@@ -1,0 +1,29 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <AssemblyName>Meshmakers.Octo.Common.Internationalization</AssemblyName>
+        <PackageIcon>meshmakers64.png</PackageIcon>
+        <PackageId>Meshmakers.Octo.Common.Intenationalization</PackageId>
+        <PackageLicenseFile>LICENSE</PackageLicenseFile>
+        <RepositoryUrl>https://github.com/meshmakers/octomesh</RepositoryUrl>
+        <RootNamespace>Meshmakers.Octo.Common.Internationalization</RootNamespace>
+        <IsPackable>false</IsPackable>
+        <TargetFramework>net7.0</TargetFramework>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Update="Texts.Designer.cs">
+            <DesignTime>True</DesignTime>
+            <AutoGen>True</AutoGen>
+            <DependentUpon>Texts.resx</DependentUpon>
+        </Compile>
+    </ItemGroup>
+
+    <ItemGroup>
+        <EmbeddedResource Update="Texts.resx">
+            <Generator>PublicResXFileCodeGenerator</Generator>
+            <LastGenOutput>Texts.Designer.cs</LastGenOutput>
+        </EmbeddedResource>
+    </ItemGroup>
+
+</Project>

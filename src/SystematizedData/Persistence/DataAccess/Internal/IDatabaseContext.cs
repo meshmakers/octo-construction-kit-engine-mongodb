@@ -1,0 +1,45 @@
+using System.Collections.Generic;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+using Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
+using MongoDB.Bson;
+
+namespace Meshmakers.Octo.Backend.Persistence.DataAccess.Internal;
+
+public interface IDatabaseContext
+{
+    ICachedCollection<CkEntity> CkEntities { get; }
+    ICachedCollection<CkAttribute> CkAttributes { get; }
+    ICachedCollection<CkEntityAssociation> CkEntityAssociations { get; }
+    ICachedCollection<CkEntityInheritance> CkEntityInheritances { get; }
+    ICachedCollection<RtAssociation> RtAssociations { get; }
+    Task<IOctoSession> StartSessionAsync();
+    IOctoSession StartSession();
+
+    ICachedCollection<TEntity> GetRtCollection<TEntity>(string ckId) where TEntity : RtEntity, new();
+
+    Task<ICollection<CkTypeInfo>> GetCkTypeInfoAsync(IOctoSession session);
+    Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, string ckId);
+    Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, CkEntity ckId);
+
+    Task UpdateCollectionsAsync(IOctoSession session);
+    Task UpdateIndexAsync(IOctoSession session);
+
+    #region Large Binaries
+
+    Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,
+        CancellationToken cancellationToken = default);
+
+    Task ReplaceLargeBinaryAsync(ObjectId largeBinaryId, string filename, string contentType, Stream stream,
+        CancellationToken cancellationToken = default);
+
+    Task DeleteLargeBinaryAsync(ObjectId largeBinaryId, CancellationToken cancellationToken = default);
+
+    Task<IDownloadStreamHandler> DownloadLargeBinaryAsync(ObjectId largeBinaryId,
+        CancellationToken cancellationToken = default);
+
+    Task<IDownloadInfo> GetLargeBinaryAsync(ObjectId largeBinaryId, CancellationToken cancellationToken = default);
+
+    #endregion Large Binaries
+}
