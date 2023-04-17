@@ -1,7 +1,7 @@
 using System;
 using Meshmakers.Octo.Common.Shared;
 
-namespace Meshmakers.Octo.Backend.Persistence;
+namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 public interface IDownloadInfo
 {

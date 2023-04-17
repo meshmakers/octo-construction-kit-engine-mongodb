@@ -1,6 +1,6 @@
-using Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
+using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-namespace Meshmakers.Octo.Backend.Persistence;
+namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 public class EntityUpdateInfo
 {

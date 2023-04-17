@@ -1,4 +1,4 @@
-namespace Meshmakers.Octo.Backend.Persistence.MongoDb;
+namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 
 internal interface IRepositoryInternal : IRepository
 {

@@ -5,14 +5,14 @@ using System.Threading.Tasks;
 using Duende.IdentityServer.Models;
 using Duende.IdentityServer.Stores;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Backend.Persistence.DataAccess;
-using Meshmakers.Octo.Backend.Persistence.DataAccess.Internal;
-using Meshmakers.Octo.Backend.Persistence.MongoDb;
-using Meshmakers.Octo.Backend.Persistence.SystemEntities;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
+using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemEntities;
 using MongoDB.Driver;
 using NLog;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemStores;
 
 public class PersistentGrantStore : IOctoPersistentGrantStore
 {

@@ -1,6 +1,6 @@
-using Meshmakers.Octo.Backend.Persistence.DataAccess;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
-namespace Meshmakers.Octo.Backend.Persistence;
+namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 internal interface ITenantContextInternal : ITenantContext
 {

@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.Serialization;
 
-namespace Meshmakers.Octo.Backend.Persistence.MongoDb;
+namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 
 [Serializable]
 public class ConfigurationErrorException : Exception

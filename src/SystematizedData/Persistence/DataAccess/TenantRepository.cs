@@ -5,16 +5,16 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Backend.Persistence.CkModelEntities;
-using Meshmakers.Octo.Backend.Persistence.CkRuleEngine;
-using Meshmakers.Octo.Backend.Persistence.CkRuleEngine.Cache;
-using Meshmakers.Octo.Backend.Persistence.DataAccess.Internal;
-using Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.Persistence.CkModelEntities;
+using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine;
+using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
+using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
-namespace Meshmakers.Octo.Backend.Persistence.DataAccess;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 internal class TenantRepository : ITenantRepositoryInternal
 {

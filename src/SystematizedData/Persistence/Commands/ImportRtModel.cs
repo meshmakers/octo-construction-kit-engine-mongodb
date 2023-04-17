@@ -5,14 +5,14 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Meshmakers.Octo.Backend.Persistence.DataAccess;
 using Meshmakers.Octo.Common.Shared.Exchange;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using MongoDB.Bson;
 using NLog;
-using RtAssociation = Meshmakers.Octo.Backend.Persistence.DatabaseEntities.RtAssociation;
-using RtEntity = Meshmakers.Octo.Backend.Persistence.DatabaseEntities.RtEntity;
+using RtAssociation = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.RtAssociation;
+using RtEntity = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.RtEntity;
 
-namespace Meshmakers.Octo.Backend.Persistence.Commands;
+namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
 
 internal class ImportRtModel
 {

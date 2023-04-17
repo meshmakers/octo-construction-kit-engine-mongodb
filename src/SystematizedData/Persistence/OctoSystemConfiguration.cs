@@ -1,7 +1,7 @@
 using System.Text.RegularExpressions;
-using Meshmakers.Octo.Backend.Persistence.MongoDb;
+using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 
-namespace Meshmakers.Octo.Backend.Persistence;
+namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 public class OctoSystemConfiguration
 {

@@ -1,9 +1,9 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-namespace Meshmakers.Octo.Backend.Persistence.DataAccess;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 internal interface ITenantRepositoryInternal : ITenantRepository
 {

@@ -2,12 +2,12 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Backend.Persistence.DataAccess;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Conventions;
 using MongoDB.Driver;
 
-namespace Meshmakers.Octo.Backend.Persistence.MongoDb;
+namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 
 public class MongoRepositoryClient : IRepositoryClient
 {

@@ -1,4 +1,4 @@
-namespace Meshmakers.Octo.Backend.Persistence.DataAccess;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 public enum CurrentMultiplicity
 {

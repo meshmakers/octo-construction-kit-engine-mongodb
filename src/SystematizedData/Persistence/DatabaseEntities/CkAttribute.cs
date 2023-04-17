@@ -4,7 +4,7 @@ using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Bson.Serialization.IdGenerators;
 using Newtonsoft.Json;
 
-namespace Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 [CollectionName("CkAttributes")]
 [DebuggerDisplay("{" + nameof(AttributeId) + "}")]

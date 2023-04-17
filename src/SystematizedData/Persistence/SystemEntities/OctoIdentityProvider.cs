@@ -1,7 +1,7 @@
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemEntities;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemEntities;
 
 /// <summary>
 ///     Base class for all specific identity provider configuration classes.

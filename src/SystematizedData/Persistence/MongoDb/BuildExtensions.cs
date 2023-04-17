@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using MongoDB.Driver;
 using MongoDB.Driver.Core.Misc;
 
-namespace Meshmakers.Octo.Backend.Persistence.MongoDb;
+namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 
 internal static class BuildExtensions
 {

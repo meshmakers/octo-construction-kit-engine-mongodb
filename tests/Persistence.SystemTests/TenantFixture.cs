@@ -2,6 +2,7 @@ using System.Threading.Tasks;
 using FakeItEasy;
 using Meshmakers.Octo.Backend.DistributedCache;
 using Meshmakers.Octo.Backend.Persistence.SystemTests.Configuration;
+using Meshmakers.Octo.SystematizedData.Persistence;
 using Microsoft.Extensions.Options;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemTests;

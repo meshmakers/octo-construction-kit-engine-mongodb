@@ -1,10 +1,10 @@
 using System.Threading;
 using System.Threading.Tasks;
-using Meshmakers.Octo.Backend.Persistence.CkRuleEngine.Cache;
-using Meshmakers.Octo.Backend.Persistence.DataAccess;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
-namespace Meshmakers.Octo.Backend.Persistence;
+namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 public interface ITenantContext
 {

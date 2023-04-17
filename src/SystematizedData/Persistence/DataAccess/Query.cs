@@ -1,12 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Meshmakers.Octo.Backend.Persistence.Formulas;
+using Meshmakers.Octo.SystematizedData.Persistence.Formulas;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 
-namespace Meshmakers.Octo.Backend.Persistence.DataAccess;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 public abstract class Query<TEntity> where TEntity : class, new()
 {

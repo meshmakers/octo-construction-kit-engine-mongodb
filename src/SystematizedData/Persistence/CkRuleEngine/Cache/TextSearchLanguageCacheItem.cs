@@ -1,7 +1,7 @@
 using System.Collections.Generic;
-using Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
+using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-namespace Meshmakers.Octo.Backend.Persistence.CkRuleEngine.Cache;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 
 public class TextSearchLanguageCacheItem
 {

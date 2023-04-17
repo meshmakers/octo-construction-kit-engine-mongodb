@@ -1,4 +1,4 @@
-namespace Meshmakers.Octo.Backend.Persistence.SystemEntities;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemEntities;
 
 /// <summary>
 ///     Available types of identity providers.

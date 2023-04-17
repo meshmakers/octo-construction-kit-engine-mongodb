@@ -1,7 +1,7 @@
 using Meshmakers.Octo.Common.Internationalization;
 using Microsoft.AspNetCore.Identity;
 
-namespace Meshmakers.Octo.Backend.Persistence.Configuration.DependencyInjection;
+namespace Meshmakers.Octo.SystematizedData.Persistence.Configuration.DependencyInjection;
 
 // ReSharper disable once ClassNeverInstantiated.Global
 internal class OctoErrorDescriber : IdentityErrorDescriber

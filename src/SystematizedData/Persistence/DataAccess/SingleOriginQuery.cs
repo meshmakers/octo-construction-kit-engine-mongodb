@@ -1,11 +1,11 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Backend.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using MongoDB.Driver;
 
-namespace Meshmakers.Octo.Backend.Persistence.DataAccess;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 public abstract class SingleOriginQuery<TEntity> : Query<TEntity> where TEntity : class, new()
 {

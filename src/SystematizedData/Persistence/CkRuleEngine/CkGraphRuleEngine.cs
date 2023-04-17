@@ -1,13 +1,13 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Meshmakers.Octo.Backend.Persistence.CkRuleEngine.Cache;
-using Meshmakers.Octo.Backend.Persistence.DataAccess;
-using Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
+using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
+using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-namespace Meshmakers.Octo.Backend.Persistence.CkRuleEngine;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine;
 
 internal class CkGraphRuleEngine : ICkGraphRuleEngine
 {

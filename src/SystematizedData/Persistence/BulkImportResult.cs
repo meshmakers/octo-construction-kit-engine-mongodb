@@ -1,6 +1,6 @@
 using MongoDB.Driver;
 
-namespace Meshmakers.Octo.Backend.Persistence;
+namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 public class BulkImportResult
 {

@@ -3,7 +3,7 @@ using MongoDB.Bson;
 
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 
-namespace Meshmakers.Octo.Backend.Persistence.DataAccess;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 // ReSharper disable once ClassNeverInstantiated.Global
 internal class QueryMultipleResult<TEntity>

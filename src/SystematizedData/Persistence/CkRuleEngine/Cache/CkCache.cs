@@ -3,11 +3,11 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Meshmakers.Octo.Backend.Persistence.DataAccess.Internal;
-using Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
+using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using NLog;
 
-namespace Meshmakers.Octo.Backend.Persistence.CkRuleEngine.Cache;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 
 public class CkCache : ICkCache
 {

@@ -2,7 +2,7 @@
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemEntities;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemEntities;
 
 [CollectionName("PersistedGrants")]
 public class OctoPersistedGrant : PersistedGrant

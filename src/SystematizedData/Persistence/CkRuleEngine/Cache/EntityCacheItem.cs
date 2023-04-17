@@ -1,9 +1,9 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-using Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
+using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-namespace Meshmakers.Octo.Backend.Persistence.CkRuleEngine.Cache;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 
 [DebuggerDisplay("{" + nameof(CkId) + "}")]
 public class EntityCacheItem

@@ -1,7 +1,7 @@
 using System.Threading.Tasks;
-using Meshmakers.Octo.Backend.Persistence.DataAccess;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
-namespace Meshmakers.Octo.Backend.Persistence.MongoDb;
+namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 
 public interface IRepositoryClient
 {

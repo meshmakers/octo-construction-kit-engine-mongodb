@@ -3,7 +3,7 @@ using System.Diagnostics;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Bson.Serialization.IdGenerators;
 
-namespace Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 /// <summary>
 ///     Represents a definition of a construction kit type

@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace Meshmakers.Octo.Backend.Persistence.DataAccess;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 public class AttributeSearchFilter
 {

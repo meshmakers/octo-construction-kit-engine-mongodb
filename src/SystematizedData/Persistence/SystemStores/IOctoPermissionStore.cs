@@ -1,7 +1,7 @@
 using System.Threading.Tasks;
-using Meshmakers.Octo.Backend.Persistence.SystemEntities;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemEntities;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemStores;
 
 public interface IOctoPermissionStore
 {

@@ -3,13 +3,13 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Backend.Persistence.CkModelEntities;
-using Meshmakers.Octo.Backend.Persistence.DataAccess;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.Common.Shared.Services;
+using Meshmakers.Octo.SystematizedData.Persistence.CkModelEntities;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemStores;
 
 public class EntityNotificationRepository : INotificationRepository
 {

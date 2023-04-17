@@ -1,4 +1,4 @@
-namespace Meshmakers.Octo.Backend.Persistence;
+namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 /// <summary>
 ///     Represents an Octo data source

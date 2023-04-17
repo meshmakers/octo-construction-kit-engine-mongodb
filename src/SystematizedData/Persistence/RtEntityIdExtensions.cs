@@ -1,7 +1,7 @@
-using Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-namespace Meshmakers.Octo.Backend.Persistence;
+namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 public static class RtEntityIdExtensions
 {

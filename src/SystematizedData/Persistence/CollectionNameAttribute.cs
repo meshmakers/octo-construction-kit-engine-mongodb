@@ -1,6 +1,6 @@
 using System;
 
-namespace Meshmakers.Octo.Backend.Persistence;
+namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 [AttributeUsage(AttributeTargets.Class)]
 public class CollectionNameAttribute : Attribute

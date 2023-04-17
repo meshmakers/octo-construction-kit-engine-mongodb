@@ -2,10 +2,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
-using Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
+using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using MongoDB.Bson;
 
-namespace Meshmakers.Octo.Backend.Persistence.DataAccess.Internal;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 
 public interface IDatabaseContext
 {

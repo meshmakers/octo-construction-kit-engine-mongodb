@@ -1,6 +1,6 @@
 using AspNetCore.Identity.Mongo.Model;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemEntities;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemEntities;
 
 /// <summary>
 ///     Represents an user identity.

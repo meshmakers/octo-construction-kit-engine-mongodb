@@ -3,7 +3,7 @@ using MongoDB.Bson.Serialization.IdGenerators;
 
 // ReSharper disable UnusedMember.Global
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemEntities;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemEntities;
 
 [CollectionName("OctoTenant")]
 public class OctoTenant

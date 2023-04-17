@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using MongoDB.Bson;
 
-namespace Meshmakers.Octo.Backend.Persistence.DataAccess;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 internal class MultipleOriginResultSet<TEntity> : Dictionary<ObjectId, ResultSet<TEntity>>,
     IMultipleOriginResultSet<TEntity>

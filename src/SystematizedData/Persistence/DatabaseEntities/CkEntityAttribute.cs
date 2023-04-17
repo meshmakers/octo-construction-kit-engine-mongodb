@@ -2,7 +2,7 @@
 using System.Diagnostics;
 using Newtonsoft.Json;
 
-namespace Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 [DebuggerDisplay("{" + nameof(AttributeId) + "}")]
 public class CkEntityAttribute

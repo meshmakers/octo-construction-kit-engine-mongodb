@@ -1,7 +1,7 @@
 using Meshmakers.Octo.Common.Shared;
 using MongoDB.Bson;
 
-namespace Meshmakers.Octo.Backend.Persistence;
+namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 public static class ObjectIdExtensions
 {

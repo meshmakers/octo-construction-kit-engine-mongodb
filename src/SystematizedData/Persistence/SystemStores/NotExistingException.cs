@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Runtime.Serialization;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemStores;
 
 [Serializable]
 public class NotExistingException : Exception

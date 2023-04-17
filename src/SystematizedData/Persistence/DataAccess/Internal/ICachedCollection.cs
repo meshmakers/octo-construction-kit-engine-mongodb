@@ -3,10 +3,10 @@ using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
-using Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
+using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using MongoDB.Driver;
 
-namespace Meshmakers.Octo.Backend.Persistence.DataAccess.Internal;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 
 public interface ICachedCollection<TDocument> where TDocument : class, new()
 {

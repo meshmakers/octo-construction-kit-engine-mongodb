@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Meshmakers.Octo.Backend.Persistence.DataAccess.Internal;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 
-namespace Meshmakers.Octo.Backend.Persistence.CkRuleEngine.Cache;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 
 public interface ICkCache : IDisposable
 {

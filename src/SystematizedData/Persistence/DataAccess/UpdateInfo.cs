@@ -1,6 +1,6 @@
 using MongoDB.Driver;
 
-namespace Meshmakers.Octo.Backend.Persistence.DataAccess;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 public class UpdateInfo<T> where T : class, new()
 {

@@ -1,9 +1,9 @@
 using System;
-using Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
+using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using MongoDB.Bson.Serialization.Attributes;
 using Newtonsoft.Json;
 
-namespace Meshmakers.Octo.Backend.Persistence.CkModelEntities;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkModelEntities;
 
 [CkId(Constants.SystemNotificationMessageCkId)]
 public class RtSystemNotificationMessage : RtEntity

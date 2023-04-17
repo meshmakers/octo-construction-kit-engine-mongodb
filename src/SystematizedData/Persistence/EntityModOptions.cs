@@ -1,4 +1,4 @@
-namespace Meshmakers.Octo.Backend.Persistence;
+namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 /// <summary>
 ///     Defines if an operation creates, updates or deletes

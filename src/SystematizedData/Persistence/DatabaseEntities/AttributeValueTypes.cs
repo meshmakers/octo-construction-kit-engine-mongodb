@@ -1,4 +1,4 @@
-﻿namespace Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
+﻿namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 public enum AttributeValueTypes
 {

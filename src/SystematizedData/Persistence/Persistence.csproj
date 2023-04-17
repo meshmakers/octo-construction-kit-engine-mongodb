@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <AssemblyName>Meshmakers.Octo.Backend.Persistence</AssemblyName>
+        <AssemblyName>Meshmakers.Octo.SystematizedData.Persistence</AssemblyName>
         <Description>The persistance layer of Octo Mesh (direct read/write operations to database)</Description>
         <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
         <PackageIcon>meshmakers64.png</PackageIcon>

@@ -1,10 +1,10 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Meshmakers.Octo.Backend.Persistence.CkRuleEngine.Cache;
-using Meshmakers.Octo.Backend.Persistence.DataAccess;
+using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
-namespace Meshmakers.Octo.Backend.Persistence.CkRuleEngine;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine;
 
 internal class CkEntityRuleEngine : ICkEntityRuleEngine
 {

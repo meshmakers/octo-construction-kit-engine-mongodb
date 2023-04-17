@@ -1,7 +1,7 @@
 using System;
 using Meshmakers.Common.Shared;
 
-namespace Meshmakers.Octo.Backend.Persistence;
+namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 [AttributeUsage(AttributeTargets.Class)]
 public class CkIdAttribute : Attribute

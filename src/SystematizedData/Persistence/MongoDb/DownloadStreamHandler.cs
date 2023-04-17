@@ -6,7 +6,7 @@ using Meshmakers.Octo.Common.Shared;
 using MongoDB.Bson;
 using MongoDB.Driver.GridFS;
 
-namespace Meshmakers.Octo.Backend.Persistence.MongoDb;
+namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 
 internal class DownloadStreamHandler : IDownloadStreamHandler
 {

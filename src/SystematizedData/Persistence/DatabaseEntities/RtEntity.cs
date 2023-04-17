@@ -5,7 +5,7 @@ using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Bson.Serialization.IdGenerators;
 
-namespace Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 /// <summary>
 ///     Represents an entity, based on information of the construction kit type

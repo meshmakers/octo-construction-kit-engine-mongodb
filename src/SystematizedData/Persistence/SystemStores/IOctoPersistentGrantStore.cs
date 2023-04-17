@@ -1,7 +1,7 @@
 ﻿using System.Threading.Tasks;
 using Duende.IdentityServer.Stores;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemStores;
 
 public interface IOctoPersistentGrantStore : IPersistedGrantStore
 {

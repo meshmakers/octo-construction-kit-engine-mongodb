@@ -1,10 +1,10 @@
 ﻿using System.Threading.Tasks;
 using Duende.IdentityServer.Models;
 using Duende.IdentityServer.Stores;
-using Meshmakers.Octo.Backend.Persistence.SystemEntities;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemEntities;
 using MongoDB.Bson;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemStores;
 
 public interface IOctoResourceStore : IResourceStore
 {

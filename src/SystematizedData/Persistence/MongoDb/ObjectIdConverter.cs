@@ -3,7 +3,7 @@ using System.ComponentModel;
 using System.Globalization;
 using MongoDB.Bson;
 
-namespace Meshmakers.Octo.Backend.Persistence.MongoDb;
+namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 
 /// <inheritdoc />
 // ReSharper disable once ClassNeverInstantiated.Global

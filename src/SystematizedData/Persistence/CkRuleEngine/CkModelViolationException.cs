@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.Serialization;
 
-namespace Meshmakers.Octo.Backend.Persistence.CkRuleEngine;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine;
 
 [Serializable]
 public class CkModelViolationException : Exception

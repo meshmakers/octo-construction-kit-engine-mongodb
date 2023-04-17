@@ -1,10 +1,10 @@
 using AspNetCore.Identity.Mongo.Stores;
-using Meshmakers.Octo.Backend.Persistence.MongoDb;
-using Meshmakers.Octo.Backend.Persistence.SystemEntities;
+using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemEntities;
 using Microsoft.AspNetCore.Identity;
 using MongoDB.Bson;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemStores;
 
 public class OctoRoleStore : RoleStore<OctoRole, ObjectId>
 {

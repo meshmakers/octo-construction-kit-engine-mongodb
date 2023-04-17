@@ -4,7 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Meshmakers.Octo.Common.Shared;
 
-namespace Meshmakers.Octo.Backend.Persistence;
+namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 /// <summary>
 ///     Handles the download of a stream from a persistent storage

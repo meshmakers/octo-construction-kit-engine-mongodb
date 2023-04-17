@@ -1,7 +1,7 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
-namespace Meshmakers.Octo.Backend.Persistence.DatabaseEntities;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 [CollectionName("RtAssociations")]
 public class RtAssociation

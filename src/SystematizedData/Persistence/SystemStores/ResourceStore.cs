@@ -3,13 +3,13 @@ using System.Linq;
 using System.Threading.Tasks;
 using Duende.IdentityServer.Models;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Backend.Persistence.DataAccess;
-using Meshmakers.Octo.Backend.Persistence.DataAccess.Internal;
-using Meshmakers.Octo.Backend.Persistence.MongoDb;
-using Meshmakers.Octo.Backend.Persistence.SystemEntities;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
+using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemEntities;
 using MongoDB.Bson;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemStores;
 
 public class ResourceStore : IOctoResourceStore
 {

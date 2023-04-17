@@ -1,4 +1,4 @@
-namespace Meshmakers.Octo.Backend.Persistence.CkModelEntities;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkModelEntities;
 
 public enum NotificationTypes
 {

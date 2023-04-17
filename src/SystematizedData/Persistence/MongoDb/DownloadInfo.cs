@@ -2,7 +2,7 @@ using System;
 using Meshmakers.Octo.Common.Shared;
 using MongoDB.Driver.GridFS;
 
-namespace Meshmakers.Octo.Backend.Persistence.MongoDb;
+namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 
 internal class DownloadInfo : IDownloadInfo
 {

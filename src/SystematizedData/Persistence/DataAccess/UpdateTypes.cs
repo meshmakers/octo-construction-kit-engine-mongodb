@@ -1,6 +1,6 @@
 using System;
 
-namespace Meshmakers.Octo.Backend.Persistence.DataAccess;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 [Flags]
 public enum UpdateTypes

@@ -1,6 +1,6 @@
 using System;
 
-namespace Meshmakers.Octo.Backend.Persistence.DataAccess;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 /// <summary>
 ///     Access to event update stream

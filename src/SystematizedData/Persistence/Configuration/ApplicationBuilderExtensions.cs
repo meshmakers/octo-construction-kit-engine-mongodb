@@ -2,7 +2,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Meshmakers.Octo.Backend.Persistence.Configuration;
+namespace Meshmakers.Octo.SystematizedData.Persistence.Configuration;
 
 public static class ApplicationBuilderExtensions
 {
