@@ -38,8 +38,8 @@ stages:
             if ($branch.StartsWith("refs/tags/r")) {
               $major = [int]$branchName.Split(".")[0].substring(1)
               $minor = [int]$branchName.Split(".")[1]
-              Write-Host "##vso[MajorVersion]$major"
-              Write-Host "##vso[MinorVersion]$minor"
+              Write-Host "##vso[task.setvariable variable=MajorVersion;]$major"
+              Write-Host "##vso[task.setvariable variable=MinorVersion;]$minor"
               # Write-Host "Setting build number to $buildNumber"
               # Write-Host "##vso[build.updatebuildnumber]$buildNumber"
             }
