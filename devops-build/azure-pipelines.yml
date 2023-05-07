@@ -1,4 +1,4 @@
-name:  $(MajorVersion).$(MinorVersion).$(date:yyMM).$(DayOfMonth)$(rev:rrr)
+name:  $(MajorVersion).$(MinorVersion).$(RevisionVersion).$(BuildVersion)
 
 trigger:
   batch: true
@@ -18,6 +18,8 @@ variables:
   isRelease: $[startsWith(variables['Build.SourceBranch'], 'refs/tags/r')]
   MajorVersion: 0
   MinorVersion: 0
+  RevisionVersion: $(DayOfMonth)
+  BuildVersion: $(DayOfMonth)$(rev:rrr)
 
 stages:
  - stage: Build
@@ -38,13 +40,11 @@ stages:
             if ($branch.StartsWith("refs/tags/r")) {
               $major = [int]$branchName.Split(".")[0].substring(1)
               $minor = [int]$branchName.Split(".")[1]
-              $revision= Get-Date -Format "yyMM"
-              $build = '$(rev)'
-              $buildNumber = "$major.$minor.$revision.$build"
+              $buildNumber = "$major.$minor.$env:revision.$env:build"
               Write-Host "##vso[task.setvariable variable=MajorVersion;]$major"
               Write-Host "##vso[task.setvariable variable=MinorVersion;]$minor"
               Write-Host "Setting build number to $buildNumber"
-              # Write-Host "##vso[build.updatebuildnumber]$buildNumber"
+             Write-Host "##vso[build.updatebuildnumber]$buildNumber"
             }
         displayName: 'Set build number'
       - checkout: self
