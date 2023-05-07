@@ -19,7 +19,7 @@ variables:
   MajorVersion: 0
   MinorVersion: 0
   RevisionVersion: $(DayOfMonth)
-  BuildVersion: $(DayOfMonth)$(rev:rrr)
+  BuildVersion: "$(DayOfMonth)$(rev:rrr)"
 
 stages:
  - stage: Build
