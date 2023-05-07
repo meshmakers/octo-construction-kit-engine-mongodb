@@ -38,10 +38,12 @@ stages:
             if ($branch.StartsWith("refs/tags/r")) {
               $major = [int]$branchName.Split(".")[0].substring(1)
               $minor = [int]$branchName.Split(".")[1]
-              $buildNumber = '$major.$minor.$(date:yyMM).$(rev:rrr)' 
+              $revision= Get-Date -Format "yyMM"
+              $build = $(rev:rrr)
+              $buildNumber = "$major.$minor.$revision.$build"
               Write-Host "##vso[task.setvariable variable=MajorVersion;]$major"
               Write-Host "##vso[task.setvariable variable=MinorVersion;]$minor"
-               Write-Host "Setting build number to $buildNumber"
+              Write-Host "Setting build number to $buildNumber"
               # Write-Host "##vso[build.updatebuildnumber]$buildNumber"
             }
         displayName: 'Set build number'
