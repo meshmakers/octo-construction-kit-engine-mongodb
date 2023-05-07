@@ -34,10 +34,12 @@ stages:
         inputs:
           targetType: 'inline'
           script: |
+            Write-Host "Source Branch $(Build.SourceBranch)"
+            Write-Host "Source Branch Name $(Build.SourceBranchName)"
             $branch = '$(Build.SourceBranch)'
             $branchName = '$(Build.SourceBranchName)'
-            if ($branch.StartsWith("refs/heads/releases/")) {
-              $major = [int]$branchName.Split(".")[0]
+            if ($branch.StartsWith("refs/heads/tags/r")) {
+              $major = [int]$branchName.Split(".")[0].substring(1)
               $minor = [int]$branchName.Split(".")[1]
               Write-Host "##vso[MajorVersion]$major"
               Write-Host "##vso[MinorVersion]$minor"
