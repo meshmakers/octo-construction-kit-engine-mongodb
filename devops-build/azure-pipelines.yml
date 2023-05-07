@@ -14,6 +14,8 @@ variables:
   Company: "meshmakers GmbH"
   Copyright: "(c) 2022-2023 meshmakers GmbH"
   isRelease: $[contains(variables['Build.SourceBranch'], 'refs/heads/releases/')]
+  MajorVersion: 0
+  MinorVersion: 0
 
 stages:
  - stage: Build
@@ -27,10 +29,16 @@ stages:
         inputs:
           targetType: 'inline'
           script: |
+            $branch = '$(Build.SourceBranch)'
             $branchName = '$(Build.SourceBranchName)'
-            $buildNumber = "1.0.0-$branchName"
-            Write-Host "Setting build number to $buildNumber"
-            Write-Host "##vso[build.updatebuildnumber]$buildNumber"
+            if ($branch.StartsWith("refs/heads/releases/")) {
+              $major = [int]$branch.Split(".")[0]
+              $minor = [int]$branch.Split(".")[1]
+              Write-Host "##vso[MajorVersion]$major"
+              Write-Host "##vso[MinorVersion]$minor"
+              # Write-Host "Setting build number to $buildNumber"
+              # Write-Host "##vso[build.updatebuildnumber]$buildNumber"
+            }
         displayName: 'Set build number'
       - checkout: self
         clean: true
