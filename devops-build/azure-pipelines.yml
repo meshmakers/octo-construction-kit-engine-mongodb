@@ -1,4 +1,4 @@
-name: $(MajorVersion).$(MinorVersion).$(date:yyMM).$(DayOfMonth)$(rev:rrr)
+name:  $(MajorVersion).$(MinorVersion).$(date:yyMM).$(DayOfMonth)$(rev:rrr)
 
 trigger:
   batch: true
@@ -6,7 +6,7 @@ trigger:
     include:
       - main
       - releases/*
-  
+
 variables:
   buildConfiguration: 'Release'
   buildPlatform: 'any cpu'
@@ -14,6 +14,7 @@ variables:
   Company: "meshmakers GmbH"
   Copyright: "(c) 2022-2023 meshmakers GmbH"
   isMain: $[eq(variables['Build.SourceBranch'], 'refs/heads/main')]
+  branch: $(replace(replace(variables['Build.SourceBranch'], 'refs/heads/', ''), 'releases/', '')
 
 stages:
  - stage: Build
