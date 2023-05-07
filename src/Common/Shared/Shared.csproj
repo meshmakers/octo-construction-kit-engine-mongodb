@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <AssemblyName>Meshmakers.Octo.Common.Shared</AssemblyName>
@@ -30,7 +30,7 @@
         <PackageReference Include="IdentityModel" Version="6.1.0" />
         <PackageReference Include="JsonSubTypes" Version="2.0.1" />
         <PackageReference Include="Markdig.Signed" Version="0.31.0" />
-        <PackageReference Include="Meshmakers.Common.Shared" Version="4.0.2302.10004" />
+        <PackageReference Include="Meshmakers.Common.Shared" Version="4.0.2305.5002" />
         <PackageReference Include="Microsoft.Extensions.Options" Version="7.0.1" />
         <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
         <PackageReference Include="NLog" Version="5.1.4" />
