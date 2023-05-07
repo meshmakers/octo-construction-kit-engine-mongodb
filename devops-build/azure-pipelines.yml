@@ -32,8 +32,8 @@ stages:
             $branch = '$(Build.SourceBranch)'
             $branchName = '$(Build.SourceBranchName)'
             if ($branch.StartsWith("refs/heads/releases/")) {
-              $major = [int]$branch.Split(".")[0]
-              $minor = [int]$branch.Split(".")[1]
+              $major = [int]$branchName.Split(".")[0]
+              $minor = [int]$branchName.Split(".")[1]
               Write-Host "##vso[MajorVersion]$major"
               Write-Host "##vso[MinorVersion]$minor"
               # Write-Host "Setting build number to $buildNumber"
