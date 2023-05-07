@@ -5,7 +5,7 @@ trigger:
   branches:
     include:
       - main
-      - releases/2.*
+      - releases/*
   
 variables:
   buildConfiguration: 'Release'
@@ -17,7 +17,7 @@ variables:
 stages:
  - stage: Build
    jobs:
-    - job: windows
+    - job: buildAndTest
       displayName: "Build nuget and execute tests"
       pool:
         name: Gerald-Local-Linux
