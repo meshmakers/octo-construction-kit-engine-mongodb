@@ -18,7 +18,7 @@ variables:
   isRelease: $[startsWith(variables['Build.SourceBranch'], 'refs/tags/r')]
   MajorVersion: 0
   MinorVersion: 0
-  RevisionVersion: $[$(DayOfMonth)]
+  RevisionVersion: $[$(date:yyMM)]
   BuildVersion: $[$(DayOfMonth)$(rev:rrr)]
 
 stages:
