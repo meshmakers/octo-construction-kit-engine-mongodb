@@ -16,14 +16,13 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddOctoPersistence(
         this IServiceCollection services,
-        Action<OctoSystemConfiguration> setupSystemConfigurationAction = null,
-        Action<IdentityOptions> setupAction = null)
+        Action<OctoSystemConfiguration>? setupSystemConfigurationAction = null,
+        Action<IdentityOptions>? setupAction = null)
     {
         if (setupSystemConfigurationAction != null)
         {
             services.Configure(setupSystemConfigurationAction);
         }
-
 
         services.AddSingleton<ISystemContext, SystemContext>();
         services.AddTransient<IOctoClientStore, ClientStore>();
@@ -36,10 +35,10 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    private static void AddIdentity(IServiceCollection services, Action<IdentityOptions> setupAction)
+    private static void AddIdentity(IServiceCollection services, Action<IdentityOptions>? setupAction)
     {
         var builder = services
-            .AddIdentity<OctoUser, OctoRole>(setupAction)
+            .AddIdentity<OctoUser, OctoRole>(setupAction ?? null!)
             .AddRoleStore<OctoRoleStore>()
             .AddUserStore<OctoUserStore>()
             .AddUserManager<UserManager<OctoUser>>()
@@ -50,8 +49,11 @@ public static class ServiceCollectionExtensions
         // register custom ObjectId TypeConverter
         RegisterTypeConverter<ObjectId, ObjectIdConverter>();
 
-        builder.Services.AddTransient(
-            typeof(IRoleStore<>).MakeGenericType(builder.RoleType), typeof(OctoRoleStore));
+        if (builder.RoleType != null)
+        {
+            builder.Services.AddTransient(
+                typeof(IRoleStore<>).MakeGenericType(builder.RoleType), typeof(OctoRoleStore));
+        }
 
         builder.Services.AddTransient(
             typeof(IUserStore<>).MakeGenericType(builder.UserType), typeof(OctoUserStore));
