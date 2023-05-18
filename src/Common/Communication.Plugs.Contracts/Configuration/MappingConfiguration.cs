@@ -10,11 +10,19 @@ public class MappingConfiguration
     
     public T Deserialize<T>()
     {
-        return JsonSerializer.Deserialize<T>(Configuration)!;
+        var serializerOptions = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
+        return JsonSerializer.Deserialize<T>(Configuration, serializerOptions)!;
     }
     
     public void Serialize<T>(T configuration)
     {
-        Configuration = JsonSerializer.Serialize(configuration);
+        var serializerOptions = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
+        Configuration = JsonSerializer.Serialize(configuration, serializerOptions);
     }
 }
