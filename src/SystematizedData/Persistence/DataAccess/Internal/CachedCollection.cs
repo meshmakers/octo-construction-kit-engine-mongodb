@@ -224,7 +224,7 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
         }
     }
 
-    public async Task<TDerived> DocumentAsync<TDerived, TField>(IOctoSession session, TField id)
+    public async Task<TDerived?> DocumentAsync<TDerived, TField>(IOctoSession session, TField id)
         where TDerived : TDocument, new()
     {
         try
@@ -242,7 +242,7 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
         }
     }
 
-    public async Task<TDocument> DocumentAsync<TField>(IOctoSession session, TField id)
+    public async Task<TDocument?> DocumentAsync<TField>(IOctoSession session, TField id)
     {
         try
         {

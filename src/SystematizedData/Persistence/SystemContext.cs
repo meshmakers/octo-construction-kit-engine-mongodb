@@ -24,7 +24,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence;
 public class SystemContext : ISystemContext
 {
     private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
-    private readonly ConcurrentDictionary<string, ICkCache> _ckCaches;
+    private readonly ConcurrentDictionary<string, ICkCache?> _ckCaches;
     private readonly ICachedCollection<OctoConfiguration> _configurationCollection;
 
     private readonly IDistributedWithPubSubCache _distributedWithPubSubCache;
@@ -50,7 +50,7 @@ public class SystemContext : ISystemContext
             AllowInsecureTls = _systemConfiguration.AllowInsecureTls
         };
 
-        _ckCaches = new ConcurrentDictionary<string, ICkCache>();
+        _ckCaches = new ConcurrentDictionary<string, ICkCache?>();
 
         _repositoryClient = new MongoRepositoryClient(sharedSettings);
         OctoSystemDatabase = _repositoryClient.GetRepository(_systemConfiguration.SystemDatabaseName);
@@ -193,7 +193,7 @@ public class SystemContext : ISystemContext
     {
         if (TryGetCkCache(tenantId, out var ckCache))
         {
-            return await CreateTenantContextAsync(systemSession, ckCache);
+            return await CreateTenantContextAsync(systemSession, ckCache!);
         }
 
         try
@@ -202,7 +202,7 @@ public class SystemContext : ISystemContext
 
             if (TryGetCkCache(tenantId, out ckCache))
             {
-                return await CreateTenantContextAsync(systemSession, ckCache);
+                return await CreateTenantContextAsync(systemSession, ckCache!);
             }
 
             var databaseContext = await CreateDatabaseContextByTenantAsync(systemSession, tenantId);
@@ -227,7 +227,7 @@ public class SystemContext : ISystemContext
         return new TenantContext(ckCache.TenantId, tenantRepository, ckCache);
     }
 
-    public bool TryGetCkCache(string tenantId, out ICkCache ckCache)
+    public bool TryGetCkCache(string tenantId, out ICkCache? ckCache)
     {
         var key = tenantId.MakeKey();
 
@@ -246,7 +246,7 @@ public class SystemContext : ISystemContext
 
     #region User Data Source handling
 
-    private async Task<SystemEntities.OctoTenant> GetOctoDatabaseFromTenantAsync(IOctoSession systemSession,
+    private async Task<SystemEntities.OctoTenant?> GetOctoDatabaseFromTenantAsync(IOctoSession systemSession,
         string tenantId)
     {
         return await _tenantCollection.DocumentAsync(systemSession, tenantId.MakeKey());
@@ -415,7 +415,7 @@ public class SystemContext : ISystemContext
     private async Task RestoreTenantSystemCkModelAsync(IOctoSession systemSession, SystemEntities.OctoTenant octoTenant)
     {
         var ckModelFilePath = Path.Combine(Helper.AssemblyDirectory, "CKModel.json");
-        Logger.Info("Importing construction kit model '{0}'", ckModelFilePath);
+        Logger.Info("Importing construction kit model '{CkModelFilePath}'", ckModelFilePath);
         await ImportCkModelAsync(systemSession, octoTenant.TenantId, ScopeIds.System, ckModelFilePath, null);
         Logger.Info("Construction kit model imported.");
     }
@@ -481,21 +481,25 @@ public class SystemContext : ISystemContext
 
     #region Configuration
 
-    public async Task<TValueType> GetConfigurationAsync<TValueType>(IOctoSession systemSession, string key,
+    public async Task<TValueType?> GetConfigurationAsync<TValueType>(IOctoSession systemSession, string key,
         TValueType defaultValue) where
         TValueType
         : struct
 
     {
         ArgumentValidation.ValidateString(nameof(key), key);
-        return (TValueType)Convert.ChangeType(await GetConfigAsync(systemSession, key, defaultValue),
-            typeof(TValueType));
+        var o = await GetConfigAsync(systemSession, key, defaultValue);
+        if (o == null)
+        {
+            return null;
+        }
+        return (TValueType)Convert.ChangeType(o, typeof(TValueType));
     }
 
-    public async Task<string> GetConfigurationAsync(IOctoSession systemSession, string key, string defaultValue)
+    public async Task<string?> GetConfigurationAsync(IOctoSession systemSession, string key, string? defaultValue = null)
     {
         ArgumentValidation.ValidateString(nameof(key), key);
-        return (string)await GetConfigAsync(systemSession, key, defaultValue);
+        return (string?)await GetConfigAsync(systemSession, key, defaultValue);
     }
 
 
@@ -514,7 +518,7 @@ public class SystemContext : ISystemContext
     }
 
 
-    private async Task<object> GetConfigAsync(IOctoSession systemSession, string key, object defaultValue)
+    private async Task<object?> GetConfigAsync(IOctoSession systemSession, string key, object? defaultValue)
     {
         var document = await _configurationCollection.DocumentAsync(systemSession, key);
         if (document == null)
@@ -555,7 +559,7 @@ public class SystemContext : ISystemContext
     {
         if (_ckCaches.TryRemove(tenantId, out var ckCache))
         {
-            ckCache.Dispose();
+            ckCache?.Dispose();
         }
     }
 

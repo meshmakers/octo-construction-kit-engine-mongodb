@@ -15,11 +15,11 @@ public class RtAssociation
 
     [BsonRequired] public ObjectId OriginRtId { get; set; }
 
-    [BsonRequired] public string OriginCkId { get; set; }
+    [BsonRequired] public string OriginCkId { get; set; } = null!;
 
     [BsonRequired] public ObjectId TargetRtId { get; set; }
 
-    [BsonRequired] public string TargetCkId { get; set; }
+    [BsonRequired] public string TargetCkId { get; set; }= null!;
 
-    [BsonRequired] public string AssociationRoleId { get; set; }
+    [BsonRequired] public string AssociationRoleId { get; set; }= null!;
 }

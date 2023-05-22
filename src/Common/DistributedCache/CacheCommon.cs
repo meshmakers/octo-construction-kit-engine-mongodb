@@ -19,4 +19,9 @@ public static class CacheCommon
     ///     Channel of tenant updates
     /// </summary>
     public const string KeyTenantUpdate = "TenantUpdate";
+    
+    /// <summary>
+    /// Channel of plug controller updates
+    /// </summary>
+    public const string KeyPlugControllerUpdate = "PlugControllerUpdate";
 }

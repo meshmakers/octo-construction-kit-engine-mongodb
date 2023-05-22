@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-
 namespace Meshmakers.Octo.Communication.Plugs.Contracts.Configuration;
 
 public class ServerConfiguration

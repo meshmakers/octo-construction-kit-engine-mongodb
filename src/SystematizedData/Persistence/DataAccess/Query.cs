@@ -115,7 +115,7 @@ public abstract class Query<TEntity> where TEntity : class, new()
     }
 
 
-    internal void AddIdFilter<TField>(IReadOnlyList<TField> ids)
+    internal void AddIdFilter<TField>(IReadOnlyList<TField>? ids)
     {
         if (ids == null || !ids.Any())
         {
@@ -125,7 +125,7 @@ public abstract class Query<TEntity> where TEntity : class, new()
         _idFilters.Add(Builders<TEntity>.Filter.In(Constants.IdField, ids));
     }
 
-    internal void AddFieldFilters(IEnumerable<FieldFilter> fieldFilters)
+    internal void AddFieldFilters(IEnumerable<FieldFilter>? fieldFilters)
     {
         if (fieldFilters == null)
         {

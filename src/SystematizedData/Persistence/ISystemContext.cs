@@ -34,10 +34,10 @@ public interface ISystemContext
     Task ImportCkModelAsync(IOctoSession systemSession, string tenantId, ScopeIds scopeId, string filePath,
         CancellationToken? cancellationToken);
 
-    Task<TValueType> GetConfigurationAsync<TValueType>(IOctoSession systemSession, string key, TValueType defaultValue)
+    Task<TValueType?> GetConfigurationAsync<TValueType>(IOctoSession systemSession, string key, TValueType defaultValue)
         where TValueType : struct;
 
-    Task<string> GetConfigurationAsync(IOctoSession systemSession, string key, string defaultValue);
+    Task<string?> GetConfigurationAsync(IOctoSession systemSession, string key, string? defaultValue = null);
 
     Task SetConfigurationAsync<TValueType>(IOctoSession systemSession, string key, TValueType value)
         where TValueType : struct;
@@ -46,5 +46,5 @@ public interface ISystemContext
 
     Task<ITenantContext> CreateOrGetTenantContextAsync(string tenantId);
 
-    bool TryGetCkCache(string tenantId, out ICkCache ckCache);
+    bool TryGetCkCache(string tenantId, out ICkCache? ckCache);
 }

@@ -38,7 +38,7 @@ internal class MultipleOriginHierarchicalRtQuery<TOriginEntity, TTargetEntity> :
     private readonly string _targetCkId;
     private readonly EntityCacheItem _targetEntityCacheItem;
 
-    protected MultipleOriginHierarchicalRtQuery(EntityCacheItem targetEntityCacheItem,
+    internal MultipleOriginHierarchicalRtQuery(EntityCacheItem targetEntityCacheItem,
         IDatabaseContext databaseContext,
         string language, IEnumerable<ObjectId> rtIds, string originCkId, string roleId,
         GraphDirections graphDirection, string targetCkId)

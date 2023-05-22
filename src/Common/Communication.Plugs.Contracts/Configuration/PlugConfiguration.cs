@@ -1,10 +1,10 @@
-using System.Collections.Generic;
+using Meshmakers.Octo.Common.Shared;
 
 namespace Meshmakers.Octo.Communication.Plugs.Contracts.Configuration;
 
 public class PlugConfiguration
 {
-    public string PlugId { get; set; } = null!;
+    public OctoObjectId PlugId { get; set; }
     
     public IReadOnlyCollection<ServerConfiguration> ServerConfigurations { get; set; } = null!;
 }

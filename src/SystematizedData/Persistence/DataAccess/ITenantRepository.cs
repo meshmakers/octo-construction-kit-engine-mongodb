@@ -39,9 +39,9 @@ public interface ITenantRepository
         DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null);
 
-    Task<RtEntity> GetRtEntityAsync(IOctoSession session, RtEntityId rtEntityId);
+    Task<RtEntity?> GetRtEntityAsync(IOctoSession session, RtEntityId rtEntityId);
 
-    Task<TEntity> GetRtEntityAsync<TEntity>(IOctoSession session, RtEntityId rtEntityId)
+    Task<TEntity?> GetRtEntityAsync<TEntity>(IOctoSession session, RtEntityId rtEntityId)
         where TEntity : RtEntity, new();
 
     Task<ResultSet<RtEntity>> GetRtEntitiesByIdAsync(IOctoSession session, string ckId, IReadOnlyList<ObjectId> rtIds,
@@ -50,6 +50,14 @@ public interface ITenantRepository
     Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
         IEnumerable<ObjectId> originRtIds, string originCkId, string roleId, string targetCkId,
         GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
+
+    Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
+        IOctoSession session,
+        IEnumerable<ObjectId> originRtIds, string roleId,
+        GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
+        int? take = null)
+        where TOriginEntity : RtEntity
+        where TTargetEntity : RtEntity, new();
 
     Task<RtAssociation> GetRtAssociationAsync(IOctoSession session, RtEntityId rtEntityIdOrigin,
         RtEntityId rtEntityIdTarget,

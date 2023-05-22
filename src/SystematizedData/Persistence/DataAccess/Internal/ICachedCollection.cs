@@ -28,9 +28,9 @@ public interface ICachedCollection<TDocument> where TDocument : class, new()
 
     Task ReplaceByIdAsync<TField>(IOctoSession session, TField id, TDocument document);
     Task UpdateOneAsync<TField>(IOctoSession session, TField id, UpdateDefinition<TDocument> updateDefinition);
-    Task<TDocument> DocumentAsync<TField>(IOctoSession session, TField id);
+    Task<TDocument?> DocumentAsync<TField>(IOctoSession session, TField id);
 
-    Task<TDerived> DocumentAsync<TDerived, TField>(IOctoSession session, TField id)
+    Task<TDerived?> DocumentAsync<TDerived, TField>(IOctoSession session, TField id)
         where TDerived : TDocument, new();
 
     Task<IEnumerable<TDocument>> GetAsync(IOctoSession session, int? skip = null, int? take = null);

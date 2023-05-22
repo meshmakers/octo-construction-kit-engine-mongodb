@@ -247,13 +247,13 @@ internal class TenantRepository : ITenantRepositoryInternal
         return new ResultSet<CkEntity>(resultSet, totalCount);
     }
 
-    public async Task<RtEntity> GetRtEntityAsync(IOctoSession session, RtEntityId rtEntityId)
+    public async Task<RtEntity?> GetRtEntityAsync(IOctoSession session, RtEntityId rtEntityId)
     {
         return await _databaseContext.GetRtCollection<RtEntity>(rtEntityId.CkId)
             .DocumentAsync(session, rtEntityId.RtId.ToObjectId());
     }
 
-    public async Task<TEntity> GetRtEntityAsync<TEntity>(IOctoSession session, RtEntityId rtEntityId)
+    public async Task<TEntity?> GetRtEntityAsync<TEntity>(IOctoSession session, RtEntityId rtEntityId)
         where TEntity : RtEntity, new()
     {
         ArgumentValidation.ValidateString(nameof(rtEntityId.CkId), rtEntityId.CkId);
@@ -345,7 +345,19 @@ internal class TenantRepository : ITenantRepositoryInternal
 
         return result.First().Value;
     }
+    
+    public async Task<ResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(IOctoSession session, ObjectId originRtId,
+        string roleId,
+        GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
+        where TOriginEntity : RtEntity
+        where TTargetEntity : RtEntity, new()
+    {
+        var result = await GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(session, new[] { originRtId }, roleId, 
+            graphDirection, rtIds, dataQueryOperation, skip, take);
 
+        return result.First().Value;
+    }
+    
     public async Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
         IEnumerable<ObjectId> originRtIds, string originCkId, string roleId, string targetCkId,
         GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
@@ -369,6 +381,32 @@ internal class TenantRepository : ITenantRepositoryInternal
         return await hierarchicalRtStatementCreator.ExecuteQuery(session, skip, take);
     }
 
+    public async Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(IOctoSession session,
+        IEnumerable<ObjectId> originRtIds, string roleId,
+        GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
+        where TOriginEntity : RtEntity
+        where TTargetEntity : RtEntity, new()
+    {
+        ArgumentValidation.ValidateString(nameof(roleId), roleId);
+        
+        var originCkId = GetCkId<TOriginEntity>();
+        var targetCkId = GetCkId<TTargetEntity>();
+
+        var entityCacheItem = GetEntityCacheItem(targetCkId);
+
+        var hierarchicalRtStatementCreator =
+            new MultipleOriginHierarchicalRtQuery<TOriginEntity, TTargetEntity>(entityCacheItem, _databaseContext, dataQueryOperation.Language,
+                originRtIds,
+                originCkId, roleId, graphDirection, targetCkId);
+
+        hierarchicalRtStatementCreator.AddFieldFilters(dataQueryOperation.FieldFilters);
+        hierarchicalRtStatementCreator.AddIdFilter(rtIds);
+        hierarchicalRtStatementCreator.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
+        hierarchicalRtStatementCreator.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
+        hierarchicalRtStatementCreator.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+
+        return await hierarchicalRtStatementCreator.ExecuteQuery(session, skip, take);
+    }
 
     public async Task<ResultSet<RtEntity>> GetRtEntitiesByTypeAsync(IOctoSession session, string ckId,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
@@ -466,7 +504,7 @@ internal class TenantRepository : ITenantRepositoryInternal
 
     #region Transient data
 
-    private static string GetCkId<TEntity>() where TEntity : RtEntity, new()
+    private static string GetCkId<TEntity>() where TEntity : RtEntity
     {
         var customAttribute = Attribute.GetCustomAttribute(typeof(TEntity), typeof(CkIdAttribute));
         if (customAttribute == null)
