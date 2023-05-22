@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <AssemblyName>Meshmakers.Octo.SystematizedData.Persistence</AssemblyName>
@@ -31,7 +31,7 @@
         <PackageReference Include="MongoDB.Driver.GridFS" Version="2.19.1" />
         <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
         <PackageReference Include="NLog" Version="5.1.4" />
-        <PackageReference Include="System.Reactive" Version="5.0.0" />
+        <PackageReference Include="System.Reactive" Version="6.0.0" />
         <PackageReference Include="MongoDB.Bson" Version="2.19.1" />
         <PackageReference Include="MongoDB.Driver" Version="2.19.1" />
         <PackageReference Include="AspNetCore.Identity.Mongo" Version="8.3.3" />
