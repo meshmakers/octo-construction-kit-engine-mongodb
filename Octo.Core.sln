@@ -1,4 +1,4 @@
-﻿
+﻿,
 Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Shared", "src\Common\Shared\Shared.csproj", "{39AA64A0-FEF5-48A3-82A4-3A655953FED1}"
 EndProject
