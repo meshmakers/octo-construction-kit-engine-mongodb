@@ -44,6 +44,11 @@ public interface ISystemContext
 
     Task SetConfigurationAsync(IOctoSession systemSession, string key, string value);
 
+    /// <summary>
+    /// Gets or creates a tenant context for the given tenant id.
+    /// </summary>
+    /// <param name="tenantId">Identifier of tenant</param>
+    /// <returns>Interface to access the content of the tenant</returns>
     Task<ITenantContext> CreateOrGetTenantContextAsync(string tenantId);
 
     bool TryGetCkCache(string tenantId, out ICkCache? ckCache);

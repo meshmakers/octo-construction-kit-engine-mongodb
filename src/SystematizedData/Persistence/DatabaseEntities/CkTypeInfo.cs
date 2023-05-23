@@ -44,7 +44,7 @@ public class CkTypeInfo
     /// <summary>
     ///     Gets or sets a list of text search languages
     /// </summary>
-    public ICollection<CkEntityIndex> TextSearchLanguages { get; set; }
+    public ICollection<CkEntityIndex>? TextSearchLanguages { get; set; }
 
     public string Path => CkId + ": " + string.Join("->", BaseTypes.Select(x => x.OriginCkId)) ?? "(none)";
 }

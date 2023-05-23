@@ -12,7 +12,7 @@ internal class OctoSession : IOctoSessionInternal
 
     public void Dispose()
     {
-        SessionHandle?.Dispose();
+        SessionHandle.Dispose();
     }
 
     public void StartTransaction()
