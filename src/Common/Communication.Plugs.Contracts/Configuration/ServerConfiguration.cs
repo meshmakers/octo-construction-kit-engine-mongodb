@@ -1,6 +1,6 @@
 namespace Meshmakers.Octo.Communication.Plugs.Contracts.Configuration;
 
-public class ServerConfiguration
+public record ServerConfiguration
 {
     public string Server { get; set; } = null!;
     
