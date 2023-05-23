@@ -7,7 +7,7 @@ trigger:
     - 'r*'
   branches:
     exclude:
-    - dev
+#    - dev
 
 variables:
   buildConfiguration: 'Release'
