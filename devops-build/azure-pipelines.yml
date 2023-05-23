@@ -5,8 +5,8 @@ trigger:
   tags:
     include:
     - 'r*'
-  branches:
-    exclude:
+#  branches:
+#    exclude:
 #    - dev
 
 variables:
