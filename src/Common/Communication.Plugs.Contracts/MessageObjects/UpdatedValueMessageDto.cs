@@ -1,12 +1,11 @@
 using Meshmakers.Octo.Common.Shared;
 
-namespace Meshmakers.Octo.Communication.Plugs.Contracts.Data;
+namespace Meshmakers.Octo.Communication.Plugs.Contracts.MessageObjects;
 
-public record UpdatedValueMessage
+public record UpdatedValueMessageDto
 {
     public string TenantId { get; set; } = null!;
     public OctoObjectId PlugId { get; set; }
-    public string Group { get; set; } = null!;
     public OctoObjectId MappingId { get; set; }
     public object? Value { get; set; }
     public DateTime PlugReceivedDateTime { get; set; }
