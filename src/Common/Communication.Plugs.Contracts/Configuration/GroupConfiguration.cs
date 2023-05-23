@@ -4,7 +4,7 @@ using Meshmakers.Octo.Common.Shared;
 
 namespace Meshmakers.Octo.Communication.Plugs.Contracts.Configuration;
 
-public class GroupConfiguration
+public record GroupConfiguration
 {
     public IReadOnlyCollection<MappingConfiguration> Mappings { get; set; } = null!;
     public string Name { get; set; } = null!;

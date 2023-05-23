@@ -2,7 +2,7 @@ using Meshmakers.Octo.Common.Shared;
 
 namespace Meshmakers.Octo.Communication.Plugs.Contracts.Data;
 
-public class UpdatedValueMessage
+public record UpdatedValueMessage
 {
     public string TenantId { get; set; } = null!;
     public OctoObjectId PlugId { get; set; }
