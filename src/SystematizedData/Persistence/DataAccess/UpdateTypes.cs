@@ -20,5 +20,8 @@ public enum UpdateTypes
     Replace = 4,
 
     /// <summary>A delete operation type.</summary>
-    Delete = 8
+    Delete = 8,
+    
+    /// <summary>All operation types.</summary>
+    All = Insert | Update | Replace | Delete
 }

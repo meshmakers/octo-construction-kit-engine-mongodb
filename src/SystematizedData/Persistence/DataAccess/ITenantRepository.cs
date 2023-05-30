@@ -118,6 +118,10 @@ public interface ITenantRepository
 
     IUpdateStream<RtEntity> SubscribeToRtEntities(string ckId, UpdateStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default);
+    
+    IUpdateStream<TEntity> SubscribeToRtEntities<TEntity>(UpdateStreamFilter updateStreamFilter,
+        CancellationToken cancellationToken = default)
+        where TEntity : RtEntity, new();
 
     Task<IEnumerable<AutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session, string ckId,
         string attributeName,

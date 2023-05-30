@@ -618,6 +618,15 @@ internal class TenantRepository : ITenantRepositoryInternal
         return _databaseContext.GetRtCollection<RtEntity>(ckId).Subscribe(updateStreamFilter, cancellationToken);
     }
 
+    public IUpdateStream<TEntity> SubscribeToRtEntities<TEntity>(UpdateStreamFilter updateStreamFilter,
+        CancellationToken cancellationToken = default)
+        where TEntity : RtEntity, new()
+    {
+        var ckId = GetCkId<TEntity>();
+
+        return _databaseContext.GetRtCollection<TEntity>(ckId).Subscribe(updateStreamFilter, cancellationToken);
+    }
+
     public async Task<IEnumerable<AutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session,
         string ckId,
         string attributeName, string regexFilterValue, int takeCount)
