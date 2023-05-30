@@ -4,6 +4,6 @@ namespace Meshmakers.Octo.Communication.Plugs.Contracts.Hubs;
 
 public interface IPlugPoolHubCallbacks
 {
-    Task AddPlugAsync(PlugPoolPlugDto plug);
-    Task RemovePlugAsync(PlugPoolPlugDto plug);
+    Task DeployPlugAsync(PlugPoolPlugDto plug);
+    Task UndeployPlugAsync(PlugPoolPlugDto plug);
 }
