@@ -6,4 +6,6 @@ namespace Meshmakers.Octo.Communication.Plugs.Contracts.Hubs;
 public interface IPlugPoolHub
 {
     Task<PlugPoolConfigurationDto> RegisterPlugPoolOperatorAsync(string plugPoolName);
+
+    Task UnregisterPlugPoolOperatorAsync(string plugPoolName);
 }
