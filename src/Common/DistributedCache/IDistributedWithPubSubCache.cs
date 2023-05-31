@@ -20,6 +20,13 @@ public interface IDistributedWithPubSubCache
     IDatabase Database { get; }
 
     /// <summary>
+    /// Returns the last message of the given channel as string
+    /// </summary>
+    /// <param name="channelName">The channel name</param>
+    /// <returns></returns>
+    Task<string?> GetLastMessageAsStringAsync(string channelName);
+
+    /// <summary>
     ///     Subscribes to a channel
     /// </summary>
     /// <param name="channel">The name of the channel</param>

@@ -20,7 +20,7 @@ internal class CkEntityRuleEngine : ICkEntityRuleEngine
     public Task<CkEntityRuleEngineResult> ValidateAsync(IReadOnlyList<EntityUpdateInfo> entityUpdateInfos)
     {
         var entityValidatorResult = new CkEntityRuleEngineResult();
-
+        
         entityValidatorResult.RtEntitiesToCreate.AddRange(entityUpdateInfos
             .Where(e => e.ModOption == EntityModOptions.Create).Select(e => e.RtEntity));
         entityValidatorResult.RtEntitiesToUpdate.AddRange(entityUpdateInfos

@@ -6,10 +6,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared;
-using Meshmakers.Octo.SystematizedData.Persistence.CkModelEntities;
-using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.InsertModifiers;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Mutation;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -62,15 +62,8 @@ internal class TenantRepository : ITenantRepositoryInternal
     public async Task ApplyChanges(IOctoSession session, IReadOnlyList<EntityUpdateInfo> entityUpdateInfoList,
         IReadOnlyList<AssociationUpdateInfo> associationUpdateInfoList)
     {
-        var ckEntityRuleEngine = new CkEntityRuleEngine(CkCache, this);
-        var entityValidatorResult = await ckEntityRuleEngine.ValidateAsync(entityUpdateInfoList);
-
-        var ckGraphRuleEngine = new CkGraphRuleEngine(CkCache, this);
-        var graphValidationResult =
-            await ckGraphRuleEngine.ValidateAsync(session, entityUpdateInfoList, associationUpdateInfoList);
-
-        await ApplyRtEntityChangesAsync(session, entityValidatorResult);
-        await ApplyRtAssociationChangesAsync(session, graphValidationResult);
+        MutationHandler mutationHandler = new MutationHandler(_databaseContext, CkCache, this, new AutoIncrementModifier(_databaseContext, CkCache, this));
+        await mutationHandler.ApplyChanges(session, entityUpdateInfoList, associationUpdateInfoList);
     }
 
     public async Task ApplyChanges(IOctoSession session,
@@ -84,111 +77,23 @@ internal class TenantRepository : ITenantRepositoryInternal
         await ApplyChanges(session, entityUpdateInfoList, new List<AssociationUpdateInfo>());
     }
 
-    private async Task ApplyRtAssociationChangesAsync(IOctoSession session,
-        GraphRuleEngineResult graphRuleEngineResult)
-    {
-        if (graphRuleEngineResult.RtAssociationsToCreate.Any())
-        {
-            await InsertRtAssociationsAsync(session, graphRuleEngineResult.RtAssociationsToCreate);
-        }
-
-        if (graphRuleEngineResult.RtAssociationsToDelete.Any())
-        {
-            await DeleteRtAssociationsAsync(session, graphRuleEngineResult.RtAssociationsToDelete);
-        }
-    }
-
-    private async Task ApplyRtEntityChangesAsync(IOctoSession session,
-        CkEntityRuleEngineResult ckEntityRuleEngineResult)
-    {
-        if (ckEntityRuleEngineResult.RtEntitiesToDelete.Any())
-        {
-            await DeleteRtEntityAsync(session, ckEntityRuleEngineResult.RtEntitiesToDelete);
-        }
-
-        if (ckEntityRuleEngineResult.RtEntitiesToUpdate.Any())
-        {
-            await UpdateRtEntities(session, ckEntityRuleEngineResult.RtEntitiesToUpdate);
-        }
-
-        if (ckEntityRuleEngineResult.RtEntitiesToCreate.Any())
-        {
-            await InsertRtEntitiesAsync(session, ckEntityRuleEngineResult.RtEntitiesToCreate);
-        }
-    }
-
-    public async Task InsertRtEntitiesAsync(IOctoSession session, IEnumerable<RtEntity> rtEntityList,
-        bool disableAutoIncrement = false)
-    {
-        var rtEntities = rtEntityList.ToList();
-        rtEntities.ForEach(x => x.RtCreationDateTime = DateTime.Now);
-        rtEntities.ForEach(x => x.RtChangedDateTime = x.RtCreationDateTime);
-
-        if (!disableAutoIncrement)
-        {
-            foreach (var rtEntitiesByType in rtEntities.GroupBy(x => x.CkId))
-            {
-                await RunAutoIncrementAsync(session, rtEntitiesByType.Key, rtEntitiesByType);
-            }
-        }
-
-        foreach (var groupedEntities in rtEntities.GroupBy(x => x.CkId))
-        {
-            await _databaseContext.GetRtCollection<RtEntity>(groupedEntities.Key)
-                .InsertMultipleAsync(session, groupedEntities);
-        }
-    }
-
     public async Task<AggregatedBulkImportResult> BulkInsertRtEntitiesAsync(IOctoSession session,
         IEnumerable<RtEntity> rtEntityList)
     {
         var results = new List<BulkImportResult>();
         foreach (var groupedEntities in rtEntityList.GroupBy(x => x.CkId))
         {
+            if (string.IsNullOrWhiteSpace(groupedEntities.Key))
+            {
+                throw OperationFailedException.CreateWithMessage(
+                    "Cannot update RtEntity without CkId. Please provide a CkId.");
+            }
+            
             results.Add(await _databaseContext.GetRtCollection<RtEntity>(groupedEntities.Key)
                 .BulkImportAsync(session, groupedEntities));
         }
 
         return new AggregatedBulkImportResult(results);
-    }
-
-    private async Task DeleteRtEntityAsync(IOctoSession session, IReadOnlyList<RtEntity> rtEntities)
-    {
-        foreach (var rtEntity in rtEntities.AsParallel())
-        {
-            await _databaseContext.GetRtCollection<RtEntity>(rtEntity.CkId).DeleteOneAsync(session, rtEntity.RtId);
-        }
-    }
-
-    private async Task UpdateRtEntities(IOctoSession session, IReadOnlyList<RtEntity> rtEntities)
-    {
-        foreach (var rtEntityGrouping in rtEntities.GroupBy(x => x.CkId))
-        {
-            var collection = _databaseContext.GetRtCollection<RtEntity>(rtEntityGrouping.Key);
-
-            foreach (var document in rtEntityGrouping.AsParallel())
-            {
-                var updateDefList = new List<UpdateDefinition<RtEntity>>();
-                foreach (var keyValuePair in document.Attributes)
-                {
-                    updateDefList.Add(Builders<RtEntity>.Update.Set(
-                        $"{Constants.AttributesName}.{keyValuePair.Key.ToCamelCase()}", keyValuePair.Value));
-                }
-
-                if (updateDefList.Any())
-                {
-                    document.RtChangedDateTime = DateTime.Now;
-
-                    var updateDefinition = Builders<RtEntity>.Update.Combine(updateDefList);
-                    await collection.UpdateOneAsync(session, document.RtId, updateDefinition);
-                }
-            }
-        }
-    }
-
-    public async Task InsertRtAssociationsAsync(IOctoSession session, IEnumerable<RtAssociation> rtAssociations)
-    {
-        await _databaseContext.RtAssociations.InsertMultipleAsync(session, rtAssociations);
     }
 
     public async Task<BulkImportResult> BulkRtAssociationsAsync(IOctoSession session,
@@ -197,10 +102,6 @@ internal class TenantRepository : ITenantRepositoryInternal
         return await _databaseContext.RtAssociations.BulkImportAsync(session, rtAssociations);
     }
 
-    private async Task DeleteRtAssociationsAsync(IOctoSession session, IEnumerable<RtAssociation> rtAssociations)
-    {
-        await _databaseContext.RtAssociations.DeleteManyAsync(session, rtAssociations.Select(x => x.AssociationId));
-    }
 
     #endregion Data manipulation
 
@@ -389,8 +290,8 @@ internal class TenantRepository : ITenantRepositoryInternal
     {
         ArgumentValidation.ValidateString(nameof(roleId), roleId);
         
-        var originCkId = GetCkId<TOriginEntity>();
-        var targetCkId = GetCkId<TTargetEntity>();
+        var originCkId = RtEntityExtensions.GetCkId<TOriginEntity>();
+        var targetCkId =RtEntityExtensions.GetCkId<TTargetEntity>();
 
         var entityCacheItem = GetEntityCacheItem(targetCkId);
 
@@ -418,7 +319,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null) where TEntity : RtEntity, new()
     {
-        var ckId = GetCkId<TEntity>();
+        var ckId = RtEntityExtensions.GetCkId<TEntity>();
         return await GetRtEntitiesByTypeAsync<TEntity>(session, ckId, dataQueryOperation, skip, take);
     }
 
@@ -504,19 +405,6 @@ internal class TenantRepository : ITenantRepositoryInternal
 
     #region Transient data
 
-    private static string GetCkId<TEntity>() where TEntity : RtEntity
-    {
-        var customAttribute = Attribute.GetCustomAttribute(typeof(TEntity), typeof(CkIdAttribute));
-        if (customAttribute == null)
-        {
-            throw new InvalidCkIdException(
-                $"Type '{typeof(TEntity)}' does not define attribute '{typeof(CkIdAttribute)}'");
-        }
-
-        var ckIdAttribute = (CkIdAttribute)customAttribute;
-        return ckIdAttribute.CkId;
-    }
-
     public RtEntity CreateTransientRtEntity(string ckId)
     {
         ArgumentValidation.ValidateString(nameof(ckId), ckId);
@@ -532,7 +420,7 @@ internal class TenantRepository : ITenantRepositoryInternal
 
     public TEntity CreateTransientRtEntity<TEntity>() where TEntity : RtEntity, new()
     {
-        var ckId = GetCkId<TEntity>();
+        var ckId = RtEntityExtensions.GetCkId<TEntity>();
         if (string.IsNullOrWhiteSpace(ckId))
         {
             throw new InvalidCkIdException($"No Construction Kit Id for type '{typeof(TEntity).FullName}'" +
@@ -559,7 +447,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         };
         foreach (var attributeCacheItem in entityCacheItem.Attributes.Values)
         {
-            var value = attributeCacheItem.DefaultValue ?? attributeCacheItem.DefaultValues?.ToList();
+            var value = attributeCacheItem.DefaultValue;
             rtEntity.SetAttributeValue(attributeCacheItem.AttributeName, attributeCacheItem.AttributeValueType, value);
         }
 
@@ -622,7 +510,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         CancellationToken cancellationToken = default)
         where TEntity : RtEntity, new()
     {
-        var ckId = GetCkId<TEntity>();
+        var ckId = RtEntityExtensions.GetCkId<TEntity>();
 
         return _databaseContext.GetRtCollection<TEntity>(ckId).Subscribe(updateStreamFilter, cancellationToken);
     }
@@ -683,78 +571,7 @@ internal class TenantRepository : ITenantRepositoryInternal
             PipelineDefinition<RtEntity, AutoCompleteText>.Create(match, sortByCount, limit));
         return await result.ToListAsync();
     }
-
-
-    private async Task RunAutoIncrementAsync(IOctoSession session, string ckId, IEnumerable<RtEntity> rtEntities)
-    {
-        var entityCacheItem = CkCache.GetEntityCacheItem(ckId);
-        if (entityCacheItem == null)
-        {
-            throw new InvalidCkIdException($"Construction Kit Id '{ckId}' is invalid.");
-        }
-
-        var autoIncrementReferences = entityCacheItem.Attributes.Values
-            .Where(a => !string.IsNullOrEmpty(a.AutoIncrementReference)).ToList();
-        if (!autoIncrementReferences.Any())
-        {
-            return;
-        }
-
-        var dataQueryOperation = new DataQueryOperation
-        {
-            FieldFilters = new[]
-            {
-                new FieldFilter(nameof(RtEntity.RtWellKnownName), FieldFilterOperator.In,
-                    autoIncrementReferences.Select(x => x.AutoIncrementReference))
-            }
-        };
-
-        var autoIncrementerSet = await GetRtEntitiesByTypeAsync<RtSystemAutoIncrement>(session, dataQueryOperation);
-
-        foreach (var rtEntity in rtEntities)
-        foreach (var autoIncrementReference in autoIncrementReferences)
-        {
-            var attributeCacheItem = entityCacheItem.Attributes[autoIncrementReference.AttributeName];
-            if (attributeCacheItem == null)
-            {
-                throw new InvalidAttributeException(
-                    $"Attribute with name '{autoIncrementReference.AttributeName}' does not exist at Ck-Id {ckId}");
-            }
-
-            var autoIncrement = autoIncrementerSet.Result.FirstOrDefault(x =>
-                x.RtWellKnownName == autoIncrementReference.AutoIncrementReference);
-
-            rtEntity.SetAttributeValue(autoIncrementReference.AttributeName,
-                attributeCacheItem.AttributeValueType,
-                await ExecuteAutoIncrementAsync(session, autoIncrement));
-        }
-    }
-
-    private async Task<long> ExecuteAutoIncrementAsync(IOctoSession session, RtSystemAutoIncrement autoIncrement)
-    {
-        var end = autoIncrement.End;
-        if (!autoIncrement.CurrentValue.HasValue)
-        {
-            throw new AutoIncrementFailedException(
-                $"'{autoIncrement.RtId}' cannot be incremented because current value was null.");
-        }
-
-        var currentValue = autoIncrement.CurrentValue.Value;
-
-        currentValue++;
-
-        if (currentValue > end)
-        {
-            throw new AutoIncrementFailedException(
-                $"'{autoIncrement.RtId}' cannot be incremented because end value is reached.");
-        }
-
-        autoIncrement.CurrentValue = currentValue;
-        await _databaseContext.GetRtCollection<RtEntity>(autoIncrement.CkId)
-            .ReplaceByIdAsync(session, autoIncrement.RtId, autoIncrement);
-
-        return currentValue;
-    }
+    
 
     public async Task UpdateAutoCompleteTexts(IOctoSession session, string ckId, string attributeName,
         IEnumerable<string> autoCompleteTexts)

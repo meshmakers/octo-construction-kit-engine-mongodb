@@ -30,6 +30,17 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
         Database = _redis.GetDatabase();
         _subscriber = _redis.GetSubscriber();
     }
+    
+    /// <summary>
+    /// Returns the last message of the given channel as string
+    /// </summary>
+    /// <param name="channelName">The channel name</param>
+    /// <returns></returns>
+    public async Task<string?> GetLastMessageAsStringAsync(string channelName)
+    {
+        var lastMessage = await Database.ListGetByIndexAsync(channelName, -1);
+        return lastMessage.HasValue ? lastMessage.ToString() : null;
+    }
 
     /// <summary>
     ///     Subscribes to a channel
