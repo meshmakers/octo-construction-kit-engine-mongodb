@@ -12,8 +12,8 @@ public class RtEntity
         Associations = new List<RtAssociation>();
     }
 
-    [JsonProperty("rtId")]
-    [JsonConverter(typeof(NewtonOctoObjectIdConverter))]
+    [JsonProperty("rtId", Required = Required.Always)]
+    [JsonRequired]
     public OctoObjectId RtId { get; set; }
 
     /// <summary>
@@ -28,11 +28,16 @@ public class RtEntity
     [JsonProperty("rtChangedDateTime", NullValueHandling = NullValueHandling.Ignore)]
     public DateTime? RtChangedDateTime { get; set; }
 
-    [JsonProperty("ckId")] public string? CkId { get; set; }
+    [JsonProperty("ckId", Required = Required.Always)] 
+    [JsonRequired]
+    public string? CkId { get; set; }
 
-    [JsonProperty("rtWellKnownName")] public string? RtWellKnownName { get; set; }
+    [JsonProperty("rtWellKnownName")] 
+    public string? RtWellKnownName { get; set; }
 
-    [JsonProperty("attributes")] public List<RtAttribute> Attributes { get; }
+    [JsonProperty("attributes")] 
+    public List<RtAttribute> Attributes { get; }
 
-    [JsonProperty("associations")] public List<RtAssociation> Associations { get; }
+    [JsonProperty("associations")] 
+    public List<RtAssociation>? Associations { get; }
 }
