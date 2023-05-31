@@ -30,7 +30,11 @@ internal class UpdateStream<TDocument> : IUpdateStream<TDocument>
         Task.Run(async () =>
         {
             using (var cursor = await documentCollection.WatchAsync(pipelineDefinition,
-                       new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup },
+                       new ChangeStreamOptions
+                       {
+                           FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, 
+                           FullDocumentBeforeChange = ChangeStreamFullDocumentBeforeChangeOption.WhenAvailable
+                       },
                        requestCancellationToken))
             {
                 await cursor.ForEachAsync(change =>

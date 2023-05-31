@@ -64,7 +64,7 @@ internal class CkGraphRuleEngine : ICkGraphRuleEngine
         // Currently, the only mandatory association has multiplicity of One
         foreach (var entityUpdateInfo in entityUpdateInfoList.Where(x => x.ModOption == EntityModOptions.Create))
         {
-            var cacheItem = _ckCache.GetEntityCacheItem(entityUpdateInfo.RtEntity.CkId);
+            var cacheItem = _ckCache.GetEntityCacheItem(entityUpdateInfo.RtEntity.GetCkId());
 
             var inboundAssociationCacheItems =
                 cacheItem.InboundAssociations.Values.SelectMany(x =>
@@ -102,7 +102,7 @@ internal class CkGraphRuleEngine : ICkGraphRuleEngine
                 throw new CkModelViolationException($"Target entity '{targetRtId}' does not exist.");
             }
 
-            var targetCacheItem = _ckCache.GetEntityCacheItem(targetEntity.CkId);
+            var targetCacheItem = _ckCache.GetEntityCacheItem(targetEntity.GetCkId());
 
             foreach (var associationUpdateInfosByRoleId in associationUpdateInfoList.Where(a => a.Target == targetRtId)
                          .GroupBy(a => a.RoleId))
@@ -118,7 +118,7 @@ internal class CkGraphRuleEngine : ICkGraphRuleEngine
                 foreach (var associationUpdateInfo in associationUpdateInfosByRoleId)
                 {
                     var originEntity = await GetEntity(session, entityUpdateInfoList, associationUpdateInfo.Origin);
-                    var originCacheItem = _ckCache.GetEntityCacheItem(originEntity.CkId);
+                    var originCacheItem = _ckCache.GetEntityCacheItem(originEntity.GetCkId());
 
                     if (!inboundAssociationCacheItem.AllowedTypes.Contains(originCacheItem))
                     {
@@ -172,7 +172,7 @@ internal class CkGraphRuleEngine : ICkGraphRuleEngine
                 throw new CkModelViolationException($"Origin entity '{originRtId}' does not exist.");
             }
 
-            var originCacheItem = _ckCache.GetEntityCacheItem(originEntity.CkId);
+            var originCacheItem = _ckCache.GetEntityCacheItem(originEntity.GetCkId());
 
             foreach (var associationUpdateInfosByRoleId in associationUpdateInfoList.Where(a => a.Origin == originRtId)
                          .GroupBy(a => a.RoleId))
@@ -188,7 +188,7 @@ internal class CkGraphRuleEngine : ICkGraphRuleEngine
                 foreach (var associationUpdateInfo in associationUpdateInfosByRoleId)
                 {
                     var targetEntity = await GetEntity(session, entityUpdateInfoList, associationUpdateInfo.Target);
-                    var targetCacheItem = _ckCache.GetEntityCacheItem(targetEntity.CkId);
+                    var targetCacheItem = _ckCache.GetEntityCacheItem(targetEntity.GetCkId());
 
                     if (!outboundAssociationCacheItem.AllowedTypes.Contains(targetCacheItem))
                     {

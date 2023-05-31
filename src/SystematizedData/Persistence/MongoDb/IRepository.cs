@@ -17,7 +17,7 @@ public interface IRepository
     IOctoSession StartSession();
 
 
-    Task CreateCollectionIfNotExistsAsync<TCollection>(string? suffix = null) where TCollection : class, new();
+    Task CreateCollectionIfNotExistsAsync<TCollection>(bool enableChangeStreamPreAndPostImages, string? suffix = null) where TCollection : class, new();
 
 
     ICachedCollection<T> GetCollection<T>(string? suffix = null) where T : class, new();

@@ -53,4 +53,9 @@ public class CkEntity
     /// </summary>
     [BsonIgnoreIfNull]
     public ICollection<CkEntityIndex> Indexes { get; set; }
+    
+    /// <summary>
+    /// Gets or sets if the change stream should include pre and post images
+    /// </summary>
+    public bool EnableChangeStreamPreAndPostImages { get; set; }
 }

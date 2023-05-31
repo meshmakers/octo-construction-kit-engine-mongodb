@@ -68,6 +68,13 @@ public class MutationHandler
         var rtEntities = rtEntityList.ToList();
         rtEntities.ForEach(x => x.RtCreationDateTime = DateTime.Now);
         rtEntities.ForEach(x => x.RtChangedDateTime = x.RtCreationDateTime);
+        rtEntities.ForEach(x =>
+            {
+                if (string.IsNullOrWhiteSpace(x.CkId)) {
+                    x.CkId = x.GetCkId();
+                }
+            }
+        );
 
         foreach (var rtEntityGrouping in rtEntities.GroupBy(x => x.GetCkId()))
         {

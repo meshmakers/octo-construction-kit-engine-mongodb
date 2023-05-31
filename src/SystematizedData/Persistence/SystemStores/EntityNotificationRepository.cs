@@ -192,9 +192,14 @@ public class EntityNotificationRepository : INotificationRepository
         NotificationMessageDto notificationMessageDto,
         ITenantContext tenantContext)
     {
+        if (!notificationMessageDto.RtId.HasValue)
+        {
+            throw new InvalidOperationException("Cannot update notification message without RtId.");
+        }
+        
         var rtEntity =
             await tenantContext.Repository.GetRtEntityAsync<RtSystemNotificationMessage>(session,
-                notificationMessageDto.ToRtEntityId());
+                notificationMessageDto.RtId.Value);
 
         ApplyDtoData(notificationMessageDto, rtEntity);
 

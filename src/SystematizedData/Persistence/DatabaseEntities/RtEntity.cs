@@ -47,7 +47,7 @@ public class RtEntity
     ///     Gets or sets the construction kit id
     /// </summary>
     [BsonRequired]
-    public string? CkId { get; init; }
+    public string? CkId { get; set; }
 
     /// <summary>
     ///     Returns the well known name to access well known entities in a faster way

@@ -62,7 +62,8 @@ internal class TenantRepository : ITenantRepositoryInternal
     public async Task ApplyChanges(IOctoSession session, IReadOnlyList<EntityUpdateInfo> entityUpdateInfoList,
         IReadOnlyList<AssociationUpdateInfo> associationUpdateInfoList)
     {
-        MutationHandler mutationHandler = new MutationHandler(_databaseContext, CkCache, this, new AutoIncrementModifier(_databaseContext, CkCache, this));
+        MutationHandler mutationHandler =
+            new MutationHandler(_databaseContext, CkCache, this, new AutoIncrementModifier(_databaseContext, CkCache, this));
         await mutationHandler.ApplyChanges(session, entityUpdateInfoList, associationUpdateInfoList);
     }
 
@@ -88,7 +89,7 @@ internal class TenantRepository : ITenantRepositoryInternal
                 throw OperationFailedException.CreateWithMessage(
                     "Cannot update RtEntity without CkId. Please provide a CkId.");
             }
-            
+
             results.Add(await _databaseContext.GetRtCollection<RtEntity>(groupedEntities.Key)
                 .BulkImportAsync(session, groupedEntities));
         }
@@ -101,7 +102,6 @@ internal class TenantRepository : ITenantRepositoryInternal
     {
         return await _databaseContext.RtAssociations.BulkImportAsync(session, rtAssociations);
     }
-
 
     #endregion Data manipulation
 
@@ -154,13 +154,13 @@ internal class TenantRepository : ITenantRepositoryInternal
             .DocumentAsync(session, rtEntityId.RtId.ToObjectId());
     }
 
-    public async Task<TEntity?> GetRtEntityAsync<TEntity>(IOctoSession session, RtEntityId rtEntityId)
+    public async Task<TEntity?> GetRtEntityAsync<TEntity>(IOctoSession session, OctoObjectId rtId)
         where TEntity : RtEntity, new()
     {
-        ArgumentValidation.ValidateString(nameof(rtEntityId.CkId), rtEntityId.CkId);
+        var ckId = RtEntityExtensions.GetCkId<TEntity>();
 
-        return await _databaseContext.GetRtCollection<TEntity>(rtEntityId.CkId)
-            .DocumentAsync(session, rtEntityId.RtId.ToObjectId());
+        return await _databaseContext.GetRtCollection<TEntity>(ckId)
+            .DocumentAsync(session, rtId.ToObjectId());
     }
 
     public async Task<ResultSet<RtEntity>> GetRtEntitiesByIdAsync(IOctoSession session, string ckId,
@@ -239,29 +239,33 @@ internal class TenantRepository : ITenantRepositoryInternal
         string originCkId,
         string roleId,
         string targetCkId,
-        GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
+        GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
+        int? take = null)
     {
         var result = await GetRtAssociationTargetsAsync(session, new[] { originRtId }, originCkId, roleId, targetCkId,
             graphDirection, rtIds, dataQueryOperation, skip, take);
 
         return result.First().Value;
     }
-    
-    public async Task<ResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(IOctoSession session, ObjectId originRtId,
+
+    public async Task<ResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(IOctoSession session,
+        ObjectId originRtId,
         string roleId,
-        GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
+        GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
+        int? take = null)
         where TOriginEntity : RtEntity
         where TTargetEntity : RtEntity, new()
     {
-        var result = await GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(session, new[] { originRtId }, roleId, 
+        var result = await GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(session, new[] { originRtId }, roleId,
             graphDirection, rtIds, dataQueryOperation, skip, take);
 
         return result.First().Value;
     }
-    
+
     public async Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
         IEnumerable<ObjectId> originRtIds, string originCkId, string roleId, string targetCkId,
-        GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
+        GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
+        int? take = null)
     {
         ArgumentValidation.ValidateString(nameof(roleId), roleId);
         ArgumentValidation.ValidateString(nameof(targetCkId), targetCkId);
@@ -282,21 +286,24 @@ internal class TenantRepository : ITenantRepositoryInternal
         return await hierarchicalRtStatementCreator.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(IOctoSession session,
+    public async Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
+        IOctoSession session,
         IEnumerable<ObjectId> originRtIds, string roleId,
-        GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
+        GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
+        int? take = null)
         where TOriginEntity : RtEntity
         where TTargetEntity : RtEntity, new()
     {
         ArgumentValidation.ValidateString(nameof(roleId), roleId);
-        
+
         var originCkId = RtEntityExtensions.GetCkId<TOriginEntity>();
-        var targetCkId =RtEntityExtensions.GetCkId<TTargetEntity>();
+        var targetCkId = RtEntityExtensions.GetCkId<TTargetEntity>();
 
         var entityCacheItem = GetEntityCacheItem(targetCkId);
 
         var hierarchicalRtStatementCreator =
-            new MultipleOriginHierarchicalRtQuery<TOriginEntity, TTargetEntity>(entityCacheItem, _databaseContext, dataQueryOperation.Language,
+            new MultipleOriginHierarchicalRtQuery<TOriginEntity, TTargetEntity>(entityCacheItem, _databaseContext,
+                dataQueryOperation.Language,
                 originRtIds,
                 originCkId, roleId, graphDirection, targetCkId);
 
@@ -503,7 +510,20 @@ internal class TenantRepository : ITenantRepositoryInternal
     public IUpdateStream<RtEntity> SubscribeToRtEntities(string ckId, UpdateStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default)
     {
-        return _databaseContext.GetRtCollection<RtEntity>(ckId).Subscribe(updateStreamFilter, cancellationToken);
+        var collection = _databaseContext.GetRtCollection<RtEntity>(ckId);
+
+        return collection.Subscribe(updateStreamFilter.UpdateTypes, pipeline =>
+        {
+            if (updateStreamFilter.RtId.HasValue)
+            {
+                var filter = Builders<ChangeStreamDocument<RtEntity>>.Filter.Eq(
+                    "fullDocument." + Constants.IdField,
+                    updateStreamFilter.RtId.Value.ToObjectId());
+                return pipeline.Match(filter);
+            }
+
+            return pipeline;
+        }, cancellationToken);
     }
 
     public IUpdateStream<TEntity> SubscribeToRtEntities<TEntity>(UpdateStreamFilter updateStreamFilter,
@@ -512,7 +532,63 @@ internal class TenantRepository : ITenantRepositoryInternal
     {
         var ckId = RtEntityExtensions.GetCkId<TEntity>();
 
-        return _databaseContext.GetRtCollection<TEntity>(ckId).Subscribe(updateStreamFilter, cancellationToken);
+        var collection = _databaseContext.GetRtCollection<TEntity>(ckId);
+
+        return collection.Subscribe(updateStreamFilter.UpdateTypes, pipeline =>
+        {
+            if (updateStreamFilter.RtId.HasValue)
+            {
+                var filter = Builders<ChangeStreamDocument<TEntity>>.Filter.Eq(
+                    "fullDocument." + Constants.IdField,
+                    updateStreamFilter.RtId.Value.ToObjectId());
+                return pipeline.Match(filter);
+            }
+
+            return pipeline;
+        }, cancellationToken);
+    }
+
+    public IUpdateStream<RtAssociation> SubscribeToRtAssociations(string originCkId, string targetCkId,
+        UpdateAssociationStreamFilter updateStreamFilter,
+        CancellationToken cancellationToken = default)
+    {
+        return _databaseContext.RtAssociations.Subscribe(updateStreamFilter.UpdateTypes, pipeline =>
+        {
+            pipeline = pipeline.Match(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
+                "fullDocument." + nameof(RtAssociation.OriginCkId).ToCamelCase(), originCkId));
+            pipeline = pipeline.Match(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
+                "fullDocument." + nameof(RtAssociation.TargetCkId).ToCamelCase(), targetCkId));
+
+            if (!string.IsNullOrWhiteSpace(updateStreamFilter.RoleId))
+            {
+                pipeline = pipeline.Match(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
+                    "fullDocument." + nameof(RtAssociation.AssociationRoleId).ToCamelCase(), updateStreamFilter.RoleId));
+            }
+
+            if (updateStreamFilter.OriginRtId.HasValue)
+            {
+                pipeline = pipeline.Match(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
+                    "fullDocument." + nameof(RtAssociation.OriginRtId).ToCamelCase(), updateStreamFilter.OriginRtId));
+            }
+
+            if (updateStreamFilter.TargetRtId.HasValue)
+            {
+                pipeline = pipeline.Match(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
+                    "fullDocument." + nameof(RtAssociation.TargetRtId).ToCamelCase(), updateStreamFilter.TargetRtId));
+            }
+
+            return pipeline;
+        }, cancellationToken);
+    }
+
+    public IUpdateStream<RtAssociation> SubscribeToRtAssociations<TOriginEntity, TTargetEntity>(
+        UpdateAssociationStreamFilter updateStreamFilter,
+        CancellationToken cancellationToken = default) where TOriginEntity : RtEntity, new() where TTargetEntity : RtEntity, new()
+    {
+        var originCkId = RtEntityExtensions.GetCkId<TOriginEntity>();
+        var targetCkId = RtEntityExtensions.GetCkId<TTargetEntity>();
+
+        return SubscribeToRtAssociations(originCkId, targetCkId, updateStreamFilter, cancellationToken);
     }
 
     public async Task<IEnumerable<AutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session,
@@ -571,7 +647,7 @@ internal class TenantRepository : ITenantRepositoryInternal
             PipelineDefinition<RtEntity, AutoCompleteText>.Create(match, sortByCount, limit));
         return await result.ToListAsync();
     }
-    
+
 
     public async Task UpdateAutoCompleteTexts(IOctoSession session, string ckId, string attributeName,
         IEnumerable<string> autoCompleteTexts)

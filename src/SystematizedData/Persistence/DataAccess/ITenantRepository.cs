@@ -41,7 +41,7 @@ public interface ITenantRepository
 
     Task<RtEntity?> GetRtEntityAsync(IOctoSession session, RtEntityId rtEntityId);
 
-    Task<TEntity?> GetRtEntityAsync<TEntity>(IOctoSession session, RtEntityId rtEntityId)
+    Task<TEntity?> GetRtEntityAsync<TEntity>(IOctoSession session, OctoObjectId rtId)
         where TEntity : RtEntity, new();
 
     Task<ResultSet<RtEntity>> GetRtEntitiesByIdAsync(IOctoSession session, string ckId, IReadOnlyList<ObjectId> rtIds,
@@ -122,6 +122,13 @@ public interface ITenantRepository
     IUpdateStream<TEntity> SubscribeToRtEntities<TEntity>(UpdateStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default)
         where TEntity : RtEntity, new();
+    
+    IUpdateStream<RtAssociation> SubscribeToRtAssociations(string originCkId, string targetCkId, UpdateAssociationStreamFilter updateStreamFilter,
+        CancellationToken cancellationToken = default);
+
+    IUpdateStream<RtAssociation> SubscribeToRtAssociations<TOriginEntity, TTargetEntity>(UpdateAssociationStreamFilter updateStreamFilter,
+        CancellationToken cancellationToken = default)
+        where TOriginEntity : RtEntity, new() where TTargetEntity : RtEntity, new();
 
     Task<IEnumerable<AutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session, string ckId,
         string attributeName,

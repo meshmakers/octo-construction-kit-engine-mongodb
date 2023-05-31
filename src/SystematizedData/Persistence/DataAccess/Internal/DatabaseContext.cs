@@ -100,8 +100,11 @@ internal sealed class DatabaseContext : IDatabaseContext
         var ckEntities = (await CkEntities.GetAsync(session)).ToList();
         foreach (var ckEntity in ckEntities)
         {
-            var suffix = ckEntity.CkId.Replace(".", "_");
-            await _repository.CreateCollectionIfNotExistsAsync<RtEntity>(suffix);
+            if (!ckEntity.IsAbstract)
+            {
+                var suffix = ckEntity.CkId.Replace(".", "_");
+                await _repository.CreateCollectionIfNotExistsAsync<RtEntity>(ckEntity.EnableChangeStreamPreAndPostImages, suffix);
+            }
         }
     }
 

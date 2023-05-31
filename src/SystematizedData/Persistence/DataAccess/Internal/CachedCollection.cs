@@ -358,7 +358,8 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
     }
 
 
-    public IUpdateStream<TDocument> Subscribe(UpdateStreamFilter updateStreamFilter,
+    public IUpdateStream<TDocument> Subscribe(UpdateTypes updateTypes, 
+        Func<PipelineDefinition<ChangeStreamDocument<TDocument>, ChangeStreamDocument<TDocument>>, PipelineDefinition<ChangeStreamDocument<TDocument>, ChangeStreamDocument<TDocument>>> pipelineFunc,
         CancellationToken cancellationToken = default)
     {
         var updateStream = new UpdateStream<TDocument>();
@@ -367,25 +368,20 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
             new EmptyPipelineDefinition<ChangeStreamDocument<TDocument>>();
 
 
-        pipeline = pipeline.Match(x =>
-            (x.OperationType == ChangeStreamOperationType.Update &&
-             updateStreamFilter.UpdateTypes.HasFlag(UpdateTypes.Update)) ||
-            (x.OperationType == ChangeStreamOperationType.Insert &&
-             updateStreamFilter.UpdateTypes.HasFlag(UpdateTypes.Insert)) ||
-            (x.OperationType == ChangeStreamOperationType.Delete &&
-             updateStreamFilter.UpdateTypes.HasFlag(UpdateTypes.Delete)) ||
-            (x.OperationType == ChangeStreamOperationType.Replace &&
-             updateStreamFilter.UpdateTypes.HasFlag(UpdateTypes.Replace)) ||
-            updateStreamFilter.UpdateTypes == UpdateTypes.Undefined
-        );
+        // pipeline = pipeline.Match(x =>
+        //     // (x.OperationType == ChangeStreamOperationType.Update &&
+        //     //  updateTypes.HasFlag(UpdateTypes.Update)) ||
+        //  //   (x.OperationType == ChangeStreamOperationType.Insert &&
+        // //     updateTypes.HasFlag(UpdateTypes.Insert)) ||
+        //    /* (*/x.OperationType == ChangeStreamOperationType.Delete //&&
+        //    //  updateTypes.HasFlag(UpdateTypes.Delete)) ||
+        //     // (x.OperationType == ChangeStreamOperationType.Replace &&
+        //     //  updateTypes.HasFlag(UpdateTypes.Replace)) ||
+        //     // updateTypes == UpdateTypes.Undefined
+        // );
 
 
-        if (updateStreamFilter.RtId.HasValue)
-        {
-            var filter = Builders<ChangeStreamDocument<TDocument>>.Filter.Eq("fullDocument." + Constants.IdField,
-                updateStreamFilter.RtId.Value.ToObjectId());
-            pipeline = pipeline.Match(filter);
-        }
+        pipeline = pipelineFunc(pipeline);
 
         updateStream.Watch(_documentCollection, pipeline, cancellationToken);
         return updateStream;

@@ -136,18 +136,18 @@ public class SystemContext : ISystemContext
 
     private async Task CreateSystemSchemaAsync(IOctoSession systemSession)
     {
-        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<SystemEntities.OctoTenant>();
-        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoConfiguration>();
-        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoUser>();
-        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoRole>();
-        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoPermission>();
-        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoPermissionRole>();
-        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoClient>();
-        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoApiResource>();
-        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoApiScope>();
-        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoIdentityResource>();
-        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoPersistedGrant>();
-        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoIdentityProvider>();
+        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<SystemEntities.OctoTenant>(false);
+        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoConfiguration>(false);
+        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoUser>(false);
+        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoRole>(false);
+        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoPermission>(false);
+        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoPermissionRole>(false);
+        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoClient>(false);
+        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoApiResource>(false);
+        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoApiScope>(false);
+        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoIdentityResource>(false);
+        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoPersistedGrant>(false);
+        await OctoSystemDatabase.CreateCollectionIfNotExistsAsync<OctoIdentityProvider>(false);
 
         await SetConfigAsync(systemSession, Constants.SystemSchemaVersion, Constants.SystemSchemaVersionValue);
     }
@@ -312,11 +312,11 @@ public class SystemContext : ISystemContext
             _systemConfiguration.DatabaseUserPassword);
 
         var repository = _repositoryClient.GetRepository(normalizedDatabaseName);
-        await repository.CreateCollectionIfNotExistsAsync<CkAttribute>();
-        await repository.CreateCollectionIfNotExistsAsync<CkEntity>();
-        await repository.CreateCollectionIfNotExistsAsync<CkEntityAssociation>();
-        await repository.CreateCollectionIfNotExistsAsync<CkEntityInheritance>();
-        await repository.CreateCollectionIfNotExistsAsync<RtAssociation>();
+        await repository.CreateCollectionIfNotExistsAsync<CkAttribute>(false);
+        await repository.CreateCollectionIfNotExistsAsync<CkEntity>(false);
+        await repository.CreateCollectionIfNotExistsAsync<CkEntityAssociation>(false);
+        await repository.CreateCollectionIfNotExistsAsync<CkEntityInheritance>(false);
+        await repository.CreateCollectionIfNotExistsAsync<RtAssociation>(true);
 
 
         var octoTenant = new SystemEntities.OctoTenant

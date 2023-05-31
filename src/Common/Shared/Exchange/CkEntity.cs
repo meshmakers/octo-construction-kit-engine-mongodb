@@ -26,4 +26,9 @@ public class CkEntity
     [JsonProperty("indexes")] public List<CkEntityIndexDto> Indexes { get; }
 
     [JsonProperty("associations")] public List<CkEntityAssociation> Associations { get; }
+    
+    /// <summary>
+    /// Gets or sets if the change stream should include pre and post images
+    /// </summary>
+    [JsonProperty("enableChangeStreamPreAndPostImages")] public bool EnableChangeStreamPreAndPostImages { get; set; }
 }

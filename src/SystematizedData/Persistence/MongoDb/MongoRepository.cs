@@ -44,13 +44,20 @@ public class MongoRepository : IRepositoryInternal
         return new OctoSession(session);
     }
 
-    public async Task CreateCollectionIfNotExistsAsync<TCollection>(string? suffix = null)
+    public async Task CreateCollectionIfNotExistsAsync<TCollection>(bool enableChangeStreamPreAndPostImages, string? suffix = null)
         where TCollection : class, new()
     {
         if (!await CollectionExistsAsync<TCollection>(suffix))
         {
             var name = GetCollectionName<TCollection>(suffix);
-            await _database.CreateCollectionAsync(name);
+            var options = new CreateCollectionOptions
+            {
+                ChangeStreamPreAndPostImagesOptions = new ChangeStreamPreAndPostImagesOptions
+                {
+                    Enabled = enableChangeStreamPreAndPostImages
+                }
+            };
+            await _database.CreateCollectionAsync(name, options);
         }
     }
 
