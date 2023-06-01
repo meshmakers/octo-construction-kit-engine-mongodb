@@ -173,8 +173,8 @@ public class MutationHandler
             await InsertRtAssociationsAsync(session, graphRuleEngineResult.RtAssociationsToCreate);
         }
     }
-    
-    public async Task InsertRtAssociationsAsync(IOctoSession session, IEnumerable<RtAssociation> rtAssociations)
+
+    private async Task InsertRtAssociationsAsync(IOctoSession session, IEnumerable<RtAssociation> rtAssociations)
     {
         await _databaseContext.RtAssociations.InsertMultipleAsync(session, rtAssociations);
     }
