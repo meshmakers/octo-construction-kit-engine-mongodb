@@ -26,8 +26,10 @@ public class UpdateInfo<T> where T : class, new()
         }
 
         Document = changeStreamDocument.FullDocument;
+        DocumentBeforeChange = changeStreamDocument.FullDocumentBeforeChange;
     }
 
     public UpdateTypes UpdateType { get; }
-    public T Document { get; }
+    public T? Document { get; }
+    public T? DocumentBeforeChange { get; }
 }

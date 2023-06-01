@@ -367,7 +367,6 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
         PipelineDefinition<ChangeStreamDocument<TDocument>, ChangeStreamDocument<TDocument>> pipeline =
             new EmptyPipelineDefinition<ChangeStreamDocument<TDocument>>();
 
-
         // pipeline = pipeline.Match(x =>
         //     // (x.OperationType == ChangeStreamOperationType.Update &&
         //     //  updateTypes.HasFlag(UpdateTypes.Update)) ||
@@ -381,7 +380,7 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
         // );
 
 
-        pipeline = pipelineFunc(pipeline);
+       // pipeline = pipelineFunc(pipeline);
 
         updateStream.Watch(_documentCollection, pipeline, cancellationToken);
         return updateStream;

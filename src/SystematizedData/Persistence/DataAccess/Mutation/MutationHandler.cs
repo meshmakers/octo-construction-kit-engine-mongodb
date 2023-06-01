@@ -163,14 +163,14 @@ public class MutationHandler
     private async Task ApplyRtAssociationChangesAsync(IOctoSession session,
         GraphRuleEngineResult graphRuleEngineResult)
     {
-        if (graphRuleEngineResult.RtAssociationsToCreate.Any())
-        {
-            await InsertRtAssociationsAsync(session, graphRuleEngineResult.RtAssociationsToCreate);
-        }
-
         if (graphRuleEngineResult.RtAssociationsToDelete.Any())
         {
             await DeleteRtAssociationsAsync(session, graphRuleEngineResult.RtAssociationsToDelete);
+        }
+        
+        if (graphRuleEngineResult.RtAssociationsToCreate.Any())
+        {
+            await InsertRtAssociationsAsync(session, graphRuleEngineResult.RtAssociationsToCreate);
         }
     }
     
