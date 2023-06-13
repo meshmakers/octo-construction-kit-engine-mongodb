@@ -7,9 +7,9 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 internal static class BuildExtensions
 {
     internal static FilterDefinition<TDocument> BuildIdFilter<TDocument, TField>(
-        this FilterDefinitionBuilder<TDocument> _this, TField id)
+        this FilterDefinitionBuilder<TDocument> @this, TField id)
     {
-        return _this.Eq(Constants.IdField, id);
+        return @this.Eq(Constants.IdField, id);
     }
 
     /// <summary>
@@ -34,9 +34,9 @@ internal static class BuildExtensions
         IMongoCollection<TForeignDocument> foreignCollection,
         FieldDefinition<TResult> localField,
         FieldDefinition<TForeignDocument> foreignField,
-        PipelineDefinition<TForeignDocument, TAsElement> lookupPipeline,
+        PipelineDefinition<TForeignDocument, TAsElement>? lookupPipeline,
         FieldDefinition<TOutput, TAs> @as,
-        AggregateLookupOptions<TForeignDocument, TOutput> options = null)
+        AggregateLookupOptions<TForeignDocument, TOutput>? options = null)
         where TAs : IEnumerable<TAsElement>
     {
         Ensure.IsNotNull(aggregate, nameof(aggregate));

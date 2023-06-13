@@ -49,7 +49,8 @@ public interface ITenantRepository
 
     Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
         IEnumerable<ObjectId> originRtIds, string originCkId, string roleId, string targetCkId,
-        GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
+        GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
+        int? take = null);
 
     Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
         IOctoSession session,
@@ -58,6 +59,18 @@ public interface ITenantRepository
         int? take = null)
         where TOriginEntity : RtEntity
         where TTargetEntity : RtEntity, new();
+
+    Task<ResultSet<TTargetEntity>?> GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
+        IOctoSession session, ObjectId originRtId, string roleId,
+        GraphDirections graphDirection)
+        where TOriginEntity : RtEntity
+        where TTargetEntity : RtEntity, new();
+
+    Task<IMultipleOriginResultSet<TTargetEntity>> GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(IOctoSession session,
+        IEnumerable<ObjectId> originRtIds,
+        string roleId,
+        GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
+        int? take = null) where TOriginEntity : RtEntity where TTargetEntity : RtEntity, new();
 
     Task<RtAssociation> GetRtAssociationAsync(IOctoSession session, RtEntityId rtEntityIdOrigin,
         RtEntityId rtEntityIdTarget,
@@ -118,12 +131,13 @@ public interface ITenantRepository
 
     IUpdateStream<RtEntity> SubscribeToRtEntities(string ckId, UpdateStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default);
-    
+
     IUpdateStream<TEntity> SubscribeToRtEntities<TEntity>(UpdateStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default)
         where TEntity : RtEntity, new();
-    
-    IUpdateStream<RtAssociation> SubscribeToRtAssociations(string originCkId, string targetCkId, UpdateAssociationStreamFilter updateStreamFilter,
+
+    IUpdateStream<RtAssociation> SubscribeToRtAssociations(string originCkId, string targetCkId,
+        UpdateAssociationStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default);
 
     IUpdateStream<RtAssociation> SubscribeToRtAssociations<TOriginEntity, TTargetEntity>(UpdateAssociationStreamFilter updateStreamFilter,

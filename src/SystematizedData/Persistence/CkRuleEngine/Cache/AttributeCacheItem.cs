@@ -41,8 +41,8 @@ public class AttributeCacheItem
 
     public AttributeValueTypes AttributeValueType { get; }
 
-    public object DefaultValue { get; }
+    public object? DefaultValue { get; }
 
-    public ICollection<object> DefaultValues { get; }
-    public ICollection<CkSelectionValue> SelectionValues { get; }
+    public ICollection<object>? DefaultValues { get; }
+    public ICollection<CkSelectionValue>? SelectionValues { get; }
 }

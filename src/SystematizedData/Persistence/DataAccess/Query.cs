@@ -181,7 +181,7 @@ public abstract class Query<TEntity> where TEntity : class, new()
         if (propertyType != null && propertyType.IsEnum)
         {
             var nameCandidates = Enum.GetNames(propertyType)
-                .Where(x => x.ToLower().Contains(searchTerm.ToString().ToLower()));
+                .Where(x => x.ToLower().Contains(searchTerm.ToString()?.ToLower()));
 
             var values = new List<object>();
             foreach (var nameCandidate in nameCandidates)

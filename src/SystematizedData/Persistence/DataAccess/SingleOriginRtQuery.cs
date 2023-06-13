@@ -57,14 +57,14 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<TEntity> where T
         return _entityCacheItem.CkId;
     }
 
-    protected override object ResolveSearchAttributeValue(string attributeName, object searchTerm, out bool isEnum)
+    protected override object? ResolveSearchAttributeValue(string attributeName, object? searchTerm, out bool isEnum)
     {
         if (searchTerm != null &&
             _entityCacheItem.Attributes.TryGetValue(attributeName, out var attributeCacheItem))
         {
             if (attributeCacheItem.SelectionValues != null)
             {
-                var searchTermString = searchTerm.ToString().Replace("_", "");
+                var searchTermString = searchTerm.ToString()?.Replace("_", "");
 
                 // Search for match in selection value
                 var result = attributeCacheItem.SelectionValues.FirstOrDefault(x =>
@@ -78,27 +78,31 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<TEntity> where T
 
             if (searchTerm.ToString()?.StartsWith("@") == true)
             {
-                var expression = new OctoExpression(searchTerm.ToString()?.Substring(1));
-                var result = expression.calculate();
-
-                if (double.IsNegativeInfinity(result))
+                var expressionString = searchTerm.ToString()?.Substring(1);
+                if (!string.IsNullOrWhiteSpace(expressionString))
                 {
-                    isEnum = false;
-                    return null;
-                }
+                    var expression = new OctoExpression(expressionString);
+                    var result = expression.calculate();
 
-                if (!double.IsNaN(result))
-                {
-                    switch (attributeCacheItem.AttributeValueType)
+                    if (double.IsNegativeInfinity(result))
                     {
-                        case AttributeValueTypes.DateTime:
-                            isEnum = false;
-                            return new DateTime((long)result);
+                        isEnum = false;
+                        return null;
                     }
-                }
-                else
-                {
-                    throw new OperationFailedException($"Term '{searchTerm}' cannot be evaluated by formula.");
+
+                    if (!double.IsNaN(result))
+                    {
+                        switch (attributeCacheItem.AttributeValueType)
+                        {
+                            case AttributeValueTypes.DateTime:
+                                isEnum = false;
+                                return new DateTime((long)result);
+                        }
+                    }
+                    else
+                    {
+                        throw new OperationFailedException($"Term '{searchTerm}' cannot be evaluated by formula.");
+                    }
                 }
             }
 
