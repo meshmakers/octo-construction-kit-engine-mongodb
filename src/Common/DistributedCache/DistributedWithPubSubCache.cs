@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
 using Microsoft.Extensions.Options;
@@ -62,6 +61,7 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
     public async Task PublishAsync(string channel, string value)
     {
         ArgumentValidation.ValidateString(nameof(channel), channel);
+        
         await _subscriber.PublishAsync(channel, value);
         await SaveLastMessage(channel, value);
     }
