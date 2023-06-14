@@ -3,7 +3,7 @@
     <PropertyGroup>
         <AssemblyName>Meshmakers.Octo.SystematizedData.Persistence</AssemblyName>
         <Description>The persistance layer of Octo Mesh (direct read/write operations to database)</Description>
-        <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+        <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
         <PackageIcon>meshmakers64.png</PackageIcon>
         <PackageId>Meshmakers.Octo.SystematizedData.Persistence</PackageId>
         <PackageLicenseFile>LICENSE</PackageLicenseFile>

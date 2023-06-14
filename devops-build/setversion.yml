@@ -4,13 +4,10 @@ steps:
   inputs:
     FileNames: |
       **/*.csproj
-      !src/Frontend/Client/*.csproj
-      !src/Common/Shared/*.csproj      
-      !src/Backend/Common/*.csproj
     InsertAttributes: true
     FileEncoding: 'auto'
     GeneratePackageOnBuild: false
-    Authors: Meshmakers GmbH and contributors
+    Authors: meshmakers GmbH and contributors
     Company: $(Company)
     Product: $(Build.SourceBranchName) - $(Build.SourceVersion) (release)
     Copyright: $(Copyright)
@@ -25,13 +22,13 @@ steps:
   displayName: "Versioning (nuget)"
   inputs:
     FileNames: |      
-      src/Frontend/Client/*.csproj
+      src/Common/Communication.Contracts/*.csproj
+      src/Common/Communication.Plugs.Contracts/*.csproj    
       src/Common/Shared/*.csproj
-      src/Backend/Common/*.csproj
     InsertAttributes: true
     FileEncoding: 'auto'
     GeneratePackageOnBuild: true
-    Authors: Meshmakers GmbH and contributors
+    Authors: meshmakers GmbH and contributors
     Company: $(Company)
     Product: $(Build.SourceBranchName) - $(Build.SourceVersion) (release)
     Copyright: $(Copyright)
