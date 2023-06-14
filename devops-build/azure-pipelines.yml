@@ -4,10 +4,11 @@ trigger:
   batch: true
   tags:
     include:
-    - 'r*'
-#  branches:
-#    exclude:
-#    - dev
+      - 'r*'
+  branches:
+    include:
+      - dev/*
+      - main
 
 variables:
   buildConfiguration: 'Release'
