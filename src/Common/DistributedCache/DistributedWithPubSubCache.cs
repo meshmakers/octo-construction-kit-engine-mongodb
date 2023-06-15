@@ -38,7 +38,7 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
     /// <returns></returns>
     public async Task<string?> GetLastMessageAsStringAsync(string channelName)
     {
-        var lastMessage = await Database.ListGetByIndexAsync(channelName, -1);
+        var lastMessage = await Database.ListGetByIndexAsync($"last_message:{channelName}", -1);
         return lastMessage.HasValue ? lastMessage.ToString() : null;
     }
 
@@ -61,7 +61,9 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
     public async Task PublishAsync(string channel, string value)
     {
         ArgumentValidation.ValidateString(nameof(channel), channel);
+        
         await _subscriber.PublishAsync(channel, value);
+        await SaveLastMessage(channel, value);
     }
 
     /// <summary>
@@ -106,4 +108,9 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
     ///     Returns the Redis database
     /// </summary>
     public IDatabase Database { get; }
+    
+    private async Task SaveLastMessage(string channelName, string message)
+    {
+        await Database.ListRightPushAsync($"last_message:{channelName}", message);
+    }
 }

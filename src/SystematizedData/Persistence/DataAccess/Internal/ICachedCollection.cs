@@ -42,8 +42,8 @@ public interface ICachedCollection<TDocument> where TDocument : class, new()
     Task<BulkImportResult> BulkImportAsync(IOctoSession session, IEnumerable<TDocument> documentList);
 
     IUpdateStream<TDocument> Subscribe(UpdateTypes updateTypes,
-        Func<PipelineDefinition<ChangeStreamDocument<TDocument>, ChangeStreamDocument<TDocument>>,
-            PipelineDefinition<ChangeStreamDocument<TDocument>, ChangeStreamDocument<TDocument>>> pipelineFunc,
+        Func<FilterDefinition<ChangeStreamDocument<TDocument>>?>? documentFilterFunc = null,
+        Func<FilterDefinition<ChangeStreamDocument<TDocument>>?>? documentBeforeFilterFunc = null,
         CancellationToken cancellationToken = default);
 
     IAggregateFluent<TDocument> Aggregate(IOctoSession session);

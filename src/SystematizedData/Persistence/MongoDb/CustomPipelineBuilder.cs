@@ -15,15 +15,14 @@ internal static class CustomPipelineBuilder
         FieldDefinition<TInput> localField,
         FieldDefinition<TForeignDocument> foreignField,
         FieldDefinition<TOutput, TAs> @as,
-        PipelineDefinition<TForeignDocument, TAsElement> lookupPipeline,
-        AggregateLookupOptions<TForeignDocument, TOutput> options = null)
+        PipelineDefinition<TForeignDocument, TAsElement>? lookupPipeline,
+        AggregateLookupOptions<TForeignDocument, TOutput>? options = null)
         where TAs : IEnumerable<TAsElement>
 
     {
         Ensure.IsNotNull(foreignCollection, nameof(foreignCollection));
         Ensure.IsNotNull(localField, nameof(localField));
         Ensure.IsNotNull(foreignField, nameof(foreignField));
-        Ensure.IsNotNull(lookupPipeline, nameof(lookupPipeline));
         Ensure.IsNotNull(@as, nameof(@as));
 
         options = options ?? new AggregateLookupOptions<TForeignDocument, TOutput>();
@@ -37,9 +36,21 @@ internal static class CustomPipelineBuilder
                                         sr.GetSerializer<TForeignDocument>();
                 var outputSerializer = options.ResultSerializer ??
                                        inputSerializer as IBsonSerializer<TOutput> ?? sr.GetSerializer<TOutput>();
-                var lookupPipelineDocuments =
-                    new BsonArray(lookupPipeline.Render(foreignSerializer, sr, linqProvider).Documents);
+                if (lookupPipeline != null)
+                {
+                    var lookupPipelineDocuments = new BsonArray(lookupPipeline.Render(foreignSerializer, sr, linqProvider).Documents);
 
+                    return new RenderedPipelineStageDefinition<TOutput>(
+                        operatorName, new BsonDocument(operatorName, new BsonDocument
+                        {
+                            { "from", foreignCollection.CollectionNamespace.CollectionName },
+                            { "localField", localField.Render(inputSerializer, sr, linqProvider).FieldName },
+                            { "foreignField", foreignField.Render(foreignSerializer, sr, linqProvider).FieldName },
+                            { "pipeline", lookupPipelineDocuments },
+                            { "as", @as.Render(outputSerializer, sr, linqProvider).FieldName }
+                        }),
+                        outputSerializer);
+                }
 
                 return new RenderedPipelineStageDefinition<TOutput>(
                     operatorName, new BsonDocument(operatorName, new BsonDocument
@@ -47,7 +58,6 @@ internal static class CustomPipelineBuilder
                         { "from", foreignCollection.CollectionNamespace.CollectionName },
                         { "localField", localField.Render(inputSerializer, sr, linqProvider).FieldName },
                         { "foreignField", foreignField.Render(foreignSerializer, sr, linqProvider).FieldName },
-                        { "pipeline", lookupPipelineDocuments },
                         { "as", @as.Render(outputSerializer, sr, linqProvider).FieldName }
                     }),
                     outputSerializer);

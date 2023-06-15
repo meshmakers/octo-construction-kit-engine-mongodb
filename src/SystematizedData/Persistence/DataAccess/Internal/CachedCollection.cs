@@ -358,8 +358,9 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
     }
 
 
-    public IUpdateStream<TDocument> Subscribe(UpdateTypes updateTypes, 
-        Func<PipelineDefinition<ChangeStreamDocument<TDocument>, ChangeStreamDocument<TDocument>>, PipelineDefinition<ChangeStreamDocument<TDocument>, ChangeStreamDocument<TDocument>>> pipelineFunc,
+    public IUpdateStream<TDocument> Subscribe(UpdateTypes updateTypes,
+        Func<FilterDefinition<ChangeStreamDocument<TDocument>>?>? documentFilterFunc = null,
+        Func<FilterDefinition<ChangeStreamDocument<TDocument>>?>? documentBeforeFilterFunc = null,
         CancellationToken cancellationToken = default)
     {
         var updateStream = new UpdateStream<TDocument>();
@@ -367,21 +368,44 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
         PipelineDefinition<ChangeStreamDocument<TDocument>, ChangeStreamDocument<TDocument>> pipeline =
             new EmptyPipelineDefinition<ChangeStreamDocument<TDocument>>();
 
-        // pipeline = pipeline.Match(x =>
-        //     // (x.OperationType == ChangeStreamOperationType.Update &&
-        //     //  updateTypes.HasFlag(UpdateTypes.Update)) ||
-        //  //   (x.OperationType == ChangeStreamOperationType.Insert &&
-        // //     updateTypes.HasFlag(UpdateTypes.Insert)) ||
-        //    /* (*/x.OperationType == ChangeStreamOperationType.Delete //&&
-        //    //  updateTypes.HasFlag(UpdateTypes.Delete)) ||
-        //     // (x.OperationType == ChangeStreamOperationType.Replace &&
-        //     //  updateTypes.HasFlag(UpdateTypes.Replace)) ||
-        //     // updateTypes == UpdateTypes.Undefined
-        // );
+        pipeline = pipeline.Match(x =>
+            (x.OperationType == ChangeStreamOperationType.Update &&
+             updateTypes.HasFlag(UpdateTypes.Update)) ||
+            (x.OperationType == ChangeStreamOperationType.Insert &&
+             updateTypes.HasFlag(UpdateTypes.Insert)) ||
+            (x.OperationType == ChangeStreamOperationType.Delete &&
+             updateTypes.HasFlag(UpdateTypes.Delete)) ||
+            (x.OperationType == ChangeStreamOperationType.Replace &&
+             updateTypes.HasFlag(UpdateTypes.Replace)) ||
+            updateTypes == UpdateTypes.Undefined
+        );
 
+        FilterDefinition<ChangeStreamDocument<TDocument>>? documentFilter = null;
+        FilterDefinition<ChangeStreamDocument<TDocument>>? documentBeforeFilter = null;
 
-       // pipeline = pipelineFunc(pipeline);
+        if (documentFilterFunc != null)
+        {
+            documentFilter = documentFilterFunc();
+        }
+        if (documentBeforeFilterFunc != null)
+        {
+            documentBeforeFilter = documentBeforeFilterFunc();
+        }
 
+        if (documentFilter != null && documentBeforeFilter != null)
+        {
+            pipeline = pipeline.Match(Builders<ChangeStreamDocument<TDocument>>
+                .Filter.Or(documentFilter, documentBeforeFilter));
+        }
+        else if (documentFilter != null)
+        {
+            pipeline = pipeline.Match(documentFilter);
+        }
+        else if (documentBeforeFilter != null)
+        {
+            pipeline = pipeline.Match(documentBeforeFilter);
+        }
+        
         updateStream.Watch(_documentCollection, pipeline, cancellationToken);
         return updateStream;
     }
@@ -470,7 +494,7 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
             throw new EntityNotFoundException(message);
         }
     }
-    
+
     private void ThrowIfMatchedCountZero<TField>(long matchedCount, TField idField)
     {
         if (matchedCount == 0)

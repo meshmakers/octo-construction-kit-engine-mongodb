@@ -5,5 +5,6 @@ namespace Meshmakers.Octo.Communication.Plugs.Contracts.Hubs;
 
 public interface IPlugHub
 {
-    Task<PlugConfigurationDto> RegisterPlug(OctoObjectId plugId);
+    Task<PlugConfigurationDto> RegisterPlugAsync(OctoObjectId plugRtId);
+    Task UnRegisterPlugAsync(OctoObjectId plugRtId);
 }
