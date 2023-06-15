@@ -316,6 +316,43 @@ internal class TenantRepository : ITenantRepositoryInternal
         return await hierarchicalRtStatementCreator.ExecuteQuery(session, skip, take);
     }
 
+    public async Task<ResultSet<TTargetEntity>?> GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(IOctoSession session, ObjectId originRtId,
+        string roleId,
+        GraphDirections graphDirection) where TOriginEntity : RtEntity where TTargetEntity : RtEntity, new()
+    {
+        var dataQueryOperation = new DataQueryOperation();
+        
+        var resultSets = await GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(session, new []{originRtId}, roleId, graphDirection, null, dataQueryOperation);
+        return resultSets[originRtId];
+    }
+
+    public async Task<IMultipleOriginResultSet<TTargetEntity>> GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(IOctoSession session, IEnumerable<ObjectId> originRtIds,
+        string roleId,
+        GraphDirections graphDirection, IReadOnlyList<ObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
+        int? take = null) where TOriginEntity : RtEntity where TTargetEntity : RtEntity, new()
+    {
+        ArgumentValidation.ValidateString(nameof(roleId), roleId);
+
+        var originCkId = RtEntityExtensions.GetCkId<TOriginEntity>();
+        var targetCkId = RtEntityExtensions.GetCkId<TTargetEntity>();
+
+        var entityCacheItem = GetEntityCacheItem(targetCkId);
+
+        var rtStatementCreator =
+            new MultipleOriginIndirectHierarchicalRtQuery<TOriginEntity, TTargetEntity>(entityCacheItem, _databaseContext,
+                dataQueryOperation.Language,
+                originRtIds,
+                originCkId, roleId, graphDirection, targetCkId);
+        
+        rtStatementCreator.AddFieldFilters(dataQueryOperation.FieldFilters);
+        rtStatementCreator.AddIdFilter(rtIds);
+        rtStatementCreator.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
+        rtStatementCreator.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
+        rtStatementCreator.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+
+        return await rtStatementCreator.ExecuteQuery(session, skip, take);
+    }
+
     public async Task<ResultSet<RtEntity>> GetRtEntitiesByTypeAsync(IOctoSession session, string ckId,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
@@ -512,18 +549,17 @@ internal class TenantRepository : ITenantRepositoryInternal
     {
         var collection = _databaseContext.GetRtCollection<RtEntity>(ckId);
 
-        return collection.Subscribe(updateStreamFilter.UpdateTypes, pipeline =>
+        return collection.Subscribe(updateStreamFilter.UpdateTypes, () =>
         {
             if (updateStreamFilter.RtId.HasValue)
             {
-                var filter = Builders<ChangeStreamDocument<RtEntity>>.Filter.Eq(
+                return Builders<ChangeStreamDocument<RtEntity>>.Filter.Eq(
                     "fullDocument." + Constants.IdField,
                     updateStreamFilter.RtId.Value.ToObjectId());
-                return pipeline.Match(filter);
             }
 
-            return pipeline;
-        }, cancellationToken);
+            return default;
+        }, () => null, cancellationToken);
     }
 
     public IUpdateStream<TEntity> SubscribeToRtEntities<TEntity>(UpdateStreamFilter updateStreamFilter,
@@ -534,50 +570,81 @@ internal class TenantRepository : ITenantRepositoryInternal
 
         var collection = _databaseContext.GetRtCollection<TEntity>(ckId);
 
-        return collection.Subscribe(updateStreamFilter.UpdateTypes, pipeline =>
+        return collection.Subscribe(updateStreamFilter.UpdateTypes, () =>
         {
             if (updateStreamFilter.RtId.HasValue)
             {
-                var filter = Builders<ChangeStreamDocument<TEntity>>.Filter.Eq(
+                return Builders<ChangeStreamDocument<TEntity>>.Filter.Eq(
                     "fullDocument." + Constants.IdField,
                     updateStreamFilter.RtId.Value.ToObjectId());
-                return pipeline.Match(filter);
             }
 
-            return pipeline;
-        }, cancellationToken);
+            return default;
+        }, () => null, cancellationToken);
     }
 
     public IUpdateStream<RtAssociation> SubscribeToRtAssociations(string originCkId, string targetCkId,
         UpdateAssociationStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default)
     {
-        return _databaseContext.RtAssociations.Subscribe(updateStreamFilter.UpdateTypes, pipeline =>
+        return _databaseContext.RtAssociations.Subscribe(updateStreamFilter.UpdateTypes, () =>
         {
-            pipeline = pipeline.Match(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
-                "fullDocument." + nameof(RtAssociation.OriginCkId).ToCamelCase(), originCkId));
-            pipeline = pipeline.Match(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
-                "fullDocument." + nameof(RtAssociation.TargetCkId).ToCamelCase(), targetCkId));
+            var filterList = new List<FilterDefinition<ChangeStreamDocument<RtAssociation>>>
+            {
+                Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
+                    "fullDocument." + nameof(RtAssociation.OriginCkId).ToCamelCase(), originCkId),
+                Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
+                    "fullDocument." + nameof(RtAssociation.TargetCkId).ToCamelCase(), targetCkId)
+            };
 
             if (!string.IsNullOrWhiteSpace(updateStreamFilter.RoleId))
             {
-                pipeline = pipeline.Match(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
+                filterList.Add(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
                     "fullDocument." + nameof(RtAssociation.AssociationRoleId).ToCamelCase(), updateStreamFilter.RoleId));
             }
 
             if (updateStreamFilter.OriginRtId.HasValue)
             {
-                pipeline = pipeline.Match(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
+                filterList.Add(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
                     "fullDocument." + nameof(RtAssociation.OriginRtId).ToCamelCase(), updateStreamFilter.OriginRtId));
             }
 
             if (updateStreamFilter.TargetRtId.HasValue)
             {
-                pipeline = pipeline.Match(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
+                filterList.Add(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
                     "fullDocument." + nameof(RtAssociation.TargetRtId).ToCamelCase(), updateStreamFilter.TargetRtId));
             }
 
-            return pipeline;
+            return Builders<ChangeStreamDocument<RtAssociation>>.Filter.And(filterList);
+        }, () =>
+        {
+            var filterList = new List<FilterDefinition<ChangeStreamDocument<RtAssociation>>>
+            {
+                Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
+                    "fullDocumentBeforeChange." + nameof(RtAssociation.OriginCkId).ToCamelCase(), originCkId),
+                Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
+                    "fullDocumentBeforeChange." + nameof(RtAssociation.TargetCkId).ToCamelCase(), targetCkId)
+            };
+
+            if (!string.IsNullOrWhiteSpace(updateStreamFilter.RoleId))
+            {
+                filterList.Add(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
+                    "fullDocumentBeforeChange." + nameof(RtAssociation.AssociationRoleId).ToCamelCase(), updateStreamFilter.RoleId));
+            }
+
+            if (updateStreamFilter.OriginRtId.HasValue)
+            {
+                filterList.Add(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
+                    "fullDocumentBeforeChange." + nameof(RtAssociation.OriginRtId).ToCamelCase(), updateStreamFilter.OriginRtId));
+            }
+
+            if (updateStreamFilter.TargetRtId.HasValue)
+            {
+                filterList.Add(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
+                    "fullDocumentBeforeChange." + nameof(RtAssociation.TargetRtId).ToCamelCase(), updateStreamFilter.TargetRtId));
+            }
+
+            return Builders<ChangeStreamDocument<RtAssociation>>.Filter.And(filterList);
         }, cancellationToken);
     }
 

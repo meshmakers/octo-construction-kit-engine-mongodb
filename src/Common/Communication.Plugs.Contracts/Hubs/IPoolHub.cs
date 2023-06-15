@@ -3,7 +3,7 @@ using Meshmakers.Octo.Communication.Plugs.Contracts.DataTransferObjects;
 
 namespace Meshmakers.Octo.Communication.Plugs.Contracts.Hubs;
 
-public interface IPlugPoolHub
+public interface IPoolHub
 {
     Task<PlugPoolConfigurationDto> RegisterPlugPoolOperatorAsync(string plugPoolName);
 

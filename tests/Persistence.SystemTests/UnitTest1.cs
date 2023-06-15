@@ -1,7 +1,10 @@
 using System.Collections.Generic;
 using System.Linq;
+using Meshmakers.Octo.Backend.PlugControllerServices.CkModelEntities;
+using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
+using MongoDB.Bson;
 using Xunit;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemTests;
@@ -13,6 +16,24 @@ public class UnitTest1 : IClassFixture<TenantFixture>
     public UnitTest1(TenantFixture tenantFixture)
     {
         _tenantFixture = tenantFixture;
+    }
+
+    [Fact]
+    public async void TestGetIndirectRtAssociationTargets()
+    {
+        var tenantContext = await _tenantFixture.GetTenantContextAsync();
+
+        using (var session = await tenantContext.Repository.StartSessionAsync())
+        {
+            session.StartTransaction();
+
+            ObjectId originRtId = ObjectId.Parse("5fc8fc3d8b2fc75f925e21bc");
+
+
+            var r = await tenantContext.Repository.GetIndirectRtAssociationTargetsAsync<RtPlugMapping, RtPlug>(session, originRtId, Statics.RoleIdParentChild,
+                GraphDirections.Outbound);
+
+        }
     }
 
     [Fact]

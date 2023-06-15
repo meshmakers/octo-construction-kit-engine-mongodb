@@ -24,4 +24,5 @@ public enum UpdateTypes
     
     /// <summary>All operation types.</summary>
     All = Insert | Update | Replace | Delete
+    
 }
