@@ -14,12 +14,14 @@
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
-        <OutputPath>..\..\..\bin\Debug\Communication\Common\</OutputPath>
+        <OutputPath>..\..\..\bin\Debug\Common\</OutputPath>
+        <DocumentationFile>..\..\..\bin\Debug\Common\Meshmakers.Octo.Communication.Contracts.xml</DocumentationFile>
         <NoWarn>1701;1702;CS8002</NoWarn>
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-        <OutputPath>..\..\..\bin\Release\Communication\Common\</OutputPath>
+        <OutputPath>..\..\..\bin\Release\Common\</OutputPath>
+        <DocumentationFile>..\..\..\bin\Release\Common\Meshmakers.Octo.Communication.Contracts.xml</DocumentationFile>
         <NoWarn>1701;1702;CS8002</NoWarn>
     </PropertyGroup>
 

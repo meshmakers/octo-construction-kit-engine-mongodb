@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using IdentityModel.Client;
 using Meshmakers.Common.Shared;
 using Microsoft.Extensions.Options;
+// ReSharper disable UnusedType.Global
 
 namespace Meshmakers.Octo.Common.Shared.Authorization;
 
@@ -34,6 +35,7 @@ public class AuthorizationClient : IAuthorizationClient
         }
     }
     
+    // ReSharper disable once MemberCanBePrivate.Global
     protected AuthorizationOptions Options { get; private set; }
 
     public async Task<UserInfoData> GetUserInfoAsync(string accessToken)
@@ -102,10 +104,11 @@ public class AuthorizationClient : IAuthorizationClient
     {
         if (response.IsError)
         {
-            throw new AuthorizationFailedException(response.Error, response.Error, response.Exception);
+            throw AuthorizationFailedException.AuthenticationFailed(response.Error, response.Exception);
         }
     }
 
+    // ReSharper disable once MemberCanBePrivate.Global
     protected async Task<DiscoveryDocumentResponse> GetDiscoveryResponse()
     {
         var disco = await Cache.GetAsync();

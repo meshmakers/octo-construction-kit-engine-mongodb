@@ -1,0 +1,13 @@
+<Project>
+    <PropertyGroup>
+        <BaseDirectoryBuildPath>$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))</BaseDirectoryBuildPath>
+    </PropertyGroup>
+    <Import Condition="Exists($(BaseDirectoryBuildPath))" Project="$(BaseDirectoryBuildPath)" />
+    <PropertyGroup>
+        <Authors>meshmakers GmbH</Authors>
+        <Company>meshmakers GmbH</Company>
+        <Copyright>https://www.meshmakers.io</Copyright>
+        <LangVersion>latestmajor</LangVersion>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+</Project>

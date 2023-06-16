@@ -13,13 +13,13 @@
     </PropertyGroup>
 
     <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
-        <OutputPath>..\..\..\bin\Debug\Common\DistributedCache</OutputPath>
-        <DocumentationFile>..\..\..\bin\Debug\Common\DistributedCache\DistributedCache.xml</DocumentationFile>
+        <OutputPath>..\..\..\bin\Debug\Common\</OutputPath>
+        <DocumentationFile>..\..\..\bin\Debug\Common\Meshmakers.Octo.Common.DistributedCache.xml</DocumentationFile>
     </PropertyGroup>
 
     <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
-        <OutputPath>..\..\..\bin\Release\Common\DistributedCache</OutputPath>
-        <DocumentationFile>..\..\..\bin\Release\Common\DistributedCache\DistributedCache.xml</DocumentationFile>
+        <OutputPath>..\..\..\bin\Release\Common\</OutputPath>
+        <DocumentationFile>..\..\..\bin\Release\Common\Meshmakers.Octo.Common.DistributedCache.xml</DocumentationFile>
     </PropertyGroup>
 
     <ItemGroup>

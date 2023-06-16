@@ -1,25 +1,23 @@
 using System;
-using System.Runtime.Serialization;
 
 namespace Meshmakers.Octo.Common.Shared.Authorization;
 
 [Serializable]
 public class AuthorizationFailedException : Exception
 {
-    public AuthorizationFailedException(string error)
+    public AuthorizationFailedException(string message) : base(message)
     {
-        Error = error;
+    }
+    
+    public AuthorizationFailedException(string message, Exception? innerException) 
+        : base(message, innerException)
+    {
     }
 
-    public AuthorizationFailedException(string error, string message) : base(message)
-    {
-        Error = error;
-    }
 
-    public AuthorizationFailedException(string error, string message, Exception inner) : base(message, inner)
+    internal static Exception AuthenticationFailed(string? responseError, Exception? responseException)
     {
-        Error = error;
+        return new AuthorizationFailedException(
+            $"Authentication failed. Response error: {responseError}", responseException);
     }
-
-    public string Error { get; }
 }

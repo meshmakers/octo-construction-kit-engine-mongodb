@@ -19,11 +19,13 @@
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
-        <OutputPath>..\..\..\bin\Debug\Common\Shared\</OutputPath>
+        <OutputPath>..\..\..\bin\Debug\Common\</OutputPath>
+        <DocumentationFile>..\..\..\bin\Debug\Common\Meshmakers.Octo.Common.Shared.xml</DocumentationFile>
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-        <OutputPath>..\..\..\bin\Release\Common\Shared\</OutputPath>
+        <OutputPath>..\..\..\bin\Release\Common\</OutputPath>
+        <DocumentationFile>..\..\..\bin\Debug\Common\Meshmakers.Octo.Common.Shared.xml</DocumentationFile>
     </PropertyGroup>
 
     <ItemGroup>
