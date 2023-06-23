@@ -188,6 +188,13 @@ public class SystemContext : ISystemContext
         return result;
     }
 
+    public async Task ClearCacheAsync(string tenantId)
+    {
+        ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
+        
+        await UnloadTenantCachesAsync(tenantId);
+    }
+
     private async Task<ITenantContextInternal> CreateOrGetTenantContextInternal(IOctoSession systemSession,
         string tenantId)
     {

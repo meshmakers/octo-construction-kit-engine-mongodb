@@ -51,5 +51,10 @@ public interface ISystemContext
     /// <returns>Interface to access the content of the tenant</returns>
     Task<ITenantContext> CreateOrGetTenantContextAsync(string tenantId);
 
-    bool TryGetCkCache(string tenantId, out ICkCache? ckCache);
+    /// <summary>
+    /// Initializes clearing of caches of octo mesh services for a given tenant id.
+    /// </summary>
+    /// <param name="tenantId">Identifier of tenant</param>
+    /// <returns></returns>
+    Task ClearCacheAsync(string tenantId);
 }
