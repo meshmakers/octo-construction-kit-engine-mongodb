@@ -10,7 +10,7 @@ namespace Meshmakers.Octo.Communication.Contracts.DataTransferObjects;
 public record PoolConfigurationDto
 {
     /// <summary>
-    /// Gets or sets plugs associated with the pool.
+    /// Gets or sets communication adapters associated with the pool.
     /// </summary>
-    public IEnumerable<PoolPlugDto> Plugs { get; init; } = null!;
+    public IEnumerable<PoolCommunicationAdapterDto> CommunicationAdapterList { get; init; } = null!;
 }

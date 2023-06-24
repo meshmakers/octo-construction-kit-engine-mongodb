@@ -7,9 +7,9 @@ using Meshmakers.Octo.Common.Shared;
 namespace Meshmakers.Octo.Communication.Contracts.DataTransferObjects;
 
 /// <summary>
-/// Represents a plug in a pool for data transfer.
+/// Represents a communication adapter in a pool for data transfer.
 /// </summary>
-public record PoolPlugDto
+public record PoolCommunicationAdapterDto
 {
     /// <summary>
     /// Gets or sets the object identifier of the pool.
@@ -22,17 +22,22 @@ public record PoolPlugDto
     public string PoolName { get; set; } = null!;
     
     /// <summary>
-    /// Gets or sets the object identifier of the plug.
+    /// Gets or sets the object identifier of the communication adapter.
     /// </summary>
-    public OctoObjectId PlugRtId { get; set; }
+    public OctoObjectId CommunicationAdapterRtId { get; set; }
     
     /// <summary>
-    /// Gets or sets the docker image name of the plug.
+    /// Gets or sets the construction kit identifier of the communication adapter.
+    /// </summary>
+    public string CommunicationAdapterCkId { get; set; } = null!;
+    
+    /// <summary>
+    /// Gets or sets the docker image name of the communication adapter.
     /// </summary>
     public string ImageName { get; set; } = null!;
     
     /// <summary>
-    /// Gets or sets the docker image version of the plug.
+    /// Gets or sets the docker image version of the communication adapter.
     /// </summary>
     public string Version { get; set; } = null!;
 }
