@@ -1,10 +1,9 @@
-using Meshmakers.Octo.Backend.Persistence.SystemTests;
 using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using MongoDB.Bson.Serialization.Attributes;
 using Newtonsoft.Json;
 
-namespace Meshmakers.Octo.Backend.PlugControllerServices.CkModelEntities;
+namespace Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
 
 [CkId(Statics.CkIdPlugGroup)]
 public class RtPlugGroup : RtEntity

@@ -7,19 +7,19 @@ using Meshmakers.Octo.Common.Shared;
 namespace Meshmakers.Octo.Communication.Contracts.DataTransferObjects;
 
 /// <summary>
-/// Represents a plug in a plug pool for data transfer.
+/// Represents a plug in a pool for data transfer.
 /// </summary>
 public record PoolPlugDto
 {
     /// <summary>
-    /// Gets or sets the object identifier of the plug pool.
+    /// Gets or sets the object identifier of the pool.
     /// </summary>
-    public OctoObjectId PlugPoolRtId { get; set; }
+    public OctoObjectId PoolRtId { get; set; }
     
     /// <summary>
-    /// Gets or sets the name of the plug pool.
+    /// Gets or sets the name of the pool.
     /// </summary>
-    public string PlugPoolName { get; set; } = null!;
+    public string PoolName { get; set; } = null!;
     
     /// <summary>
     /// Gets or sets the object identifier of the plug.

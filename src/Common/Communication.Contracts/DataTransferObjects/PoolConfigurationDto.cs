@@ -5,7 +5,7 @@ namespace Meshmakers.Octo.Communication.Contracts.DataTransferObjects;
 // ReSharper disable UnusedMember.Global
 
 /// <summary>
-/// Represents the configuration of a plug pool for data transfer.
+/// Represents the configuration of a pool for data transfer.
 /// </summary>
 public record PoolConfigurationDto
 {

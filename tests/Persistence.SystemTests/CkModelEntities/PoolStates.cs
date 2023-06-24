@@ -1,6 +1,6 @@
-namespace Meshmakers.Octo.Backend.PlugControllerServices.CkModelEntities;
+namespace Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
 
-public enum PlugPoolStates
+public enum PoolStates
 {
     Created = 0,
     Pending = 1,

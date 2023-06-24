@@ -1,4 +1,4 @@
-namespace Meshmakers.Octo.Backend.PlugControllerServices.CkModelEntities;
+namespace Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
 
 public enum PlugStates
 {

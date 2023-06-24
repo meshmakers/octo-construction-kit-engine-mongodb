@@ -1,14 +1,13 @@
 using System;
-using Meshmakers.Octo.Backend.Persistence.SystemTests;
 using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using MongoDB.Bson.Serialization.Attributes;
 using Newtonsoft.Json;
 
-namespace Meshmakers.Octo.Backend.PlugControllerServices.CkModelEntities;
+namespace Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
 
-[CkId(Statics.CkIdPlugPool)]
-public class RtPlugPool : RtEntity
+[CkId(Statics.CkIdCommunicationPool)]
+public class RtCommunicationPool : RtEntity
 {
     [JsonIgnore]
     [BsonIgnore]
@@ -20,9 +19,9 @@ public class RtPlugPool : RtEntity
     
     [JsonIgnore]
     [BsonIgnore]
-    public PlugPoolStates? State
+    public PoolStates? State
     {
-        get => GetAttributeValueOrDefault<PlugPoolStates>(nameof(State));
+        get => GetAttributeValueOrDefault<PoolStates>(nameof(State));
         set => SetAttributeValue(nameof(State), AttributeValueTypes.Int, value);
     }
     
