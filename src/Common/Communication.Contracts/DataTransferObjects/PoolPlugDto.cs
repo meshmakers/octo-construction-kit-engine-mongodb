@@ -9,7 +9,7 @@ namespace Meshmakers.Octo.Communication.Contracts.DataTransferObjects;
 /// <summary>
 /// Represents a plug in a plug pool for data transfer.
 /// </summary>
-public record PlugPoolPlugDto
+public record PoolPlugDto
 {
     /// <summary>
     /// Gets or sets the object identifier of the plug pool.

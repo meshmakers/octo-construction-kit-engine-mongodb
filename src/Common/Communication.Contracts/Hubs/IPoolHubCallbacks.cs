@@ -14,15 +14,15 @@ public interface IPoolHubCallbacks
     /// Informs the plug pool that a new plug has to be deployed.
     /// </summary>
     /// <param name="tenantId">Tenant identifier</param>
-    /// <param name="plugPoolPlug">Plug configuration data transfer object</param>
+    /// <param name="poolPlug">Plug configuration data transfer object</param>
     /// <returns></returns>
-    Task DeployPlugAsync(string tenantId, PlugPoolPlugDto plugPoolPlug);
+    Task DeployPlugAsync(string tenantId, PoolPlugDto poolPlug);
     
     /// <summary>
     /// Inform the plug pool that a plug has to be undeployed.
     /// </summary>
     /// <param name="tenantId">Tenant identifier</param>
-    /// <param name="plugPoolPlug">Plug configuration data transfer object</param>
+    /// <param name="poolPlug">Plug configuration data transfer object</param>
     /// <returns></returns>
-    Task UndeployPlugAsync(string tenantId, PlugPoolPlugDto plugPoolPlug);
+    Task UndeployPlugAsync(string tenantId, PoolPlugDto poolPlug);
 }

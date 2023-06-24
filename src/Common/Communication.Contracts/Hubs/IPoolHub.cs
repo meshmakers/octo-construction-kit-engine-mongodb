@@ -15,7 +15,7 @@ public interface IPoolHub
     /// </summary>
     /// <param name="plugPoolName">The name of the plug</param>
     /// <returns></returns>
-    Task<PlugPoolConfigurationDto> RegisterPlugPoolOperatorAsync(string plugPoolName);
+    Task<PoolConfigurationDto> RegisterPlugPoolOperatorAsync(string plugPoolName);
 
     /// <summary>
     /// Unregisters a plug pool from the plug controller
