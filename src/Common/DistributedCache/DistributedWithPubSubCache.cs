@@ -16,6 +16,7 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
     private readonly ConnectionMultiplexer _redis;
     private readonly ISubscriber _subscriber;
     private readonly IDatabase _database;
+    private readonly string _currentClientName;
 
     /// <summary>
     ///     Constructor
@@ -31,6 +32,8 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
         _redis = ConnectionMultiplexer.Connect(connectionString);
         _database = _redis.GetDatabase();
         _subscriber = _redis.GetSubscriber();
+
+        _currentClientName = $"{_redis.ClientName}_{System.Diagnostics.Process.GetCurrentProcess().Id}";
     }
     
     /// <summary>
@@ -56,7 +59,7 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
     /// <returns>The channel to access e. g. messages</returns>
     public IChannel<TValue> Subscribe<TValue>(string channel) 
     {
-        return new Channel<TValue>(_redis.ClientName, _subscriber.Subscribe(RedisChannel.Literal(channel)));
+        return new Channel<TValue>(_currentClientName, _subscriber.Subscribe(RedisChannel.Literal(channel)));
     }
 
     /// <summary>
@@ -68,7 +71,7 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
     {
         ArgumentValidation.ValidateString(nameof(channel), channel);
         
-        await _subscriber.PublishAsync(RedisChannel.Literal(channel),new ChannelMessage<T>(_redis.ClientName, value).Serialize());
+        await _subscriber.PublishAsync(RedisChannel.Literal(channel),new ChannelMessage<T>(_currentClientName, value).Serialize());
         await SaveLastMessage(channel, value);
     }
 
