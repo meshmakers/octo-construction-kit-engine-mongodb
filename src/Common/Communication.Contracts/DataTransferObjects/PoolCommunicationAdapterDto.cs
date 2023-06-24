@@ -24,12 +24,12 @@ public record PoolCommunicationAdapterDto
     /// <summary>
     /// Gets or sets the object identifier of the communication adapter.
     /// </summary>
-    public OctoObjectId CommunicationAdapterRtId { get; set; }
+    public OctoObjectId AdapterRtId { get; set; }
     
     /// <summary>
     /// Gets or sets the construction kit identifier of the communication adapter.
     /// </summary>
-    public string CommunicationAdapterCkId { get; set; } = null!;
+    public string AdapterCkId { get; set; } = null!;
     
     /// <summary>
     /// Gets or sets the docker image name of the communication adapter.
