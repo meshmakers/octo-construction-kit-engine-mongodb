@@ -75,9 +75,9 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
     /// <inheritdoc />
     public async Task CacheStreamAsync(string key, byte[] value, string contentType, TimeSpan? expiry = null)
     {
-        await _database.StringSetAsync(key + "value", value);
-        await _database.StringSetAsync(key + "", contentType);
+        await _database.StringSetAsync(key + "contentType", contentType);
         await _database.KeyExpireAsync(key + "contentType", DateTime.Now + expiry);
+        await _database.StringSetAsync(key + "value", value);
         await _database.KeyExpireAsync(key + "value", DateTime.Now + expiry);
     }
 
