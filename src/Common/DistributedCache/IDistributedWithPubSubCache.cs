@@ -1,3 +1,4 @@
+using System;
 using System.Threading.Tasks;
 using StackExchange.Redis;
 
@@ -34,4 +35,29 @@ public interface IDistributedWithPubSubCache
     /// <param name="channel">The name of the channel</param>
     /// <param name="value">Value to publish</param>
     Task PublishAsync<TValue>(string channel, TValue value);
+    
+    
+    /// <summary>
+    /// Caches a stream for the given amount of time
+    /// </summary>
+    /// <param name="key">The key identifying the stream</param>
+    /// <param name="value">The byte array</param>
+    /// <param name="contentType">Content type of the file</param>
+    /// <param name="expiry">The amount of time the stream gets cached</param>
+    /// <returns></returns>
+    Task CacheStreamAsync(string key, byte[] value, string contentType, TimeSpan? expiry = null);
+
+    /// <summary>
+    /// Deletes a cached stream
+    /// </summary>
+    /// <param name="key">The key identifying the stream</param>
+    /// <returns></returns>
+    Task DeleteCacheStreamAsync(string key);
+
+    /// <summary>
+    /// Retrieves a cached stream
+    /// </summary>
+    /// <param name="key">The key identifying the stream</param>
+    /// <returns></returns>
+    Task<CacheStream?> GetCacheStreamAsync(string key);
 }
