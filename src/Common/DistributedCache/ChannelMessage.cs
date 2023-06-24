@@ -1,26 +1,31 @@
-using System;
-
-namespace Meshmakers.Octo.Backend.DistributedCache;
+namespace Meshmakers.Octo.Common.DistributedCache;
 
 /// <summary>
 ///     Implements a channel message
 /// </summary>
-public class ChannelMessage<TValue> : IChannelMessage<TValue> where TValue : IConvertible
+internal record ChannelMessage<TValue> : IChannelMessage<TValue>
 {
     /// <summary>
     ///     Constructor
     /// </summary>
+    /// <param name="senderClientName">The client name of the sender</param>
     /// <param name="message">Message of channel</param>
-    /// <param name="hasValue">Is there a value</param>
-    internal ChannelMessage(TValue? message, bool hasValue)
+    internal ChannelMessage(string senderClientName, TValue? message)
     {
+        SenderClientName = senderClientName;
         Message = message;
-        HasValue = hasValue;
+    }
+    
+    /// <summary>
+    /// Constructor
+    /// </summary>
+    internal ChannelMessage()
+    {
     }
 
     /// <inheritdoc />
-    public bool HasValue { get; }
+    public string SenderClientName { get; init; } = null!;
 
     /// <inheritdoc />
-    public TValue? Message { get; }
+    public TValue? Message { get; init; }
 }

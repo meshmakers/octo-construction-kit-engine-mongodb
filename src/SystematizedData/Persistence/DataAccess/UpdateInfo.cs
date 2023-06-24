@@ -1,3 +1,5 @@
+using System;
+using System.Linq;
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
@@ -25,9 +27,13 @@ public class UpdateInfo<T> where T : class, new()
                 break;
         }
 
+        UpdateFields = changeStreamDocument.UpdateDescription?.UpdatedFields.Names.ToArray() ?? Array.Empty<string>();
+
         Document = changeStreamDocument.FullDocument;
         DocumentBeforeChange = changeStreamDocument.FullDocumentBeforeChange;
     }
+
+    public string[] UpdateFields { get; }
 
     public UpdateTypes UpdateType { get; }
     public T? Document { get; }

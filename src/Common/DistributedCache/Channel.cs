@@ -1,19 +1,22 @@
 using System;
 using System.Threading.Tasks;
+using Meshmakers.Octo.Common.Shared;
 using StackExchange.Redis;
 
-namespace Meshmakers.Octo.Backend.DistributedCache;
+namespace Meshmakers.Octo.Common.DistributedCache;
 
 /// <summary>
 ///     Implements a channel
 /// </summary>
 /// <typeparam name="TValue">Type of value in messages</typeparam>
-public class Channel<TValue> : IChannel<TValue> where TValue : IConvertible
+internal class Channel<TValue> : IChannel<TValue> 
 {
+    private readonly string _currentClientName;
     private readonly ChannelMessageQueue _channelMessageQueue;
 
-    internal Channel(ChannelMessageQueue channelMessageQueue)
+    internal Channel(string currentClientName, ChannelMessageQueue channelMessageQueue)
     {
+        _currentClientName = currentClientName;
         _channelMessageQueue = channelMessageQueue;
     }
 
@@ -24,46 +27,23 @@ public class Channel<TValue> : IChannel<TValue> where TValue : IConvertible
     }
 
     /// <inheritdoc />
-    public void OnMessage(Func<ChannelMessage<TValue>, Task> action)
+    public void OnMessage(Func<IChannelMessage<TValue>, Task> action)
     {
-        _channelMessageQueue.OnMessage(async message =>
+        _channelMessageQueue.OnMessage(async channelMessage =>
         {
-            if (!message.Message.HasValue)
+            var serializedObject = channelMessage.Message.ToString();
+            if (string.IsNullOrWhiteSpace(serializedObject))
             {
-                await action(new ChannelMessage<TValue>(default, false));
+                return;
             }
 
-            if (typeof(TValue) == typeof(int))
+            var o = serializedObject.Deserialize<ChannelMessage<TValue>>();
+            if (o.SenderClientName == _currentClientName)
             {
-                if (message.Message.TryParse(out int _))
-                {
-                    await action(new ChannelMessage<TValue>((TValue)Convert.ChangeType(message.Message, TypeCode.Int32),
-                        true));
-                }
+                return;
             }
-            else if (typeof(TValue) == typeof(double))
-            {
-                if (message.Message.TryParse(out double _))
-                {
-                    await action(
-                        new ChannelMessage<TValue>((TValue)Convert.ChangeType(message.Message, TypeCode.Double), true));
-                }
-            }
-            else if (typeof(TValue) == typeof(long))
-            {
-                if (message.Message.TryParse(out long _))
-                {
-                    await action(new ChannelMessage<TValue>((TValue)Convert.ChangeType(message.Message, TypeCode.Int64),
-                        true));
-                }
-            }
-            else if (typeof(TValue) == typeof(string))
-            {
-                await action(new ChannelMessage<TValue>((TValue)Convert.ChangeType(message.Message, TypeCode.String),
-                    true));
-            }
-
-            await action(new ChannelMessage<TValue>(default, true));
+            
+            await action(o);
         });
     }
 

@@ -5,7 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Backend.DistributedCache;
+using Meshmakers.Octo.Common.DistributedCache;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
@@ -59,9 +59,12 @@ public class SystemContext : ISystemContext
         _configurationCollection = OctoSystemDatabase.GetCollection<OctoConfiguration>();
 
         var sub = _distributedWithPubSubCache.Subscribe<string>(CacheCommon.KeyTenantUpdate);
-        sub.OnMessage(message =>
+        sub.OnMessage(channelMessage =>
         {
-            RemoveCkCache(message.Message);
+            if (!string.IsNullOrWhiteSpace(channelMessage.Message))
+            {
+                RemoveCkCache(channelMessage.Message);
+            }
             return Task.CompletedTask;
         });
     }

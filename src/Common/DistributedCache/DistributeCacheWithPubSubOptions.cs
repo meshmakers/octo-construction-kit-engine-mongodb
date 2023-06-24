@@ -1,4 +1,4 @@
-namespace Meshmakers.Octo.Backend.DistributedCache;
+namespace Meshmakers.Octo.Common.DistributedCache;
 
 /// <summary>
 ///     Options of distributed cache with pub sub

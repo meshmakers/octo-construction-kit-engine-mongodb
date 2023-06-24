@@ -1,10 +1,10 @@
-using System;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.Common.Shared;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 
-namespace Meshmakers.Octo.Backend.DistributedCache;
+namespace Meshmakers.Octo.Common.DistributedCache;
 
 /// <summary>
 ///     Implements a distributed cache with pub sub mechanisms using REDIS
@@ -14,6 +14,7 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
 {
     private readonly ConnectionMultiplexer _redis;
     private readonly ISubscriber _subscriber;
+    private readonly IDatabase _database;
 
     /// <summary>
     ///     Constructor
@@ -27,7 +28,7 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
         }
 
         _redis = ConnectionMultiplexer.Connect(connectionString);
-        Database = _redis.GetDatabase();
+        _database = _redis.GetDatabase();
         _subscriber = _redis.GetSubscriber();
     }
     
@@ -36,10 +37,14 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
     /// </summary>
     /// <param name="channelName">The channel name</param>
     /// <returns></returns>
-    public async Task<string?> GetLastMessageAsStringAsync(string channelName)
+    public async Task<TValue?> GetLastMessageAsync<TValue>(string channelName)
     {
-        var lastMessage = await Database.ListGetByIndexAsync($"last_message:{channelName}", -1);
-        return lastMessage.HasValue ? lastMessage.ToString() : null;
+        var lastMessage = await _database.ListGetByIndexAsync($"last_message:{channelName}", -1);
+        if (string.IsNullOrWhiteSpace(lastMessage))
+        {
+            return default;
+        }
+        return lastMessage.ToString().Deserialize<TValue>();
     }
 
     /// <summary>
@@ -48,9 +53,9 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
     /// <param name="channel">The name of the channel</param>
     /// <typeparam name="TValue">Type of value in messages</typeparam>
     /// <returns>The channel to access e. g. messages</returns>
-    public IChannel<TValue> Subscribe<TValue>(string channel) where TValue : IConvertible
+    public IChannel<TValue> Subscribe<TValue>(string channel) 
     {
-        return new Channel<TValue>(_subscriber.Subscribe(channel));
+        return new Channel<TValue>(_redis.ClientName, _subscriber.Subscribe(channel));
     }
 
     /// <summary>
@@ -58,45 +63,12 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
     /// </summary>
     /// <param name="channel">The name of the channel</param>
     /// <param name="value">Value to publish</param>
-    public async Task PublishAsync(string channel, string value)
+    public async Task PublishAsync<T>(string channel, T value)
     {
         ArgumentValidation.ValidateString(nameof(channel), channel);
         
-        await _subscriber.PublishAsync(channel, value);
+        await _subscriber.PublishAsync(RedisChannel.Literal(channel),new ChannelMessage<T>(_redis.ClientName, value).Serialize());
         await SaveLastMessage(channel, value);
-    }
-
-    /// <summary>
-    ///     Publish a message to the given channel
-    /// </summary>
-    /// <param name="channel">The name of the channel</param>
-    /// <param name="value">Value to publish</param>
-    public async Task PublishAsync(string channel, int value)
-    {
-        ArgumentValidation.ValidateString(nameof(channel), channel);
-        await _subscriber.PublishAsync(channel, value);
-    }
-
-    /// <summary>
-    ///     Publish a message to the given channel
-    /// </summary>
-    /// <param name="channel">The name of the channel</param>
-    /// <param name="value">Value to publish</param>
-    public async Task PublishAsync(string channel, long value)
-    {
-        ArgumentValidation.ValidateString(nameof(channel), channel);
-        await _subscriber.PublishAsync(channel, value);
-    }
-
-    /// <summary>
-    ///     Publish a message to the given channel
-    /// </summary>
-    /// <param name="channel">The name of the channel</param>
-    /// <param name="value">Value to publish</param>
-    public void PublishAsync(string channel, double value)
-    {
-        ArgumentValidation.ValidateString(nameof(channel), channel);
-        _subscriber.PublishAsync(channel, value);
     }
 
     /// <summary>
@@ -104,13 +76,9 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
     /// </summary>
     public bool IsConnected => _redis.IsConnected;
 
-    /// <summary>
-    ///     Returns the Redis database
-    /// </summary>
-    public IDatabase Database { get; }
     
-    private async Task SaveLastMessage(string channelName, string message)
+    private async Task SaveLastMessage<T>(string channelName, T value)
     {
-        await Database.ListRightPushAsync($"last_message:{channelName}", message);
+        await _database.ListRightPushAsync($"last_message:{channelName}", value?.Serialize());
     }
 }

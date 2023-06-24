@@ -1,19 +1,20 @@
-using System;
-
-namespace Meshmakers.Octo.Backend.DistributedCache;
+namespace Meshmakers.Octo.Common.DistributedCache;
 
 /// <summary>
 ///     Interface of a channel message
 /// </summary>
-public interface IChannelMessage<out TValue> where TValue : IConvertible
+public interface IChannelMessage<out TValue>
 {
     /// <summary>
     ///     Returns the message
     /// </summary>
     TValue? Message { get; }
-
+    
     /// <summary>
-    ///     Returns true if there is a value
+    /// Return the client name of the sender.
     /// </summary>
-    bool HasValue { get; }
+    /// <remarks>
+    /// Must be unique in the in redis instance.
+    /// </remarks>
+    string SenderClientName {get;}
 }

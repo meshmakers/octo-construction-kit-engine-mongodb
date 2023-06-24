@@ -1,4 +1,4 @@
-namespace Meshmakers.Octo.Communication.Plugs.Contracts.DataTransferObjects;
+namespace Meshmakers.Octo.Communication.Contracts.DataTransferObjects;
 // ReSharper disable MemberCanBePrivate.Global
 // ReSharper disable ClassNeverInstantiated.Global
 // ReSharper disable UnusedAutoPropertyAccessor.Global

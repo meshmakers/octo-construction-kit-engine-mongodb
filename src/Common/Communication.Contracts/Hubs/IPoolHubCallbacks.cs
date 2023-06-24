@@ -1,8 +1,9 @@
-using Meshmakers.Octo.Communication.Plugs.Contracts.DataTransferObjects;
+using Meshmakers.Octo.Communication.Contracts.DataTransferObjects;
+
 // ReSharper disable UnusedType.Global
 // ReSharper disable UnusedMember.Global
 
-namespace Meshmakers.Octo.Communication.Plugs.Contracts.Hubs;
+namespace Meshmakers.Octo.Communication.Contracts.Hubs;
 
 /// <summary>
 /// Interfaces of callbacks that can be called by the plug pool hub.

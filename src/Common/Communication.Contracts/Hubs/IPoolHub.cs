@@ -1,8 +1,9 @@
-using Meshmakers.Octo.Communication.Plugs.Contracts.DataTransferObjects;
+using Meshmakers.Octo.Communication.Contracts.DataTransferObjects;
+
 // ReSharper disable UnusedType.Global
 // ReSharper disable UnusedMember.Global
 
-namespace Meshmakers.Octo.Communication.Plugs.Contracts.Hubs;
+namespace Meshmakers.Octo.Communication.Contracts.Hubs;
 
 /// <summary>
 /// Interface of the plug pool hub that is responsible for registering and unregistering plug pools and managing their state.

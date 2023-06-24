@@ -1,9 +1,10 @@
 using Meshmakers.Octo.Common.Shared;
+
 // ReSharper disable MemberCanBePrivate.Global
 // ReSharper disable ClassNeverInstantiated.Global
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 
-namespace Meshmakers.Octo.Communication.Plugs.Contracts.DataTransferObjects;
+namespace Meshmakers.Octo.Communication.Contracts.DataTransferObjects;
 
 /// <summary>
 /// Represents a plug in a plug pool for data transfer.

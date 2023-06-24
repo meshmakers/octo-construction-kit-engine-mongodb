@@ -37,4 +37,14 @@
         </None>
     </ItemGroup>
 
+    <ItemGroup>
+      <ProjectReference Include="..\Shared\Shared.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Reference Include="Meshmakers.Octo.Common.Shared">
+        <HintPath>..\..\..\..\..\bin\Debug\PlugControllerServices\net7.0\Meshmakers.Octo.Common.Shared.dll</HintPath>
+      </Reference>
+    </ItemGroup>
+
 </Project>
