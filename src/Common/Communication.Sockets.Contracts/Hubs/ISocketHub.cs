@@ -13,12 +13,12 @@ public interface ISocketHub
     /// </summary>
     /// <param name="socketRtId">Object identifier of the socket</param>
     /// <returns></returns>
-    Task<SocketConfigurationDto> RegisterPlugAsync(OctoObjectId socketRtId);
+    Task<SocketConfigurationDto> RegisterSocketAsync(OctoObjectId socketRtId);
     
     /// <summary>
     /// Unregisters a socket from the communication controller
     /// </summary>
     /// <param name="socketRtId">Object identifier of the socket</param>
     /// <returns></returns>
-    Task UnRegisterPlugAsync(OctoObjectId socketRtId);
+    Task UnRegisterSocketAsync(OctoObjectId socketRtId);
 }
