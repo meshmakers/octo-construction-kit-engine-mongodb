@@ -29,4 +29,9 @@ public static class CacheCommon
     /// Channel of communication controller plug updates
     /// </summary>
     public const string KeyCommunicationControllerPlugUpdate = "CommunicationController_Plugs_Update";
+    
+    /// <summary>
+    /// Channel of communication controller socket updates
+    /// </summary>
+    public const string KeyCommunicationControllerSocketUpdate = "CommunicationController_Socket_Update";
 }
