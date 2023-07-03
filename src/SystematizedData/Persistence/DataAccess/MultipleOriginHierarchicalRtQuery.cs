@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
@@ -15,9 +16,9 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 internal class MultipleOriginHierarchicalRtQuery : MultipleOriginHierarchicalRtQuery<RtEntity, RtEntity>
 {
-    internal MultipleOriginHierarchicalRtQuery(EntityCacheItem targetEntityCacheItem,
+    internal MultipleOriginHierarchicalRtQuery(IEntityCacheItem targetEntityCacheItem,
         IDatabaseContext databaseContext,
-        string language, IEnumerable<ObjectId> rtIds, string originCkId, string roleId,
+        string language, IEnumerable<OctoObjectId> rtIds, string originCkId, string roleId,
         GraphDirections graphDirection, string targetCkId)
         : base(targetEntityCacheItem, databaseContext, language, rtIds, originCkId, roleId, graphDirection,
             targetCkId)
@@ -34,13 +35,13 @@ internal class MultipleOriginHierarchicalRtQuery<TOriginEntity, TTargetEntity> :
     private readonly string _language;
     private readonly string _originCkId;
     private readonly string _roleId;
-    private readonly IEnumerable<ObjectId> _rtIds;
+    private readonly IEnumerable<OctoObjectId> _rtIds;
     private readonly string _targetCkId;
-    private readonly EntityCacheItem _targetEntityCacheItem;
+    private readonly IEntityCacheItem _targetEntityCacheItem;
 
-    internal MultipleOriginHierarchicalRtQuery(EntityCacheItem targetEntityCacheItem,
+    internal MultipleOriginHierarchicalRtQuery(IEntityCacheItem targetEntityCacheItem,
         IDatabaseContext databaseContext,
-        string language, IEnumerable<ObjectId> rtIds, string originCkId, string roleId,
+        string language, IEnumerable<OctoObjectId> rtIds, string originCkId, string roleId,
         GraphDirections graphDirection, string targetCkId)
     {
         _targetEntityCacheItem = targetEntityCacheItem;
@@ -53,7 +54,7 @@ internal class MultipleOriginHierarchicalRtQuery<TOriginEntity, TTargetEntity> :
         _targetCkId = targetCkId;
     }
 
-    internal async Task<MultipleOriginResultSet<TTargetEntity>> ExecuteQuery(IOctoSession session, int? skip,
+    internal async Task<IMultipleOriginResultSet<TTargetEntity>> ExecuteQuery(IOctoSession session, int? skip,
         int? take)
     {
         if (skip.HasValue && !take.HasValue)
@@ -100,7 +101,7 @@ internal class MultipleOriginHierarchicalRtQuery<TOriginEntity, TTargetEntity> :
 
         var aggregate = _databaseContext.GetRtCollection<RtEntity>(_originCkId).Aggregate(session)
             .Match(
-                Builders<RtEntity>.Filter.And(Builders<RtEntity>.Filter.In(x => x.RtId, _rtIds)))
+                Builders<RtEntity>.Filter.And(Builders<RtEntity>.Filter.In(x => x.RtId.ToObjectId(), _rtIds.Cast<ObjectId>())))
             .Lookup(
                 _databaseContext.RtAssociations.GetMongoCollection(),
                 connectFromField,

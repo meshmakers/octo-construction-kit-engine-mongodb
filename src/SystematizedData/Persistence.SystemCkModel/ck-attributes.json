@@ -1,0 +1,85 @@
+{
+  "attributes": [
+    {
+      "id": "System.Name",
+      "valueType": "String"
+    },
+    {
+      "id": "System.Enabled",
+      "valueType": "Boolean"
+    },
+    {
+      "id": "System.Description",
+      "valueType": "String"
+    },
+    {
+      "id": "System.Contacts.FirstName",
+      "valueType": "String"
+    },
+    {
+      "id": "System.Contacts.LastName",
+      "valueType": "String"
+    },
+    {
+      "id": "System.TenantId",
+      "valueType": "String"
+    },
+    {
+      "id": "System.DatabaseName",
+      "valueType": "String"
+    },
+    {
+      "id": "System.AutoIncrement.Start",
+      "valueType": "Int"
+    },
+    {
+      "id": "System.AutoIncrement.End",
+      "valueType": "Int"
+    },
+    {
+      "id": "System.AutoIncrement.CurrentValue",
+      "valueType": "Int"
+    },
+    {
+      "id": "System.ConfigurationValue",
+      "valueType": "String"
+    },
+    {
+      "id": "System.Query.Columns",
+      "valueType": "String"
+    },
+    {
+      "id": "System.Query.CkId",
+      "valueType": "String"
+    },
+    {
+      "id": "System.Query.Sorting",
+      "valueType": "String"
+    },
+    {
+      "id": "System.Query.FieldFilter",
+      "valueType": "String"
+    },
+    {
+      "id": "System.Query.TextSearchFilter",
+      "valueType": "String"
+    },
+    {
+      "id": "System.Query.AttributeSearchFilter",
+      "valueType": "String"
+    },
+
+    {
+      "id": "System.ServiceHook.Uri",
+      "valueType": "String"
+    },
+    {
+      "id": "System.ServiceHook.Action",
+      "valueType": "String"
+    },
+    {
+      "id": "System.ServiceHook.ApiKey",
+      "valueType": "String"
+    }
+  ]
+}

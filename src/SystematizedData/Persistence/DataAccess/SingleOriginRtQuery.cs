@@ -10,7 +10,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 internal class SingleOriginRtQuery : SingleOriginRtQuery<RtEntity>
 {
-    internal SingleOriginRtQuery(EntityCacheItem entityCacheItem, IDatabaseContext databaseContext, string language)
+    internal SingleOriginRtQuery(IEntityCacheItem entityCacheItem, IDatabaseContext databaseContext, string language)
         : base(entityCacheItem, databaseContext, language)
     {
     }
@@ -18,9 +18,9 @@ internal class SingleOriginRtQuery : SingleOriginRtQuery<RtEntity>
 
 internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<TEntity> where TEntity : RtEntity, new()
 {
-    private readonly EntityCacheItem _entityCacheItem;
+    private readonly IEntityCacheItem _entityCacheItem;
 
-    internal SingleOriginRtQuery(EntityCacheItem entityCacheItem, IDatabaseContext databaseContext, string language)
+    internal SingleOriginRtQuery(IEntityCacheItem entityCacheItem, IDatabaseContext databaseContext, string language)
         : base(databaseContext.GetRtCollection<TEntity>(entityCacheItem.CkId), language)
     {
         _entityCacheItem = entityCacheItem;

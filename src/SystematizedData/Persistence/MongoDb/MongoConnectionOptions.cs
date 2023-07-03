@@ -17,7 +17,7 @@ public class MongoConnectionOptions
 
     public string MongoDbHost { get; set; }
     public string MongoDbUsername { get; set; }
-    public string MongoDbPassword { get; set; }
+    public string? MongoDbPassword { get; set; }
     public string DatabaseName { get; set; }
     public string AuthenticationSource { get; set; }
 

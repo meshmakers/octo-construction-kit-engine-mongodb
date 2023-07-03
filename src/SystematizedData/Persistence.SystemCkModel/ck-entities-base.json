@@ -1,0 +1,84 @@
+{
+  "entities": [
+    {
+      "ckId": "System.Entity",
+      "isFinal": false,
+      "isAbstract": true,
+      "attributes": [
+      ],
+      "associations": [
+        {
+          "roleId": "System.Related",
+          "targetCkId": "System.Notification.Message",
+          "inboundMultiplicity": "N",
+          "outboundMultiplicity": "N",
+          "description": null
+        }
+      ]
+    },
+    {
+      "ckId": "System.AutoIncrement",
+      "ckDerivedId": "System.Entity",
+      "isFinal": false,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System.AutoIncrement.Start",
+          "name": "Start"
+        },
+        {
+          "id": "System.AutoIncrement.End",
+          "name": "End"
+        },
+        {
+          "id": "System.AutoIncrement.CurrentValue",
+          "name": "CurrentValue"
+        }
+      ],
+      "associations": [
+      ]
+    },
+    {
+      "ckId": "System.Tenant",
+      "ckDerivedId": "System.Entity",
+      "isFinal": true,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System.TenantId",
+          "name": "TenantId"
+        },
+        {
+          "id": "System.DatabaseName",
+          "name": "DatabaseName"
+        }
+      ],
+      "indexes": [
+        {
+          "indexType": "Ascending",
+          "fields": [
+            {
+              "attributeNames": [
+                "TenantId"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ckId": "System.Configuration",
+      "ckDerivedId": "System.Entity",
+      "isFinal": true,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System.ConfigurationValue",
+          "name": "ConfigurationValue"
+        }
+      ],
+      "associations": [
+      ]
+    }
+  ]
+}

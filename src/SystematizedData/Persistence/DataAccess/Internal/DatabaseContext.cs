@@ -19,15 +19,9 @@ internal sealed class DatabaseContext : IDatabaseContext
     // ReSharper disable once PrivateFieldCanBeConvertedToLocalVariable
     private readonly IRepositoryClient _repositoryClient;
 
-    public DatabaseContext(string dataSourceHost, string databaseName, string databaseUser, string databasePassword,
+    public DatabaseContext(string dataSourceHost, string databaseName, string databaseUser, string? databasePassword,
         string authenticationDatabaseName, bool useTls, bool allowInsecureTls)
-    {
-        ArgumentValidation.ValidateString(dataSourceHost, nameof(dataSourceHost));
-        ArgumentValidation.ValidateString(databaseName, nameof(databaseName));
-        ArgumentValidation.ValidateString(databaseUser, nameof(databaseUser));
-        ArgumentValidation.ValidateString(databasePassword, nameof(databasePassword));
-
-        var sharedSettings = new MongoConnectionOptions
+        : this(new MongoRepositoryClient(new MongoConnectionOptions
         {
             MongoDbHost = dataSourceHost,
             MongoDbUsername = databaseUser,
@@ -36,9 +30,15 @@ internal sealed class DatabaseContext : IDatabaseContext
             AuthenticationSource = authenticationDatabaseName,
             UseTls = useTls,
             AllowInsecureTls = allowInsecureTls
-        };
+        }), databaseName)
+    {
+    }
 
-        _repositoryClient = new MongoRepositoryClient(sharedSettings);
+    public DatabaseContext(IRepositoryClient repositoryClient, string databaseName)
+    {
+        ArgumentValidation.ValidateString(databaseName, nameof(databaseName));
+
+        _repositoryClient = repositoryClient;
         _repository = (IRepositoryInternal)_repositoryClient.GetRepository(databaseName);
 
         CkEntities = _repository.GetCollection<CkEntity>();
@@ -65,6 +65,12 @@ internal sealed class DatabaseContext : IDatabaseContext
     {
         var suffix = ckId.Replace(".", "_");
         return _repository.GetCollection<TEntity>(suffix);
+    }
+
+    public ICachedCollection<TEntity> GetRtCollection<TEntity>() where TEntity : RtEntity, new()
+    {
+        var ckId = RtEntityExtensions.GetCkId<TEntity>();
+        return GetRtCollection<TEntity>(ckId);
     }
 
     public async Task<ICollection<CkTypeInfo>> GetCkTypeInfoAsync(IOctoSession session)
@@ -118,6 +124,7 @@ internal sealed class DatabaseContext : IDatabaseContext
 
             var collection = GetRtCollection<RtEntity>(ckEntity.CkId);
             await collection.DropIndexAsync(name);
+            // TODO: Hard coded database name not possible. Use from configuration
             await collection.DropIndexAsync("OctoSystem");
         }
 
@@ -154,7 +161,7 @@ internal sealed class DatabaseContext : IDatabaseContext
                 x => x.OriginCkId,
                 x => x.TargetCkId,
                 x => x.CkId,
-                (CkTypeInfo x) => x.BaseTypes, (CkBaseTypeInfo i) => i.BaseTypeDepthIndex)
+                (ICkTypeInfo x) => x.BaseTypes, (ICkBaseTypeInfo i) => i.BaseTypeDepthIndex)
             .Lookup<CkTypeInfo, CkTypeInfo>(_repository.GetCollectionName<CkEntityAssociation>(),
                 "baseTypes.originCkId",
                 "originCkId",

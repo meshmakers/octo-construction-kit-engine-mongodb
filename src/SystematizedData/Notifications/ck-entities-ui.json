@@ -1,0 +1,18 @@
+{
+  "entities": [
+    {
+      "ckId": "System.UI.Page",
+      "ckDerivedId": "System.Entity",
+      "isFinal": false,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System.UI.Page.Content",
+          "name": "Content"
+        }
+      ],
+      "associations": [
+      ]
+    }
+  ]
+}

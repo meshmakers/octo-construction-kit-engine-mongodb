@@ -18,7 +18,8 @@ public static class CacheCommon
     /// <summary>
     ///     Channel of tenant updates
     /// </summary>
-    public const string KeyTenantUpdate = "TenantUpdate";
+    public const string KeyTenantPreUpdate = "TenantUpdatePre";
+    public const string KeyTenantPostUpdate = "TenantUpdatePost";
     
     /// <summary>
     /// Channel of communication controller pool updates

@@ -4,7 +4,7 @@ using MongoDB.Driver;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
-public class UpdateInfo<T> where T : class, new()
+public class UpdateInfo<T> : IUpdateInfo<T> where T : class, new()
 {
     public UpdateInfo(ChangeStreamDocument<T> changeStreamDocument)
     {

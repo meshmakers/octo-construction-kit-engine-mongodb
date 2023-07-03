@@ -1,0 +1,268 @@
+{
+  "entities": [
+    {
+      "ckId": "System.Identity.User",
+      "isFinal": true,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System.Identity.UserName",
+          "name": "UserName"
+        },
+        {
+          "id": "System.Identity.UserName",
+          "name": "UserName"
+        },
+        {
+          "id": "System.Identity.UserName",
+          "name": "UserName"
+        },
+        {
+          "id": "System.Identity.NormalizedUserName",
+          "name": "NormalizedUserName"
+        },
+        {
+          "id": "System.Identity.Email",
+          "name": "Email"
+        },
+        {
+          "id": "System.Identity.NormalizedEmail",
+          "name": "NormalizedEmail"
+        },
+        {
+          "id": "System.Identity.EmailConfirmed",
+          "name": "EmailConfirmed"
+        },
+        {
+          "id": "System.Identity.PasswordHash",
+          "name": "PasswordHash"
+        },
+        {
+          "id": "System.Identity.SecurityStamp",
+          "name": "SecurityStamp"
+        },
+        {
+          "id": "System.Identity.ConcurrencyStamp",
+          "name": "ConcurrencyStamp"
+        },
+        {
+          "id": "System.Identity.PhoneNumber",
+          "name": "PhoneNumber"
+        },
+        {
+          "id": "System.Identity.PhoneNumberConfirmed",
+          "name": "PhoneNumberConfirmed"
+        },
+        {
+          "id": "System.Identity.TwoFactorEnabled",
+          "name": "TwoFactorEnabled"
+        },
+        {
+          "id": "System.Identity.LockoutEnd",
+          "name": "LockoutEnd"
+        },
+        {
+          "id": "System.Identity.LockoutEnabled",
+          "name": "LockoutEnabled"
+        },
+        {
+          "id": "System.Identity.AccessFailedCount",
+          "name": "AccessFailedCount"
+        },
+        {
+          "id": "System.Identity.ResetPasswordOnLogin",
+          "name": "ResetPasswordOnLogin"
+        }
+      ],
+      "indexes": [
+        {
+          "indexType": "Ascending",
+          "fields": [
+            {
+              "attributeNames": [
+                "NormalizedEmail",
+                "NormalizedUserName"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ckId": "System.AutoIncrement",
+      "ckDerivedId": "System.Entity",
+      "isFinal": false,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System.AutoIncrement.Start",
+          "name": "Start"
+        },
+        {
+          "id": "System.AutoIncrement.End",
+          "name": "End"
+        },
+        {
+          "id": "System.AutoIncrement.CurrentValue",
+          "name": "CurrentValue"
+        }
+      ],
+      "associations": [
+      ]
+    },
+    {
+      "ckId": "System.Query",
+      "ckDerivedId": "System.Entity",
+      "isFinal": false,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System.Query.CkId",
+          "name": "QueryCkId"
+        },
+        {
+          "id": "System.Query.Columns",
+          "name": "Columns"
+        },
+        {
+          "id": "System.Query.Sorting",
+          "name": "Sorting"
+        },
+        {
+          "id": "System.Query.FieldFilter",
+          "name": "FieldFilter"
+        },
+        {
+          "id": "System.Query.TextSearchFilter",
+          "name": "TextSearchFilter"
+        },
+        {
+          "id": "System.Query.AttributeSearchFilter",
+          "name": "AttributeSearchFilter"
+        },
+        {
+          "id": "System.Name",
+          "name": "Name"
+        }
+      ],
+      "associations": [
+      ]
+    },
+    {
+      "ckId": "System.ServiceHook",
+      "ckDerivedId": "System.Entity",
+      "isFinal": false,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System.Enabled",
+          "name": "Enabled"
+        },
+        {
+          "id": "System.Query.CkId",
+          "name": "QueryCkId"
+        },
+        {
+          "id": "System.Query.FieldFilter",
+          "name": "FieldFilter"
+        },
+        {
+          "id": "System.Name",
+          "name": "Name"
+        },
+        {
+          "id": "System.ServiceHook.Uri",
+          "name": "ServiceHookBaseUri"
+        },
+        {
+          "id": "System.ServiceHook.Action",
+          "name": "ServiceHookAction"
+        },
+        {
+          "id": "System.ServiceHook.ApiKey",
+          "name": "ServiceHookApiKey"
+        }
+      ],
+      "associations": [
+      ]
+    },
+    {
+      "ckId": "System.NotificationTemplate",
+      "ckDerivedId": "System.Entity",
+      "isFinal": false,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System.Notification.SubjectTemplate",
+          "name": "SubjectTemplate"
+        },
+        {
+          "id": "System.Notification.BodyTemplate",
+          "name": "BodyTemplate"
+        },
+        {
+          "id": "System.Notification.Type",
+          "name": "Type"
+        }
+      ],
+      "associations": [
+      ]
+    },
+    {
+      "ckId": "System.UI.Page",
+      "ckDerivedId": "System.Entity",
+      "isFinal": false,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System.UI.Page.Content",
+          "name": "Content"
+        }
+      ],
+      "associations": [
+      ]
+    },
+    {
+      "ckId": "System.Notification.Message",
+      "ckDerivedId": "System.Entity",
+      "isFinal": false,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System.Notification.SubjectText",
+          "name": "SubjectText"
+        },
+        {
+          "id": "System.Notification.BodyText",
+          "name": "BodyText"
+        },
+        {
+          "id": "System.Notification.RecipientAddress",
+          "name": "RecipientAddress"
+        },
+        {
+          "id": "System.Notification.Type",
+          "name": "NotificationType"
+        },
+        {
+          "id": "System.Notification.SentDateTime",
+          "name": "SentDateTime"
+        },
+        {
+          "id": "System.Notification.LastTryDateTime",
+          "name": "LastTryDateTime"
+        },
+        {
+          "id": "System.Notification.Status",
+          "name": "SendStatus"
+        },
+        {
+          "id": "System.Notification.ErrorText",
+          "name": "ErrorText"
+        }
+      ],
+      "associations": [
+      ]
+    }
+  ]
+}

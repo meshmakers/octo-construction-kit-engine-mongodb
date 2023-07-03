@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
@@ -17,7 +18,7 @@ internal class MultipleOriginIndirectHierarchicalRtQuery : MultipleOriginIndirec
 {
     internal MultipleOriginIndirectHierarchicalRtQuery(EntityCacheItem targetEntityCacheItem,
         IDatabaseContext databaseContext,
-        string language, IEnumerable<ObjectId> rtIds, string originCkId, string roleId,
+        string language, IEnumerable<OctoObjectId> rtIds, string originCkId, string roleId,
         GraphDirections graphDirection, string targetCkId)
         : base(targetEntityCacheItem, databaseContext, language, rtIds, originCkId, roleId, graphDirection,
             targetCkId)
@@ -34,13 +35,13 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TOriginEntity, TTargetE
     private readonly string _language;
     private readonly string _originCkId;
     private readonly string _roleId;
-    private readonly IEnumerable<ObjectId> _rtIds;
+    private readonly IEnumerable<OctoObjectId> _rtIds;
     private readonly string _targetCkId;
-    private readonly EntityCacheItem _targetEntityCacheItem;
+    private readonly IEntityCacheItem _targetEntityCacheItem;
 
-    internal MultipleOriginIndirectHierarchicalRtQuery(EntityCacheItem targetEntityCacheItem,
+    internal MultipleOriginIndirectHierarchicalRtQuery(IEntityCacheItem targetEntityCacheItem,
         IDatabaseContext databaseContext,
-        string language, IEnumerable<ObjectId> rtIds, string originCkId, string roleId,
+        string language, IEnumerable<OctoObjectId> rtIds, string originCkId, string roleId,
         GraphDirections graphDirection, string targetCkId)
     {
         _targetEntityCacheItem = targetEntityCacheItem;
@@ -84,7 +85,7 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TOriginEntity, TTargetE
 
         var associationFilter = new FilterDefinitionBuilder<RtAssociation>().Eq(x => x.AssociationRoleId, _roleId);
 
-        var startWith = new ExpressionAggregateExpressionDefinition<RtEntity, BsonValue>(x => x.RtId, new ExpressionTranslationOptions());
+        var startWith = new ExpressionAggregateExpressionDefinition<RtEntity, BsonValue>(x => x.RtId.ToObjectId(), new ExpressionTranslationOptions());
 
         AddTextFilterConstraintsToPipeline(pipelineStageDefinitions);
         AddFilterConstraintsToPipeline(pipelineStageDefinitions);

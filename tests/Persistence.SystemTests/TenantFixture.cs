@@ -1,28 +1,17 @@
 using System.Threading.Tasks;
-using FakeItEasy;
-using Meshmakers.Octo.Backend.DistributedCache;
 using Meshmakers.Octo.Backend.Persistence.SystemTests.Configuration;
-using Meshmakers.Octo.Common.DistributedCache;
-using Meshmakers.Octo.SystematizedData.Persistence;
-using Microsoft.Extensions.Options;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemTests;
 
-public class TenantFixture : SystemTestFixture
+public class TenantFixture : SystemFixture
 {
-    public async Task<ITenantContext> GetTenantContextAsync()
+    public async Task<ITenantRepositoryInternal> GetTenantRepositoryAsync()
     {
-        var distributedWithPubSubCache = A.Fake<IDistributedWithPubSubCache>();
-
         var options = GetOptions<SystemTestOptions>("SystemTest");
 
-        var systemContext = new SystemContext(new OptionsWrapper<OctoSystemConfiguration>(
-            new OctoSystemConfiguration
-            {
-                AdminUserPassword = options.AdminUserPassword,
-                DatabaseUserPassword = options.DatabaseUserPassword
-            }), distributedWithPubSubCache);
+        var systemContext = GetSystemContext();
 
-        return await systemContext.CreateOrGetTenantContextAsync(options.TenantId);
+        return await systemContext.CreateOrGetTenantRepositoryInternalAsync(options.TenantId);
     }
 }

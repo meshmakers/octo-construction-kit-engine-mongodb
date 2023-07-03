@@ -1,0 +1,42 @@
+{
+  "entities": [
+    {
+      "ckId": "System.ServiceHook",
+      "ckDerivedId": "System.Entity",
+      "isFinal": false,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System.Enabled",
+          "name": "Enabled"
+        },
+        {
+          "id": "System.Query.CkId",
+          "name": "QueryCkId"
+        },
+        {
+          "id": "System.Query.FieldFilter",
+          "name": "FieldFilter"
+        },
+        {
+          "id": "System.Name",
+          "name": "Name"
+        },
+        {
+          "id": "System.ServiceHook.Uri",
+          "name": "ServiceHookBaseUri"
+        },
+        {
+          "id": "System.ServiceHook.Action",
+          "name": "ServiceHookAction"
+        },
+        {
+          "id": "System.ServiceHook.ApiKey",
+          "name": "ServiceHookApiKey"
+        }
+      ],
+      "associations": [
+      ]
+    }
+  ]
+}

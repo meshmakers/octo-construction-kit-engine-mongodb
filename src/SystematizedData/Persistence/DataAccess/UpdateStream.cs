@@ -11,9 +11,9 @@ internal class UpdateStream<TDocument> : IUpdateStream<TDocument>
     where TDocument : class, new()
 {
     private readonly CancellationTokenSource _cancellationTokenSource = new();
-    private readonly ReplaySubject<UpdateInfo<TDocument>> _messageStream = new(1);
+    private readonly ReplaySubject<IUpdateInfo<TDocument>> _messageStream = new(1);
 
-    public IObservable<UpdateInfo<TDocument>> GetUpdates()
+    public IObservable<IUpdateInfo<TDocument>> GetUpdates()
     {
         return _messageStream;
     }

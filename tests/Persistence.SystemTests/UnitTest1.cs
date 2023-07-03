@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
+using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using MongoDB.Bson;
@@ -20,16 +21,16 @@ public class UnitTest1 : IClassFixture<TenantFixture>
     [Fact]
     public async void TestGetIndirectRtAssociationTargets()
     {
-        var tenantContext = await _tenantFixture.GetTenantContextAsync();
+        var repository = await _tenantFixture.GetTenantRepositoryAsync();
 
-        using (var session = await tenantContext.Repository.StartSessionAsync())
+        using (var session = await repository.StartSessionAsync())
         {
             session.StartTransaction();
 
-            ObjectId originRtId = ObjectId.Parse("5fc8fc3d8b2fc75f925e21bc");
+            OctoObjectId originRtId = OctoObjectId.Parse("5fc8fc3d8b2fc75f925e21bc");
 
 
-            var r = await tenantContext.Repository.GetIndirectRtAssociationTargetsAsync<RtPlugMapping, RtPlug>(session, originRtId, Statics.RoleIdParentChild,
+            var r = await repository.GetIndirectRtAssociationTargetsAsync<RtPlugMapping, RtPlug>(session, originRtId, Statics.RoleIdParentChild,
                 GraphDirections.Outbound);
 
         }
@@ -38,15 +39,15 @@ public class UnitTest1 : IClassFixture<TenantFixture>
     [Fact]
     public async void Test1()
     {
-        var tenantContext = await _tenantFixture.GetTenantContextAsync();
+        var tenantContext = await _tenantFixture.GetTenantRepositoryAsync();
 
-        using (var session = await tenantContext.Repository.StartSessionAsync())
+        using (var session = await tenantContext.StartSessionAsync())
         {
-            var result = await tenantContext.Repository.GetRtEntitiesByTypeAsync(session, "PaketService.Contact",
+            var result = await tenantContext.GetRtEntitiesByTypeAsync(session, "PaketService.Contact",
                 new DataQueryOperation(), 0, 5);
 
             var rtIds = result.Result.Select(x => x.RtId).ToList();
-            var deep = await tenantContext.Repository.GetRtAssociationTargetsAsync(session, rtIds,
+            var deep = await tenantContext.GetRtAssociationTargetsAsync(session, rtIds,
                 "PaketService.Contact", "System.ParentChild", "PaketService.ParcelShipment", GraphDirections.Outbound, null,
                 new DataQueryOperation(), 0, 5);
 
@@ -65,11 +66,11 @@ public class UnitTest1 : IClassFixture<TenantFixture>
     [Fact]
     public async void Test2()
     {
-        var tenantContext = await _tenantFixture.GetTenantContextAsync();
+        var tenantRepository = await _tenantFixture.GetTenantRepositoryAsync();
 
-        using (var session = await tenantContext.Repository.StartSessionAsync())
+        using (var session = await tenantRepository.StartSessionAsync())
         {
-            var result = await tenantContext.Repository.GetRtEntitiesByTypeAsync(session, "PaketService.ParcelShipment",
+            var result = await tenantRepository.GetRtEntitiesByTypeAsync(session, "PaketService.ParcelShipment",
                 new DataQueryOperation(), 0, 10);
 
 
@@ -83,7 +84,7 @@ public class UnitTest1 : IClassFixture<TenantFixture>
             // });
 
             var rtIds = result.Result.Select(x => x.RtId).ToList();
-            var deep = await tenantContext.Repository.GetRtAssociationTargetsAsync(session, rtIds,
+            var deep = await tenantRepository.GetRtAssociationTargetsAsync(session, rtIds,
                 "PaketService.ParcelShipment", "System.ParentChild", "PaketService.Contact", GraphDirections.Inbound, null,
                 dataOperation, 0, 5);
 

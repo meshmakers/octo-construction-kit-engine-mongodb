@@ -2,7 +2,7 @@ using MongoDB.Driver;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence;
 
-public class BulkImportResult
+public class BulkImportResult : IBulkImportResult
 {
     private readonly BulkWriteResult _bulkWriteResult;
 

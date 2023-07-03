@@ -1,5 +1,4 @@
 using System.Threading.Tasks;
-using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 
@@ -13,6 +12,6 @@ public interface IRepositoryClient
 
     Task<bool> IsRepositoryExistingAsync(string name);
 
-    Task CreateUser(IOctoSession session, string authenticationDatabaseName, string databaseName, string user,
-        string password);
+    Task CreateUser(string authenticationDatabaseName, string databaseName, string user,
+        string? password);
 }

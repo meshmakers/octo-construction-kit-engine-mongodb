@@ -18,6 +18,7 @@ public interface IDatabaseContext
     IOctoSession StartSession();
 
     ICachedCollection<TEntity> GetRtCollection<TEntity>(string ckId) where TEntity : RtEntity, new();
+    ICachedCollection<TEntity> GetRtCollection<TEntity>() where TEntity : RtEntity, new();
 
     Task<ICollection<CkTypeInfo>> GetCkTypeInfoAsync(IOctoSession session);
     Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, string ckId);

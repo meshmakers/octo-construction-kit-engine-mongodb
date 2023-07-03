@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net7.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\CkModel\CkModel.csproj" />
+      <ProjectReference Include="..\Persistence.InternalContracts\Persistence.InternalContracts.csproj" />
+      <ProjectReference Include="..\Persistence.SystemCkModel\Persistence.SystemCkModel.csproj" />
+    </ItemGroup>
+
+</Project>

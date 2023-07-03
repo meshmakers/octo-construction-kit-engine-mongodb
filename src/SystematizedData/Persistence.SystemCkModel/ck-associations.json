@@ -1,0 +1,14 @@
+{
+  "associationRoles": [
+    {
+      "id": "System.ParentChild",
+      "inboundName": "Parent",
+      "outboundName": "Children"
+    },
+    {
+      "id": "System.Related",
+      "inboundName": "RelatesTo",
+      "outboundName": "RelatesFrom"
+    }
+  ]
+}

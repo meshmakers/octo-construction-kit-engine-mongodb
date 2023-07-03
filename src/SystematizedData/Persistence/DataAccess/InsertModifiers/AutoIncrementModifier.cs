@@ -59,7 +59,11 @@ public class AutoIncrementModifier : IAutoIncrementModifier
 
             var autoIncrement = autoIncrementerSet.Result.FirstOrDefault(x =>
                 x.RtWellKnownName == autoIncrementReference.AutoIncrementReference);
-
+            if (autoIncrement == null)
+            {
+                throw new InvalidAttributeException(
+                    $"Autoincrement reference '{autoIncrementReference.AutoIncrementReference}' does not exist at Ck-Id {ckId}");
+            }
             rtEntity.SetAttributeValue(autoIncrementReference.AttributeName,
                 attributeCacheItem.AttributeValueType,
                 await ExecuteAutoIncrementAsync(session, autoIncrement));

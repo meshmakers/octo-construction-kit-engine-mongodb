@@ -7,10 +7,16 @@ public class CkModelRoot
 {
     public CkModelRoot()
     {
+        CkDependencies = new List<CkDependency>();
         CkEntities = new List<CkEntity>();
         CkAssociationRoles = new List<CkAssociationRole>();
         CkAttributes = new List<CkAttribute>();
     }
+    
+    [JsonRequired]
+    public CkName? Name { get; set; }
+    
+    [JsonProperty("dependencies")] public List<CkDependency> CkDependencies { get; }
 
     [JsonProperty("entities")] public List<CkEntity> CkEntities { get; }
 

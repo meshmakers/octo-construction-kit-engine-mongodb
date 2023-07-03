@@ -19,7 +19,10 @@ public class MutationHandler
     private readonly ITenantRepositoryInternal _tenantRepository;
     private readonly IAutoIncrementModifier _autoIncrementModifier;
 
-    internal MutationHandler(IDatabaseContext databaseContext, ICkCache ckCache, ITenantRepositoryInternal tenantRepository, IAutoIncrementModifier autoIncrementModifier)
+    internal MutationHandler(IDatabaseContext databaseContext,
+        ICkCache ckCache,
+        ITenantRepositoryInternal tenantRepository,
+        IAutoIncrementModifier autoIncrementModifier)
     {
         _databaseContext = databaseContext;
         _ckCache = ckCache;

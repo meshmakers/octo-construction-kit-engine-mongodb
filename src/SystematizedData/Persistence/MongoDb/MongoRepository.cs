@@ -65,17 +65,7 @@ public class MongoRepository : IRepositoryInternal
     {
         if (!_collectionNameMapping.TryGetValue(typeof(T), out var name))
         {
-            var collectionNameAttribute =
-                (CollectionNameAttribute)Attribute.GetCustomAttribute(typeof(T), typeof(CollectionNameAttribute));
-            if (collectionNameAttribute == null)
-            {
-                name = typeof(T).Name;
-            }
-            else
-            {
-                name = collectionNameAttribute.CollectionName;
-            }
-
+            name = typeof(T).Name;
             _collectionNameMapping.Add(typeof(T), name);
         }
 
