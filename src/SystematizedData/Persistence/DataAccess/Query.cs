@@ -341,9 +341,9 @@ public abstract class Query<TEntity> where TEntity : class, new()
             case FieldFilterOperator.NotEquals:
                 return Builders<TEntity>.Filter.Ne(attributeName, value);
             case FieldFilterOperator.In:
-                return Builders<TEntity>.Filter.In(attributeName, (IEnumerable<object>)value);
+                return Builders<TEntity>.Filter.In(attributeName, ParseArray(value));
             case FieldFilterOperator.NotIn:
-                return Builders<TEntity>.Filter.Nin(attributeName, (IEnumerable<object>)value);
+                return Builders<TEntity>.Filter.Nin(attributeName, ParseArray(value));
             case FieldFilterOperator.LessThan:
                 return Builders<TEntity>.Filter.Lt(attributeName, value);
             case FieldFilterOperator.LessEqualThan:
@@ -361,6 +361,38 @@ public abstract class Query<TEntity> where TEntity : class, new()
             default:
                 throw new NotImplementedException("Value is not implemented.");
         }
+    }
+    
+    private static IEnumerable<object> ParseArray(object value)
+    {
+        if (value is string s)
+        {
+            var r = s.Split(',').Select(x => x.Trim());
+            var castedValues = new List<object>();
+            foreach (string str in r)
+            {
+                if (double.TryParse(str, out double doubleValue))
+                {
+                    castedValues.Add(doubleValue);
+                }
+                else if (int.TryParse(str, out int intValue))
+                {
+                    castedValues.Add(intValue);
+                }
+                else if (bool.TryParse(str, out bool boolValue))
+                {
+                    castedValues.Add(boolValue);
+                }
+                else
+                {
+                    castedValues.Add(str);
+                }
+            }
+
+            return castedValues;
+        }
+
+        return (IEnumerable<object>) value;
     }
 
     private static string GetRegex(string value)
