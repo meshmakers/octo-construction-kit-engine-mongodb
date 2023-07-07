@@ -9,9 +9,9 @@ public class LargeBinaryInfoDto
     [JsonConverter(typeof(NewtonOctoObjectIdConverter))]
     public OctoObjectId? BinaryId { get; set; }
 
-    public string? ContentType { get; init; }
-    public string? Filename { get; init; }
-    public DateTime UploadDateTime { get; init; }
-    public long Length { get; init; }
-    public Uri? DownloadUri { get; init; }
+    public string? ContentType { get; set; }
+    public string? Filename { get; set; }
+    public DateTime UploadDateTime { get; set; }
+    public long Length { get; set; }
+    public Uri? DownloadUri { get; set; }
 }

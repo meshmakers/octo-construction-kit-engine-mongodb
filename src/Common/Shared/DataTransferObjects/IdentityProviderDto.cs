@@ -51,7 +51,7 @@ public class IdentityProviderDto
     ///     The API automatically returns an ID once the configuration has been created.
     /// </summary>
     [StringLength(TextDefaultMaxLength)]
-    public string? Id { get; init; }
+    public string? Id { get; set; }
 
     /// <summary>
     ///     Free definable for all different identity provider types.

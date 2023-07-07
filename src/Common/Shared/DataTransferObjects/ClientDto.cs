@@ -14,17 +14,17 @@ public class ClientDto
     /// <summary>
     ///     Specifies if client is enabled
     /// </summary>
-    public bool? IsEnabled { get; init; }
+    public bool? IsEnabled { get; set; }
 
     /// <summary>
     ///     Unique ID of the client
     /// </summary>
-    public string? ClientId { get; init; }
+    public string? ClientId { get; set; }
 
     /// <summary>
     ///     Optional client secret
     /// </summary>
-    public string? ClientSecret { get; init; }
+    public string? ClientSecret { get; set; }
 
     /// <summary>
     ///     Client display name (used for logging and consent screen)
@@ -40,7 +40,7 @@ public class ClientDto
     ///     Specifies the allowed grant types (legal combinations of AuthorizationCode, Implicit, Hybrid, ResourceOwner,
     ///     ClientCredentials).
     /// </summary>
-    public IEnumerable<string>? AllowedGrantTypes { get; init; }
+    public IEnumerable<string>? AllowedGrantTypes { get; set; }
 
     /// <summary>
     ///     Specifies allowed URIs to return tokens or authorization codes to
@@ -60,10 +60,10 @@ public class ClientDto
     /// <summary>
     ///     Specifies the api scopes that the client is allowed to request
     /// </summary>
-    public IEnumerable<string>? AllowedScopes { get; init; }
+    public IEnumerable<string>? AllowedScopes { get; set; }
 
     /// <summary>
     ///     Specifies if offline access to use code_authorization is enabled
     /// </summary>
-    public bool? IsOfflineAccessEnabled { get; init; }
+    public bool? IsOfflineAccessEnabled { get; set; }
 }

@@ -12,5 +12,5 @@ public record PoolConfigurationDto
     /// <summary>
     /// Gets or sets communication adapters associated with the pool.
     /// </summary>
-    public IEnumerable<PoolCommunicationAdapterDto> CommunicationAdapterList { get; init; } = null!;
+    public IEnumerable<PoolCommunicationAdapterDto> CommunicationAdapterList { get; set; } = null!;
 }

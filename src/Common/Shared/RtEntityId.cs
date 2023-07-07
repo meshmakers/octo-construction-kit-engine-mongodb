@@ -4,7 +4,7 @@ namespace Meshmakers.Octo.Common.Shared;
 
 public readonly struct RtEntityId : IComparable<RtEntityId>, IEquatable<RtEntityId>
 {
-    public string CkId { get; init; }
+    public string CkId { get; }
     public OctoObjectId RtId { get; }
 
     public RtEntityId(string ckId, OctoObjectId rtId)

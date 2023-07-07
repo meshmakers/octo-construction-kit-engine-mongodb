@@ -10,7 +10,7 @@
         <PackageProjectUrl>https://www.meshmakers.io</PackageProjectUrl>
         <RepositoryUrl>https://github.com/meshmakers/octomesh</RepositoryUrl>
         <RootNamespace>Meshmakers.Octo.Common.Shared</RootNamespace>
-        <TargetFramework>net7.0</TargetFramework>
+        <TargetFrameworks>net7.0;netstandard2.0</TargetFrameworks>
     </PropertyGroup>
 
     <PropertyGroup>
@@ -32,7 +32,7 @@
         <PackageReference Include="IdentityModel" Version="6.1.0" />
         <PackageReference Include="JsonSubTypes" Version="2.0.1" />
         <PackageReference Include="Markdig.Signed" Version="0.31.0" />
-        <PackageReference Include="Meshmakers.Common.Shared" Version="4.0.2305.5002" />
+        <PackageReference Include="Meshmakers.Common.Shared" Version="4.0.2307.7001" />
         <PackageReference Include="Microsoft.Extensions.Options" Version="7.0.1" />
         <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
         <PackageReference Include="NLog" Version="5.2.0" />

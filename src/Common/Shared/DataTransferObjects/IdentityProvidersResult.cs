@@ -10,5 +10,5 @@ public class IdentityProvidersResult
     /// <summary>
     ///     The available identity providers.
     /// </summary>
-    public IEnumerable<IdentityProviderDto>? IdentityProviders { get; init; }
+    public IEnumerable<IdentityProviderDto>? IdentityProviders { get; set; }
 }
