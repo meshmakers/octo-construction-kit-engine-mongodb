@@ -30,7 +30,7 @@ public class CkCache : ICkCache
             return;
         }
 
-        Logger.Debug("Initializing MetaCache");
+        Logger.Debug("Initializing CK cache");
 
         var session = await databaseContext.StartSessionAsync();
         session.StartTransaction();
@@ -72,11 +72,12 @@ public class CkCache : ICkCache
         foreach (var entityCacheItem in _metaCache.Values)
         {
             BuildInheritanceGraph(ckTypeInfosDictionary[entityCacheItem.CkId], entityCacheItem);
-            BuildAttributes(entityCacheItem);
         }
 
         foreach (var entityCacheItem in _metaCache.Values)
         {
+            BuildAttributes(entityCacheItem);
+
             var ckTypeInfo = ckTypeInfosDictionary[entityCacheItem.CkId];
             BuildAssociationGraph(ckTypeInfo.Associations.Out, entityCacheItem.OutboundAssociations,
                 entityCacheItem.CkId,
@@ -88,7 +89,7 @@ public class CkCache : ICkCache
         await session.CommitTransactionAsync();
 
         _isInitialized = true;
-        Logger.Debug("Initializing MetaCache done");
+        Logger.Debug("Initializing CK cache done");
     }
 
 
@@ -171,12 +172,15 @@ public class CkCache : ICkCache
     private void BuildAttributes(EntityCacheItem entityCacheItem)
     {
         Logger.Debug($"Building attributes for '{entityCacheItem.CkId}'");
+        
         foreach (var cacheItem in entityCacheItem.GetBaseTypesChain(false))
-        foreach (var attribute in cacheItem.Attributes)
         {
-            if (!entityCacheItem.Attributes.ContainsKey(attribute.Key))
+            foreach (var attribute in cacheItem.Attributes)
             {
-                entityCacheItem.Attributes.Add(attribute.Key, attribute.Value);
+                if (!entityCacheItem.Attributes.ContainsKey(attribute.Key))
+                {
+                    entityCacheItem.Attributes.Add(attribute.Key, attribute.Value);
+                }
             }
         }
     }

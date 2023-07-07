@@ -6,21 +6,21 @@ using Meshmakers.Octo.Communication.Contracts.DataTransferObjects;
 namespace Meshmakers.Octo.Communication.Contracts.Hubs;
 
 /// <summary>
-/// Interface of the plug pool hub that is responsible for registering and unregistering plug pools and managing their state.
+/// Interface of the pool hub that is responsible for registering and unregistering pools and managing their state.
 /// </summary>
 public interface IPoolHub
 {
     /// <summary>
-    /// Registers a plug pool at the plug controller
+    /// Registers a pool at the controller
     /// </summary>
-    /// <param name="plugPoolName">The name of the plug</param>
+    /// <param name="poolName">The name of the pool</param>
     /// <returns></returns>
-    Task<PlugPoolConfigurationDto> RegisterPlugPoolOperatorAsync(string plugPoolName);
+    Task<PoolConfigurationDto> RegisterPoolOperatorAsync(string poolName);
 
     /// <summary>
-    /// Unregisters a plug pool from the plug controller
+    /// Unregisters a pool from the controller
     /// </summary>
-    /// <param name="plugPoolName">The name of the plug</param>
+    /// <param name="poolName">The name of the pool</param>
     /// <returns></returns>
-    Task UnregisterPlugPoolOperatorAsync(string plugPoolName);
+    Task UnregisterPoolOperatorAsync(string poolName);
 }

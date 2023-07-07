@@ -24,6 +24,7 @@ steps:
     FileNames: |      
       src/Common/Communication.Contracts/*.csproj
       src/Common/Communication.Plugs.Contracts/*.csproj    
+      src/Common/Communication.Sockets.Contracts/*.csproj    
       src/Common/Shared/*.csproj
     InsertAttributes: true
     FileEncoding: 'auto'

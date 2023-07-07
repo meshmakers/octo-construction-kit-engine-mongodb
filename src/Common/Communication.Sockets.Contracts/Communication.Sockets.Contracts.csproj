@@ -1,28 +1,28 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <AssemblyName>Meshmakers.Octo.Communication.Plugs.Contracts</AssemblyName>
-        <Description>General interfaces for implementation of Octo Plugs</Description>
+        <AssemblyName>Meshmakers.Octo.Communication.Sockets.Contracts</AssemblyName>
+        <Description>General interfaces for implementation of Octo Sockets</Description>
         <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
         <PackageIcon>meshmakers64.png</PackageIcon>
-        <PackageId>Meshmakers.Octo.Communication.Plugs.Contracts</PackageId>
+        <PackageId>Meshmakers.Octo.Communication.Sockets.Contracts</PackageId>
         <PackageLicenseFile>LICENSE</PackageLicenseFile>
         <PackageProjectUrl>https://www.meshmakers.io</PackageProjectUrl>
         <RepositoryUrl>https://github.com/meshmakers/octomesh</RepositoryUrl>
-        <RootNamespace>Meshmakers.Octo.Communication.Plugs.Contracts</RootNamespace>
+        <RootNamespace>Meshmakers.Octo.Communication.Sockets.Contracts</RootNamespace>
         <TargetFramework>net7.0</TargetFramework>
         <ImplicitUsings>true</ImplicitUsings>
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
         <OutputPath>..\..\..\bin\Debug\Common\</OutputPath>
-        <DocumentationFile>..\..\..\bin\Debug\Common\Meshmakers.Octo.Communication.Plugs.Contracts.xml</DocumentationFile>
+        <DocumentationFile>..\..\..\bin\Debug\Common\Meshmakers.Octo.Communication.Sockets.Contracts.xml</DocumentationFile>
         <NoWarn>1701;1702;CS8002</NoWarn>
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
         <OutputPath>..\..\..\bin\Release\Common\</OutputPath>
-        <DocumentationFile>..\..\..\bin\Release\Common\Meshmakers.Octo.Communication.Plugs.Contracts.xml</DocumentationFile>
+        <DocumentationFile>..\..\..\bin\Release\Common\Meshmakers.Octo.Communication.Sockets.Contracts.xml</DocumentationFile>
         <NoWarn>1701;1702;CS8002</NoWarn>
     </PropertyGroup>
 
@@ -40,7 +40,7 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\Shared\Shared.csproj" />
+        <ProjectReference Include="..\Shared\Shared.csproj" />
     </ItemGroup>
-
+    
 </Project>

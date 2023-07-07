@@ -31,7 +31,12 @@ internal class Channel<TValue> : IChannel<TValue>
     {
         _channelMessageQueue.OnMessage(async channelMessage =>
         {
-            var serializedObject = channelMessage.Message.ToString();
+            if (!channelMessage.Message.HasValue)
+            {
+                return;
+            }
+
+            string? serializedObject = channelMessage.Message;
             if (string.IsNullOrWhiteSpace(serializedObject))
             {
                 return;

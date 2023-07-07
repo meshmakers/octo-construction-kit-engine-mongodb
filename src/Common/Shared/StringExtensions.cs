@@ -30,7 +30,8 @@ public static class StringExtensions
         // TODO: Move to commmon shared
         var serializerOptions = new JsonSerializerOptions
         {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            PropertyNameCaseInsensitive = true
         };
         return JsonSerializer.Deserialize<T>(s, serializerOptions)!;
     }
