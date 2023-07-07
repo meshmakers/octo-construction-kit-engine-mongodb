@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 

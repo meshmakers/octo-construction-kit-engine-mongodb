@@ -11,11 +11,11 @@ public class RtAssociation : IRtAssociation
 
     public OctoObjectId OriginRtId { get; set; }
 
-    public string OriginCkId { get; set; } = null!;
+    public CkTypeId OriginCkId { get; set; } = null!;
 
     public OctoObjectId TargetRtId { get; set; }
 
-    public string TargetCkId { get; set; }= null!;
+    public CkTypeId TargetCkId { get; set; }= null!;
 
     public string AssociationRoleId { get; set; }= null!;
 }

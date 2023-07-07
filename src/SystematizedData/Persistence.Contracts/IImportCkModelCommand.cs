@@ -6,9 +6,9 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
 
 public interface IImportCkModelCommand
 {
-    Task ImportTextAsync(IOctoSession session, ITenantCkModelRepository ckModelRepository, string jsonText, ScopeIds scopeId,
+    Task ImportTextAsync(IOctoSession session, ITenantCkModelRepository ckModelRepository, string jsonText,
         CancellationToken? cancellationToken = null);
 
-    Task ImportAsync(IOctoSession session, ITenantCkModelRepository ckModelRepository, string filePath, ScopeIds scopeId,
+    Task ImportAsync(IOctoSession session, ITenantCkModelRepository ckModelRepository, string filePath,
         CancellationToken? cancellationToken = null);
 }

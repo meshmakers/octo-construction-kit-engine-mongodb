@@ -9,9 +9,7 @@ public class CkEntityInheritance : ICkEntityInheritance
     /// </summary>
     public OctoObjectId InheritanceId { get; set; }
 
-    public ScopeIds ScopeId { get; set; }
+    public CkTypeId OriginCkId { get; set; } = null!;
 
-    public string OriginCkId { get; set; } = null!;
-
-    public string TargetCkId { get; set; } = null!;
+    public CkTypeId TargetCkId { get; set; } = null!;
 }

@@ -11,24 +11,24 @@ public class CkModelValidation
 {
     private readonly ITenantCkModelRepository _tenantCkModelRepository;
 
-    private List<CkAttribute>? _availableAttributes;
-    private TransientCkModel? _transientCkModel;
+    private readonly List<CkAttribute> _availableAttributes;
 
     public CkModelValidation(ITenantCkModelRepository tenantCkModelRepository)
     {
         _tenantCkModelRepository = tenantCkModelRepository;
+
+        _availableAttributes = new List<CkAttribute>();
     }
 
-    public async Task Validate(IOctoSession session, TransientCkModel transientCkModel, ScopeIds scopeId,
+    public async Task Validate(IOctoSession session, TransientCkModel transientCkModel, 
         CancellationToken? cancellationToken)
     {
-        _transientCkModel = transientCkModel;
-
-        var dbAttributes = await _tenantCkModelRepository.GetCkAttributesByScopeAsync(session, scopeId);
-        _availableAttributes = dbAttributes.Union(_transientCkModel.CkAttributes).ToList();
+        var dbAttributes = await _tenantCkModelRepository.GetCkAttributesByModelAsync(session, transientCkModel.ModelId);
+        _availableAttributes.Clear();
+        _availableAttributes.AddRange(dbAttributes.Union(transientCkModel.CkAttributes));
 
         // ValidateAsync
-        await ValidateEntitiesAndInheritance(session, scopeId);
+        await ValidateEntitiesAndInheritance(session, transientCkModel);
         if (CheckCancellation(cancellationToken))
         {
             return;
@@ -46,17 +46,17 @@ public class CkModelValidation
         }
     }
 
-    private async Task ValidateEntitiesAndInheritance(IOctoSession session, ScopeIds scopeId)
+    private async Task ValidateEntitiesAndInheritance(IOctoSession session, TransientCkModel transientCkModel)
     {
-        var dbEntities = (await _tenantCkModelRepository.GetCkEntitiesByScopeAsync(session, scopeId))
+        var dbEntities = (await _tenantCkModelRepository.GetCkEntitiesByModelAsync(session, transientCkModel.ModelId))
             .ToList();
-        var dbEntityInheritances = await _tenantCkModelRepository.GetCkEntityInheritancesByScopeAsync(session, scopeId);
-        var availableEntitiesIds = dbEntities.Select(x => x.CkId.ToString())
-            .Union(_transientCkModel.CkEntities.Select(x => x.CkId)).ToList();
-        var availableEntities = dbEntities.Union(_transientCkModel.CkEntities).ToList();
-        var availableEntityInheritances = dbEntityInheritances.Union(_transientCkModel.CkEntityInheritances).ToList();
+        var dbEntityInheritances = await _tenantCkModelRepository.GetCkEntityInheritancesByModelAsync(session, transientCkModel.ModelId);
+        var availableEntitiesIds = dbEntities.Select(x => x.CkId)
+            .Union(transientCkModel.CkEntities.Select(x => x.CkId)).ToList();
+        var availableEntities = dbEntities.Union(transientCkModel.CkEntities).ToList();
+        var availableEntityInheritances = dbEntityInheritances.Union(transientCkModel.CkEntityInheritances).ToList();
 
-        foreach (var ckEntityInheritance in _transientCkModel.CkEntityInheritances)
+        foreach (var ckEntityInheritance in transientCkModel.CkEntityInheritances)
         {
             if (!availableEntitiesIds.Contains(ckEntityInheritance.OriginCkId))
             {
@@ -69,9 +69,9 @@ public class CkModelValidation
             }
         }
 
-        foreach (var ckEntity in _transientCkModel.CkEntities)
+        foreach (var ckEntity in transientCkModel.CkEntities)
         {
-            if (dbEntities.Any(x => x.CkId == ckEntity.CkId))
+            if (dbEntities.Any(x => Equals(x.CkId, ckEntity.CkId)))
             {
                 throw ModelValidationException.CkIdAlreadyExistsInDatabase(ckEntity.CkId);
             }
@@ -123,7 +123,7 @@ public class CkModelValidation
             if (ckEntityIndex.IndexType == IndexTypes.Text &&
                 !CkModelCommon.KnownAnalyzerLanguages.Contains(ckEntityIndex.Language))
             {
-                unknownAnalyzers.Add(ckEntityIndex.Language);
+                unknownAnalyzers.Add(ckEntityIndex.Language ?? "en");
             }
 
             foreach (var ckIndexFields in ckEntityIndex.Fields)
@@ -182,13 +182,13 @@ public class CkModelValidation
         {
             attributeList.AddRange(currentEntity.Attributes);
 
-            var result = ckEntityInheritances.FirstOrDefault(x => x.TargetCkId == currentEntity.CkId);
+            var result = ckEntityInheritances.FirstOrDefault(x => Equals(x.TargetCkId, currentEntity.CkId));
             if (result == null)
             {
                 break;
             }
 
-            currentEntity = availableEntities.FirstOrDefault(x => x.CkId == result.OriginCkId);
+            currentEntity = availableEntities.FirstOrDefault(x => Equals(x.CkId, result.OriginCkId));
         }
 
         return attributeList;

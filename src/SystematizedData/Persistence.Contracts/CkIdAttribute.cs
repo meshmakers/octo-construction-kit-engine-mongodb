@@ -1,5 +1,4 @@
-using System;
-using Meshmakers.Common.Shared;
+using Meshmakers.Octo.Common.Shared;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence;
 
@@ -8,10 +7,8 @@ public class CkIdAttribute : Attribute
 {
     public CkIdAttribute(string ckId)
     {
-        ArgumentValidation.ValidateString(nameof(ckId), ckId);
-
         CkId = ckId;
     }
 
-    public string CkId { get; }
+    public CkTypeId CkId { get; }
 }

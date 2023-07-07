@@ -31,7 +31,7 @@ internal class TenantRepository : ITenantRepositoryInternal
 
     #region Helper
 
-    public IEntityCacheItem GetEntityCacheItem(string ckId)
+    public IEntityCacheItem GetEntityCacheItem(CkTypeId ckId)
     {
         var entityCacheItem = _ckCache.GetEntityCacheItem(ckId);
         if (entityCacheItem == null)
@@ -80,7 +80,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         var results = new List<BulkImportResult>();
         foreach (var groupedEntities in rtEntityList.GroupBy(x => x.CkId))
         {
-            if (string.IsNullOrWhiteSpace(groupedEntities.Key))
+            if (string.IsNullOrWhiteSpace(groupedEntities.Key.FullName))
             {
                 throw OperationFailedException.CreateWithMessage(
                     "Cannot update RtEntity without CkId. Please provide a CkId.");
@@ -105,7 +105,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         };
     }
 
-    public async Task InsertOneRtEntityAsync(IOctoSession session, string ckId, RtEntity rtEntity)
+    public async Task InsertOneRtEntityAsync(IOctoSession session, CkTypeId ckId, RtEntity rtEntity)
     {
         var rtCollection = _databaseContext.GetRtCollection<RtEntity>(ckId);
         await rtCollection.InsertAsync(session, rtEntity);
@@ -117,7 +117,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         await rtCollection.InsertAsync(session, rtEntity);
     }
 
-    public async Task ReplaceOneRtEntityByIdAsync(IOctoSession session, string ckId, OctoObjectId rtId, RtEntity rtEntity)
+    public async Task ReplaceOneRtEntityByIdAsync(IOctoSession session, CkTypeId ckId, OctoObjectId rtId, RtEntity rtEntity)
     {
         var rtCollection = _databaseContext.GetRtCollection<RtEntity>(ckId);
         await rtCollection.ReplaceByIdAsync(session, rtId, rtEntity);
@@ -129,7 +129,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         await rtCollection.ReplaceByIdAsync(session, rtId, rtEntity);
     }
 
-    public async Task DeleteOneRtEntityByRtIdAsync(IOctoSession session, string ckId, OctoObjectId rtId)
+    public async Task DeleteOneRtEntityByRtIdAsync(IOctoSession session, CkTypeId ckId, OctoObjectId rtId)
     {
         var rtCollection = _databaseContext.GetRtCollection<RtEntity>(ckId);
         await rtCollection.DeleteOneAsync(session, rtId);
@@ -141,7 +141,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         await rtCollection.DeleteOneAsync(session, rtId);
     }
 
-    public async Task DeleteOneRtEntityAsync(IOctoSession session, string ckId, Expression<Func<RtEntity, bool>> filterExpression)
+    public async Task DeleteOneRtEntityAsync(IOctoSession session, CkTypeId ckId, Expression<Func<RtEntity, bool>> filterExpression)
     {
         var rtCollection = _databaseContext.GetRtCollection<RtEntity>(ckId);
         await rtCollection.DeleteOneAsync(session, filterExpression);
@@ -184,7 +184,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         return new ResultSet<CkAttribute>(resultSet, totalCount);
     }
 
-    public async Task<IResultSet<ICkEntity>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<string> ckIds,
+    public async Task<IResultSet<ICkEntity>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<CkTypeId> ckIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var resultSet = new List<CkEntity>();
@@ -219,7 +219,7 @@ internal class TenantRepository : ITenantRepositoryInternal
             .DocumentAsync(session, rtId.ToObjectId());
     }
 
-    public async Task<RtEntity?> GetRtEntityByFilterAsync(IOctoSession session, string ckId, Expression<Func<RtEntity, bool>> filterExpression)
+    public async Task<RtEntity?> GetRtEntityByFilterAsync(IOctoSession session, CkTypeId ckId, Expression<Func<RtEntity, bool>> filterExpression)
     {
         return await _databaseContext.GetRtCollection<RtEntity>(ckId)
             .FindSingleOrDefaultAsync(session, filterExpression);
@@ -233,12 +233,10 @@ internal class TenantRepository : ITenantRepositoryInternal
             .FindSingleOrDefaultAsync(session, filterExpression);
     }
 
-    public async Task<IResultSet<RtEntity>> GetRtEntitiesByIdAsync(IOctoSession session, string ckId,
+    public async Task<IResultSet<RtEntity>> GetRtEntitiesByIdAsync(IOctoSession session, CkTypeId ckId,
         IReadOnlyList<OctoObjectId> rtIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
-        ArgumentValidation.ValidateString(nameof(ckId), ckId);
-
         if (!rtIds.Any())
         {
             return new ResultSet<RtEntity>(new List<RtEntity>(), 0);
@@ -306,9 +304,9 @@ internal class TenantRepository : ITenantRepositoryInternal
     }
 
     public async Task<IResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session, OctoObjectId originRtId,
-        string originCkId,
+        CkTypeId originCkId,
         string roleId,
-        string targetCkId,
+        CkTypeId targetCkId,
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
         int? take = null)
     {
@@ -333,12 +331,11 @@ internal class TenantRepository : ITenantRepositoryInternal
     }
 
     public async Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
-        IEnumerable<OctoObjectId> originRtIds, string originCkId, string roleId, string targetCkId,
+        IEnumerable<OctoObjectId> originRtIds, CkTypeId originCkId, string roleId, CkTypeId targetCkId,
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
         int? take = null)
     {
         ArgumentValidation.ValidateString(nameof(roleId), roleId);
-        ArgumentValidation.ValidateString(nameof(targetCkId), targetCkId);
 
         var entityCacheItem = GetEntityCacheItem(targetCkId);
 
@@ -423,7 +420,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         return await rtStatementCreator.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<RtEntity>> GetRtEntitiesByTypeAsync(IOctoSession session, string ckId,
+    public async Task<IResultSet<RtEntity>> GetRtEntitiesByTypeAsync(IOctoSession session, CkTypeId ckId,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         return await GetRtEntitiesByTypeAsync<RtEntity>(session, ckId, dataQueryOperation, skip, take);
@@ -437,7 +434,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         return await GetRtEntitiesByTypeAsync<TEntity>(session, ckId, dataQueryOperation, skip, take);
     }
 
-    private async Task<ResultSet<TEntity>> GetRtEntitiesByTypeAsync<TEntity>(IOctoSession session, string ckId,
+    private async Task<ResultSet<TEntity>> GetRtEntitiesByTypeAsync<TEntity>(IOctoSession session, CkTypeId ckId,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null) where TEntity : RtEntity, new()
     {
         var entityCacheItem = GetEntityCacheItem(ckId);
@@ -519,10 +516,8 @@ internal class TenantRepository : ITenantRepositoryInternal
 
     #region Transient data
 
-    public RtEntity CreateTransientRtEntity(string ckId)
+    public RtEntity CreateTransientRtEntity(CkTypeId ckId)
     {
-        ArgumentValidation.ValidateString(nameof(ckId), ckId);
-
         var entityCacheItem = _ckCache.GetEntityCacheItem(ckId);
         return CreateTransientRtEntity<RtEntity>(entityCacheItem);
     }
@@ -535,7 +530,7 @@ internal class TenantRepository : ITenantRepositoryInternal
     public TEntity CreateTransientRtEntity<TEntity>() where TEntity : RtEntity, new()
     {
         var ckId = RtEntityExtensions.GetCkId<TEntity>();
-        if (string.IsNullOrWhiteSpace(ckId))
+        if (string.IsNullOrWhiteSpace(ckId.FullName))
         {
             throw new InvalidCkIdException($"No Construction Kit Id for type '{typeof(TEntity).FullName}'" +
                                            $" is defined. Is attribute '{typeof(CkIdAttribute).FullName}' missing?");
@@ -614,7 +609,7 @@ internal class TenantRepository : ITenantRepositoryInternal
 
     #region Advanced functionality
 
-    public IUpdateStream<RtEntity> SubscribeToRtEntities(string ckId, UpdateStreamFilter updateStreamFilter,
+    public IUpdateStream<RtEntity> SubscribeToRtEntities(CkTypeId ckId, UpdateStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default)
     {
         var collection = _databaseContext.GetRtCollection<RtEntity>(ckId);
@@ -653,7 +648,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         }, () => null, cancellationToken);
     }
 
-    public IUpdateStream<RtAssociation> SubscribeToRtAssociations(string originCkId, string targetCkId,
+    public IUpdateStream<RtAssociation> SubscribeToRtAssociations(CkTypeId originCkId, CkTypeId targetCkId,
         UpdateAssociationStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default)
     {
@@ -729,10 +724,9 @@ internal class TenantRepository : ITenantRepositoryInternal
     }
 
     public async Task<IEnumerable<IAutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session,
-        string ckId,
+        CkTypeId ckId,
         string attributeName, string regexFilterValue, int takeCount)
     {
-        ArgumentValidation.ValidateString(nameof(ckId), ckId);
         ArgumentValidation.ValidateString(nameof(attributeName), attributeName);
         ArgumentValidation.ValidateString(nameof(regexFilterValue), regexFilterValue);
 
@@ -786,10 +780,9 @@ internal class TenantRepository : ITenantRepositoryInternal
     }
 
 
-    public async Task UpdateAutoCompleteTexts(IOctoSession session, string ckId, string attributeName,
+    public async Task UpdateAutoCompleteTexts(IOctoSession session, CkTypeId ckId, string attributeName,
         IEnumerable<string> autoCompleteTexts)
     {
-        ArgumentValidation.ValidateString(nameof(ckId), ckId);
         ArgumentValidation.ValidateString(nameof(attributeName), attributeName);
 
         var ckEntity =

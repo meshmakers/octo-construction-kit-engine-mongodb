@@ -1,6 +1,4 @@
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
@@ -21,7 +19,6 @@ public class AttributeCacheItem : IAttributeCacheItem
         AutoCompleteLimit = ckEntityAttribute.AutoCompleteLimit;
         AutoCompleteTexts = ckEntityAttribute.AutoCompleteTexts;
         AutoIncrementReference = ckEntityAttribute.AutoIncrementReference;
-        ScopeId = ckAttribute.ScopeId;
     }
 
     public string AttributeName { get; }
@@ -29,15 +26,13 @@ public class AttributeCacheItem : IAttributeCacheItem
 
     public bool IsAutoCompleteEnabled { get; }
 
-    public string AutoCompleteFilter { get; }
+    public string? AutoCompleteFilter { get; }
 
-    public int AutoCompleteLimit { get; }
+    public int? AutoCompleteLimit { get; }
 
-    public string AutoIncrementReference { get; }
+    public string? AutoIncrementReference { get; }
 
-    public ICollection<string> AutoCompleteTexts { get; }
-
-    public ScopeIds ScopeId { get; set; }
+    public ICollection<string>? AutoCompleteTexts { get; }
 
     public AttributeValueTypes AttributeValueType { get; }
 

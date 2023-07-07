@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 using MongoDB.Bson;
@@ -61,9 +62,9 @@ internal sealed class DatabaseContext : IDatabaseContext
         return session;
     }
 
-    public ICachedCollection<TEntity> GetRtCollection<TEntity>(string ckId) where TEntity : RtEntity, new()
+    public ICachedCollection<TEntity> GetRtCollection<TEntity>(CkTypeId ckId) where TEntity : RtEntity, new()
     {
-        var suffix = ckId.Replace(".", "_");
+        var suffix = ckId.FullName.Replace(".", "_");
         return _repository.GetCollection<TEntity>(suffix);
     }
 
@@ -108,7 +109,7 @@ internal sealed class DatabaseContext : IDatabaseContext
         {
             if (!ckEntity.IsAbstract)
             {
-                var suffix = ckEntity.CkId.Replace(".", "_");
+                var suffix = ckEntity.CkId.FullName.Replace(".", "_");
                 await _repository.CreateCollectionIfNotExistsAsync<RtEntity>(ckEntity.EnableChangeStreamPreAndPostImages, suffix);
             }
         }
@@ -120,7 +121,7 @@ internal sealed class DatabaseContext : IDatabaseContext
 
         foreach (var ckEntity in ckEntities)
         {
-            var name = ckEntity.CkId.Replace(".", "_");
+            var name = ckEntity.CkId.FullName.Replace(".", "_");
 
             var collection = GetRtCollection<RtEntity>(ckEntity.CkId);
             await collection.DropIndexAsync(name);
@@ -138,7 +139,7 @@ internal sealed class DatabaseContext : IDatabaseContext
 
             var collection = GetRtCollection<RtEntity>(ckEntity.CkId);
 
-            var newName = ckEntity.CkId.Replace(".", "_") + "_" + ObjectId.GenerateNewId();
+            var newName = ckEntity.CkId.FullName.Replace(".", "_") + "_" + ObjectId.GenerateNewId();
 
             switch (index.IndexType)
             {

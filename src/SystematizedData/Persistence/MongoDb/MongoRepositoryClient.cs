@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -58,11 +57,18 @@ public class MongoRepositoryClient : IRepositoryClient
 
     private static void RegisterClassMaps()
     {
+        BsonClassMap.TryRegisterClassMap<DatabaseEntities.CkModel>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.MapIdMember(c => c.Id).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
+            cm.MapMember(c => c.ScopeId).SetIsRequired(true);
+
+        });
+        
         BsonClassMap.TryRegisterClassMap<CkEntity>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.CkId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
-            cm.MapMember(c => c.ScopeId).SetIsRequired(true);
             cm.MapMember(c => c.IsFinal).SetIsRequired(true);
             cm.MapMember(c => c.IsAbstract).SetIsRequired(true);
             cm.MapMember(c => c.Attributes).SetIsRequired(true);
@@ -74,7 +80,6 @@ public class MongoRepositoryClient : IRepositoryClient
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.AttributeId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
-            cm.MapMember(c => c.ScopeId).SetIsRequired(true);
             cm.MapMember(c => c.AttributeValueType).SetIsRequired(true);
             cm.MapMember(c => c.DefaultValue).SetIgnoreIfDefault(true);
             cm.MapMember(c => c.DefaultValues).SetIsRequired(true);
@@ -85,7 +90,6 @@ public class MongoRepositoryClient : IRepositoryClient
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.AssociationId).SetSerializer(new OctoObjectIdSerializer()).SetIdGenerator(new OctoObjectIdGenerator());
-            cm.MapMember(c => c.ScopeId).SetIsRequired(true);
             cm.MapMember(c => c.OriginCkId).SetIsRequired(true);
             cm.MapMember(c => c.TargetCkId).SetIsRequired(true);
             cm.MapMember(c => c.InboundName).SetIsRequired(true);

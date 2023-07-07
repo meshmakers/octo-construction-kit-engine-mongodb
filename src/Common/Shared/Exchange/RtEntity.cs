@@ -28,9 +28,9 @@ public class RtEntity
     [JsonProperty("rtChangedDateTime", NullValueHandling = NullValueHandling.Ignore)]
     public DateTime? RtChangedDateTime { get; set; }
 
-    [JsonProperty("ckId", Required = Required.Always)] 
+    [JsonProperty("ckId", Required = Required.Always)]
     [JsonRequired]
-    public string? CkId { get; set; }
+    public CkTypeId CkId { get; set; } = null!;
 
     [JsonProperty("rtWellKnownName")] 
     public string? RtWellKnownName { get; set; }

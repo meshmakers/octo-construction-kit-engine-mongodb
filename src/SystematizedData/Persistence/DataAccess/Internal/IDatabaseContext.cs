@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using MongoDB.Bson;
 
@@ -17,7 +18,7 @@ public interface IDatabaseContext
     Task<IOctoSession> StartSessionAsync();
     IOctoSession StartSession();
 
-    ICachedCollection<TEntity> GetRtCollection<TEntity>(string ckId) where TEntity : RtEntity, new();
+    ICachedCollection<TEntity> GetRtCollection<TEntity>(CkTypeId ckId) where TEntity : RtEntity, new();
     ICachedCollection<TEntity> GetRtCollection<TEntity>() where TEntity : RtEntity, new();
 
     Task<ICollection<CkTypeInfo>> GetCkTypeInfoAsync(IOctoSession session);

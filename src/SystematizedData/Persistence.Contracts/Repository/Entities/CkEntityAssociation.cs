@@ -11,11 +11,9 @@ public class CkEntityAssociation : ICkEntityAssociation
     /// </summary>
     public OctoObjectId AssociationId { get; set; }
 
-    public ScopeIds ScopeId { get; set; }
+    public CkTypeId OriginCkId { get; set; }= null!;
 
-    public string OriginCkId { get; set; }= null!;
-
-    public string TargetCkId { get; set; }= null!;
+    public CkTypeId TargetCkId { get; set; }= null!;
 
     /// <summary>
     ///     Name of the association for inbound references (e. g. Parent)

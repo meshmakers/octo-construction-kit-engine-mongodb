@@ -30,4 +30,9 @@ public class ModelImportException : Exception
         StreamingContext context) : base(info, context)
     {
     }
+
+    public static Exception CannotDeserializeModel()
+    {
+        return new ModelImportException("Cannot deserialize model");
+    }
 }

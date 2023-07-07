@@ -23,7 +23,7 @@ public class RtEntityDto : GraphQlDto
     public DateTime? RtChangedDateTime { get; set; }
 
     [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
-    public string? CkId { get; set; }
+    public CkTypeId? CkId { get; set; }
 
     [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
     public string? RtWellKnownName { get; set; }

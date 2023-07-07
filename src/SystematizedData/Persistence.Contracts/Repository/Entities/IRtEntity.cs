@@ -22,7 +22,7 @@ public interface IRtEntity2
     /// <summary>
     ///     Gets or sets the construction kit id
     /// </summary>
-    string CkId { get; set; }
+    CkTypeId CkId { get; set; }
 
     /// <summary>
     ///     Returns the well known name to access well known entities in a faster way

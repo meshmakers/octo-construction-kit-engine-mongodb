@@ -17,22 +17,22 @@ public interface ITenantRepositoryInternal : ITenantRepository
     RtAssociation CreateTransientRtAssociation(RtEntityId originRtEntityId, string roleId,
         RtEntityId targetRtEntityId);
 
-    Task InsertOneRtEntityAsync(IOctoSession session, string ckId, RtEntity rtEntity);
+    Task InsertOneRtEntityAsync(IOctoSession session, CkTypeId ckId, RtEntity rtEntity);
 
     Task InsertOneRtEntityAsync<TEntity>(IOctoSession session, TEntity rtEntity)
         where TEntity : RtEntity, new();
     
-    Task ReplaceOneRtEntityByIdAsync(IOctoSession session, string ckId, OctoObjectId rtId, RtEntity rtEntity);
+    Task ReplaceOneRtEntityByIdAsync(IOctoSession session, CkTypeId ckId, OctoObjectId rtId, RtEntity rtEntity);
 
     Task ReplaceOneRtEntityByIdAsync<TEntity>(IOctoSession session, OctoObjectId rtId, TEntity rtEntity)
         where TEntity : RtEntity, new();
 
-    Task DeleteOneRtEntityByRtIdAsync(IOctoSession session, string ckId, OctoObjectId rtId);
+    Task DeleteOneRtEntityByRtIdAsync(IOctoSession session, CkTypeId ckId, OctoObjectId rtId);
     
     Task DeleteOneRtEntityByRtIdAsync<TEntity>(IOctoSession session, OctoObjectId rtId)
         where TEntity : RtEntity, new();
 
-    Task DeleteOneRtEntityAsync(IOctoSession session, string ckId, Expression<Func<RtEntity, bool>> filterExpression);
+    Task DeleteOneRtEntityAsync(IOctoSession session, CkTypeId ckId, Expression<Func<RtEntity, bool>> filterExpression);
     
     Task DeleteOneRtEntityAsync<TEntity>(IOctoSession session, Expression<Func<TEntity, bool>> filterExpression)
         where TEntity : RtEntity, new();

@@ -4,10 +4,10 @@ namespace Meshmakers.Octo.Common.Shared;
 
 public readonly struct RtEntityId : IComparable<RtEntityId>, IEquatable<RtEntityId>
 {
-    public string CkId { get; init; }
+    public CkTypeId CkId { get; init; }
     public OctoObjectId RtId { get; }
 
-    public RtEntityId(string ckId, OctoObjectId rtId)
+    public RtEntityId(CkTypeId ckId, OctoObjectId rtId)
     {
         CkId = ckId;
         RtId = rtId;
@@ -15,12 +15,12 @@ public readonly struct RtEntityId : IComparable<RtEntityId>, IEquatable<RtEntity
 
     public int CompareTo(RtEntityId other)
     {
-        var num = string.CompareOrdinal(CkId, other.CkId);
+        var num = CkId.CompareTo(other.CkId);
         if (num != 0)
         {
             return num;
         }
-
+        
         return RtId.CompareTo(other.RtId);
     }
 
@@ -34,7 +34,7 @@ public readonly struct RtEntityId : IComparable<RtEntityId>, IEquatable<RtEntity
 
     public bool Equals(RtEntityId other)
     {
-        return string.CompareOrdinal(CkId, other.CkId) == 0 &&
+        return Equals(CkId, other.CkId) &&
                Equals(RtId, other.RtId);
     }
 

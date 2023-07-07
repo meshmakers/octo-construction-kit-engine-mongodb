@@ -7,7 +7,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 public interface ITenantRepository
 {
-    IEntityCacheItem GetEntityCacheItem(string ckId);
+    IEntityCacheItem GetEntityCacheItem(CkTypeId ckId);
     
     #region Transaction Handling
 
@@ -33,7 +33,7 @@ public interface ITenantRepository
     Task<IResultSet<ICkAttribute>> GetCkAttributesAsync(IOctoSession session, IReadOnlyList<string> attributeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
 
-    Task<IResultSet<ICkEntity>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<string> ckIds,
+    Task<IResultSet<ICkEntity>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<CkTypeId> ckIds,
         DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null);
 
@@ -42,15 +42,15 @@ public interface ITenantRepository
     Task<TEntity?> GetRtEntityByRtIdAsync<TEntity>(IOctoSession session, OctoObjectId rtId)
         where TEntity : RtEntity, new();
 
-    Task<RtEntity?> GetRtEntityByFilterAsync(IOctoSession session, string ckId, Expression<Func<RtEntity, bool>> filterExpression);
+    Task<RtEntity?> GetRtEntityByFilterAsync(IOctoSession session, CkTypeId ckId, Expression<Func<RtEntity, bool>> filterExpression);
     Task<TEntity?> GetRtEntityByFilterAsync<TEntity>(IOctoSession session, Expression<Func<TEntity, bool>> filterExpression)
         where TEntity : RtEntity, new();
 
-    Task<IResultSet<RtEntity>> GetRtEntitiesByIdAsync(IOctoSession session, string ckId, IReadOnlyList<OctoObjectId> rtIds,
+    Task<IResultSet<RtEntity>> GetRtEntitiesByIdAsync(IOctoSession session, CkTypeId ckId, IReadOnlyList<OctoObjectId> rtIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
 
     Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
-        IEnumerable<OctoObjectId> originRtIds, string originCkId, string roleId, string targetCkId,
+        IEnumerable<OctoObjectId> originRtIds, CkTypeId originCkId, string roleId, CkTypeId targetCkId,
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
         int? take = null);
 
@@ -84,7 +84,7 @@ public interface ITenantRepository
     Task<IReadOnlyList<RtAssociation>> GetRtAssociationsAsync(IOctoSession session, OctoObjectId rtId,
         GraphDirections graphDirections);
 
-    Task<IResultSet<RtEntity>> GetRtEntitiesByTypeAsync(IOctoSession session, string ckId,
+    Task<IResultSet<RtEntity>> GetRtEntitiesByTypeAsync(IOctoSession session, CkTypeId ckId,
         DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null);
 
@@ -104,7 +104,7 @@ public interface ITenantRepository
 
     #region Transient data
 
-    RtEntity CreateTransientRtEntity(string ckId);
+    RtEntity CreateTransientRtEntity(CkTypeId ckId);
 
     // ReSharper disable once UnusedMemberInSuper.Global
     RtEntity CreateTransientRtEntity(IEntityCacheItem entityCacheItem);
@@ -131,14 +131,14 @@ public interface ITenantRepository
 
     #region Advanced functionality
 
-    IUpdateStream<RtEntity> SubscribeToRtEntities(string ckId, UpdateStreamFilter updateStreamFilter,
+    IUpdateStream<RtEntity> SubscribeToRtEntities(CkTypeId ckId, UpdateStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default);
 
     IUpdateStream<TEntity> SubscribeToRtEntities<TEntity>(UpdateStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default)
         where TEntity : RtEntity, new();
 
-    IUpdateStream<RtAssociation> SubscribeToRtAssociations(string originCkId, string targetCkId,
+    IUpdateStream<RtAssociation> SubscribeToRtAssociations(CkTypeId originCkId, CkTypeId targetCkId,
         UpdateAssociationStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default);
 
@@ -146,11 +146,11 @@ public interface ITenantRepository
         CancellationToken cancellationToken = default)
         where TOriginEntity : RtEntity, new() where TTargetEntity : RtEntity, new();
 
-    Task<IEnumerable<IAutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session, string ckId,
+    Task<IEnumerable<IAutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session, CkTypeId ckId,
         string attributeName,
         string regexFilterValue, int takeCount);
 
-    Task UpdateAutoCompleteTexts(IOctoSession session, string rtId, string attributeName,
+    Task UpdateAutoCompleteTexts(IOctoSession session, CkTypeId ckId, string attributeName,
         IEnumerable<string> autoCompleteTexts);
 
     #endregion Advanced functionality

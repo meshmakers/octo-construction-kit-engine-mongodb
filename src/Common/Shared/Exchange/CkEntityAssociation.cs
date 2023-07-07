@@ -5,15 +5,21 @@ namespace Meshmakers.Octo.Common.Shared.Exchange;
 
 public class CkEntityAssociation
 {
-    [JsonProperty("roleId")] public string? RoleId { get; set; }
+    [JsonProperty("roleId")]
+    [JsonRequired]
+    public string RoleId { get; set; } = null!;
 
-    [JsonProperty("targetCkId")] public string? TargetCkId { get; set; }
+    [JsonProperty("targetCkId")]
+    [JsonRequired]
+    public CkTypeId TargetCkId { get; set; } = null!;
 
     [JsonProperty("inboundMultiplicity")]
     [JsonConverter(typeof(StringEnumConverter))]
+    [JsonRequired]
     public Multiplicities InboundMultiplicity { get; set; }
 
     [JsonProperty("outboundMultiplicity")]
     [JsonConverter(typeof(StringEnumConverter))]
+    [JsonRequired]
     public Multiplicities OutboundMultiplicity { get; set; }
 }

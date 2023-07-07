@@ -1,10 +1,11 @@
+using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 
 public interface IEntityCacheItem
 {
-    string CkId { get; }
+    CkTypeId CkId { get; }
     bool IsAbstract { get; }
     bool IsFinal { get; }
     ScopeIds ScopeId { get; }

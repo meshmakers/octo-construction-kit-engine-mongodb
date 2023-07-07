@@ -12,20 +12,20 @@ public class CkEntity
         Indexes = new List<CkEntityIndexDto>();
     }
 
-    [JsonProperty("ckId")] public string? CkId { get; set; }
+    [JsonProperty("ckId")] [JsonRequired] public CkTypeId CkId { get; set; } = null!;
 
-    [JsonProperty("ckDerivedId")] public string? CkDerivedId { get; set; }
+    [JsonProperty("ckDerivedId")] public CkTypeId? CkDerivedId { get; set; }
 
     [JsonProperty("isFinal")] public bool IsFinal { get; set; }
 
-    [JsonProperty("isAbstract")] public bool IsAbstract { get; set; }
+    [JsonProperty("isAbstract")] public bool IsAbstract { get; set; } 
 
 
     [JsonProperty("attributes")] public List<CkEntityAttribute> Attributes { get; }
 
-    [JsonProperty("indexes")] public List<CkEntityIndexDto> Indexes { get; }
+    [JsonProperty("indexes")] public List<CkEntityIndexDto>? Indexes { get; }
 
-    [JsonProperty("associations")] public List<CkEntityAssociation> Associations { get; }
+    [JsonProperty("associations")] public List<CkEntityAssociation>? Associations { get; }
     
     /// <summary>
     /// Gets or sets if the change stream should include pre and post images

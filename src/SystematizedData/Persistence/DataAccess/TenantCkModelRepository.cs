@@ -33,20 +33,7 @@ public class TenantCkModelRepository : ITenantCkModelRepository
         return await _databaseContext.CkAttributes.FindSingleOrDefaultAsync(session, expression);
     }
 
-    public async Task<ICollection<CkAttribute>> GetCkAttributesByScopeAsync(IOctoSession session, ScopeIds scopeId)
-    {
-        return await _databaseContext.CkAttributes.FindManyAsync(session, x=> (int)x.ScopeId < (int)scopeId);
-    }
 
-    public async Task<ICollection<CkEntity>> GetCkEntitiesByScopeAsync(IOctoSession session, ScopeIds scopeId)
-    {
-        return await _databaseContext.CkEntities.FindManyAsync(session, x=> (int)x.ScopeId < (int)scopeId);
-    }
-
-    public async Task<ICollection<CkEntityInheritance>> GetCkEntityInheritancesByScopeAsync(IOctoSession session, ScopeIds scopeId)
-    {
-        return await _databaseContext.CkEntityInheritances.FindManyAsync(session, x=> (int)x.ScopeId < (int)scopeId);
-    }
 
     public async Task<IBulkImportResult> BulkImportCkAttributesAsync(IOctoSession session, IReadOnlyCollection<CkAttribute> ckAttributes)
     {
@@ -73,12 +60,7 @@ public class TenantCkModelRepository : ITenantCkModelRepository
         await _databaseContext.CkEntityAssociations.DeleteOneAsync(session, associationId);
     }
 
-    public async Task<ICollection<CkEntityAssociation>> GetCkEntityAssociationsByScopeAsync(IOctoSession session, ScopeIds scopeId)
-    {
-        return await _databaseContext.CkEntityAssociations.FindManyAsync(session, x=> (int)x.ScopeId < (int)scopeId);
-    }
-
-    public async Task DeleteCkEntitiesOneAsync(IOctoSession session, string ckId)
+    public async Task DeleteCkEntitiesOneAsync(IOctoSession session, CkTypeId ckId)
     {
         await _databaseContext.CkEntities.DeleteOneAsync(session, ckId);
     }
@@ -101,5 +83,25 @@ public class TenantCkModelRepository : ITenantCkModelRepository
     public async Task UpdateIndexAsync(IOctoSession session)
     {
         await _databaseContext.UpdateIndexAsync(session);
+    }
+
+    public Task<IEnumerable<CkAttribute>> GetCkAttributesByModelAsync(IOctoSession session, CkModelId ckModelId)
+    {
+        _databaseContext.CkAttributes.FindManyAsync(session, x => x. == ckModelId)
+    }
+
+    public Task<IEnumerable<CkEntity>> GetCkEntitiesByModelAsync(IOctoSession session, CkModelId ckModelId)
+    {
+        throw new NotImplementedException();
+    }
+
+    public Task<IEnumerable<CkEntityAssociation>> GetCkEntityAssociationsByModelAsync(IOctoSession session, CkModelId ckModelId)
+    {
+        throw new NotImplementedException();
+    }
+
+    public Task<IEnumerable<CkEntityInheritance>> GetCkEntityInheritancesByModelAsync(IOctoSession session, CkModelId ckModelId)
+    {
+        throw new NotImplementedException();
     }
 }

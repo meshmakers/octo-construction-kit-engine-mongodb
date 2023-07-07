@@ -6,7 +6,7 @@ namespace Meshmakers.Octo.Common.Shared.Exchange;
 
 public class CkAttribute
 {
-    [JsonProperty("id")] public string? AttributeId { get; set; }
+    [JsonProperty("id")] [JsonRequired] public string AttributeId { get; set; } = null!;
 
     [JsonProperty("valueType")]
     [JsonConverter(typeof(StringEnumConverter))]

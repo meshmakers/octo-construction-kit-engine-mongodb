@@ -3,11 +3,13 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.InsertModifiers;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Mutation;
@@ -73,7 +75,7 @@ public class MutationHandler
         rtEntities.ForEach(x => x.RtChangedDateTime = x.RtCreationDateTime);
         rtEntities.ForEach(x =>
             {
-                if (string.IsNullOrWhiteSpace(x.CkId)) {
+                if (string.IsNullOrWhiteSpace(x.CkId.FullName)) {
                     x.CkId = x.GetCkId();
                 }
             }
@@ -81,7 +83,7 @@ public class MutationHandler
 
         foreach (var rtEntityGrouping in rtEntities.GroupBy(x => x.GetCkId()))
         {
-            if (string.IsNullOrWhiteSpace(rtEntityGrouping.Key))
+            if (string.IsNullOrWhiteSpace(rtEntityGrouping.Key.FullName))
             {
                 throw OperationFailedException.CreateWithMessage(
                     "Cannot update RtEntity without CkId. Please provide a CkId.");
@@ -104,7 +106,7 @@ public class MutationHandler
     {
         foreach (var rtEntityGrouping in rtEntities.GroupBy(x => x.GetCkId()))
         {
-            if (string.IsNullOrWhiteSpace(rtEntityGrouping.Key))
+            if (string.IsNullOrWhiteSpace(rtEntityGrouping.Key.FullName))
             {
                 throw OperationFailedException.CreateWithMessage(
                     "Cannot update RtEntity without CkId. Please provide a CkId.");
@@ -114,7 +116,7 @@ public class MutationHandler
         }
     }
 
-    private async Task UpdateRtEntitiesByCkId<TEntity>(IOctoSession session, string ckId, IEnumerable<RtEntity> rtEntityGrouping)
+    private async Task UpdateRtEntitiesByCkId<TEntity>(IOctoSession session, CkTypeId ckId, IEnumerable<RtEntity> rtEntityGrouping)
         where TEntity : RtEntity, new()
     {
         var collection = _databaseContext.GetRtCollection<TEntity>(ckId);
@@ -142,7 +144,7 @@ public class MutationHandler
     {
         foreach (var rtEntityGrouping in rtEntities.GroupBy(x => x.GetCkId()))
         {
-            if (string.IsNullOrWhiteSpace(rtEntityGrouping.Key))
+            if (string.IsNullOrWhiteSpace(rtEntityGrouping.Key.FullName))
             {
                 throw OperationFailedException.CreateWithMessage(
                     "Cannot delete RtEntity without CkId. Please provide a CkId.");
@@ -152,11 +154,11 @@ public class MutationHandler
         }
     }
     
-    private async Task DeleteRtEntityAsync<TEntity>(IOctoSession session, string ckId, IEnumerable<RtEntity> rtEntities)
+    private async Task DeleteRtEntityAsync<TEntity>(IOctoSession session, CkTypeId ckId, IEnumerable<RtEntity> rtEntities)
         where TEntity : RtEntity, new()
     {
         var collection = _databaseContext.GetRtCollection<TEntity>(ckId);
-
+        
         foreach (var rtEntity in rtEntities.AsParallel())
         {
             await collection.DeleteOneAsync(session, rtEntity.RtId);

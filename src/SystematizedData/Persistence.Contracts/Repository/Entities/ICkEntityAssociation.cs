@@ -9,9 +9,8 @@ public interface ICkEntityAssociation
     /// </summary>
     OctoObjectId AssociationId { get; set; }
 
-    ScopeIds ScopeId { get; set; }
-    string OriginCkId { get; set; }
-    string TargetCkId { get; set; }
+    CkTypeId OriginCkId { get; set; }
+    CkTypeId TargetCkId { get; set; }
 
     /// <summary>
     ///     Name of the association for inbound references (e. g. Parent)

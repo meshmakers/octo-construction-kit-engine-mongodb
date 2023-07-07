@@ -1,3 +1,5 @@
+using Meshmakers.Octo.Common.Shared;
+
 namespace CkModel.CkRuleEngine;
 
 public class ModelValidationException : Exception
@@ -20,18 +22,18 @@ public class ModelValidationException : Exception
         return new ModelValidationException($"Following attribute ids are duplicates: '{attributeIds}'");
     }
 
-    internal static Exception UnknownCkIdForInheritance(object ckId)
+    internal static Exception UnknownCkIdForInheritance(CkTypeId ckId)
     {
         return new ModelValidationException($"CkId '{ckId}' is unknown for inheritance.");
     }
 
 
-    public static Exception CkIdAlreadyExistsInDatabase(object ckId)
+    public static Exception CkIdAlreadyExistsInDatabase(CkTypeId ckId)
     {
         return new ModelValidationException($"CkId '{ckId}' already exists in database.");
     }
 
-    public static Exception UnknownAttributeOfCkIdInSource(string ckId, string attributeId)
+    public static Exception UnknownAttributeOfCkIdInSource(CkTypeId ckId, string attributeId)
     {
         return new ModelValidationException($"Attribute Id '{attributeId}' of CkId '{ckId}' does not exist.");
     }
@@ -41,7 +43,7 @@ public class ModelValidationException : Exception
         return new ModelValidationException($"Validation of Construction Kit Model failed:" + Environment.NewLine + error);
     }
 
-    public static Exception DuplicateAttributeIdsInCkEntity(string ckId, IEnumerable<string> duplicateAttributeIds)
+    public static Exception DuplicateAttributeIdsInCkEntity(CkTypeId ckId, IEnumerable<string> duplicateAttributeIds)
     {
         var attributeIds = string.Join(", ", duplicateAttributeIds);
         return new ModelValidationException($"CkId '{ckId}' has duplicate attribute IDs: '{attributeIds}'");

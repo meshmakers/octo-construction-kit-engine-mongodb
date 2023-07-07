@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using NLog;
 
@@ -7,13 +8,13 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 public class CkCache : ICkCache
 {
     private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
-    private readonly ConcurrentDictionary<string, EntityCacheItem> _metaCache;
+    private readonly ConcurrentDictionary<CkTypeId, EntityCacheItem> _metaCache;
     private bool _isInitialized;
 
     public CkCache(string tenantId)
     {
         TenantId = tenantId;
-        _metaCache = new ConcurrentDictionary<string, EntityCacheItem>();
+        _metaCache = new ConcurrentDictionary<CkTypeId, EntityCacheItem>();
     }
 
     public string TenantId { get; }
@@ -119,7 +120,7 @@ public class CkCache : ICkCache
     }
 
 
-    public IEntityCacheItem GetEntityCacheItem(string ckId)
+    public IEntityCacheItem GetEntityCacheItem(CkTypeId ckId)
     {
         return _metaCache[ckId];
     }
@@ -127,7 +128,7 @@ public class CkCache : ICkCache
 
     private void BuildAssociationGraph(ICkTypeAggregations ckTypeAggregations,
         IDictionary<string, List<IAssociationCacheItem>> associations,
-        string ckId, GraphDirections graphDirections)
+        CkTypeId ckId, GraphDirections graphDirections)
     {
         Logger.Debug($"BuildAssociationGraph for '{ckId}' ({graphDirections})");
 
@@ -202,14 +203,14 @@ public class CkCache : ICkCache
 
         foreach (var ckBaseTypeInfo in ckTypeInfo.BaseTypes)
         {
-            if (ckBaseTypeInfo.OriginCkId == entityCacheItem.CkId)
+            if (ckBaseTypeInfo.OriginCkId.Equals(entityCacheItem.CkId))
             {
                 continue;
             }
 
             Logger.Debug($"Building inheritance graph '{entityCacheItem.CkId}', base type {ckBaseTypeInfo.OriginCkId}");
             var baseType = _metaCache[ckBaseTypeInfo.OriginCkId];
-            if (ckBaseTypeInfo.TargetCkId == entityCacheItem.CkId)
+            if (ckBaseTypeInfo.TargetCkId.Equals(entityCacheItem.CkId))
             {
                 entityCacheItem.BaseType = baseType;
             }

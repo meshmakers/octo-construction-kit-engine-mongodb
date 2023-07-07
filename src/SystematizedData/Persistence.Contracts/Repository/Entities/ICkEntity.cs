@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Meshmakers.Octo.Common.Shared;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
@@ -7,13 +8,8 @@ public interface ICkEntity
     /// <summary>
     ///     Gets or sets the construction kit id
     /// </summary>
-    string CkId { get; set; }
-
-    /// <summary>
-    ///     Defines the scope the type is created by
-    /// </summary>
-    ScopeIds ScopeId { get; set; }
-
+    CkTypeId CkId { get; set; }
+    
     /// <summary>
     ///     If true, the type cannot be inherited again
     /// </summary>

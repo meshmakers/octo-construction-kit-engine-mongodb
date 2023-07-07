@@ -9,7 +9,6 @@ public interface ICkEntityInheritance
     /// </summary>
     OctoObjectId InheritanceId { get; set; }
 
-    ScopeIds ScopeId { get; set; }
-    string OriginCkId { get; set; }
-    string TargetCkId { get; set; }
+    CkTypeId OriginCkId { get; set; }
+    CkTypeId TargetCkId { get; set; }
 }

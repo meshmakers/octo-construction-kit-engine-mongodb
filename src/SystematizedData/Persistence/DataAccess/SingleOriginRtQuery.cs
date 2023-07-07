@@ -54,7 +54,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<TEntity> where T
 
     protected override string GetEntityName()
     {
-        return _entityCacheItem.CkId;
+        return _entityCacheItem.CkId.FullName;
     }
 
     protected override object? ResolveSearchAttributeValue(string attributeName, object? searchTerm, out bool isEnum)

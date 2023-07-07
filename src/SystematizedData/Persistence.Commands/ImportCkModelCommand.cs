@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.Exchange;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
@@ -19,29 +20,31 @@ public class ImportCkModelCommand : IImportCkModelCommand
 {
     private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
     private CkModelValidation? _ckModelValidation;
-    private TransientCkModel? _transientCkModel;
-    private ITenantCkModelRepository? _ckModelRepository;
 
-    public ImportCkModelCommand()
-    {
-    }
-
-    public async Task ImportTextAsync(IOctoSession session, ITenantCkModelRepository ckModelRepository, string jsonText, ScopeIds scopeId,
+    public async Task ImportTextAsync(IOctoSession session, ITenantCkModelRepository ckModelRepository, string jsonText,
         CancellationToken? cancellationToken = null)
     {
         try
         {
-            _ckModelRepository = ckModelRepository;
-            _ckModelValidation = new CkModelValidation(_ckModelRepository);
-            _transientCkModel = new TransientCkModel();
+            _ckModelValidation = new CkModelValidation(ckModelRepository);
+            
 
             Logger.Info("Reading CK model....");
             var model = CkSerializer.Deserialize(jsonText);
-
+            
+            if (model == null)
+            {
+                Logger.Error("Import of CK model failed, model cannot be deserialized.");
+                throw ModelImportException.CannotDeserializeModel();
+            }
+            
             Logger.Info("Executing import of CK model....");
+            var transientCkModel = new TransientCkModel(model.ModelId);
+            await ExecuteImport(session, model, transientCkModel, ckModelRepository, cancellationToken);
 
-            await ExecuteImport(session, model, scopeId, cancellationToken);
-
+            
+            
+            
             Logger.Info("Import of CK model completed.");
         }
         catch (Exception e)
@@ -51,14 +54,13 @@ public class ImportCkModelCommand : IImportCkModelCommand
         }
     }
 
-    public async Task ImportAsync(IOctoSession session, ITenantCkModelRepository ckModelRepository, string filePath, ScopeIds scopeId,
+    public async Task ImportAsync(IOctoSession session, ITenantCkModelRepository ckModelRepository, string filePath, 
         CancellationToken? cancellationToken = null)
     {
         try
         {
-            _ckModelRepository = ckModelRepository;
-            _ckModelValidation = new CkModelValidation(_ckModelRepository);
-            _transientCkModel = new TransientCkModel();
+            _ckModelValidation = new CkModelValidation(ckModelRepository);
+            
 
             Logger.Info("Reading CK model....");
             CkModelRoot? model;
@@ -67,9 +69,15 @@ public class ImportCkModelCommand : IImportCkModelCommand
                 model = CkSerializer.Deserialize(streamReader);
             }
 
-            Logger.Info("Executing import of CK model....");
+            if (model == null)
+            {
+                Logger.Error("Import of CK model failed, model cannot be deserialized.");
+                throw ModelImportException.CannotDeserializeModel();
+            }
 
-            await ExecuteImport(session, model, scopeId, cancellationToken);
+            Logger.Info("Executing import of CK model....");
+            var transientCkModel = new TransientCkModel(model.ModelId);
+            await ExecuteImport(session, model,transientCkModel, ckModelRepository, cancellationToken);
 
             await session.CommitTransactionAsync();
 
@@ -82,19 +90,19 @@ public class ImportCkModelCommand : IImportCkModelCommand
         }
     }
 
-    private async Task ExecuteImport(IOctoSession session, CkModelRoot model, ScopeIds scopeId,
+    private async Task ExecuteImport(IOctoSession session, CkModelRoot model, TransientCkModel transientCkModel, ITenantCkModelRepository ckModelRepository,
         CancellationToken? cancellationToken)
     {
-        Debug.Assert(_ckModelRepository != null, nameof(_ckModelRepository) + " != null");
+        ProcessCkModel(model, transientCkModel);
 
         // Transform to entities
-        ProcessCkAttributes(model, scopeId);
+        ProcessCkAttributes(model, transientCkModel);
         if (CheckCancellation(cancellationToken))
         {
             return;
         }
 
-        ProcessCkEntitiesAndAssociations(model, scopeId);
+        ProcessCkEntitiesAndAssociations(model, transientCkModel);
         if (CheckCancellation(cancellationToken))
         {
             return;
@@ -102,11 +110,10 @@ public class ImportCkModelCommand : IImportCkModelCommand
 
         // ValidateAsync
         Debug.Assert(_ckModelValidation != null, nameof(_ckModelValidation) + " != null");
-        Debug.Assert(_transientCkModel != null, nameof(_transientCkModel) + " != null");
-        await _ckModelValidation.Validate(session, _transientCkModel, scopeId, cancellationToken);
+        await _ckModelValidation.Validate(session, transientCkModel, cancellationToken);
 
         // Delete the old version
-        if (await DeleteOldVersion(session, scopeId, cancellationToken))
+        if (await DeleteOldVersion(session, model.ModelId, ckModelRepository, cancellationToken))
         {
             return;
         }
@@ -117,66 +124,70 @@ public class ImportCkModelCommand : IImportCkModelCommand
         }
 
         // ValidateAsync the Model
-        if (_transientCkModel.CkAttributes.Any())
+        if (transientCkModel.CkAttributes.Any())
         {
             ValidateAndThrow(
-                await _ckModelRepository.BulkImportCkAttributesAsync(session,
-                    _transientCkModel.CkAttributes.ToArray()));
+                await ckModelRepository.BulkImportCkAttributesAsync(session,
+                    transientCkModel.CkAttributes.ToArray()));
             if (CheckCancellation(cancellationToken))
             {
                 return;
             }
         }
 
-        if (_transientCkModel.CkEntities.Any())
+        if (transientCkModel.CkEntities.Any())
         {
             ValidateAndThrow(
-                await _ckModelRepository.BulkImportCkEntitiesAsync(session, _transientCkModel.CkEntities.ToArray()));
+                await ckModelRepository.BulkImportCkEntitiesAsync(session, transientCkModel.CkEntities.ToArray()));
             if (CheckCancellation(cancellationToken))
             {
                 return;
             }
         }
 
-        if (_transientCkModel.CkEntityAssociations.Any())
+        if (transientCkModel.CkEntityAssociations.Any())
         {
             ValidateAndThrow(
-                await _ckModelRepository.BulkImportCkEntityAssociationsAsync(session,
-                    _transientCkModel.CkEntityAssociations));
+                await ckModelRepository.BulkImportCkEntityAssociationsAsync(session,
+                    transientCkModel.CkEntityAssociations));
             if (CheckCancellation(cancellationToken))
             {
                 return;
             }
         }
 
-        if (_transientCkModel.CkEntityInheritances.Any())
+        if (transientCkModel.CkEntityInheritances.Any())
         {
             ValidateAndThrow(
-                await _ckModelRepository.BulkImportCkEntityInheritancesAsync(session,
-                    _transientCkModel.CkEntityInheritances));
+                await ckModelRepository.BulkImportCkEntityInheritancesAsync(session,
+                    transientCkModel.CkEntityInheritances));
             if (CheckCancellation(cancellationToken))
             {
                 return;
             }
         }
 
-        await CreateCollections(session);
+        await CreateCollections(session, ckModelRepository);
         if (CheckCancellation(cancellationToken))
         {
             return;
         }
 
-        await CreateIndex(session);
+        await CreateIndex(session, ckModelRepository);
     }
 
-    private async Task<bool> DeleteOldVersion(IOctoSession session, ScopeIds scopeId,
+    private void ProcessCkModel(CkModelRoot model, TransientCkModel transientCkModel)
+    {
+
+        
+    }
+
+    private async Task<bool> DeleteOldVersion(IOctoSession session, CkModelId ckModelId,ITenantCkModelRepository ckModelRepository,
         CancellationToken? cancellationToken)
     {
-        Debug.Assert(_ckModelRepository != null, nameof(_ckModelRepository) + " != null");
-
-        foreach (var ckAttribute in await _ckModelRepository.GetCkAttributesByScopeAsync(session, scopeId))
+        foreach (var ckAttribute in await ckModelRepository.GetCkAttributesByModelAsync(session, ckModelId))
         {
-            await _ckModelRepository.DeleteCkAttributesOneAsync(session, ckAttribute.AttributeId);
+            await ckModelRepository.DeleteCkAttributesOneAsync(session, ckAttribute.AttributeId);
         }
 
         if (CheckCancellation(cancellationToken))
@@ -184,9 +195,9 @@ public class ImportCkModelCommand : IImportCkModelCommand
             return true;
         }
 
-        foreach (var ckEntity in await _ckModelRepository.GetCkEntitiesByScopeAsync(session, scopeId))
+        foreach (var ckEntity in await ckModelRepository.GetCkEntitiesByModelAsync(session, ckModelId))
         {
-            await _ckModelRepository.DeleteCkEntitiesOneAsync(session, ckEntity.CkId);
+            await ckModelRepository.DeleteCkEntitiesOneAsync(session, ckEntity.CkId);
         }
 
         if (CheckCancellation(cancellationToken))
@@ -194,9 +205,9 @@ public class ImportCkModelCommand : IImportCkModelCommand
             return true;
         }
 
-        foreach (var ckEntityAssociation in await _ckModelRepository.GetCkEntityAssociationsByScopeAsync(session, scopeId))
+        foreach (var ckEntityAssociation in await ckModelRepository.GetCkEntityAssociationsByModelAsync(session, ckModelId))
         {
-            await _ckModelRepository.DeleteCkEntityAssociationsOneAsync(session, ckEntityAssociation.AssociationId);
+            await ckModelRepository.DeleteCkEntityAssociationsOneAsync(session, ckEntityAssociation.AssociationId);
         }
 
         if (CheckCancellation(cancellationToken))
@@ -204,9 +215,9 @@ public class ImportCkModelCommand : IImportCkModelCommand
             return true;
         }
 
-        foreach (var ckEntityInheritance in await _ckModelRepository.GetCkEntityInheritancesByScopeAsync(session, scopeId))
+        foreach (var ckEntityInheritance in await ckModelRepository.GetCkEntityInheritancesByModelAsync(session, ckModelId))
         {
-            await _ckModelRepository.DeleteOneCkEntityInheritancesAsync(session, ckEntityInheritance.InheritanceId);
+            await ckModelRepository.DeleteOneCkEntityInheritancesAsync(session, ckEntityInheritance.InheritanceId);
         }
 
         if (CheckCancellation(cancellationToken))
@@ -217,17 +228,14 @@ public class ImportCkModelCommand : IImportCkModelCommand
         return false;
     }
 
-    private async Task CreateCollections(IOctoSession session)
+    private async Task CreateCollections(IOctoSession session, ITenantCkModelRepository ckModelRepository)
     {
-        Debug.Assert(_ckModelRepository != null, nameof(_ckModelRepository) + " != null");
-
-        await _ckModelRepository.UpdateCollectionsAsync(session);
+        await ckModelRepository.UpdateCollectionsAsync(session);
     }
 
-    private async Task CreateIndex(IOctoSession session)
+    private async Task CreateIndex(IOctoSession session, ITenantCkModelRepository ckModelRepository)
     {
-        Debug.Assert(_ckModelRepository != null, nameof(_ckModelRepository) + " != null");
-        await _ckModelRepository.UpdateIndexAsync(session);
+        await ckModelRepository.UpdateIndexAsync(session);
     }
 
     private static bool CheckCancellation(CancellationToken? cancellationToken)
@@ -240,25 +248,24 @@ public class ImportCkModelCommand : IImportCkModelCommand
         return false;
     }
 
-    private void ProcessCkAttributes(CkModelRoot model, ScopeIds scopeId)
+    private void ProcessCkAttributes(CkModelRoot model, TransientCkModel transientCkModel)
     {
         foreach (var modelCkAttribute in model.CkAttributes)
         {
             var ckAttribute = new CkAttribute
             {
                 AttributeId = modelCkAttribute.AttributeId,
-                ScopeId = scopeId,
                 AttributeValueType = (AttributeValueTypes)modelCkAttribute.ValueType,
                 SelectionValues = modelCkAttribute.SelectionValues?.Select(sv => new CkSelectionValue
                     { Key = sv.Key, Name = sv.Name }).ToList<ICkSelectionValue>(),
                 DefaultValue = modelCkAttribute.DefaultValue,
                 DefaultValues = modelCkAttribute.DefaultValues
             };
-            _transientCkModel.CkAttributes.Add(ckAttribute);
+            transientCkModel.CkAttributes.Add(ckAttribute);
         }
     }
 
-    private void ProcessCkEntitiesAndAssociations(CkModelRoot model, ScopeIds scopeId)
+    private void ProcessCkEntitiesAndAssociations(CkModelRoot model, TransientCkModel transientCkModel)
     {
         var associationRoleDefinitions = model.CkAssociationRoles.ToDictionary(k => k.RoleId, v => v);
 
@@ -281,59 +288,62 @@ public class ImportCkModelCommand : IImportCkModelCommand
             }
 
             var textSearchDefinitions = new List<CkEntityIndex>();
-            foreach (var entityIndexDto in entity.Indexes)
+            if (entity.Indexes != null)
             {
-                var entityIndex = new CkEntityIndex
+                foreach (var entityIndexDto in entity.Indexes)
                 {
-                    IndexType = (IndexTypes)entityIndexDto.IndexType,
-                    Language = entityIndexDto.Language,
-                    Fields = entityIndexDto.Fields
-                        .Select(x => new CkIndexFields { Weight = x.Weight, AttributeNames = x.AttributeNames })
-                        .ToList<ICkIndexFields>()
-                };
+                    var entityIndex = new CkEntityIndex
+                    {
+                        IndexType = (IndexTypes)entityIndexDto.IndexType,
+                        Language = entityIndexDto.Language,
+                        Fields = entityIndexDto.Fields
+                            .Select(x => new CkIndexFields { Weight = x.Weight, AttributeNames = x.AttributeNames })
+                            .ToList<ICkIndexFields>()
+                    };
 
-                textSearchDefinitions.Add(entityIndex);
+                    textSearchDefinitions.Add(entityIndex);
+                }
             }
 
 
             var ckEntity = new CkEntity
             {
                 CkId = entity.CkId,
-                ScopeId = scopeId,
                 IsFinal = entity.IsFinal,
                 IsAbstract = entity.IsAbstract,
                 Attributes = ckEntityAttributes,
                 Indexes = textSearchDefinitions
             };
 
-            if (!string.IsNullOrWhiteSpace(entity.CkDerivedId))
+            if (entity.CkDerivedId != null)
             {
                 var ckEntityInheritance = new CkEntityInheritance
                 {
-                    ScopeId = scopeId,
                     OriginCkId = entity.CkDerivedId,
                     TargetCkId = entity.CkId
                 };
-                _transientCkModel.CkEntityInheritances.Add(ckEntityInheritance);
+                transientCkModel.CkEntityInheritances.Add(ckEntityInheritance);
             }
 
-            foreach (var association in entity.Associations)
+            if (entity.Associations != null)
             {
-                var ckEntityAssociation = new CkEntityAssociation
+                foreach (var association in entity.Associations)
                 {
-                    RoleId = association.RoleId,
-                    ScopeId = scopeId,
-                    InboundMultiplicity = (Multiplicities)association.InboundMultiplicity,
-                    OutboundMultiplicity = (Multiplicities)association.OutboundMultiplicity,
-                    OriginCkId = ckEntity.CkId,
-                    TargetCkId = association.TargetCkId,
-                    InboundName = associationRoleDefinitions[association.RoleId].InboundName,
-                    OutboundName = associationRoleDefinitions[association.RoleId].OutboundName
-                };
-                _transientCkModel.CkEntityAssociations.Add(ckEntityAssociation);
+                    var ckEntityAssociation = new CkEntityAssociation
+                    {
+                        RoleId = association.RoleId,
+                        InboundMultiplicity = (Multiplicities)association.InboundMultiplicity,
+                        OutboundMultiplicity = (Multiplicities)association.OutboundMultiplicity,
+                        OriginCkId = ckEntity.CkId,
+                        TargetCkId = association.TargetCkId,
+                        InboundName = associationRoleDefinitions[association.RoleId].InboundName,
+                        OutboundName = associationRoleDefinitions[association.RoleId].OutboundName
+                    };
+                    transientCkModel.CkEntityAssociations.Add(ckEntityAssociation);
+                }
             }
 
-            _transientCkModel.CkEntities.Add(ckEntity);
+            transientCkModel.CkEntities.Add(ckEntity);
         }
     }
 

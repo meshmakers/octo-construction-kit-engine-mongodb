@@ -4,17 +4,19 @@ namespace Meshmakers.Octo.Common.Shared.Exchange;
 
 public class CkAssociationRole
 {
-    [JsonProperty("id")] public string? RoleId { get; set; }
+    [JsonProperty("id")] [JsonRequired] public string RoleId { get; set; } = null!;
 
     /// <summary>
     ///     Name of the association for inbound references (e. g. Children)
     /// </summary>
     [JsonProperty("inboundName")]
-    public string? InboundName { get; set; }
+    [JsonRequired]
+    public string InboundName { get; set; } = null!;
 
     /// <summary>
     ///     Name of the association for outbound references (e. g. Parent)
     /// </summary>
     [JsonProperty("outboundName")]
-    public string? OutboundName { get; set; }
+    [JsonRequired]
+    public string OutboundName { get; set; } = null!;
 }

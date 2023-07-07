@@ -1,3 +1,6 @@
+using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
+
 namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 
 public interface ICkCache : IDisposable
@@ -8,7 +11,7 @@ public interface ICkCache : IDisposable
 
     IEnumerable<IEntityCacheItem> GetCkEntities();
 
-    IEntityCacheItem GetEntityCacheItem(string ckId);
+    IEntityCacheItem GetEntityCacheItem(CkTypeId ckId);
 
     void Unload();
 

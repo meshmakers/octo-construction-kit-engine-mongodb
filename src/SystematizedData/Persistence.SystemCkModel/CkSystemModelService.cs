@@ -2,7 +2,6 @@ using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.Commands;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
-using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using NLog;
 using Persistence.InternalContracts;
 
@@ -22,7 +21,7 @@ public class CkSystemModelService : ICkSystemModelService
     {
         var ckModelFilePath = Path.Combine(Helper.AssemblyDirectory, "ck-system.json");
         Logger.Info("Importing construction kit model '{CkModelFilePath}'", ckModelFilePath);
-        await _importCkModelCommand.ImportAsync(systemSession, ckModelRepository, ckModelFilePath, ScopeIds.System);
+        await _importCkModelCommand.ImportAsync(systemSession, ckModelRepository, ckModelFilePath);
         Logger.Info("Construction kit model imported.");
     }
 }
