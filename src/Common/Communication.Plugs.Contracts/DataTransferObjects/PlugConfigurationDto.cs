@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Meshmakers.Octo.Common.Shared;
 // ReSharper disable MemberCanBePrivate.Global
 // ReSharper disable ClassNeverInstantiated.Global
@@ -11,14 +12,26 @@ namespace Meshmakers.Octo.Communication.Plugs.Contracts.DataTransferObjects;
 public record PlugConfigurationDto
 {
     /// <summary>
+    /// Constructor
+    /// </summary>
+    /// <param name="plugRtId">Id of the plug</param>
+    /// <param name="serverConfigurations">Server configurations of the plug</param>
+    [JsonConstructor]
+    public PlugConfigurationDto(OctoObjectId plugRtId, IReadOnlyCollection<ServerConfigurationDto> serverConfigurations)
+    {
+        PlugRtId = plugRtId;
+        ServerConfigurations = serverConfigurations;
+    }
+    
+    /// <summary>
     /// Gets or sets the id of the plug.
     /// </summary>
-    public OctoObjectId PlugRtId { get; init; }
+    public OctoObjectId PlugRtId { get; }
     
     /// <summary>
     /// Gets or sets the server configurations of the plug.
     /// </summary>
-    public IReadOnlyCollection<ServerConfigurationDto> ServerConfigurations { get; init; } = null!;
+    public IReadOnlyCollection<ServerConfigurationDto> ServerConfigurations { get; } = null!;
 
 
     /// <inheritdoc />
@@ -33,6 +46,6 @@ public record PlugConfigurationDto
     /// <inheritdoc />
     public override int GetHashCode()
     {
-        return HashCode.Combine(PlugRtId, ServerConfigurations);
+        return PlugRtId.GetHashCode() ^ ServerConfigurations.GetHashCode();
     }
 }

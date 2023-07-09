@@ -2,6 +2,7 @@
 // ReSharper disable ClassNeverInstantiated.Global
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 
+using System.Text.Json.Serialization;
 using Meshmakers.Octo.Common.Shared;
 
 namespace Meshmakers.Octo.Communication.Sockets.Contracts.DataTransferObjects;
@@ -12,9 +13,19 @@ namespace Meshmakers.Octo.Communication.Sockets.Contracts.DataTransferObjects;
 public record SocketConfigurationDto
 {
     /// <summary>
+    /// Constructor
+    /// </summary>
+    /// <param name="socketRtId">Id of the socket</param>
+    [JsonConstructor]
+    public SocketConfigurationDto(OctoObjectId socketRtId)
+    {
+        SocketRtId = socketRtId;
+    }
+    
+    /// <summary>
     /// Gets or sets the id of the socket.
     /// </summary>
-    public OctoObjectId SocketRtId { get; init; }
+    public OctoObjectId SocketRtId { get; }
     
     /// <inheritdoc />
     public virtual bool Equals(SocketConfigurationDto? other)
