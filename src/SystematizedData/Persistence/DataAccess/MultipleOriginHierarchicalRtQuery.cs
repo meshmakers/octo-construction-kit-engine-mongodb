@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
@@ -167,6 +168,11 @@ internal class MultipleOriginHierarchicalRtQuery<TOriginEntity, TTargetEntity> :
 
         var result = await aggregate2.ToListAsync();
 
+        foreach (var multipleResult in result)
+        {
+            multipleResult.Grouping = CalculateGrouping(multipleResult.Targets);
+        }
+
         return new MultipleOriginResultSet<TTargetEntity>(result);
     }
 
@@ -246,5 +252,16 @@ internal class MultipleOriginHierarchicalRtQuery<TOriginEntity, TTargetEntity> :
         }
 
         return base.ResolveSearchAttributeValue(attributeName, searchTerm, out isEnum);
+    }
+    
+    protected override IEnumerable<GroupingDto>? CalculateGrouping(IEnumerable<TTargetEntity> resultList)
+    {
+        if (GroupBy == null)
+        {
+            return null;
+        }
+
+        var statisticFunctions = new RtStatisticFunctions<TTargetEntity>(_targetEntityCacheItem, GroupBy);
+        return statisticFunctions.Calculate(resultList);
     }
 }

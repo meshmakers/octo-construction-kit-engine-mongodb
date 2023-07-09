@@ -126,8 +126,4 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<TEntity> where T
         var statisticFunctions = new RtStatisticFunctions<TEntity>(_entityCacheItem, GroupBy);
         return statisticFunctions.Calculate(resultList);
     }
-
-   
-
-
 }
