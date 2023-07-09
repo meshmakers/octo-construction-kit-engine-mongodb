@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.Persistence.Formulas;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -14,6 +15,7 @@ public abstract class Query<TEntity> where TEntity : class, new()
     private readonly BsonClassMap<TEntity> _bsonClassMap;
     private readonly List<FilterDefinition<TEntity>> _fieldFilters;
     private readonly List<FilterDefinition<TEntity>> _idFilters;
+    protected FieldGroupBy? GroupBy { get; private set; }
 
     private readonly List<SortDefinition<TEntity>> _sortDefinitions;
 
@@ -138,6 +140,16 @@ public abstract class Query<TEntity> where TEntity : class, new()
         }
     }
 
+    internal void AddGrouping(FieldGroupBy? groupByDto)
+    {
+        if (groupByDto == null)
+        {
+            return;
+        }
+
+        GroupBy = groupByDto;
+    }
+
     private void AddFieldFilter(FieldFilter fieldFilter)
     {
         if (string.IsNullOrWhiteSpace(fieldFilter.AttributeName))
@@ -238,6 +250,11 @@ public abstract class Query<TEntity> where TEntity : class, new()
 
         isEnum = false;
         return searchTerm;
+    }
+
+    protected virtual IEnumerable<GroupingDto>? CalculateGrouping(IEnumerable<TEntity> resultList)
+    {
+        return null;
     }
 
     internal void AddTextSearchFilter(TextSearchFilter textSearchFilter)
@@ -362,7 +379,7 @@ public abstract class Query<TEntity> where TEntity : class, new()
                 throw new NotImplementedException("Value is not implemented.");
         }
     }
-    
+
     private static IEnumerable<object> ParseArray(object value)
     {
         if (value is string s)
@@ -392,7 +409,7 @@ public abstract class Query<TEntity> where TEntity : class, new()
             return castedValues;
         }
 
-        return (IEnumerable<object>) value;
+        return (IEnumerable<object>)value;
     }
 
     private static string GetRegex(string value)

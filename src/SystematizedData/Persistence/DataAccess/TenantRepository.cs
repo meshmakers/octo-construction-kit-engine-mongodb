@@ -111,41 +111,29 @@ internal class TenantRepository : ITenantRepositoryInternal
         IReadOnlyList<string> attributeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
-        var resultSet = new List<CkAttribute>();
-        long totalCount = 0;
-
         var statementCreator = new CkAttributeQuery(_databaseContext);
         statementCreator.AddFieldFilters(dataQueryOperation.FieldFilters);
         statementCreator.AddIdFilter(attributeIds);
         statementCreator.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         statementCreator.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         statementCreator.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        statementCreator.AddGrouping(dataQueryOperation.FieldGroupBy);
 
-        var tempResultSet = await statementCreator.ExecuteQuery(session, skip, take);
-        resultSet.AddRange(tempResultSet.Result);
-        totalCount += tempResultSet.TotalCount;
-
-        return new ResultSet<CkAttribute>(resultSet, totalCount);
+        return await statementCreator.ExecuteQuery(session, skip, take);
     }
 
     public async Task<ResultSet<CkEntity>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<string> ckIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
-        var resultSet = new List<CkEntity>();
-        long totalCount = 0;
-
         var statementCreator = new CkEntityQuery(_databaseContext);
         statementCreator.AddFieldFilters(dataQueryOperation.FieldFilters);
         statementCreator.AddIdFilter(ckIds);
         statementCreator.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         statementCreator.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         statementCreator.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        statementCreator.AddGrouping(dataQueryOperation.FieldGroupBy);
 
-        var tempResultSet = await statementCreator.ExecuteQuery(session, skip, take);
-        resultSet.AddRange(tempResultSet.Result);
-        totalCount += tempResultSet.TotalCount;
-
-        return new ResultSet<CkEntity>(resultSet, totalCount);
+        return await statementCreator.ExecuteQuery(session, skip, take);
     }
 
     public async Task<RtEntity?> GetRtEntityAsync(IOctoSession session, RtEntityId rtEntityId)
@@ -171,11 +159,9 @@ internal class TenantRepository : ITenantRepositoryInternal
 
         if (!rtIds.Any())
         {
-            return new ResultSet<RtEntity>(new List<RtEntity>(), 0);
+            return new ResultSet<RtEntity>(new List<RtEntity>(), 0, null);
         }
 
-        var resultSet = new List<RtEntity>();
-        long totalCount = 0;
         var entityCacheItem = GetEntityCacheItem(ckId);
 
         var statementCreator =
@@ -185,12 +171,9 @@ internal class TenantRepository : ITenantRepositoryInternal
         statementCreator.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         statementCreator.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         statementCreator.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        statementCreator.AddGrouping(dataQueryOperation.FieldGroupBy);
 
-        var tempResultSet = await statementCreator.ExecuteQuery(session, skip, take);
-        resultSet.AddRange(tempResultSet.Result);
-        totalCount += tempResultSet.TotalCount;
-
-        return new ResultSet<RtEntity>(resultSet, totalCount);
+        return await statementCreator.ExecuteQuery(session, skip, take);
     }
 
     public async Task<CurrentMultiplicity> GetCurrentRtAssociationMultiplicityAsync(IOctoSession session,
@@ -282,6 +265,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         hierarchicalRtStatementCreator.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         hierarchicalRtStatementCreator.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         hierarchicalRtStatementCreator.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        hierarchicalRtStatementCreator.AddGrouping(dataQueryOperation.FieldGroupBy);
 
         return await hierarchicalRtStatementCreator.ExecuteQuery(session, skip, take);
     }
@@ -312,6 +296,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         hierarchicalRtStatementCreator.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         hierarchicalRtStatementCreator.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         hierarchicalRtStatementCreator.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        hierarchicalRtStatementCreator.AddGrouping(dataQueryOperation.FieldGroupBy);
 
         return await hierarchicalRtStatementCreator.ExecuteQuery(session, skip, take);
     }
@@ -349,6 +334,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         rtStatementCreator.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         rtStatementCreator.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         rtStatementCreator.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        rtStatementCreator.AddGrouping(dataQueryOperation.FieldGroupBy);
 
         return await rtStatementCreator.ExecuteQuery(session, skip, take);
     }
@@ -377,6 +363,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         statementCreator.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         statementCreator.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         statementCreator.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        statementCreator.AddGrouping(dataQueryOperation.FieldGroupBy);
 
         return await statementCreator.ExecuteQuery(session, skip, take);
     }

@@ -16,6 +16,8 @@ public class DataQueryOperation
     public AttributeSearchFilter AttributeSearchFilter { get; set; }
 
     public IEnumerable<FieldFilter> FieldFilters { get; set; }
+    
+    public FieldGroupBy FieldGroupBy { get; set; }
 
     public IEnumerable<SortOrderItem> SortOrders { get; set; }
 }

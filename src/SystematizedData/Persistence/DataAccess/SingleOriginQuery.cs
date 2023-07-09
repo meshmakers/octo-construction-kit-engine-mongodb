@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using MongoDB.Driver;
 
@@ -65,7 +66,8 @@ public abstract class SingleOriginQuery<TEntity> : Query<TEntity> where TEntity 
             var pipelineDefinition = PipelineDefinition<TEntity, QueryResult<TEntity>>.Create(pipelineStageDefinitions);
             var resultAggregate = _cachedCollection.Aggregate(octoSession, pipelineDefinition);
             var result = await resultAggregate.SingleOrDefaultAsync();
-            return new ResultSet<TEntity>(result);
+            var grouping = CalculateGrouping(result.Result);
+            return new ResultSet<TEntity>(result, grouping);
         }
         else // Return result directly if there is no paging enabled
         {
@@ -73,7 +75,8 @@ public abstract class SingleOriginQuery<TEntity> : Query<TEntity> where TEntity 
 
             var aggregate = _cachedCollection.Aggregate(octoSession, pipelineDefinition);
             var resultNoTotalCount = await aggregate.ToListAsync();
-            return new ResultSet<TEntity>(resultNoTotalCount, resultNoTotalCount.Count);
+            var grouping = CalculateGrouping(resultNoTotalCount);
+            return new ResultSet<TEntity>(resultNoTotalCount, resultNoTotalCount.Count, grouping);
         }
     }
 }

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using MongoDB.Bson;
 
 // ReSharper disable UnusedAutoPropertyAccessor.Global
@@ -11,4 +12,6 @@ internal class QueryMultipleResult<TEntity>
     public ObjectId Id { get; set; }
     public long TotalCount { get; set; }
     public IEnumerable<TEntity> Targets { get; set; }
+    
+    public IEnumerable<GroupingDto>? Grouping { get; set; }
 }

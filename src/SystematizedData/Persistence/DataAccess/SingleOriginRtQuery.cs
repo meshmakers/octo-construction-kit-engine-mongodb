@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
@@ -113,4 +115,19 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<TEntity> where T
 
         return base.ResolveSearchAttributeValue(attributeName, searchTerm, out isEnum);
     }
+
+    protected override IEnumerable<GroupingDto>? CalculateGrouping(IEnumerable<TEntity> resultList)
+    {
+        if (GroupBy == null)
+        {
+            return null;
+        }
+
+        var statisticFunctions = new RtStatisticFunctions<TEntity>(_entityCacheItem, GroupBy);
+        return statisticFunctions.Calculate(resultList);
+    }
+
+   
+
+
 }
