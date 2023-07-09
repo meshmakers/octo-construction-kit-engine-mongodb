@@ -173,6 +173,12 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TOriginEntity, TTargetE
         }
 
         var result = await aggregate2.ToListAsync();
+        
+        foreach (var multipleResult in result)
+        {
+            multipleResult.Grouping = CalculateGrouping(multipleResult.Targets);
+        }
+        
         return new MultipleOriginResultSet<TTargetEntity>(result);
     }
 
