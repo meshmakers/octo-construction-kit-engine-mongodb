@@ -21,15 +21,15 @@ public class RtStatisticFunctions<TEntity> where TEntity : RtEntity
 
     public IEnumerable<GroupingDto> Calculate(IEnumerable<TEntity> resultList)
     {
-        var groupByPropertiesResult = resultList.GroupBy(g=> GroupBy.AttributeNames.Select(a=> GetValue(a)(g)));
+        var groupByPropertiesResult = resultList.GroupBy(g=> new Key(GroupBy.AttributeNames.Select(a=> GetValue(a)(g))));
 
         List<GroupingDto> calculateGrouping = new List<GroupingDto>();
-        foreach (IGrouping<IEnumerable<object?>, TEntity> entityGrouping in groupByPropertiesResult)
+        foreach (IGrouping<Key, TEntity> entityGrouping in groupByPropertiesResult)
         {
             var grouping = new GroupingDto
             {
                 GroupByAttributeNames = GroupBy.AttributeNames,
-                Keys = entityGrouping.Key,
+                Keys = entityGrouping.Key.Keys,
                 Count = entityGrouping.Count(),
                 CountStatistics = RunStatistics(GroupBy.CountAttributeNames,
                     attributeName => entityGrouping.Count(x => GetValue(attributeName)(x) != null)),
@@ -81,4 +81,27 @@ public class RtStatisticFunctions<TEntity> where TEntity : RtEntity
 
             return property.GetValue(entity);
         };
+
+    internal class Key
+    {
+        private readonly IEnumerable<object?> _keys;
+
+        public Key(IEnumerable<object?> keys)
+        {
+            _keys = keys;
+        }
+        
+        public IEnumerable<object?> Keys => _keys;
+
+        public override bool Equals(object? obj)
+        {
+            var t=  obj is Key other && _keys.SequenceEqual(other._keys);
+            return t;
+        }
+
+        public override int GetHashCode()
+        {
+            return _keys.Aggregate(0, (current, key) => current ^ key?.GetHashCode() ?? 0);
+        }
+    }   
 }
