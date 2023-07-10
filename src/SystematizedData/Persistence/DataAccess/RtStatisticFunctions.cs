@@ -24,7 +24,7 @@ public class RtStatisticFunctions<TEntity> where TEntity : RtEntity
         var groupByPropertiesResult = resultList.GroupBy(g=> new Key(GroupBy.AttributeNames.Select(a=> GetValue(a)(g))));
 
         List<GroupingDto> calculateGrouping = new List<GroupingDto>();
-        foreach (IGrouping<Key, TEntity> entityGrouping in groupByPropertiesResult)
+        foreach (IGrouping<Key, TEntity> entityGrouping in groupByPropertiesResult.OrderBy(x=> x.Key))
         {
             var grouping = new GroupingDto
             {
