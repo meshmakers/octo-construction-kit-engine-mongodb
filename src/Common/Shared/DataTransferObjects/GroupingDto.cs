@@ -6,15 +6,13 @@ namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 public class GroupingDto
 {
     [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
-    [JsonRequired]
-    public IEnumerable<string> GroupByAttributeNames { get; set; } = null!;
+    public IEnumerable<string>? GroupByAttributeNames { get; set; }
 
     [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
-    public IEnumerable<object?> Keys { get; set; } = null!;
+    public IEnumerable<object?>? Keys { get; set; } = null!;
 
     [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
-    [JsonRequired]
-    public long Count { get; set; }
+    public long? Count { get; set; }
 
     [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
     public IEnumerable<StatisticsDto>? CountStatistics { get; set; }
