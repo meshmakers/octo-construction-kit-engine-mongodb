@@ -82,7 +82,7 @@ public class RtStatisticFunctions<TEntity> where TEntity : RtEntity
             return property.GetValue(entity);
         };
 
-    internal class Key
+    internal class Key : IComparable
     {
         private readonly IEnumerable<object?> _keys;
 
@@ -102,6 +102,27 @@ public class RtStatisticFunctions<TEntity> where TEntity : RtEntity
         public override int GetHashCode()
         {
             return _keys.Aggregate(0, (current, key) => current ^ key?.GetHashCode() ?? 0);
+        }
+
+        public int CompareTo(object? obj)
+        {
+            foreach (var key in _keys)
+            {
+                if (key is IComparable comparable)
+                {
+                    var result = comparable.CompareTo(key);
+                    if (result != 0)
+                    {
+                        return result;
+                    }
+                }
+                else
+                {
+                    throw new OperationFailedException($"Key '{key}' is not comparable");
+                }
+            }
+
+            return 0;
         }
     }   
 }
