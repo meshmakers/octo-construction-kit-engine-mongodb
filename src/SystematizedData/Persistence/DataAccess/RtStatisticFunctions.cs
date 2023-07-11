@@ -106,11 +106,39 @@ public class RtStatisticFunctions<TEntity> where TEntity : RtEntity
 
         public int CompareTo(object? obj)
         {
-            foreach (var key in _keys)
+            if (obj == null)
             {
+                return 1;
+            }
+
+            if (!(obj is Key))
+            {
+                return 1;
+            }
+            
+            var keys = _keys.ToArray();
+            var otherKeys = ((Key) obj!)._keys.ToArray();
+            if (keys.Length < otherKeys.Length)
+            {
+                return -1;
+            }
+            if (keys.Length > otherKeys.Length)
+            {
+                return 1;
+            }
+            
+            for (int i = 0; i < keys.Length; i++)
+            {
+                var key = keys[i];
+                var otherKey = otherKeys[i];
+
+                if (key == null && otherKey != null)
+                {
+                    return -1;
+                }
                 if (key is IComparable comparable)
                 {
-                    var result = comparable.CompareTo(key);
+                    var result = comparable.CompareTo(otherKey);
                     if (result != 0)
                     {
                         return result;
