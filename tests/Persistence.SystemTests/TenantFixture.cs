@@ -1,8 +1,7 @@
 using System.Threading.Tasks;
 using FakeItEasy;
-using Meshmakers.Octo.Backend.DistributedCache;
 using Meshmakers.Octo.Backend.Persistence.SystemTests.Configuration;
-using Meshmakers.Octo.Common.DistributedCache;
+using Meshmakers.Octo.Common.Shared.DistributedCache;
 using Meshmakers.Octo.SystematizedData.Persistence;
 using Microsoft.Extensions.Options;
 
