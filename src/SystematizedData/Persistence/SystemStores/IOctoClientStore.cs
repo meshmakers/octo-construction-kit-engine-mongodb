@@ -1,11 +1,12 @@
 ﻿using System.Collections.Generic;
 using System.Threading.Tasks;
 using Duende.IdentityServer.Stores;
+using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemEntities;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemStores;
 
-public interface IOctoClientStore : IClientStore
+public interface IOctoClientStore : IClientStore, IKnownOriginsProvider
 {
     Task<IEnumerable<OctoClient>> GetClients();
 

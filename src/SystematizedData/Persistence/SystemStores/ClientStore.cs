@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Duende.IdentityServer.Models;
 using Meshmakers.Common.Shared;
@@ -48,7 +49,7 @@ public class ClientStore : IOctoClientStore
         await session.CommitTransactionAsync();
     }
 
-    public async Task<Client> FindClientByIdAsync(string clientId)
+    public async Task<Client?> FindClientByIdAsync(string clientId)
     {
         ArgumentValidation.ValidateString(nameof(clientId), clientId);
 
@@ -94,5 +95,12 @@ public class ClientStore : IOctoClientStore
     {
         var client = await _clientCollection.FindSingleOrDefaultAsync(session, x => x.ClientId == clientId);
         return client;
+    }
+
+    public async Task<IReadOnlyCollection<string>> GetKnownOriginsAsync()
+    {
+        var clients = await GetClients();
+        var origins = clients.SelectMany(x => x.AllowedCorsOrigins);
+        return new List<string>(origins);
     }
 }

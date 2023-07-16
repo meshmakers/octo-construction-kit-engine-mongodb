@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.Common.Shared.DistributedCache;
 using StackExchange.Redis;
 
 namespace Meshmakers.Octo.Common.DistributedCache;

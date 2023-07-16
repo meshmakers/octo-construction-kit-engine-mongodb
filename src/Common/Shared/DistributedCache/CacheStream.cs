@@ -1,6 +1,6 @@
 using System;
 
-namespace Meshmakers.Octo.Common.DistributedCache;
+namespace Meshmakers.Octo.Common.Shared.DistributedCache;
 
 /// <summary>
 /// Represents a cache stream
@@ -10,10 +10,10 @@ public record CacheStream
     /// <summary>
     /// The content type of the stream
     /// </summary>
-    public string ContentType { get; init; } = string.Empty;
+    public string ContentType { get; set; } = string.Empty;
     
     /// <summary>
     /// The stream as byte array
     /// </summary>
-    public byte[] Stream { get; init; } = Array.Empty<byte>();
+    public byte[] Stream { get; set; } = Array.Empty<byte>();
 }

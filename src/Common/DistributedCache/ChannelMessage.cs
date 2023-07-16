@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Meshmakers.Octo.Common.Shared.DistributedCache;
 
 namespace Meshmakers.Octo.Common.DistributedCache;
 

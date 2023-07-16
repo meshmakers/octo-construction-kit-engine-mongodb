@@ -1,8 +1,7 @@
 using System;
 using System.Threading.Tasks;
-using StackExchange.Redis;
 
-namespace Meshmakers.Octo.Common.DistributedCache;
+namespace Meshmakers.Octo.Common.Shared.DistributedCache;
 
 /// <summary>
 ///     Interface of a distributed cache with pub sub mechanisms using REDIS

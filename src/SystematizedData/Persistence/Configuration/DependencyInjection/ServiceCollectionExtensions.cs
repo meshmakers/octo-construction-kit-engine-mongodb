@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel;
+using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.Configuration.DependencyInjection;
 using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
@@ -26,6 +27,7 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<ISystemContext, SystemContext>();
         services.AddTransient<IOctoClientStore, ClientStore>();
+        services.AddTransient<IKnownOriginsProvider>(provider => provider.GetRequiredService<IOctoClientStore>());
         services.AddScoped<IOctoResourceStore, ResourceStore>();
         services.AddScoped<IOctoPersistentGrantStore, PersistentGrantStore>();
         services.AddScoped<IOctoIdentityProviderStore, IdentityProviderStore>();

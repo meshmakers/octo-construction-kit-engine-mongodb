@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.Common.Shared.DistributedCache;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 

@@ -1,5 +1,6 @@
 using System;
 using Meshmakers.Octo.Common.DistributedCache;
+using Meshmakers.Octo.Common.Shared.DistributedCache;
 using Microsoft.Extensions.DependencyInjection;
 
 // ReSharper disable once CheckNamespace

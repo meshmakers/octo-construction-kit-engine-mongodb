@@ -1,4 +1,4 @@
-namespace Meshmakers.Octo.Common.DistributedCache;
+namespace Meshmakers.Octo.Common.Shared.DistributedCache;
 
 /// <summary>
 ///     Interface of a channel message
