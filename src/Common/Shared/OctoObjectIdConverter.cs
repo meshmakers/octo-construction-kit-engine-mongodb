@@ -12,7 +12,7 @@ public class OctoObjectIdConverter : JsonConverter<OctoObjectId>
             ? reader.GetString()
             : throw new Exception(
                 $"Unexpected token parsing ObjectId. Expected String, got {(object)reader.TokenType}.");
-        return string.IsNullOrEmpty(str) ? OctoObjectId.Empty : new OctoObjectId(str);
+        return string.IsNullOrEmpty(str) || str == null ? OctoObjectId.Empty : new OctoObjectId(str);
     }
 
     public override void Write(Utf8JsonWriter writer, OctoObjectId value, JsonSerializerOptions options)
