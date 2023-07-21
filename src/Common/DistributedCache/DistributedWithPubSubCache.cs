@@ -4,6 +4,7 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DistributedCache;
 using Microsoft.Extensions.Options;
+using NLog;
 using StackExchange.Redis;
 
 namespace Meshmakers.Octo.Common.DistributedCache;
@@ -18,6 +19,8 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
     private readonly ISubscriber _subscriber;
     private readonly IDatabase _database;
     private readonly string _currentClientName;
+    
+    private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
 
     /// <summary>
     ///     Constructor
@@ -29,6 +32,8 @@ public class DistributedWithPubSubCache : IDistributedWithPubSubCache
         {
             connectionString += $",password={options.Value.Password}";
         }
+
+        Logger.Info($"Connecting to REDIS with '{connectionString}'");
 
         _redis = ConnectionMultiplexer.Connect(connectionString);
         _database = _redis.GetDatabase();
