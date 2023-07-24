@@ -23,7 +23,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Meshmakers.Common.Shared" Version="4.0.2307.7001" />
+        <PackageReference Include="Meshmakers.Common.Shared" Version="4.0.2307.21001" />
         <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="7.0.0" />
         <PackageReference Include="Microsoft.Extensions.Options" Version="7.0.1" />
         <PackageReference Include="StackExchange.Redis" Version="2.6.122" />
