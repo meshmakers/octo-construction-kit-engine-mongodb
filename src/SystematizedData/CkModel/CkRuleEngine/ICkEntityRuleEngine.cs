@@ -1,7 +1,4 @@
-using System.Collections.Generic;
-using System.Threading.Tasks;
-
-namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 
 public interface ICkEntityRuleEngine
 {

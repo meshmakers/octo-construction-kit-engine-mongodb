@@ -6,5 +6,5 @@ public class CkEntityIndex : ICkEntityIndex
 
     public string? Language { get; set; }
 
-    public ICollection<ICkIndexFields> Fields { get; set; }
+    public ICollection<CkIndexFields> Fields { get; set; }
 }

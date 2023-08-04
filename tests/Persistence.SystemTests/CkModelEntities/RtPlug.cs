@@ -6,7 +6,7 @@ using Newtonsoft.Json;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
 
-[CkId(Statics.CkIdPlug)]
+[CkId(Statics.SystemCkModelId, Statics.CkIdPlug)]
 public class RtPlug : RtEntity
 {
     [JsonIgnore]

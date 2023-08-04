@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.InsertModifiers;
@@ -11,6 +12,7 @@ using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Mutation;
 
@@ -116,7 +118,7 @@ public class MutationHandler
         }
     }
 
-    private async Task UpdateRtEntitiesByCkId<TEntity>(IOctoSession session, CkTypeId ckId, IEnumerable<RtEntity> rtEntityGrouping)
+    private async Task UpdateRtEntitiesByCkId<TEntity>(IOctoSession session, CkId<CkTypeId> ckId, IEnumerable<RtEntity> rtEntityGrouping)
         where TEntity : RtEntity, new()
     {
         var collection = _databaseContext.GetRtCollection<TEntity>(ckId);
@@ -154,7 +156,7 @@ public class MutationHandler
         }
     }
     
-    private async Task DeleteRtEntityAsync<TEntity>(IOctoSession session, CkTypeId ckId, IEnumerable<RtEntity> rtEntities)
+    private async Task DeleteRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckId, IEnumerable<RtEntity> rtEntities)
         where TEntity : RtEntity, new()
     {
         var collection = _databaseContext.GetRtCollection<TEntity>(ckId);

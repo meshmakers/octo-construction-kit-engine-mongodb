@@ -1,6 +1,5 @@
 using System.Collections.Generic;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
+using System.Text.Json.Serialization;
 
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
@@ -10,8 +9,7 @@ public class CkAttributeDto
 
     public ScopeIdsDto ScopeId { get; set; }
 
-    [JsonConverter(typeof(StringEnumConverter), typeof(ConstantCaseNamingStrategy))]
-
+    [JsonConverter(typeof(JsonStringEnumConverter))]
     public AttributeValueTypesDto AttributeValueType { get; set; }
 
     public object? DefaultValue { get; set; }

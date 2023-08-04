@@ -119,7 +119,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
         foreach (var modelAttribute in modelRtEntity.Attributes)
         {
             var attributeCacheItem =
-                entityCacheItem.Attributes.Values.FirstOrDefault(a => a.AttributeId == modelAttribute.Id);
+                entityCacheItem.Attributes.Values.FirstOrDefault(a => a.AttributeId.Equals(modelAttribute.Id));
             if (attributeCacheItem == null)
             {
                 Logger.Error($"'{modelAttribute.Id}' does not exit on type $'{entityCacheItem.CkId}'");

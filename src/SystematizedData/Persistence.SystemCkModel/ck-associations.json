@@ -1,14 +1,18 @@
 {
   "associationRoles": [
     {
-      "id": "System.ParentChild",
+      "id": "ParentChild",
       "inboundName": "Parent",
-      "outboundName": "Children"
+      "outboundName": "Children",
+      "inboundMultiplicity": "N",
+      "outboundMultiplicity": "N"
     },
     {
-      "id": "System.Related",
+      "id": "Related",
       "inboundName": "RelatesTo",
-      "outboundName": "RelatesFrom"
+      "outboundName": "RelatesFrom",
+      "inboundMultiplicity": "N",
+      "outboundMultiplicity": "N"
     }
   ]
 }

@@ -1,11 +1,10 @@
 using System.Text;
-using CkModel;
-using CkModel.CkRuleEngine;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
+using Meshmakers.Octo.SystematizedData.Persistence.Commands;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 
 public class CkModelValidation
 {
@@ -23,9 +22,20 @@ public class CkModelValidation
     public async Task Validate(IOctoSession session, TransientCkModel transientCkModel, 
         CancellationToken? cancellationToken)
     {
-        var dbAttributes = await _tenantCkModelRepository.GetCkAttributesByModelAsync(session, transientCkModel.ModelId);
+        // Check if model exist in repository.
+        foreach (var modelDependency in transientCkModel.CkModel.Dependencies)
+        {
+            var isCkModelExisting = await _tenantCkModelRepository.IsCkModelExistingAsync(session, modelDependency);
+            if (!isCkModelExisting)
+            {
+                throw ModelValidationException.UnknownCkModel(modelDependency);
+            }
+        }
+        
+        var dbAttributes = await _tenantCkModelRepository.GetCkAttributesByModelAsync(session, transientCkModel.CkModel.Id);
         _availableAttributes.Clear();
         _availableAttributes.AddRange(dbAttributes.Union(transientCkModel.CkAttributes));
+        
 
         // ValidateAsync
         await ValidateEntitiesAndInheritance(session, transientCkModel);
@@ -48,9 +58,9 @@ public class CkModelValidation
 
     private async Task ValidateEntitiesAndInheritance(IOctoSession session, TransientCkModel transientCkModel)
     {
-        var dbEntities = (await _tenantCkModelRepository.GetCkEntitiesByModelAsync(session, transientCkModel.ModelId))
+        var dbEntities = (await _tenantCkModelRepository.GetCkEntitiesByModelAsync(session, transientCkModel.CkModel.Id))
             .ToList();
-        var dbEntityInheritances = await _tenantCkModelRepository.GetCkEntityInheritancesByModelAsync(session, transientCkModel.ModelId);
+        var dbEntityInheritances = await _tenantCkModelRepository.GetCkEntityInheritancesByModelAsync(session, transientCkModel.CkModel.Id);
         var availableEntitiesIds = dbEntities.Select(x => x.CkId)
             .Union(transientCkModel.CkEntities.Select(x => x.CkId)).ToList();
         var availableEntities = dbEntities.Union(transientCkModel.CkEntities).ToList();

@@ -1,18 +1,19 @@
-﻿using Newtonsoft.Json;
+﻿using System.Text.Json.Serialization;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.Common.Shared.Exchange;
 
 public class RtAssociation
 {
-    [JsonProperty("roleId", Required = Required.Always)]
+    [JsonPropertyName("roleId")]
     [JsonRequired]
     public string RoleId { get; set; } = null!;
 
-    [JsonProperty("targetRtId", Required = Required.Always)]
+    [JsonPropertyName("targetRtId")]
     [JsonRequired]
     public OctoObjectId TargetRtId { get; set; }
     
-    [JsonProperty("targetCkId", Required = Required.Always)] 
+    [JsonPropertyName("targetCkId")] 
     [JsonRequired]
-    public string TargetCkId { get; set; } = null!;
+    public CkId<CkTypeId> TargetCkId { get; set; }
 }

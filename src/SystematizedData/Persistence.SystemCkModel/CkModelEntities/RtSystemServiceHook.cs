@@ -3,7 +3,7 @@ using Persistence.SystemCkModel;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.CkModelEntities;
 
-[CkId(SystemCkModel.SystemServiceHookCkId)]
+[CkId(SystemCkModel.SystemCkModelId, SystemCkModel.SystemServiceHookCkId)]
 public class RtSystemServiceHook : RtEntity
 {
     public bool? Enabled

@@ -1,32 +1,29 @@
 ﻿using System.IO;
-using Newtonsoft.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading.Tasks;
 
 namespace Meshmakers.Octo.Common.Shared.Exchange;
 
 public static class CkSerializer
 {
-    public static void Serialize(StreamWriter streamWriter, CkModelRoot model)
+    public static async Task SerializeAsync(StreamWriter streamWriter, CkModelRoot model)
     {
-        var serializer = new JsonSerializer { NullValueHandling = NullValueHandling.Ignore };
-
-        using (JsonWriter writer = new JsonTextWriter(streamWriter))
-        {
-            serializer.Serialize(writer, model);
-        }
+        var options = new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        await JsonSerializer.SerializeAsync(streamWriter.BaseStream, model, options);
     }
 
-    public static CkModelRoot? Deserialize(string s)
+    public static async Task<CkModelRoot?> DeserializeAsync(string s)
     {
-        return Deserialize(new StringReader(s));
+        byte[] byteArray = System.Text.Encoding.UTF8.GetBytes(s);
+        using var memStream = new MemoryStream(byteArray);
+        using var streamReader = new StreamReader(memStream);   
+        return await DeserializeAsync(streamReader);
     }
 
-    public static CkModelRoot? Deserialize(TextReader textReader)
+    public static async Task<CkModelRoot?> DeserializeAsync(StreamReader textReader)
     {
-        var serializer = new JsonSerializer { NullValueHandling = NullValueHandling.Ignore };
-
-        using (JsonReader reader = new JsonTextReader(textReader))
-        {
-            return serializer.Deserialize<CkModelRoot>(reader);
-        }
+        var options = new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        return await JsonSerializer.DeserializeAsync<CkModelRoot?>(textReader.BaseStream, options);
     }
 }

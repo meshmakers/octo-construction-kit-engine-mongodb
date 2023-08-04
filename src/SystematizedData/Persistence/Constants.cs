@@ -7,10 +7,6 @@ public static class Constants
 
     internal const string AttributesName = "attributes";
 
-    internal const string SystemSchemaVersion = "SystemSchemaVersion";
-
-    internal const int SystemSchemaVersionValue = 1;
-
     public const string IdField = "_id";
 
     internal const string OctoTextAnalyzer = "text_octo_";

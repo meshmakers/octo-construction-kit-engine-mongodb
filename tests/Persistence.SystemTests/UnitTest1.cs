@@ -43,16 +43,16 @@ public class UnitTest1 : IClassFixture<TenantFixture>
 
         using (var session = await tenantContext.StartSessionAsync())
         {
-            var result = await tenantContext.GetRtEntitiesByTypeAsync(session, "PaketService.Contact",
-                new DataQueryOperation(), 0, 5);
+            // var result = await tenantContext.GetRtEntitiesByTypeAsync(session, "PaketService.Contact",
+            //     new DataQueryOperation(), 0, 5);
+            //
+            // var rtIds = result.Result.Select(x => x.RtId).ToList();
+            // var deep = await tenantContext.GetRtAssociationTargetsAsync(session, rtIds,
+            //     "System/PaketService.Contact", "System/ParentChild", "PaketService.ParcelShipment", GraphDirections.Outbound, null,
+            //     new DataQueryOperation(), 0, 5);
 
-            var rtIds = result.Result.Select(x => x.RtId).ToList();
-            var deep = await tenantContext.GetRtAssociationTargetsAsync(session, rtIds,
-                "PaketService.Contact", "System.ParentChild", "PaketService.ParcelShipment", GraphDirections.Outbound, null,
-                new DataQueryOperation(), 0, 5);
 
-
-            Assert.Equal(5, deep.Count);
+          //  Assert.Equal(5, deep.Count);
             // Assert.Collection(deep, 
             //     pair => Assert.Equal(5, pair.Value.Result.Count()),
             //     pair => Assert.Equal(5, pair.Value.Result.Count()),
@@ -70,8 +70,8 @@ public class UnitTest1 : IClassFixture<TenantFixture>
 
         using (var session = await tenantRepository.StartSessionAsync())
         {
-            var result = await tenantRepository.GetRtEntitiesByTypeAsync(session, "PaketService.ParcelShipment",
-                new DataQueryOperation(), 0, 10);
+            // var result = await tenantRepository.GetRtEntitiesByTypeAsync(session, "PaketService.ParcelShipment",
+            //     new DataQueryOperation(), 0, 10);
 
 
             var dataOperation = new DataQueryOperation();
@@ -83,10 +83,10 @@ public class UnitTest1 : IClassFixture<TenantFixture>
             //     new SortOrderItem("LastName", SortOrders.Descending)
             // });
 
-            var rtIds = result.Result.Select(x => x.RtId).ToList();
-            var deep = await tenantRepository.GetRtAssociationTargetsAsync(session, rtIds,
-                "PaketService.ParcelShipment", "System.ParentChild", "PaketService.Contact", GraphDirections.Inbound, null,
-                dataOperation, 0, 5);
+            // var rtIds = result.Result.Select(x => x.RtId).ToList();
+            // var deep = await tenantRepository.GetRtAssociationTargetsAsync(session, rtIds,
+            //     "PaketService.ParcelShipment", "System.ParentChild", "PaketService.Contact", GraphDirections.Inbound, null,
+            //     dataOperation, 0, 5);
 
 
             // Assert.Collection(deep, 

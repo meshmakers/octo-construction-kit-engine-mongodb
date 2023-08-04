@@ -4,7 +4,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 public class FieldFilter
 {
-    public FieldFilter(string attributeName, FieldFilterOperator comparisonOperator, object comparisonValue)
+    public FieldFilter(string attributeName, FieldFilterOperator comparisonOperator, object? comparisonValue)
     {
         ArgumentValidation.ValidateString(nameof(attributeName), attributeName);
 
@@ -15,5 +15,5 @@ public class FieldFilter
 
     public string AttributeName { get; }
     public FieldFilterOperator Operator { get; }
-    public object ComparisonValue { get; }
+    public object? ComparisonValue { get; }
 }

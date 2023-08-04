@@ -1,15 +1,16 @@
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 public static class RtEntityExtensions
 {
-    public static CkTypeId GetCkId<TEntity>(this TEntity rtEntity)
+    public static CkId<CkTypeId> GetCkId<TEntity>(this TEntity rtEntity)
         where TEntity : RtEntity
     {
-        if (!string.IsNullOrWhiteSpace(rtEntity.CkId.TypeId))
+        if (!string.IsNullOrWhiteSpace(rtEntity.CkId.Key.TypeId))
         {
             return rtEntity.CkId;
         }
@@ -17,13 +18,13 @@ public static class RtEntityExtensions
         return GetCkId(rtEntity.GetType());
     }
 
-    public static CkTypeId GetCkId<TEntity>()
+    public static CkId<CkTypeId> GetCkId<TEntity>()
         where TEntity : RtEntity
     {
         return GetCkId(typeof(TEntity));
     }
 
-    private static CkTypeId GetCkId(Type type)
+    private static CkId<CkTypeId> GetCkId(Type type)
     {
         var customAttribute = Attribute.GetCustomAttribute(type, typeof(CkIdAttribute));
         if (customAttribute == null)

@@ -1,11 +1,12 @@
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 public class AssociationUpdateInfo
 {
-    public AssociationUpdateInfo(RtEntityId origin, RtEntityId target, string roleId,
+    public AssociationUpdateInfo(RtEntityId origin, RtEntityId target,  CkId<CkAssociationId> roleId,
         AssociationModOptionsDto modOption)
     {
         Origin = origin;
@@ -17,6 +18,6 @@ public class AssociationUpdateInfo
     public RtEntityId Origin { get; }
     public RtEntityId Target { get; }
 
-    public string RoleId { get; }
+    public CkId<CkAssociationId> RoleId { get; }
     public AssociationModOptionsDto ModOption { get; }
 }

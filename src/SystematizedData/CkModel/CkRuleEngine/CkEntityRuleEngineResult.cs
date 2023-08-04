@@ -1,6 +1,6 @@
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 
 public class CkEntityRuleEngineResult
 {

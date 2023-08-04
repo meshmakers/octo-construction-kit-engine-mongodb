@@ -126,6 +126,7 @@ public class TenantContext : ITenantContextInternal
         await repository.CreateCollectionIfNotExistsAsync<CkEntityAssociation>(false);
         await repository.CreateCollectionIfNotExistsAsync<CkEntityInheritance>(false);
         await repository.CreateCollectionIfNotExistsAsync<RtAssociation>(true);
+        
     }
 
     // ReSharper disable once UnusedMember.Global
@@ -414,7 +415,6 @@ public class TenantContext : ITenantContextInternal
     {
         var ckModelRepository = await CreateTenantCkModelRepository(systemSession, rtSystemTenant.TenantId);
         await _ckSystemModelService.ImportAsync(systemSession, ckModelRepository);
-        await SetConfigurationAsync(systemSession, Constants.SystemSchemaVersion, (object)Constants.SystemSchemaVersionValue);
     }
 
 

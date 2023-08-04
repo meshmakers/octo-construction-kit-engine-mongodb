@@ -1,4 +1,5 @@
 using Meshmakers.Octo.Common.Shared;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
@@ -16,7 +17,7 @@ public class InvalidAttributeValueException : Exception
     {
     }
 
-    public static Exception CannotBeNull(OctoObjectId rtId, CkTypeId ckId, string attributeName)
+    public static Exception CannotBeNull(OctoObjectId rtId, CkId<CkTypeId> ckId, string attributeName)
     {
         return new InvalidAttributeValueException($"Attribute value cannot be null for {ckId}.{rtId} at attribute with name {attributeName}");
     }

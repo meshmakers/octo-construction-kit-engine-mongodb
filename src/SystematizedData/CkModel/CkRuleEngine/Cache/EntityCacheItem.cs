@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
+using Persistence.Contracts;
 
-namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine.Cache;
 
 [DebuggerDisplay("{" + nameof(CkId) + "}")]
 public class EntityCacheItem : IEntityCacheItem
@@ -21,7 +23,7 @@ public class EntityCacheItem : IEntityCacheItem
     }
 
 
-    public CkTypeId CkId { get; }
+    public CkId<CkTypeId> CkId { get; }
 
     public bool IsAbstract { get; }
     public bool IsFinal { get; }

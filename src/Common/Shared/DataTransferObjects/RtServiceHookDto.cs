@@ -1,4 +1,4 @@
-using Newtonsoft.Json;
+using System.Text.Json.Serialization;
 
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
@@ -10,7 +10,7 @@ public class RtServiceHookDto
     /// <summary>
     ///     Returns the unique key of the service hook
     /// </summary>
-    [JsonConverter(typeof(NewtonOctoObjectIdConverter))]
+    [JsonConverter(typeof(OctoObjectIdConverter))]
     public OctoObjectId RtId { get; set; }
 
     /// <summary>

@@ -1,37 +1,37 @@
 {
   "entities": [
     {
-      "ckId": "System.Query",
-      "ckDerivedId": "System.Entity",
+      "ckId": "Query",
+      "ckDerivedId": "System/Entity",
       "isFinal": false,
       "isAbstract": false,
       "attributes": [
         {
-          "id": "System.Query.CkId",
+          "id": "System/Query.CkId",
           "name": "QueryCkId"
         },
         {
-          "id": "System.Query.Columns",
+          "id": "System/Query.Columns",
           "name": "Columns"
         },
         {
-          "id": "System.Query.Sorting",
+          "id": "System/Query.Sorting",
           "name": "Sorting"
         },
         {
-          "id": "System.Query.FieldFilter",
+          "id": "System/Query.FieldFilter",
           "name": "FieldFilter"
         },
         {
-          "id": "System.Query.TextSearchFilter",
+          "id": "System/Query.TextSearchFilter",
           "name": "TextSearchFilter"
         },
         {
-          "id": "System.Query.AttributeSearchFilter",
+          "id": "System/Query.AttributeSearchFilter",
           "name": "AttributeSearchFilter"
         },
         {
-          "id": "System.Name",
+          "id": "System/Name",
           "name": "Name"
         }
       ],

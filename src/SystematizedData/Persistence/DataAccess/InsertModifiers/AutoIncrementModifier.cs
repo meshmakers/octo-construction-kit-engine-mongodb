@@ -6,6 +6,7 @@ using Meshmakers.Octo.SystematizedData.Persistence.CkModelEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.InsertModifiers;
 
@@ -22,7 +23,7 @@ public class AutoIncrementModifier : IAutoIncrementModifier
         _tenantRepository = tenantRepository;
     }
     
-    public async Task RunAutoIncrementAsync(IOctoSession session, CkTypeId ckId, IEnumerable<RtEntity> rtEntities)
+    public async Task RunAutoIncrementAsync(IOctoSession session, CkId<CkTypeId> ckId, IEnumerable<RtEntity> rtEntities)
     {
         var entityCacheItem = _ckCache.GetEntityCacheItem(ckId);
         if (entityCacheItem == null)

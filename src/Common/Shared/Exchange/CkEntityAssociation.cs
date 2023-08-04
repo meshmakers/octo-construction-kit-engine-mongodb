@@ -1,25 +1,24 @@
-﻿using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
+﻿using System.Diagnostics;
+using System.Text.Json.Serialization;
+using Persistence.Contracts;
+
+// ReSharper disable AutoPropertyCanBeMadeGetOnly.Global
+// ReSharper disable UnusedAutoPropertyAccessor.Global
 
 namespace Meshmakers.Octo.Common.Shared.Exchange;
 
+[DebuggerDisplay("{" + nameof(RoleId) + "} -> {" + nameof(TargetCkId) + "}")]
 public class CkEntityAssociation
 {
-    [JsonProperty("roleId")]
+    [JsonPropertyName("roleId")]
     [JsonRequired]
-    public string RoleId { get; set; } = null!;
+    [JsonConverter(typeof(CkIdAssociationIdConverter))]
+    public CkId<CkAssociationId> RoleId { get; set; }
 
-    [JsonProperty("targetCkId")]
+    [JsonPropertyName("targetCkId")]
     [JsonRequired]
-    public CkTypeId TargetCkId { get; set; } = null!;
+    [JsonConverter(typeof(CkIdTypeIdConverter))]
+    public CkId<CkTypeId> TargetCkId { get; set; }
 
-    [JsonProperty("inboundMultiplicity")]
-    [JsonConverter(typeof(StringEnumConverter))]
-    [JsonRequired]
-    public Multiplicities InboundMultiplicity { get; set; }
 
-    [JsonProperty("outboundMultiplicity")]
-    [JsonConverter(typeof(StringEnumConverter))]
-    [JsonRequired]
-    public Multiplicities OutboundMultiplicity { get; set; }
 }

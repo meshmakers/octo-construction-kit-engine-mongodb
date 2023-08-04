@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
+using CkModel.CkRuleEngine;
 using Meshmakers.Octo.Common.DistributedCache;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 
-namespace CkModel.CkRuleEngine;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 
 public class CkCacheService : ICkCacheService
 {

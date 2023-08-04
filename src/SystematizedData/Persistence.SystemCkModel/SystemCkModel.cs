@@ -5,11 +5,12 @@ public static class SystemCkModel
     // ********************************************************************
     // Well-known association identifier
     // ********************************************************************
-    public const string RelatedRoleId = "System.Related";
+    public const string RelatedRoleId = "Related";
     
-    public const string SystemServiceHookCkId = "System.ServiceHook";
-    public const string SystemAutoIncrementCkId = "System.AutoIncrement";
-    public const string SystemQueryCkId = "System.Query";
-    public const string SystemTenantCkId = "System.Tenant";
-    public const string SystemConfigurationCkId = "System.Conficuration";
+    public const string SystemCkModelId = "System-1.0.0";
+    public const string SystemServiceHookCkId = "ServiceHook";
+    public const string SystemAutoIncrementCkId = "AutoIncrement";
+    public const string SystemQueryCkId = "Query";
+    public const string SystemTenantCkId = "Tenant";
+    public const string SystemConfigurationCkId = "Conficuration";
 }

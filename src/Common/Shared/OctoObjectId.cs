@@ -14,7 +14,6 @@ namespace Meshmakers.Octo.Common.Shared;
 [SuppressMessage("ReSharper", "MemberCanBePrivate.Global")]
 [SuppressMessage("ReSharper", "MemberCanBePrivate.Global")]
 [SuppressMessage("ReSharper", "UnusedMember.Global")]
-[Newtonsoft.Json.JsonConverter(typeof(NewtonOctoObjectIdConverter))]
 [System.Text.Json.Serialization.JsonConverter(typeof(OctoObjectIdConverter))]
 public readonly struct OctoObjectId : IComparable<OctoObjectId>, IEquatable<OctoObjectId>, IConvertible
 {

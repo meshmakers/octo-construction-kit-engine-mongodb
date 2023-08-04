@@ -1,10 +1,11 @@
-using System.Collections.Generic;
+using Meshmakers.Octo.Common.Shared;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 public interface ICkEntityAttribute
 {
-    string AttributeId { get; set; }
+    CkId<CkAttributeId> AttributeId { get; set; }
     string AttributeName { get; set; }
     bool IsAutoCompleteEnabled { get; set; }
     string? AutoCompleteFilter { get; set; }

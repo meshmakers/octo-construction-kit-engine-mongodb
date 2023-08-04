@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using Meshmakers.Octo.Common.Shared;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
@@ -17,11 +18,11 @@ public class CkEntity : ICkEntity
         Attributes = new HashSet<CkEntityAttribute>();
         Indexes = new HashSet<CkEntityIndex>();
     }
-
+    
     /// <summary>
     ///     Gets or sets the construction kit id
     /// </summary>
-    public CkTypeId CkId { get; set; } = null!;
+    public CkId<CkTypeId> CkId { get; set; }
 
     /// <summary>
     ///     If true, the type cannot be inherited again
@@ -41,7 +42,7 @@ public class CkEntity : ICkEntity
     /// <summary>
     ///     Gets or sets a list of defined indexes
     /// </summary>
-    public ICollection<CkEntityIndex> Indexes { get; set; }
+    public ICollection<CkEntityIndex>? Indexes { get; set; }
     
     /// <summary>
     /// Gets or sets if the change stream should include pre and post images

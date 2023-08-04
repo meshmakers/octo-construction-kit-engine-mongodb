@@ -1,6 +1,7 @@
 using Meshmakers.Octo.Common.Shared;
+using Persistence.Contracts;
 
-namespace CkModel.CkRuleEngine;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 
 public class ModelValidationException : Exception
 {
@@ -16,24 +17,24 @@ public class ModelValidationException : Exception
     {
     }
     
-    internal static Exception DuplicateAttributeIds(IEnumerable<string> duplicateAttributes)
+    internal static Exception DuplicateAttributeIds(IEnumerable<CkId<CkAttributeId>> duplicateAttributes)
     {
         var attributeIds = string.Join(", ", duplicateAttributes);
         return new ModelValidationException($"Following attribute ids are duplicates: '{attributeIds}'");
     }
 
-    internal static Exception UnknownCkIdForInheritance(CkTypeId ckId)
+    internal static Exception UnknownCkIdForInheritance(CkId<CkTypeId> ckId)
     {
         return new ModelValidationException($"CkId '{ckId}' is unknown for inheritance.");
     }
 
 
-    public static Exception CkIdAlreadyExistsInDatabase(CkTypeId ckId)
+    public static Exception CkIdAlreadyExistsInDatabase(CkId<CkTypeId> ckId)
     {
         return new ModelValidationException($"CkId '{ckId}' already exists in database.");
     }
 
-    public static Exception UnknownAttributeOfCkIdInSource(CkTypeId ckId, string attributeId)
+    public static Exception UnknownAttributeOfCkIdInSource(CkId<CkTypeId> ckId, CkId<CkAttributeId> attributeId)
     {
         return new ModelValidationException($"Attribute Id '{attributeId}' of CkId '{ckId}' does not exist.");
     }
@@ -43,7 +44,7 @@ public class ModelValidationException : Exception
         return new ModelValidationException($"Validation of Construction Kit Model failed:" + Environment.NewLine + error);
     }
 
-    public static Exception DuplicateAttributeIdsInCkEntity(CkTypeId ckId, IEnumerable<string> duplicateAttributeIds)
+    public static Exception DuplicateAttributeIdsInCkEntity(CkId<CkTypeId> ckId, IEnumerable<CkId<CkAttributeId>> duplicateAttributeIds)
     {
         var attributeIds = string.Join(", ", duplicateAttributeIds);
         return new ModelValidationException($"CkId '{ckId}' has duplicate attribute IDs: '{attributeIds}'");
@@ -60,6 +61,16 @@ public class ModelValidationException : Exception
         var attributeNames = string.Join(", ", systemReservedAttributeNames);
         return new ModelValidationException(
             $"CkId '{ckId}' using attribute names that are system reserved: '{attributeNames}'");
+    }
+
+    public static Exception CkAssociationRoleNotFound(CkId<CkAssociationId> associationId)
+    {
+        return new ModelValidationException($"Association role '{associationId}' not found.");
+    }
+
+    public static Exception UnknownCkModel(CkModelId modelDependency)
+    {
+       return new ModelValidationException($"Repository does not contain construction kit model '{modelDependency}'.");
     }
 }
 

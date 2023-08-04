@@ -1,14 +1,15 @@
 using Meshmakers.Octo.Common.Shared;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 [AttributeUsage(AttributeTargets.Class)]
 public class CkIdAttribute : Attribute
 {
-    public CkIdAttribute(string ckId)
+    public CkIdAttribute(string modelId, string ckId)
     {
-        CkId = ckId;
+        CkId = new CkId<CkTypeId>(modelId, ckId);
     }
 
-    public CkTypeId CkId { get; }
+    public CkId<CkTypeId> CkId { get; }
 }

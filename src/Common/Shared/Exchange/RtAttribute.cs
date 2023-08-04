@@ -1,12 +1,13 @@
-﻿using Newtonsoft.Json;
+﻿using System.Text.Json.Serialization;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.Common.Shared.Exchange;
 
 public class RtAttribute
 {
-    [JsonProperty("id", Required = Required.Always)]
+    [JsonPropertyName("id")]
     [JsonRequired]
-    public string? Id { get; set; }
+    public CkId<CkAttributeId> Id { get; set; } 
 
-    [JsonProperty("value")] public object? Value { get; set; }
+    [JsonPropertyName("value")] public object? Value { get; set; }
 }

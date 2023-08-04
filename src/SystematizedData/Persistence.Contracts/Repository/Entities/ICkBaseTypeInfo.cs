@@ -1,4 +1,5 @@
 using Meshmakers.Octo.Common.Shared;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
@@ -10,7 +11,7 @@ public interface ICkBaseTypeInfo
     OctoObjectId InheritanceId { get; set; }
 
     ScopeIds ScopeId { get; set; }
-    CkTypeId OriginCkId { get; set; }
-    CkTypeId TargetCkId { get; set; }
+    CkId<CkTypeId> OriginCkId { get; set; }
+    CkId<CkTypeId> TargetCkId { get; set; }
     int BaseTypeDepthIndex { get; set; }
 }

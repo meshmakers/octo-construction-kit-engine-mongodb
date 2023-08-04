@@ -3,7 +3,7 @@ using Persistence.SystemCkModel;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.CkModelEntities;
 
-[CkId(SystemCkModel.SystemAutoIncrementCkId)]
+[CkId(SystemCkModel.SystemCkModelId, SystemCkModel.SystemAutoIncrementCkId)]
 public class RtSystemAutoIncrement : RtEntity
 {
     public long? Start

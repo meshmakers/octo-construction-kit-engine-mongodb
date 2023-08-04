@@ -1,15 +1,22 @@
 using System;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.Common.Shared;
 
 public readonly struct RtEntityId : IComparable<RtEntityId>, IEquatable<RtEntityId>
 {
-    public CkTypeId CkId { get; init; }
+    public CkId<CkTypeId> CkId { get; init; }
     public OctoObjectId RtId { get; }
 
-    public RtEntityId(CkTypeId ckId, OctoObjectId rtId)
+    public RtEntityId(CkId<CkTypeId> ckId, OctoObjectId rtId)
     {
         CkId = ckId;
+        RtId = rtId;
+    }
+    
+    public RtEntityId(CkModelId ckModelId, CkTypeId ckTypeId, OctoObjectId rtId)
+    {
+        CkId = new CkId<CkTypeId>(ckModelId, ckTypeId);
         RtId = rtId;
     }
 

@@ -10,6 +10,7 @@ using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 
@@ -42,8 +43,10 @@ internal sealed class DatabaseContext : IDatabaseContext
         _repositoryClient = repositoryClient;
         _repository = (IRepositoryInternal)_repositoryClient.GetRepository(databaseName);
 
+        CkModels = _repository.GetCollection<DatabaseEntities.CkModel>();
         CkEntities = _repository.GetCollection<CkEntity>();
         CkAttributes = _repository.GetCollection<CkAttribute>();
+        CkAssociationRoles = _repository.GetCollection<CkAssociationRole>();
         CkEntityAssociations = _repository.GetCollection<CkEntityAssociation>();
         CkEntityInheritances = _repository.GetCollection<CkEntityInheritance>();
         RtAssociations = _repository.GetCollection<RtAssociation>();
@@ -62,9 +65,9 @@ internal sealed class DatabaseContext : IDatabaseContext
         return session;
     }
 
-    public ICachedCollection<TEntity> GetRtCollection<TEntity>(CkTypeId ckId) where TEntity : RtEntity, new()
+    public ICachedCollection<TEntity> GetRtCollection<TEntity>(CkId<CkTypeId> ckId) where TEntity : RtEntity, new()
     {
-        var suffix = ckId.FullName.Replace(".", "_");
+        var suffix = ckId.SemanticVersionedFullName.Replace("/", "_");
         return _repository.GetCollection<TEntity>(suffix);
     }
 
@@ -96,8 +99,10 @@ internal sealed class DatabaseContext : IDatabaseContext
         return await AggregateCkTypeInfo(aggregate).SingleOrDefaultAsync();
     }
 
+    public ICachedCollection<DatabaseEntities.CkModel> CkModels { get; }
     public ICachedCollection<CkEntity> CkEntities { get; }
     public ICachedCollection<CkAttribute> CkAttributes { get; }
+    public ICachedCollection<CkAssociationRole> CkAssociationRoles { get; }
     public ICachedCollection<CkEntityAssociation> CkEntityAssociations { get; }
     public ICachedCollection<CkEntityInheritance> CkEntityInheritances { get; }
     public ICachedCollection<RtAssociation> RtAssociations { get; }
@@ -109,7 +114,7 @@ internal sealed class DatabaseContext : IDatabaseContext
         {
             if (!ckEntity.IsAbstract)
             {
-                var suffix = ckEntity.CkId.FullName.Replace(".", "_");
+                var suffix = ckEntity.CkId.SemanticVersionedFullName.Replace("/", "_");
                 await _repository.CreateCollectionIfNotExistsAsync<RtEntity>(ckEntity.EnableChangeStreamPreAndPostImages, suffix);
             }
         }
@@ -121,7 +126,7 @@ internal sealed class DatabaseContext : IDatabaseContext
 
         foreach (var ckEntity in ckEntities)
         {
-            var name = ckEntity.CkId.FullName.Replace(".", "_");
+            var name = ckEntity.CkId.SemanticVersionedFullName.Replace(".", "_");
 
             var collection = GetRtCollection<RtEntity>(ckEntity.CkId);
             await collection.DropIndexAsync(name);
@@ -139,7 +144,7 @@ internal sealed class DatabaseContext : IDatabaseContext
 
             var collection = GetRtCollection<RtEntity>(ckEntity.CkId);
 
-            var newName = ckEntity.CkId.FullName.Replace(".", "_") + "_" + ObjectId.GenerateNewId();
+            var newName = ckEntity.CkId.SemanticVersionedFullName.Replace(".", "_") + "_" + ObjectId.GenerateNewId();
 
             switch (index.IndexType)
             {

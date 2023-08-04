@@ -3,7 +3,7 @@ using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.Common.Shared.Exchange;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
-using Newtonsoft.Json;
+using Persistence.Contracts;
 using Persistence.SystemCkModel;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
@@ -29,7 +29,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
             session.StartTransaction();
 
             var query = await tenantRepository.GetRtEntityByRtIdAsync(session,
-                new RtEntityId(SystemCkModel.SystemQueryCkId, queryId));
+                new RtEntityId(SystemCkModel.SystemCkModelId, SystemCkModel.SystemQueryCkId, queryId));
 
             if (CheckCancellation(cancellationToken))
             {
@@ -43,18 +43,17 @@ public class ExportRtModelCommand : IExportRtModelCommand
 
             var dataQueryOperation = new DataQueryOperation();
 
-            var sortingDtoList =
-                JsonConvert.DeserializeObject<ICollection<SortDto>>(query.GetAttributeStringValueOrDefault("Sorting"));
+            var sortingDtoList = query.GetAttributeStringValueOrDefault("Sorting")?.Deserialize<ICollection<SortDto>>();
             dataQueryOperation.SortOrders = sortingDtoList?.Select(dto =>
-                new SortOrderItem(dto.AttributeName.ToPascalCase(), (SortOrders)dto.SortOrder));
+                new SortOrderItem(dto.AttributeName.ToPascalCase(), (SortOrders)dto.SortOrder)) ?? new List<SortOrderItem>();
             var fieldFilterDtoList =
-                JsonConvert.DeserializeObject<ICollection<FieldFilterDto>>(
-                    query.GetAttributeStringValueOrDefault("FieldFilter"));
+                query.GetAttributeStringValueOrDefault("FieldFilter")?.Deserialize<ICollection<FieldFilterDto>>();
             dataQueryOperation.FieldFilters = fieldFilterDtoList?.Select(dto =>
                 new FieldFilter(TransformAttributeName(dto.AttributeName), (FieldFilterOperator)dto.Operator,
-                    dto.ComparisonValue));
+                    dto.ComparisonValue)) ?? new List<FieldFilter>();
 
-            var ckId = query.GetAttributeStringValueOrDefault("QueryCkId");
+            var ckIdString = query.GetAttributeStringValueOrDefault("QueryCkId");
+            var ckId = new CkId<CkTypeId>(ckIdString);
 
             var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync(session, ckId, dataQueryOperation);
 

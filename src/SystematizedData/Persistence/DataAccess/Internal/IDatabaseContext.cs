@@ -5,20 +5,23 @@ using System.Threading.Tasks;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using MongoDB.Bson;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 
 public interface IDatabaseContext
 {
+    ICachedCollection<DatabaseEntities.CkModel> CkModels { get; }
     ICachedCollection<CkEntity> CkEntities { get; }
     ICachedCollection<CkAttribute> CkAttributes { get; }
+    ICachedCollection<CkAssociationRole> CkAssociationRoles { get; }
     ICachedCollection<CkEntityAssociation> CkEntityAssociations { get; }
     ICachedCollection<CkEntityInheritance> CkEntityInheritances { get; }
     ICachedCollection<RtAssociation> RtAssociations { get; }
     Task<IOctoSession> StartSessionAsync();
     IOctoSession StartSession();
 
-    ICachedCollection<TEntity> GetRtCollection<TEntity>(CkTypeId ckId) where TEntity : RtEntity, new();
+    ICachedCollection<TEntity> GetRtCollection<TEntity>(CkId<CkTypeId> ckId) where TEntity : RtEntity, new();
     ICachedCollection<TEntity> GetRtCollection<TEntity>() where TEntity : RtEntity, new();
 
     Task<ICollection<CkTypeInfo>> GetCkTypeInfoAsync(IOctoSession session);

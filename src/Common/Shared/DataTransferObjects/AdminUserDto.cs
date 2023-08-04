@@ -1,5 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
-using Newtonsoft.Json;
+using System.Text.Json.Serialization;
 
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
@@ -13,7 +13,7 @@ public class AdminUserDto
     /// </summary>
     [Required]
     [EmailAddress]
-    [JsonProperty("email")]
+    [JsonPropertyName("email")]
     // Email max length is 254, see https://stackoverflow.com/questions/386294/what-is-the-maximum-length-of-a-valid-email-address
     [StringLength(ValidationConstants.EmailMaxLength)]
     public string? EMail { get; set; }
@@ -22,7 +22,7 @@ public class AdminUserDto
     ///     The login password for the user.
     /// </summary>
     [Required]
-    [JsonProperty("password")]
+    [JsonPropertyName("password")]
     [StringLength(ValidationConstants.PasswordMaxLength)]
     public string? Password { get; set; }
 }

@@ -1,4 +1,5 @@
 using Meshmakers.Octo.Common.Shared;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
@@ -10,8 +11,8 @@ public interface IRtAssociation
     OctoObjectId AssociationId { get; set; }
 
     OctoObjectId OriginRtId { get; set; }
-    CkTypeId OriginCkId { get; set; }
+    CkId<CkTypeId> OriginCkId { get; set; }
     OctoObjectId TargetRtId { get; set; }
-    CkTypeId TargetCkId { get; set; }
-    string AssociationRoleId { get; set; }
+    CkId<CkTypeId> TargetCkId { get; set; }
+    CkId<CkAssociationId> AssociationRoleId { get; set; }
 }

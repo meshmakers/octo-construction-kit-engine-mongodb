@@ -1,4 +1,5 @@
 ﻿using Meshmakers.Octo.Common.Shared;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
@@ -9,7 +10,7 @@ public class CkEntityInheritance : ICkEntityInheritance
     /// </summary>
     public OctoObjectId InheritanceId { get; set; }
 
-    public CkTypeId OriginCkId { get; set; } = null!;
+    public CkId<CkTypeId> OriginCkId { get; set; }
 
-    public CkTypeId TargetCkId { get; set; } = null!;
+    public CkId<CkTypeId> TargetCkId { get; set; }
 }

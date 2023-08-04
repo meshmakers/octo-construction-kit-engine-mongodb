@@ -1,4 +1,5 @@
 using Meshmakers.Octo.Common.Shared;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
@@ -22,7 +23,7 @@ public interface IRtEntity2
     /// <summary>
     ///     Gets or sets the construction kit id
     /// </summary>
-    CkTypeId CkId { get; set; }
+    CkId<CkTypeId> CkId { get; set; }
 
     /// <summary>
     ///     Returns the well known name to access well known entities in a faster way

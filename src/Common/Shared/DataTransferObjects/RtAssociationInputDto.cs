@@ -1,5 +1,4 @@
-using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
+using System.Text.Json.Serialization;
 
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
@@ -7,6 +6,6 @@ public class RtAssociationInputDto
 {
     public RtEntityId Target { get; set; }
 
-    [JsonConverter(typeof(StringEnumConverter), typeof(ConstantCaseNamingStrategy))]
+    [JsonConverter(typeof(JsonStringEnumConverter))]
     public AssociationModOptionsDto? ModOption { get; set; }
 }

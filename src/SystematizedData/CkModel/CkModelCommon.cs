@@ -1,4 +1,4 @@
-namespace CkModel;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel;
 
 internal static class CkModelCommon
 {

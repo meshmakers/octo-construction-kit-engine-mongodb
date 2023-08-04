@@ -6,6 +6,7 @@ using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
@@ -55,17 +56,17 @@ public class TenantCkModelRepository : ITenantCkModelRepository
         return await _databaseContext.CkEntityInheritances.BulkImportAsync(session, ckEntityInheritances);
     }
 
-    public async Task DeleteCkEntityAssociationsOneAsync(IOctoSession session, object associationId)
+    public async Task DeleteCkEntityAssociationsOneAsync(IOctoSession session, OctoObjectId associationId)
     {
         await _databaseContext.CkEntityAssociations.DeleteOneAsync(session, associationId);
     }
 
-    public async Task DeleteCkEntitiesOneAsync(IOctoSession session, CkTypeId ckId)
+    public async Task DeleteCkEntitiesOneAsync(IOctoSession session, CkId<CkTypeId> ckId)
     {
         await _databaseContext.CkEntities.DeleteOneAsync(session, ckId);
     }
 
-    public async Task DeleteCkAttributesOneAsync(IOctoSession session, string attributeId)
+    public async Task DeleteCkAttributesOneAsync(IOctoSession session, CkId<CkAttributeId> attributeId)
     {
         await _databaseContext.CkAttributes.DeleteOneAsync(session, attributeId);
     }
@@ -85,23 +86,58 @@ public class TenantCkModelRepository : ITenantCkModelRepository
         await _databaseContext.UpdateIndexAsync(session);
     }
 
-    public Task<IEnumerable<CkAttribute>> GetCkAttributesByModelAsync(IOctoSession session, CkModelId ckModelId)
+    public async Task<IEnumerable<CkAttribute>> GetCkAttributesByModelAsync(IOctoSession session, CkModelId ckModelId)
     {
-        _databaseContext.CkAttributes.FindManyAsync(session, x => x. == ckModelId)
+        return await _databaseContext.CkAttributes.FindManyAsync(session, x => x.AttributeId.ModelId == ckModelId.ModelId);
     }
 
-    public Task<IEnumerable<CkEntity>> GetCkEntitiesByModelAsync(IOctoSession session, CkModelId ckModelId)
+    public async Task<IEnumerable<CkEntity>> GetCkEntitiesByModelAsync(IOctoSession session, CkModelId ckModelId)
     {
-        throw new NotImplementedException();
+        return await _databaseContext.CkEntities.FindManyAsync(session, x => x.CkId.ModelId == ckModelId.ModelId);
     }
 
-    public Task<IEnumerable<CkEntityAssociation>> GetCkEntityAssociationsByModelAsync(IOctoSession session, CkModelId ckModelId)
+    public async Task<IEnumerable<CkEntityAssociation>> GetCkEntityAssociationsByModelAsync(IOctoSession session, CkModelId ckModelId)
     {
-        throw new NotImplementedException();
+        return await _databaseContext.CkEntityAssociations.FindManyAsync(session, x => x.RoleId.ModelId == ckModelId.ModelId);
     }
 
-    public Task<IEnumerable<CkEntityInheritance>> GetCkEntityInheritancesByModelAsync(IOctoSession session, CkModelId ckModelId)
+    public async Task<IEnumerable<CkEntityInheritance>> GetCkEntityInheritancesByModelAsync(IOctoSession session, CkModelId ckModelId)
     {
-        throw new NotImplementedException();
+        return await _databaseContext.CkEntityInheritances.FindManyAsync(session, x => x.TargetCkId.ModelId == ckModelId.ModelId);
+    }
+
+    public async Task<IEnumerable<CkAssociationRole>> GetCkAssociationRolesByModelAsync(IOctoSession session, CkModelId ckModelId)
+    {
+        return await _databaseContext.CkAssociationRoles.FindManyAsync(session, x => x.RoleId.ModelId == ckModelId.ModelId);
+    }
+
+    public async Task<CkAssociationRole?> GetCkAssociationRoleAsync(IOctoSession session, CkId<CkAssociationId> ckAssociationId)
+    {
+        return await _databaseContext.CkAssociationRoles.DocumentAsync(session, ckAssociationId);
+    }
+
+    public async Task DeleteCkAssociationRoleOneAsync(IOctoSession session, CkId<CkAssociationId> associationRoleId)
+    {
+        await _databaseContext.CkAssociationRoles.DeleteOneAsync(session, associationRoleId);
+    }
+
+    public async Task<IBulkImportResult> BulkImportCkAssociationRoleAsync(IOctoSession session, IReadOnlyCollection<CkAssociationRole> ckAssociationRoles)
+    {
+        return await _databaseContext.CkAssociationRoles.BulkImportAsync(session, ckAssociationRoles);
+    }
+
+    public async Task<bool> IsCkModelExistingAsync(IOctoSession session, CkModelId ckModelId)
+    {
+        return (await _databaseContext.CkModels.DocumentAsync(session, ckModelId) != null);
+    }
+
+    public async Task DeleteCkModelOneAsync(IOctoSession session, CkModelId ckModelId)
+    {
+        //await _databaseContext.CkModels.DeleteOneAsync(session, ckModelId);
+    }
+
+    public async Task InsertCkModelAsync(IOctoSession session, DatabaseEntities.CkModel ckModel)
+    {
+        await _databaseContext.CkModels.InsertAsync(session, ckModel);
     }
 }

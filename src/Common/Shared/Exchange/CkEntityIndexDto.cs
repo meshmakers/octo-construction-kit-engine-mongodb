@@ -1,6 +1,7 @@
 using System.Collections.Generic;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
+using System.Text.Json.Serialization;
+// ReSharper disable AutoPropertyCanBeMadeGetOnly.Global
+// ReSharper disable UnusedAutoPropertyAccessor.Global
 
 namespace Meshmakers.Octo.Common.Shared.Exchange;
 
@@ -11,11 +12,11 @@ public class CkEntityIndexDto
         Fields = new List<CkIndexFields>();
     }
 
-    [JsonProperty("indexType")]
-    [JsonConverter(typeof(StringEnumConverter))]
+    [JsonPropertyName("indexType")]
+    [JsonConverter(typeof(JsonStringEnumConverter))]
     public IndexTypeDto IndexType { get; set; }
 
-    [JsonProperty("language")] public string? Language { get; set; }
+    [JsonPropertyName("language")] public string? Language { get; set; }
 
-    [JsonProperty("fields")] public List<CkIndexFields> Fields { get; }
+    [JsonPropertyName("fields")] public List<CkIndexFields> Fields { get; set; }
 }

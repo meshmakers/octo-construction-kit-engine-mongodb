@@ -1,20 +1,29 @@
-﻿using Newtonsoft.Json;
+﻿using System.Diagnostics;
+using System.Text.Json.Serialization;
+using Persistence.Contracts;
+
+// ReSharper disable AutoPropertyCanBeMadeGetOnly.Global
+// ReSharper disable UnusedAutoPropertyAccessor.Global
 
 namespace Meshmakers.Octo.Common.Shared.Exchange;
 
+[DebuggerDisplay("{" + nameof(AttributeId) + "} -> {" + nameof(AttributeName) + "}")]
 public class CkEntityAttribute
 {
-    [JsonProperty("id")] [JsonRequired] public string AttributeId { get; set; } = null!;
+    [JsonPropertyName("id")]
+    [JsonRequired]
+    [JsonConverter(typeof(CkIdAttributeIdConverter))]
+    public CkId<CkAttributeId> AttributeId { get; set; }
 
-    [JsonProperty("name")] [JsonRequired] public string AttributeName { get; set; } = null!;
+    [JsonPropertyName("name")] [JsonRequired] public string AttributeName { get; set; } = null!;
 
-    [JsonProperty("isAutoCompleteEnabled")]
+    [JsonPropertyName("isAutoCompleteEnabled")]
     public bool IsAutoCompleteEnabled { get; set; }
 
-    [JsonProperty("autoCompleteFilter")] public string? AutoCompleteFilter { get; set; }
+    [JsonPropertyName("autoCompleteFilter")] public string? AutoCompleteFilter { get; set; }
 
-    [JsonProperty("autoCompleteLimit")] public int? AutoCompleteLimit { get; set; }
+    [JsonPropertyName("autoCompleteLimit")] public int? AutoCompleteLimit { get; set; }
 
-    [JsonProperty("autoIncrementReference")]
+    [JsonPropertyName("autoIncrementReference")]
     public string? AutoIncrementReference { get; set; }
 }

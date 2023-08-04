@@ -4,7 +4,7 @@ using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 
 public class CkGraphRuleEngine : ICkGraphRuleEngine
 {

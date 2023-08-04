@@ -1,14 +1,15 @@
 ﻿using System.Diagnostics;
-using Newtonsoft.Json;
+using Meshmakers.Octo.Common.Shared;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 [DebuggerDisplay("{" + nameof(AttributeId) + "}")]
 public class CkEntityAttribute : ICkEntityAttribute
 {
-    public string AttributeId { get; set; }
+    public CkId<CkAttributeId> AttributeId { get; set; }
 
-    public string AttributeName { get; set; }
+    public string AttributeName { get; set; } = null!;
 
     public bool IsAutoCompleteEnabled { get; set; }
 
@@ -18,6 +19,5 @@ public class CkEntityAttribute : ICkEntityAttribute
 
     public string? AutoIncrementReference { get; set; }
 
-    [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
     public ICollection<string>? AutoCompleteTexts { get; set; }
 }

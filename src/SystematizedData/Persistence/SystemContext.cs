@@ -1,12 +1,10 @@
 using System;
 using System.Threading.Tasks;
 using CkModel.CkRuleEngine;
-using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Microsoft.Extensions.Options;
 using NLog;
-using Persistence.Contracts;
 using Persistence.InternalContracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence;
@@ -35,9 +33,11 @@ public class SystemContext : TenantContext, ISystemContextInternal
         try
         {
             await _cacheService.DistributeTenantModificationPreEventAsync(_systemConfiguration.Value.SystemTenantId);
-            
-            await _systemRepositoryClient.CreateRepositoryAsync(_systemConfiguration.Value.SystemDatabaseName);
 
+            await _systemRepositoryClient.CreateRepositoryAsync(_systemConfiguration.Value.SystemDatabaseName);
+            await _systemRepositoryClient.CreateUser(_systemConfiguration.Value.AuthenticationDatabaseName,
+                _systemConfiguration.Value.SystemDatabaseName, string.Format(_systemConfiguration.Value.DatabaseUser, _systemConfiguration.Value.SystemDatabaseName),
+                _systemConfiguration.Value.DatabaseUserPassword);
             using var systemSession = await StartSystemSessionAsync();
             systemSession.StartTransaction();
 
@@ -45,7 +45,6 @@ public class SystemContext : TenantContext, ISystemContextInternal
             var ckModelRepository = new TenantCkModelRepository(databaseContext);
 
             await _ckSystemModelService.ImportAsync(systemSession, ckModelRepository);
-            await SetConfigurationAsync(systemSession, Constants.SystemSchemaVersion, (object)Constants.SystemSchemaVersionValue);
 
             await systemSession.CommitTransactionAsync();
             

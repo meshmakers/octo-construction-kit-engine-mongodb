@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
-using Newtonsoft.Json;
+using System.Text.Json.Serialization;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.Common.Shared.Exchange;
 
@@ -12,32 +13,33 @@ public class RtEntity
         Associations = new List<RtAssociation>();
     }
 
-    [JsonProperty("rtId", Required = Required.Always)]
+    [JsonPropertyName("rtId")]
     [JsonRequired]
     public OctoObjectId RtId { get; set; }
 
     /// <summary>
     ///     Returns the creation date time
     /// </summary>
-    [JsonProperty("rtCreationDateTime", NullValueHandling = NullValueHandling.Ignore)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+
     public DateTime? RtCreationDateTime { get; set; }
 
     /// <summary>
     ///     Returns the last change date time
     /// </summary>
-    [JsonProperty("rtChangedDateTime", NullValueHandling = NullValueHandling.Ignore)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public DateTime? RtChangedDateTime { get; set; }
 
-    [JsonProperty("ckId", Required = Required.Always)]
+    [JsonPropertyName("ckId")]
     [JsonRequired]
-    public CkTypeId CkId { get; set; } = null!;
+    public CkId<CkTypeId> CkId { get; set; } 
 
-    [JsonProperty("rtWellKnownName")] 
+    [JsonPropertyName("rtWellKnownName")] 
     public string? RtWellKnownName { get; set; }
 
-    [JsonProperty("attributes")] 
+    [JsonPropertyName("attributes")] 
     public List<RtAttribute> Attributes { get; }
 
-    [JsonProperty("associations")] 
+    [JsonPropertyName("associations")] 
     public List<RtAssociation>? Associations { get; }
 }

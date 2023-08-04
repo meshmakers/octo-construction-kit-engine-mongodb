@@ -1,9 +1,9 @@
-using System.Threading.Tasks;
 using CkModel.CkRuleEngine;
 using FakeItEasy;
 using Meshmakers.Octo.Backend.Persistence.SystemTests.Configuration;
 using Meshmakers.Octo.Common.DistributedCache;
 using Meshmakers.Octo.SystematizedData.Persistence;
+using Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 using Meshmakers.Octo.SystematizedData.Persistence.Commands;
 using Microsoft.Extensions.Options;
 using Persistence.InternalContracts;

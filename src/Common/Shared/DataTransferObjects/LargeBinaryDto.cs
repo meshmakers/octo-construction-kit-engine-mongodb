@@ -1,12 +1,12 @@
 using System;
-using Newtonsoft.Json;
+using System.Text.Json.Serialization;
 
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 public class LargeBinaryInfoDto
 {
-    [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
-    [JsonConverter(typeof(NewtonOctoObjectIdConverter))]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    [JsonConverter(typeof(OctoObjectIdConverter))]
     public OctoObjectId? BinaryId { get; set; }
 
     public string? ContentType { get; init; }

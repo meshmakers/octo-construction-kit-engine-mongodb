@@ -1,7 +1,10 @@
 using System.Diagnostics;
+using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
+using Persistence.Contracts;
 
-namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
+namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine.Cache;
 
 [DebuggerDisplay("{" + nameof(AttributeId) + "}")]
 public class AttributeCacheItem : IAttributeCacheItem
@@ -22,7 +25,7 @@ public class AttributeCacheItem : IAttributeCacheItem
     }
 
     public string AttributeName { get; }
-    public string AttributeId { get; }
+    public CkId<CkAttributeId> AttributeId { get; }
 
     public bool IsAutoCompleteEnabled { get; }
 

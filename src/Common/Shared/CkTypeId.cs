@@ -1,10 +1,15 @@
 using System;
+using System.Diagnostics;
 
 namespace Meshmakers.Octo.Common.Shared;
 
-public class CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, IConvertible
+/// <summary>
+/// Represents a versioned construction kit type id
+/// </summary>
+[DebuggerDisplay("{" + nameof(TypeId) + "} ({" + nameof(Version) + "})")]
+[System.Text.Json.Serialization.JsonConverter(typeof(CkTypeIdConverter))]
+public readonly struct CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, ICkKey
 {
-    public string? ModelId { get; }
 
     /// <summary>
     /// Defines the name of the entity, e. g. "Person"
@@ -13,40 +18,43 @@ public class CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, IConvertibl
     
     public CkVersion Version { get; }
 
-    public string FullName => $"{ModelId}/{TypeId}-{Version}";
+    public string FullName => $"{TypeId}-{Version}";
+    
+    public string SemanticVersionedFullName
+    {
+        get
+        {
+            var s = TypeId;
+            if (Version.Major > 1)
+            {
+                s += $"-{Version.Major}";
+            }
+
+            return s;
+        }
+    }
 
     public CkTypeId(string ckId)
     {
-        var modelIndex =ckId.IndexOf("/", StringComparison.Ordinal);
-        if (modelIndex < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(ckId), ckId, "CkId must contain a model id and a type id");
-        }
-        ModelId = ckId.Substring(0, modelIndex);
-        if (string.IsNullOrWhiteSpace(ModelId))
-        {
-            throw new ArgumentOutOfRangeException(nameof(ckId), ckId, "CkId must contain a model id and a type id");
-        }
         var typeIndex = ckId.IndexOf("-", StringComparison.Ordinal);
         if (typeIndex < 0)
         {
-            TypeId = ckId.Substring(modelIndex + 1);
+            TypeId = ckId;
             Version = "1.0.0";
         }
         else
         {
-            TypeId = ckId.Substring(modelIndex + 1, typeIndex - modelIndex - 1);
+            TypeId = ckId.Substring(0, typeIndex);
             Version = ckId.Substring(typeIndex + 1);
         }
         if (string.IsNullOrWhiteSpace(TypeId))
         {
-            throw new ArgumentOutOfRangeException(nameof(ckId), ckId, "CkId must contain a type id");
+            throw new ArgumentOutOfRangeException(nameof(ckId), ckId, $"{nameof(ckId)} must contain a type id");
         }
     }
 
-    public CkTypeId(string modelId, string typeId, string typeVersion = "1.0.0") 
+    public CkTypeId(string typeId, string typeVersion = "1.0.0") 
     {
-        ModelId = modelId;
         TypeId = typeId;
         Version = typeVersion;
     }
@@ -56,20 +64,9 @@ public class CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, IConvertibl
         return new CkTypeId(value);
     }
 
-    public int CompareTo(CkTypeId? other)
+    public int CompareTo(CkTypeId other)
     {
-        if (other == null)
-        {
-            return 1;
-        }
-
-        var result = String.Compare(ModelId, other.ModelId, StringComparison.Ordinal);
-        if (result != 0)
-        {
-            return result;
-        }
-
-        result = String.Compare(TypeId, other.TypeId, StringComparison.Ordinal);
+        var result = String.Compare(TypeId, other.TypeId, StringComparison.Ordinal);
         if (result != 0)
         {
             return result;
@@ -78,14 +75,9 @@ public class CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, IConvertibl
         return Version.CompareTo(other.Version);
     }
 
-    public bool Equals(CkTypeId? other)
+    public bool Equals(CkTypeId other)
     {
-        if (other == null)
-        {
-            return false;
-        }
-        
-        return ModelId == other.ModelId && TypeId == other.TypeId && Equals(Version, other.Version);
+        return TypeId == other.TypeId && Equals(Version, other.Version);
     }
 
     public TypeCode GetTypeCode()
@@ -150,7 +142,7 @@ public class CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, IConvertibl
 
     public string ToString(IFormatProvider? provider)
     {
-        return $"{ModelId}/{TypeId}-{Version}";
+        return FullName;
     }
 
     public object ToType(Type conversionType, IFormatProvider? provider)
@@ -158,7 +150,7 @@ public class CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, IConvertibl
         switch (Type.GetTypeCode(conversionType))
         {
             case TypeCode.String:
-                return ((IConvertible)this).ToString(provider);
+                return ToString(provider);
             case TypeCode.Object:
                 if (conversionType == typeof(object) || conversionType == typeof(OctoObjectId))
                 {
@@ -192,7 +184,7 @@ public class CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, IConvertibl
     /// <returns>A string representation of the value.</returns>
     public override string ToString()
     {
-        return $"{ModelId}.{TypeId}-{Version}";
+        return FullName;
     }
 
     public override bool Equals(object? obj)
@@ -204,7 +196,7 @@ public class CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, IConvertibl
         
         var other = (CkTypeId)obj;
         
-        return ModelId == other.ModelId && TypeId == other.TypeId && Version == other.Version;
+        return TypeId == other.TypeId && Version == other.Version;
     }
 
     public override int GetHashCode()
@@ -212,10 +204,19 @@ public class CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, IConvertibl
         unchecked
         {
             int hash = 17;
-            hash = hash * 23 + (ModelId?.GetHashCode() ?? 0);
-            hash = hash * 23 + (TypeId?.GetHashCode() ?? 0);
-            hash = hash * 23 + (Version?.GetHashCode() ?? 0);
+            hash = hash * 23 + TypeId.GetHashCode();
+            hash = hash * 23 + Version.GetHashCode();
             return hash;
         }
+    }
+    
+    public static bool operator ==(CkTypeId p1, CkTypeId p2)
+    {
+        return p1.Equals(p2);
+    }
+
+    public static bool operator !=(CkTypeId p1, CkTypeId p2)
+    {
+        return !p1.Equals(p2);
     }
 }

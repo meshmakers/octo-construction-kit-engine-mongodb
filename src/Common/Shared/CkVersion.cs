@@ -2,7 +2,7 @@ using System;
 
 namespace Meshmakers.Octo.Common.Shared;
 
-public class CkVersion : IComparable<CkVersion>, IEquatable<CkVersion>
+public readonly struct CkVersion : IComparable<CkVersion>, IEquatable<CkVersion>
 {
     public CkVersion(string version)
     {
@@ -22,16 +22,12 @@ public class CkVersion : IComparable<CkVersion>, IEquatable<CkVersion>
         return new CkVersion(value);
     }
     
-    public int Major { get; init; }
-    public int Minor { get; init; }
-    public int Revision { get; init; }
+    public int Major { get; }
+    public int Minor { get; }
+    public int Revision { get; }
     
-    public int CompareTo(CkVersion? other)
+    public int CompareTo(CkVersion other)
     {
-        if (other == null)
-        {
-            return 1;
-        }
         
         if (Major != other.Major)
         {
@@ -51,12 +47,8 @@ public class CkVersion : IComparable<CkVersion>, IEquatable<CkVersion>
         return 0;
     }
 
-    public bool Equals(CkVersion? other)
+    public bool Equals(CkVersion other)
     {
-        if (other == null)
-        {
-            return false;
-        }
         return Major == other.Major && Minor == other.Minor && Revision == other.Revision;
     }
     
@@ -69,7 +61,6 @@ public class CkVersion : IComparable<CkVersion>, IEquatable<CkVersion>
         return $"{Major}.{Minor}.{Revision}";
     }
 
-    
     public override bool Equals(object? obj)
     {
         if (obj == null)
@@ -92,5 +83,15 @@ public class CkVersion : IComparable<CkVersion>, IEquatable<CkVersion>
             hash = hash * 25 + Revision.GetHashCode();
             return hash;
         }
+    }
+    
+    public static bool operator ==(CkVersion p1, CkVersion p2)
+    {
+        return p1.Equals(p2);
+    }
+
+    public static bool operator !=(CkVersion p1, CkVersion p2)
+    {
+        return !p1.Equals(p2);
     }
 }

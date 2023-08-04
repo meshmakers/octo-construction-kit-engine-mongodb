@@ -1,6 +1,5 @@
 using System.Collections.Generic;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
+using System.Text.Json.Serialization;
 
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
@@ -9,7 +8,7 @@ public class CkEntityAttributeDto
     public string? AttributeId { get; init; }
     public string? AttributeName { get; init; }
 
-    [JsonConverter(typeof(StringEnumConverter), typeof(ConstantCaseNamingStrategy))]
+    [JsonConverter(typeof(JsonStringEnumConverter))]
     public AttributeValueTypesDto AttributeValueType { get; init; }
 
     public bool IsAutoCompleteEnabled { get; init; }

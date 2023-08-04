@@ -14,10 +14,7 @@ $jsonEntities = $base.entities + $query.entities + $servicehook.entities
 # Create a new object and combine the properties from each JSON
 Write-Host "Merging JSON files..."
 $mergedJson = [PSCustomObject]@{
-    name = @{
-        id= "System" 
-        version= "1.0.0"
-    }
+    modelId = "System-1.0.0"
     associationRoles = $jsonAssocs.associationRoles
     attributes = $jsonAttributes.attributes
     entities = $jsonEntities

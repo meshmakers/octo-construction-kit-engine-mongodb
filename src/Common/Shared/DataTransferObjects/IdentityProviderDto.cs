@@ -1,7 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
-using JsonSubTypes;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
+using System.Text.Json.Serialization;
 using static Meshmakers.Octo.Common.Shared.DataTransferObjects.ValidationConstants;
 
 // ReSharper disable MemberCanBePrivate.Global
@@ -12,18 +10,12 @@ namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 /// <summary>
 ///     Data Transfer Object of a Octo identity provider
 /// </summary>
-[System.Text.Json.Serialization.JsonPolymorphic(TypeDiscriminatorPropertyName = TypeJsonName)]
-[System.Text.Json.Serialization.JsonDerivedType(typeof(GoogleIdentityProviderDto), (int)IdentityProviderTypesDto.Google)]
-[System.Text.Json.Serialization.JsonDerivedType(typeof(MicrosoftIdentityProviderDto), (int)IdentityProviderTypesDto.Microsoft)]
-[System.Text.Json.Serialization.JsonDerivedType(typeof(AzureAdProviderDto), (int)IdentityProviderTypesDto.MicrosoftAzureAd)]
-[System.Text.Json.Serialization.JsonDerivedType(typeof(MicrosoftAdProviderDto), (int)IdentityProviderTypesDto.MicrosoftActiveDirectory)]
-[System.Text.Json.Serialization.JsonDerivedType(typeof(OpenLdapProviderDto), (int)IdentityProviderTypesDto.OpenLdap)]
-// [JsonConverter(typeof(JsonSubtypes), TypeJsonName)]
-// [JsonSubtypes.KnownSubTypeAttribute(typeof(GoogleIdentityProviderDto), IdentityProviderTypesDto.Google)]
-// [JsonSubtypes.KnownSubTypeAttribute(typeof(MicrosoftIdentityProviderDto), IdentityProviderTypesDto.Microsoft)]
-// [JsonSubtypes.KnownSubTypeAttribute(typeof(AzureAdProviderDto), IdentityProviderTypesDto.MicrosoftAzureAd)]
-// [JsonSubtypes.KnownSubTypeAttribute(typeof(MicrosoftAdProviderDto), IdentityProviderTypesDto.MicrosoftActiveDirectory)]
-// [JsonSubtypes.KnownSubTypeAttribute(typeof(OpenLdapProviderDto), IdentityProviderTypesDto.OpenLdap)]
+[JsonPolymorphic(TypeDiscriminatorPropertyName = TypeJsonName)]
+[JsonDerivedType(typeof(GoogleIdentityProviderDto), (int)IdentityProviderTypesDto.Google)]
+[JsonDerivedType(typeof(MicrosoftIdentityProviderDto), (int)IdentityProviderTypesDto.Microsoft)]
+[JsonDerivedType(typeof(AzureAdProviderDto), (int)IdentityProviderTypesDto.MicrosoftAzureAd)]
+[JsonDerivedType(typeof(MicrosoftAdProviderDto), (int)IdentityProviderTypesDto.MicrosoftActiveDirectory)]
+[JsonDerivedType(typeof(OpenLdapProviderDto), (int)IdentityProviderTypesDto.OpenLdap)]
 public class IdentityProviderDto
 {
     /// <summary>
@@ -34,10 +26,10 @@ public class IdentityProviderDto
     /// <summary>
     ///     The source type of the identity provider (e.g. AzureAD, OpenLDAP ...).
     /// </summary>
-    [JsonConverter(typeof(StringEnumConverter))]
+    [JsonConverter(typeof(JsonStringEnumConverter))]
     [Required]
-    [JsonProperty(TypeJsonName)]
-    [System.Text.Json.Serialization.JsonPropertyOrder(-5)]
+    [JsonPropertyName(TypeJsonName)]
+    [JsonPropertyOrder(-5)]
     public IdentityProviderTypesDto Type { get; set; }
 
     /// <summary>

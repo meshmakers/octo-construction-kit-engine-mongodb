@@ -1,20 +1,22 @@
 ﻿using System.Collections.Generic;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
+using System.Diagnostics;
+using System.Text.Json.Serialization;
+// ReSharper disable UnusedAutoPropertyAccessor.Global
 
 namespace Meshmakers.Octo.Common.Shared.Exchange;
 
+[DebuggerDisplay("{" + nameof(AttributeId) + "}")]
 public class CkAttribute
 {
-    [JsonProperty("id")] [JsonRequired] public string AttributeId { get; set; } = null!;
+    [JsonPropertyName("id")] [JsonRequired] public CkAttributeId AttributeId { get; set; }
 
-    [JsonProperty("valueType")]
-    [JsonConverter(typeof(StringEnumConverter))]
+    [JsonPropertyName("valueType")]
+    [JsonConverter(typeof(JsonStringEnumConverter))]
     public AttributeValueTypes ValueType { get; set; }
 
-    [JsonProperty("defaultValue")] public object? DefaultValue { get; set; }
+    [JsonPropertyName("defaultValue")] public object? DefaultValue { get; set; }
 
-    [JsonProperty("defaultValues")] public ICollection<object>? DefaultValues { get; set; }
+    [JsonPropertyName("defaultValues")] public ICollection<object>? DefaultValues { get; set; }
 
-    [JsonProperty("selectionValues")] public ICollection<CkSelectionValue>? SelectionValues { get; set; }
+    [JsonPropertyName("selectionValues")] public ICollection<CkSelectionValue>? SelectionValues { get; set; }
 }

@@ -8,6 +8,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\CkModel\CkModel.csproj" />
+      <ProjectReference Include="..\Persistence.IdentityCkModel\Persistence.IdentityCkModel.csproj" />
       <ProjectReference Include="..\Persistence.InternalContracts\Persistence.InternalContracts.csproj" />
       <ProjectReference Include="..\Persistence.SystemCkModel\Persistence.SystemCkModel.csproj" />
     </ItemGroup>

@@ -1,5 +1,7 @@
 ﻿using System.Collections.Generic;
-using Newtonsoft.Json;
+using System.Text.Json.Serialization;
+// ReSharper disable AutoPropertyCanBeMadeGetOnly.Global
+// ReSharper disable UnusedAutoPropertyAccessor.Global
 
 namespace Meshmakers.Octo.Common.Shared.Exchange;
 
@@ -7,20 +9,26 @@ public class CkModelRoot
 {
     public CkModelRoot()
     {
-        CkDependencies = new List<CkModelDependency>();
+        CkDependencies = new List<CkModelId>();
         CkEntities = new List<CkEntity>();
         CkAssociationRoles = new List<CkAssociationRole>();
         CkAttributes = new List<CkAttribute>();
     }
-    
+
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
     [JsonRequired]
-    public CkModelId ModelId { get; set; } = null!;
-    
-    [JsonProperty("dependencies")] public List<CkModelDependency> CkDependencies { get; }
+    [JsonPropertyName("modelId")]
+    public CkModelId ModelId { get; set; }
 
-    [JsonProperty("entities")] public List<CkEntity> CkEntities { get; }
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
+    [JsonPropertyName("dependencies")] public List<CkModelId> CkDependencies { get; }
 
-    [JsonProperty("associationRoles")] public List<CkAssociationRole> CkAssociationRoles { get; }
+    // ReSharper disable once CollectionNeverUpdated.Global
+    [JsonPropertyName("entities")] public List<CkEntity> CkEntities { get; set; }
 
-    [JsonProperty("attributes")] public List<CkAttribute> CkAttributes { get; }
+    // ReSharper disable once CollectionNeverUpdated.Global
+    [JsonPropertyName("associationRoles")] public List<CkAssociationRole> CkAssociationRoles { get; set; }
+
+    // ReSharper disable once CollectionNeverUpdated.Global
+    [JsonPropertyName("attributes")] public List<CkAttribute> CkAttributes { get; set; }
 }

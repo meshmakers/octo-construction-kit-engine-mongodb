@@ -1,8 +1,14 @@
 ﻿using System.Collections.Generic;
-using Newtonsoft.Json;
+using System.Diagnostics;
+using System.Text.Json.Serialization;
+using Persistence.Contracts;
+
+// ReSharper disable AutoPropertyCanBeMadeGetOnly.Global
+// ReSharper disable UnusedAutoPropertyAccessor.Global
 
 namespace Meshmakers.Octo.Common.Shared.Exchange;
 
+[DebuggerDisplay("{" + nameof(CkId) + "}")]
 public class CkEntity
 {
     public CkEntity()
@@ -12,23 +18,28 @@ public class CkEntity
         Indexes = new List<CkEntityIndexDto>();
     }
 
-    [JsonProperty("ckId")] [JsonRequired] public CkTypeId CkId { get; set; } = null!;
+    [JsonPropertyName("ckId")]
+    [JsonRequired]
+    public CkTypeId CkId { get; set; }
 
-    [JsonProperty("ckDerivedId")] public CkTypeId? CkDerivedId { get; set; }
+    [JsonPropertyName("ckDerivedId")]
+    [JsonConverter(typeof(CkIdTypeIdConverter))]
+    public CkId<CkTypeId>? CkDerivedId { get; set; }
 
-    [JsonProperty("isFinal")] public bool IsFinal { get; set; }
+    [JsonPropertyName("isFinal")] public bool IsFinal { get; set; }
 
-    [JsonProperty("isAbstract")] public bool IsAbstract { get; set; } 
+    [JsonPropertyName("isAbstract")] public bool IsAbstract { get; set; }
 
 
-    [JsonProperty("attributes")] public List<CkEntityAttribute> Attributes { get; }
+    [JsonPropertyName("attributes")] public List<CkEntityAttribute> Attributes { get; set; }
 
-    [JsonProperty("indexes")] public List<CkEntityIndexDto>? Indexes { get; }
+    [JsonPropertyName("indexes")] public List<CkEntityIndexDto>? Indexes { get; set; }
 
-    [JsonProperty("associations")] public List<CkEntityAssociation>? Associations { get; }
-    
+    [JsonPropertyName("associations")] public List<CkEntityAssociation>? Associations { get; set; }
+
     /// <summary>
     /// Gets or sets if the change stream should include pre and post images
     /// </summary>
-    [JsonProperty("enableChangeStreamPreAndPostImages")] public bool EnableChangeStreamPreAndPostImages { get; set; }
+    [JsonPropertyName("enableChangeStreamPreAndPostImages")]
+    public bool EnableChangeStreamPreAndPostImages { get; set; }
 }

@@ -1,4 +1,5 @@
 using Meshmakers.Octo.Common.Shared;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
@@ -8,29 +9,14 @@ public interface ICkEntityAssociation
     ///     Returns the mongodb ID
     /// </summary>
     OctoObjectId AssociationId { get; set; }
-
-    CkTypeId OriginCkId { get; set; }
-    CkTypeId TargetCkId { get; set; }
-
+    
     /// <summary>
-    ///     Name of the association for inbound references (e. g. Parent)
+    /// Returns the corresponding role Id
     /// </summary>
-    string InboundName { get; set; }
+    CkId<CkAssociationId> RoleId { get; set; }
 
-    /// <summary>
-    ///     Name of the association for outbound references (e. g. Children)
-    /// </summary>
-    string OutboundName { get; set; }
 
-    /// <summary>
-    ///     Multiplicity of the inbound association
-    /// </summary>
-    Multiplicities InboundMultiplicity { get; set; }
-
-    /// <summary>
-    ///     Multiplicity of the outbound association
-    /// </summary>
-    Multiplicities OutboundMultiplicity { get; set; }
-
-    string RoleId { get; set; }
+    CkId<CkTypeId> OriginCkId { get; set; }
+    
+    CkId<CkTypeId> TargetCkId { get; set; }
 }

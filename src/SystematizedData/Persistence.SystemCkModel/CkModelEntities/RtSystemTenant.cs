@@ -6,7 +6,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.CkModelEntities;
 /// <summary>
 /// Represents a tenant in the system.
 /// </summary>
-[CkId(SystemCkModel.SystemTenantCkId)]
+[CkId(SystemCkModel.SystemCkModelId, SystemCkModel.SystemTenantCkId)]
 public class RtSystemTenant : RtEntity
 {
     /// <summary>

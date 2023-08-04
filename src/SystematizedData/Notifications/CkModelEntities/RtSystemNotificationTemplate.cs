@@ -3,7 +3,7 @@ using Meshmakers.Octo.SystematizedData.Persistence.SystemStores;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.CkModelEntities;
 
-[CkId(NotificationCkModel.SystemNotificationTemplate)]
+[CkId(NotificationCkModel.SystemCkModelId, NotificationCkModel.SystemNotificationTemplate)]
 public class RtSystemNotificationTemplate : RtEntity
 {
     public string? SubjectTemplate
