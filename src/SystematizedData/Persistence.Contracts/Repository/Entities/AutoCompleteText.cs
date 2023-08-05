@@ -1,6 +1,6 @@
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-public class AutoCompleteText : IAutoCompleteText
+public class AutoCompleteText 
 {
    public int OccurrenceCount { get; set; }
 

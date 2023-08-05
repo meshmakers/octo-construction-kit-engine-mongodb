@@ -9,7 +9,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine.Cach
 [DebuggerDisplay("{" + nameof(AttributeId) + "}")]
 public class AttributeCacheItem : IAttributeCacheItem
 {
-    public AttributeCacheItem(string attributeName, ICkEntityAttribute ckEntityAttribute, ICkAttribute ckAttribute)
+    public AttributeCacheItem(string attributeName, CkEntityAttribute ckEntityAttribute, CkAttribute ckAttribute)
     {
         AttributeName = attributeName;
         AttributeId = ckAttribute.AttributeId;
@@ -42,5 +42,5 @@ public class AttributeCacheItem : IAttributeCacheItem
     public object? DefaultValue { get; }
 
     public ICollection<object>? DefaultValues { get; }
-    public ICollection<ICkSelectionValue>? SelectionValues { get; }
+    public ICollection<CkSelectionValue>? SelectionValues { get; }
 }

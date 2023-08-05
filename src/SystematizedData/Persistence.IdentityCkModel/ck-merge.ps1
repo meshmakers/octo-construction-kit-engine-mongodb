@@ -8,15 +8,9 @@ $jsonEntities = $json5.entities
 # Create a new object and combine the properties from each JSON
 Write-Host "Merging JSON files..."
 $mergedJson = [PSCustomObject]@{
-    name = @{
-        id= "System.Identity"
-        version= "1.0.0"
-    }
+    modelId = "System.Identity-1.0.0"
     dependencies = @(
-        @{
-            id= "System"
-            version= "^1.0.0"
-        }
+        "System-1.0.0"
     )
     associationRoles = $json1.associationRoles
     attributes = $json2.attributes

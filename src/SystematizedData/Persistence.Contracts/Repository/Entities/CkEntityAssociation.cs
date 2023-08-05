@@ -5,7 +5,7 @@ using Persistence.Contracts;
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 [DebuggerDisplay("{" + nameof(AssociationId) + "} -> {" + nameof(TargetCkId) + "}")]
-public class CkEntityAssociation : ICkEntityAssociation
+public class CkEntityAssociation 
 {
     /// <summary>
     ///     Returns the mongodb ID

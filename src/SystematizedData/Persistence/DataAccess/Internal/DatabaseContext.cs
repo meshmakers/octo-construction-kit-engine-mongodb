@@ -54,14 +54,14 @@ internal sealed class DatabaseContext : IDatabaseContext
 
     public async Task<IOctoSession> StartSessionAsync()
     {
-        var session = await _repository.StartSessionAsync();
+        var session = await _repositoryClient.StartSessionAsync();
         return session;
     }
 
 
     public IOctoSession StartSession()
     {
-        var session = _repository.StartSession();
+        var session = _repositoryClient.StartSession();
         return session;
     }
 
@@ -167,7 +167,7 @@ internal sealed class DatabaseContext : IDatabaseContext
                 x => x.OriginCkId,
                 x => x.TargetCkId,
                 x => x.CkId,
-                (ICkTypeInfo x) => x.BaseTypes, (ICkBaseTypeInfo i) => i.BaseTypeDepthIndex)
+                (CkTypeInfo x) => x.BaseTypes, (CkBaseTypeInfo i) => i.BaseTypeDepthIndex)
             .Lookup<CkTypeInfo, CkTypeInfo>(_repository.GetCollectionName<CkEntityAssociation>(),
                 "baseTypes.originCkId",
                 "originCkId",

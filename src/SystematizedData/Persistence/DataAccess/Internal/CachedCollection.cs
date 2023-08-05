@@ -61,7 +61,7 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
     }
 
     public async Task CreateTextIndexAsync(string name, string language,
-        IEnumerable<ICkIndexFields> fields)
+        IEnumerable<CkIndexFields> fields)
     {
         ArgumentValidation.ValidateString(nameof(name), name);
         ArgumentValidation.ValidateString(nameof(language), language);

@@ -3,7 +3,7 @@ using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-public class RtAssociation : IRtAssociation
+public class RtAssociation
 {
     /// <summary>
     ///     Returns the mongodb ID

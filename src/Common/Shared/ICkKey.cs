@@ -14,4 +14,9 @@ public interface ICkKey : IConvertible
     /// Major version is included except for major version 1
     /// </summary>
     string SemanticVersionedFullName { get; }
+    
+    /// <summary>
+    /// Returns true, if the key is empty.
+    /// </summary>
+    bool IsEmpty { get; }
 }

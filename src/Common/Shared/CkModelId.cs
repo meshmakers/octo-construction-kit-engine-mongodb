@@ -45,12 +45,17 @@ public readonly struct CkModelId : IComparable<CkModelId>, IEquatable<CkModelId>
     public CkVersion ModelVersion { get; }
 
     // ReSharper disable once MemberCanBePrivate.Global
-    public string FullName => $"{ModelId}-{ModelVersion}";
+    public string FullName => IsEmpty ? "" : $"{ModelId}-{ModelVersion}";
 
     public string SemanticVersionedFullName
     {
         get
         {
+            if (IsEmpty)
+            {
+                return "";
+            }
+            
             var s = ModelId;
             if (ModelVersion.Major > 1)
             {
@@ -60,6 +65,8 @@ public readonly struct CkModelId : IComparable<CkModelId>, IEquatable<CkModelId>
             return s;
         }
     }
+    
+    public bool IsEmpty => string.IsNullOrWhiteSpace(ModelId);
 
     public TypeCode GetTypeCode()
     {

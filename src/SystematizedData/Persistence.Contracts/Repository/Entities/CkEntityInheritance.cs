@@ -3,7 +3,7 @@ using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-public class CkEntityInheritance : ICkEntityInheritance
+public class CkEntityInheritance 
 {
     /// <summary>
     ///     Returns the mongodb ID

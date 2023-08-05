@@ -16,5 +16,5 @@ public interface IAttributeCacheItem
     AttributeValueTypes AttributeValueType { get; }
     object? DefaultValue { get; }
     ICollection<object>? DefaultValues { get; }
-    ICollection<ICkSelectionValue>? SelectionValues { get; }
+    ICollection<CkSelectionValue>? SelectionValues { get; }
 }

@@ -31,10 +31,10 @@ public interface ITenantRepository
 
     #region Data query
 
-    Task<IResultSet<ICkAttribute>> GetCkAttributesAsync(IOctoSession session, IReadOnlyList<string> attributeIds,
+    Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session, IReadOnlyList<string> attributeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
 
-    Task<IResultSet<ICkEntity>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<CkTypeId> ckIds,
+    Task<IResultSet<CkEntity>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<CkTypeId> ckIds,
         DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null);
 
@@ -147,7 +147,7 @@ public interface ITenantRepository
         CancellationToken cancellationToken = default)
         where TOriginEntity : RtEntity, new() where TTargetEntity : RtEntity, new();
 
-    Task<IEnumerable<IAutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session, CkId<CkTypeId> ckId,
+    Task<IEnumerable<AutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session, CkId<CkTypeId> ckId,
         string attributeName,
         string regexFilterValue, int takeCount);
 

@@ -3,14 +3,12 @@ using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-public class CkBaseTypeInfo : ICkBaseTypeInfo
+public class CkBaseTypeInfo 
 {
     /// <summary>
     ///     Returns the mongodb ID
     /// </summary>
     public OctoObjectId InheritanceId { get; set; }
-
-    public ScopeIds ScopeId { get; set; }
 
     public CkId<CkTypeId> OriginCkId { get; set; }
 

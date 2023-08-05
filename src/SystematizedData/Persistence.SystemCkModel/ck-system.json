@@ -1,0 +1,242 @@
+{
+  "modelId": "System-1.0.0",
+  "associationRoles": [
+    {
+      "id": "ParentChild",
+      "inboundName": "Parent",
+      "outboundName": "Children",
+      "inboundMultiplicity": "N",
+      "outboundMultiplicity": "N"
+    },
+    {
+      "id": "Related",
+      "inboundName": "RelatesTo",
+      "outboundName": "RelatesFrom",
+      "inboundMultiplicity": "N",
+      "outboundMultiplicity": "N"
+    }
+  ],
+  "attributes": [
+    {
+      "id": "Name",
+      "valueType": "String"
+    },
+    {
+      "id": "Enabled",
+      "valueType": "Boolean"
+    },
+    {
+      "id": "Description",
+      "valueType": "String"
+    },
+    {
+      "id": "Contacts.FirstName",
+      "valueType": "String"
+    },
+    {
+      "id": "Contacts.LastName",
+      "valueType": "String"
+    },
+    {
+      "id": "TenantId",
+      "valueType": "String"
+    },
+    {
+      "id": "DatabaseName",
+      "valueType": "String"
+    },
+    {
+      "id": "AutoIncrement.Start",
+      "valueType": "Int"
+    },
+    {
+      "id": "AutoIncrement.End",
+      "valueType": "Int"
+    },
+    {
+      "id": "AutoIncrement.CurrentValue",
+      "valueType": "Int"
+    },
+    {
+      "id": "ConfigurationValue",
+      "valueType": "String"
+    },
+    {
+      "id": "Query.Columns",
+      "valueType": "String"
+    },
+    {
+      "id": "Query.CkId",
+      "valueType": "String"
+    },
+    {
+      "id": "Query.Sorting",
+      "valueType": "String"
+    },
+    {
+      "id": "Query.FieldFilter",
+      "valueType": "String"
+    },
+    {
+      "id": "Query.TextSearchFilter",
+      "valueType": "String"
+    },
+    {
+      "id": "Query.AttributeSearchFilter",
+      "valueType": "String"
+    },
+    {
+      "id": "ServiceHook.Uri",
+      "valueType": "String"
+    },
+    {
+      "id": "ServiceHook.Action",
+      "valueType": "String"
+    },
+    {
+      "id": "ServiceHook.ApiKey",
+      "valueType": "String"
+    }
+  ],
+  "entities": [
+    {
+      "ckId": "Entity",
+      "isFinal": false,
+      "isAbstract": true
+    },
+    {
+      "ckId": "AutoIncrement",
+      "ckDerivedId": "System/Entity",
+      "isFinal": false,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System/AutoIncrement.Start",
+          "name": "Start"
+        },
+        {
+          "id": "System/AutoIncrement.End",
+          "name": "End"
+        },
+        {
+          "id": "System/AutoIncrement.CurrentValue",
+          "name": "CurrentValue"
+        }
+      ]
+    },
+    {
+      "ckId": "Tenant",
+      "ckDerivedId": "System/Entity",
+      "isFinal": true,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System/TenantId",
+          "name": "TenantId"
+        },
+        {
+          "id": "System/DatabaseName",
+          "name": "DatabaseName"
+        }
+      ],
+      "indexes": [
+        {
+          "indexType": "Ascending",
+          "fields": [
+            {
+              "attributeNames": [
+                "TenantId"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ckId": "Configuration",
+      "ckDerivedId": "System/Entity",
+      "isFinal": true,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System/ConfigurationValue",
+          "name": "ConfigurationValue"
+        }
+      ]
+    },
+    {
+      "ckId": "Query",
+      "ckDerivedId": "System/Entity",
+      "isFinal": false,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System/Query.CkId",
+          "name": "QueryCkId"
+        },
+        {
+          "id": "System/Query.Columns",
+          "name": "Columns"
+        },
+        {
+          "id": "System/Query.Sorting",
+          "name": "Sorting"
+        },
+        {
+          "id": "System/Query.FieldFilter",
+          "name": "FieldFilter"
+        },
+        {
+          "id": "System/Query.TextSearchFilter",
+          "name": "TextSearchFilter"
+        },
+        {
+          "id": "System/Query.AttributeSearchFilter",
+          "name": "AttributeSearchFilter"
+        },
+        {
+          "id": "System/Name",
+          "name": "Name"
+        }
+      ],
+      "associations": []
+    },
+    {
+      "ckId": "ServiceHook",
+      "ckDerivedId": "System/Entity",
+      "isFinal": false,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "System/Enabled",
+          "name": "Enabled"
+        },
+        {
+          "id": "System/Query.CkId",
+          "name": "QueryCkId"
+        },
+        {
+          "id": "System/Query.FieldFilter",
+          "name": "FieldFilter"
+        },
+        {
+          "id": "System/Name",
+          "name": "Name"
+        },
+        {
+          "id": "System/ServiceHook.Uri",
+          "name": "ServiceHookBaseUri"
+        },
+        {
+          "id": "System/ServiceHook.Action",
+          "name": "ServiceHookAction"
+        },
+        {
+          "id": "System/ServiceHook.ApiKey",
+          "name": "ServiceHookApiKey"
+        }
+      ],
+      "associations": []
+    }
+  ]
+}

@@ -115,7 +115,20 @@ internal class TenantRepository : ITenantRepositoryInternal
     public async Task InsertOneRtEntityAsync<TEntity>(IOctoSession session, TEntity rtEntity) where TEntity : RtEntity, new()
     {
         var rtCollection = _databaseContext.GetRtCollection<TEntity>();
+        PrepareEntityForModification<TEntity>(rtEntity);
         await rtCollection.InsertAsync(session, rtEntity);
+    }
+
+    private void PrepareEntityForModification<TEntity>(TEntity rtEntity) where TEntity : RtEntity, new()
+    {
+        rtEntity.RtChangedDateTime = DateTime.Now;
+        if (!rtEntity.RtCreationDateTime.HasValue)
+        {
+            rtEntity.RtCreationDateTime = rtEntity.RtChangedDateTime;
+        }
+        if (string.IsNullOrWhiteSpace(rtEntity.CkId.FullName)) {
+            rtEntity.CkId = rtEntity.GetCkId();
+        }
     }
 
     public async Task ReplaceOneRtEntityByIdAsync(IOctoSession session, CkId<CkTypeId> ckId, OctoObjectId rtId, RtEntity rtEntity)
@@ -164,7 +177,7 @@ internal class TenantRepository : ITenantRepositoryInternal
 
     #region Data query
 
-    public async Task<IResultSet<ICkAttribute>> GetCkAttributesAsync(IOctoSession session,
+    public async Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session,
         IReadOnlyList<string> attributeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
@@ -185,7 +198,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         return new ResultSet<CkAttribute>(resultSet, totalCount);
     }
 
-    public async Task<IResultSet<ICkEntity>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<CkTypeId> ckIds,
+    public async Task<IResultSet<CkEntity>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<CkTypeId> ckIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var resultSet = new List<CkEntity>();
@@ -719,7 +732,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         return SubscribeToRtAssociations(originCkId, targetCkId, updateStreamFilter, cancellationToken);
     }
 
-    public async Task<IEnumerable<IAutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session,
+    public async Task<IEnumerable<AutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session,
         CkId<CkTypeId> ckId,
         string attributeName, string regexFilterValue, int takeCount)
     {

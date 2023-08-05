@@ -88,8 +88,6 @@ public class ImportCkModelCommand : IImportCkModelCommand
             });
             await ExecuteImport(session, model, transientCkModel, ckModelRepository, cancellationToken);
 
-            await session.CommitTransactionAsync();
-
             Logger.Info("Import of CK model completed.");
         }
         catch (Exception e)
@@ -312,7 +310,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
                 AttributeId = new CkId<CkAttributeId>(model.ModelId, modelCkAttribute.AttributeId),
                 AttributeValueType = (AttributeValueTypes)modelCkAttribute.ValueType,
                 SelectionValues = modelCkAttribute.SelectionValues?.Select(sv => new CkSelectionValue
-                    { Key = sv.Key, Name = sv.Name }).ToList<ICkSelectionValue>(),
+                    { Key = sv.Key, Name = sv.Name }).ToList(),
                 DefaultValue = modelCkAttribute.DefaultValue,
                 DefaultValues = modelCkAttribute.DefaultValues
             };

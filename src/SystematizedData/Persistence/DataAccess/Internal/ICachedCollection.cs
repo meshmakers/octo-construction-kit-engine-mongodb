@@ -11,7 +11,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 public interface ICachedCollection<TDocument> where TDocument : class, new()
 {
     Task CreateAscendingIndexAsync(string name, IEnumerable<string> fields);
-    Task CreateTextIndexAsync(string name, string language, IEnumerable<ICkIndexFields> fields);
+    Task CreateTextIndexAsync(string name, string language, IEnumerable<CkIndexFields> fields);
     Task DropIndexAsync(string name);
 
     Task<TDocument> FindSingleOrDefaultAsync(IOctoSession session, Expression<Func<TDocument, bool>> expression);

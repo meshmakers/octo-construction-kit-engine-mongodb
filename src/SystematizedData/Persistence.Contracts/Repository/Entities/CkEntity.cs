@@ -8,7 +8,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 ///     Represents a definition of a construction kit type
 /// </summary>
 [DebuggerDisplay("{" + nameof(CkId) + "}")]
-public class CkEntity : ICkEntity
+public class CkEntity 
 {
     /// <summary>
     ///     Constructor

@@ -6,7 +6,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 /// <summary>
 ///     Represents an entity, based on information of the construction kit type
 /// </summary>
-public class RtEntity : IRtEntity2
+public class RtEntity
 {
     // ReSharper disable once FieldCanBeMadeReadOnly.Local
     private Dictionary<string, object?> _attributes;

@@ -4,10 +4,10 @@ namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 public interface ISystemContext : ITenantContext
 {
-    Task<bool> IsSystemDatabaseExistingAsync();
+    Task<bool> IsSystemTenantExistingAsync();
 
-    Task CreateSystemDatabaseAsync();
-    Task ClearSystemDatabaseAsync();
-    Task DropSystemDatabaseAsync();
+    Task CreateSystemTenantAsync();
+    Task ClearSystemTenantAsync();
+    Task DeleteSystemTenantAsync();
 
 }

@@ -17,12 +17,17 @@ public readonly struct CkAttributeId : IComparable<CkAttributeId>, IEquatable<Ck
 
     public CkVersion Version { get; }
 
-    public string FullName => $"{AttributeId}-{Version}";
-    
+    public string FullName => IsEmpty ? "" : $"{AttributeId}-{Version}";
+
     public string SemanticVersionedFullName
     {
         get
         {
+            if (IsEmpty)
+            {
+                return "";
+            }
+            
             var s = AttributeId;
             if (Version.Major > 1)
             {
@@ -32,6 +37,8 @@ public readonly struct CkAttributeId : IComparable<CkAttributeId>, IEquatable<Ck
             return s;
         }
     }
+    
+    public bool IsEmpty => string.IsNullOrWhiteSpace(AttributeId);
     
     public CkAttributeId(string attributeId)
     {

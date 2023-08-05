@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using CkModel.CkRuleEngine;
+using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Microsoft.Extensions.Options;
@@ -16,64 +17,67 @@ public class SystemContext : TenantContext, ISystemContextInternal
 
     public SystemContext(IOptions<OctoSystemConfiguration> systemConfiguration,
         ICkCacheService ckCacheService, ICkSystemModelService ckSystemModelService)
-    : base(systemConfiguration, systemConfiguration.Value.SystemTenantId, systemConfiguration.Value.SystemDatabaseName, ckSystemModelService, ckCacheService)
+    : base(systemConfiguration, systemConfiguration.Value.SystemTenantId, systemConfiguration.Value.SystemDatabaseName.ToLower(), ckSystemModelService, ckCacheService)
     {
     }
 
     #region System database handling
 
     // ReSharper disable once MemberCanBePrivate.Global
-    public async Task CreateSystemDatabaseAsync()
+    public async Task CreateSystemTenantAsync()
     {
-        if (await IsSystemDatabaseExistingAsync())
+        if (await IsSystemTenantExistingAsync())
         {
             throw new DatabaseException("System database already exists.");
         }
 
+        var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
+        var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.MakeKey();
+
         try
         {
-            await _cacheService.DistributeTenantModificationPreEventAsync(_systemConfiguration.Value.SystemTenantId);
+            // Distribute updates (post) to inform other services.
+            await _cacheService.DistributeTenantModificationPreEventAsync(normalizedTenantId);
 
-            await _systemRepositoryClient.CreateRepositoryAsync(_systemConfiguration.Value.SystemDatabaseName);
-            await _systemRepositoryClient.CreateUser(_systemConfiguration.Value.AuthenticationDatabaseName,
-                _systemConfiguration.Value.SystemDatabaseName, string.Format(_systemConfiguration.Value.DatabaseUser, _systemConfiguration.Value.SystemDatabaseName),
-                _systemConfiguration.Value.DatabaseUserPassword);
             using var systemSession = await StartSystemSessionAsync();
             systemSession.StartTransaction();
+            
+            // Create database
+            await CreateTenantInternalAsync(normalizedDatabaseName);
 
-            var databaseContext = CreateSystemDatabaseContext();
-            var ckModelRepository = new TenantCkModelRepository(databaseContext);
-
+            // Restore the tenant system model on the newly created repository
+            var ckModelRepository = CreateTenantCkModelRepository();
             await _ckSystemModelService.ImportAsync(systemSession, ckModelRepository);
 
             await systemSession.CommitTransactionAsync();
             
-            await _cacheService.DistributeTenantModificationPostEventAsync(_systemConfiguration.Value.SystemTenantId);
+            // Distribute updates (post) to inform other services.
+            await _cacheService.DistributeTenantModificationPostEventAsync(normalizedTenantId);
         }
         catch (Exception)
         {
-            await _systemRepositoryClient.DropRepositoryAsync(_systemConfiguration.Value.SystemDatabaseName);
+            await _systemRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
             throw;
         }
     }
 
     // ReSharper disable once UnusedMember.Global
-    public async Task ClearSystemDatabaseAsync()
+    public async Task ClearSystemTenantAsync()
     {
-        if (!await IsSystemDatabaseExistingAsync())
+        if (!await IsSystemTenantExistingAsync())
         {
             throw new DatabaseException("System database does not exist.");
         }
 
-        await DropSystemDatabaseAsync();
-        await CreateSystemDatabaseAsync();
+        await DeleteSystemTenantAsync();
+        await CreateSystemTenantAsync();
     }
 
 
     // ReSharper disable once UnusedMember.Global
-    public async Task DropSystemDatabaseAsync()
+    public async Task DeleteSystemTenantAsync()
     {
-        if (!await IsSystemDatabaseExistingAsync())
+        if (!await IsSystemTenantExistingAsync())
         {
             throw new DatabaseException("System database does not exist.");
         }
@@ -85,21 +89,10 @@ public class SystemContext : TenantContext, ISystemContextInternal
     }
 
     // ReSharper disable once MemberCanBePrivate.Global
-    public async Task<bool> IsSystemDatabaseExistingAsync()
+    public async Task<bool> IsSystemTenantExistingAsync()
     {
         return await IsDatabaseAlreadyExistingAsync(_systemConfiguration.Value.SystemDatabaseName);
     }
 
     #endregion TenantId Context Handling
-
-    #region Private methods
-    
-
-    // ReSharper disable once UnusedMember.Global
-    private IDatabaseContext CreateSystemDatabaseContext()
-    {
-        return new DatabaseContext(_systemRepositoryClient, _systemConfiguration.Value.SystemDatabaseName);
-    }
-
-    #endregion Tenant handling
 }

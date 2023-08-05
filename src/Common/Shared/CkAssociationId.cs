@@ -17,12 +17,17 @@ public readonly struct CkAssociationId : IComparable<CkAssociationId>, IEquatabl
     
     public CkVersion Version { get; }
 
-    public string FullName => $"{AssociationId}-{Version}";
-    
+    public string FullName => IsEmpty ? "" : $"{AssociationId}-{Version}";
+
     public string SemanticVersionedFullName
     {
         get
         {
+            if (IsEmpty)
+            {
+                return "";
+            }
+            
             var s = AssociationId;
             if (Version.Major > 1)
             {
@@ -32,6 +37,8 @@ public readonly struct CkAssociationId : IComparable<CkAssociationId>, IEquatabl
             return s;
         }
     }
+
+    public bool IsEmpty => string.IsNullOrWhiteSpace(AssociationId);
 
     public CkAssociationId(string associationId)
     {

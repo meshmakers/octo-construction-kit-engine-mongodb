@@ -18,12 +18,17 @@ public readonly struct CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, I
     
     public CkVersion Version { get; }
 
-    public string FullName => $"{TypeId}-{Version}";
+    public string FullName => IsEmpty ? "" : $"{TypeId}-{Version}";
     
     public string SemanticVersionedFullName
     {
         get
         {
+            if (IsEmpty)
+            {
+                return "";
+            }
+            
             var s = TypeId;
             if (Version.Major > 1)
             {
@@ -33,6 +38,8 @@ public readonly struct CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, I
             return s;
         }
     }
+    
+    public bool IsEmpty => string.IsNullOrWhiteSpace(TypeId);
 
     public CkTypeId(string ckId)
     {
@@ -152,7 +159,7 @@ public readonly struct CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, I
             case TypeCode.String:
                 return ToString(provider);
             case TypeCode.Object:
-                if (conversionType == typeof(object) || conversionType == typeof(OctoObjectId))
+                if (conversionType == typeof(object))
                 {
                     return this;
                 }

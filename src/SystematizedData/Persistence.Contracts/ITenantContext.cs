@@ -11,6 +11,8 @@ public interface ITenantContext
 
     Task<IOctoSession> StartSystemSessionAsync();
 
+    Task<ITenantContext> CreateChildTenantContextAsync(string tenantId);
+
     Task CreateChildTenantAsync(IOctoSession systemSession, string databaseName, string tenantId);
 
     Task AttachChildTenantAsync(IOctoSession systemSession, string databaseName, string tenantId);
@@ -28,11 +30,9 @@ public interface ITenantContext
 
     Task<OctoTenant> GetChildTenantAsync(IOctoSession systemSession, string tenantId);
 
-    Task UpdateTenantSystemCkModelAsync(IOctoSession systemSession, string tenantId);
+    ITenantCkModelRepository CreateTenantCkModelRepository();
 
-    Task<ITenantCkModelRepository> CreateTenantCkModelRepository(IOctoSession systemSession, string tenantId);
-
-    Task<ITenantRepository> CreateOrGetTenantRepositoryAsync(string tenantId);
+    Task<ITenantRepository> CreateOrGetTenantRepositoryAsync();
 
     Task<TValueType?> GetConfigurationAsync<TValueType>(IOctoSession systemSession, string key,
         TValueType defaultValue) where

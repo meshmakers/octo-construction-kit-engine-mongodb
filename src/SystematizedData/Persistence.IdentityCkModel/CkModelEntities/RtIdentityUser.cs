@@ -1,3 +1,4 @@
+using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 namespace Persistence.IdentityCkModel.CkModelEntities;
@@ -5,6 +6,7 @@ namespace Persistence.IdentityCkModel.CkModelEntities;
 /// <summary>
 ///     Represents an user identity.
 /// </summary>
+[CkId(IdentityCkModel.SystemIdentityUser)]
 public class RtIdentityUser : RtEntity
 {
     /// <summary>

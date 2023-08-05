@@ -9,7 +9,6 @@ public interface IEntityCacheItem
     CkId<CkTypeId> CkId { get; }
     bool IsAbstract { get; }
     bool IsFinal { get; }
-    ScopeIds ScopeId { get; }
     IEntityCacheItem? BaseType { get; }
     IList<IEntityCacheItem> DerivedTypes { get; }
     IList<ITextSearchLanguageCacheItem> TextSearchLanguages { get; }

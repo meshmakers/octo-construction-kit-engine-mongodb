@@ -5,7 +5,7 @@ using Persistence.Contracts;
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 [DebuggerDisplay("{" + nameof(AttributeId) + "}")]
-public class CkEntityAttribute : ICkEntityAttribute
+public class CkEntityAttribute 
 {
     public CkId<CkAttributeId> AttributeId { get; set; }
 

@@ -9,12 +9,11 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine.Cach
 [DebuggerDisplay("{" + nameof(CkId) + "}")]
 public class EntityCacheItem : IEntityCacheItem
 {
-    public EntityCacheItem(ICkTypeInfo ckTypeInfo)
+    public EntityCacheItem(CkTypeInfo ckTypeInfo)
     {
         CkId = ckTypeInfo.CkId;
         IsFinal = ckTypeInfo.IsFinal;
         IsAbstract = ckTypeInfo.IsAbstract;
-        ScopeId = ckTypeInfo.ScopeId;
         DerivedTypes = new List<IEntityCacheItem>();
         Attributes = new Dictionary<string, IAttributeCacheItem>();
         TextSearchLanguages = new List<ITextSearchLanguageCacheItem>();
@@ -27,7 +26,6 @@ public class EntityCacheItem : IEntityCacheItem
 
     public bool IsAbstract { get; }
     public bool IsFinal { get; }
-    public ScopeIds ScopeId { get; }
 
     public IEntityCacheItem? BaseType { get; internal set; }
     public IList<IEntityCacheItem> DerivedTypes { get; }

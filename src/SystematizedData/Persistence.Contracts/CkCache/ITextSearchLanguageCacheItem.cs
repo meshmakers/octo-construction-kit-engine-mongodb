@@ -5,5 +5,5 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 public interface ITextSearchLanguageCacheItem
 {
     string Language { get; }
-    IList<ICkIndexFields> Fields { get; }
+    IList<CkIndexFields> Fields { get; }
 }

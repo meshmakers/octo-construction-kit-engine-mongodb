@@ -122,7 +122,7 @@ public class CkModelValidation
         }
     }
 
-    private static void ValidateTextSearchLanguage(CkEntity ckEntity, List<ICkEntityAttribute> attributes)
+    private static void ValidateTextSearchLanguage(CkEntity ckEntity, List<CkEntityAttribute> attributes)
     {
         var errorMessageStringBuilder = new StringBuilder();
 
@@ -183,10 +183,10 @@ public class CkModelValidation
         }
     }
 
-    private IEnumerable<ICkEntityAttribute> GetAllDerivedAttributes(IList<CkEntityInheritance> ckEntityInheritances,
+    private IEnumerable<CkEntityAttribute> GetAllDerivedAttributes(IList<CkEntityInheritance> ckEntityInheritances,
         IList<CkEntity> availableEntities, CkEntity ckEntity)
     {
-        var attributeList = new List<ICkEntityAttribute>();
+        var attributeList = new List<CkEntityAttribute>();
         var currentEntity = ckEntity;
         while (currentEntity != null)
         {

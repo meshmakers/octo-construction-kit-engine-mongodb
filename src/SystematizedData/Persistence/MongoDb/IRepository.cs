@@ -12,13 +12,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 /// </summary>
 public interface IRepository
 {
-    Task<IOctoSession> StartSessionAsync();
-
-    IOctoSession StartSession();
-
-
     Task CreateCollectionIfNotExistsAsync<TCollection>(bool enableChangeStreamPreAndPostImages, string? suffix = null) where TCollection : class, new();
-
 
     ICachedCollection<T> GetCollection<T>(string? suffix = null) where T : class, new();
 

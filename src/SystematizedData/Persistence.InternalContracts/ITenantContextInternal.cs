@@ -5,5 +5,7 @@ namespace Persistence.InternalContracts;
 
 public interface ITenantContextInternal : ITenantContext
 {
-    Task<ITenantRepositoryInternal> CreateOrGetTenantRepositoryInternalAsync(string tenantId);
+    Task<ITenantContextInternal> CreateChildTenantContextInternalAsync(string tenantId);
+    
+    Task<ITenantRepositoryInternal> CreateOrGetTenantRepositoryInternalAsync();
 }

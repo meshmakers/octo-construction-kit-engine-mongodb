@@ -1,9 +1,14 @@
 using System.Threading.Tasks;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 
 public interface IRepositoryClient
 {
+    Task<IOctoSession> StartSessionAsync();
+
+    IOctoSession StartSession();
+    
     Task CreateRepositoryAsync(string name);
 
     Task DropRepositoryAsync(string name);

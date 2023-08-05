@@ -8,10 +8,10 @@ public class TextSearchLanguageCacheItem : ITextSearchLanguageCacheItem
     public TextSearchLanguageCacheItem(string language)
     {
         Language = language;
-        Fields = new List<ICkIndexFields>();
+        Fields = new List<CkIndexFields>();
     }
 
     public string Language { get; }
 
-    public IList<ICkIndexFields> Fields { get; }
+    public IList<CkIndexFields> Fields { get; }
 }

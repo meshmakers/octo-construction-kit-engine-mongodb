@@ -143,14 +143,14 @@ public class CkCache : ICkCache
     }
 
 
-    private async Task BuildAssociationGraphAsync(ICkTypeAggregations ckTypeAggregations,
+    private async Task BuildAssociationGraphAsync(CkTypeAggregations ckTypeAggregations,
         Func<CkId<CkAssociationId>, Task<CkAssociationRole>> getAssociationRoleFunc,
         IDictionary<string, List<IAssociationCacheItem>> associations,
         CkId<CkTypeId> ckId, GraphDirections graphDirections)
     {
         Logger.Debug($"BuildAssociationGraph for '{ckId}' ({graphDirections})");
 
-        var ckEntityAssociationList = new List<ICkEntityAssociation>();
+        var ckEntityAssociationList = new List<CkEntityAssociation>();
         if (ckTypeAggregations.Owned != null)
         {
             ckEntityAssociationList.AddRange(ckTypeAggregations.Owned);
@@ -180,8 +180,8 @@ public class CkCache : ICkCache
                 foreach (var entityAssociation in entityAssociationByRole)
                 {
                     var targetEntityId = graphDirections == GraphDirections.Inbound
-                        ? entityAssociation.OriginCkId
-                        : entityAssociation.TargetCkId;
+                        ? entityAssociation.OriginCkId.SemanticVersionedFullName
+                        : entityAssociation.TargetCkId.SemanticVersionedFullName;
                     var targetInfo = _metaCache[targetEntityId];
                     baseTypesChain.AddRange(targetInfo.GetAllDerivedTypes(true));
                 }
@@ -218,7 +218,7 @@ public class CkCache : ICkCache
         }
     }
 
-    private void BuildInheritanceGraph(ICkTypeInfo ckTypeInfo, EntityCacheItem entityCacheItem)
+    private void BuildInheritanceGraph(CkTypeInfo ckTypeInfo, EntityCacheItem entityCacheItem)
     {
         Logger.Debug($"Building inheritance graph '{entityCacheItem.CkId}'");
 

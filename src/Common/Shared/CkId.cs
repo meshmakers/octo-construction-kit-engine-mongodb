@@ -39,25 +39,28 @@ public readonly struct CkId<TKey> : IComparable<CkId<TKey>>, IEquatable<CkId<TKe
 
     public CkId(string ckId)
     {
-        var modelIndex =ckId.IndexOf("/", StringComparison.Ordinal);
+        var modelIndex = ckId.IndexOf("/", StringComparison.Ordinal);
         if (modelIndex < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(ckId), ckId, $"{nameof(ckId)} must contain a model id and a type id");
         }
+
         ModelId = ckId.Substring(0, modelIndex);
-       
+
         var typeId = ckId.Substring(modelIndex + 1);
-        Key = (TKey) Activator.CreateInstance(typeof(TKey), new[] { typeId });
+        Key = (TKey)Activator.CreateInstance(typeof(TKey), new[] { typeId });
     }
 
-    public CkModelId ModelId { get;  }
-    
-    public TKey Key { get;}
-    
-    public string FullName => $"{ModelId.FullName}/{Key}";
-    
-    public string SemanticVersionedFullName => $"{ModelId.SemanticVersionedFullName}/{Key.SemanticVersionedFullName}";
-    
+    public CkModelId ModelId { get; }
+
+    public TKey Key { get; }
+
+    public string FullName => IsEmpty ? "" : $"{ModelId.FullName}/{Key}";
+
+    public string SemanticVersionedFullName => IsEmpty ? "" : $"{ModelId.SemanticVersionedFullName}/{Key.SemanticVersionedFullName}";
+
+    public bool IsEmpty => ModelId.IsEmpty && Key.IsEmpty;
+
     public static bool operator ==(CkId<TKey> p1, CkId<TKey> p2)
     {
         return p1.Equals(p2);
@@ -67,7 +70,7 @@ public readonly struct CkId<TKey> : IComparable<CkId<TKey>>, IEquatable<CkId<TKe
     {
         return !p1.Equals(p2);
     }
-    
+
     public static implicit operator CkId<TKey>(string value)
     {
         return new CkId<TKey>(value);
@@ -75,6 +78,6 @@ public readonly struct CkId<TKey> : IComparable<CkId<TKey>>, IEquatable<CkId<TKe
 
     public override string ToString()
     {
-        return FullName;
+        return SemanticVersionedFullName;
     }
 }

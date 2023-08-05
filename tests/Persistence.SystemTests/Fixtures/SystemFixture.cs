@@ -1,3 +1,5 @@
+using System;
+using System.Threading.Tasks;
 using CkModel.CkRuleEngine;
 using FakeItEasy;
 using Meshmakers.Octo.Backend.Persistence.SystemTests.Configuration;
@@ -11,8 +13,15 @@ using Persistence.SystemCkModel;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemTests;
 
-public class SystemFixture : ConfigurationFixture
+public class SystemFixture : ConfigurationFixture, IDisposable
 {
+    public SystemFixture()
+    {
+        var systemContext = GetSystemContext();
+        Task.WaitAll(systemContext.CreateSystemTenantAsync());
+        
+    }
+    
     public ISystemContextInternal GetSystemContext()
     {
         var distributedWithPubSubCache = A.Fake<IDistributedWithPubSubCache>();
@@ -29,5 +38,11 @@ public class SystemFixture : ConfigurationFixture
             }), cacheService, systemModelService);
 
         return systemContext;
+    }
+    
+    public void Dispose()
+    {
+        var systemContext = GetSystemContext();
+        Task.WaitAll(systemContext.DeleteSystemTenantAsync());
     }
 }

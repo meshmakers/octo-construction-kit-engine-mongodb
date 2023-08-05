@@ -29,7 +29,7 @@ public class TenantCkModelRepository : ITenantCkModelRepository
         return await _databaseContext.GetCkTypeInfoAsync(session);
     }
 
-    public async Task<ICkAttribute> FindSingleOrDefaultCkAttributesAsync(IOctoSession session, Expression<Func<CkAttribute, bool>> expression)
+    public async Task<CkAttribute> FindSingleOrDefaultCkAttributesAsync(IOctoSession session, Expression<Func<CkAttribute, bool>> expression)
     {
         return await _databaseContext.CkAttributes.FindSingleOrDefaultAsync(session, expression);
     }

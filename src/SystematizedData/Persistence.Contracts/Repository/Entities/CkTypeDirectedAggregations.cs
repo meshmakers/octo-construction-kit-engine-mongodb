@@ -1,7 +1,7 @@
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-public class CkTypeDirectedAggregations : ICkTypeDirectedAggregations
+public class CkTypeDirectedAggregations
 {
-    public ICkTypeAggregations In { get; set; }
-    public ICkTypeAggregations Out { get; set; }
+    public CkTypeAggregations In { get; set; }
+    public CkTypeAggregations Out { get; set; }
 }

@@ -1,23 +1,26 @@
 using System;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Conventions;
 using MongoDB.Bson.Serialization.IdGenerators;
-using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 
+[DebuggerDisplay("{" + nameof(_instanceId) + "}")]
 public class MongoRepositoryClient : IRepositoryClient
 {
     private readonly MongoClient _client;
     private const string OctoConventionCamelCase ="octo-convention-camelCase";
     private const string OctoConventionSerialization ="octo-convention-serialization";
+    private readonly Guid _instanceId = Guid.NewGuid();
 
     public MongoRepositoryClient(MongoConnectionOptions mongoConnectionOptions)
     {
@@ -46,23 +49,41 @@ public class MongoRepositoryClient : IRepositoryClient
             urlBuilder.AuthenticationSource = mongoConnectionOptions.AuthenticationSource;
         }
 
+        urlBuilder.ApplicationName = $"{_instanceId}-{urlBuilder.Username}";
         urlBuilder.UseTls = mongoConnectionOptions.UseTls;
         urlBuilder.AllowInsecureTls = mongoConnectionOptions.AllowInsecureTls;
         // TODO: It seams that secondary servers do not have any work. This seems not be possibly. Other solution?
         // urlBuilder.ReadPreference = ReadPreference.SecondaryPreferred; 
 
         ConfigureMongoDriver();
+        MongoClientSettings settings = MongoClientSettings.FromUrl(urlBuilder.ToMongoUrl());
+        settings.ReadConcern = ReadConcern.Majority;
+        settings.WriteConcern = new WriteConcern(WriteConcern.WMode.Majority, TimeSpan.FromSeconds(2));
         _client = new MongoClient(urlBuilder.ToMongoUrl());
 
         RegisterClassMaps();
     }
 
+    public static bool isRegistered = false;
+
     private static void RegisterClassMaps()
     {
+        if (isRegistered)
+        {
+            return;
+        }
+        isRegistered = true;
+        
+        BsonSerializer.TryRegisterSerializer(new OctoCkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
+        BsonSerializer.TryRegisterSerializer(new OctoCkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>());
+        BsonSerializer.TryRegisterSerializer(new OctoCkIdSerializer<CkAssociationId, OctoAssociationIdSerializer>());
+        BsonSerializer.TryRegisterSerializer(new OctoObjectIdSerializer());
+        BsonSerializer.TryRegisterSerializer(new OctoModelIdSerializer());
+        
         BsonClassMap.TryRegisterClassMap<DatabaseEntities.CkModel>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
-            cm.MapIdMember(c => c.Id).SetSerializer(new OctoModelIdSerializer()).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
+            cm.MapIdMember(c => c.Id).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
             //cm.MapMember(c => c.ScopeId).SetIsRequired(true);
             //cm.MapMember(c => c.Dependencies).SetIsRequired(true);
@@ -71,7 +92,7 @@ public class MongoRepositoryClient : IRepositoryClient
         BsonClassMap.TryRegisterClassMap<CkEntity>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
-            cm.MapIdMember(c => c.CkId).SetSerializer(new OctoCkIdSerializer<CkTypeId, OctoTypeIdSerializer>()).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
+            cm.MapIdMember(c => c.CkId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
             cm.GetMemberMap(c => c.IsFinal).SetIsRequired(true);
@@ -84,7 +105,7 @@ public class MongoRepositoryClient : IRepositoryClient
         BsonClassMap.TryRegisterClassMap<CkAttribute>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
-            cm.MapIdMember(c => c.AttributeId).SetSerializer(new OctoCkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>()).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
+            cm.MapIdMember(c => c.AttributeId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
             cm.GetMemberMap(c => c.AttributeValueType).SetIsRequired(true);
@@ -96,7 +117,7 @@ public class MongoRepositoryClient : IRepositoryClient
         BsonClassMap.TryRegisterClassMap<CkAssociationRole>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
-            cm.MapIdMember(c => c.RoleId).SetSerializer(new OctoCkIdSerializer<CkAssociationId, OctoAssociationIdSerializer>()).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
+            cm.MapIdMember(c => c.RoleId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
             cm.GetMemberMap(c => c.InboundMultiplicity).SetIsRequired(true);
@@ -108,18 +129,18 @@ public class MongoRepositoryClient : IRepositoryClient
         BsonClassMap.TryRegisterClassMap<CkEntityAssociation>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
-            cm.MapIdMember(c => c.AssociationId).SetSerializer(new OctoObjectIdSerializer()).SetIdGenerator(new OctoObjectIdGenerator());
+            cm.MapIdMember(c => c.AssociationId).SetIdGenerator(new OctoObjectIdGenerator());
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.RoleId).SetSerializer(new OctoCkIdSerializer<CkAssociationId, OctoAssociationIdSerializer>()).SetIsRequired(true);
-            cm.GetMemberMap(c => c.OriginCkId).SetSerializer(new OctoCkIdSerializer<CkTypeId, OctoTypeIdSerializer>()).SetIsRequired(true);
-            cm.GetMemberMap(c => c.TargetCkId).SetSerializer(new OctoCkIdSerializer<CkTypeId, OctoTypeIdSerializer>()).SetIsRequired(true);
+            cm.GetMemberMap(c => c.RoleId).SetIsRequired(true);
+            cm.GetMemberMap(c => c.OriginCkId).SetIsRequired(true);
+            cm.GetMemberMap(c => c.TargetCkId).SetIsRequired(true);
         });
         
         BsonClassMap.TryRegisterClassMap<CkEntityAttribute>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
-            cm.MapIdMember(c => c.AttributeId).SetSerializer(new OctoCkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>()).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
+            cm.MapIdMember(c => c.AttributeId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
             cm.GetMemberMap(c => c.AttributeName).SetIsRequired(true);
@@ -133,11 +154,11 @@ public class MongoRepositoryClient : IRepositoryClient
         BsonClassMap.TryRegisterClassMap<CkEntityInheritance>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
-            cm.MapIdMember(c => c.InheritanceId).SetSerializer(new OctoObjectIdSerializer()).SetIdGenerator(new OctoObjectIdGenerator());
+            cm.MapIdMember(c => c.InheritanceId).SetIdGenerator(new OctoObjectIdGenerator());
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.OriginCkId).SetSerializer(new OctoCkIdSerializer<CkTypeId, OctoTypeIdSerializer>()).SetIsRequired(true);
-            cm.GetMemberMap(c => c.TargetCkId).SetSerializer(new OctoCkIdSerializer<CkTypeId, OctoTypeIdSerializer>()).SetIsRequired(true);
+            cm.GetMemberMap(c => c.OriginCkId).SetIsRequired(true);
+            cm.GetMemberMap(c => c.TargetCkId).SetIsRequired(true);
         });
         
         BsonClassMap.TryRegisterClassMap<CkEntityIndex>(cm =>
@@ -159,6 +180,29 @@ public class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.AttributeNames).SetIsRequired(true);
         });
         
+        BsonClassMap.TryRegisterClassMap<CkTypeInfo>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.MapIdMember(c => c.CkId).SetIdGenerator(new NullIdChecker()).SetIsRequired(true);
+            cm.AutoMap();
+
+            cm.GetMemberMap(c => c.TextSearchLanguages).SetIgnoreIfDefault(true);
+            cm.GetMemberMap(c => c.BaseTypes).SetIsRequired(true);
+            cm.GetMemberMap(c => c.Associations).SetIsRequired(true);
+            cm.GetMemberMap(c => c.Attributes).SetIsRequired(true);
+        });
+        
+        BsonClassMap.TryRegisterClassMap<CkBaseTypeInfo>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.MapIdMember(c => c.InheritanceId).SetIdGenerator(new OctoObjectIdGenerator());
+            cm.AutoMap();
+
+            cm.GetMemberMap(c => c.OriginCkId).SetIsRequired(true);
+            cm.GetMemberMap(c => c.TargetCkId).SetIsRequired(true);
+            cm.GetMemberMap(c => c.BaseTypeDepthIndex).SetIsRequired(true);
+        });
+        
         BsonClassMap.TryRegisterClassMap<AutoCompleteText>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
@@ -170,28 +214,27 @@ public class MongoRepositoryClient : IRepositoryClient
         
         BsonClassMap.TryRegisterClassMap<RtEntity>(cm =>
         {
+            cm.SetIsRootClass(true);
             cm.SetIgnoreExtraElements(true);
             cm.MapField("_attributes").SetElementName(Constants.AttributesName).SetSerializer(new RtAttributeDictionarySerializer());
-            cm.MapIdMember(c => c.RtId).SetSerializer(new OctoObjectIdSerializer()).SetIdGenerator(new OctoObjectIdGenerator());
-            cm.AutoMap();
-
-            cm.GetMemberMap(c => c.RtCreationDateTime).SetIsRequired(true);
-            cm.GetMemberMap(c => c.RtChangedDateTime).SetIsRequired(true);
-            cm.GetMemberMap(c => c.CkId).SetSerializer(new OctoCkIdSerializer<CkTypeId, OctoTypeIdSerializer>()).SetIsRequired(true);
-            cm.GetMemberMap(c => c.RtWellKnownName).SetIgnoreIfDefault(true);
+            cm.MapIdMember(c => c.RtId).SetIdGenerator(new OctoObjectIdGenerator());
+            cm.MapMember(c => c.RtCreationDateTime).SetElementName(nameof(RtEntity.RtCreationDateTime).ToCamelCase()).SetIsRequired(true);
+            cm.MapMember(c => c.RtChangedDateTime).SetElementName(nameof(RtEntity.RtChangedDateTime).ToCamelCase()).SetIsRequired(true);
+            cm.MapMember(c => c.CkId).SetElementName(nameof(RtEntity.CkId).ToCamelCase()).SetIsRequired(true);
+            cm.MapMember(c => c.RtWellKnownName).SetElementName(nameof(RtEntity.RtWellKnownName).ToCamelCase()).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.TryRegisterClassMap<RtAssociation>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
-            cm.MapIdMember(c => c.AssociationId).SetSerializer(new OctoObjectIdSerializer()).SetIdGenerator(new OctoObjectIdGenerator());
+            cm.MapIdMember(c => c.AssociationId).SetIdGenerator(new OctoObjectIdGenerator());
             cm.AutoMap();
 
             cm.GetMemberMap(c => c.AssociationRoleId).SetIsRequired(true);
-            cm.GetMemberMap(c => c.OriginCkId).SetSerializer(new OctoCkIdSerializer<CkTypeId, OctoTypeIdSerializer>()).SetIsRequired(true);
-            cm.GetMemberMap(c => c.OriginRtId).SetSerializer(new OctoObjectIdSerializer()).SetIsRequired(true);
-            cm.GetMemberMap(c => c.TargetCkId).SetSerializer(new OctoCkIdSerializer<CkTypeId, OctoTypeIdSerializer>()).SetIsRequired(true);
-            cm.GetMemberMap(c => c.TargetRtId).SetSerializer(new OctoObjectIdSerializer()).SetIsRequired(true);
+            cm.GetMemberMap(c => c.OriginCkId).SetIsRequired(true);
+            cm.GetMemberMap(c => c.OriginRtId).SetIsRequired(true);
+            cm.GetMemberMap(c => c.TargetCkId).SetIsRequired(true);
+            cm.GetMemberMap(c => c.TargetRtId).SetIsRequired(true);
         });
     }
 
@@ -201,6 +244,19 @@ public class MongoRepositoryClient : IRepositoryClient
 
         return databaseNames.ToList().Any(x => string.Compare(x, name,
             StringComparison.InvariantCultureIgnoreCase) == 0);
+    }
+    
+    
+    public async Task<IOctoSession> StartSessionAsync()
+    {
+        var session = await _client.StartSessionAsync();
+        return new OctoSession(session, _client.Settings.ApplicationName);
+    }
+
+    public IOctoSession StartSession()
+    {
+        var session = _client.StartSession();
+        return new OctoSession(session, _client.Settings.ApplicationName);
     }
 
 

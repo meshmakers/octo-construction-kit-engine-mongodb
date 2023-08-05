@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
-using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
+using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -32,17 +32,6 @@ public class MongoRepository : IRepositoryInternal
         });
     }
 
-    public async Task<IOctoSession> StartSessionAsync()
-    {
-        var session = await _database.Client.StartSessionAsync();
-        return new OctoSession(session);
-    }
-
-    public IOctoSession StartSession()
-    {
-        var session = _database.Client.StartSession();
-        return new OctoSession(session);
-    }
 
     public async Task CreateCollectionIfNotExistsAsync<TCollection>(bool enableChangeStreamPreAndPostImages, string? suffix = null)
         where TCollection : class, new()
@@ -65,7 +54,7 @@ public class MongoRepository : IRepositoryInternal
     {
         if (!_collectionNameMapping.TryGetValue(typeof(T), out var name))
         {
-            name = typeof(T).Name;
+            name = typeof(T).GetMostInnerBaseType().Name;
             _collectionNameMapping.Add(typeof(T), name);
         }
 

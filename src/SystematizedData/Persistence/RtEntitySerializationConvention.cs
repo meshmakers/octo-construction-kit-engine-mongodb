@@ -1,3 +1,4 @@
+using System;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Conventions;
 
@@ -12,8 +13,10 @@ namespace Meshmakers.Octo.SystematizedData.Persistence;
 /// stored as attributes in the database, and the serialization of the properties
 /// results in duplicate values.
 /// </remarks>
-internal class RtEntitySerializationConvention : IMemberMapConvention {
-    public void Apply(BsonMemberMap memberMap) {
+internal class RtEntitySerializationConvention : IMemberMapConvention
+{
+    public void Apply(BsonMemberMap memberMap)
+    {
         memberMap.SetShouldSerializeMethod(o => false);
     }
 

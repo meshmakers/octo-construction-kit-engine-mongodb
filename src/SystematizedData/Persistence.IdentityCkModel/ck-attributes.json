@@ -1,126 +1,72 @@
 {
   "attributes": [
     {
-      "id": "System.Identity.UserName",
+      "id": "UserName",
       "valueType": "String"
     },
     {
-      "id": "System.Identity.NormalizedUserName",
+      "id": "NormalizedUserName",
       "valueType": "String"
     },
     {
-      "id": "System.Identity.Email",
+      "id": "Email",
       "valueType": "String"
     },
     {
-      "id": "System.Identity.NormalizedEmail",
+      "id": "NormalizedEmail",
       "valueType": "String"
     },
     {
-      "id": "System.Identity.EmailConfirmed",
+      "id": "EmailConfirmed",
       "valueType": "Boolean"
     },
     {
-      "id": "System.Identity.PasswordHash",
+      "id": "PasswordHash",
       "valueType": "String"
     },
     {
-      "id": "System.Identity.SecurityStamp",
+      "id": "SecurityStamp",
       "valueType": "String"
     },
     {
-      "id": "System.Identity.ConcurrencyStamp",
+      "id": "ConcurrencyStamp",
       "valueType": "String"
     },
     {
-      "id": "System.Identity.PhoneNumber",
+      "id": "PhoneNumber",
       "valueType": "String"
     },
     {
-      "id": "System.Identity.PhoneNumberConfirmed",
+      "id": "PhoneNumberConfirmed",
       "valueType": "Boolean"
     },
     {
-      "id": "System.Identity.TwoFactorEnabled",
+      "id": "TwoFactorEnabled",
       "valueType": "Boolean"
     },
     {
-      "id": "System.Identity.LockoutEnd",
+      "id": "LockoutEnd",
       "valueType": "DateTime"
     },
     {
-      "id": "System.Identity.LockoutEnabled",
+      "id": "LockoutEnabled",
       "valueType": "Boolean"
     },
     {
-      "id": "System.Identity.AccessFailedCount",
+      "id": "AccessFailedCount",
       "valueType": "Int"
     },
     {
-      "id": "System.Identity.ResetPasswordOnLogin",
-      "valueType": "String"
-    },
-    
-    
-    {
-      "id": "System.Identity.FirstName",
+      "id": "ResetPasswordOnLogin",
       "valueType": "String"
     },
     {
-      "id": "System.Identity.LastName",
+      "id": "FirstName",
       "valueType": "String"
     },
     {
-      "id": "System.Identity",
-      "valueType": "Boolean"
-    },
-    {
-      "id": "System.Identity.Uri",
+      "id": "LastName",
       "valueType": "String"
-    },
-    {
-      "id": "System.Identity.Action",
-      "valueType": "String"
-    },
-    {
-      "id": "System.Identity.ApiKey",
-      "valueType": "String"
-    },
-    {
-      "id": "System.Identity.ErrorText",
-      "valueType": "String"
-    },
-    {
-      "id": "System.Identity.Type",
-      "valueType": "Int",
-      "selectionValues": [
-        {
-          "key": 1,
-          "name": "EMail"
-        },
-        {
-          "key": 2,
-          "name": "SMS"
-        }
-      ]
-    },
-    {
-      "id": "System.Notification.Status",
-      "valueType": "Int",
-      "selectionValues": [
-        {
-          "key": 0,
-          "name": "Pending"
-        },
-        {
-          "key": 1,
-          "name": "Sent"
-        },
-        {
-          "key": 2,
-          "name": "Error"
-        }
-      ]
     }
   ]
 }

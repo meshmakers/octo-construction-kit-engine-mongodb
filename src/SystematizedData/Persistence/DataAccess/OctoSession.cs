@@ -1,14 +1,19 @@
+using System.Diagnostics;
 using System.Threading.Tasks;
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
+[DebuggerDisplay("{" + nameof(ApplicationName) + "}")]
 internal class OctoSession : IOctoSessionInternal
 {
-    internal OctoSession(IClientSessionHandle clientSessionHandle)
+    internal OctoSession(IClientSessionHandle clientSessionHandle, string applicationName)
     {
         SessionHandle = clientSessionHandle;
+        ApplicationName = applicationName;
     }
+
+    public string ApplicationName { get; set; }
 
     public void Dispose()
     {
