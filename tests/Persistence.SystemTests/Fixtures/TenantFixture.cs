@@ -1,8 +1,7 @@
-using System.Threading.Tasks;
 using Meshmakers.Octo.Backend.Persistence.SystemTests.Configuration;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemTests;
+namespace Meshmakers.Octo.Backend.Persistence.SystemTests.Fixtures;
 
 public class TenantFixture : SystemFixture
 {

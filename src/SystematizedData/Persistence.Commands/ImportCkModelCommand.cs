@@ -205,17 +205,20 @@ public class ImportCkModelCommand : IImportCkModelCommand
 
     private void ProcessCkAssociations(CkModelRoot model, TransientCkModel transientCkModel)
     {
-        foreach (var modelAssociationRole in model.CkAssociationRoles)
+        if (model.CkAssociationRoles != null)
         {
-            var associationRole = new CkAssociationRole
+            foreach (var modelAssociationRole in model.CkAssociationRoles)
             {
-                RoleId = new CkId<CkAssociationId>(model.ModelId, modelAssociationRole.RoleId),
-                InboundName = modelAssociationRole.InboundName,
-                OutboundName = modelAssociationRole.OutboundName,
-                InboundMultiplicity = (Multiplicities)modelAssociationRole.InboundMultiplicity,
-                OutboundMultiplicity = (Multiplicities)modelAssociationRole.OutboundMultiplicity,
-            };
-            transientCkModel.CkAssociationRoles.Add(associationRole);
+                var associationRole = new CkAssociationRole
+                {
+                    RoleId = new CkId<CkAssociationId>(model.ModelId, modelAssociationRole.RoleId),
+                    InboundName = modelAssociationRole.InboundName,
+                    OutboundName = modelAssociationRole.OutboundName,
+                    InboundMultiplicity = (Multiplicities)modelAssociationRole.InboundMultiplicity,
+                    OutboundMultiplicity = (Multiplicities)modelAssociationRole.OutboundMultiplicity,
+                };
+                transientCkModel.CkAssociationRoles.Add(associationRole);
+            }
         }
     }
 
@@ -303,18 +306,21 @@ public class ImportCkModelCommand : IImportCkModelCommand
 
     private void ProcessCkAttributes(CkModelRoot model, TransientCkModel transientCkModel)
     {
-        foreach (var modelCkAttribute in model.CkAttributes)
+        if (model.CkAttributes != null)
         {
-            var ckAttribute = new CkAttribute
+            foreach (var modelCkAttribute in model.CkAttributes)
             {
-                AttributeId = new CkId<CkAttributeId>(model.ModelId, modelCkAttribute.AttributeId),
-                AttributeValueType = (AttributeValueTypes)modelCkAttribute.ValueType,
-                SelectionValues = modelCkAttribute.SelectionValues?.Select(sv => new CkSelectionValue
-                    { Key = sv.Key, Name = sv.Name }).ToList(),
-                DefaultValue = modelCkAttribute.DefaultValue,
-                DefaultValues = modelCkAttribute.DefaultValues
-            };
-            transientCkModel.CkAttributes.Add(ckAttribute);
+                var ckAttribute = new CkAttribute
+                {
+                    AttributeId = new CkId<CkAttributeId>(model.ModelId, modelCkAttribute.AttributeId),
+                    AttributeValueType = (AttributeValueTypes)modelCkAttribute.ValueType,
+                    SelectionValues = modelCkAttribute.SelectionValues?.Select(sv => new CkSelectionValue
+                        { Key = sv.Key, Name = sv.Name }).ToList(),
+                    DefaultValue = modelCkAttribute.DefaultValue,
+                    DefaultValues = modelCkAttribute.DefaultValues
+                };
+                transientCkModel.CkAttributes.Add(ckAttribute);
+            }
         }
     }
 

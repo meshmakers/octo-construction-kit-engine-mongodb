@@ -1,6 +1,3 @@
-using System;
-using System.Threading.Tasks;
-using CkModel.CkRuleEngine;
 using FakeItEasy;
 using Meshmakers.Octo.Backend.Persistence.SystemTests.Configuration;
 using Meshmakers.Octo.Common.DistributedCache;
@@ -11,15 +8,22 @@ using Microsoft.Extensions.Options;
 using Persistence.InternalContracts;
 using Persistence.SystemCkModel;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemTests;
+namespace Meshmakers.Octo.Backend.Persistence.SystemTests.Fixtures;
 
 public class SystemFixture : ConfigurationFixture, IDisposable
 {
     public SystemFixture()
     {
-        var systemContext = GetSystemContext();
-        Task.WaitAll(systemContext.CreateSystemTenantAsync());
-        
+        Task.WaitAll(Task.Run(async () =>
+        {
+            var systemContext = GetSystemContext();
+            if (await systemContext.IsSystemTenantExistingAsync())
+            {
+                await systemContext.DeleteSystemTenantAsync();
+            }
+
+            await systemContext.CreateSystemTenantAsync();
+        }));
     }
     
     public ISystemContextInternal GetSystemContext()
@@ -42,7 +46,7 @@ public class SystemFixture : ConfigurationFixture, IDisposable
     
     public void Dispose()
     {
-        var systemContext = GetSystemContext();
-        Task.WaitAll(systemContext.DeleteSystemTenantAsync());
+      //  var systemContext = GetSystemContext();
+       // Task.WaitAll(systemContext.DeleteSystemTenantAsync());
     }
 }

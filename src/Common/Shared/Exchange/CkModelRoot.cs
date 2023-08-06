@@ -27,8 +27,8 @@ public class CkModelRoot
     [JsonPropertyName("entities")] public List<CkEntity> CkEntities { get; set; }
 
     // ReSharper disable once CollectionNeverUpdated.Global
-    [JsonPropertyName("associationRoles")] public List<CkAssociationRole> CkAssociationRoles { get; set; }
+    [JsonPropertyName("associationRoles")] public List<CkAssociationRole>? CkAssociationRoles { get; set; }
 
     // ReSharper disable once CollectionNeverUpdated.Global
-    [JsonPropertyName("attributes")] public List<CkAttribute> CkAttributes { get; set; }
+    [JsonPropertyName("attributes")] public List<CkAttribute>? CkAttributes { get; set; }
 }

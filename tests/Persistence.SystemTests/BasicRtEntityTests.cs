@@ -1,3 +1,4 @@
+using Meshmakers.Octo.Backend.Persistence.SystemTests.Fixtures;
 using Xunit;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemTests;

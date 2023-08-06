@@ -1,4 +1,7 @@
 using System;
+using Meshmakers.Octo.Backend.Persistence.SystemTests.Fixtures;
+using Meshmakers.Octo.SystematizedData.Persistence.Commands;
+using Persistence.IdentityCkModel;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -21,6 +24,21 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
         var systemContext = _systemFixture.GetSystemContext();
         var result = await systemContext.IsSystemTenantExistingAsync();
         Assert.True(result);
+    }
+
+    [Fact]
+    public async void ImportConstructionKit()
+    {
+        var systemContext = _systemFixture.GetSystemContext();
+
+        using var session = await systemContext.StartSystemSessionAsync();
+        session.StartTransaction();
+        var ckModelRepository = systemContext.CreateTenantCkModelRepository();
+        var systemIdentityModelService = new CkSystemIdentityModelService(new ImportCkModelCommand());
+        
+        await systemIdentityModelService.ImportAsync(session, ckModelRepository);
+
+        await session.CommitTransactionAsync();
     }
 
     [Fact]
