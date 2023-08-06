@@ -46,14 +46,19 @@ public class ExportRtModelCommand : IExportRtModelCommand
 
             var sortingDtoList = query.GetAttributeStringValueOrDefault("Sorting")?.Deserialize<ICollection<SortDto>>();
             dataQueryOperation.SortOrders = sortingDtoList?.Select(dto =>
-                new SortOrderItem(dto.AttributeName.ToPascalCase(), (SortOrders)dto.SortOrder)) ?? new List<SortOrderItem>();
+                new SortOrderItem(dto.AttributeName.ToPascalCase(), (SortOrders)dto.SortOrder)).ToList() ?? new List<SortOrderItem>();
             var fieldFilterDtoList =
                 query.GetAttributeStringValueOrDefault("FieldFilter")?.Deserialize<ICollection<FieldFilterDto>>();
             dataQueryOperation.FieldFilters = fieldFilterDtoList?.Select(dto =>
                 new FieldFilter(TransformAttributeName(dto.AttributeName), (FieldFilterOperator)dto.Operator,
-                    dto.ComparisonValue)) ?? new List<FieldFilter>();
+                    dto.ComparisonValue)).ToList() ?? new List<FieldFilter>();
 
             var ckIdString = query.GetAttributeStringValueOrDefault("QueryCkId");
+            if (string.IsNullOrWhiteSpace(ckIdString))
+            {
+                throw new ModelExportException($"Query '{queryId}‘ has no QueryCkId attribute set.");
+
+            }
             var ckId = new CkId<CkTypeId>(ckIdString);
 
             var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync(session, ckId, dataQueryOperation);
@@ -61,7 +66,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
             var entityCacheItem = tenantRepository.GetEntityCacheItem(ckId);
 
             var model = new RtModelRoot();
-            model.RtEntities.AddRange(resultSet.Result.Select(entity =>
+            model.RtEntities.AddRange(resultSet.Items.Select(entity =>
             {
                 var exEntity = new RtEntity
                 {
@@ -86,7 +91,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
             }));
 
             await using var streamWriter = new StreamWriter(filePath);
-            RtSerializer.Serialize(streamWriter, model);
+            await RtSerializer.SerializeAsync(streamWriter, model);
 
             await session.CommitTransactionAsync();
         }

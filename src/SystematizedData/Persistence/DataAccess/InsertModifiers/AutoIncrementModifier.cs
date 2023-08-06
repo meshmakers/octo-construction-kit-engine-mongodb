@@ -59,7 +59,7 @@ public class AutoIncrementModifier : IAutoIncrementModifier
                     $"Attribute with name '{autoIncrementReference.AttributeName}' does not exist at Ck-Id {ckId}");
             }
 
-            var autoIncrement = autoIncrementerSet.Result.FirstOrDefault(x =>
+            var autoIncrement = autoIncrementerSet.Items.FirstOrDefault(x =>
                 x.RtWellKnownName == autoIncrementReference.AutoIncrementReference);
             if (autoIncrement == null)
             {

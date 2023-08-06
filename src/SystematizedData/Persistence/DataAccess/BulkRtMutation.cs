@@ -16,14 +16,14 @@ using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Mutation;
 
-public class MutationHandler
+public class BulkRtMutation
 {
     private readonly IDatabaseContext _databaseContext;
     private readonly ICkCache _ckCache;
     private readonly ITenantRepositoryInternal _tenantRepository;
     private readonly IAutoIncrementModifier _autoIncrementModifier;
 
-    internal MutationHandler(IDatabaseContext databaseContext,
+    internal BulkRtMutation(IDatabaseContext databaseContext,
         ICkCache ckCache,
         ITenantRepositoryInternal tenantRepository,
         IAutoIncrementModifier autoIncrementModifier)

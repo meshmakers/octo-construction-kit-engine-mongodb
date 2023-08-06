@@ -33,8 +33,8 @@ public interface ITenantRepositoryInternal : ITenantRepository
     Task DeleteOneRtEntityByRtIdAsync<TEntity>(IOctoSession session, OctoObjectId rtId)
         where TEntity : RtEntity, new();
 
-    Task DeleteOneRtEntityAsync(IOctoSession session, CkId<CkTypeId> ckId, Expression<Func<RtEntity, bool>> filterExpression);
+    Task DeleteOneRtEntityAsync(IOctoSession session, CkId<CkTypeId> ckId, ICollection<FieldFilter> fieldFilters);
     
-    Task DeleteOneRtEntityAsync<TEntity>(IOctoSession session, Expression<Func<TEntity, bool>> filterExpression)
+    Task DeleteOneRtEntityAsync<TEntity>(IOctoSession session, ICollection<FieldFilter> fieldFilters)
         where TEntity : RtEntity, new();
 }

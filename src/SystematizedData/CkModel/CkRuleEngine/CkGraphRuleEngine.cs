@@ -295,6 +295,12 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
             rtEntity = await _tenantRepository.GetRtEntityByRtIdAsync(session, rtEntityId);
         }
 
+        if (rtEntity == null)
+        {
+            throw new OperationFailedException(
+                $"Entity '{rtEntityId}' does not exist");
+        }
+
         return rtEntity;
     }
 }

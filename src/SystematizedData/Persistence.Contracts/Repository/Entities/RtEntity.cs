@@ -121,12 +121,12 @@ public class RtEntity
     
     public string GetAttributeStringValue(string attributeName)
     {
-        if (!Attributes.TryGetValue(attributeName, out var value))
+        if (!Attributes.TryGetValue(attributeName, out var value) || value == null)
         {
             throw InvalidAttributeValueException.CannotBeNull(RtId, CkId, attributeName);
         }
 
-        return (string?)value;
+        return (string)value;
     }
 
     public void SetAttributeValue(string attributeName, AttributeValueTypes attributeValueTypes,

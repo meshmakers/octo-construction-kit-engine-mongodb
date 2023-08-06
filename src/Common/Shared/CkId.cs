@@ -42,13 +42,26 @@ public readonly struct CkId<TKey> : IComparable<CkId<TKey>>, IEquatable<CkId<TKe
         var modelIndex = ckId.IndexOf("/", StringComparison.Ordinal);
         if (modelIndex < 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(ckId), ckId, $"{nameof(ckId)} must contain a model id and a type id");
+            throw new ArgumentOutOfRangeException(nameof(ckId), ckId, $"'{nameof(ckId)}' must contain a model id");
         }
 
         ModelId = ckId.Substring(0, modelIndex);
 
         var typeId = ckId.Substring(modelIndex + 1);
-        Key = (TKey)Activator.CreateInstance(typeof(TKey), new[] { typeId });
+        if (string.IsNullOrWhiteSpace(typeId))
+        {
+            throw new ArgumentOutOfRangeException(nameof(ckId), ckId, $"'{nameof(ckId)}' must contain a key");
+        }
+
+        var value = Activator.CreateInstance(typeof(TKey), new object?[] { typeId });
+        if (value != null)
+        {
+            Key = (TKey)value;
+        }
+        else
+        {
+            throw new ArgumentOutOfRangeException(nameof(ckId), ckId, $"Cannot create key of type '{typeof(TKey)}'");
+        }
     }
 
     public CkModelId ModelId { get; }

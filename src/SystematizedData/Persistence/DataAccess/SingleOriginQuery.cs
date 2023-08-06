@@ -26,7 +26,11 @@ public abstract class SingleOriginQuery<TEntity> : Query<TEntity> where TEntity 
         // In documentation, text search must be at first place
         AddTextFilterConstraintsToPipeline(pipelineStageDefinitions);
         // Filter for fields
-        AddFilterConstraintsToPipeline(pipelineStageDefinitions);
+        var filterDefinitions = CreateFilterDefinitions();
+        if (filterDefinitions != null)
+        {
+            pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(filterDefinitions));
+        }
 
         AddSortConstraintsToPipeline(pipelineStageDefinitions);
 

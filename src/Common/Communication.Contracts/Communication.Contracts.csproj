@@ -4,7 +4,6 @@
         <AssemblyName>Meshmakers.Octo.Communication.Contracts</AssemblyName>
         <Description>General interfaces for communication using tools, plugs and sockets</Description>
         <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-        <PackageIcon>meshmakers64.png</PackageIcon>
         <PackageId>Meshmakers.Octo.Communication.Contracts</PackageId>
         <PackageLicenseFile>LICENSE</PackageLicenseFile>
         <PackageProjectUrl>https://www.meshmakers.io</PackageProjectUrl>
@@ -12,6 +11,7 @@
         <RootNamespace>Meshmakers.Octo.Communication.Contracts</RootNamespace>
         <TargetFramework>net7.0</TargetFramework>
         <ImplicitUsings>true</ImplicitUsings>
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">

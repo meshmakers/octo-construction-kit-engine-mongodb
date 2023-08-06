@@ -105,7 +105,7 @@ public class EntityNotificationRepository : INotificationRepository
 
         await session.CommitTransactionAsync();
 
-        return new PagedResult<NotificationMessageDto>(result.Result.Select(CreateNotificationMessage), 0, take,
+        return new PagedResult<NotificationMessageDto>(result.Items.Select(CreateNotificationMessage), 0, take,
             result.TotalCount);
     }
 
@@ -193,7 +193,12 @@ public class EntityNotificationRepository : INotificationRepository
         var rtEntity =
             await tenantRepository.GetRtEntityByRtIdAsync<RtSystemNotificationMessage>(session,
                 notificationMessageDto.RtId);
-
+        if (rtEntity == null)
+        {
+            throw new NotificationSendFailedException($"Notification with id '{notificationMessageDto.RtId}' not found in repository.");
+        }
+        
+        
         ApplyDtoData(notificationMessageDto, rtEntity);
 
         return rtEntity;

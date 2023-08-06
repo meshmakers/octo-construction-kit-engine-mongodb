@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
@@ -59,9 +58,9 @@ internal class TenantRepository : ITenantRepositoryInternal
     public async Task ApplyChanges(IOctoSession session, IReadOnlyList<EntityUpdateInfo> entityUpdateInfoList,
         IReadOnlyList<AssociationUpdateInfo> associationUpdateInfoList)
     {
-        MutationHandler mutationHandler =
-            new MutationHandler(_databaseContext, _ckCache, this, new AutoIncrementModifier(_databaseContext, _ckCache, this));
-        await mutationHandler.ApplyChanges(session, entityUpdateInfoList, associationUpdateInfoList);
+        BulkRtMutation bulkRtMutation =
+            new BulkRtMutation(_databaseContext, _ckCache, this, new AutoIncrementModifier(_databaseContext, _ckCache, this));
+        await bulkRtMutation.ApplyChanges(session, entityUpdateInfoList, associationUpdateInfoList);
     }
 
     public async Task ApplyChanges(IOctoSession session,
@@ -115,7 +114,7 @@ internal class TenantRepository : ITenantRepositoryInternal
     public async Task InsertOneRtEntityAsync<TEntity>(IOctoSession session, TEntity rtEntity) where TEntity : RtEntity, new()
     {
         var rtCollection = _databaseContext.GetRtCollection<TEntity>();
-        PrepareEntityForModification<TEntity>(rtEntity);
+        PrepareEntityForModification(rtEntity);
         await rtCollection.InsertAsync(session, rtEntity);
     }
 
@@ -155,16 +154,25 @@ internal class TenantRepository : ITenantRepositoryInternal
         await rtCollection.DeleteOneAsync(session, rtId);
     }
 
-    public async Task DeleteOneRtEntityAsync(IOctoSession session, CkId<CkTypeId> ckId, Expression<Func<RtEntity, bool>> filterExpression)
+    public async Task DeleteOneRtEntityAsync(IOctoSession session, CkId<CkTypeId> ckId, ICollection<FieldFilter> fieldFilters)
     {
-        var rtCollection = _databaseContext.GetRtCollection<RtEntity>(ckId);
-        await rtCollection.DeleteOneAsync(session, filterExpression);
+        await DeleteOneRtEntityAsync<RtEntity>(session, ckId, fieldFilters);
     }
 
-    public async Task DeleteOneRtEntityAsync<TEntity>(IOctoSession session, Expression<Func<TEntity, bool>> filterExpression) where TEntity : RtEntity, new()
+    public async Task DeleteOneRtEntityAsync<TEntity>(IOctoSession session, ICollection<FieldFilter> fieldFilters) where TEntity : RtEntity, new()
     {
-        var rtCollection = _databaseContext.GetRtCollection<TEntity>();
-        await rtCollection.DeleteOneAsync(session, filterExpression);
+        var ckId = RtEntityExtensions.GetCkId<TEntity>();
+        
+        await DeleteOneRtEntityAsync<TEntity>(session, ckId, fieldFilters);
+    }
+    
+    private async Task DeleteOneRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckId, ICollection<FieldFilter> fieldFilters) where TEntity : RtEntity, new()
+    {
+        var rtCollection = _databaseContext.GetRtCollection<TEntity>(ckId);
+
+        var mutation = new RtMutation<TEntity>(rtCollection);
+        mutation.AddFieldFilters(fieldFilters);
+        await mutation.ExecuteDeleteOneAsync(session);
     }
 
     public async Task<IBulkImportResult> BulkRtAssociationsAsync(IOctoSession session,
@@ -184,15 +192,15 @@ internal class TenantRepository : ITenantRepositoryInternal
         var resultSet = new List<CkAttribute>();
         long totalCount = 0;
 
-        var statementCreator = new CkAttributeQuery(_databaseContext);
-        statementCreator.AddFieldFilters(dataQueryOperation.FieldFilters);
-        statementCreator.AddIdFilter(attributeIds);
-        statementCreator.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        statementCreator.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        statementCreator.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        var query = new CkAttributeQuery(_databaseContext);
+        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddIdFilter(attributeIds);
+        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
+        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
+        query.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
 
-        var tempResultSet = await statementCreator.ExecuteQuery(session, skip, take);
-        resultSet.AddRange(tempResultSet.Result);
+        var tempResultSet = await query.ExecuteQuery(session, skip, take);
+        resultSet.AddRange(tempResultSet.Items);
         totalCount += tempResultSet.TotalCount;
 
         return new ResultSet<CkAttribute>(resultSet, totalCount);
@@ -204,15 +212,15 @@ internal class TenantRepository : ITenantRepositoryInternal
         var resultSet = new List<CkEntity>();
         long totalCount = 0;
 
-        var statementCreator = new CkEntityQuery(_databaseContext);
-        statementCreator.AddFieldFilters(dataQueryOperation.FieldFilters);
-        statementCreator.AddIdFilter(ckIds);
-        statementCreator.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        statementCreator.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        statementCreator.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        var query = new CkEntityQuery(_databaseContext);
+        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddIdFilter(ckIds);
+        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
+        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
+        query.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
 
-        var tempResultSet = await statementCreator.ExecuteQuery(session, skip, take);
-        resultSet.AddRange(tempResultSet.Result);
+        var tempResultSet = await query.ExecuteQuery(session, skip, take);
+        resultSet.AddRange(tempResultSet.Items);
         totalCount += tempResultSet.TotalCount;
 
         return new ResultSet<CkEntity>(resultSet, totalCount);
@@ -233,20 +241,6 @@ internal class TenantRepository : ITenantRepositoryInternal
             .DocumentAsync(session, rtId.ToObjectId());
     }
 
-    public async Task<RtEntity?> GetRtEntityByFilterAsync(IOctoSession session, CkId<CkTypeId> ckId, Expression<Func<RtEntity, bool>> filterExpression)
-    {
-        return await _databaseContext.GetRtCollection<RtEntity>(ckId)
-            .FindSingleOrDefaultAsync(session, filterExpression);
-    }
-
-    public async Task<TEntity?> GetRtEntityByFilterAsync<TEntity>(IOctoSession session, Expression<Func<TEntity, bool>> filterExpression) where TEntity : RtEntity, new()
-    {
-        var ckId = RtEntityExtensions.GetCkId<TEntity>();
-
-        return await _databaseContext.GetRtCollection<TEntity>(ckId)
-            .FindSingleOrDefaultAsync(session, filterExpression);
-    }
-
     public async Task<IResultSet<RtEntity>> GetRtEntitiesByIdAsync(IOctoSession session, CkId<CkTypeId> ckId,
         IReadOnlyList<OctoObjectId> rtIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
@@ -260,16 +254,16 @@ internal class TenantRepository : ITenantRepositoryInternal
         long totalCount = 0;
         var entityCacheItem = GetEntityCacheItem(ckId);
 
-        var statementCreator =
+        var query =
             new SingleOriginRtQuery(entityCacheItem, _databaseContext, dataQueryOperation.Language);
-        statementCreator.AddFieldFilters(dataQueryOperation.FieldFilters);
-        statementCreator.AddIdFilter(rtIds);
-        statementCreator.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        statementCreator.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        statementCreator.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddIdFilter(rtIds);
+        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
+        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
+        query.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
 
-        var tempResultSet = await statementCreator.ExecuteQuery(session, skip, take);
-        resultSet.AddRange(tempResultSet.Result);
+        var tempResultSet = await query.ExecuteQuery(session, skip, take);
+        resultSet.AddRange(tempResultSet.Items);
         totalCount += tempResultSet.TotalCount;
 
         return new ResultSet<RtEntity>(resultSet, totalCount);
@@ -351,18 +345,18 @@ internal class TenantRepository : ITenantRepositoryInternal
     {
         var entityCacheItem = GetEntityCacheItem(targetCkId);
 
-        var hierarchicalRtStatementCreator =
+        var hierarchicalRtQuery =
             new MultipleOriginHierarchicalRtQuery(entityCacheItem, _databaseContext, dataQueryOperation.Language,
                 originRtIds,
                 originCkId, roleId, graphDirection, targetCkId);
 
-        hierarchicalRtStatementCreator.AddFieldFilters(dataQueryOperation.FieldFilters);
-        hierarchicalRtStatementCreator.AddIdFilter(rtIds);
-        hierarchicalRtStatementCreator.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        hierarchicalRtStatementCreator.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        hierarchicalRtStatementCreator.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        hierarchicalRtQuery.AddFieldFilters(dataQueryOperation.FieldFilters);
+        hierarchicalRtQuery.AddIdFilter(rtIds);
+        hierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
+        hierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
+        hierarchicalRtQuery.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
 
-        return await hierarchicalRtStatementCreator.ExecuteQuery(session, skip, take);
+        return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
     }
 
     public async Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
@@ -378,19 +372,19 @@ internal class TenantRepository : ITenantRepositoryInternal
 
         var entityCacheItem = GetEntityCacheItem(targetCkId);
 
-        var hierarchicalRtStatementCreator =
-            new MultipleOriginHierarchicalRtQuery<TOriginEntity, TTargetEntity>(entityCacheItem, _databaseContext,
+        var originHierarchicalRtQuery =
+            new MultipleOriginHierarchicalRtQuery<TTargetEntity>(entityCacheItem, _databaseContext,
                 dataQueryOperation.Language,
                 originRtIds,
                 originCkId, roleId, graphDirection, targetCkId);
 
-        hierarchicalRtStatementCreator.AddFieldFilters(dataQueryOperation.FieldFilters);
-        hierarchicalRtStatementCreator.AddIdFilter(rtIds);
-        hierarchicalRtStatementCreator.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        hierarchicalRtStatementCreator.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        hierarchicalRtStatementCreator.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        originHierarchicalRtQuery.AddFieldFilters(dataQueryOperation.FieldFilters);
+        originHierarchicalRtQuery.AddIdFilter(rtIds);
+        originHierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
+        originHierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
+        originHierarchicalRtQuery.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
 
-        return await hierarchicalRtStatementCreator.ExecuteQuery(session, skip, take);
+        return await originHierarchicalRtQuery.ExecuteQuery(session, skip, take);
     }
 
     public async Task<IResultSet<TTargetEntity>?> GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(IOctoSession session, OctoObjectId originRtId,
@@ -414,19 +408,19 @@ internal class TenantRepository : ITenantRepositoryInternal
 
         var entityCacheItem = GetEntityCacheItem(targetCkId);
 
-        var rtStatementCreator =
-            new MultipleOriginIndirectHierarchicalRtQuery<TOriginEntity, TTargetEntity>(entityCacheItem, _databaseContext,
+        var hierarchicalRtQuery =
+            new MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity>(entityCacheItem, _databaseContext,
                 dataQueryOperation.Language,
                 originRtIds,
                 originCkId, roleId, graphDirection, targetCkId);
         
-        rtStatementCreator.AddFieldFilters(dataQueryOperation.FieldFilters);
-        rtStatementCreator.AddIdFilter(rtIds);
-        rtStatementCreator.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        rtStatementCreator.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        rtStatementCreator.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        hierarchicalRtQuery.AddFieldFilters(dataQueryOperation.FieldFilters);
+        hierarchicalRtQuery.AddIdFilter(rtIds);
+        hierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
+        hierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
+        hierarchicalRtQuery.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
 
-        return await rtStatementCreator.ExecuteQuery(session, skip, take);
+        return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
     }
 
     public async Task<IResultSet<RtEntity>> GetRtEntitiesByTypeAsync(IOctoSession session, CkId<CkTypeId> ckId,
@@ -447,14 +441,14 @@ internal class TenantRepository : ITenantRepositoryInternal
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null) where TEntity : RtEntity, new()
     {
         var entityCacheItem = GetEntityCacheItem(ckId);
-        var statementCreator =
+        var query =
             new SingleOriginRtQuery<TEntity>(entityCacheItem, _databaseContext, dataQueryOperation.Language);
-        statementCreator.AddFieldFilters(dataQueryOperation.FieldFilters);
-        statementCreator.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        statementCreator.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        statementCreator.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
+        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
+        query.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
 
-        return await statementCreator.ExecuteQuery(session, skip, take);
+        return await query.ExecuteQuery(session, skip, take);
     }
 
     public async Task<RtAssociation> GetRtAssociationAsync(IOctoSession session, RtEntityId rtEntityIdOrigin,

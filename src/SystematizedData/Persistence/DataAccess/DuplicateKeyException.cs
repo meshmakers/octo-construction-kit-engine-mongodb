@@ -1,24 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.Serialization;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 [Serializable]
 public class DuplicateKeyException : Exception
 {
-    //
-    // For guidelines regarding the creation of new exception types, see
-    //    http://msdn.microsoft.com/library/default.asp?url=/library/en-us/cpgenref/html/cpconerrorraisinghandlingguidelines.asp
-    // and
-    //    http://msdn.microsoft.com/library/default.asp?url=/library/en-us/dncscol/html/csharp07192001.asp
-    //
-
-    public DuplicateKeyException()
-    {
-    }
-
     public DuplicateKeyException(string message, Type type, Exception inner) : base(message, inner)
     {
         Type = type;
@@ -39,12 +27,6 @@ public class DuplicateKeyException : Exception
     {
         Type = type;
         Properties = properties;
-    }
-
-    protected DuplicateKeyException(
-        SerializationInfo info,
-        StreamingContext context) : base(info, context)
-    {
     }
 
     /// <summary>

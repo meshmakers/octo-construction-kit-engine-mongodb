@@ -6,7 +6,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 
 public interface IAssociationCacheItem
 {
-    string Name { get; set; }
+    string Name { get; }
     CkId<CkAssociationId> RoleId { get; set; }
     Multiplicities InboundMultiplicity { get; set; }
     Multiplicities OutboundMultiplicity { get; set; }

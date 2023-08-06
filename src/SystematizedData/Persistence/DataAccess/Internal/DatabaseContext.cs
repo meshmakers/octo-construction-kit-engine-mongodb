@@ -135,28 +135,33 @@ internal sealed class DatabaseContext : IDatabaseContext
         }
 
         foreach (var ckEntity in ckEntities)
-        foreach (var index in ckEntity.Indexes)
         {
-            if (index.IndexType == IndexTypes.None)
+            if (ckEntity.Indexes != null)
             {
-                continue;
-            }
+                foreach (var index in ckEntity.Indexes)
+                {
+                    if (index.IndexType == IndexTypes.None)
+                    {
+                        continue;
+                    }
 
-            var collection = GetRtCollection<RtEntity>(ckEntity.CkId);
+                    var collection = GetRtCollection<RtEntity>(ckEntity.CkId);
 
-            var newName = ckEntity.CkId.SemanticVersionedFullName.Replace(".", "_") + "_" + ObjectId.GenerateNewId();
+                    var newName = ckEntity.CkId.SemanticVersionedFullName.Replace(".", "_") + "_" + ObjectId.GenerateNewId();
 
-            switch (index.IndexType)
-            {
-                case IndexTypes.Ascending:
-                    await collection.CreateAscendingIndexAsync(newName,
-                        index.Fields.SelectMany(x => x.AttributeNames));
-                    break;
-                case IndexTypes.Text:
-                    await collection.CreateTextIndexAsync(newName, index.Language, index.Fields);
-                    break;
-                default:
-                    throw new NotImplementedException($"Index type {index.IndexType} is not implemented.");
+                    switch (index.IndexType)
+                    {
+                        case IndexTypes.Ascending:
+                            await collection.CreateAscendingIndexAsync(newName,
+                                index.Fields.SelectMany(x => x.AttributeNames));
+                            break;
+                        case IndexTypes.Text:
+                            await collection.CreateTextIndexAsync(newName, index.Language ?? "en", index.Fields);
+                            break;
+                        default:
+                            throw new NotImplementedException($"Index type {index.IndexType} is not implemented.");
+                    }
+                }
             }
         }
     }

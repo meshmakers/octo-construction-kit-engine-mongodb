@@ -133,7 +133,7 @@ public class TenantCkModelRepository : ITenantCkModelRepository
 
     public async Task DeleteCkModelOneAsync(IOctoSession session, CkModelId ckModelId)
     {
-        //await _databaseContext.CkModels.DeleteOneAsync(session, ckModelId);
+        await _databaseContext.CkModels.TryDeleteOneAsync(session, ckModelId);
     }
 
     public async Task InsertCkModelAsync(IOctoSession session, DatabaseEntities.CkModel ckModel)

@@ -8,7 +8,13 @@ internal static class Helper
         get
         {
             var location = typeof(Helper).Assembly.Location;
-            return Path.GetDirectoryName(location);
+            var assemblyDirectory = Path.GetDirectoryName(location);
+            if (string.IsNullOrWhiteSpace(assemblyDirectory))
+            {
+                throw new InvalidOperationException($"Could not determine assembly directory for {location}");
+            }
+
+            return assemblyDirectory;
         }
     }
 }

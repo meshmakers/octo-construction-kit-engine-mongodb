@@ -35,4 +35,30 @@ public class OperationFailedException : PersistenceException
     {
         return new OperationFailedException(text);
     }
+
+    public static Exception FormulaCalculationFailed(object searchTerm)
+    {
+        return new OperationFailedException($"Formula '{searchTerm}' cannot be calculated.");
+    }
+
+    public static Exception FormulaEvaluationFailed(object searchTerm)
+    {
+        return new OperationFailedException($"Term '{searchTerm}' cannot be evaluated by formula.");
+    }
+
+    public static Exception AttributeNameResolutionFailed(string fieldFilterAttributeName)
+    {
+        return new OperationFailedException($"Attribute name '{fieldFilterAttributeName}' cannot be resolved.");
+    }
+
+    public static Exception AttributeDoesNotExist(string attributeName, string getEntityName)
+    {
+        return new OperationFailedException(
+            $"Attribute '{attributeName}' does not exist on type '{getEntityName}'");
+    }
+
+    public static Exception NoFilterSet()
+    {
+        return new OperationFailedException("No filter set.");
+    }
 }

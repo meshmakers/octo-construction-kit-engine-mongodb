@@ -13,8 +13,6 @@ namespace Meshmakers.Octo.SystematizedData.Persistence;
 // ReSharper disable once UnusedMember.Global
 public class SystemContext : TenantContext, ISystemContextInternal
 {
-    private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
-
     public SystemContext(IOptions<OctoSystemConfiguration> systemConfiguration,
         ICkCacheService ckCacheService, ICkSystemModelService ckSystemModelService)
     : base(systemConfiguration, systemConfiguration.Value.SystemTenantId, systemConfiguration.Value.SystemDatabaseName.ToLower(), ckSystemModelService, ckCacheService)
@@ -82,16 +80,20 @@ public class SystemContext : TenantContext, ISystemContextInternal
             throw new DatabaseException("System database does not exist.");
         }
         
+        var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
+        var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.MakeKey();
 
-        await _cacheService.DistributeTenantModificationPreEventAsync(_systemConfiguration.Value.SystemTenantId);
-        await _systemRepositoryClient.DropRepositoryAsync(_systemConfiguration.Value.SystemDatabaseName);
-        await _cacheService.DistributeTenantModificationPostEventAsync(_systemConfiguration.Value.SystemTenantId);
+        await _cacheService.DistributeTenantModificationPreEventAsync(normalizedTenantId);
+        await _systemRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
+        await _cacheService.DistributeTenantModificationPostEventAsync(normalizedTenantId);
     }
 
     // ReSharper disable once MemberCanBePrivate.Global
     public async Task<bool> IsSystemTenantExistingAsync()
     {
-        return await IsDatabaseAlreadyExistingAsync(_systemConfiguration.Value.SystemDatabaseName);
+        var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
+
+        return await IsDatabaseAlreadyExistingAsync(normalizedDatabaseName);
     }
 
     #endregion TenantId Context Handling

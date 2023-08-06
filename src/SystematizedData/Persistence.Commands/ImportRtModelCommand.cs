@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Diagnostics;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.Exchange;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
@@ -19,7 +18,6 @@ public class ImportRtModelCommand : IImportRtModelCommand
     private readonly ConcurrentQueue<RtAssociation> _importAssociationQueue;
 
     private readonly ConcurrentQueue<RtEntity> _importEntityQueue;
-    private ITenantRepositoryInternal? _tenantRepository;
     private int _associationsCount;
 
     private int _entityProgressCount;
@@ -38,20 +36,20 @@ public class ImportRtModelCommand : IImportRtModelCommand
         Logger.Info("Importing RT entities using text started.");
 
         var tenantContext = await _systemContext.CreateChildTenantContextInternalAsync(tenantId);
-        _tenantRepository = await tenantContext.CreateOrGetTenantRepositoryInternalAsync();
+        var tenantRepository = await tenantContext.CreateOrGetTenantRepositoryInternalAsync();
 
-        var session = await _tenantRepository.StartSessionAsync();
+        var session = await tenantRepository.StartSessionAsync();
         try
         {
             session.StartTransaction();
 
             using (var stream = new StreamReader(jsonText))
             {
-                await RtSerializer.DeserializeAsync(stream, x => ImportEntity(session, x), cancellationToken);
+                await RtSerializer.DeserializeAsync(stream, x => ImportEntity(session, x, tenantRepository), cancellationToken);
             }
 
             // Finish the last entities
-            await ImportToDatabase(session);
+            await ImportToDatabase(session, tenantRepository);
 
             Logger.Info($"{_entityImportIds.Count} entities, {_associationsCount} associations imported.");
         }
@@ -71,15 +69,15 @@ public class ImportRtModelCommand : IImportRtModelCommand
         {
             session.StartTransaction();
             var tenantContext = await _systemContext.CreateChildTenantContextInternalAsync(tenantId);
-            _tenantRepository = await tenantContext.CreateOrGetTenantRepositoryInternalAsync();
+            var tenantRepository = await tenantContext.CreateOrGetTenantRepositoryInternalAsync();
 
             using (var stream = File.OpenText(filePath))
             {
-                await RtSerializer.DeserializeAsync(stream, x => ImportEntity(session, x), cancellationToken);
+                await RtSerializer.DeserializeAsync(stream, x => ImportEntity(session, x, tenantRepository), cancellationToken);
             }
 
             // Finish the last entities
-            await ImportToDatabase(session);
+            await ImportToDatabase(session, tenantRepository);
 
             Logger.Info($"{_entityImportIds.Count} entities, {_associationsCount} associations imported.");
         }
@@ -90,7 +88,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
         }
     }
 
-    private async Task ImportEntity(IOctoSession session, Common.Shared.Exchange.RtEntity modelRtEntity)
+    private async Task ImportEntity(IOctoSession session, Common.Shared.Exchange.RtEntity modelRtEntity, ITenantRepositoryInternal tenantRepository)
     {
         var progress = Interlocked.Increment(ref _entityProgressCount);
         if (progress > Max)
@@ -98,13 +96,12 @@ public class ImportRtModelCommand : IImportRtModelCommand
             Logger.Info($"{_importEntityQueue.Count} entities (total imports of {_entityImportIds.Count}) imported.");
             Interlocked.Exchange(ref _entityProgressCount, 1);
 
-            await ImportToDatabase(session);
+            await ImportToDatabase(session, tenantRepository);
         }
 
-        Debug.Assert(_tenantRepository != null, nameof(_tenantRepository) + " != null");
-        var entityCacheItem = _tenantRepository.GetEntityCacheItem(modelRtEntity.CkId);
+        var entityCacheItem = tenantRepository.GetEntityCacheItem(modelRtEntity.CkId);
 
-        var rtEntity = _tenantRepository.CreateTransientRtEntity(modelRtEntity.CkId);
+        var rtEntity = tenantRepository.CreateTransientRtEntity(modelRtEntity.CkId);
         rtEntity.RtId = modelRtEntity.RtId;
         rtEntity.RtChangedDateTime = modelRtEntity.RtChangedDateTime;
         rtEntity.RtCreationDateTime = modelRtEntity.RtCreationDateTime;
@@ -154,7 +151,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
         }
     }
 
-    private async Task ImportToDatabase(IOctoSession session)
+    private async Task ImportToDatabase(IOctoSession session, ITenantRepositoryInternal tenantRepository)
     {
         Logger.Info($"Importing {_importEntityQueue.Count} to database.");
 
@@ -193,13 +190,13 @@ public class ImportRtModelCommand : IImportRtModelCommand
             if (importEntities.Any())
             {
                 Logger.Info("Adding entities...");
-                await _tenantRepository.BulkInsertRtEntitiesAsync(session, importEntities);
+                await tenantRepository.BulkInsertRtEntitiesAsync(session, importEntities);
             }
 
             if (importAssociations.Any())
             {
                 Logger.Info("Adding associations...");
-                await _tenantRepository.BulkRtAssociationsAsync(session, importAssociations);
+                await tenantRepository.BulkRtAssociationsAsync(session, importAssociations);
             }
 
 

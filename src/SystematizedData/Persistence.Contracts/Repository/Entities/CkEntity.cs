@@ -43,7 +43,7 @@ public class CkEntity
     ///     Gets or sets a list of defined indexes
     /// </summary>
     public ICollection<CkEntityIndex>? Indexes { get; set; }
-    
+
     /// <summary>
     /// Gets or sets if the change stream should include pre and post images
     /// </summary>

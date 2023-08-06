@@ -16,7 +16,8 @@ using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
-internal class MultipleOriginIndirectHierarchicalRtQuery : MultipleOriginIndirectHierarchicalRtQuery<RtEntity, RtEntity>
+// ReSharper disable once UnusedType.Global
+internal class MultipleOriginIndirectHierarchicalRtQuery : MultipleOriginIndirectHierarchicalRtQuery<RtEntity>
 {
     internal MultipleOriginIndirectHierarchicalRtQuery(EntityCacheItem targetEntityCacheItem,
         IDatabaseContext databaseContext,
@@ -28,13 +29,10 @@ internal class MultipleOriginIndirectHierarchicalRtQuery : MultipleOriginIndirec
     }
 }
 
-internal class MultipleOriginIndirectHierarchicalRtQuery<TOriginEntity, TTargetEntity> : Query<TTargetEntity>
-    where TOriginEntity : RtEntity
-    where TTargetEntity : RtEntity, new()
+internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<TTargetEntity> where TTargetEntity : RtEntity, new()
 {
     private readonly IDatabaseContext _databaseContext;
     private readonly GraphDirections _graphDirection;
-    private readonly string _language;
     private readonly CkId<CkTypeId> _originCkId;
     private readonly CkId<CkAssociationId> _roleId;
     private readonly IEnumerable<OctoObjectId> _rtIds;
@@ -45,10 +43,10 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TOriginEntity, TTargetE
         IDatabaseContext databaseContext,
         string language, IEnumerable<OctoObjectId> rtIds, CkId<CkTypeId> originCkId, CkId<CkAssociationId> roleId,
         GraphDirections graphDirection, CkId<CkTypeId> targetCkId)
+        : base(language)
     {
         _targetEntityCacheItem = targetEntityCacheItem;
         _databaseContext = databaseContext;
-        _language = language;
         _rtIds = rtIds;
         _originCkId = originCkId;
         _roleId = roleId;
@@ -91,7 +89,12 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TOriginEntity, TTargetE
             new ExpressionAggregateExpressionDefinition<RtEntity, BsonValue>(x => x.RtId.ToObjectId(), new ExpressionTranslationOptions());
 
         AddTextFilterConstraintsToPipeline(pipelineStageDefinitions);
-        AddFilterConstraintsToPipeline(pipelineStageDefinitions);
+        var filterDefinitions = CreateFilterDefinitions();
+        if (filterDefinitions != null)
+        {
+            pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(filterDefinitions));
+        }
+
         AddSortConstraintsToPipeline(pipelineStageDefinitions);
 
         var projectDefinition = (ProjectionDefinition<BsonDocument, BsonDocument>)

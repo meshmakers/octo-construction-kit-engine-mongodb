@@ -20,7 +20,7 @@ internal class RtAttributeDictionarySerializer : DictionarySerializerBase<Dictio
     }
 
     public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args,
-        Dictionary<string, object> value)
+        Dictionary<string, object>? value)
     {
         if (value != null)
         {
@@ -29,7 +29,8 @@ internal class RtAttributeDictionarySerializer : DictionarySerializerBase<Dictio
         }
         else
         {
-            BsonSerializer.Serialize<object>(context.Writer, null);
+            var bsonWriter = context.Writer;
+            bsonWriter.WriteNull();
         }
     }
 
@@ -39,7 +40,7 @@ internal class RtAttributeDictionarySerializer : DictionarySerializerBase<Dictio
         var dic = BsonSerializer.Deserialize<Dictionary<string, object>>(context.Reader);
         if (dic == null)
         {
-            return null;
+            return null!;
         }
 
         var ret = new Dictionary<string, object>();

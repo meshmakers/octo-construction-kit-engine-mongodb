@@ -32,7 +32,6 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<TEntity> where T
                attributeName == nameof(RtEntity.RtId) ||
                attributeName == nameof(RtEntity.RtCreationDateTime) ||
                attributeName == nameof(RtEntity.RtChangedDateTime) ||
-               attributeName == nameof(RtEntity.RtWellKnownName) ||
                attributeName == nameof(RtEntity.RtWellKnownName);
     }
 

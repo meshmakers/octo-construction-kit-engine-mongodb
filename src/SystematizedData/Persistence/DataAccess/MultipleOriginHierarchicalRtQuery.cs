@@ -15,7 +15,7 @@ using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
-internal class MultipleOriginHierarchicalRtQuery : MultipleOriginHierarchicalRtQuery<RtEntity, RtEntity>
+internal class MultipleOriginHierarchicalRtQuery : MultipleOriginHierarchicalRtQuery<RtEntity>
 {
     internal MultipleOriginHierarchicalRtQuery(IEntityCacheItem targetEntityCacheItem,
         IDatabaseContext databaseContext,
@@ -27,13 +27,10 @@ internal class MultipleOriginHierarchicalRtQuery : MultipleOriginHierarchicalRtQ
     }
 }
 
-internal class MultipleOriginHierarchicalRtQuery<TOriginEntity, TTargetEntity> : Query<TTargetEntity>
-    where TOriginEntity : RtEntity
-    where TTargetEntity : RtEntity, new()
+internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetEntity> where TTargetEntity : RtEntity, new()
 {
     private readonly IDatabaseContext _databaseContext;
     private readonly GraphDirections _graphDirection;
-    private readonly string _language;
     private readonly CkId<CkTypeId> _originCkId;
     private readonly CkId<CkAssociationId> _roleId;
     private readonly IEnumerable<OctoObjectId> _rtIds;
@@ -44,10 +41,10 @@ internal class MultipleOriginHierarchicalRtQuery<TOriginEntity, TTargetEntity> :
         IDatabaseContext databaseContext,
         string language, IEnumerable<OctoObjectId> rtIds, CkId<CkTypeId> originCkId, CkId<CkAssociationId> roleId,
         GraphDirections graphDirection, CkId<CkTypeId> targetCkId)
+        : base(language)
     {
         _targetEntityCacheItem = targetEntityCacheItem;
         _databaseContext = databaseContext;
-        _language = language;
         _rtIds = rtIds;
         _originCkId = originCkId;
         _roleId = roleId;
@@ -96,13 +93,18 @@ internal class MultipleOriginHierarchicalRtQuery<TOriginEntity, TTargetEntity> :
 
 
         AddTextFilterConstraintsToPipeline(pipelineStageDefinitions);
-        AddFilterConstraintsToPipeline(pipelineStageDefinitions);
+        var filterDefinitions = CreateFilterDefinitions();
+        if (filterDefinitions != null)
+        {
+            pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(filterDefinitions));
+        }
+
         AddSortConstraintsToPipeline(pipelineStageDefinitions);
 
 
         var aggregate = _databaseContext.GetRtCollection<RtEntity>(_originCkId).Aggregate(session)
             .Match(
-                Builders<RtEntity>.Filter.And(Builders<RtEntity>.Filter.In(x => x.RtId.ToObjectId(), _rtIds.Cast<ObjectId>())))
+                Builders<RtEntity>.Filter.And(Builders<RtEntity>.Filter.In(x => x.RtId, _rtIds)))
             .Lookup(
                 _databaseContext.RtAssociations.GetMongoCollection(),
                 connectFromField,
@@ -110,40 +112,6 @@ internal class MultipleOriginHierarchicalRtQuery<TOriginEntity, TTargetEntity> :
                 PipelineDefinition<RtAssociation, TTargetEntity>.Create(pipelineStageDefinitions),
                 @as
             );
-
-
-        // In documentation, text search must be at first place
-        //  aggregate = AddTextFilterConstraintsToPipeline(aggregate);
-        //
-        // if (filters.Any())
-        // {
-        //     var filterDefinition = Builders<TEntity>.Filter.Empty;
-        //     if (filters.Any())
-        //     {
-        //         if (filters.Count == 1)
-        //         {
-        //             filterDefinition = filters.First();
-        //         }
-        //         else
-        //         {
-        //             filterDefinition = Builders<TEntity>.Filter.And(filters);
-        //         }
-        //     }
-        //
-        //     aggregate = aggregate.Match(filterDefinition);
-        // }
-
-        // aggregate1 = aggregate1.Lookup(
-        //     _databaseContext.GetRtCollection<RtEntity>(_targetCkId).GetMongoCollection().CollectionNamespace
-        //         .CollectionName,
-        //     "rtassocs.targetRtId", "_id", "associations");
-        // aggregate1 = aggregate1.Unwind("associations");
-        // aggregate1 =
-        //     aggregate1.ReplaceRoot<BsonDocument>("{ $mergeObjects: [{_originId: '$_id'}, '$associations']}");
-        //
-
-        // TODO: Filter for targets
-
 
         var aggregate2 = aggregate.ReplaceWith(
             (AggregateExpressionDefinition<BsonDocument, QueryMultipleResult<TTargetEntity>>)
@@ -196,15 +164,15 @@ internal class MultipleOriginHierarchicalRtQuery<TOriginEntity, TTargetEntity> :
 
         return $"{Constants.AttributesName}.{attributeName.ToCamelCase()}";
     }
-    
-    protected override object ResolveSearchAttributeValue(string attributeName, object searchTerm, out bool isEnum)
+
+    protected override object? ResolveSearchAttributeValue(string attributeName, object? searchTerm, out bool isEnum)
     {
         if (searchTerm != null &&
             _targetEntityCacheItem.Attributes.TryGetValue(attributeName, out var attributeCacheItem))
         {
             if (attributeCacheItem.SelectionValues != null)
             {
-                var searchTermString = searchTerm.ToString().Replace("_", "");
+                var searchTermString = searchTerm.ToString()?.Replace("_", "");
 
                 // Search for match in selection value
                 var result = attributeCacheItem.SelectionValues.FirstOrDefault(x =>
@@ -218,27 +186,35 @@ internal class MultipleOriginHierarchicalRtQuery<TOriginEntity, TTargetEntity> :
 
             if (searchTerm.ToString()?.StartsWith("@") == true)
             {
-                var expression = new OctoExpression(searchTerm.ToString()?.Substring(1));
-                var result = expression.calculate();
-
-                if (double.IsNegativeInfinity(result))
+                var expressionString = searchTerm.ToString()?.Substring(1);
+                if (string.IsNullOrWhiteSpace(expressionString) && expressionString != null)
                 {
-                    isEnum = false;
-                    return null;
-                }
-
-                if (!double.IsNaN(result))
-                {
-                    switch (attributeCacheItem.AttributeValueType)
+                    var expression = new OctoExpression(expressionString);
+                    var result = expression.calculate();
+                    
+                    if (double.IsNegativeInfinity(result))
                     {
-                        case AttributeValueTypes.DateTime:
-                            isEnum = false;
-                            return new DateTime((long)result);
+                        isEnum = false;
+                        return null;
+                    }
+
+                    if (!double.IsNaN(result))
+                    {
+                        switch (attributeCacheItem.AttributeValueType)
+                        {
+                            case AttributeValueTypes.DateTime:
+                                isEnum = false;
+                                return new DateTime((long)result);
+                        }
+                    }
+                    else
+                    {
+                        throw OperationFailedException.FormulaCalculationFailed(searchTerm);
                     }
                 }
                 else
                 {
-                    throw new OperationFailedException($"Term '{searchTerm}' cannot be evaluated by formula.");
+                    throw OperationFailedException.FormulaEvaluationFailed(searchTerm);
                 }
             }
 

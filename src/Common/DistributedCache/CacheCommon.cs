@@ -16,9 +16,13 @@ public static class CacheCommon
     public const string KeyCorsClients = "CorsPolicyProvider_CorsClients";
 
     /// <summary>
-    ///     Channel of tenant updates
+    /// Key of tenant updates for pre processing
     /// </summary>
     public const string KeyTenantPreUpdate = "TenantUpdatePre";
+    
+    /// <summary>
+    /// Key of tenant updates for post processing
+    /// </summary>
     public const string KeyTenantPostUpdate = "TenantUpdatePost";
     
     /// <summary>

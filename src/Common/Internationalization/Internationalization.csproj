@@ -2,7 +2,6 @@
 
     <PropertyGroup>
         <AssemblyName>Meshmakers.Octo.Common.Internationalization</AssemblyName>
-        <PackageIcon>meshmakers64.png</PackageIcon>
         <PackageId>Meshmakers.Octo.Common.Intenationalization</PackageId>
         <PackageLicenseFile>LICENSE</PackageLicenseFile>
         <RepositoryUrl>https://github.com/meshmakers/octomesh</RepositoryUrl>

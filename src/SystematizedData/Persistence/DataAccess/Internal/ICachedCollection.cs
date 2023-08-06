@@ -1,8 +1,4 @@
-using System;
-using System.Collections.Generic;
 using System.Linq.Expressions;
-using System.Threading;
-using System.Threading.Tasks;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using MongoDB.Driver;
 
@@ -34,7 +30,10 @@ public interface ICachedCollection<TDocument> where TDocument : class, new()
         where TDerived : TDocument, new();
 
     Task<IEnumerable<TDocument>> GetAsync(IOctoSession session, int? skip = null, int? take = null);
+
+    Task TryDeleteOneAsync<TField>(IOctoSession session, TField id);
     Task DeleteOneAsync<TField>(IOctoSession session, TField id);
+    Task DeleteOneAsync(IOctoSession session, FilterDefinition<TDocument> filter);
     Task DeleteOneAsync(IOctoSession session, Expression<Func<TDocument, bool>> expression);
 
     Task DeleteManyAsync<TField>(IOctoSession session, IEnumerable<TField> ids);

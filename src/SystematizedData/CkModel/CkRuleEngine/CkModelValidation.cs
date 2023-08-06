@@ -128,37 +128,40 @@ public class CkModelValidation
 
         var missingAttributes = new List<string>();
         var unknownAnalyzers = new List<string>();
-        foreach (var ckEntityIndex in ckEntity.Indexes)
+        if (ckEntity.Indexes != null)
         {
-            if (ckEntityIndex.IndexType == IndexTypes.Text &&
-                !CkModelCommon.KnownAnalyzerLanguages.Contains(ckEntityIndex.Language))
+            foreach (var ckEntityIndex in ckEntity.Indexes)
             {
-                unknownAnalyzers.Add(ckEntityIndex.Language ?? "en");
-            }
-
-            foreach (var ckIndexFields in ckEntityIndex.Fields)
-            {
-                var missingAttributeList = ckIndexFields.AttributeNames.Where(s =>
-                    !attributes.Exists(attribute => attribute.AttributeName == s)).ToArray();
-                if (missingAttributeList.Any())
+                if (ckEntityIndex.IndexType == IndexTypes.Text &&
+                    !CkModelCommon.KnownAnalyzerLanguages.Contains(ckEntityIndex.Language))
                 {
-                    missingAttributes.AddRange(missingAttributeList);
+                    unknownAnalyzers.Add(ckEntityIndex.Language ?? "en");
                 }
 
-                var duplicateAttributeNames =
-                    ckIndexFields.AttributeNames.GroupBy(a => a).Where(a => a.Count() > 1).ToList();
-                if (duplicateAttributeNames.Count > 0)
+                foreach (var ckIndexFields in ckEntityIndex.Fields)
                 {
-                    var attributeNames = string.Join(", ", duplicateAttributeNames.Select(x => x.Key));
-                    errorMessageStringBuilder.AppendLine(
-                        $"Text search language '{ckEntityIndex.Language}' at CkId '{ckEntity.CkId}' has duplicate attribute names in one definition: '{attributeNames}'");
-                }
+                    var missingAttributeList = ckIndexFields.AttributeNames.Where(s =>
+                        !attributes.Exists(attribute => attribute.AttributeName == s)).ToArray();
+                    if (missingAttributeList.Any())
+                    {
+                        missingAttributes.AddRange(missingAttributeList);
+                    }
 
-                if (ckEntityIndex.IndexType == IndexTypes.Text && ckIndexFields.Weight.HasValue &&
-                    ckIndexFields.Weight < 1)
-                {
-                    errorMessageStringBuilder.AppendLine(
-                        $"Weight '{ckIndexFields.Weight}' for language '{ckEntityIndex.Language}' at CkId '{ckEntity.CkId}' is invalid.");
+                    var duplicateAttributeNames =
+                        ckIndexFields.AttributeNames.GroupBy(a => a).Where(a => a.Count() > 1).ToList();
+                    if (duplicateAttributeNames.Count > 0)
+                    {
+                        var attributeNames = string.Join(", ", duplicateAttributeNames.Select(x => x.Key));
+                        errorMessageStringBuilder.AppendLine(
+                            $"Text search language '{ckEntityIndex.Language}' at CkId '{ckEntity.CkId}' has duplicate attribute names in one definition: '{attributeNames}'");
+                    }
+
+                    if (ckEntityIndex.IndexType == IndexTypes.Text && ckIndexFields.Weight.HasValue &&
+                        ckIndexFields.Weight < 1)
+                    {
+                        errorMessageStringBuilder.AppendLine(
+                            $"Weight '{ckIndexFields.Weight}' for language '{ckEntityIndex.Language}' at CkId '{ckEntity.CkId}' is invalid.");
+                    }
                 }
             }
         }

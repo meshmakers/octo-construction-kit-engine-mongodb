@@ -67,7 +67,7 @@ public class CkCache : ICkCache
             {
                 foreach (var textSearchLanguage in ckTypeInfo.TextSearchLanguages)
                 {
-                    var textSearchCacheItem = new TextSearchLanguageCacheItem(textSearchLanguage.Language);
+                    var textSearchCacheItem = new TextSearchLanguageCacheItem(textSearchLanguage.Language ?? "en");
 
                     foreach (var textSearchField in textSearchLanguage.Fields)
                     {
@@ -186,16 +186,16 @@ public class CkCache : ICkCache
                     baseTypesChain.AddRange(targetInfo.GetAllDerivedTypes(true));
                 }
 
-                roleAssociationItems.Add(new AssociationCacheItem
-                {
-                    RoleId = entityAssociationByRole.Key,
-                    Name = graphDirections == GraphDirections.Inbound
-                        ? entityAssociationByRole.First().AssocationRole.InboundName
-                        : entityAssociationByRole.First().AssocationRole.OutboundName,
-                    InboundMultiplicity = entityAssociationByRole.First().AssocationRole.InboundMultiplicity,
-                    OutboundMultiplicity = entityAssociationByRole.First().AssocationRole.OutboundMultiplicity,
-                    AllowedTypes = baseTypesChain.Where(x => !x.IsAbstract).ToList()
-                });
+                roleAssociationItems.Add(new AssociationCacheItem(
+                        graphDirections == GraphDirections.Inbound
+                            ? entityAssociationByRole.First().AssocationRole.InboundName
+                            : entityAssociationByRole.First().AssocationRole.OutboundName,
+                        entityAssociationByRole.Key,
+                        entityAssociationByRole.First().AssocationRole.InboundMultiplicity,
+                        entityAssociationByRole.First().AssocationRole.OutboundMultiplicity,
+                        baseTypesChain.Where(x => !x.IsAbstract).ToList()
+                    )
+                );
             }
 
             associations.Add(entityAssociations.Key, roleAssociationItems);

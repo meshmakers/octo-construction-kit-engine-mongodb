@@ -60,10 +60,14 @@ public readonly struct CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, I
         }
     }
 
-    public CkTypeId(string typeId, string typeVersion = "1.0.0") 
+    public CkTypeId(string typeId, string version = "1.0.0") 
     {
         TypeId = typeId;
-        Version = typeVersion;
+        Version = version;
+        if (string.IsNullOrWhiteSpace(TypeId))
+        {
+            throw new ArgumentOutOfRangeException(nameof(typeId), typeId, $"{nameof(typeId)} must contain a type id");
+        }
     }
     
     public static implicit operator CkTypeId(string value)

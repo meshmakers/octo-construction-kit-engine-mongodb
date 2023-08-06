@@ -1,9 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Linq.Expressions;
-using System.Threading;
-using System.Threading.Tasks;
+﻿using System.Linq.Expressions;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
@@ -269,6 +264,21 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
             throw new OperationFailedException(e.Message, e);
         }
     }
+    
+    public async Task TryDeleteOneAsync<TField>(IOctoSession session, TField id)
+    {
+        try
+        {
+            var filter = Builders<TDocument>.Filter.BuildIdFilter(id);
+            var deleteResult = await _documentCollection.DeleteOneAsync(((IOctoSessionInternal)session).SessionHandle, filter);
+            ThrowIfNotAcknowledged(deleteResult.IsAcknowledged);
+        }
+        catch (MongoException e)
+        {
+            Logger.Error(e);
+            throw new OperationFailedException(e.Message, e);
+        }
+    }
 
     public async Task DeleteOneAsync<TField>(IOctoSession session, TField id)
     {
@@ -294,6 +304,22 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
                 await _documentCollection.DeleteOneAsync(((IOctoSessionInternal)session).SessionHandle, expression);
             ThrowIfNotAcknowledged(deleteResult.IsAcknowledged);
             ThrowIfMatchedCountZero<TDocument>(deleteResult.DeletedCount, expression);
+        }
+        catch (MongoException e)
+        {
+            Logger.Error(e);
+            throw new OperationFailedException(e.Message, e);
+        }
+    }
+    
+    public async Task DeleteOneAsync(IOctoSession session, FilterDefinition<TDocument> filter)
+    {
+        try
+        {
+            var deleteResult =
+                await _documentCollection.DeleteOneAsync(((IOctoSessionInternal)session).SessionHandle, filter);
+            ThrowIfNotAcknowledged(deleteResult.IsAcknowledged);
+            ThrowIfMatchedCountZero<TDocument>(deleteResult.DeletedCount, filter);
         }
         catch (MongoException e)
         {
@@ -495,6 +521,16 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
             throw new EntityNotFoundException(message);
         }
     }
+    
+    private void ThrowIfMatchedCountZero<T>(long matchedCount, FilterDefinition<TDocument> filter)
+    {
+        if (matchedCount == 0)
+        {
+            var message =
+                $"Operation failed because filter '{filter}' did not match any documents for type {nameof(T)}.";
+            throw new EntityNotFoundException(message);
+        }
+    }
 
     private void ThrowIfMatchedCountZero<TField>(long matchedCount, TField idField)
     {
@@ -505,7 +541,7 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
             throw new EntityNotFoundException(message);
         }
     }
-
+    
     // ReSharper disable once ParameterOnlyUsedForPreconditionCheck.Local
     private void ThrowIfMatchedCountZero(long matchedCount)
     {

@@ -10,14 +10,14 @@ namespace Meshmakers.Octo.Common.Shared.Exchange;
 
 public static class RtSerializer
 {
-    public static async Task Serialize(StreamWriter streamWriter, RtModelRoot model)
+    public static async Task SerializeAsync(StreamWriter streamWriter, RtModelRoot model)
     {
         var options = new JsonSerializerOptions {  DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault };
 
         await JsonSerializer.SerializeAsync(streamWriter.BaseStream, model, options);
     }
 
-    public static async Task DeserializeAsync(StreamReader textReader, Func<RtEntity?, Task> entityDeserializedAction,
+    public static async Task DeserializeAsync(StreamReader textReader, Func<RtEntity, Task> entityDeserializedAction,
         CancellationToken? cancellationToken = null)
     {
         var options = new JsonDocumentOptions {  };

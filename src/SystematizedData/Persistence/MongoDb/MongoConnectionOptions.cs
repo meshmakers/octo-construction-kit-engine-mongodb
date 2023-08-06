@@ -1,10 +1,12 @@
-﻿namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
+﻿// ReSharper disable PropertyCanBeMadeInitOnly.Global
+namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 
 /// <summary>
 ///     The configuration for MongoDB.
 /// </summary>
 public class MongoConnectionOptions
 {
+    // ReSharper disable once ConvertConstructorToMemberInitializers
     public MongoConnectionOptions()
     {
         MongoDbHost = "localhost:27017";
@@ -16,7 +18,7 @@ public class MongoConnectionOptions
     }
 
     public string MongoDbHost { get; set; }
-    public string MongoDbUsername { get; set; }
+    public string MongoDbUsername { get; set; } = null!;
     public string? MongoDbPassword { get; set; }
     public string DatabaseName { get; set; }
     public string AuthenticationSource { get; set; }
