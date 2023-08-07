@@ -162,6 +162,26 @@ public readonly struct OctoObjectId : IComparable<OctoObjectId>, IEquatable<Octo
     {
         return lhs.CompareTo(rhs) > 0;
     }
+    
+    /// <summary>
+    /// Allows the OctoObjectId to be used as a string
+    /// </summary>
+    /// <param name="objectId"></param>
+    /// <returns></returns>
+    public static implicit operator string (OctoObjectId objectId)
+    {
+        return objectId.ToString();
+    }
+
+    /// <summary>
+    /// Allows to pass strings where an OctoObjectId is required
+    /// </summary>
+    /// <param name="string"></param>
+    /// <returns></returns>
+    public static implicit operator OctoObjectId(string @string)
+    {
+        return new OctoObjectId(@string);
+    }
 
     // public static methods
     /// <summary>
