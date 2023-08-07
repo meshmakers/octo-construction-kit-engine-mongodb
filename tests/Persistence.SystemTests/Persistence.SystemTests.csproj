@@ -7,7 +7,6 @@
         <PackageProjectUrl>https://www.meshmakers.io</PackageProjectUrl>
         <RepositoryUrl>https://github.com/meshmakers/octomesh</RepositoryUrl>
         <RootNamespace>Meshmakers.Octo.Backend.Persistence.SystemTests</RootNamespace>
-        <TargetFramework>net7.0</TargetFramework>
     </PropertyGroup>
 
     <ItemGroup>
@@ -37,5 +36,6 @@
       <ProjectReference Include="..\..\src\SystematizedData\Persistence.Commands\Persistence.Commands.csproj" />
       <ProjectReference Include="..\..\src\SystematizedData\Persistence\Persistence.csproj" />
     </ItemGroup>
+
 
 </Project>

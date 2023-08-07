@@ -1,0 +1,50 @@
+{
+  "entities": [
+    {
+      "ckId": "Location",
+      "ckDerivedId": "System/Entity",
+      "isFinal": true,
+      "isAbstract": true,
+      "attributes": [
+        {
+          "id": "Test/Designation",
+          "name": "Designation"
+        }
+      ]
+    },
+    {
+      "ckId": "Planet",
+      "ckDerivedId": "Test/Location",
+      "isFinal": false,
+      "isAbstract": false,
+      "attributes": [
+      ]
+    },
+    {
+      "ckId": "City",
+      "ckDerivedId": "Test/Location",
+      "isFinal": true,
+      "isAbstract": false,
+      "attributes": [
+      ]
+    },
+    {
+      "ckId": "PoliticalOrganization",
+      "ckDerivedId": "System/Entity",
+      "isFinal": true,
+      "isAbstract": false,
+      "attributes": [
+        {
+          "id": "Test/Designation",
+          "name": "Designation"
+        }
+      ],
+      "associations": [
+        {
+          "roleId": "System/Related",
+          "targetCkId": "Test/City"
+        }
+      ]
+    }
+  ]
+}

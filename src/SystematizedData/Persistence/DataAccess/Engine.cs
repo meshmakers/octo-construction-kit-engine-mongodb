@@ -42,7 +42,7 @@ public class Engine<TEntity> where TEntity : class, new()
         }
 
         var memberMap = _bsonClassMap.GetMemberMap(attributeName);
-        if (!memberMap.ShouldSerializeMethod.Invoke(null))
+        if (memberMap == null || !memberMap.ShouldSerializeMethod.Invoke(null))
         {
             return null;
         }

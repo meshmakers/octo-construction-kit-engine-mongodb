@@ -41,6 +41,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Notifications", "src\System
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharedTests", "tests\SharedTests\SharedTests.csproj", "{4896425A-129C-42EB-84A7-C6B5A247AB7D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CkModel.Contracts", "src\SystematizedData\CkModel.Contracts\CkModel.Contracts.csproj", "{C380FDCD-4928-465D-9A03-7C08578D3C88}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -66,6 +68,7 @@ Global
 		{A0759E49-BFA9-4E4C-B420-6F6302AA8B43} = {B55553CF-14AC-483E-AD30-B8FBFE5B94D9}
 		{A4096D30-6E86-4BA9-A9B0-61AFCE550E92} = {B55553CF-14AC-483E-AD30-B8FBFE5B94D9}
 		{4896425A-129C-42EB-84A7-C6B5A247AB7D} = {892E504C-F5AE-42E7-9271-53552EB95CF4}
+		{C380FDCD-4928-465D-9A03-7C08578D3C88} = {B55553CF-14AC-483E-AD30-B8FBFE5B94D9}
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{39AA64A0-FEF5-48A3-82A4-3A655953FED1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
@@ -136,5 +139,9 @@ Global
 		{4896425A-129C-42EB-84A7-C6B5A247AB7D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4896425A-129C-42EB-84A7-C6B5A247AB7D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{4896425A-129C-42EB-84A7-C6B5A247AB7D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C380FDCD-4928-465D-9A03-7C08578D3C88}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C380FDCD-4928-465D-9A03-7C08578D3C88}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C380FDCD-4928-465D-9A03-7C08578D3C88}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C380FDCD-4928-465D-9A03-7C08578D3C88}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

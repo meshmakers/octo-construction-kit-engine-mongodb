@@ -1,48 +1,47 @@
-using System.Collections.Generic;
-using System.Linq;
 using Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
 using Meshmakers.Octo.Backend.Persistence.SystemTests.Fixtures;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
-using MongoDB.Bson;
 using Xunit;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemTests;
 
-public class UnitTest1 : IClassFixture<TenantFixture>
+public class RtEntityTests : IClassFixture<SystemFixture>
 {
-    private readonly TenantFixture _tenantFixture;
+    private readonly SystemFixture _systemFixture;
 
-    public UnitTest1(TenantFixture tenantFixture)
+    public RtEntityTests(SystemFixture systemFixture)
     {
-        _tenantFixture = tenantFixture;
+        _systemFixture = systemFixture;
     }
 
     [Fact]
     public async void TestGetIndirectRtAssociationTargets()
     {
-        var repository = await _tenantFixture.GetTenantRepositoryAsync();
+        var systemContext = _systemFixture.GetSystemContext();
+        var tenantRepository = await systemContext.CreateOrGetTenantRepositoryAsync();
 
-        using (var session = await repository.StartSessionAsync())
+        using (var session = await tenantRepository.StartSessionAsync())
         {
             session.StartTransaction();
 
             OctoObjectId originRtId = OctoObjectId.Parse("5fc8fc3d8b2fc75f925e21bc");
 
 
-            var r = await repository.GetIndirectRtAssociationTargetsAsync<RtPlugMapping, RtPlug>(session, originRtId, Statics.RoleIdParentChild,
+            var r = await tenantRepository.GetIndirectRtAssociationTargetsAsync<RtCity, RtLocation>(session, originRtId,
+                TestCkModel.RoleIdParentChild,
                 GraphDirections.Outbound);
-
         }
     }
 
     [Fact]
     public async void Test1()
     {
-        var tenantContext = await _tenantFixture.GetTenantRepositoryAsync();
+        var systemContext = _systemFixture.GetSystemContext();
+        var tenantRepository = await systemContext.CreateOrGetTenantRepositoryAsync();
 
-        using (var session = await tenantContext.StartSessionAsync())
+        using (var session = await tenantRepository.StartSessionAsync())
         {
             // var result = await tenantContext.GetRtEntitiesByTypeAsync(session, "PaketService.Contact",
             //     new DataQueryOperation(), 0, 5);
@@ -53,7 +52,7 @@ public class UnitTest1 : IClassFixture<TenantFixture>
             //     new DataQueryOperation(), 0, 5);
 
 
-          //  Assert.Equal(5, deep.Count);
+            //  Assert.Equal(5, deep.Count);
             // Assert.Collection(deep, 
             //     pair => Assert.Equal(5, pair.Value.Result.Count()),
             //     pair => Assert.Equal(5, pair.Value.Result.Count()),
@@ -67,7 +66,8 @@ public class UnitTest1 : IClassFixture<TenantFixture>
     [Fact]
     public async void Test2()
     {
-        var tenantRepository = await _tenantFixture.GetTenantRepositoryAsync();
+        var systemContext = _systemFixture.GetSystemContext();
+        var tenantRepository = await systemContext.CreateOrGetTenantRepositoryAsync();
 
         using (var session = await tenantRepository.StartSessionAsync())
         {

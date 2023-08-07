@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <AssemblyName>Meshmakers.Octo.SystematizedData.CkModel.Contracts</AssemblyName>
+        <RootNamespace>Meshmakers.Octo.SystematizedData.CkModel.Contracts</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\..\Common\Shared\Shared.csproj" />
+    </ItemGroup>
+    
+</Project>

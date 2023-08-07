@@ -296,24 +296,20 @@ public class TenantContext : ITenantContextInternal
     #region Configuration
 
     public async Task<TValueType?> GetConfigurationAsync<TValueType>(IOctoSession systemSession, string key,
-        TValueType defaultValue) where
+        TValueType? defaultValue) where
         TValueType
-        : struct
+        : class
     {
         ArgumentValidation.ValidateString(nameof(key), key);
         var o = await GetConfigAsync(systemSession, key, defaultValue);
-        if (o == null)
-        {
-            return null;
-        }
 
-        return (TValueType)Convert.ChangeType(o, typeof(TValueType));
+        return o;
     }
 
     public async Task<string?> GetConfigurationAsync(IOctoSession systemSession, string key, string? defaultValue = null)
     {
         ArgumentValidation.ValidateString(nameof(key), key);
-        return (string?)await GetConfigAsync(systemSession, key, defaultValue);
+        return await GetConfigAsync(systemSession, key, defaultValue);
     }
 
 
@@ -417,7 +413,7 @@ public class TenantContext : ITenantContextInternal
         return await _systemRepositoryClient.IsRepositoryExistingAsync(databaseName);
     }
 
-    private async Task<object?> GetConfigAsync(IOctoSession systemSession, string key, object? defaultValue)
+    private async Task<TType?> GetConfigAsync<TType>(IOctoSession systemSession, string key, TType? defaultValue)
     {
         var tenantRepository = await CreateTenantRepositoryAsync();
 
@@ -431,7 +427,8 @@ public class TenantContext : ITenantContextInternal
             return defaultValue;
         }
 
-        return configuration.ConfigurationValue.Deserialize<object>();
+        var result = configuration.ConfigurationValue.Deserialize<TType>();
+        return result;
     }
 
     #endregion Private methods

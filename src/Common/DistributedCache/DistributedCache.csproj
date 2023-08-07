@@ -8,8 +8,6 @@
         <PackageProjectUrl>https://www.meshmakers.io</PackageProjectUrl>
         <RepositoryUrl>https://github.com/meshmakers/octomesh</RepositoryUrl>
         <RootNamespace>Meshmakers.Octo.Common.DistributedCache</RootNamespace>
-        <TargetFramework>net7.0</TargetFramework>
-        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     </PropertyGroup>
 
     <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">

@@ -12,5 +12,5 @@ public static class SystemCkModel
     public const string SystemAutoIncrementCkId = "AutoIncrement";
     public const string SystemQueryCkId = "Query";
     public const string SystemTenantCkId = "Tenant";
-    public const string SystemConfigurationCkId = "Conficuration";
+    public const string SystemConfigurationCkId = "Configuration";
 }

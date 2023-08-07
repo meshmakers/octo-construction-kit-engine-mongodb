@@ -9,13 +9,11 @@
         <PackageProjectUrl>https://www.meshmakers.io</PackageProjectUrl>
         <RepositoryUrl>https://github.com/meshmakers/octomesh</RepositoryUrl>
         <RootNamespace>Meshmakers.Octo.Common.Shared</RootNamespace>
-        <TargetFramework>net7.0</TargetFramework>
     </PropertyGroup>
 
     <PropertyGroup>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <NoWarn>$(NoWarn);1591</NoWarn>
-        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">

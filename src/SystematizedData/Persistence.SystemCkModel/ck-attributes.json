@@ -9,18 +9,6 @@
       "valueType": "Boolean"
     },
     {
-      "id": "Description",
-      "valueType": "String"
-    },
-    {
-      "id": "Contacts.FirstName",
-      "valueType": "String"
-    },
-    {
-      "id": "Contacts.LastName",
-      "valueType": "String"
-    },
-    {
       "id": "TenantId",
       "valueType": "String"
     },

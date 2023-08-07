@@ -39,7 +39,7 @@ public class CkTypeInfo
     /// </summary>
     public ICollection<CkEntityIndex>? TextSearchLanguages { get; set; }
 
-    public string Path => CkId + ": " + string.Join("->", BaseTypes.Select(x => x.OriginCkId)) ?? "(none)";
+    public string Path => CkId + ": " + string.Join("->", BaseTypes.Select(x => x.OriginCkId));
 }
 
 // ReSharper disable once ClassNeverInstantiated.Global

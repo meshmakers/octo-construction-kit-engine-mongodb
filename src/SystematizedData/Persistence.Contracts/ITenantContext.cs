@@ -35,9 +35,8 @@ public interface ITenantContext
     Task<ITenantRepository> CreateOrGetTenantRepositoryAsync();
 
     Task<TValueType?> GetConfigurationAsync<TValueType>(IOctoSession systemSession, string key,
-        TValueType defaultValue) where
-        TValueType
-        : struct;
+        TValueType? defaultValue) where
+        TValueType : class;
 
     Task<string?> GetConfigurationAsync(IOctoSession systemSession, string key, string? defaultValue = null);
 
