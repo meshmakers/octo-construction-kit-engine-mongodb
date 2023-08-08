@@ -13,7 +13,7 @@ public class CkEntityAssociation
     [JsonPropertyName("roleId")]
     [JsonRequired]
     [JsonConverter(typeof(CkIdAssociationIdConverter))]
-    public CkId<CkAssociationId> RoleId { get; set; }
+    public CkId<CkAssociationRoleId> RoleId { get; set; }
 
     [JsonPropertyName("targetCkId")]
     [JsonRequired]

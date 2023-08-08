@@ -15,7 +15,7 @@ public class CkEntityAssociation
     /// <summary>
     /// Returns the corresponding role Id
     /// </summary>
-    public CkId<CkAssociationId> RoleId { get; set; }
+    public CkId<CkAssociationRoleId> RoleId { get; set; }
 
     public CkId<CkTypeId> OriginCkId { get; set; }
 

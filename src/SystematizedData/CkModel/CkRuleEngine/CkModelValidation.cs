@@ -23,15 +23,18 @@ public class CkModelValidation
         CancellationToken? cancellationToken)
     {
         // Check if model exist in repository.
-        foreach (var modelDependency in transientCkModel.CkModel.Dependencies)
+        if (transientCkModel.CkModel.Dependencies != null)
         {
-            var isCkModelExisting = await _tenantCkModelRepository.IsCkModelExistingAsync(session, modelDependency);
-            if (!isCkModelExisting)
+            foreach (var modelDependency in transientCkModel.CkModel.Dependencies)
             {
-                throw ModelValidationException.UnknownCkModel(modelDependency);
+                var isCkModelExisting = await _tenantCkModelRepository.IsCkModelExistingAsync(session, modelDependency);
+                if (!isCkModelExisting)
+                {
+                    throw ModelValidationException.UnknownCkModel(modelDependency);
+                }
             }
         }
-        
+
         var dbAttributes = await _tenantCkModelRepository.GetCkAttributesByModelAsync(session, transientCkModel.CkModel.Id);
         _availableAttributes.Clear();
         _availableAttributes.AddRange(dbAttributes.Union(transientCkModel.CkAttributes));

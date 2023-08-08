@@ -47,36 +47,36 @@ public interface ITenantRepository
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
 
     Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
-        IEnumerable<OctoObjectId> originRtIds, CkId<CkTypeId> originCkId, CkId<CkAssociationId> roleId, CkId<CkTypeId> targetCkId,
+        IEnumerable<OctoObjectId> originRtIds, CkId<CkTypeId> originCkId, CkId<CkAssociationRoleId> roleId, CkId<CkTypeId> targetCkId,
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
         int? take = null);
 
     Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
         IOctoSession session,
-        IEnumerable<OctoObjectId> originRtIds, CkId<CkAssociationId> roleId,
+        IEnumerable<OctoObjectId> originRtIds, CkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
         int? take = null)
         where TOriginEntity : RtEntity
         where TTargetEntity : RtEntity, new();
 
     Task<IResultSet<TTargetEntity>?> GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
-        IOctoSession session, OctoObjectId originRtId, CkId<CkAssociationId> roleId,
+        IOctoSession session, OctoObjectId originRtId, CkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection)
         where TOriginEntity : RtEntity
         where TTargetEntity : RtEntity, new();
 
     Task<IMultipleOriginResultSet<TTargetEntity>> GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds,
-        CkId<CkAssociationId> roleId,
+        CkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
         int? take = null) where TOriginEntity : RtEntity where TTargetEntity : RtEntity, new();
 
     Task<RtAssociation> GetRtAssociationAsync(IOctoSession session, RtEntityId rtEntityIdOrigin,
         RtEntityId rtEntityIdTarget,
-        CkId<CkAssociationId> roleId);
+        CkId<CkAssociationRoleId> roleId);
 
     Task<IReadOnlyList<RtAssociation>> GetRtAssociationsAsync(IOctoSession session, OctoObjectId rtId,
-        GraphDirections graphDirections, CkId<CkAssociationId> roleId);
+        GraphDirections graphDirections, CkId<CkAssociationRoleId> roleId);
 
     Task<IReadOnlyList<RtAssociation>> GetRtAssociationsAsync(IOctoSession session, OctoObjectId rtId,
         GraphDirections graphDirections);
@@ -92,7 +92,7 @@ public interface ITenantRepository
     // ReSharper disable once UnusedMember.Global
     Task<IReadOnlyList<RtAssociation>> GetRtAssociationsAsync(IOctoSession session, string rtId,
         GraphDirections graphDirections,
-        CkId<CkAssociationId> roleId);
+        CkId<CkAssociationRoleId> roleId);
 
     Task<IReadOnlyList<RtAssociation>> GetRtAssociationsAsync(IOctoSession session, string rtId,
         GraphDirections graphDirections);

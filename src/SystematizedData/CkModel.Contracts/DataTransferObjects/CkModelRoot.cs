@@ -21,10 +21,10 @@ public class CkModelRoot
     public CkModelId ModelId { get; set; }
 
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
-    [JsonPropertyName("dependencies")] public List<CkModelId> CkDependencies { get; }
+    [JsonPropertyName("dependencies")] public List<CkModelId>? CkDependencies { get; set; }
 
     // ReSharper disable once CollectionNeverUpdated.Global
-    [JsonPropertyName("entities")] public List<CkEntity> CkEntities { get; set; }
+    [JsonPropertyName("entities")] public List<CkEntity>? CkEntities { get; set; }
 
     // ReSharper disable once CollectionNeverUpdated.Global
     [JsonPropertyName("associationRoles")] public List<CkAssociationRole>? CkAssociationRoles { get; set; }

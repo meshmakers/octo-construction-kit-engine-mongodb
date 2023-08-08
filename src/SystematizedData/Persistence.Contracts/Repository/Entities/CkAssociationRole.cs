@@ -10,7 +10,7 @@ public class CkAssociationRole
     /// <summary>
     ///     Returns the mongodb ID
     /// </summary>
-    public CkId<CkAssociationId> RoleId { get; set; }
+    public CkId<CkAssociationRoleId> RoleId { get; set; }
 
     /// <summary>
     ///     Name of the association for inbound references (e. g. Parent)

@@ -204,7 +204,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
         }
         catch (Exception e)
         {
-            throw new ModelImportException("Import of model failed during import to database.", e);
+            ModelParseException.CommonErrorReadRtModel(e);
         }
     }
 }

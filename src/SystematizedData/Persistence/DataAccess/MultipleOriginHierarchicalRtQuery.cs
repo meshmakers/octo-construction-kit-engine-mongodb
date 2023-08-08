@@ -19,7 +19,7 @@ internal class MultipleOriginHierarchicalRtQuery : MultipleOriginHierarchicalRtQ
 {
     internal MultipleOriginHierarchicalRtQuery(IEntityCacheItem targetEntityCacheItem,
         IDatabaseContext databaseContext,
-        string language, IEnumerable<OctoObjectId> rtIds, CkId<CkTypeId> originCkId, CkId<CkAssociationId> roleId,
+        string language, IEnumerable<OctoObjectId> rtIds, CkId<CkTypeId> originCkId, CkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkId<CkTypeId> targetCkId)
         : base(targetEntityCacheItem, databaseContext, language, rtIds, originCkId, roleId, graphDirection,
             targetCkId)
@@ -32,14 +32,14 @@ internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetE
     private readonly IDatabaseContext _databaseContext;
     private readonly GraphDirections _graphDirection;
     private readonly CkId<CkTypeId> _originCkId;
-    private readonly CkId<CkAssociationId> _roleId;
+    private readonly CkId<CkAssociationRoleId> _roleId;
     private readonly IEnumerable<OctoObjectId> _rtIds;
     private readonly CkId<CkTypeId> _targetCkId;
     private readonly IEntityCacheItem _targetEntityCacheItem;
 
     internal MultipleOriginHierarchicalRtQuery(IEntityCacheItem targetEntityCacheItem,
         IDatabaseContext databaseContext,
-        string language, IEnumerable<OctoObjectId> rtIds, CkId<CkTypeId> originCkId, CkId<CkAssociationId> roleId,
+        string language, IEnumerable<OctoObjectId> rtIds, CkId<CkTypeId> originCkId, CkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkId<CkTypeId> targetCkId)
         : base(language)
     {

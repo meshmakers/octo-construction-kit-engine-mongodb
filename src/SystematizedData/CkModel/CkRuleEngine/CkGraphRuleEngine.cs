@@ -72,8 +72,9 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
                         x.ModOption == AssociationModOptionsDto.Create &&
                         x.RoleId == inboundAssociationCacheItem.RoleId))
                 {
-                    throw new CkModelViolationException(
-                        $"Inbound association '{inboundAssociationCacheItem.RoleId}' has multiplicity of 'One', but create statement is missing. Error occurred at CK type '{entityUpdateInfo.RtEntity.CkId}' (from RtId '{entityUpdateInfo.RtEntity.RtId}').");
+                    throw ModelValidationException.AssociationCardinalityViolationOnCreate(
+                        inboundAssociationCacheItem.RoleId, Common.Shared.Exchange.Multiplicities.One,
+                        entityUpdateInfo.RtEntity.ToRtEntityId());
                 }
             }
         }
@@ -96,7 +97,7 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
             var targetEntity = await GetEntity(session, entityUpdateInfoList, targetRtId);
             if (targetEntity == null)
             {
-                throw new CkModelViolationException($"Target entity '{targetRtId}' does not exist.");
+                throw ModelValidationException.MissingTargetEntity(targetRtId);
             }
 
             var targetCacheItem = _ckCache.GetEntityCacheItem(targetEntity.GetCkId());
@@ -108,8 +109,9 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
                     .SelectMany(x => x.Where(a => a.RoleId == associationUpdateInfosByRoleId.Key)).FirstOrDefault();
                 if (inboundAssociationCacheItem == null)
                 {
-                    throw new CkModelViolationException(
-                        $"Inbound association '{associationUpdateInfosByRoleId.Key}' is not allowed at CK type '{targetCacheItem.CkId}' (from RtId '{targetRtId}').");
+                    throw ModelValidationException.AssociationNotAllowed(
+                        associationUpdateInfosByRoleId.Key, targetRtId);
+
                 }
 
                 foreach (var associationUpdateInfo in associationUpdateInfosByRoleId)
@@ -119,8 +121,8 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
 
                     if (!inboundAssociationCacheItem.AllowedTypes.Contains(originCacheItem))
                     {
-                        throw new CkModelViolationException(
-                            $"Inbound association '{associationUpdateInfosByRoleId.Key}' does not allow CK type '{targetCacheItem.CkId}' (from RtId '{targetRtId}').");
+                        throw ModelValidationException.AssociationNotAllowed(
+                            associationUpdateInfosByRoleId.Key, targetRtId);
                     }
                 }
 
@@ -138,8 +140,8 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
                     if (storedTargetAssociations == CurrentMultiplicity.One &&
                         inboundAssociationCacheItem.InboundMultiplicity == Multiplicities.One)
                     {
-                        throw new CkModelViolationException(
-                            $"Inbound association '{associationUpdateInfosByRoleId.Key}' has multiplicity of 'One'. Association deletion violates the model (from RtId '{targetRtId}').");
+                        throw ModelValidationException.AssociationCardinalityViolationOnDelete(
+                            associationUpdateInfosByRoleId.Key, Common.Shared.Exchange.Multiplicities.One, targetRtId);
                     }
                 }
 
@@ -149,8 +151,8 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
                         (inboundAssociationCacheItem.InboundMultiplicity == Multiplicities.One ||
                          inboundAssociationCacheItem.InboundMultiplicity == Multiplicities.ZeroOrOne))
                     {
-                        throw new CkModelViolationException(
-                            $"Inbound association '{associationUpdateInfosByRoleId.Key}' has multiplicity of 'One'. Adding another association violates the model (from RtId '{targetRtId}').");
+                        throw ModelValidationException.AssociationCardinalityViolationOnModification(
+                            associationUpdateInfosByRoleId.Key, Common.Shared.Exchange.Multiplicities.One, targetRtId);
                     }
                 }
             }
@@ -166,7 +168,7 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
             var originEntity = await GetEntity(session, entityUpdateInfoList, originRtId);
             if (originEntity == null)
             {
-                throw new CkModelViolationException($"Origin entity '{originRtId}' does not exist.");
+                throw ModelValidationException.MissingOriginEntity(originRtId);
             }
 
             var originCacheItem = _ckCache.GetEntityCacheItem(originEntity.GetCkId());
@@ -178,8 +180,7 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
                     .SelectMany(x => x.Where(a => a.RoleId == associationUpdateInfosByRoleId.Key)).FirstOrDefault();
                 if (outboundAssociationCacheItem == null)
                 {
-                    throw new CkModelViolationException(
-                        $"Outbound association '{associationUpdateInfosByRoleId.Key}' is not allowed at CK type '{originCacheItem.CkId}' (from RtId '{originRtId}').");
+                    throw ModelValidationException.InboundAssociationNotAllowedForCkType(associationUpdateInfosByRoleId.Key, originRtId, originCacheItem.CkId);
                 }
 
                 foreach (var associationUpdateInfo in associationUpdateInfosByRoleId)
@@ -189,8 +190,7 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
 
                     if (!outboundAssociationCacheItem.AllowedTypes.Contains(targetCacheItem))
                     {
-                        throw new CkModelViolationException(
-                            $"Outbound association '{associationUpdateInfosByRoleId.Key}' does not allow CK type '{targetCacheItem.CkId}' (from RtId '{originRtId}').");
+                        throw ModelValidationException.OutboundAssociationNotAllowedForCkType(associationUpdateInfosByRoleId.Key, originRtId, targetCacheItem.CkId);
                     }
                 }
 
@@ -208,8 +208,7 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
                     if (storedOriginAssociations == CurrentMultiplicity.One &&
                         outboundAssociationCacheItem.OutboundMultiplicity == Multiplicities.One)
                     {
-                        throw new CkModelViolationException(
-                            $"Outbound association '{associationUpdateInfosByRoleId.Key}' has multiplicity of 'One'. Association deletion violates the model (from RtId '{originRtId}').");
+                        throw ModelValidationException.AssociationCardinalityViolationOnDelete(associationUpdateInfosByRoleId.Key, Common.Shared.Exchange.Multiplicities.One, originRtId);
                     }
                 }
 
@@ -219,8 +218,7 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
                         (outboundAssociationCacheItem.OutboundMultiplicity == Multiplicities.One ||
                          outboundAssociationCacheItem.OutboundMultiplicity == Multiplicities.ZeroOrOne))
                     {
-                        throw new CkModelViolationException(
-                            $"Outbound association '{associationUpdateInfosByRoleId.Key}' has multiplicity of 'One'. Adding another association violates the model (from RtId '{originRtId}').");
+                        throw ModelValidationException.AssociationCardinalityViolationOnModification(associationUpdateInfosByRoleId.Key, Common.Shared.Exchange.Multiplicities.One, originRtId);
                     }
                 }
             }

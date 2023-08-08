@@ -38,7 +38,7 @@ public static class RtSerializer
             //         continue;
             //     }
             //
-            //     throw new ModelSerializerException(
+            //     throw new ModelParseException(
             //         "Missing structure of JSON file format. Ensure that file begins with { \"entities\" : [ {");
             // }
             //

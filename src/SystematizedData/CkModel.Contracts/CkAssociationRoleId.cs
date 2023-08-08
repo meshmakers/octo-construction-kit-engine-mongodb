@@ -8,7 +8,7 @@ namespace Meshmakers.Octo.Common.Shared;
 /// </summary>
 [DebuggerDisplay("{" + nameof(AssociationId) + "} ({" + nameof(Version) + "})")]
 [System.Text.Json.Serialization.JsonConverter(typeof(CkAssociationIdConverter))]
-public readonly struct CkAssociationId : IComparable<CkAssociationId>, IEquatable<CkAssociationId>, ICkKey
+public readonly struct CkAssociationRoleId : IComparable<CkAssociationRoleId>, IEquatable<CkAssociationRoleId>, ICkKey
 {
     /// <summary>
     /// Defines the name of the association, e. g. "ParentChild"
@@ -40,7 +40,7 @@ public readonly struct CkAssociationId : IComparable<CkAssociationId>, IEquatabl
 
     public bool IsEmpty => string.IsNullOrWhiteSpace(AssociationId);
 
-    public CkAssociationId(string associationId)
+    public CkAssociationRoleId(string associationId)
     {
         var typeIndex = associationId.IndexOf("-", StringComparison.Ordinal);
         if (typeIndex < 0)
@@ -59,18 +59,18 @@ public readonly struct CkAssociationId : IComparable<CkAssociationId>, IEquatabl
         }
     }
 
-    public CkAssociationId(string associationId, string typeVersion = "1.0.0") 
+    public CkAssociationRoleId(string associationId, string typeVersion = "1.0.0") 
     {
         AssociationId = associationId;
         Version = typeVersion;
     }
     
-    public static implicit operator CkAssociationId(string value)
+    public static implicit operator CkAssociationRoleId(string value)
     {
-        return new CkAssociationId(value);
+        return new CkAssociationRoleId(value);
     }
 
-    public int CompareTo(CkAssociationId other)
+    public int CompareTo(CkAssociationRoleId other)
     {
         var result = String.Compare(AssociationId, other.AssociationId, StringComparison.Ordinal);
         if (result != 0)
@@ -81,7 +81,7 @@ public readonly struct CkAssociationId : IComparable<CkAssociationId>, IEquatabl
         return Version.CompareTo(other.Version);
     }
 
-    public bool Equals(CkAssociationId other)
+    public bool Equals(CkAssociationRoleId other)
     {
         return AssociationId == other.AssociationId && Equals(Version, other.Version);
     }
@@ -200,7 +200,7 @@ public readonly struct CkAssociationId : IComparable<CkAssociationId>, IEquatabl
             return false;
         }
         
-        var other = (CkAssociationId)obj;
+        var other = (CkAssociationRoleId)obj;
         
         return AssociationId == other.AssociationId && Version == other.Version;
     }
@@ -216,12 +216,12 @@ public readonly struct CkAssociationId : IComparable<CkAssociationId>, IEquatabl
         }
     }
     
-    public static bool operator ==(CkAssociationId p1, CkAssociationId p2)
+    public static bool operator ==(CkAssociationRoleId p1, CkAssociationRoleId p2)
     {
         return p1.Equals(p2);
     }
 
-    public static bool operator !=(CkAssociationId p1, CkAssociationId p2)
+    public static bool operator !=(CkAssociationRoleId p1, CkAssociationRoleId p2)
     {
         return !p1.Equals(p2);
     }

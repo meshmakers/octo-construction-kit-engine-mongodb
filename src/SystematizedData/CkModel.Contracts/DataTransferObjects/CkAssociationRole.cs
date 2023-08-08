@@ -6,7 +6,7 @@ namespace Meshmakers.Octo.Common.Shared.Exchange;
 [DebuggerDisplay("{" + nameof(RoleId) + "}")]
 public class CkAssociationRole
 {
-    [JsonPropertyName("id")] [JsonRequired] public CkAssociationId RoleId { get; set; }
+    [JsonPropertyName("id")] [JsonRequired] public CkAssociationRoleId RoleId { get; set; }
 
     /// <summary>
     ///     Name of the association for inbound references (e. g. Children)

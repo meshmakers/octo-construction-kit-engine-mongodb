@@ -36,8 +36,8 @@ public class CkCache : ICkCache
         var ckTypeInfosDictionary =
             (await tenantCkModelRepository.GetCkTypeInfoAsync(session)).ToDictionary(k => k.CkId, v => v);
 
-        var associationRoles = new Dictionary<CkId<CkAssociationId>, CkAssociationRole>();
-        Func<CkId<CkAssociationId>, Task<CkAssociationRole>> getAssociationRoleFunc = async associationId =>
+        var associationRoles = new Dictionary<CkId<CkAssociationRoleId>, CkAssociationRole>();
+        Func<CkId<CkAssociationRoleId>, Task<CkAssociationRole>> getAssociationRoleFunc = async associationId =>
         {
             if (!associationRoles.TryGetValue(associationId, out var associationRole))
             {
@@ -144,7 +144,7 @@ public class CkCache : ICkCache
 
 
     private async Task BuildAssociationGraphAsync(CkTypeAggregations ckTypeAggregations,
-        Func<CkId<CkAssociationId>, Task<CkAssociationRole>> getAssociationRoleFunc,
+        Func<CkId<CkAssociationRoleId>, Task<CkAssociationRole>> getAssociationRoleFunc,
         IDictionary<string, List<IAssociationCacheItem>> associations,
         CkId<CkTypeId> ckId, GraphDirections graphDirections)
     {

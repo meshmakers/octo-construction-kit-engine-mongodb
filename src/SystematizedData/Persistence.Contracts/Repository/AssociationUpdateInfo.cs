@@ -6,7 +6,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 public class AssociationUpdateInfo
 {
-    public AssociationUpdateInfo(RtEntityId origin, RtEntityId target,  CkId<CkAssociationId> roleId,
+    public AssociationUpdateInfo(RtEntityId origin, RtEntityId target,  CkId<CkAssociationRoleId> roleId,
         AssociationModOptionsDto modOption)
     {
         Origin = origin;
@@ -18,6 +18,6 @@ public class AssociationUpdateInfo
     public RtEntityId Origin { get; }
     public RtEntityId Target { get; }
 
-    public CkId<CkAssociationId> RoleId { get; }
+    public CkId<CkAssociationRoleId> RoleId { get; }
     public AssociationModOptionsDto ModOption { get; }
 }

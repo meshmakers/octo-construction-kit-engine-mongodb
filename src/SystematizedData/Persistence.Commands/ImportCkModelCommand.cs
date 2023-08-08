@@ -38,14 +38,14 @@ public class ImportCkModelCommand : IImportCkModelCommand
             if (model == null)
             {
                 Logger.Error("Import of CK model failed, model cannot be deserialized.");
-                throw ModelImportException.CannotDeserializeModel();
+                throw ModelParseException.CannotDeserializeModeByJsonString(jsonText);
             }
 
             Logger.Info("Executing import of CK model....");
             var transientCkModel = new TransientCkModel(new DatabaseEntities.CkModel()
             {
                 Id = model.ModelId,
-                Dependencies = model.CkDependencies.ToArray()
+                Dependencies = model.CkDependencies?.ToArray()
             });
             await ExecuteImport(session, model, transientCkModel, ckModelRepository, cancellationToken);
 
@@ -77,14 +77,14 @@ public class ImportCkModelCommand : IImportCkModelCommand
             if (model == null)
             {
                 Logger.Error("Import of CK model failed, model cannot be deserialized.");
-                throw ModelImportException.CannotDeserializeModel();
+                throw ModelParseException.CannotDeserializeModel(filePath);
             }
 
             Logger.Info("Executing import of CK model....");
             var transientCkModel = new TransientCkModel(new DatabaseEntities.CkModel()
             {
                 Id = model.ModelId,
-                Dependencies = model.CkDependencies.ToArray()
+                Dependencies = model.CkDependencies?.ToArray()
             });
             await ExecuteImport(session, model, transientCkModel, ckModelRepository, cancellationToken);
 
@@ -116,7 +116,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
             return;
         }
 
-        ProcessCkEntitiesAndAssociations(ckModelRepository, model, transientCkModel);
+        ProcessCkEntitiesAndAssociations(model, transientCkModel);
         if (CheckCancellation(cancellationToken))
         {
             return;
@@ -211,7 +211,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
             {
                 var associationRole = new CkAssociationRole
                 {
-                    RoleId = new CkId<CkAssociationId>(model.ModelId, modelAssociationRole.RoleId),
+                    RoleId = new CkId<CkAssociationRoleId>(model.ModelId, modelAssociationRole.RoleId),
                     InboundName = modelAssociationRole.InboundName,
                     OutboundName = modelAssociationRole.OutboundName,
                     InboundMultiplicity = (Multiplicities)modelAssociationRole.InboundMultiplicity,
@@ -324,25 +324,33 @@ public class ImportCkModelCommand : IImportCkModelCommand
         }
     }
 
-    private void ProcessCkEntitiesAndAssociations(ITenantCkModelRepository ckModelRepository, CkModelRoot model,
+    private void ProcessCkEntitiesAndAssociations(CkModelRoot model,
         TransientCkModel transientCkModel)
     {
+        if (model.CkEntities == null)
+        {
+            return;
+        }
+
         foreach (var entity in model.CkEntities)
         {
             var ckEntityAttributes = new List<CkEntityAttribute>();
-            foreach (var attribute in entity.Attributes)
+            if (entity.Attributes != null)
             {
-                var ckEntityAttribute = new CkEntityAttribute
+                foreach (var attribute in entity.Attributes)
                 {
-                    AttributeId = attribute.AttributeId,
-                    AttributeName = attribute.AttributeName,
-                    AutoCompleteFilter = attribute.AutoCompleteFilter,
-                    AutoCompleteLimit = attribute.AutoCompleteLimit,
-                    IsAutoCompleteEnabled = attribute.IsAutoCompleteEnabled,
-                    AutoIncrementReference = attribute.AutoIncrementReference
-                };
+                    var ckEntityAttribute = new CkEntityAttribute
+                    {
+                        AttributeId = attribute.AttributeId,
+                        AttributeName = attribute.AttributeName,
+                        AutoCompleteFilter = attribute.AutoCompleteFilter,
+                        AutoCompleteLimit = attribute.AutoCompleteLimit,
+                        IsAutoCompleteEnabled = attribute.IsAutoCompleteEnabled,
+                        AutoIncrementReference = attribute.AutoIncrementReference
+                    };
 
-                ckEntityAttributes.Add(ckEntityAttribute);
+                    ckEntityAttributes.Add(ckEntityAttribute);
+                }
             }
 
             var textSearchDefinitions = new List<CkEntityIndex>();
@@ -366,19 +374,19 @@ public class ImportCkModelCommand : IImportCkModelCommand
 
             var ckEntity = new CkEntity
             {
-                CkId = new CkId<CkTypeId>(model.ModelId, entity.CkId),
+                CkId = new CkId<CkTypeId>(model.ModelId, entity.TypeId),
                 IsFinal = entity.IsFinal,
                 IsAbstract = entity.IsAbstract,
                 Attributes = ckEntityAttributes,
                 Indexes = textSearchDefinitions
             };
 
-            if (entity.CkDerivedId != null)
+            if (entity.DerivedCkTypeId != null)
             {
                 var ckEntityInheritance = new CkEntityInheritance
                 {
-                    OriginCkId = entity.CkDerivedId.Value,
-                    TargetCkId = new CkId<CkTypeId>(model.ModelId, entity.CkId)
+                    OriginCkId = entity.DerivedCkTypeId.Value,
+                    TargetCkId = new CkId<CkTypeId>(model.ModelId, entity.TypeId)
                 };
                 transientCkModel.CkEntityInheritances.Add(ckEntityInheritance);
             }

@@ -9,7 +9,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine.Cach
 [DebuggerDisplay("{" + nameof(RoleId) + "}")]
 public class AssociationCacheItem : IAssociationCacheItem
 {
-    internal AssociationCacheItem(string name, CkId<CkAssociationId> roleId, Multiplicities inboundMultiplicity,
+    internal AssociationCacheItem(string name, CkId<CkAssociationRoleId> roleId, Multiplicities inboundMultiplicity,
         Multiplicities outboundMultiplicity, IEnumerable<IEntityCacheItem> allowedTypes)
     {
         Name = name;
@@ -20,7 +20,7 @@ public class AssociationCacheItem : IAssociationCacheItem
     }
 
     public string Name { get; } 
-    public CkId<CkAssociationId> RoleId { get; set; }
+    public CkId<CkAssociationRoleId> RoleId { get; set; }
 
     public Multiplicities InboundMultiplicity { get; set; }
 

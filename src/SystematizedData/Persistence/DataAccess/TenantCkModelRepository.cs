@@ -111,12 +111,12 @@ public class TenantCkModelRepository : ITenantCkModelRepository
         return await _databaseContext.CkAssociationRoles.FindManyAsync(session, x => x.RoleId.ModelId == ckModelId.ModelId);
     }
 
-    public async Task<CkAssociationRole?> GetCkAssociationRoleAsync(IOctoSession session, CkId<CkAssociationId> ckAssociationId)
+    public async Task<CkAssociationRole?> GetCkAssociationRoleAsync(IOctoSession session, CkId<CkAssociationRoleId> ckAssociationId)
     {
         return await _databaseContext.CkAssociationRoles.DocumentAsync(session, ckAssociationId);
     }
 
-    public async Task DeleteCkAssociationRoleOneAsync(IOctoSession session, CkId<CkAssociationId> associationRoleId)
+    public async Task DeleteCkAssociationRoleOneAsync(IOctoSession session, CkId<CkAssociationRoleId> associationRoleId)
     {
         await _databaseContext.CkAssociationRoles.DeleteOneAsync(session, associationRoleId);
     }

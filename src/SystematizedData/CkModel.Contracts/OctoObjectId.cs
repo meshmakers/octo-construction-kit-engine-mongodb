@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Security;
 using System.Threading;
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
 namespace Meshmakers.Octo.Common.Shared;
 
@@ -93,7 +94,7 @@ public readonly struct OctoObjectId : IComparable<OctoObjectId>, IEquatable<Octo
     /// <summary>
     ///     Gets the creation time (derived from the timestamp).
     /// </summary>
-    public DateTime CreationTime => CommonConstants.UnixEpoch.AddSeconds((uint)Timestamp);
+    public DateTime CreationTime => CkModelStatics.UnixEpoch.AddSeconds((uint)Timestamp);
 
     // public operators
     /// <summary>
@@ -306,7 +307,7 @@ public readonly struct OctoObjectId : IComparable<OctoObjectId>, IEquatable<Octo
     private static int GetTimestampFromDateTime(DateTime timestamp)
     {
         var secondsSinceEpoch =
-            (long)Math.Floor((timestamp.ToUniversalTime() - CommonConstants.UnixEpoch).TotalSeconds);
+            (long)Math.Floor((timestamp.ToUniversalTime() - CkModelStatics.UnixEpoch).TotalSeconds);
         if (secondsSinceEpoch < uint.MinValue || secondsSinceEpoch > uint.MaxValue)
         {
             throw new ArgumentOutOfRangeException(nameof(timestamp));

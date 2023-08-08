@@ -18,5 +18,5 @@ public class RtAssociation
 
     public CkId<CkTypeId> TargetCkId { get; set; }
 
-    public CkId<CkAssociationId> AssociationRoleId { get; set; }
+    public CkId<CkAssociationRoleId> AssociationRoleId { get; set; }
 }

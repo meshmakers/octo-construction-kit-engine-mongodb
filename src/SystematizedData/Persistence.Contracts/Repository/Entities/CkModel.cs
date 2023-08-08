@@ -27,5 +27,5 @@ public class CkModel
     /// <summary>
     /// Defines the dependencies of the construction kit
     /// </summary>
-    public CkModelId[] Dependencies { get; set; }
+    public CkModelId[]? Dependencies { get; set; }
 }

@@ -8,7 +8,7 @@ using Persistence.Contracts;
 
 namespace Meshmakers.Octo.Common.Shared.Exchange;
 
-[DebuggerDisplay("{" + nameof(CkId) + "}")]
+[DebuggerDisplay("{" + nameof(TypeId) + "}")]
 public class CkEntity
 {
     public CkEntity()
@@ -18,20 +18,20 @@ public class CkEntity
         Indexes = new List<CkEntityIndexDto>();
     }
 
-    [JsonPropertyName("ckId")]
+    [JsonPropertyName("typeId")]
     [JsonRequired]
-    public CkTypeId CkId { get; set; }
+    public CkTypeId TypeId { get; set; }
 
-    [JsonPropertyName("ckDerivedId")]
+    [JsonPropertyName("derivedCkTypeId")]
     [JsonConverter(typeof(CkIdTypeIdConverter))]
-    public CkId<CkTypeId>? CkDerivedId { get; set; }
+    public CkId<CkTypeId>? DerivedCkTypeId { get; set; }
 
     [JsonPropertyName("isFinal")] public bool IsFinal { get; set; }
 
     [JsonPropertyName("isAbstract")] public bool IsAbstract { get; set; }
 
 
-    [JsonPropertyName("attributes")] public List<CkEntityAttribute> Attributes { get; set; }
+    [JsonPropertyName("attributes")] public List<CkEntityAttribute>? Attributes { get; set; }
 
     [JsonPropertyName("indexes")] public List<CkEntityIndexDto>? Indexes { get; set; }
 

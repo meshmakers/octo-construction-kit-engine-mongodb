@@ -26,8 +26,8 @@ public interface ITenantCkModelRepository
     Task<IEnumerable<CkEntityAssociation>> GetCkEntityAssociationsByModelAsync(IOctoSession session, CkModelId ckModelId);
     Task<IEnumerable<CkEntityInheritance>> GetCkEntityInheritancesByModelAsync(IOctoSession session, CkModelId ckModelId);
     Task<IEnumerable<CkAssociationRole>> GetCkAssociationRolesByModelAsync(IOctoSession session, CkModelId ckModelId);
-    Task<CkAssociationRole?> GetCkAssociationRoleAsync(IOctoSession session, CkId<CkAssociationId> ckAssociationId);
-    Task DeleteCkAssociationRoleOneAsync(IOctoSession session, CkId<CkAssociationId> associationRoleId);
+    Task<CkAssociationRole?> GetCkAssociationRoleAsync(IOctoSession session, CkId<CkAssociationRoleId> ckAssociationId);
+    Task DeleteCkAssociationRoleOneAsync(IOctoSession session, CkId<CkAssociationRoleId> associationRoleId);
     Task<IBulkImportResult> BulkImportCkAssociationRoleAsync(IOctoSession session, IReadOnlyCollection<CkAssociationRole> ckAssociationRoles);
     Task<bool> IsCkModelExistingAsync(IOctoSession session, CkModelId ckModelId);
     Task DeleteCkModelOneAsync(IOctoSession session, CkModelId ckModelId);

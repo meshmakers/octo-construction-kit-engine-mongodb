@@ -8,7 +8,7 @@ using MongoDB.Bson.Serialization.Serializers;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence;
 
-public class OctoAssociationIdSerializer : StructSerializerBase<CkAssociationId>, IRepresentationConfigurable<OctoAssociationIdSerializer>
+public class OctoAssociationIdSerializer : StructSerializerBase<CkAssociationRoleId>, IRepresentationConfigurable<OctoAssociationIdSerializer>
 {
     private readonly BsonType _representation;
     public OctoAssociationIdSerializer()
@@ -32,7 +32,7 @@ public class OctoAssociationIdSerializer : StructSerializerBase<CkAssociationId>
         _representation = representation;
     }
 
-    public override CkAssociationId Deserialize(BsonDeserializationContext context, BsonDeserializationArgs args)
+    public override CkAssociationRoleId Deserialize(BsonDeserializationContext context, BsonDeserializationArgs args)
     {
         var bsonReader = context.Reader;
 
@@ -40,14 +40,14 @@ public class OctoAssociationIdSerializer : StructSerializerBase<CkAssociationId>
         switch (bsonType)
         {
             case BsonType.String:
-                return new CkAssociationId(bsonReader.ReadString());
+                return new CkAssociationRoleId(bsonReader.ReadString());
 
             default:
                 throw CreateCannotDeserializeFromBsonTypeException(bsonType);
         }
     }
 
-    public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args, CkAssociationId value)
+    public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args, CkAssociationRoleId value)
     {
         var bsonWriter = context.Writer;
 

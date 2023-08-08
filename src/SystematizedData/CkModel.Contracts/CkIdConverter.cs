@@ -15,7 +15,7 @@ public class CkIdTypeIdConverter : CkIdConverter<CkTypeId>
     
 }
 
-public class CkIdAssociationIdConverter : CkIdConverter<CkAssociationId>
+public class CkIdAssociationIdConverter : CkIdConverter<CkAssociationRoleId>
 {
     
 }

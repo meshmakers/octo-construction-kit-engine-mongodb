@@ -1,0 +1,65 @@
+{
+  "compilerMessages": [
+    {
+      "key": "UnknownCkModel",
+      "number": 1,
+      "level": "ERROR",
+      "text": "Repository does not contain construction kit model '{modelId}'."
+    },
+    {
+      "key": "UnknownAttributeOfCkIdInSource",
+      "number": 2,
+      "level": "ERROR",
+      "text": "Attribute Id '{attributeId}' of CkId '{ckId}' does not exist. Please check if you have set dependency to the correct construction kit model."
+    },
+    {
+      "key": "UnknownCkDerivedIdOfCkIdInSource",
+      "number": 3,
+      "level": "ERROR",
+      "text": "Derived CkId '{derivedCkId}' of CkId '{ckId}' does not exist. Please check if you have set dependency to the correct construction kit model."
+    },
+    {
+      "key": "UnknownAssociationRoleOfCkIdInSource",
+      "number": 4,
+      "level": "ERROR",
+      "text": "CkId '{ckId}' defines unknown association role '{roleId}'. Please check if you have set dependency to the correct construction kit model."
+    },
+    {
+      "key": "UnknownTargetCkIdOfCkIdInSource",
+      "number": 5,
+      "level": "ERROR",
+      "text": "CkId '{ckId}' defines unknown association role target CkId '{targetCkId}'. Please check if you have set dependency to the correct construction kit model."
+    },
+    {
+      "key": "AttributeIdNotUnique",
+      "number": 6,
+      "level": "ERROR",
+      "text": "AttributeId '{ckId}' is not unique."
+    },
+    {
+      "key": "AssociationRoleIdNotUnique",
+      "number": 7,
+      "level": "ERROR",
+      "text": "AssociationRoleId '{ckId}' is not unique."
+    },
+    {
+      "key": "TypeIdNotUnique",
+      "number": 8,
+      "level": "ERROR",
+      "text": "TypeId '{ckId}' is not unique."
+    },
+    {
+      "key": "InheritanceMissing",
+      "number": 9,
+      "level": "ERROR",
+      "text": "TypeId '{ckId}' has no inheritance definition. Ensure that attribute ckDerivedId is set."
+    },
+    {
+      "key": "CircularDependency",
+      "number": 10,
+      "level": "ERROR",
+      "text": "ModelId '{modelId}' has defined a dependency to '{dependentModelId}' that results to a circular dependencies."
+    }
+    
+  ]
+}

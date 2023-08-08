@@ -76,7 +76,7 @@ public class MongoRepositoryClient : IRepositoryClient
         
         BsonSerializer.TryRegisterSerializer(new OctoCkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
         BsonSerializer.TryRegisterSerializer(new OctoCkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>());
-        BsonSerializer.TryRegisterSerializer(new OctoCkIdSerializer<CkAssociationId, OctoAssociationIdSerializer>());
+        BsonSerializer.TryRegisterSerializer(new OctoCkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());
         BsonSerializer.TryRegisterSerializer(new OctoObjectIdSerializer());
         BsonSerializer.TryRegisterSerializer(new OctoModelIdSerializer());
         
