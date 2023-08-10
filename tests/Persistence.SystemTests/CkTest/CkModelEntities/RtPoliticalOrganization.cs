@@ -3,7 +3,7 @@ using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
 
-[CkId(TestCkModel.TestCkModelId, TestCkModel.CkPoliticalOrganization)]
+[CkId(TestCkModel.TestCkModelId, TestCkModel.PoliticalOrganizationTypeId)]
 public class RtPoliticalOrganization : RtEntity
 {
     public string Designation

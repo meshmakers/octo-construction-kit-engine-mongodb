@@ -8,9 +8,9 @@ public static class SystemCkModel
     public const string RelatedRoleId = "Related";
     
     public const string SystemCkModelId = "System-1.0.0";
-    public const string SystemServiceHookCkId = "ServiceHook";
-    public const string SystemAutoIncrementCkId = "AutoIncrement";
-    public const string SystemQueryCkId = "Query";
-    public const string SystemTenantCkId = "Tenant";
-    public const string SystemConfigurationCkId = "Configuration";
+    public const string SystemServiceHookTypeId = "ServiceHook";
+    public const string SystemAutoIncrementTypeId = "AutoIncrement";
+    public const string SystemQueryTypeId = "Query";
+    public const string SystemTenantTypeId = "Tenant";
+    public const string SystemConfigurationTypeId = "Configuration";
 }

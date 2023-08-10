@@ -8,7 +8,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 public interface ITenantRepository
 {
-    IEntityCacheItem GetEntityCacheItem(CkId<CkTypeId> ckId);
+    IEntityCacheItem GetEntityCacheItem(CkId<CkTypeId> ckTypeId);
     
     #region Transaction Handling
 
@@ -34,7 +34,7 @@ public interface ITenantRepository
     Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session, IReadOnlyList<string> attributeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
 
-    Task<IResultSet<CkEntity>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<CkTypeId> ckIds,
+    Task<IResultSet<CkEntity>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<CkTypeId> ckTypeIds,
         DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null);
 
@@ -43,11 +43,11 @@ public interface ITenantRepository
     Task<TEntity?> GetRtEntityByRtIdAsync<TEntity>(IOctoSession session, OctoObjectId rtId)
         where TEntity : RtEntity, new();
 
-    Task<IResultSet<RtEntity>> GetRtEntitiesByIdAsync(IOctoSession session, CkId<CkTypeId> ckId, IReadOnlyList<OctoObjectId> rtIds,
+    Task<IResultSet<RtEntity>> GetRtEntitiesByIdAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, IReadOnlyList<OctoObjectId> rtIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
 
     Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
-        IEnumerable<OctoObjectId> originRtIds, CkId<CkTypeId> originCkId, CkId<CkAssociationRoleId> roleId, CkId<CkTypeId> targetCkId,
+        IEnumerable<OctoObjectId> originRtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId, CkId<CkTypeId> targetCkTypeId,
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
         int? take = null);
 
@@ -81,7 +81,7 @@ public interface ITenantRepository
     Task<IReadOnlyList<RtAssociation>> GetRtAssociationsAsync(IOctoSession session, OctoObjectId rtId,
         GraphDirections graphDirections);
 
-    Task<IResultSet<RtEntity>> GetRtEntitiesByTypeAsync(IOctoSession session, CkId<CkTypeId> ckId,
+    Task<IResultSet<RtEntity>> GetRtEntitiesByTypeAsync(IOctoSession session, CkId<CkTypeId> ckTypeId,
         DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null);
 
@@ -101,7 +101,7 @@ public interface ITenantRepository
 
     #region Transient data
 
-    RtEntity CreateTransientRtEntity(CkId<CkTypeId> ckId);
+    RtEntity CreateTransientRtEntity(CkId<CkTypeId> ckTypeId);
 
     // ReSharper disable once UnusedMemberInSuper.Global
     RtEntity CreateTransientRtEntity(IEntityCacheItem entityCacheItem);
@@ -128,14 +128,14 @@ public interface ITenantRepository
 
     #region Advanced functionality
 
-    IUpdateStream<RtEntity> SubscribeToRtEntities(CkId<CkTypeId> ckId, UpdateStreamFilter updateStreamFilter,
+    IUpdateStream<RtEntity> SubscribeToRtEntities(CkId<CkTypeId> ckTypeId, UpdateStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default);
 
     IUpdateStream<TEntity> SubscribeToRtEntities<TEntity>(UpdateStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default)
         where TEntity : RtEntity, new();
 
-    IUpdateStream<RtAssociation> SubscribeToRtAssociations(CkId<CkTypeId> originCkId, CkId<CkTypeId> targetCkId,
+    IUpdateStream<RtAssociation> SubscribeToRtAssociations(CkId<CkTypeId> originCkTypeId, CkId<CkTypeId> targetCkTypeId,
         UpdateAssociationStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default);
 
@@ -143,11 +143,11 @@ public interface ITenantRepository
         CancellationToken cancellationToken = default)
         where TOriginEntity : RtEntity, new() where TTargetEntity : RtEntity, new();
 
-    Task<IEnumerable<AutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session, CkId<CkTypeId> ckId,
+    Task<IEnumerable<AutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session, CkId<CkTypeId> ckTypeId,
         string attributeName,
         string regexFilterValue, int takeCount);
 
-    Task UpdateAutoCompleteTexts(IOctoSession session, CkId<CkTypeId> ckId, string attributeName,
+    Task UpdateAutoCompleteTexts(IOctoSession session, CkId<CkTypeId> ckTypeId, string attributeName,
         IEnumerable<string> autoCompleteTexts);
 
     #endregion Advanced functionality

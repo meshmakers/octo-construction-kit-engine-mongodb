@@ -26,7 +26,7 @@ public class RtServiceHookDto
     /// <summary>
     ///     The CK model entity id
     /// </summary>
-    public string? QueryCkId { get; set; }
+    public string? QueryCkTypeId { get; set; }
 
     /// <summary>
     ///     Field filters

@@ -21,10 +21,10 @@ internal class MultipleOriginIndirectHierarchicalRtQuery : MultipleOriginIndirec
 {
     internal MultipleOriginIndirectHierarchicalRtQuery(EntityCacheItem targetEntityCacheItem,
         IDatabaseContext databaseContext,
-        string language, IEnumerable<OctoObjectId> rtIds, CkId<CkTypeId> originCkId, CkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, CkId<CkTypeId> targetCkId)
-        : base(targetEntityCacheItem, databaseContext, language, rtIds, originCkId, roleId, graphDirection,
-            targetCkId)
+        string language, IEnumerable<OctoObjectId> rtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
+        GraphDirections graphDirection, CkId<CkTypeId> targetCkTypeId)
+        : base(targetEntityCacheItem, databaseContext, language, rtIds, originCkTypeId, roleId, graphDirection,
+            targetCkTypeId)
     {
     }
 }
@@ -33,25 +33,25 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
 {
     private readonly IDatabaseContext _databaseContext;
     private readonly GraphDirections _graphDirection;
-    private readonly CkId<CkTypeId> _originCkId;
+    private readonly CkId<CkTypeId> _originCkTypeId;
     private readonly CkId<CkAssociationRoleId> _roleId;
     private readonly IEnumerable<OctoObjectId> _rtIds;
-    private readonly CkId<CkTypeId> _targetCkId;
+    private readonly CkId<CkTypeId> _targetCkTypeId;
     private readonly IEntityCacheItem _targetEntityCacheItem;
 
     internal MultipleOriginIndirectHierarchicalRtQuery(IEntityCacheItem targetEntityCacheItem,
         IDatabaseContext databaseContext,
-        string language, IEnumerable<OctoObjectId> rtIds, CkId<CkTypeId> originCkId, CkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, CkId<CkTypeId> targetCkId)
+        string language, IEnumerable<OctoObjectId> rtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
+        GraphDirections graphDirection, CkId<CkTypeId> targetCkTypeId)
         : base(language)
     {
         _targetEntityCacheItem = targetEntityCacheItem;
         _databaseContext = databaseContext;
         _rtIds = rtIds;
-        _originCkId = originCkId;
+        _originCkTypeId = originCkTypeId;
         _roleId = roleId;
         _graphDirection = graphDirection;
-        _targetCkId = targetCkId;
+        _targetCkTypeId = targetCkTypeId;
     }
 
     internal async Task<MultipleOriginResultSet<TTargetEntity>> ExecuteQuery(IOctoSession session, int? skip,
@@ -64,15 +64,15 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
 
         var connectFromRtIdField = "targetRtId";
         var connectToRtIdField = "originRtId";
-        var connectToCkIdField = "originCkId";
+        var connectToCkTypeIdField = "originCkTypeId";
         var @as = "_associations";
 
         switch (_graphDirection)
         {
             case GraphDirections.Inbound:
                 connectFromRtIdField = "originRtId";
-                connectToRtIdField = "originCkId";
-                connectToCkIdField = "targetCkId";
+                connectToRtIdField = "originCkTypeId";
+                connectToCkTypeIdField = "targetCkTypeId";
                 break;
             case GraphDirections.Outbound:
                 break;
@@ -113,8 +113,8 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
                                         new BsonDocument("$eq",
                                             new BsonArray
                                             {
-                                                "$$this." + connectToCkIdField,
-                                                _targetCkId.FullName
+                                                "$$this." + connectToCkTypeIdField,
+                                                _targetCkTypeId.FullName
                                             })
                                     }
                                 })
@@ -125,7 +125,7 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
                         }
                     }));
 
-        var aggregate = _databaseContext.GetRtCollection<RtEntity>(_originCkId).Aggregate(session)
+        var aggregate = _databaseContext.GetRtCollection<RtEntity>(_originCkTypeId).Aggregate(session)
             .Match(
                 Builders<RtEntity>.Filter.And(Builders<RtEntity>.Filter.In(x => x.RtId, _rtIds)))
             .GraphLookup<RtAssociation, BsonValue, BsonValue, BsonValue, TTargetEntity, TTargetEntity[], BsonDocument>(
@@ -143,7 +143,7 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
             .Project(projectDefinition)
             .Unwind(@as, new AggregateUnwindOptions<BsonDocument> { PreserveNullAndEmptyArrays = true })
             .Lookup<BsonDocument, TTargetEntity, TTargetEntity, IEnumerable<TTargetEntity>, BsonDocument>(
-                foreignCollection: _databaseContext.GetRtCollection<TTargetEntity>(_targetCkId).GetMongoCollection(),
+                foreignCollection: _databaseContext.GetRtCollection<TTargetEntity>(_targetCkTypeId).GetMongoCollection(),
                 localField: @as + "." + connectToRtIdField,
                 foreignField: "_id",
                 lookupPipeline: pipelineStageDefinitions.Any()

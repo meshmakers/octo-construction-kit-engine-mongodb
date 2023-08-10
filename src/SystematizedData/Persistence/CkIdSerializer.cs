@@ -8,15 +8,15 @@ using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence;
 
-public class OctoCkIdSerializer<TKey, TKeySerializer> : StructSerializerBase<CkId<TKey>>, IBsonDocumentSerializer, IRepresentationConfigurable<OctoCkIdSerializer<TKey, TKeySerializer>> where TKey : struct, IComparable<TKey>, ICkKey where TKeySerializer : StructSerializerBase<TKey>
+public class CkIdSerializer<TKey, TKeySerializer> : StructSerializerBase<CkId<TKey>>, IBsonDocumentSerializer, IRepresentationConfigurable<CkIdSerializer<TKey, TKeySerializer>> where TKey : struct, IComparable<TKey>, ICkKey where TKeySerializer : StructSerializerBase<TKey>
 {
     private readonly BsonType _representation;
-    public OctoCkIdSerializer()
+    public CkIdSerializer()
         : this(BsonType.String)
     {
     }
     
-    public OctoCkIdSerializer(BsonType representation)
+    public CkIdSerializer(BsonType representation)
     {
         switch (representation)
         {
@@ -57,7 +57,7 @@ public class OctoCkIdSerializer<TKey, TKeySerializer> : StructSerializerBase<CkI
 
         if (memberName == nameof(CkId<TKey>.ModelId))
         {
-            serializationInfo = new BsonSerializationInfo(memberName, new OctoModelIdSerializer(), typeof(CkModelId));
+            serializationInfo = new BsonSerializationInfo(memberName, new ModelIdSerializer(), typeof(CkModelId));
             return true;
         }
 
@@ -81,14 +81,14 @@ public class OctoCkIdSerializer<TKey, TKeySerializer> : StructSerializerBase<CkI
         }
     }
 
-    public OctoCkIdSerializer<TKey, TKeySerializer> WithRepresentation(BsonType representation)
+    public CkIdSerializer<TKey, TKeySerializer> WithRepresentation(BsonType representation)
     {
         if (representation == _representation)
         {
             return this;
         }
 
-        return new OctoCkIdSerializer<TKey, TKeySerializer>(representation);
+        return new CkIdSerializer<TKey, TKeySerializer>(representation);
     }
 
     public BsonType Representation => _representation;

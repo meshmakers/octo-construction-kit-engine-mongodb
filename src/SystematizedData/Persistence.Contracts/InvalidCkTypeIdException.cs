@@ -4,7 +4,7 @@ using System.Runtime.Serialization;
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 [Serializable]
-public class InvalidCkIdException : OperationFailedException
+public class InvalidCkTypeIdException : OperationFailedException
 {
     //
     // For guidelines regarding the creation of new exception types, see
@@ -13,19 +13,19 @@ public class InvalidCkIdException : OperationFailedException
     //    http://msdn.microsoft.com/library/default.asp?url=/library/en-us/dncscol/html/csharp07192001.asp
     //
 
-    public InvalidCkIdException()
+    public InvalidCkTypeIdException()
     {
     }
 
-    public InvalidCkIdException(string message) : base(message)
+    public InvalidCkTypeIdException(string message) : base(message)
     {
     }
 
-    public InvalidCkIdException(string message, Exception inner) : base(message, inner)
+    public InvalidCkTypeIdException(string message, Exception inner) : base(message, inner)
     {
     }
 
-    protected InvalidCkIdException(
+    protected InvalidCkTypeIdException(
         SerializationInfo info,
         StreamingContext context) : base(info, context)
     {

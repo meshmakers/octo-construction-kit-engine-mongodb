@@ -3,7 +3,7 @@ using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
 
-[CkId(TestCkModel.TestCkModelId, TestCkModel.CkIdLocation)]
+[CkId(TestCkModel.TestCkModelId, TestCkModel.LocationTypeId)]
 public class RtLocation : RtEntity
 {
     public string Designation

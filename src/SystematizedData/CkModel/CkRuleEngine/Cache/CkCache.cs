@@ -34,7 +34,7 @@ public class CkCache : ICkCache
         session.StartTransaction();
 
         var ckTypeInfosDictionary =
-            (await tenantCkModelRepository.GetCkTypeInfoAsync(session)).ToDictionary(k => k.CkId, v => v);
+            (await tenantCkModelRepository.GetCkTypeInfoAsync(session)).ToDictionary(k => k.CkTypeId, v => v);
 
         var associationRoles = new Dictionary<CkId<CkAssociationRoleId>, CkAssociationRole>();
         Func<CkId<CkAssociationRoleId>, Task<CkAssociationRole>> getAssociationRoleFunc = async associationId =>
@@ -78,24 +78,24 @@ public class CkCache : ICkCache
                 }
             }
 
-            _metaCache[ckTypeInfo.CkId] = entityCacheItem;
+            _metaCache[ckTypeInfo.CkTypeId] = entityCacheItem;
         }
 
         foreach (var entityCacheItem in _metaCache.Values)
         {
-            BuildInheritanceGraph(ckTypeInfosDictionary[entityCacheItem.CkId], entityCacheItem);
+            BuildInheritanceGraph(ckTypeInfosDictionary[entityCacheItem.CkTypeId], entityCacheItem);
         }
 
         foreach (var entityCacheItem in _metaCache.Values)
         {
             BuildAttributes(entityCacheItem);
 
-            var ckTypeInfo = ckTypeInfosDictionary[entityCacheItem.CkId];
+            var ckTypeInfo = ckTypeInfosDictionary[entityCacheItem.CkTypeId];
             await BuildAssociationGraphAsync(ckTypeInfo.Associations.Out, getAssociationRoleFunc, entityCacheItem.OutboundAssociations,
-                entityCacheItem.CkId,
+                entityCacheItem.CkTypeId,
                 GraphDirections.Outbound);
             await BuildAssociationGraphAsync(ckTypeInfo.Associations.In, getAssociationRoleFunc, entityCacheItem.InboundAssociations,
-                entityCacheItem.CkId,
+                entityCacheItem.CkTypeId,
                 GraphDirections.Inbound);
         }
 
@@ -137,18 +137,18 @@ public class CkCache : ICkCache
     }
 
 
-    public IEntityCacheItem GetEntityCacheItem(CkId<CkTypeId> ckId)
+    public IEntityCacheItem GetEntityCacheItem(CkId<CkTypeId> ckTypeId)
     {
-        return _metaCache[ckId];
+        return _metaCache[ckTypeId];
     }
 
 
     private async Task BuildAssociationGraphAsync(CkTypeAggregations ckTypeAggregations,
         Func<CkId<CkAssociationRoleId>, Task<CkAssociationRole>> getAssociationRoleFunc,
         IDictionary<string, List<IAssociationCacheItem>> associations,
-        CkId<CkTypeId> ckId, GraphDirections graphDirections)
+        CkId<CkTypeId> ckTypeId, GraphDirections graphDirections)
     {
-        Logger.Debug($"BuildAssociationGraph for '{ckId}' ({graphDirections})");
+        Logger.Debug($"BuildAssociationGraph for '{ckTypeId}' ({graphDirections})");
 
         var ckEntityAssociationList = new List<CkEntityAssociation>();
         if (ckTypeAggregations.Owned != null)
@@ -162,7 +162,7 @@ public class CkCache : ICkCache
         }
 
         var ckEntityAssociationCompleteList = await Task.WhenAll(ckEntityAssociationList.Select(
-            async x => new { x.OriginCkId, x.TargetCkId, AssocationRole = await getAssociationRoleFunc(x.RoleId) }).ToList());
+            async x => new {OriginCkTypeId = x.OriginCkTypeId, TargetCkTypeId = x.TargetCkTypeId, AssocationRole = await getAssociationRoleFunc(x.RoleId) }).ToList());
 
         var groupedAssocList = ckEntityAssociationCompleteList.GroupBy(x => x.AssocationRole.InboundName);
         if (graphDirections == GraphDirections.Outbound)
@@ -180,8 +180,8 @@ public class CkCache : ICkCache
                 foreach (var entityAssociation in entityAssociationByRole)
                 {
                     var targetEntityId = graphDirections == GraphDirections.Inbound
-                        ? entityAssociation.OriginCkId.SemanticVersionedFullName
-                        : entityAssociation.TargetCkId.SemanticVersionedFullName;
+                        ? entityAssociation.OriginCkTypeId.SemanticVersionedFullName
+                        : entityAssociation.TargetCkTypeId.SemanticVersionedFullName;
                     var targetInfo = _metaCache[targetEntityId];
                     baseTypesChain.AddRange(targetInfo.GetAllDerivedTypes(true));
                 }
@@ -204,7 +204,7 @@ public class CkCache : ICkCache
 
     private void BuildAttributes(EntityCacheItem entityCacheItem)
     {
-        Logger.Debug($"Building attributes for '{entityCacheItem.CkId}'");
+        Logger.Debug($"Building attributes for '{entityCacheItem.CkTypeId}'");
 
         foreach (var cacheItem in entityCacheItem.GetBaseTypesChain(false))
         {
@@ -220,18 +220,18 @@ public class CkCache : ICkCache
 
     private void BuildInheritanceGraph(CkTypeInfo ckTypeInfo, EntityCacheItem entityCacheItem)
     {
-        Logger.Debug($"Building inheritance graph '{entityCacheItem.CkId}'");
+        Logger.Debug($"Building inheritance graph '{entityCacheItem.CkTypeId}'");
 
         foreach (var ckBaseTypeInfo in ckTypeInfo.BaseTypes)
         {
-            if (ckBaseTypeInfo.OriginCkId.Equals(entityCacheItem.CkId))
+            if (ckBaseTypeInfo.OriginCkTypeId.Equals(entityCacheItem.CkTypeId))
             {
                 continue;
             }
 
-            Logger.Debug($"Building inheritance graph '{entityCacheItem.CkId}', base type {ckBaseTypeInfo.OriginCkId}");
-            var baseType = _metaCache[ckBaseTypeInfo.OriginCkId];
-            if (ckBaseTypeInfo.TargetCkId.Equals(entityCacheItem.CkId))
+            Logger.Debug($"Building inheritance graph '{entityCacheItem.CkTypeId}', base type {ckBaseTypeInfo.OriginCkTypeId}");
+            var baseType = _metaCache[ckBaseTypeInfo.OriginCkTypeId];
+            if (ckBaseTypeInfo.TargetCkTypeId.Equals(entityCacheItem.CkTypeId))
             {
                 entityCacheItem.BaseType = baseType;
             }

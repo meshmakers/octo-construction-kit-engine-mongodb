@@ -6,12 +6,12 @@ using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine.Cache;
 
-[DebuggerDisplay("{" + nameof(CkId) + "}")]
+[DebuggerDisplay("{" + nameof(CkTypeId) + "}")]
 public class EntityCacheItem : IEntityCacheItem
 {
     public EntityCacheItem(CkTypeInfo ckTypeInfo)
     {
-        CkId = ckTypeInfo.CkId;
+        CkTypeId = ckTypeInfo.CkTypeId;
         IsFinal = ckTypeInfo.IsFinal;
         IsAbstract = ckTypeInfo.IsAbstract;
         DerivedTypes = new List<IEntityCacheItem>();
@@ -22,7 +22,7 @@ public class EntityCacheItem : IEntityCacheItem
     }
 
 
-    public CkId<CkTypeId> CkId { get; }
+    public CkId<CkTypeId> CkTypeId { get; }
 
     public bool IsAbstract { get; }
     public bool IsFinal { get; }

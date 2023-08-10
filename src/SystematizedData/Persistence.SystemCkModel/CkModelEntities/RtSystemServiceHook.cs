@@ -3,7 +3,7 @@ using Persistence.SystemCkModel;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.CkModelEntities;
 
-[CkId(SystemCkModel.SystemCkModelId, SystemCkModel.SystemServiceHookCkId)]
+[CkId(SystemCkModel.SystemCkModelId, SystemCkModel.SystemServiceHookTypeId)]
 public class RtSystemServiceHook : RtEntity
 {
     public bool? Enabled
@@ -12,10 +12,10 @@ public class RtSystemServiceHook : RtEntity
         set => SetAttributeValue(nameof(Enabled), AttributeValueTypes.Boolean, value);
     }
 
-    public string? QueryCkId
+    public string? QueryCkTypeId
     {
-        get => GetAttributeStringValueOrDefault(nameof(QueryCkId));
-        set => SetAttributeValue(nameof(QueryCkId), AttributeValueTypes.String, value);
+        get => GetAttributeStringValueOrDefault(nameof(QueryCkTypeId));
+        set => SetAttributeValue(nameof(QueryCkTypeId), AttributeValueTypes.String, value);
     }
 
     public string? FieldFilter

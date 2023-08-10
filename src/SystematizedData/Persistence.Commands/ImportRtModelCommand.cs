@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.Exchange;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using NLog;
 using Persistence.InternalContracts;
@@ -88,7 +89,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
         }
     }
 
-    private async Task ImportEntity(IOctoSession session, Common.Shared.Exchange.RtEntity modelRtEntity, ITenantRepositoryInternal tenantRepository)
+    private async Task ImportEntity(IOctoSession session, RtEntityDto modelRtEntity, ITenantRepositoryInternal tenantRepository)
     {
         var progress = Interlocked.Increment(ref _entityProgressCount);
         if (progress > Max)
@@ -99,9 +100,9 @@ public class ImportRtModelCommand : IImportRtModelCommand
             await ImportToDatabase(session, tenantRepository);
         }
 
-        var entityCacheItem = tenantRepository.GetEntityCacheItem(modelRtEntity.CkId);
+        var entityCacheItem = tenantRepository.GetEntityCacheItem(modelRtEntity.CkTypeId);
 
-        var rtEntity = tenantRepository.CreateTransientRtEntity(modelRtEntity.CkId);
+        var rtEntity = tenantRepository.CreateTransientRtEntity(modelRtEntity.CkTypeId);
         rtEntity.RtId = modelRtEntity.RtId;
         rtEntity.RtChangedDateTime = modelRtEntity.RtChangedDateTime;
         rtEntity.RtCreationDateTime = modelRtEntity.RtCreationDateTime;
@@ -121,7 +122,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
                 entityCacheItem.Attributes.Values.FirstOrDefault(a => a.AttributeId.Equals(modelAttribute.Id));
             if (attributeCacheItem == null)
             {
-                Logger.Error($"'{modelAttribute.Id}' does not exit on type $'{entityCacheItem.CkId}'");
+                Logger.Error($"'{modelAttribute.Id}' does not exit on type $'{entityCacheItem.CkTypeId}'");
                 return;
             }
 
@@ -141,9 +142,9 @@ public class ImportRtModelCommand : IImportRtModelCommand
                 {
                     AssociationRoleId = association.RoleId,
                     OriginRtId = originId,
-                    OriginCkId = rtEntity.CkId,
+                    OriginCkTypeId = rtEntity.CkTypeId,
                     TargetRtId = association.TargetRtId,
-                    TargetCkId = association.TargetCkId
+                    TargetCkTypeId = association.TargetCkTypeId
                 };
                 _importAssociationQueue.Enqueue(rtAssociation);
                 Interlocked.Increment(ref _associationsCount);

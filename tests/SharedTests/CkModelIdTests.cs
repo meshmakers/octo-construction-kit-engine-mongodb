@@ -70,8 +70,8 @@ public class CkModelIdTest
     [Fact]
     public void Equal_CkModelId_DifferentVersion()
     {
-        var ckId1 = new CkModelId("System-1.0.0");
-        var ckId2 = new CkModelId("System-1.0.1");
-        Assert.False(ckId1.Equals(ckId2));
+        var id1 = new CkModelId("System-1.0.0");
+        var id2 = new CkModelId("System-1.0.1");
+        Assert.False(id1.Equals(id2));
     }
 }

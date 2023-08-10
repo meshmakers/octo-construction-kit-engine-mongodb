@@ -7,7 +7,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 /// <summary>
 ///     Represents a definition of a construction kit type
 /// </summary>
-[DebuggerDisplay("{" + nameof(CkId) + "}")]
+[DebuggerDisplay("{" + nameof(CkTypeId) + "}")]
 public class CkEntity 
 {
     /// <summary>
@@ -22,7 +22,7 @@ public class CkEntity
     /// <summary>
     ///     Gets or sets the construction kit id
     /// </summary>
-    public CkId<CkTypeId> CkId { get; set; }
+    public CkId<CkTypeId> CkTypeId { get; set; }
 
     /// <summary>
     ///     If true, the type cannot be inherited again

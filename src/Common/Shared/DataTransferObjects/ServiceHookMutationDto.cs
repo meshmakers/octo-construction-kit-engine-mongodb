@@ -23,7 +23,7 @@ public class ServiceHookMutationDto
     ///     The CK model entity id
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-    public string? QueryCkId { get; set; }
+    public string? QueryCkTypeId { get; set; }
 
     /// <summary>
     ///     Field filters

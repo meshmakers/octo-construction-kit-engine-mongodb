@@ -22,7 +22,7 @@ public static class Constants
     // ********************************************************************
     // Well-known attribute names
     // ********************************************************************
-    public const string QueryCkIdAttribute = "QueryCkId";
+    public const string QueryCkTypeIdAttribute = "QueryCkTypeId";
     public const string ServiceHookBaseUriAttribute = "ServiceHookBaseUri";
     public const string ServiceHookActionAttribute = "ServiceHookAction";
     public const string ServiceHookApiKeyAttribute = "ServiceHookApiKey";

@@ -8,15 +8,15 @@ using MongoDB.Bson.Serialization.Serializers;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence;
 
-public class OctoModelIdSerializer : StructSerializerBase<CkModelId>, IRepresentationConfigurable<OctoModelIdSerializer>
+public class ModelIdSerializer : StructSerializerBase<CkModelId>, IRepresentationConfigurable<ModelIdSerializer>
 {
     private readonly BsonType _representation;
-    public OctoModelIdSerializer()
+    public ModelIdSerializer()
         : this(BsonType.String)
     {
     }
     
-    public OctoModelIdSerializer(BsonType representation)
+    public ModelIdSerializer(BsonType representation)
     {
         switch (representation)
         {
@@ -63,14 +63,14 @@ public class OctoModelIdSerializer : StructSerializerBase<CkModelId>, IRepresent
         }
     }
 
-    public OctoModelIdSerializer WithRepresentation(BsonType representation)
+    public ModelIdSerializer WithRepresentation(BsonType representation)
     {
         if (representation == _representation)
         {
             return this;
         }
 
-        return new OctoModelIdSerializer(representation);
+        return new ModelIdSerializer(representation);
     }
 
     public BsonType Representation => _representation;

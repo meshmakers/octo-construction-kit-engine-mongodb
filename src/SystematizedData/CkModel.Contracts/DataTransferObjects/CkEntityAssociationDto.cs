@@ -1,24 +1,25 @@
 ﻿using System.Diagnostics;
 using System.Text.Json.Serialization;
+using Meshmakers.Octo.Common.Shared;
 using Persistence.Contracts;
 
 // ReSharper disable AutoPropertyCanBeMadeGetOnly.Global
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 
-namespace Meshmakers.Octo.Common.Shared.Exchange;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
-[DebuggerDisplay("{" + nameof(RoleId) + "} -> {" + nameof(TargetCkId) + "}")]
-public class CkEntityAssociation
+[DebuggerDisplay("{" + nameof(RoleId) + "} -> {" + nameof(TargetCkTypeId) + "}")]
+public class CkEntityAssociationDto
 {
     [JsonPropertyName("roleId")]
     [JsonRequired]
     [JsonConverter(typeof(CkIdAssociationIdConverter))]
     public CkId<CkAssociationRoleId> RoleId { get; set; }
 
-    [JsonPropertyName("targetCkId")]
+    [JsonPropertyName("targetCkTypeId")]
     [JsonRequired]
     [JsonConverter(typeof(CkIdTypeIdConverter))]
-    public CkId<CkTypeId> TargetCkId { get; set; }
+    public CkId<CkTypeId> TargetCkTypeId { get; set; }
 
 
 }

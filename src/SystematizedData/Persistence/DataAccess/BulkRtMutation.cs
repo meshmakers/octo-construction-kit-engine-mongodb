@@ -77,27 +77,27 @@ public class BulkRtMutation
         rtEntities.ForEach(x => x.RtChangedDateTime = x.RtCreationDateTime);
         rtEntities.ForEach(x =>
             {
-                if (string.IsNullOrWhiteSpace(x.CkId.FullName)) {
-                    x.CkId = x.GetCkId();
+                if (string.IsNullOrWhiteSpace(x.CkTypeId.FullName)) {
+                    x.CkTypeId = x.GetCkTypeId();
                 }
             }
         );
 
-        foreach (var rtEntityGrouping in rtEntities.GroupBy(x => x.GetCkId()))
+        foreach (var rtEntityGrouping in rtEntities.GroupBy(x => x.GetCkTypeId()))
         {
             if (string.IsNullOrWhiteSpace(rtEntityGrouping.Key.FullName))
             {
                 throw OperationFailedException.CreateWithMessage(
-                    "Cannot update RtEntity without CkId. Please provide a CkId.");
+                    "Cannot update RtEntity without CkTypeId. Please provide a CkTypeId.");
             }
 
-            var ckId = rtEntityGrouping.Key;
+            var ckTypeId = rtEntityGrouping.Key;
 
             if (!disableAutoIncrement)
             {
-                await _autoIncrementModifier.RunAutoIncrementAsync(session, ckId, rtEntityGrouping);
+                await _autoIncrementModifier.RunAutoIncrementAsync(session, ckTypeId, rtEntityGrouping);
                 
-                await _databaseContext.GetRtCollection<RtEntity>(ckId)
+                await _databaseContext.GetRtCollection<RtEntity>(ckTypeId)
                     .InsertMultipleAsync(session, rtEntityGrouping);
             }
 
@@ -106,22 +106,22 @@ public class BulkRtMutation
     
     private async Task UpdateRtEntities(IOctoSession session, IReadOnlyList<RtEntity> rtEntities)
     {
-        foreach (var rtEntityGrouping in rtEntities.GroupBy(x => x.GetCkId()))
+        foreach (var rtEntityGrouping in rtEntities.GroupBy(x => x.GetCkTypeId()))
         {
             if (string.IsNullOrWhiteSpace(rtEntityGrouping.Key.FullName))
             {
                 throw OperationFailedException.CreateWithMessage(
-                    "Cannot update RtEntity without CkId. Please provide a CkId.");
+                    "Cannot update RtEntity without CkTypeId. Please provide a CkTypeId.");
             }
 
             await UpdateRtEntitiesByCkId<RtEntity>(session, rtEntityGrouping.Key, rtEntityGrouping);
         }
     }
 
-    private async Task UpdateRtEntitiesByCkId<TEntity>(IOctoSession session, CkId<CkTypeId> ckId, IEnumerable<RtEntity> rtEntityGrouping)
+    private async Task UpdateRtEntitiesByCkId<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId, IEnumerable<RtEntity> rtEntityGrouping)
         where TEntity : RtEntity, new()
     {
-        var collection = _databaseContext.GetRtCollection<TEntity>(ckId);
+        var collection = _databaseContext.GetRtCollection<TEntity>(ckTypeId);
 
         foreach (var document in rtEntityGrouping.AsParallel())
         {
@@ -144,22 +144,22 @@ public class BulkRtMutation
     
     private async Task DeleteRtEntityAsync(IOctoSession session, IReadOnlyList<RtEntity> rtEntities)
     {
-        foreach (var rtEntityGrouping in rtEntities.GroupBy(x => x.GetCkId()))
+        foreach (var rtEntityGrouping in rtEntities.GroupBy(x => x.GetCkTypeId()))
         {
             if (string.IsNullOrWhiteSpace(rtEntityGrouping.Key.FullName))
             {
                 throw OperationFailedException.CreateWithMessage(
-                    "Cannot delete RtEntity without CkId. Please provide a CkId.");
+                    "Cannot delete RtEntity without CkTypeId. Please provide a CkTypeId.");
             }
 
             await DeleteRtEntityAsync<RtEntity>(session, rtEntityGrouping.Key, rtEntityGrouping);
         }
     }
     
-    private async Task DeleteRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckId, IEnumerable<RtEntity> rtEntities)
+    private async Task DeleteRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId, IEnumerable<RtEntity> rtEntities)
         where TEntity : RtEntity, new()
     {
-        var collection = _databaseContext.GetRtCollection<TEntity>(ckId);
+        var collection = _databaseContext.GetRtCollection<TEntity>(ckTypeId);
         
         foreach (var rtEntity in rtEntities.AsParallel())
         {

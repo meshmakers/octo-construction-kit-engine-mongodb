@@ -17,8 +17,8 @@ public class InvalidAttributeValueException : Exception
     {
     }
 
-    public static Exception CannotBeNull(OctoObjectId rtId, CkId<CkTypeId> ckId, string attributeName)
+    public static Exception CannotBeNull(OctoObjectId rtId, CkId<CkTypeId> ckTypeId, string attributeName)
     {
-        return new InvalidAttributeValueException($"Attribute value cannot be null for {ckId}.{rtId} at attribute with name {attributeName}");
+        return new InvalidAttributeValueException($"Attribute value cannot be null for {ckTypeId}.{rtId} at attribute with name {attributeName}");
     }
 }

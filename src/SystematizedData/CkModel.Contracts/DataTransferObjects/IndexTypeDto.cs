@@ -1,4 +1,4 @@
-namespace Meshmakers.Octo.Common.Shared;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
 public enum IndexTypeDto
 {

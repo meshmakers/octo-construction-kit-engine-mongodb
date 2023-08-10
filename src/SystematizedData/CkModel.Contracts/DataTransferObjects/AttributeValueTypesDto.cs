@@ -1,6 +1,6 @@
-﻿namespace Meshmakers.Octo.Common.Shared.Exchange;
+﻿namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
-public enum AttributeValueTypes
+public enum AttributeValueTypesDto
 {
     Int = 1,
     String = 2,

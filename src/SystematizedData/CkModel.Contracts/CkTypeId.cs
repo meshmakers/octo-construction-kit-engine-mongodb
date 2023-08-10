@@ -41,22 +41,22 @@ public readonly struct CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, I
     
     public bool IsEmpty => string.IsNullOrWhiteSpace(TypeId);
 
-    public CkTypeId(string ckId)
+    public CkTypeId(string typeId)
     {
-        var typeIndex = ckId.IndexOf("-", StringComparison.Ordinal);
+        var typeIndex = typeId.IndexOf("-", StringComparison.Ordinal);
         if (typeIndex < 0)
         {
-            TypeId = ckId;
+            TypeId = typeId;
             Version = "1.0.0";
         }
         else
         {
-            TypeId = ckId.Substring(0, typeIndex);
-            Version = ckId.Substring(typeIndex + 1);
+            TypeId = typeId.Substring(0, typeIndex);
+            Version = typeId.Substring(typeIndex + 1);
         }
         if (string.IsNullOrWhiteSpace(TypeId))
         {
-            throw new ArgumentOutOfRangeException(nameof(ckId), ckId, $"{nameof(ckId)} must contain a type id");
+            throw new ArgumentOutOfRangeException(nameof(typeId), typeId, $"{nameof(typeId)} must contain a type id");
         }
     }
 

@@ -24,7 +24,7 @@ public class RtEntityDto : GraphQlDto
     public DateTime? RtChangedDateTime { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-    public CkId<CkTypeId> CkId { get; set; }
+    public CkId<CkTypeId> CkTypeId { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public string? RtWellKnownName { get; set; }

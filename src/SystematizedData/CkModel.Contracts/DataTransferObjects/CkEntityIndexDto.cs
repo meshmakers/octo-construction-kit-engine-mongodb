@@ -1,15 +1,15 @@
-using System.Collections.Generic;
 using System.Text.Json.Serialization;
+
 // ReSharper disable AutoPropertyCanBeMadeGetOnly.Global
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 
-namespace Meshmakers.Octo.Common.Shared.Exchange;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
 public class CkEntityIndexDto
 {
     public CkEntityIndexDto()
     {
-        Fields = new List<CkIndexFields>();
+        Fields = new List<CkIndexFieldsDto>();
     }
 
     [JsonPropertyName("indexType")]
@@ -18,5 +18,5 @@ public class CkEntityIndexDto
 
     [JsonPropertyName("language")] public string? Language { get; set; }
 
-    [JsonPropertyName("fields")] public List<CkIndexFields> Fields { get; set; }
+    [JsonPropertyName("fields")] public List<CkIndexFieldsDto> Fields { get; set; }
 }

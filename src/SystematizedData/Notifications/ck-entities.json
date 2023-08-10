@@ -1,7 +1,7 @@
 {
   "entities": [
     {
-      "ckId": "System.NotificationTemplate",
+      "typeId": "System.NotificationTemplate",
       "ckDerivedId": "System.Entity",
       "isFinal": false,
       "isAbstract": false,
@@ -23,7 +23,7 @@
       ]
     },
     {
-      "ckId": "System.Notification.Message",
+      "typeId": "System.Notification.Message",
       "ckDerivedId": "System.Entity",
       "isFinal": false,
       "isAbstract": false,

@@ -4,6 +4,6 @@ public static class RtEntityIdExtensions
 {
     public static RtEntityId ToRtEntityId(this RtEntityDto rtEntity)
     {
-        return new RtEntityId(rtEntity.CkId, rtEntity.RtId);
+        return new RtEntityId(rtEntity.CkTypeId, rtEntity.RtId);
     }
 }

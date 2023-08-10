@@ -8,5 +8,5 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.InsertModifier
 
 public interface IAutoIncrementModifier
 {
-    Task RunAutoIncrementAsync(IOctoSession session, CkId<CkTypeId> ckId, IEnumerable<RtEntity> rtEntities);
+    Task RunAutoIncrementAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, IEnumerable<RtEntity> rtEntities);
 }

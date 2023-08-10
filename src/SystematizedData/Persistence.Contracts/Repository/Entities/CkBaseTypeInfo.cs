@@ -10,9 +10,9 @@ public class CkBaseTypeInfo
     /// </summary>
     public OctoObjectId InheritanceId { get; set; }
 
-    public CkId<CkTypeId> OriginCkId { get; set; }
+    public CkId<CkTypeId> OriginCkTypeId { get; set; }
 
-    public CkId<CkTypeId> TargetCkId { get; set; }
+    public CkId<CkTypeId> TargetCkTypeId { get; set; }
 
     public int BaseTypeDepthIndex { get; set; }
 }

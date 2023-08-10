@@ -1,7 +1,7 @@
 {
   "entities": [
     {
-      "ckId": "ServiceHook",
+      "typeId": "ServiceHook",
       "ckDerivedId": "System/Entity",
       "isFinal": false,
       "isAbstract": false,
@@ -11,8 +11,8 @@
           "name": "Enabled"
         },
         {
-          "id": "System/Query.CkId",
-          "name": "QueryCkId"
+          "id": "System/Query.CkTypeId",
+          "name": "QueryCkTypeId"
         },
         {
           "id": "System/Query.FieldFilter",

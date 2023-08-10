@@ -1,9 +1,10 @@
 ﻿using System.Text.Json.Serialization;
+using Meshmakers.Octo.Common.Shared;
 using Persistence.Contracts;
 
-namespace Meshmakers.Octo.Common.Shared.Exchange;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
-public class RtAttribute
+public class RtAttributeDto
 {
     [JsonPropertyName("id")]
     [JsonRequired]

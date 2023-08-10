@@ -66,7 +66,7 @@
       "valueType": "String"
     },
     {
-      "id": "Query.CkId",
+      "id": "Query.CkTypeId",
       "valueType": "String"
     },
     {
@@ -100,12 +100,12 @@
   ],
   "entities": [
     {
-      "ckId": "Entity",
+      "typeId": "Entity",
       "isFinal": false,
       "isAbstract": true
     },
     {
-      "ckId": "AutoIncrement",
+      "typeId": "AutoIncrement",
       "ckDerivedId": "System/Entity",
       "isFinal": false,
       "isAbstract": false,
@@ -125,7 +125,7 @@
       ]
     },
     {
-      "ckId": "Tenant",
+      "typeId": "Tenant",
       "ckDerivedId": "System/Entity",
       "isFinal": true,
       "isAbstract": false,
@@ -153,7 +153,7 @@
       ]
     },
     {
-      "ckId": "Configuration",
+      "typeId": "Configuration",
       "ckDerivedId": "System/Entity",
       "isFinal": true,
       "isAbstract": false,
@@ -165,14 +165,14 @@
       ]
     },
     {
-      "ckId": "Query",
+      "typeId": "Query",
       "ckDerivedId": "System/Entity",
       "isFinal": false,
       "isAbstract": false,
       "attributes": [
         {
-          "id": "System/Query.CkId",
-          "name": "QueryCkId"
+          "id": "System/Query.CkTypeId",
+          "name": "QueryCkTypeId"
         },
         {
           "id": "System/Query.Columns",
@@ -202,7 +202,7 @@
       "associations": []
     },
     {
-      "ckId": "ServiceHook",
+      "typeId": "ServiceHook",
       "ckDerivedId": "System/Entity",
       "isFinal": false,
       "isAbstract": false,
@@ -212,8 +212,8 @@
           "name": "Enabled"
         },
         {
-          "id": "System/Query.CkId",
-          "name": "QueryCkId"
+          "id": "System/Query.CkTypeId",
+          "name": "QueryCkTypeId"
         },
         {
           "id": "System/Query.FieldFilter",

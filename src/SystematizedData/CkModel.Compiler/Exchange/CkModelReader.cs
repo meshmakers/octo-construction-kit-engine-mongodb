@@ -1,4 +1,5 @@
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Validation;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Microsoft.Extensions.Logging;
 
 namespace Meshmakers.Octo.Common.Shared.Exchange;

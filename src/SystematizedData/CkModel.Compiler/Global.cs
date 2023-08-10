@@ -8,6 +8,6 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler;
 
 internal static class CompilerStatics
 {
-    public static IEnumerable<CkId<CkTypeId>> WhiteListedCkIds { get; set; } =
+    public static IEnumerable<CkId<CkTypeId>> WhiteListedCkTypeIds { get; set; } =
         new CkId<CkTypeId>[] { new("System/Entity") };
 }

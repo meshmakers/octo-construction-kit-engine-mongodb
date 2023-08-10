@@ -76,7 +76,7 @@
   ],
   "entities": [
     {
-      "ckId": "User",
+      "typeId": "User",
       "isFinal": true,
       "isAbstract": false,
       "attributes": [

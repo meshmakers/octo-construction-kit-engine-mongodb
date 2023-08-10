@@ -4,7 +4,7 @@ using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-[DebuggerDisplay("{" + nameof(AssociationId) + "} -> {" + nameof(TargetCkId) + "}")]
+[DebuggerDisplay("{" + nameof(AssociationId) + "} -> {" + nameof(TargetCkTypeId) + "}")]
 public class CkEntityAssociation 
 {
     /// <summary>
@@ -17,7 +17,7 @@ public class CkEntityAssociation
     /// </summary>
     public CkId<CkAssociationRoleId> RoleId { get; set; }
 
-    public CkId<CkTypeId> OriginCkId { get; set; }
+    public CkId<CkTypeId> OriginCkTypeId { get; set; }
 
-    public CkId<CkTypeId> TargetCkId { get; set; }
+    public CkId<CkTypeId> TargetCkTypeId { get; set; }
 }

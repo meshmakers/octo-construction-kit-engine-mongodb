@@ -12,7 +12,7 @@ public interface ICkCache : IDisposable
 
     IEnumerable<IEntityCacheItem> GetCkEntities();
 
-    IEntityCacheItem GetEntityCacheItem(CkId<CkTypeId> ckId);
+    IEntityCacheItem GetEntityCacheItem(CkId<CkTypeId> ckTypeId);
 
     void Unload();
 

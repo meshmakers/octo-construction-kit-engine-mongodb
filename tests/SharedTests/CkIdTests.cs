@@ -8,16 +8,16 @@ public class CkIdTests
     [Fact]
     public void Copy_CkId()
     {
-        var ckId = new CkId<CkTypeId>("System/Designation-1.0.0");
-        var ckId2 = ckId;
-        test(ckId2);
+        var ckTypeId = new CkId<CkTypeId>("System/Designation-1.0.0");
+        var ckTypeId2 = ckTypeId;
+        test(ckTypeId2);
     }
 
-    private void test(CkId<CkTypeId> ckId2)
+    private void test(CkId<CkTypeId> ckTypeId)
     {
-        Assert.Equal("System", ckId2.ModelId.ModelId);
-        Assert.Equal("Designation", ckId2.Key.TypeId);
-        Assert.Equal("1.0.0", ckId2.ModelId.ModelVersion);
-        Assert.Equal("1.0.0", ckId2.Key.Version);
+        Assert.Equal("System", ckTypeId.ModelId.ModelId);
+        Assert.Equal("Designation", ckTypeId.Key.TypeId);
+        Assert.Equal("1.0.0", ckTypeId.ModelId.ModelVersion);
+        Assert.Equal("1.0.0", ckTypeId.Key.Version);
     }
 }

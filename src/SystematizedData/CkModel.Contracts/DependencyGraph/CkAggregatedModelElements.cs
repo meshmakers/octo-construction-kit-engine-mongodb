@@ -1,8 +1,8 @@
 using Meshmakers.Octo.Common.Shared;
-using Meshmakers.Octo.Common.Shared.Exchange;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Persistence.Contracts;
 
-namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Validation;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
 
 public class CkAggregatedModelElements
 {
@@ -15,9 +15,9 @@ public class CkAggregatedModelElements
     }
 
     public Dictionary<CkModelId, ICollection<CkModelId>> CkModelDependencies { get; }
-    public Dictionary<CkId<CkTypeId>, CkEntity> CkEntities { get; }
-    public Dictionary<CkId<CkAttributeId>, CkAttribute> CkAttributes { get; }
-    public Dictionary<CkId<CkAssociationRoleId>, CkAssociationRole> CkAssociationRoles { get; }
+    public Dictionary<CkId<CkTypeId>, CkEntityDto> CkEntities { get; }
+    public Dictionary<CkId<CkAttributeId>, CkAttributeDto> CkAttributes { get; }
+    public Dictionary<CkId<CkAssociationRoleId>, CkAssociationRoleDto> CkAssociationRoles { get; }
 
     public void AppendModel(CkModelRoot ckModelRoot)
     {

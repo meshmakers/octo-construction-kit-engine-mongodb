@@ -37,7 +37,7 @@
       "valueType": "String"
     },
     {
-      "id": "Query.CkId",
+      "id": "Query.CkTypeId",
       "valueType": "String"
     },
     {

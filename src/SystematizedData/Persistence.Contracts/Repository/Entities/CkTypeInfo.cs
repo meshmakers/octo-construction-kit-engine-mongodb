@@ -11,7 +11,7 @@ public class CkTypeInfo
     /// <summary>
     ///     Gets or sets the construction kit id
     /// </summary>
-    public CkId<CkTypeId> CkId { get; set; }
+    public CkId<CkTypeId> CkTypeId { get; set; }
 
     /// <summary>
     ///     If true, the type cannot be inherited again
@@ -39,7 +39,7 @@ public class CkTypeInfo
     /// </summary>
     public ICollection<CkEntityIndex>? TextSearchLanguages { get; set; }
 
-    public string Path => CkId + ": " + string.Join("->", BaseTypes.Select(x => x.OriginCkId));
+    public string Path => CkTypeId + ": " + string.Join("->", BaseTypes.Select(x => x.OriginCkTypeId));
 }
 
 // ReSharper disable once ClassNeverInstantiated.Global

@@ -1,6 +1,6 @@
 using Meshmakers.Octo.Common.Shared;
-using Meshmakers.Octo.Common.Shared.Exchange;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
@@ -25,20 +25,20 @@ public class ModelValidationException : CkModelException
         return new ModelValidationException($"Following attribute ids are duplicates: '{attributeIds}'");
     }
 
-    public static Exception UnknownCkIdForInheritance(CkId<CkTypeId> ckId)
+    public static Exception UnknownCkTypeIdForInheritance(CkId<CkTypeId> ckTypeId)
     {
-        return new ModelValidationException($"CkId '{ckId}' is unknown for inheritance.");
+        return new ModelValidationException($"CkTypeId '{ckTypeId}' is unknown for inheritance. This may happen because a dependency to another construction kit model is missing.");
     }
 
 
-    public static Exception CkIdAlreadyExistsInDatabase(CkId<CkTypeId> ckId)
+    public static Exception CkTypeIdAlreadyExistsInDatabase(CkId<CkTypeId> ckTypeId)
     {
-        return new ModelValidationException($"CkId '{ckId}' already exists in database.");
+        return new ModelValidationException($"CkTypeId '{ckTypeId}' already exists in database.");
     }
 
-    public static Exception UnknownAttributeOfCkIdInSource(CkId<CkTypeId> ckId, CkId<CkAttributeId> attributeId)
+    public static Exception UnknownAttributeOfCkTypeIdInSource(CkId<CkTypeId> ckTypeId, CkId<CkAttributeId> attributeId)
     {
-        return new ModelValidationException($"Attribute Id '{attributeId}' of CkId '{ckId}' does not exist.");
+        return new ModelValidationException($"Attribute Id '{attributeId}' of CkTypeId '{ckTypeId}' does not exist.");
     }
 
     public static Exception CommonValidationFailed(string error)
@@ -46,23 +46,23 @@ public class ModelValidationException : CkModelException
         return new ModelValidationException($"Validation of Construction Kit Model failed:" + Environment.NewLine + error);
     }
 
-    public static Exception DuplicateAttributeIdsInCkEntity(CkId<CkTypeId> ckId, IEnumerable<CkId<CkAttributeId>> duplicateAttributeIds)
+    public static Exception DuplicateAttributeIdsInCkEntity(CkId<CkTypeId> ckTypeId, IEnumerable<CkId<CkAttributeId>> duplicateAttributeIds)
     {
         var attributeIds = string.Join(", ", duplicateAttributeIds);
-        return new ModelValidationException($"CkId '{ckId}' has duplicate attribute IDs: '{attributeIds}'");
+        return new ModelValidationException($"CkTypeId '{ckTypeId}' has duplicate attribute IDs: '{attributeIds}'");
     }
 
-    public static Exception DuplicateAttributeNamesInCkEntity(object ckId, IEnumerable<string> select)
+    public static Exception DuplicateAttributeNamesInCkEntity(CkId<CkTypeId> ckTypeId, IEnumerable<string> select)
     {
         var attributeNames = string.Join(", ", select);
-        return new ModelValidationException($"CkId '{ckId}' has duplicate attribute names: '{attributeNames}'");
+        return new ModelValidationException($"CkTypeId '{ckTypeId}' has duplicate attribute names: '{attributeNames}'");
     }
 
-    public static Exception CkIdUsingSystemReservedAttributeNames(object ckId, IEnumerable<string> systemReservedAttributeNames)
+    public static Exception CkTypeIdUsingSystemReservedAttributeNames(CkId<CkTypeId> ckTypeId, IEnumerable<string> systemReservedAttributeNames)
     {
         var attributeNames = string.Join(", ", systemReservedAttributeNames);
         return new ModelValidationException(
-            $"CkId '{ckId}' using attribute names that are system reserved: '{attributeNames}'");
+            $"CkTypeId '{ckTypeId}' using attribute names that are system reserved: '{attributeNames}'");
     }
 
     public static Exception CkAssociationRoleNotFound(CkId<CkAssociationRoleId> associationId)
@@ -89,38 +89,44 @@ public class ModelValidationException : CkModelException
     public static Exception AssociationNotAllowed(CkId<CkAssociationRoleId> roleId, RtEntityId rtEntityId)
     {
         return new ModelValidationException(
-            $"CkType '{rtEntityId.CkId}'->RtId '{rtEntityId.RtId}': Inbound association '{roleId}' is not allowed.");
+            $"CkTypeId '{rtEntityId.CkTypeId}'->RtId '{rtEntityId.RtId}': Inbound association '{roleId}' is not allowed.");
     }
     
-    public static Exception InboundAssociationNotAllowedForCkType(CkId<CkAssociationRoleId> roleId, RtEntityId originRtEntityId, CkId<CkTypeId> ckId)
+    public static Exception InboundAssociationNotAllowedForCkType(CkId<CkAssociationRoleId> roleId, RtEntityId originRtEntityId, CkId<CkTypeId> ckTypeId)
     {
         return new ModelValidationException(
-            $"CkType '{originRtEntityId.CkId}'->RtId '{originRtEntityId.RtId}': Inbound association '{roleId}' to CkId '{ckId}' is not allowed.");
+            $"CkTypeId '{originRtEntityId.CkTypeId}'->RtId '{originRtEntityId.RtId}': Inbound association '{roleId}' to CkTypeId '{ckTypeId}' is not allowed.");
     }
     
-    public static Exception OutboundAssociationNotAllowedForCkType(CkId<CkAssociationRoleId> roleId, RtEntityId originRtEntityId, CkId<CkTypeId> ckId)
+    public static Exception OutboundAssociationNotAllowedForCkType(CkId<CkAssociationRoleId> roleId, RtEntityId originRtEntityId, CkId<CkTypeId> ckTypeId)
     {
         return new ModelValidationException(
-            $"CkType '{originRtEntityId.CkId}'->RtId '{originRtEntityId.RtId}': Outbound association '{roleId}' to CkId '{ckId}' is not allowed.");
+            $"CkTypeId '{originRtEntityId.CkTypeId}'->RtId '{originRtEntityId.RtId}': Outbound association '{roleId}' to CkTypeId '{ckTypeId}' is not allowed.");
     }
     
-    public static Exception AssociationCardinalityViolationOnCreate(CkId<CkAssociationRoleId> roleId, Multiplicities multiplicity, RtEntityId rtEntityId)
+    public static Exception AssociationCardinalityViolationOnCreate(CkId<CkAssociationRoleId> roleId, MultiplicitiesDto multiplicity, RtEntityId rtEntityId)
     {
         return new ModelValidationException(
-            $"CkType '{rtEntityId.CkId}'->RtId '{rtEntityId.RtId}': Inbound association '{roleId}' has minimum multiplicity of '{multiplicity}'. There is no create statement for creating this association.");
+            $"CkTypeId '{rtEntityId.CkTypeId}'->RtId '{rtEntityId.RtId}': Inbound association '{roleId}' has minimum multiplicity of '{multiplicity}'. There is no create statement for creating this association.");
     }
 
     
-    public static Exception AssociationCardinalityViolationOnDelete(CkId<CkAssociationRoleId> roleId, Multiplicities multiplicity, RtEntityId rtEntityId)
+    public static Exception AssociationCardinalityViolationOnDelete(CkId<CkAssociationRoleId> roleId, MultiplicitiesDto multiplicity, RtEntityId rtEntityId)
     {
         return new ModelValidationException(
-            $"CkType '{rtEntityId.CkId}'->RtId '{rtEntityId.RtId}': Inbound association '{roleId}' has maximum multiplicity of '{multiplicity}'. Association deletion violates the model.");
+            $"CkTypeId '{rtEntityId.CkTypeId}'->RtId '{rtEntityId.RtId}': Inbound association '{roleId}' has maximum multiplicity of '{multiplicity}'. Association deletion violates the model.");
     }
     
-    public static Exception AssociationCardinalityViolationOnModification(CkId<CkAssociationRoleId> roleId, Multiplicities multiplicity, RtEntityId rtEntityId)
+    public static Exception AssociationCardinalityViolationOnModification(CkId<CkAssociationRoleId> roleId, MultiplicitiesDto multiplicity, RtEntityId rtEntityId)
     {
         return new ModelValidationException(
-            $"CkType '{rtEntityId.CkId}'->RtId '{rtEntityId.RtId}': Inbound association '{roleId}' has maximum multiplicity of '{multiplicity}'. Adding another association violates the model.");
+            $"CkTypeId '{rtEntityId.CkTypeId}'->RtId '{rtEntityId.RtId}': Inbound association '{roleId}' has maximum multiplicity of '{multiplicity}'. Adding another association violates the model.");
+    }
+
+    public static Exception UnknownCkTypeIdForAssociationTarget(CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> entityAssociationRoleId, CkId<CkTypeId> entityAssociationTargetCkTypeId)
+    {
+        return new ModelValidationException($"CkTypeId '{originCkTypeId}' defines a unknown target construction kit type id '{entityAssociationTargetCkTypeId}' for role id '{entityAssociationRoleId}'." +
+                                            $" This may happen because a dependency to another construction kit model is missing.");
     }
 }
 

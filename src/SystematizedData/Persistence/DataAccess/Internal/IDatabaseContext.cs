@@ -21,12 +21,12 @@ public interface IDatabaseContext
     Task<IOctoSession> StartSessionAsync();
     IOctoSession StartSession();
 
-    ICachedCollection<TEntity> GetRtCollection<TEntity>(CkId<CkTypeId> ckId) where TEntity : RtEntity, new();
+    ICachedCollection<TEntity> GetRtCollection<TEntity>(CkId<CkTypeId> ckTypeId) where TEntity : RtEntity, new();
     ICachedCollection<TEntity> GetRtCollection<TEntity>() where TEntity : RtEntity, new();
 
     Task<ICollection<CkTypeInfo>> GetCkTypeInfoAsync(IOctoSession session);
-    Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, string ckId);
-    Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, CkEntity ckId);
+    Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, string ckTypeId);
+    Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, CkEntity ckEntity);
 
     Task UpdateCollectionsAsync(IOctoSession session);
     Task UpdateIndexAsync(IOctoSession session);

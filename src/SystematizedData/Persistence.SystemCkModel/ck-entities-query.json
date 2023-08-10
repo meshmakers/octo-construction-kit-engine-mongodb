@@ -1,14 +1,14 @@
 {
   "entities": [
     {
-      "ckId": "Query",
+      "typeId": "Query",
       "ckDerivedId": "System/Entity",
       "isFinal": false,
       "isAbstract": false,
       "attributes": [
         {
-          "id": "System/Query.CkId",
-          "name": "QueryCkId"
+          "id": "System/Query.CkTypeId",
+          "name": "QueryCkTypeId"
         },
         {
           "id": "System/Query.Columns",

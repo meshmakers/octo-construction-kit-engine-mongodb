@@ -12,11 +12,11 @@ public class RtAssociation
 
     public OctoObjectId OriginRtId { get; set; }
 
-    public CkId<CkTypeId> OriginCkId { get; set; }
+    public CkId<CkTypeId> OriginCkTypeId { get; set; }
 
     public OctoObjectId TargetRtId { get; set; }
 
-    public CkId<CkTypeId> TargetCkId { get; set; }
+    public CkId<CkTypeId> TargetCkTypeId { get; set; }
 
     public CkId<CkAssociationRoleId> AssociationRoleId { get; set; }
 }

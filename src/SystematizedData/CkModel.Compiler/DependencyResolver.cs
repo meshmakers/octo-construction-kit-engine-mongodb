@@ -2,6 +2,7 @@ using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.ModelRepository;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Validation;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
 using Microsoft.Extensions.Logging;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler;
@@ -35,7 +36,7 @@ internal class DependencyResolver : IDependencyResolver
         {
             var ckDependency = dependencies[i];
             
-            _logger.LogInformation("Resolving dependency '{CkId}'", ckDependency);
+            _logger.LogInformation("Resolving dependency '{CkTypeId}'", ckDependency);
             var ckDependencyRootModel = await _ckModelRepositoryManager.LookupCkModelAsync(ckDependency);
             if (ckDependencyRootModel == null)
             {
@@ -49,13 +50,13 @@ internal class DependencyResolver : IDependencyResolver
                 {
                     if (!aggregatedModelElements.CkModelDependencies.ContainsKey(ckChildDependency))
                     {
-                        _logger.LogInformation("Adding additional dependency '{CkId}'", ckChildDependency);
+                        _logger.LogInformation("Adding additional dependency '{CkTypeId}'", ckChildDependency);
                         dependencies.Add(ckChildDependency);
                     }
                 }
             }
             
-            _logger.LogInformation("Adding resolved dependency '{CkId}' to dependency graph", ckDependencyRootModel.ModelId);
+            _logger.LogInformation("Adding resolved dependency '{CkTypeId}' to dependency graph", ckDependencyRootModel.ModelId);
             aggregatedModelElements.AppendModel(ckDependencyRootModel);
         }
     }

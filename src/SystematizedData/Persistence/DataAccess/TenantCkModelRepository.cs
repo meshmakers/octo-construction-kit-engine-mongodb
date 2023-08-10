@@ -93,7 +93,7 @@ public class TenantCkModelRepository : ITenantCkModelRepository
 
     public async Task<IEnumerable<CkEntity>> GetCkEntitiesByModelAsync(IOctoSession session, CkModelId ckModelId)
     {
-        return await _databaseContext.CkEntities.FindManyAsync(session, x => x.CkId.ModelId == ckModelId.ModelId);
+        return await _databaseContext.CkEntities.FindManyAsync(session, x => x.CkTypeId.ModelId == ckModelId.ModelId);
     }
 
     public async Task<IEnumerable<CkEntityAssociation>> GetCkEntityAssociationsByModelAsync(IOctoSession session, CkModelId ckModelId)
@@ -103,7 +103,7 @@ public class TenantCkModelRepository : ITenantCkModelRepository
 
     public async Task<IEnumerable<CkEntityInheritance>> GetCkEntityInheritancesByModelAsync(IOctoSession session, CkModelId ckModelId)
     {
-        return await _databaseContext.CkEntityInheritances.FindManyAsync(session, x => x.TargetCkId.ModelId == ckModelId.ModelId);
+        return await _databaseContext.CkEntityInheritances.FindManyAsync(session, x => x.TargetCkTypeId.ModelId == ckModelId.ModelId);
     }
 
     public async Task<IEnumerable<CkAssociationRole>> GetCkAssociationRolesByModelAsync(IOctoSession session, CkModelId ckModelId)

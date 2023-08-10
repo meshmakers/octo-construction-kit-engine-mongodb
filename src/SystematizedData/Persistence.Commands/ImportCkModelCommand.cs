@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.Exchange;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
@@ -251,7 +252,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
 
         foreach (var ckEntity in await ckModelRepository.GetCkEntitiesByModelAsync(session, ckModelId))
         {
-            await ckModelRepository.DeleteCkEntitiesOneAsync(session, ckEntity.CkId);
+            await ckModelRepository.DeleteCkEntitiesOneAsync(session, ckEntity.CkTypeId);
         }
 
         if (CheckCancellation(cancellationToken))
@@ -374,19 +375,19 @@ public class ImportCkModelCommand : IImportCkModelCommand
 
             var ckEntity = new CkEntity
             {
-                CkId = new CkId<CkTypeId>(model.ModelId, entity.TypeId),
+                CkTypeId = new CkId<CkTypeId>(model.ModelId, entity.TypeId),
                 IsFinal = entity.IsFinal,
                 IsAbstract = entity.IsAbstract,
                 Attributes = ckEntityAttributes,
                 Indexes = textSearchDefinitions
             };
 
-            if (entity.DerivedCkTypeId != null)
+            if (entity.DerivedFromCkTypeId != null)
             {
                 var ckEntityInheritance = new CkEntityInheritance
                 {
-                    OriginCkId = entity.DerivedCkTypeId.Value,
-                    TargetCkId = new CkId<CkTypeId>(model.ModelId, entity.TypeId)
+                    OriginCkTypeId = entity.DerivedFromCkTypeId.Value,
+                    TargetCkTypeId = new CkId<CkTypeId>(model.ModelId, entity.TypeId)
                 };
                 transientCkModel.CkEntityInheritances.Add(ckEntityInheritance);
             }
@@ -398,8 +399,8 @@ public class ImportCkModelCommand : IImportCkModelCommand
                     var ckEntityAssociation = new CkEntityAssociation
                     {
                         RoleId = association.RoleId,
-                        OriginCkId = new CkId<CkTypeId>(model.ModelId, ckEntity.CkId.Key),
-                        TargetCkId = association.TargetCkId,
+                        OriginCkTypeId = new CkId<CkTypeId>(model.ModelId, ckEntity.CkTypeId.Key),
+                        TargetCkTypeId = association.TargetCkTypeId,
                     };
                     transientCkModel.CkEntityAssociations.Add(ckEntityAssociation);
                 }

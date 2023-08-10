@@ -5,7 +5,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 
 public interface IEntityCacheItem
 {
-    CkId<CkTypeId> CkId { get; }
+    CkId<CkTypeId> CkTypeId { get; }
     bool IsAbstract { get; }
     bool IsFinal { get; }
     IEntityCacheItem? BaseType { get; }

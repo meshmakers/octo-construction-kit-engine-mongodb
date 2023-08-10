@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.Exchange;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Validation;
@@ -15,9 +16,9 @@ public class CkModelGraph
         CkAssociationRoles = new();
     }
 
-    public Dictionary<CkId<CkTypeId>, CkEntity> CkEntities { get; }
-    public Dictionary<CkId<CkAttributeId>, CkAttribute> CkAttributes { get; }
-    public Dictionary<CkId<CkAssociationRoleId>, CkAssociationRole> CkAssociationRoles { get; }
+    public Dictionary<CkId<CkTypeId>, CkEntityDto> CkEntities { get; }
+    public Dictionary<CkId<CkAttributeId>, CkAttributeDto> CkAttributes { get; }
+    public Dictionary<CkId<CkAssociationRoleId>, CkAssociationRoleDto> CkAssociationRoles { get; }
 
     public static CkModelGraph Create(CkModelRoot ckModelRoot, ValidationResult validationResult)
     {
@@ -27,13 +28,13 @@ public class CkModelGraph
         {
             foreach (var ckAttribute in ckModelRoot.CkAttributes)
             {
-                var ckId = new CkId<CkAttributeId>(ckModelRoot.ModelId, ckAttribute.AttributeId);
-                if (ckModelGraph.CkAttributes.ContainsKey(ckId))
+                var ckAttributeId = new CkId<CkAttributeId>(ckModelRoot.ModelId, ckAttribute.AttributeId);
+                if (ckModelGraph.CkAttributes.ContainsKey(ckAttributeId))
                 {
-                    validationResult.AddMessage(MessageCodes.AttributeIdNotUnique(ckId));
+                    validationResult.AddMessage(MessageCodes.AttributeIdNotUnique(ckAttributeId));
                     continue;
                 }
-                ckModelGraph.CkAttributes.Add(ckId, ckAttribute);
+                ckModelGraph.CkAttributes.Add(ckAttributeId, ckAttribute);
             }
         }
         
@@ -41,13 +42,13 @@ public class CkModelGraph
         {
             foreach (var ckAssociationRole in ckModelRoot.CkAssociationRoles)
             {
-                var ckId = new CkId<CkAssociationRoleId>(ckModelRoot.ModelId, ckAssociationRole.RoleId);
-                if (ckModelGraph.CkAssociationRoles.ContainsKey(ckId))
+                var ckAssociationId = new CkId<CkAssociationRoleId>(ckModelRoot.ModelId, ckAssociationRole.RoleId);
+                if (ckModelGraph.CkAssociationRoles.ContainsKey(ckAssociationId))
                 {
-                    validationResult.AddMessage(MessageCodes.AssociationRoleIdNotUnique(ckId));
+                    validationResult.AddMessage(MessageCodes.AssociationRoleIdNotUnique(ckAssociationId));
                     continue;
                 }
-                ckModelGraph.CkAssociationRoles.Add(ckId, ckAssociationRole);
+                ckModelGraph.CkAssociationRoles.Add(ckAssociationId, ckAssociationRole);
             }
         }
         
@@ -55,13 +56,13 @@ public class CkModelGraph
         {
             foreach (var ckEntity in ckModelRoot.CkEntities)
             {
-                var ckId = new CkId<CkTypeId>(ckModelRoot.ModelId, ckEntity.TypeId);
-                if (ckModelGraph.CkEntities.ContainsKey(ckId))
+                var ckTypeId = new CkId<CkTypeId>(ckModelRoot.ModelId, ckEntity.TypeId);
+                if (ckModelGraph.CkEntities.ContainsKey(ckTypeId))
                 {
-                    validationResult.AddMessage(MessageCodes.TypeIdNotUnique(ckId));
+                    validationResult.AddMessage(MessageCodes.TypeIdNotUnique(ckTypeId));
                     continue;
                 }
-                ckModelGraph.CkEntities.Add(ckId, ckEntity);
+                ckModelGraph.CkEntities.Add(ckTypeId, ckEntity);
             }
         }
 

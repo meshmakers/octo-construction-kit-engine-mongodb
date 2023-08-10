@@ -1,12 +1,12 @@
 {
   "entities": [
     {
-      "ckId": "Entity",
+      "typeId": "Entity",
       "isFinal": false,
       "isAbstract": true
     },
     {
-      "ckId": "AutoIncrement",
+      "typeId": "AutoIncrement",
       "ckDerivedId": "System/Entity",
       "isFinal": false,
       "isAbstract": false,
@@ -26,7 +26,7 @@
       ]
     },
     {
-      "ckId": "Tenant",
+      "typeId": "Tenant",
       "ckDerivedId": "System/Entity",
       "isFinal": true,
       "isAbstract": false,
@@ -54,7 +54,7 @@
       ]
     },
     {
-      "ckId": "Configuration",
+      "typeId": "Configuration",
       "ckDerivedId": "System/Entity",
       "isFinal": true,
       "isAbstract": false,

@@ -37,7 +37,7 @@ public class RtEntity
     /// <summary>
     ///     Gets or sets the construction kit id
     /// </summary>
-    public CkId<CkTypeId> CkId { get; set; }
+    public CkId<CkTypeId> CkTypeId { get; set; }
 
     /// <summary>
     ///     Returns the well known name to access well known entities in a faster way
@@ -123,7 +123,7 @@ public class RtEntity
     {
         if (!Attributes.TryGetValue(attributeName, out var value) || value == null)
         {
-            throw InvalidAttributeValueException.CannotBeNull(RtId, CkId, attributeName);
+            throw InvalidAttributeValueException.CannotBeNull(RtId, CkTypeId, attributeName);
         }
 
         return (string)value;

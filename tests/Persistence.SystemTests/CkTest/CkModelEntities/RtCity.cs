@@ -5,7 +5,7 @@ using Newtonsoft.Json;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
 
-[CkId(TestCkModel.TestCkModelId, TestCkModel.CkIdCity)]
+[CkId(TestCkModel.TestCkModelId, TestCkModel.CityTypeId)]
 public class RtCity: RtLocation
 {
   

@@ -5,24 +5,24 @@ namespace Meshmakers.Octo.Common.Shared;
 
 public readonly struct RtEntityId : IComparable<RtEntityId>, IEquatable<RtEntityId>
 {
-    public CkId<CkTypeId> CkId { get; init; }
+    public CkId<CkTypeId> CkTypeId { get; init; }
     public OctoObjectId RtId { get; }
 
-    public RtEntityId(CkId<CkTypeId> ckId, OctoObjectId rtId)
+    public RtEntityId(CkId<CkTypeId> ckTypeId, OctoObjectId rtId)
     {
-        CkId = ckId;
+        CkTypeId = ckTypeId;
         RtId = rtId;
     }
     
     public RtEntityId(CkModelId ckModelId, CkTypeId ckTypeId, OctoObjectId rtId)
     {
-        CkId = new CkId<CkTypeId>(ckModelId, ckTypeId);
+        CkTypeId = new CkId<CkTypeId>(ckModelId, ckTypeId);
         RtId = rtId;
     }
 
     public int CompareTo(RtEntityId other)
     {
-        var num = CkId.CompareTo(other.CkId);
+        var num = CkTypeId.CompareTo(other.CkTypeId);
         if (num != 0)
         {
             return num;
@@ -41,7 +41,7 @@ public readonly struct RtEntityId : IComparable<RtEntityId>, IEquatable<RtEntity
 
     public bool Equals(RtEntityId other)
     {
-        return Equals(CkId, other.CkId) &&
+        return Equals(CkTypeId, other.CkTypeId) &&
                Equals(RtId, other.RtId);
     }
 
@@ -49,7 +49,7 @@ public readonly struct RtEntityId : IComparable<RtEntityId>, IEquatable<RtEntity
     /// <returns>The hash code.</returns>
     public override int GetHashCode()
     {
-        return CkId.GetHashCode() ^ RtId.GetHashCode();
+        return CkTypeId.GetHashCode() ^ RtId.GetHashCode();
     }
 
 
@@ -74,6 +74,6 @@ public readonly struct RtEntityId : IComparable<RtEntityId>, IEquatable<RtEntity
     /// <inheritdoc />
     public override string ToString()
     {
-        return $"CkId: '{CkId}', RtId: '{RtId}'";
+        return $"CkTypeId: '{CkTypeId}', RtId: '{RtId}'";
     }
 }

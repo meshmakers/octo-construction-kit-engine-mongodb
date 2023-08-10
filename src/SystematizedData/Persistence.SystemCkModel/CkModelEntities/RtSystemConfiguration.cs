@@ -6,7 +6,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.CkModelEntities;
 /// <summary>
 /// Represents a system configuration.
 /// </summary>
-[CkId(SystemCkModel.SystemCkModelId, SystemCkModel.SystemConfigurationCkId)]
+[CkId(SystemCkModel.SystemCkModelId, SystemCkModel.SystemConfigurationTypeId)]
 public class RtSystemConfiguration : RtEntity
 {
     /// <summary>

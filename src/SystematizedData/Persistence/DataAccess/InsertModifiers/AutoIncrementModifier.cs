@@ -23,12 +23,12 @@ public class AutoIncrementModifier : IAutoIncrementModifier
         _tenantRepository = tenantRepository;
     }
     
-    public async Task RunAutoIncrementAsync(IOctoSession session, CkId<CkTypeId> ckId, IEnumerable<RtEntity> rtEntities)
+    public async Task RunAutoIncrementAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, IEnumerable<RtEntity> rtEntities)
     {
-        var entityCacheItem = _ckCache.GetEntityCacheItem(ckId);
+        var entityCacheItem = _ckCache.GetEntityCacheItem(ckTypeId);
         if (entityCacheItem == null)
         {
-            throw new InvalidCkIdException($"Construction Kit Id '{ckId}' is invalid.");
+            throw new InvalidCkTypeIdException($"Construction Kit Type Id '{ckTypeId}' is invalid.");
         }
 
         var autoIncrementReferences = entityCacheItem.Attributes.Values
@@ -56,7 +56,7 @@ public class AutoIncrementModifier : IAutoIncrementModifier
             if (attributeCacheItem == null)
             {
                 throw new InvalidAttributeException(
-                    $"Attribute with name '{autoIncrementReference.AttributeName}' does not exist at Ck-Id {ckId}");
+                    $"Attribute with name '{autoIncrementReference.AttributeName}' does not exist at Ck-Id {ckTypeId}");
             }
 
             var autoIncrement = autoIncrementerSet.Items.FirstOrDefault(x =>
@@ -64,7 +64,7 @@ public class AutoIncrementModifier : IAutoIncrementModifier
             if (autoIncrement == null)
             {
                 throw new InvalidAttributeException(
-                    $"Autoincrement reference '{autoIncrementReference.AutoIncrementReference}' does not exist at Ck-Id {ckId}");
+                    $"Autoincrement reference '{autoIncrementReference.AutoIncrementReference}' does not exist at Ck-Id {ckTypeId}");
             }
             rtEntity.SetAttributeValue(autoIncrementReference.AttributeName,
                 attributeCacheItem.AttributeValueType,
@@ -92,7 +92,7 @@ public class AutoIncrementModifier : IAutoIncrementModifier
         }
 
         autoIncrement.CurrentValue = currentValue;
-        await _databaseContext.GetRtCollection<RtEntity>(autoIncrement.CkId)
+        await _databaseContext.GetRtCollection<RtEntity>(autoIncrement.CkTypeId)
             .ReplaceByIdAsync(session, autoIncrement.RtId, autoIncrement);
 
         return currentValue;

@@ -21,7 +21,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<TEntity> where T
     private readonly IEntityCacheItem _entityCacheItem;
 
     internal SingleOriginRtQuery(IEntityCacheItem entityCacheItem, IDatabaseContext databaseContext, string language)
-        : base(databaseContext.GetRtCollection<TEntity>(entityCacheItem.CkId), language)
+        : base(databaseContext.GetRtCollection<TEntity>(entityCacheItem.CkTypeId), language)
     {
         _entityCacheItem = entityCacheItem;
     }
@@ -53,7 +53,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<TEntity> where T
 
     protected override string GetEntityName()
     {
-        return _entityCacheItem.CkId.FullName;
+        return _entityCacheItem.CkTypeId.FullName;
     }
 
     protected override object? ResolveSearchAttributeValue(string attributeName, object? searchTerm, out bool isEnum)

@@ -65,16 +65,16 @@ internal sealed class DatabaseContext : IDatabaseContext
         return session;
     }
 
-    public ICachedCollection<TEntity> GetRtCollection<TEntity>(CkId<CkTypeId> ckId) where TEntity : RtEntity, new()
+    public ICachedCollection<TEntity> GetRtCollection<TEntity>(CkId<CkTypeId> ckTypeId) where TEntity : RtEntity, new()
     {
-        var suffix = ckId.SemanticVersionedFullName.Replace("/", "_");
+        var suffix = ckTypeId.SemanticVersionedFullName.Replace("/", "_");
         return _repository.GetCollection<TEntity>(suffix);
     }
 
     public ICachedCollection<TEntity> GetRtCollection<TEntity>() where TEntity : RtEntity, new()
     {
-        var ckId = RtEntityExtensions.GetCkId<TEntity>();
-        return GetRtCollection<TEntity>(ckId);
+        var ckTypeId = RtEntityExtensions.GetCkTypeId<TEntity>();
+        return GetRtCollection<TEntity>(ckTypeId);
     }
 
     public async Task<ICollection<CkTypeInfo>> GetCkTypeInfoAsync(IOctoSession session)
@@ -84,15 +84,15 @@ internal sealed class DatabaseContext : IDatabaseContext
         return await AggregateCkTypeInfo(aggregate).ToListAsync();
     }
 
-    public async Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, string ckId)
+    public async Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, string ckTypeId)
     {
-        var ckEntity = await GetCkEntityAsync(session, ckId);
+        var ckEntity = await GetCkEntityAsync(session, ckTypeId);
         return await GetCkTypeInfoAsync(session, ckEntity);
     }
 
-    public async Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, CkEntity ckId)
+    public async Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, CkEntity ckEntity)
     {
-        var filter = Builders<CkEntity>.Filter.BuildIdFilter(ckId.CkId);
+        var filter = Builders<CkEntity>.Filter.BuildIdFilter(ckEntity.CkTypeId);
 
         var aggregate = CkEntities.Aggregate(session).Match(filter);
 
@@ -114,7 +114,7 @@ internal sealed class DatabaseContext : IDatabaseContext
         {
             if (!ckEntity.IsAbstract)
             {
-                var suffix = ckEntity.CkId.SemanticVersionedFullName.Replace("/", "_");
+                var suffix = ckEntity.CkTypeId.SemanticVersionedFullName.Replace("/", "_");
                 await _repository.CreateCollectionIfNotExistsAsync<RtEntity>(ckEntity.EnableChangeStreamPreAndPostImages, suffix);
             }
         }
@@ -126,9 +126,9 @@ internal sealed class DatabaseContext : IDatabaseContext
 
         foreach (var ckEntity in ckEntities)
         {
-            var name = ckEntity.CkId.SemanticVersionedFullName.Replace(".", "_");
+            var name = ckEntity.CkTypeId.SemanticVersionedFullName.Replace(".", "_");
 
-            var collection = GetRtCollection<RtEntity>(ckEntity.CkId);
+            var collection = GetRtCollection<RtEntity>(ckEntity.CkTypeId);
             await collection.DropIndexAsync(name);
             // TODO: Hard coded database name not possible. Use from configuration
             await collection.DropIndexAsync("OctoSystem");
@@ -145,9 +145,9 @@ internal sealed class DatabaseContext : IDatabaseContext
                         continue;
                     }
 
-                    var collection = GetRtCollection<RtEntity>(ckEntity.CkId);
+                    var collection = GetRtCollection<RtEntity>(ckEntity.CkTypeId);
 
-                    var newName = ckEntity.CkId.SemanticVersionedFullName.Replace(".", "_") + "_" + ObjectId.GenerateNewId();
+                    var newName = ckEntity.CkTypeId.SemanticVersionedFullName.Replace(".", "_") + "_" + ObjectId.GenerateNewId();
 
                     switch (index.IndexType)
                     {
@@ -169,34 +169,34 @@ internal sealed class DatabaseContext : IDatabaseContext
     private IAggregateFluent<CkTypeInfo> AggregateCkTypeInfo(IAggregateFluent<CkEntity> aggregate)
     {
         return aggregate.GraphLookup(CkEntityInheritances.GetMongoCollection(),
-                x => x.OriginCkId,
-                x => x.TargetCkId,
-                x => x.CkId,
+                x => x.OriginCkTypeId,
+                x => x.TargetCkTypeId,
+                x => x.CkTypeId,
                 (CkTypeInfo x) => x.BaseTypes, (CkBaseTypeInfo i) => i.BaseTypeDepthIndex)
             .Lookup<CkTypeInfo, CkTypeInfo>(_repository.GetCollectionName<CkEntityAssociation>(),
-                "baseTypes.originCkId",
-                "originCkId",
+                "baseTypes.originCkTypeId",
+                "originCkTypeId",
                 "associations.out.inherited")
             .Lookup<CkTypeInfo, CkTypeInfo>(_repository.GetCollectionName<CkEntityAssociation>(),
                 Constants.IdField,
-                "originCkId",
+                "originCkTypeId",
                 "associations.out.owned")
             .Lookup<CkTypeInfo, CkTypeInfo>(_repository.GetCollectionName<CkEntityAssociation>(),
-                "baseTypes.originCkId",
-                "targetCkId",
+                "baseTypes.originCkTypeId",
+                "targetCkTypeId",
                 "associations.in.inherited")
             .Lookup<CkTypeInfo, CkTypeInfo>(_repository.GetCollectionName<CkEntityAssociation>(),
                 Constants.IdField,
-                "targetCkId",
+                "targetCkTypeId",
                 "associations.in.owned");
     }
 
-    private async Task<CkEntity> GetCkEntityAsync(IOctoSession session, string ckId)
+    private async Task<CkEntity> GetCkEntityAsync(IOctoSession session, string ckTypeId)
     {
-        var ckEntity = await CkEntities.DocumentAsync(session, ckId);
+        var ckEntity = await CkEntities.DocumentAsync(session, ckTypeId);
         if (ckEntity == null)
         {
-            throw new EntityNotFoundException($"'{ckId}' does not exist in database.");
+            throw new EntityNotFoundException($"'{ckTypeId}' does not exist in database.");
         }
 
         return ckEntity;

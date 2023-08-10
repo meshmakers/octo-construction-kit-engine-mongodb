@@ -4,7 +4,7 @@ namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 public class CkEntityDto
 {
-    public string? CkId { get; set; }
+    public string? CkTypeId { get; set; }
     public string? TypeName { get; set; }
 
     public ScopeIdsDto ScopeId { get; set; }

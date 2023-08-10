@@ -1,16 +1,15 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text.Json.Serialization;
+﻿using System.Text.Json.Serialization;
+using Meshmakers.Octo.Common.Shared;
 using Persistence.Contracts;
 
-namespace Meshmakers.Octo.Common.Shared.Exchange;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
-public class RtEntity
+public class RtEntityDto
 {
-    public RtEntity()
+    public RtEntityDto()
     {
-        Attributes = new List<RtAttribute>();
-        Associations = new List<RtAssociation>();
+        Attributes = new List<RtAttributeDto>();
+        Associations = new List<RtAssociationDto>();
     }
 
     [JsonPropertyName("rtId")]
@@ -30,16 +29,16 @@ public class RtEntity
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public DateTime? RtChangedDateTime { get; set; }
 
-    [JsonPropertyName("ckId")]
+    [JsonPropertyName("ckTypeId")]
     [JsonRequired]
-    public CkId<CkTypeId> CkId { get; set; } 
+    public CkId<CkTypeId> CkTypeId { get; set; } 
 
     [JsonPropertyName("rtWellKnownName")] 
     public string? RtWellKnownName { get; set; }
 
     [JsonPropertyName("attributes")] 
-    public List<RtAttribute> Attributes { get; }
+    public List<RtAttributeDto> Attributes { get; }
 
     [JsonPropertyName("associations")] 
-    public List<RtAssociation>? Associations { get; }
+    public List<RtAssociationDto>? Associations { get; }
 }

@@ -1,9 +1,10 @@
 ﻿using System.Text.Json.Serialization;
+using Meshmakers.Octo.Common.Shared;
 using Persistence.Contracts;
 
-namespace Meshmakers.Octo.Common.Shared.Exchange;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
-public class RtAssociation
+public class RtAssociationDto
 {
     [JsonPropertyName("roleId")]
     [JsonRequired]
@@ -13,7 +14,7 @@ public class RtAssociation
     [JsonRequired]
     public OctoObjectId TargetRtId { get; set; }
     
-    [JsonPropertyName("targetCkId")] 
+    [JsonPropertyName("targetCkTypeId")] 
     [JsonRequired]
-    public CkId<CkTypeId> TargetCkId { get; set; }
+    public CkId<CkTypeId> TargetCkTypeId { get; set; }
 }

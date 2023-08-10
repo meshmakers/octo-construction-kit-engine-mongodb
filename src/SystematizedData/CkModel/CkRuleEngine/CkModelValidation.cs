@@ -64,36 +64,36 @@ public class CkModelValidation
         var dbEntities = (await _tenantCkModelRepository.GetCkEntitiesByModelAsync(session, transientCkModel.CkModel.Id))
             .ToList();
         var dbEntityInheritances = await _tenantCkModelRepository.GetCkEntityInheritancesByModelAsync(session, transientCkModel.CkModel.Id);
-        var availableEntitiesIds = dbEntities.Select(x => x.CkId)
-            .Union(transientCkModel.CkEntities.Select(x => x.CkId)).ToList();
+        var availableEntitiesIds = dbEntities.Select(x => x.CkTypeId)
+            .Union(transientCkModel.CkEntities.Select(x => x.CkTypeId)).ToList();
         var availableEntities = dbEntities.Union(transientCkModel.CkEntities).ToList();
         var availableEntityInheritances = dbEntityInheritances.Union(transientCkModel.CkEntityInheritances).ToList();
 
         foreach (var ckEntityInheritance in transientCkModel.CkEntityInheritances)
         {
-            if (!availableEntitiesIds.Contains(ckEntityInheritance.OriginCkId))
+            if (!availableEntitiesIds.Contains(ckEntityInheritance.OriginCkTypeId))
             {
-                throw ModelValidationException.UnknownCkIdForInheritance(ckEntityInheritance.OriginCkId);
+                throw ModelValidationException.UnknownCkTypeIdForInheritance(ckEntityInheritance.OriginCkTypeId);
             }
 
-            if (!availableEntitiesIds.Contains(ckEntityInheritance.TargetCkId))
+            if (!availableEntitiesIds.Contains(ckEntityInheritance.TargetCkTypeId))
             {
-                throw ModelValidationException.UnknownCkIdForInheritance(ckEntityInheritance.TargetCkId);
+                throw ModelValidationException.UnknownCkTypeIdForInheritance(ckEntityInheritance.TargetCkTypeId);
             }
         }
 
         foreach (var ckEntity in transientCkModel.CkEntities)
         {
-            if (dbEntities.Any(x => Equals(x.CkId, ckEntity.CkId)))
+            if (dbEntities.Any(x => Equals(x.CkTypeId, ckEntity.CkTypeId)))
             {
-                throw ModelValidationException.CkIdAlreadyExistsInDatabase(ckEntity.CkId);
+                throw ModelValidationException.CkTypeIdAlreadyExistsInDatabase(ckEntity.CkTypeId);
             }
 
             foreach (var attribute in ckEntity.Attributes)
             {
                 if (_availableAttributes.All(a => a.AttributeId != attribute.AttributeId))
                 {
-                    throw ModelValidationException.UnknownAttributeOfCkIdInSource(ckEntity.CkId, attribute.AttributeId);
+                    throw ModelValidationException.UnknownAttributeOfCkTypeIdInSource(ckEntity.CkTypeId, attribute.AttributeId);
                 }
             }
 
@@ -103,21 +103,21 @@ public class CkModelValidation
                 .Where(attr => CkModelCommon.SystemReservedAttributeNames.Contains(attr.AttributeName)).ToList();
             if (systemReservedAttributeNames.Count > 0)
             {
-                throw ModelValidationException.CkIdUsingSystemReservedAttributeNames(ckEntity.CkId,
+                throw ModelValidationException.CkTypeIdUsingSystemReservedAttributeNames(ckEntity.CkTypeId,
                     systemReservedAttributeNames.Select(x => x.AttributeName));
             }
 
             var duplicateAttributeNames = attributes.GroupBy(a => a.AttributeName).Where(a => a.Count() > 1).ToList();
             if (duplicateAttributeNames.Count > 0)
             {
-                throw ModelValidationException.DuplicateAttributeNamesInCkEntity(ckEntity.CkId,
+                throw ModelValidationException.DuplicateAttributeNamesInCkEntity(ckEntity.CkTypeId,
                     duplicateAttributeNames.Select(a => a.Key));
             }
 
             var duplicateAttributeIds = attributes.GroupBy(a => a.AttributeId).Where(a => a.Count() > 1).ToList();
             if (duplicateAttributeIds.Count > 0)
             {
-                throw ModelValidationException.DuplicateAttributeIdsInCkEntity(ckEntity.CkId,
+                throw ModelValidationException.DuplicateAttributeIdsInCkEntity(ckEntity.CkTypeId,
                     duplicateAttributeIds.Select(a => a.Key));
             }
 
@@ -156,14 +156,14 @@ public class CkModelValidation
                     {
                         var attributeNames = string.Join(", ", duplicateAttributeNames.Select(x => x.Key));
                         errorMessageStringBuilder.AppendLine(
-                            $"Text search language '{ckEntityIndex.Language}' at CkId '{ckEntity.CkId}' has duplicate attribute names in one definition: '{attributeNames}'");
+                            $"Text search language '{ckEntityIndex.Language}' at CkTypeId '{ckEntity.CkTypeId}' has duplicate attribute names in one definition: '{attributeNames}'");
                     }
 
                     if (ckEntityIndex.IndexType == IndexTypes.Text && ckIndexFields.Weight.HasValue &&
                         ckIndexFields.Weight < 1)
                     {
                         errorMessageStringBuilder.AppendLine(
-                            $"Weight '{ckIndexFields.Weight}' for language '{ckEntityIndex.Language}' at CkId '{ckEntity.CkId}' is invalid.");
+                            $"Weight '{ckIndexFields.Weight}' for language '{ckEntityIndex.Language}' at CkTypeId '{ckEntity.CkTypeId}' is invalid.");
                     }
                 }
             }
@@ -173,14 +173,14 @@ public class CkModelValidation
         {
             var attributeNames = string.Join(", ", missingAttributes);
             errorMessageStringBuilder.AppendLine(
-                $"Text search attribute names '{attributeNames}‘ does not exist at CkId: '{ckEntity.CkId}'");
+                $"Text search attribute names '{attributeNames}‘ does not exist at CkTypeId: '{ckEntity.CkTypeId}'");
         }
 
         if (unknownAnalyzers.Any())
         {
             var unknownAnalyzerTerms = string.Join(", ", unknownAnalyzers);
             errorMessageStringBuilder.AppendLine(
-                $"Text search languages '{unknownAnalyzerTerms}‘ are unknown at CkId: '{ckEntity.CkId}'");
+                $"Text search languages '{unknownAnalyzerTerms}‘ are unknown at CkTypeId: '{ckEntity.CkTypeId}'");
         }
 
         if (errorMessageStringBuilder.Length > 0)
@@ -198,13 +198,13 @@ public class CkModelValidation
         {
             attributeList.AddRange(currentEntity.Attributes);
 
-            var result = ckEntityInheritances.FirstOrDefault(x => Equals(x.TargetCkId, currentEntity.CkId));
+            var result = ckEntityInheritances.FirstOrDefault(x => Equals(x.TargetCkTypeId, currentEntity.CkTypeId));
             if (result == null)
             {
                 break;
             }
 
-            currentEntity = availableEntities.FirstOrDefault(x => Equals(x.CkId, result.OriginCkId));
+            currentEntity = availableEntities.FirstOrDefault(x => Equals(x.CkTypeId, result.OriginCkTypeId));
         }
 
         return attributeList;

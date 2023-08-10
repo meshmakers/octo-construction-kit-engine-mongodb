@@ -7,29 +7,29 @@ namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 public static class RtEntityExtensions
 {
-    public static CkId<CkTypeId> GetCkId<TEntity>(this TEntity rtEntity)
+    public static CkId<CkTypeId> GetCkTypeId<TEntity>(this TEntity rtEntity)
         where TEntity : RtEntity
     {
-        if (!string.IsNullOrWhiteSpace(rtEntity.CkId.Key.TypeId))
+        if (!string.IsNullOrWhiteSpace(rtEntity.CkTypeId.Key.TypeId))
         {
-            return rtEntity.CkId;
+            return rtEntity.CkTypeId;
         }
 
-        return GetCkId(rtEntity.GetType());
+        return GetCkTypeId(rtEntity.GetType());
     }
 
-    public static CkId<CkTypeId> GetCkId<TEntity>()
+    public static CkId<CkTypeId> GetCkTypeId<TEntity>()
         where TEntity : RtEntity
     {
-        return GetCkId(typeof(TEntity));
+        return GetCkTypeId(typeof(TEntity));
     }
 
-    private static CkId<CkTypeId> GetCkId(Type type)
+    private static CkId<CkTypeId> GetCkTypeId(Type type)
     {
         var customAttribute = Attribute.GetCustomAttribute(type, typeof(CkIdAttribute));
         if (customAttribute == null)
         {
-            throw new InvalidCkIdException(
+            throw new InvalidCkTypeIdException(
                 $"Type '{type}' does not define attribute '{typeof(CkIdAttribute)}'");
         }
 

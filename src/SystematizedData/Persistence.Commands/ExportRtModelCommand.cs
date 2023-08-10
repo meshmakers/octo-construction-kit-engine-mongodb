@@ -2,9 +2,11 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.Common.Shared.Exchange;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Persistence.Contracts;
 using Persistence.SystemCkModel;
+using RtEntityDto = Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects.RtEntityDto;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
 
@@ -30,7 +32,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
             session.StartTransaction();
 
             var query = await tenantRepository.GetRtEntityByRtIdAsync(session,
-                new RtEntityId(SystemCkModel.SystemCkModelId, SystemCkModel.SystemQueryCkId, queryId));
+                new RtEntityId(SystemCkModel.SystemCkModelId, SystemCkModel.SystemQueryTypeId, queryId));
 
             if (CheckCancellation(cancellationToken))
             {
@@ -53,34 +55,34 @@ public class ExportRtModelCommand : IExportRtModelCommand
                 new FieldFilter(TransformAttributeName(dto.AttributeName), (FieldFilterOperator)dto.Operator,
                     dto.ComparisonValue)).ToList() ?? new List<FieldFilter>();
 
-            var ckIdString = query.GetAttributeStringValueOrDefault("QueryCkId");
-            if (string.IsNullOrWhiteSpace(ckIdString))
+            var ckTypeIdString = query.GetAttributeStringValueOrDefault("QueryCkTypeId");
+            if (string.IsNullOrWhiteSpace(ckTypeIdString))
             {
-                throw new ModelExportException($"Query '{queryId}‘ has no QueryCkId attribute set.");
+                throw new ModelExportException($"Query '{queryId}‘ has no QueryCkTypeId attribute set.");
 
             }
-            var ckId = new CkId<CkTypeId>(ckIdString);
+            var ckTypeId = new CkId<CkTypeId>(ckTypeIdString);
 
-            var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync(session, ckId, dataQueryOperation);
+            var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync(session, ckTypeId, dataQueryOperation);
 
-            var entityCacheItem = tenantRepository.GetEntityCacheItem(ckId);
+            var entityCacheItem = tenantRepository.GetEntityCacheItem(ckTypeId);
 
-            var model = new RtModelRoot();
+            var model = new RtModelRootDto();
             model.RtEntities.AddRange(resultSet.Items.Select(entity =>
             {
-                var exEntity = new RtEntity
+                var exEntity = new RtEntityDto
                 {
                     RtId = entity.RtId,
                     RtChangedDateTime = entity.RtChangedDateTime,
                     RtCreationDateTime = entity.RtCreationDateTime,
                     RtWellKnownName = entity.RtWellKnownName,
-                    CkId = entity.CkId
+                    CkTypeId = entity.CkTypeId
                 };
 
                 exEntity.Attributes.AddRange(entity.Attributes.Select(pair =>
                 {
                     var attributeCacheItem = entityCacheItem.Attributes[pair.Key];
-                    return new RtAttribute
+                    return new RtAttributeDto
                     {
                         Id = attributeCacheItem.AttributeId,
                         Value = pair.Value

@@ -1,5 +1,7 @@
 using Meshmakers.Octo.Common.Shared.Exchange;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Validation;
 
@@ -45,7 +47,7 @@ public class CkModelValidator : ICkModelValidator
         // 1. entities.attributes.id -> Reference to a defined attribute.
         // 2. entities.ckDerivedId -> Reference to a defined entity.
         // 3. entities.associations.roleId -> Reference to a defined association role.
-        // 4. entities.associations.targetCkId -> Reference to a defined entity.
+        // 4. entities.associations.targetCkTypeId -> Reference to a defined entity.
         ValidateReferences(modelGraph, aggregatedModelElements, validationResult);
 
         // Check: Inheritance.
@@ -53,13 +55,14 @@ public class CkModelValidator : ICkModelValidator
         // 2. entities.attributes -> It is not possible that an entity has an attribute, which is defined in a base entity.
         // 3. entities.attributes -> It is not possible that an entity has an attribute name, that is defined in a base entity.
         // 4. entities.associations -> It is not possible that an entity has an association, which is defined in a base entity.
+        // 5. entities.isFinal -> It is not possible that an entity is final, but has a derived entity.
         
         foreach (var ckEntityKeyValue in modelGraph.CkEntities)
         {
             // Check 1.
-            if (ckEntityKeyValue.Value.DerivedCkTypeId == null)
+            if (ckEntityKeyValue.Value.DerivedFromCkTypeId == null)
             {
-                if (!CompilerStatics.WhiteListedCkIds.Any(x => x.ModelId.ModelId == ckEntityKeyValue.Key.ModelId.ModelId
+                if (!CompilerStatics.WhiteListedCkTypeIds.Any(x => x.ModelId.ModelId == ckEntityKeyValue.Key.ModelId.ModelId
                                                                && x.Key.TypeId == ckEntityKeyValue.Key.Key.TypeId))
                 {
                     validationResult.AddMessage(
@@ -90,19 +93,19 @@ public class CkModelValidator : ICkModelValidator
                         !modelGraph.CkAttributes.ContainsKey(ckEntityAttribute.AttributeId))
                     {
                         validationResult.AddMessage(
-                            MessageCodes.UnknownAttributeOfCkIdInSource(ckEntityKeyValue.Key, ckEntityAttribute.AttributeId));
+                            MessageCodes.UnknownAttributeOfCkTypeIdInSource(ckEntityKeyValue.Key, ckEntityAttribute.AttributeId));
                     }
                 }
             }
 
             // Check 2.
-            if (ckEntityKeyValue.Value.DerivedCkTypeId != null)
+            if (ckEntityKeyValue.Value.DerivedFromCkTypeId != null)
             {
-                if (!aggregatedModelElements.CkEntities.ContainsKey(ckEntityKeyValue.Value.DerivedCkTypeId.Value) &&
-                    !modelGraph.CkEntities.ContainsKey(ckEntityKeyValue.Value.DerivedCkTypeId.Value))
+                if (!aggregatedModelElements.CkEntities.ContainsKey(ckEntityKeyValue.Value.DerivedFromCkTypeId.Value) &&
+                    !modelGraph.CkEntities.ContainsKey(ckEntityKeyValue.Value.DerivedFromCkTypeId.Value))
                 {
                     validationResult.AddMessage(
-                        MessageCodes.UnknownCkDerivedIdOfCkIdInSource(ckEntityKeyValue.Value.DerivedCkTypeId, ckEntityKeyValue.Key));
+                        MessageCodes.UnknownCkDerivedIdOfCkTypeIdInSource(ckEntityKeyValue.Value.DerivedFromCkTypeId, ckEntityKeyValue.Key));
                 }
             }
 
@@ -115,15 +118,15 @@ public class CkModelValidator : ICkModelValidator
                         !modelGraph.CkAssociationRoles.ContainsKey(ckEntityAssociation.RoleId))
                     {
                         validationResult.AddMessage(
-                            MessageCodes.UnknownAssociationRoleOfCkIdInSource(ckEntityKeyValue.Key, ckEntityAssociation.RoleId));
+                            MessageCodes.UnknownAssociationRoleOfCkTypeIdInSource(ckEntityKeyValue.Key, ckEntityAssociation.RoleId));
                     }
 
                     // Check 4.
-                    if (!aggregatedModelElements.CkEntities.ContainsKey(ckEntityAssociation.TargetCkId) &&
-                        !modelGraph.CkEntities.ContainsKey(ckEntityAssociation.TargetCkId))
+                    if (!aggregatedModelElements.CkEntities.ContainsKey(ckEntityAssociation.TargetCkTypeId) &&
+                        !modelGraph.CkEntities.ContainsKey(ckEntityAssociation.TargetCkTypeId))
                     {
                         validationResult.AddMessage(
-                            MessageCodes.UnknownTargetCkIdOfCkIdInSource(ckEntityKeyValue.Key, ckEntityAssociation.TargetCkId));
+                            MessageCodes.UnknownTargetCkTypeIdOfCkTypeIdInSource(ckEntityKeyValue.Key, ckEntityAssociation.TargetCkTypeId));
                     }
                 }
             }

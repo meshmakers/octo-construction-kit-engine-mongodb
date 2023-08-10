@@ -1,10 +1,11 @@
 ﻿using System.Diagnostics;
 using System.Text.Json.Serialization;
+using Meshmakers.Octo.Common.Shared;
 
-namespace Meshmakers.Octo.Common.Shared.Exchange;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
 [DebuggerDisplay("{" + nameof(RoleId) + "}")]
-public class CkAssociationRole
+public class CkAssociationRoleDto
 {
     [JsonPropertyName("id")] [JsonRequired] public CkAssociationRoleId RoleId { get; set; }
 
@@ -28,7 +29,7 @@ public class CkAssociationRole
     [JsonPropertyName("inboundMultiplicity")]
     [JsonConverter(typeof(JsonStringEnumConverter))]
     [JsonRequired]
-    public Multiplicities InboundMultiplicity { get; set; }
+    public MultiplicitiesDto InboundMultiplicity { get; set; }
 
     /// <summary>
     ///     Multiplicity of the outbound association
@@ -36,5 +37,5 @@ public class CkAssociationRole
     [JsonPropertyName("outboundMultiplicity")]
     [JsonConverter(typeof(JsonStringEnumConverter))]
     [JsonRequired]
-    public Multiplicities OutboundMultiplicity { get; set; }
+    public MultiplicitiesDto OutboundMultiplicity { get; set; }
 }

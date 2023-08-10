@@ -209,7 +209,7 @@ public class EntityNotificationRepository : INotificationRepository
         return new NotificationMessageDto
         {
             RtId = rtEntity.RtId,
-            CkId = rtEntity.CkId,
+            CkTypeId = rtEntity.CkTypeId,
             SubjectText = rtEntity.SubjectText,
             BodyText = rtEntity.BodyText,
             RecipientAddress = rtEntity.RecipientAddress,
