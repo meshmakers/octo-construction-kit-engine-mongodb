@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Meshmakers.Octo.Common.Shared;
 
@@ -119,9 +120,10 @@ public static class CommonConstants
     ///     Returns a scope definition including default scopes and api scopes
     /// </summary>
     /// <param name="apiScopes">Enum flags for API scopes.</param>
+    /// <param name="customScopes">Additional custom scopes to be added to the token</param>
     /// <param name="scopes">Default scopes that are added </param>
     /// <returns></returns>
-    public static string GetScopes(ApiScopes apiScopes, DefaultScopes scopes = DefaultScopes.UserDefault)
+    public static string GetScopes(ApiScopes apiScopes, IEnumerable<string> customScopes, DefaultScopes scopes = DefaultScopes.UserDefault)
     {
         var list = GetDefaultScopes(scopes);
 
@@ -151,7 +153,14 @@ public static class CommonConstants
         {
             list.Add(BotApiReadOnly);
         }
-
+        
+        foreach (var customScope in customScopes)
+        {
+            if (list.All(s => string.Compare(s, customScope, StringComparison.OrdinalIgnoreCase) != 0))
+            {
+                list.Add(customScope);
+            }
+        }
 
         return string.Join(" ", list.ToArray());
     }
