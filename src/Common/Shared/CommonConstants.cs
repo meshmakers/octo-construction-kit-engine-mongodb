@@ -123,7 +123,7 @@ public static class CommonConstants
     /// <param name="customScopes">Additional custom scopes to be added to the token</param>
     /// <param name="scopes">Default scopes that are added </param>
     /// <returns></returns>
-    public static string GetScopes(ApiScopes apiScopes, IEnumerable<string> customScopes, DefaultScopes scopes = DefaultScopes.UserDefault)
+    public static string GetScopes(ApiScopes apiScopes, IEnumerable<string>? customScopes = null, DefaultScopes scopes = DefaultScopes.UserDefault)
     {
         var list = GetDefaultScopes(scopes);
 
@@ -153,12 +153,15 @@ public static class CommonConstants
         {
             list.Add(BotApiReadOnly);
         }
-        
-        foreach (var customScope in customScopes)
+
+        if (customScopes != null)
         {
-            if (list.All(s => string.Compare(s, customScope, StringComparison.OrdinalIgnoreCase) != 0))
+            foreach (var customScope in customScopes)
             {
-                list.Add(customScope);
+                if (list.All(s => string.Compare(s, customScope, StringComparison.OrdinalIgnoreCase) != 0))
+                {
+                    list.Add(customScope);
+                }
             }
         }
 
