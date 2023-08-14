@@ -28,7 +28,7 @@
         <PackageReference Include="Duende.IdentityServer.Storage" Version="6.3.3" />
         <PackageReference Include="MathParser.org-mXparser" Version="5.2.1" />
         <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="7.0.0" />
-        <PackageReference Include="MongoDB.Driver.GridFS" Version="2.19.2" />
+        <PackageReference Include="MongoDB.Driver.GridFS" Version="2.21.0" />
         <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
         <PackageReference Include="NLog" Version="5.2.3" />
         <PackageReference Include="System.Reactive" Version="6.0.0" />
