@@ -1,5 +1,6 @@
 using FakeItEasy;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler;
+using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
 using Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 using Microsoft.Extensions.Logging;
@@ -9,7 +10,7 @@ namespace CkModel.Compiler.Tests;
 public class InheritanceResolverTests
 {
     [Fact]
-    public void MissingInheritanceEntity_OK()
+    public void Inheritance_InheritanceOfAssociations_OK()
     {
         var logger = A.Fake<ILogger<InheritanceResolver> >();
 
@@ -17,9 +18,11 @@ public class InheritanceResolverTests
         ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
         ckAggregatedModelElements.AppendModel(sampleData.sample1.Builder.Build());
 
+        CompilerResult compilerResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
-        var graph = inheritanceResolver.ResolveInheritanceAsync(ckAggregatedModelElements);
+        var graph = inheritanceResolver.ResolveInheritanceAsync(ckAggregatedModelElements, compilerResult);
         
+        Assert.Empty(compilerResult.Messages);
         Assert.Equal(4, graph.Entities.Count);
         Assert.NotNull(graph.Entities["System/Entity"]);
         Assert.NotNull(graph.Entities["sample1/Demo1"]);
@@ -40,23 +43,161 @@ public class InheritanceResolverTests
         Assert.Equal(0, graph.Entities["sample1/Demo1"].Associations.Out.Owned.Count);
         
         Assert.Equal(6, graph.Entities["sample1/Demo2"].Attributes.Count);
-        Assert.Equal(1, graph.Entities["sample1/Demo2"].Associations.In.Inherited.Count);
-        Assert.Contains(graph.Entities["sample1/Demo2"].Associations.In.Inherited, a=> a.RoleId == "sample1/Related");
         Assert.Equal(0, graph.Entities["sample1/Demo2"].Associations.In.Owned.Count);
+        Assert.Equal(2, graph.Entities["sample1/Demo2"].Associations.In.Inherited.Count);
+        Assert.Contains(graph.Entities["sample1/Demo2"].Associations.In.Inherited, a=> a.RoleId == "sample1/Related");
+        Assert.Contains(graph.Entities["sample1/Demo2"].Associations.In.Inherited, a=> a.RoleId == "System/ParentChild");
         Assert.Equal(0, graph.Entities["sample1/Demo2"].Associations.Out.Inherited.Count);
         Assert.Equal(1, graph.Entities["sample1/Demo2"].Associations.Out.Owned.Count);
         Assert.Contains(graph.Entities["sample1/Demo2"].Associations.Out.Owned, a=> a.RoleId == "System/ParentChild");
     }
+
+    [Fact]
+    public void Inheritance_InheritanceOfAttributes_OK()
+    {
+        var logger = A.Fake<ILogger<InheritanceResolver>>();
+
+        CkAggregatedModelElements ckAggregatedModelElements = new();
+        ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
+        ckAggregatedModelElements.AppendModel(sampleData.sample1.Builder.Build());
+        
+        CompilerResult compilerResult = new();
+        InheritanceResolver inheritanceResolver = new(logger);
+        var graph = inheritanceResolver.ResolveInheritanceAsync(ckAggregatedModelElements, compilerResult);
+        
+        Assert.Empty(compilerResult.Messages);
+        Assert.Equal(4, graph.Entities.Count);
+        Assert.NotNull(graph.Entities["System/Entity"]);
+        Assert.NotNull(graph.Entities["sample1/Demo1"]);
+        Assert.NotNull(graph.Entities["sample1/Demo2"]);
+        Assert.Equal(0, graph.Entities["System/Entity"].Attributes.Count);
+        Assert.Equal(3, graph.Entities["sample1/Demo1"].Attributes.Count);
+        Assert.Equal(6, graph.Entities["sample1/Demo2"].Attributes.Count);
+    }
     
     [Fact]
-    public void MissingInheritanceType_ThrowsException()
+    public void Inheritance_AttributesSameNameOnLevel_CompilerErrorMessage_ThrowsException()
+    {
+        var logger = A.Fake<ILogger<InheritanceResolver>>();
+
+        CkAggregatedModelElements ckAggregatedModelElements = new();
+        ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
+        ckAggregatedModelElements.AppendModel(sampleData.sample_attributes_sameName_fail.Builder.Build());
+        
+        CompilerResult compilerResult = new();
+        InheritanceResolver inheritanceResolver = new(logger);
+        Assert.Throws<ModelValidationException>(() => inheritanceResolver.ResolveInheritanceAsync(ckAggregatedModelElements, compilerResult));
+
+        Assert.Single(compilerResult.Messages);
+        Assert.Equal(MessageLevel.FatalError, compilerResult.Messages[0].MessageLevel);
+        Assert.Equal(15, compilerResult.Messages[0].MessageNumber);
+    }
+    
+    [Fact]
+    public void Inheritance_AttributesSameNameOnInheritance_CompilerErrorMessage()
+    {
+        var logger = A.Fake<ILogger<InheritanceResolver>>();
+
+        CkAggregatedModelElements ckAggregatedModelElements = new();
+        ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
+        ckAggregatedModelElements.AppendModel(sampleData.sample_attributes_sameNameAtInheritance_fail.Builder.Build());
+        
+        CompilerResult compilerResult = new();
+        InheritanceResolver inheritanceResolver = new(logger);
+        inheritanceResolver.ResolveInheritanceAsync(ckAggregatedModelElements, compilerResult);
+        
+        Assert.Single(compilerResult.Messages);
+        Assert.Equal(MessageLevel.Error, compilerResult.Messages[0].MessageLevel);
+        Assert.Equal(13, compilerResult.Messages[0].MessageNumber);
+    }
+        
+    [Fact]
+    public void Inheritance_AttributesSameIdOnLevel_CompilerErrorMessage_ThrowsException()
+    {
+        var logger = A.Fake<ILogger<InheritanceResolver>>();
+
+        CkAggregatedModelElements ckAggregatedModelElements = new();
+        ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
+        ckAggregatedModelElements.AppendModel(sampleData.sample_attributes_sameId_fail.Builder.Build());
+        
+        CompilerResult compilerResult = new();
+        InheritanceResolver inheritanceResolver = new(logger);
+        Assert.Throws<ModelValidationException>(() => inheritanceResolver.ResolveInheritanceAsync(ckAggregatedModelElements, compilerResult));
+
+        Assert.Single(compilerResult.Messages);
+        Assert.Equal(MessageLevel.FatalError, compilerResult.Messages[0].MessageLevel);
+        Assert.Equal(16, compilerResult.Messages[0].MessageNumber);
+    }
+    
+    [Fact]
+    public void Inheritance_AttributesSameIdOnInheritance_CompilerErrorMessage()
+    {
+        var logger = A.Fake<ILogger<InheritanceResolver>>();
+
+        CkAggregatedModelElements ckAggregatedModelElements = new();
+        ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
+        ckAggregatedModelElements.AppendModel(sampleData.sample_attributes_sameIdAtInheritance_fail.Builder.Build());
+        
+        CompilerResult compilerResult = new();
+        InheritanceResolver inheritanceResolver = new(logger);
+        inheritanceResolver.ResolveInheritanceAsync(ckAggregatedModelElements, compilerResult);
+
+        Assert.Single(compilerResult.Messages);
+        Assert.Equal(MessageLevel.Error, compilerResult.Messages[0].MessageLevel);
+        Assert.Equal(12, compilerResult.Messages[0].MessageNumber);
+    }
+    
+    [Fact]
+    public void Inheritance_AssociationSameIdAndTargetOnSame_CompilerErrorMessage()
+    {
+        var logger = A.Fake<ILogger<InheritanceResolver>>();
+
+        CkAggregatedModelElements ckAggregatedModelElements = new();
+        ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
+        ckAggregatedModelElements.AppendModel(sampleData.sample_assocs_sameIdAndTarget_fail.Builder.Build());
+        
+        CompilerResult compilerResult = new();
+        InheritanceResolver inheritanceResolver = new(logger);
+        inheritanceResolver.ResolveInheritanceAsync(ckAggregatedModelElements, compilerResult);
+
+        Assert.Single(compilerResult.Messages);
+        Assert.Equal(MessageLevel.Error, compilerResult.Messages[0].MessageLevel);
+        Assert.Equal(14, compilerResult.Messages[0].MessageNumber);
+    }
+    
+    [Fact]
+    public void Inheritance_AssociationSameIdAndTargetOnInheritance_CompilerErrorMessage()
+    {
+        var logger = A.Fake<ILogger<InheritanceResolver>>();
+
+        CkAggregatedModelElements ckAggregatedModelElements = new();
+        ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
+        ckAggregatedModelElements.AppendModel(sampleData.sample_assocs_sameIdAndTargetAtInheritance_fail.Builder.Build());
+        
+        CompilerResult compilerResult = new();
+        InheritanceResolver inheritanceResolver = new(logger);
+        inheritanceResolver.ResolveInheritanceAsync(ckAggregatedModelElements, compilerResult);
+
+        Assert.Single(compilerResult.Messages);
+        Assert.Equal(MessageLevel.Error, compilerResult.Messages[0].MessageLevel);
+        Assert.Equal(18, compilerResult.Messages[0].MessageNumber);
+    }
+
+
+    [Fact]
+    public void MissingInheritanceType_CompilerErrorMessage_ThrowsException()
     {
         var logger = A.Fake<ILogger<InheritanceResolver> >();
 
         CkAggregatedModelElements ckAggregatedModelElements = new();
         ckAggregatedModelElements.AppendModel(sampleData.sample1.Builder.Build());
 
+        CompilerResult compilerResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
-        Assert.Throws<ModelValidationException>(() => inheritanceResolver.ResolveInheritanceAsync(ckAggregatedModelElements));
+        Assert.Throws<ModelValidationException>(() => inheritanceResolver.ResolveInheritanceAsync(ckAggregatedModelElements, compilerResult));
+        
+        Assert.Single(compilerResult.Messages);
+        Assert.Equal(MessageLevel.FatalError, compilerResult.Messages[0].MessageLevel);
+        Assert.Equal(11, compilerResult.Messages[0].MessageNumber);
     }
 }

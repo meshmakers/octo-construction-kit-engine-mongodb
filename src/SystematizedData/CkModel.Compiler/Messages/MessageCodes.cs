@@ -1,4 +1,4 @@
-
+﻿
 //------------------------------------------------------------------------------
 // <auto-generate>
 //     The code was generated from a template.
@@ -32,8 +32,8 @@ internal static class MessageCodes
     internal static CompilerMessage UnknownCkModel(object modelId) =>
         GetMessage("UnknownCkModel", modelId);
 
-    internal static CompilerMessage UnknownAttributeOfCkTypeIdInSource(object attributeId, object ckTypeId) =>
-        GetMessage("UnknownAttributeOfCkTypeIdInSource", attributeId, ckTypeId);
+    internal static CompilerMessage UnknownAttributeOfCkTypeIdInSource(object ckAttributeId, object ckTypeId) =>
+        GetMessage("UnknownAttributeOfCkTypeIdInSource", ckAttributeId, ckTypeId);
 
     internal static CompilerMessage UnknownCkDerivedIdOfCkTypeIdInSource(object derivedCkTypeId, object ckTypeId) =>
         GetMessage("UnknownCkDerivedIdOfCkTypeIdInSource", derivedCkTypeId, ckTypeId);
@@ -41,14 +41,14 @@ internal static class MessageCodes
     internal static CompilerMessage UnknownAssociationRoleOfCkTypeIdInSource(object ckTypeId, object roleId) =>
         GetMessage("UnknownAssociationRoleOfCkTypeIdInSource", ckTypeId, roleId);
 
-    internal static CompilerMessage UnknownTargetCkTypeIdOfCkTypeIdInSource(object CkTypeId, object targetCkTypeId) =>
-        GetMessage("UnknownTargetCkTypeIdOfCkTypeIdInSource", CkTypeId, targetCkTypeId);
+    internal static CompilerMessage UnknownTargetCkTypeIdOfCkTypeIdInSource(object ckTypeId, object targetCkTypeId) =>
+        GetMessage("UnknownTargetCkTypeIdOfCkTypeIdInSource", ckTypeId, targetCkTypeId);
 
-    internal static CompilerMessage AttributeIdNotUnique(object CkTypeId) =>
-        GetMessage("AttributeIdNotUnique", CkTypeId);
+    internal static CompilerMessage AttributeIdNotUnique(object ckAttributeId) =>
+        GetMessage("AttributeIdNotUnique", ckAttributeId);
 
-    internal static CompilerMessage AssociationRoleIdNotUnique(object ckTypeId) =>
-        GetMessage("AssociationRoleIdNotUnique", ckTypeId);
+    internal static CompilerMessage AssociationRoleIdNotUnique(object ckAssociationId) =>
+        GetMessage("AssociationRoleIdNotUnique", ckAssociationId);
 
     internal static CompilerMessage TypeIdNotUnique(object ckTypeId) =>
         GetMessage("TypeIdNotUnique", ckTypeId);
@@ -58,6 +58,30 @@ internal static class MessageCodes
 
     internal static CompilerMessage CircularDependency(object modelId, object dependentModelId) =>
         GetMessage("CircularDependency", modelId, dependentModelId);
+
+    internal static CompilerMessage UnknownCkTypeIdForInheritance(object ckTypeId) =>
+        GetMessage("UnknownCkTypeIdForInheritance", ckTypeId);
+
+    internal static CompilerMessage CkTypeIdAttributeIdNotUniqueByInheritance(object ckTypeId, object ckAttributeId) =>
+        GetMessage("CkTypeIdAttributeIdNotUniqueByInheritance", ckTypeId, ckAttributeId);
+
+    internal static CompilerMessage CkTypeIdAttributeNameNotUniqueByInheritance(object ckTypeId, object attributeName) =>
+        GetMessage("CkTypeIdAttributeNameNotUniqueByInheritance", ckTypeId, attributeName);
+
+    internal static CompilerMessage CkTypeIdAssociationNotUnique(object ckTypeId, object ckAssociationId, object targetCkTypeId) =>
+        GetMessage("CkTypeIdAssociationNotUnique", ckTypeId, ckAssociationId, targetCkTypeId);
+
+    internal static CompilerMessage CkTypeIdAttributeNameNotUnique(object ckTypeId, object attributeName) =>
+        GetMessage("CkTypeIdAttributeNameNotUnique", ckTypeId, attributeName);
+
+    internal static CompilerMessage CkTypeIdAttributeIdNotUnique(object ckTypeId, object ckAttributeId) =>
+        GetMessage("CkTypeIdAttributeIdNotUnique", ckTypeId, ckAttributeId);
+
+    internal static CompilerMessage CkTypeIdOutAssociationNotUniqueByInheritance(object ckTypeId, object ckAssociationId, object targetCkTypeId) =>
+        GetMessage("CkTypeIdOutAssociationNotUniqueByInheritance", ckTypeId, ckAssociationId, targetCkTypeId);
+
+    internal static CompilerMessage CkTypeIdInAssociationNotUniqueByInheritance(object ckTypeId, object ckAssociationId, object targetCkTypeId) =>
+        GetMessage("CkTypeIdInAssociationNotUniqueByInheritance", ckTypeId, ckAssociationId, targetCkTypeId);
 
     private static readonly Dictionary<string, CompilerMessageTemplate> Templates = new()
     {
@@ -70,8 +94,8 @@ internal static class MessageCodes
         {
             "UnknownAttributeOfCkTypeIdInSource",
              new CompilerMessageTemplate(MessageLevel.Error,
-                 2, "Attribute Id '{attributeId}' of CkTypeId '{ckTypeId}' does not exist. Please check if you have set dependency to the correct construction kit model.",
-                 new [] {"attributeId", "ckTypeId"})
+                 2, "Attribute Id '{ckAttributeId}' of CkTypeId '{ckTypeId}' does not exist. Please check if you have set dependency to the correct construction kit model.",
+                 new [] {"ckAttributeId", "ckTypeId"})
         },
         {
             "UnknownCkDerivedIdOfCkTypeIdInSource",
@@ -88,20 +112,20 @@ internal static class MessageCodes
         {
             "UnknownTargetCkTypeIdOfCkTypeIdInSource",
              new CompilerMessageTemplate(MessageLevel.Error,
-                 5, "CkTypeId '{CkTypeId}' defines unknown association role target CkTypeId '{targetCkTypeId}'. Please check if you have set dependency to the correct construction kit model.",
-                 new [] {"CkTypeId", "targetCkTypeId"})
+                 5, "CkTypeId '{ckTypeId}' defines unknown association role target CkTypeId '{targetCkTypeId}'. Please check if you have set dependency to the correct construction kit model.",
+                 new [] {"ckTypeId", "targetCkTypeId"})
         },
         {
             "AttributeIdNotUnique",
              new CompilerMessageTemplate(MessageLevel.Error,
-                 6, "AttributeId '{CkTypeId}' is not unique.",
-                 new [] {"CkTypeId"})
+                 6, "AttributeId '{ckAttributeId}' is not unique.",
+                 new [] {"ckAttributeId"})
         },
         {
             "AssociationRoleIdNotUnique",
              new CompilerMessageTemplate(MessageLevel.Error,
-                 7, "AssociationRoleId '{ckTypeId}' is not unique.",
-                 new [] {"ckTypeId"})
+                 7, "AssociationRoleId '{ckAssociationId}' is not unique.",
+                 new [] {"ckAssociationId"})
         },
         {
             "TypeIdNotUnique",
@@ -120,6 +144,54 @@ internal static class MessageCodes
              new CompilerMessageTemplate(MessageLevel.Error,
                  10, "ModelId '{modelId}' has defined a dependency to '{dependentModelId}' that results to a circular dependencies.",
                  new [] {"modelId", "dependentModelId"})
+        },
+        {
+            "UnknownCkTypeIdForInheritance",
+             new CompilerMessageTemplate(MessageLevel.FatalError,
+                 11, "CkTypeId '{ckTypeId}' is unknown for inheritance. This may happen because a dependency to another construction kit model is missing.",
+                 new [] {"ckTypeId"})
+        },
+        {
+            "CkTypeIdAttributeIdNotUniqueByInheritance",
+             new CompilerMessageTemplate(MessageLevel.Error,
+                 12, "CkTypeId '{ckTypeId}' defines AttributeId '{ckAttributeId}' by inheritance that violates the unique attribute id constraint.",
+                 new [] {"ckTypeId", "ckAttributeId"})
+        },
+        {
+            "CkTypeIdAttributeNameNotUniqueByInheritance",
+             new CompilerMessageTemplate(MessageLevel.Error,
+                 13, "CkTypeId '{ckTypeId}' defines attribute name '{attributeName}' by inheritance that violates the unique attribute name constraint.",
+                 new [] {"ckTypeId", "attributeName"})
+        },
+        {
+            "CkTypeIdAssociationNotUnique",
+             new CompilerMessageTemplate(MessageLevel.Error,
+                 14, "CkTypeId '{ckTypeId}' defines AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}' that violates the unique association constraint",
+                 new [] {"ckTypeId", "ckAssociationId", "targetCkTypeId"})
+        },
+        {
+            "CkTypeIdAttributeNameNotUnique",
+             new CompilerMessageTemplate(MessageLevel.FatalError,
+                 15, "CkTypeId '{ckTypeId}' defines attribute name '{attributeName}' that violates the unique attribute name constraint.",
+                 new [] {"ckTypeId", "attributeName"})
+        },
+        {
+            "CkTypeIdAttributeIdNotUnique",
+             new CompilerMessageTemplate(MessageLevel.FatalError,
+                 16, "CkTypeId '{ckTypeId}' defines AttributeId '{ckAttributeId}' that violates the unique attribute id constraint.",
+                 new [] {"ckTypeId", "ckAttributeId"})
+        },
+        {
+            "CkTypeIdOutAssociationNotUniqueByInheritance",
+             new CompilerMessageTemplate(MessageLevel.Error,
+                 17, "CkTypeId '{ckTypeId}' defines an outgoing AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}' by inheritance that violates the unique association constraint",
+                 new [] {"ckTypeId", "ckAssociationId", "targetCkTypeId"})
+        },
+        {
+            "CkTypeIdInAssociationNotUniqueByInheritance",
+             new CompilerMessageTemplate(MessageLevel.Error,
+                 18, "CkTypeId '{ckTypeId}' defines an incoming AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}' by inheritance that violates the unique association constraint",
+                 new [] {"ckTypeId", "ckAssociationId", "targetCkTypeId"})
         },
     };
 }

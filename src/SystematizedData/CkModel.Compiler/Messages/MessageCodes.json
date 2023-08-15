@@ -10,7 +10,7 @@
       "key": "UnknownAttributeOfCkTypeIdInSource",
       "number": 2,
       "level": "ERROR",
-      "text": "Attribute Id '{attributeId}' of CkTypeId '{ckTypeId}' does not exist. Please check if you have set dependency to the correct construction kit model."
+      "text": "Attribute Id '{ckAttributeId}' of CkTypeId '{ckTypeId}' does not exist. Please check if you have set dependency to the correct construction kit model."
     },
     {
       "key": "UnknownCkDerivedIdOfCkTypeIdInSource",
@@ -28,19 +28,19 @@
       "key": "UnknownTargetCkTypeIdOfCkTypeIdInSource",
       "number": 5,
       "level": "ERROR",
-      "text": "CkTypeId '{CkTypeId}' defines unknown association role target CkTypeId '{targetCkTypeId}'. Please check if you have set dependency to the correct construction kit model."
+      "text": "CkTypeId '{ckTypeId}' defines unknown association role target CkTypeId '{targetCkTypeId}'. Please check if you have set dependency to the correct construction kit model."
     },
     {
       "key": "AttributeIdNotUnique",
       "number": 6,
       "level": "ERROR",
-      "text": "AttributeId '{CkTypeId}' is not unique."
+      "text": "AttributeId '{ckAttributeId}' is not unique."
     },
     {
       "key": "AssociationRoleIdNotUnique",
       "number": 7,
       "level": "ERROR",
-      "text": "AssociationRoleId '{ckTypeId}' is not unique."
+      "text": "AssociationRoleId '{ckAssociationId}' is not unique."
     },
     {
       "key": "TypeIdNotUnique",
@@ -59,7 +59,54 @@
       "number": 10,
       "level": "ERROR",
       "text": "ModelId '{modelId}' has defined a dependency to '{dependentModelId}' that results to a circular dependencies."
+    },
+    {
+      "key": "UnknownCkTypeIdForInheritance",
+      "number": 11,
+      "level": "FATALERROR",
+      "text": "CkTypeId '{ckTypeId}' is unknown for inheritance. This may happen because a dependency to another construction kit model is missing."
+    },
+    {
+      "key": "CkTypeIdAttributeIdNotUniqueByInheritance",
+      "number": 12,
+      "level": "ERROR",
+      "text": "CkTypeId '{ckTypeId}' defines AttributeId '{ckAttributeId}' by inheritance that violates the unique attribute id constraint."
+    },
+    {
+      "key": "CkTypeIdAttributeNameNotUniqueByInheritance",
+      "number": 13,
+      "level": "ERROR",
+      "text": "CkTypeId '{ckTypeId}' defines attribute name '{attributeName}' by inheritance that violates the unique attribute name constraint."
+    },
+    {
+      "key": "CkTypeIdAssociationNotUnique",
+      "number": 14,
+      "level": "ERROR",
+      "text": "CkTypeId '{ckTypeId}' defines AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}' that violates the unique association constraint"
+    },
+    {
+      "key": "CkTypeIdAttributeNameNotUnique",
+      "number": 15,
+      "level": "FATALERROR",
+      "text": "CkTypeId '{ckTypeId}' defines attribute name '{attributeName}' that violates the unique attribute name constraint."
+    },
+    {
+      "key": "CkTypeIdAttributeIdNotUnique",
+      "number": 16,
+      "level": "FATALERROR",
+      "text": "CkTypeId '{ckTypeId}' defines AttributeId '{ckAttributeId}' that violates the unique attribute id constraint."
+    },
+    {
+      "key": "CkTypeIdOutAssociationNotUniqueByInheritance",
+      "number": 17,
+      "level": "ERROR",
+      "text": "CkTypeId '{ckTypeId}' defines an outgoing AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}' by inheritance that violates the unique association constraint"
+    },
+    {
+      "key": "CkTypeIdInAssociationNotUniqueByInheritance",
+      "number": 18,
+      "level": "ERROR",
+      "text": "CkTypeId '{ckTypeId}' defines an incoming AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}' by inheritance that violates the unique association constraint"
     }
-    
   ]
 }
