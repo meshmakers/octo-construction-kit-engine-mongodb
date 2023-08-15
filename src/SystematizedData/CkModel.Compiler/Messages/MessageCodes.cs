@@ -83,6 +83,9 @@ internal static class MessageCodes
     internal static CompilerMessage CkTypeIdInAssociationNotUniqueByInheritance(object ckTypeId, object ckAssociationId, object targetCkTypeId) =>
         GetMessage("CkTypeIdInAssociationNotUniqueByInheritance", ckTypeId, ckAssociationId, targetCkTypeId);
 
+    internal static CompilerMessage CkTypeIdUnknownTargetCkTypeIdForAssociation(object originCkTypeId, object targetCkTypeId, object roleId) =>
+        GetMessage("CkTypeIdUnknownTargetCkTypeIdForAssociation", originCkTypeId, targetCkTypeId, roleId);
+
     private static readonly Dictionary<string, CompilerMessageTemplate> Templates = new()
     {
         {
@@ -192,6 +195,12 @@ internal static class MessageCodes
              new CompilerMessageTemplate(MessageLevel.Error,
                  18, "CkTypeId '{ckTypeId}' defines an incoming AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}' by inheritance that violates the unique association constraint",
                  new [] {"ckTypeId", "ckAssociationId", "targetCkTypeId"})
+        },
+        {
+            "CkTypeIdUnknownTargetCkTypeIdForAssociation",
+             new CompilerMessageTemplate(MessageLevel.FatalError,
+                 19, "CkTypeId '{originCkTypeId}' defines a unknown target CkTypeId '{targetCkTypeId}' for role id '{roleId}'. This may happen because a dependency to another construction kit model is missing.",
+                 new [] {"originCkTypeId", "targetCkTypeId", "roleId"})
         },
     };
 }

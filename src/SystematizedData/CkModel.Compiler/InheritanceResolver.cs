@@ -136,10 +136,10 @@ public class InheritanceResolver
         CkAggregatedModelElements aggregatedModelElements, CkEntityGraph entityGraph,
         CkEntityAssociationDto entityAssociation, CompilerResult compilerResult)
     {
-        var targetCkEntity = aggregatedModelElements.CkEntities[entityAssociation.TargetCkTypeId];
-        if (targetCkEntity == null)
+        if (!aggregatedModelElements.CkEntities.TryGetValue(entityAssociation.TargetCkTypeId, out var targetCkEntity))
         {
-            // TODO: Compiler message and check for more exceptions wihtout message
+            compilerResult.AddMessage(MessageCodes.CkTypeIdUnknownTargetCkTypeIdForAssociation(entityGraph.CkTypeId, 
+                entityAssociation.RoleId, entityAssociation.TargetCkTypeId));
             throw ModelValidationException.UnknownCkTypeIdForAssociationTarget(entityGraph.CkTypeId,
                 entityAssociation.RoleId, entityAssociation.TargetCkTypeId);
         }

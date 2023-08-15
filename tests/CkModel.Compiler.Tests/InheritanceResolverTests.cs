@@ -200,4 +200,22 @@ public class InheritanceResolverTests
         Assert.Equal(MessageLevel.FatalError, compilerResult.Messages[0].MessageLevel);
         Assert.Equal(11, compilerResult.Messages[0].MessageNumber);
     }
+    
+    [Fact]
+    public void AssociationTargetUnknown_CompilerErrorMessage_ThrowsException()
+    {
+        var logger = A.Fake<ILogger<InheritanceResolver> >();
+
+        CkAggregatedModelElements ckAggregatedModelElements = new();
+        ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
+        ckAggregatedModelElements.AppendModel(sampleData.sample_assocs_invalidTarget_fail.Builder.Build());
+
+        CompilerResult compilerResult = new();
+        InheritanceResolver inheritanceResolver = new(logger);
+        Assert.Throws<ModelValidationException>(() => inheritanceResolver.ResolveInheritanceAsync(ckAggregatedModelElements, compilerResult));
+        
+        Assert.Single(compilerResult.Messages);
+        Assert.Equal(MessageLevel.FatalError, compilerResult.Messages[0].MessageLevel);
+        Assert.Equal(19, compilerResult.Messages[0].MessageNumber);
+    }
 }

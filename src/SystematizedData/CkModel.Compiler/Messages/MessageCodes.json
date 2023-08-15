@@ -107,6 +107,12 @@
       "number": 18,
       "level": "ERROR",
       "text": "CkTypeId '{ckTypeId}' defines an incoming AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}' by inheritance that violates the unique association constraint"
+    },
+    {
+      "key": "CkTypeIdUnknownTargetCkTypeIdForAssociation",
+      "number": 19,
+      "level": "FATALERROR",
+      "text": "CkTypeId '{originCkTypeId}' defines a unknown target CkTypeId '{targetCkTypeId}' for role id '{roleId}'. This may happen because a dependency to another construction kit model is missing."
     }
   ]
 }
