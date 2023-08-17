@@ -110,14 +110,14 @@ public class CkModelValidation
             var duplicateAttributeNames = attributes.GroupBy(a => a.AttributeName).Where(a => a.Count() > 1).ToList();
             if (duplicateAttributeNames.Count > 0)
             {
-                throw ModelValidationException.DuplicateAttributeNamesInCkEntity(ckEntity.CkTypeId,
+                throw ModelValidationException.DuplicateAttributeNamesInCkType(ckEntity.CkTypeId,
                     duplicateAttributeNames.Select(a => a.Key));
             }
 
             var duplicateAttributeIds = attributes.GroupBy(a => a.AttributeId).Where(a => a.Count() > 1).ToList();
             if (duplicateAttributeIds.Count > 0)
             {
-                throw ModelValidationException.DuplicateAttributeIdsInCkEntity(ckEntity.CkTypeId,
+                throw ModelValidationException.DuplicateAttributeIdsInCkType(ckEntity.CkTypeId,
                     duplicateAttributeIds.Select(a => a.Key));
             }
 

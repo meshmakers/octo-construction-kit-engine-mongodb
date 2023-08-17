@@ -9,13 +9,13 @@ public class CkAggregatedModelElements
     public CkAggregatedModelElements()
     {
         CkModelDependencies = new();
-        CkEntities = new();
+        CkTypes = new();
         CkAttributes = new();
         CkAssociationRoles = new();
     }
 
     public Dictionary<CkModelId, ICollection<CkModelId>> CkModelDependencies { get; }
-    public Dictionary<CkId<CkTypeId>, CkEntityDto> CkEntities { get; }
+    public Dictionary<CkId<CkTypeId>, CkTypeDto> CkTypes { get; }
     public Dictionary<CkId<CkAttributeId>, CkAttributeDto> CkAttributes { get; }
     public Dictionary<CkId<CkAssociationRoleId>, CkAssociationRoleDto> CkAssociationRoles { get; }
 
@@ -39,11 +39,11 @@ public class CkAggregatedModelElements
             }
         }
         
-        if (ckModelRoot.CkEntities != null)
+        if (ckModelRoot.CkTypes != null)
         {
-            foreach (var ckEntity in ckModelRoot.CkEntities)
+            foreach (var ckTypeDto in ckModelRoot.CkTypes)
             {
-                CkEntities.Add(new CkId<CkTypeId>(ckModelRoot.ModelId, ckEntity.TypeId), ckEntity);
+                CkTypes.Add(new CkId<CkTypeId>(ckModelRoot.ModelId, ckTypeDto.TypeId), ckTypeDto);
             }
         }
     }

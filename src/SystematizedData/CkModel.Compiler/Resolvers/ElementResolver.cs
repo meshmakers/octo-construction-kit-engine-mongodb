@@ -40,17 +40,17 @@ public class ElementResolver : IElementResolver
             }
         }
         
-        if (ckModelRoot.CkEntities != null)
+        if (ckModelRoot.CkTypes != null)
         {
-            foreach (var ckEntity in ckModelRoot.CkEntities)
+            foreach (var ckType in ckModelRoot.CkTypes)
             {
-                var ckTypeId = new CkId<CkTypeId>(ckModelRoot.ModelId, ckEntity.TypeId);
-                if (ckModelGraph.Entities.ContainsKey(ckTypeId))
+                var ckTypeId = new CkId<CkTypeId>(ckModelRoot.ModelId, ckType.TypeId);
+                if (ckModelGraph.Types.ContainsKey(ckTypeId))
                 {
                     validationResult.AddMessage(MessageCodes.TypeIdNotUnique(ckTypeId));
                     continue;
                 }
-                ckModelGraph.GetOrCreateEntity(ckTypeId, ckEntity);
+                ckModelGraph.GetOrCreateType(ckTypeId, ckType);
             }
         }
 

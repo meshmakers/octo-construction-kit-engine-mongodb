@@ -7,21 +7,21 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
 
 public class CkModelGraph
 {
-    private readonly IDictionary<CkId<CkTypeId>, CkEntityGraph> _entities;
+    private readonly IDictionary<CkId<CkTypeId>, CkTypeGraph> _entities;
     private readonly IDictionary<CkId<CkAttributeId>, CkAttributeGraph> _attributes;
     private readonly IDictionary<CkId<CkAssociationRoleId>, CkAssociationRoleGraph> _associationRoles;
 
     public CkModelGraph()
     {
-        _entities = new Dictionary<CkId<CkTypeId>, CkEntityGraph>();
+        _entities = new Dictionary<CkId<CkTypeId>, CkTypeGraph>();
         _attributes = new Dictionary<CkId<CkAttributeId>, CkAttributeGraph>();
         _associationRoles = new Dictionary<CkId<CkAssociationRoleId>, CkAssociationRoleGraph>();
-        Entities = new ReadOnlyDictionary<CkId<CkTypeId>, CkEntityGraph>(_entities);
+        Types = new ReadOnlyDictionary<CkId<CkTypeId>, CkTypeGraph>(_entities);
         Attributes = new Dictionary<CkId<CkAttributeId>, CkAttributeGraph>(_attributes);
         AssociationRoles = new Dictionary<CkId<CkAssociationRoleId>, CkAssociationRoleGraph>(_associationRoles);
     }
 
-    public IReadOnlyDictionary<CkId<CkTypeId>, CkEntityGraph> Entities { get; }
+    public IReadOnlyDictionary<CkId<CkTypeId>, CkTypeGraph> Types { get; }
     public Dictionary<CkId<CkAttributeId>, CkAttributeGraph> Attributes { get; }
     public Dictionary<CkId<CkAssociationRoleId>, CkAssociationRoleGraph> AssociationRoles { get; }
 
@@ -37,16 +37,16 @@ public class CkModelGraph
         return ckAttributeGraph;
     }
 
-    public CkEntityGraph GetOrCreateEntity(CkId<CkTypeId> ckTypeId, CkEntityDto ckEntityDto)
+    public CkTypeGraph GetOrCreateType(CkId<CkTypeId> ckTypeId, CkTypeDto ckTypeDto)
     {
-        if (_entities.TryGetValue(ckTypeId, out var ckEntityGraph))
+        if (_entities.TryGetValue(ckTypeId, out var ckTypeGraph))
         {
-            return ckEntityGraph;
+            return ckTypeGraph;
         }
         
-        ckEntityGraph = new(ckTypeId, ckEntityDto.IsAbstract, ckEntityDto.IsFinal);
-        _entities.Add(ckTypeId, ckEntityGraph);
-        return ckEntityGraph;
+        ckTypeGraph = new(ckTypeId, ckTypeDto.IsAbstract, ckTypeDto.IsFinal);
+        _entities.Add(ckTypeId, ckTypeGraph);
+        return ckTypeGraph;
     }
 
     public CkAssociationRoleGraph GetOrCreateAssociationRoles(CkId<CkAssociationRoleId> ckAssociationId, CkAssociationRoleDto ckAssociationRole)

@@ -9,13 +9,13 @@ using Persistence.Contracts;
 namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
 [DebuggerDisplay("{" + nameof(TypeId) + "}")]
-public class CkEntityDto
+public class CkTypeDto
 {
-    public CkEntityDto()
+    public CkTypeDto()
     {
-        Attributes = new List<CkEntityAttributeDto>();
-        Associations = new List<CkEntityAssociationDto>();
-        Indexes = new List<CkEntityIndexDto>();
+        Attributes = new List<CkTypeAttributeDto>();
+        Associations = new List<CkTypeAssociationDto>();
+        Indexes = new List<CkTypeIndexDto>();
     }
 
     /// <summary>
@@ -45,16 +45,16 @@ public class CkEntityDto
     ///     Gets or sets a list of attributes
     /// </summary>
     [JsonPropertyName("attributes")]
-    public List<CkEntityAttributeDto>? Attributes { get; set; }
+    public List<CkTypeAttributeDto>? Attributes { get; set; }
 
     /// <summary>
     /// Gets or sets a list of indexes
     /// </summary>
     [JsonPropertyName("indexes")] 
-    public List<CkEntityIndexDto>? Indexes { get; set; }
+    public List<CkTypeIndexDto>? Indexes { get; set; }
 
     [JsonPropertyName("associations")]
-    public List<CkEntityAssociationDto>? Associations { get; set; }
+    public List<CkTypeAssociationDto>? Associations { get; set; }
 
     /// <summary>
     /// Gets or sets if the change stream should include pre and post images

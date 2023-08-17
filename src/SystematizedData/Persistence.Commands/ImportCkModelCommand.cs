@@ -328,12 +328,12 @@ public class ImportCkModelCommand : IImportCkModelCommand
     private void ProcessCkEntitiesAndAssociations(CkModelRoot model,
         TransientCkModel transientCkModel)
     {
-        if (model.CkEntities == null)
+        if (model.CkTypes == null)
         {
             return;
         }
 
-        foreach (var entity in model.CkEntities)
+        foreach (var entity in model.CkTypes)
         {
             var ckEntityAttributes = new List<CkEntityAttribute>();
             if (entity.Attributes != null)

@@ -50,13 +50,13 @@ public class ModelValidationException : CkModelException
         return new ModelValidationException($"Validation of Construction Kit Model failed:" + Environment.NewLine + error);
     }
 
-    public static Exception DuplicateAttributeIdsInCkEntity(CkId<CkTypeId> ckTypeId, IEnumerable<CkId<CkAttributeId>> duplicateAttributeIds)
+    public static Exception DuplicateAttributeIdsInCkType(CkId<CkTypeId> ckTypeId, IEnumerable<CkId<CkAttributeId>> duplicateAttributeIds)
     {
         var attributeIds = string.Join(", ", duplicateAttributeIds);
         return new ModelValidationException($"CkTypeId '{ckTypeId}' has duplicate attribute IDs: '{attributeIds}'");
     }
 
-    public static Exception DuplicateAttributeNamesInCkEntity(CkId<CkTypeId> ckTypeId, IEnumerable<string> select)
+    public static Exception DuplicateAttributeNamesInCkType(CkId<CkTypeId> ckTypeId, IEnumerable<string> select)
     {
         var attributeNames = string.Join(", ", select);
         return new ModelValidationException($"CkTypeId '{ckTypeId}' has duplicate attribute names: '{attributeNames}'");
@@ -127,9 +127,9 @@ public class ModelValidationException : CkModelException
             $"CkTypeId '{rtEntityId.CkTypeId}'->RtId '{rtEntityId.RtId}': Inbound association '{roleId}' has maximum multiplicity of '{multiplicity}'. Adding another association violates the model.");
     }
 
-    public static Exception UnknownCkTypeIdForAssociationTarget(CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> entityAssociationRoleId, CkId<CkTypeId> entityAssociationTargetCkTypeId)
+    public static Exception UnknownCkTypeIdForAssociationTarget(CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> entityAssociationRoleId, CkId<CkTypeId> typeAssociationTargetCkTypeId)
     {
-        return new ModelValidationException($"CkTypeId '{originCkTypeId}' defines a unknown target construction kit type id '{entityAssociationTargetCkTypeId}' for role id '{entityAssociationRoleId}'." +
+        return new ModelValidationException($"CkTypeId '{originCkTypeId}' defines a unknown target construction kit type id '{typeAssociationTargetCkTypeId}' for role id '{entityAssociationRoleId}'." +
                                             $" This may happen because a dependency to another construction kit model is missing.");
     }
 }

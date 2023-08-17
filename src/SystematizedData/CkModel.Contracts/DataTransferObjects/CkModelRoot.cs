@@ -11,7 +11,7 @@ public class CkModelRoot
     public CkModelRoot()
     {
         CkDependencies = new List<CkModelId>();
-        CkEntities = new List<CkEntityDto>();
+        CkTypes = new List<CkTypeDto>();
         CkAssociationRoles = new List<CkAssociationRoleDto>();
         CkAttributes = new List<CkAttributeDto>();
     }
@@ -25,7 +25,7 @@ public class CkModelRoot
     [JsonPropertyName("dependencies")] public List<CkModelId>? CkDependencies { get; set; }
 
     // ReSharper disable once CollectionNeverUpdated.Global
-    [JsonPropertyName("entities")] public List<CkEntityDto>? CkEntities { get; set; }
+    [JsonPropertyName("entities")] public List<CkTypeDto>? CkTypes { get; set; }
 
     // ReSharper disable once CollectionNeverUpdated.Global
     [JsonPropertyName("associationRoles")] public List<CkAssociationRoleDto>? CkAssociationRoles { get; set; }

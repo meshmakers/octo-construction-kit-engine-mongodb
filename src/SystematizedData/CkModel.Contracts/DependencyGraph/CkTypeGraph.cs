@@ -10,7 +10,7 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
 /// Represents a construction kit type in the dependency graph
 /// </summary>
 [DebuggerDisplay("{" + nameof(Path) + "}")]
-public class CkEntityGraph
+public class CkTypeGraph
 {
     private readonly List<CkGraphTypeInheritance> _baseTypes;
     
@@ -20,7 +20,7 @@ public class CkEntityGraph
     /// <param name="ckTypeId"></param>
     /// <param name="isAbstract"></param>
     /// <param name="isFinal"></param>
-    public CkEntityGraph(CkId<CkTypeId> ckTypeId, bool isAbstract, bool isFinal)
+    public CkTypeGraph(CkId<CkTypeId> ckTypeId, bool isAbstract, bool isFinal)
     {
         CkTypeId = ckTypeId;
         IsAbstract = isAbstract;
@@ -28,7 +28,7 @@ public class CkEntityGraph
         _baseTypes = new List<CkGraphTypeInheritance>();
         BaseTypes = new ReadOnlyCollection<CkGraphTypeInheritance>(_baseTypes);
         Associations = new();
-        Attributes = new List<CkEntityAttributeDto>();
+        Attributes = new List<CkTypeAttributeDto>();
     }
 
     /// <summary>
@@ -57,12 +57,12 @@ public class CkEntityGraph
     public CkGraphDirectedAssociations Associations { get; }
 
 
-    public ICollection<CkEntityIndexDto>? Indexes { get; set; }
+    public ICollection<CkTypeIndexDto>? Indexes { get; set; }
 
     /// <summary>
     ///     Gets or sets a list of attributes including inherited ones.
     /// </summary>
-    public ICollection<CkEntityAttributeDto> Attributes { get; } 
+    public ICollection<CkTypeAttributeDto> Attributes { get; } 
 
     /// <summary>
     /// Returns a string that describes the inheritance chain

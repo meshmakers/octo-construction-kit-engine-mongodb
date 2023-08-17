@@ -57,13 +57,13 @@ public class Builder
                   ValueType = AttributeValueTypesDto.String,
               }
             },
-            CkEntities = new List<CkEntityDto>
+            CkTypes = new List<CkTypeDto>
             {
                 new()
                 {
                     TypeId = "Demo1",
                     DerivedFromCkTypeId = "System/Entity",
-                    Attributes = new List<CkEntityAttributeDto>
+                    Attributes = new List<CkTypeAttributeDto>
                     {
                         new() { AttributeId = "sample1/attribute1", AttributeName = "a" },
                         new() { AttributeId = "sample1/attribute2", AttributeName = "b" },
@@ -74,13 +74,13 @@ public class Builder
                 {
                     TypeId = "Demo2",
                     DerivedFromCkTypeId = "sample1/Demo1",
-                    Attributes = new List<CkEntityAttributeDto>
+                    Attributes = new List<CkTypeAttributeDto>
                     {
                         new() { AttributeId = "sample1/attribute4", AttributeName = "d" },
                         new() { AttributeId = "sample1/attribute5", AttributeName = "e" },
                         new() { AttributeId = "sample1/attribute6", AttributeName = "f" }
                     },
-                    Associations = new List<CkEntityAssociationDto>
+                    Associations = new List<CkTypeAssociationDto>
                     {
                         new() { RoleId = "System/ParentChild", TargetCkTypeId = "sample1/Demo1" },
                         new() { RoleId = "sample1/Related", TargetCkTypeId = "System/Entity" }
@@ -91,7 +91,7 @@ public class Builder
                 {
                     TypeId = "Demo3",
                     DerivedFromCkTypeId = "sample1/Demo2",
-                    Associations = new List<CkEntityAssociationDto>
+                    Associations = new List<CkTypeAssociationDto>
                     {
                         new() { RoleId = "sample1/Related", TargetCkTypeId = "System/Entity" },
                     }

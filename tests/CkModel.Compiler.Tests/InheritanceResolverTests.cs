@@ -25,33 +25,33 @@ public class InheritanceResolverTests
         inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult);
         
         Assert.Empty(compilerResult.Messages);
-        Assert.Equal(4, graph.Entities.Count);
-        Assert.NotNull(graph.Entities["System/Entity"]);
-        Assert.NotNull(graph.Entities["sample1/Demo1"]);
-        Assert.NotNull(graph.Entities["sample1/Demo2"]);
-        Assert.Equal(0, graph.Entities["System/Entity"].Attributes.Count);
-        Assert.Equal(1, graph.Entities["System/Entity"].Associations.In.Owned.Count);
-        Assert.Contains(graph.Entities["System/Entity"].Associations.In.Owned, a=> a.RoleId == "sample1/Related");
-        Assert.Equal(0, graph.Entities["System/Entity"].Associations.In.Inherited.Count);
-        Assert.Equal(0, graph.Entities["System/Entity"].Associations.Out.Owned.Count);
-        Assert.Equal(0, graph.Entities["System/Entity"].Associations.Out.Inherited.Count);
+        Assert.Equal(4, graph.Types.Count);
+        Assert.NotNull(graph.Types["System/Entity"]);
+        Assert.NotNull(graph.Types["sample1/Demo1"]);
+        Assert.NotNull(graph.Types["sample1/Demo2"]);
+        Assert.Equal(0, graph.Types["System/Entity"].Attributes.Count);
+        Assert.Equal(1, graph.Types["System/Entity"].Associations.In.Owned.Count);
+        Assert.Contains(graph.Types["System/Entity"].Associations.In.Owned, a=> a.RoleId == "sample1/Related");
+        Assert.Equal(0, graph.Types["System/Entity"].Associations.In.Inherited.Count);
+        Assert.Equal(0, graph.Types["System/Entity"].Associations.Out.Owned.Count);
+        Assert.Equal(0, graph.Types["System/Entity"].Associations.Out.Inherited.Count);
         
-        Assert.Equal(3, graph.Entities["sample1/Demo1"].Attributes.Count);
-        Assert.Equal(1, graph.Entities["sample1/Demo1"].Associations.In.Owned.Count);
-        Assert.Contains(graph.Entities["sample1/Demo1"].Associations.In.Owned, a=> a.RoleId == "System/ParentChild");
-        Assert.Equal(1, graph.Entities["sample1/Demo1"].Associations.In.Inherited.Count);
-        Assert.Contains(graph.Entities["sample1/Demo1"].Associations.In.Inherited, a=> a.RoleId == "sample1/Related");
-        Assert.Equal(0, graph.Entities["sample1/Demo1"].Associations.Out.Inherited.Count);
-        Assert.Equal(0, graph.Entities["sample1/Demo1"].Associations.Out.Owned.Count);
+        Assert.Equal(3, graph.Types["sample1/Demo1"].Attributes.Count);
+        Assert.Equal(1, graph.Types["sample1/Demo1"].Associations.In.Owned.Count);
+        Assert.Contains(graph.Types["sample1/Demo1"].Associations.In.Owned, a=> a.RoleId == "System/ParentChild");
+        Assert.Equal(1, graph.Types["sample1/Demo1"].Associations.In.Inherited.Count);
+        Assert.Contains(graph.Types["sample1/Demo1"].Associations.In.Inherited, a=> a.RoleId == "sample1/Related");
+        Assert.Equal(0, graph.Types["sample1/Demo1"].Associations.Out.Inherited.Count);
+        Assert.Equal(0, graph.Types["sample1/Demo1"].Associations.Out.Owned.Count);
         
-        Assert.Equal(6, graph.Entities["sample1/Demo2"].Attributes.Count);
-        Assert.Equal(0, graph.Entities["sample1/Demo2"].Associations.In.Owned.Count);
-        Assert.Equal(2, graph.Entities["sample1/Demo2"].Associations.In.Inherited.Count);
-        Assert.Contains(graph.Entities["sample1/Demo2"].Associations.In.Inherited, a=> a.RoleId == "sample1/Related");
-        Assert.Contains(graph.Entities["sample1/Demo2"].Associations.In.Inherited, a=> a.RoleId == "System/ParentChild");
-        Assert.Equal(0, graph.Entities["sample1/Demo2"].Associations.Out.Inherited.Count);
-        Assert.Equal(1, graph.Entities["sample1/Demo2"].Associations.Out.Owned.Count);
-        Assert.Contains(graph.Entities["sample1/Demo2"].Associations.Out.Owned, a=> a.RoleId == "System/ParentChild");
+        Assert.Equal(6, graph.Types["sample1/Demo2"].Attributes.Count);
+        Assert.Equal(0, graph.Types["sample1/Demo2"].Associations.In.Owned.Count);
+        Assert.Equal(2, graph.Types["sample1/Demo2"].Associations.In.Inherited.Count);
+        Assert.Contains(graph.Types["sample1/Demo2"].Associations.In.Inherited, a=> a.RoleId == "sample1/Related");
+        Assert.Contains(graph.Types["sample1/Demo2"].Associations.In.Inherited, a=> a.RoleId == "System/ParentChild");
+        Assert.Equal(0, graph.Types["sample1/Demo2"].Associations.Out.Inherited.Count);
+        Assert.Equal(1, graph.Types["sample1/Demo2"].Associations.Out.Owned.Count);
+        Assert.Contains(graph.Types["sample1/Demo2"].Associations.Out.Owned, a=> a.RoleId == "System/ParentChild");
     }
 
     [Fact]
@@ -69,13 +69,13 @@ public class InheritanceResolverTests
         inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult);
         
         Assert.Empty(compilerResult.Messages);
-        Assert.Equal(4, graph.Entities.Count);
-        Assert.NotNull(graph.Entities["System/Entity"]);
-        Assert.NotNull(graph.Entities["sample1/Demo1"]);
-        Assert.NotNull(graph.Entities["sample1/Demo2"]);
-        Assert.Equal(0, graph.Entities["System/Entity"].Attributes.Count);
-        Assert.Equal(3, graph.Entities["sample1/Demo1"].Attributes.Count);
-        Assert.Equal(6, graph.Entities["sample1/Demo2"].Attributes.Count);
+        Assert.Equal(4, graph.Types.Count);
+        Assert.NotNull(graph.Types["System/Entity"]);
+        Assert.NotNull(graph.Types["sample1/Demo1"]);
+        Assert.NotNull(graph.Types["sample1/Demo2"]);
+        Assert.Equal(0, graph.Types["System/Entity"].Attributes.Count);
+        Assert.Equal(3, graph.Types["sample1/Demo1"].Attributes.Count);
+        Assert.Equal(6, graph.Types["sample1/Demo2"].Attributes.Count);
     }
     
     [Fact]

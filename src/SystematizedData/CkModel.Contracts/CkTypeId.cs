@@ -12,7 +12,7 @@ public readonly struct CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, I
 {
 
     /// <summary>
-    /// Defines the name of the entity, e. g. "Person"
+    /// Defines the name of the type, e. g. "Person"
     /// </summary>
     public string TypeId { get; }
     

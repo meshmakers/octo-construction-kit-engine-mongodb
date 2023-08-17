@@ -9,7 +9,7 @@ using Persistence.Contracts;
 namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
 [DebuggerDisplay("{" + nameof(AttributeId) + "} -> {" + nameof(AttributeName) + "}")]
-public class CkEntityAttributeDto
+public class CkTypeAttributeDto
 {
     [JsonPropertyName("id")]
     [JsonRequired]

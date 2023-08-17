@@ -50,13 +50,13 @@ public class Builder
                   ValueType = AttributeValueTypesDto.String,
               }
             },
-            CkEntities = new List<CkEntityDto>
+            CkTypes = new List<CkTypeDto>
             {
                 new()
                 {
                     TypeId = "Sample2Demo2",
                     DerivedFromCkTypeId = "System/Entity",
-                    Attributes = new List<CkEntityAttributeDto>
+                    Attributes = new List<CkTypeAttributeDto>
                     {
                         new() { AttributeId = "sample1/attribute1", AttributeName = "a" },
                         new() { AttributeId = "sample2/attributeA", AttributeName = "b" },
@@ -67,7 +67,7 @@ public class Builder
                 {
                     TypeId = "Demo2",
                     DerivedFromCkTypeId = "sample1/Demo1",
-                    Attributes = new List<CkEntityAttributeDto>
+                    Attributes = new List<CkTypeAttributeDto>
                     {
                         new() { AttributeId = "sample1/attributeC", AttributeName = "d" },
                         new() { AttributeId = "sample1/attributeD", AttributeName = "e" },

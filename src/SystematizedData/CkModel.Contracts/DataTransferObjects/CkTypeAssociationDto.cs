@@ -9,7 +9,7 @@ using Persistence.Contracts;
 namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
 [DebuggerDisplay("{" + nameof(RoleId) + "} -> {" + nameof(TargetCkTypeId) + "}")]
-public class CkEntityAssociationDto
+public class CkTypeAssociationDto
 {
     [JsonPropertyName("roleId")]
     [JsonRequired]

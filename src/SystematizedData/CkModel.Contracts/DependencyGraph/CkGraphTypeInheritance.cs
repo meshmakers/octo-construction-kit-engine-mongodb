@@ -19,12 +19,12 @@ public class CkGraphTypeInheritance
     }
     
     /// <summary>
-    /// Returns the construction kit type id of the origin entity
+    /// Returns the construction kit type id of the origin type
     /// </summary>
     public CkId<CkTypeId> InheritorCkTypeId { get; set; }
     
     /// <summary>
-    /// Returns the construction kit type id of the target entity
+    /// Returns the construction kit type id of the target type
     /// </summary>
     public CkId<CkTypeId> BaseCkTypeId { get; set; }
 

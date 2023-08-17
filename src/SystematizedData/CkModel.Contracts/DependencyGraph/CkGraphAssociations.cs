@@ -6,10 +6,10 @@ public class CkGraphAssociations
 {
     public CkGraphAssociations()
     {
-        Owned = new List<CkEntityAssociationDto>();
-        Inherited = new List<CkEntityAssociationDto>();
+        Owned = new List<CkTypeAssociationDto>();
+        Inherited = new List<CkTypeAssociationDto>();
     }
     
-    public ICollection<CkEntityAssociationDto> Owned { get;  }
-    public ICollection<CkEntityAssociationDto> Inherited { get;}
+    public ICollection<CkTypeAssociationDto> Owned { get;  }
+    public ICollection<CkTypeAssociationDto> Inherited { get;}
 }

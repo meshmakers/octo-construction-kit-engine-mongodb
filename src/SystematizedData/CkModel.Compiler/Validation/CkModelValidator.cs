@@ -50,29 +50,31 @@ public class CkModelValidator : ICkModelValidator
 
         // Check: There are only a few places, where elements of other models are used.
         // 1. entities.attributes.id -> Reference to a defined attribute.
-        // 2. entities.ckDerivedId -> Reference to a defined entity.
+        // 2. entities.ckDerivedId -> Reference to a defined type.
         // 3. entities.associations.roleId -> Reference to a defined association role.
-        // 4. entities.associations.targetCkTypeId -> Reference to a defined entity.
+        // 4. entities.associations.targetCkTypeId -> Reference to a defined type.
         ValidateReferences(aggregatedModelElements, modelGraph, validationResult);
 
         // Check: Inheritance.
-        // 1. entities.ckDerivedId -> Only one entity cannot have a derived entity: System.Entity.
-        // 2. entities.attributes -> It is not possible that an entity has an attribute, which is defined in a base entity.
-        // 3. entities.attributes -> It is not possible that an entity has an attribute name, that is defined in a base entity.
-        // 4. entities.associations -> It is not possible that an entity has an association, which is defined in a base entity too.
-        // 5. entities.isFinal -> It is not possible that an entity is final, but has a derived entity.
+        // 1. entities.ckDerivedId -> Only one type cannot have a derived type: System.Entity.
+        // 2. entities.attributes -> It is not possible that a type has an attribute, which is defined in a base type.
+        // 3. entities.attributes -> It is not possible that a type has an attribute name, that is defined in a base type.
+        // 4. entities.associations -> It is not possible that a type has an association, which is defined in a base type too.
+        // 5. entities.isFinal -> It is not possible that a type is final, but has a derived type.
+        
+        // Check 2, 3, 4 is done by inheritance resolver.
         _inheritanceResolver.Resolve(aggregatedModelElements, modelGraph, validationResult);
 
-        foreach (var ckEntityKeyValue in modelGraph.Entities)
+        foreach (var ckTypeKeyValue in modelGraph.Types)
         {
             // Check 1.
-            if (!ckEntityKeyValue.Value.BaseTypes.Any())
+            if (!ckTypeKeyValue.Value.BaseTypes.Any())
             {
-                if (!CompilerStatics.WhiteListedCkTypeIds.Any(x => x.ModelId.ModelId == ckEntityKeyValue.Key.ModelId.ModelId
-                                                                   && x.Key.TypeId == ckEntityKeyValue.Key.Key.TypeId))
+                if (!CompilerStatics.WhiteListedCkTypeIds.Any(x => x.ModelId.ModelId == ckTypeKeyValue.Key.ModelId.ModelId
+                                                                   && x.Key.TypeId == ckTypeKeyValue.Key.Key.TypeId))
                 {
                     validationResult.AddMessage(
-                        MessageCodes.InheritanceMissing(ckEntityKeyValue.Key));
+                        MessageCodes.InheritanceMissing(ckTypeKeyValue.Key));
                 }
             }
 
@@ -87,52 +89,52 @@ public class CkModelValidator : ICkModelValidator
     private static void ValidateReferences(CkAggregatedModelElements aggregatedModelElements, CkModelGraph modelGraph,
         ValidationResult validationResult)
     {
-        foreach (var ckEntityKeyValue in aggregatedModelElements.CkEntities)
+        foreach (var ckTypeKeyValue in aggregatedModelElements.CkTypes)
         {
             // Check 1.
-            if (ckEntityKeyValue.Value.Attributes != null)
+            if (ckTypeKeyValue.Value.Attributes != null)
             {
-                foreach (var ckEntityAttribute in ckEntityKeyValue.Value.Attributes)
+                foreach (var ckTypeAttribute in ckTypeKeyValue.Value.Attributes)
                 {
-                    if (!aggregatedModelElements.CkAttributes.ContainsKey(ckEntityAttribute.AttributeId) &&
-                        !modelGraph.Attributes.ContainsKey(ckEntityAttribute.AttributeId))
+                    if (!aggregatedModelElements.CkAttributes.ContainsKey(ckTypeAttribute.AttributeId) &&
+                        !modelGraph.Attributes.ContainsKey(ckTypeAttribute.AttributeId))
                     {
                         validationResult.AddMessage(
-                            MessageCodes.UnknownAttributeOfCkTypeIdInSource(ckEntityKeyValue.Key, ckEntityAttribute.AttributeId));
+                            MessageCodes.UnknownAttributeOfCkTypeIdInSource(ckTypeKeyValue.Key, ckTypeAttribute.AttributeId));
                     }
                 }
             }
 
             // Check 2.
-            if (ckEntityKeyValue.Value.DerivedFromCkTypeId != null)
+            if (ckTypeKeyValue.Value.DerivedFromCkTypeId != null)
             {
-                if (!aggregatedModelElements.CkEntities.ContainsKey(ckEntityKeyValue.Value.DerivedFromCkTypeId.Value) &&
-                    !modelGraph.Entities.ContainsKey(ckEntityKeyValue.Value.DerivedFromCkTypeId.Value))
+                if (!aggregatedModelElements.CkTypes.ContainsKey(ckTypeKeyValue.Value.DerivedFromCkTypeId.Value) &&
+                    !modelGraph.Types.ContainsKey(ckTypeKeyValue.Value.DerivedFromCkTypeId.Value))
                 {
                     validationResult.AddMessage(
-                        MessageCodes.UnknownCkDerivedIdOfCkTypeIdInSource(ckEntityKeyValue.Value.DerivedFromCkTypeId,
-                            ckEntityKeyValue.Key));
+                        MessageCodes.UnknownCkDerivedIdOfCkTypeIdInSource(ckTypeKeyValue.Value.DerivedFromCkTypeId,
+                            ckTypeKeyValue.Key));
                 }
             }
 
-            if (ckEntityKeyValue.Value.Associations != null)
+            if (ckTypeKeyValue.Value.Associations != null)
             {
-                foreach (var ckEntityAssociation in ckEntityKeyValue.Value.Associations)
+                foreach (var ckTypeAssociation in ckTypeKeyValue.Value.Associations)
                 {
                     // Check 3.
-                    if (!aggregatedModelElements.CkAssociationRoles.ContainsKey(ckEntityAssociation.RoleId) &&
-                        !modelGraph.AssociationRoles.ContainsKey(ckEntityAssociation.RoleId))
+                    if (!aggregatedModelElements.CkAssociationRoles.ContainsKey(ckTypeAssociation.RoleId) &&
+                        !modelGraph.AssociationRoles.ContainsKey(ckTypeAssociation.RoleId))
                     {
                         validationResult.AddMessage(
-                            MessageCodes.UnknownAssociationRoleOfCkTypeIdInSource(ckEntityKeyValue.Key, ckEntityAssociation.RoleId));
+                            MessageCodes.UnknownAssociationRoleOfCkTypeIdInSource(ckTypeKeyValue.Key, ckTypeAssociation.RoleId));
                     }
 
                     // Check 4.
-                    if (!aggregatedModelElements.CkEntities.ContainsKey(ckEntityAssociation.TargetCkTypeId) &&
-                        !modelGraph.Entities.ContainsKey(ckEntityAssociation.TargetCkTypeId))
+                    if (!aggregatedModelElements.CkTypes.ContainsKey(ckTypeAssociation.TargetCkTypeId) &&
+                        !modelGraph.Types.ContainsKey(ckTypeAssociation.TargetCkTypeId))
                     {
                         validationResult.AddMessage(
-                            MessageCodes.UnknownTargetCkTypeIdOfCkTypeIdInSource(ckEntityKeyValue.Key, ckEntityAssociation.TargetCkTypeId));
+                            MessageCodes.UnknownTargetCkTypeIdOfCkTypeIdInSource(ckTypeKeyValue.Key, ckTypeAssociation.TargetCkTypeId));
                     }
                 }
             }

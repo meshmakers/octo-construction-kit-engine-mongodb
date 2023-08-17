@@ -5,9 +5,9 @@ using System.Text.Json.Serialization;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
-public class CkEntityIndexDto
+public class CkTypeIndexDto
 {
-    public CkEntityIndexDto()
+    public CkTypeIndexDto()
     {
         Fields = new List<CkIndexFieldsDto>();
     }
