@@ -80,11 +80,14 @@ internal static class MessageCodes
     internal static CompilerMessage CkTypeIdOutAssociationNotUniqueByInheritance(object ckTypeId, object ckAssociationId, object targetCkTypeId) =>
         GetMessage("CkTypeIdOutAssociationNotUniqueByInheritance", ckTypeId, ckAssociationId, targetCkTypeId);
 
-    internal static CompilerMessage CkTypeIdInAssociationNotUniqueByInheritance(object ckTypeId, object ckAssociationId, object targetCkTypeId) =>
-        GetMessage("CkTypeIdInAssociationNotUniqueByInheritance", ckTypeId, ckAssociationId, targetCkTypeId);
-
     internal static CompilerMessage CkTypeIdUnknownTargetCkTypeIdForAssociation(object originCkTypeId, object targetCkTypeId, object roleId) =>
         GetMessage("CkTypeIdUnknownTargetCkTypeIdForAssociation", originCkTypeId, targetCkTypeId, roleId);
+
+    internal static CompilerMessage CkTypeIdUnknown(object ckTypeId) =>
+        GetMessage("CkTypeIdUnknown", ckTypeId);
+
+    internal static CompilerMessage CkTypeIdMultipleOutgoingAssociationRepresentingSameRole(object ckTypeId, object ckAssociationId, object targetCkTypeId, object otherCkTypeId, object otherTargetCkTypeId) =>
+        GetMessage("CkTypeIdMultipleOutgoingAssociationRepresentingSameRole", ckTypeId, ckAssociationId, targetCkTypeId, otherCkTypeId, otherTargetCkTypeId);
 
     private static readonly Dictionary<string, CompilerMessageTemplate> Templates = new()
     {
@@ -187,20 +190,26 @@ internal static class MessageCodes
         {
             "CkTypeIdOutAssociationNotUniqueByInheritance",
              new CompilerMessageTemplate(MessageLevel.Error,
-                 17, "CkTypeId '{ckTypeId}' defines an outgoing AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}' by inheritance that violates the unique association constraint",
-                 new [] {"ckTypeId", "ckAssociationId", "targetCkTypeId"})
-        },
-        {
-            "CkTypeIdInAssociationNotUniqueByInheritance",
-             new CompilerMessageTemplate(MessageLevel.Error,
-                 18, "CkTypeId '{ckTypeId}' defines an incoming AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}' by inheritance that violates the unique association constraint",
+                 17, "CkTypeId '{ckTypeId}' defines an outgoing AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}' by inheritance that violates the unique association role id constraint",
                  new [] {"ckTypeId", "ckAssociationId", "targetCkTypeId"})
         },
         {
             "CkTypeIdUnknownTargetCkTypeIdForAssociation",
              new CompilerMessageTemplate(MessageLevel.FatalError,
-                 19, "CkTypeId '{originCkTypeId}' defines a unknown target CkTypeId '{targetCkTypeId}' for role id '{roleId}'. This may happen because a dependency to another construction kit model is missing.",
+                 18, "CkTypeId '{originCkTypeId}' defines a unknown target CkTypeId '{targetCkTypeId}' for role id '{roleId}'. This may happen because a dependency to another construction kit model is missing.",
                  new [] {"originCkTypeId", "targetCkTypeId", "roleId"})
+        },
+        {
+            "CkTypeIdUnknown",
+             new CompilerMessageTemplate(MessageLevel.FatalError,
+                 19, "CkTypeId '{ckTypeId}' is unknown. This may happen because a dependency to another construction kit model is missing.",
+                 new [] {"ckTypeId"})
+        },
+        {
+            "CkTypeIdMultipleOutgoingAssociationRepresentingSameRole",
+             new CompilerMessageTemplate(MessageLevel.Error,
+                 20, "CkTypeId '{ckTypeId}' defines an outgoing AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}'. This association is also defined between CkTypeId '{otherCkTypeId}' and target CkTypeId '{otherTargetCkTypeId}'.",
+                 new [] {"ckTypeId", "ckAssociationId", "targetCkTypeId", "otherCkTypeId", "otherTargetCkTypeId"})
         },
     };
 }

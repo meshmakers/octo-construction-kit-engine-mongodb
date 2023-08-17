@@ -7,7 +7,9 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects
 [DebuggerDisplay("{" + nameof(RoleId) + "}")]
 public class CkAssociationRoleDto
 {
-    [JsonPropertyName("id")] [JsonRequired] public CkAssociationRoleId RoleId { get; set; }
+    [JsonPropertyName("id")]
+    [JsonRequired]
+    public CkAssociationRoleId RoleId { get; set; }
 
     /// <summary>
     ///     Name of the association for inbound references (e. g. Children)

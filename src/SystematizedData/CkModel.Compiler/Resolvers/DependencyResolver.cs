@@ -1,11 +1,10 @@
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
-using Meshmakers.Octo.SystematizedData.CkModel.Compiler.ModelRepository;
-using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Validation;
+using Meshmakers.Octo.SystematizedData.CkModel.Compiler.ModelRepositories;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
 using Microsoft.Extensions.Logging;
 
-namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Resolvers;
 
 internal class DependencyResolver : IDependencyResolver
 {

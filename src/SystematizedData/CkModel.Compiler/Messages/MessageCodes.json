@@ -100,19 +100,25 @@
       "key": "CkTypeIdOutAssociationNotUniqueByInheritance",
       "number": 17,
       "level": "ERROR",
-      "text": "CkTypeId '{ckTypeId}' defines an outgoing AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}' by inheritance that violates the unique association constraint"
-    },
-    {
-      "key": "CkTypeIdInAssociationNotUniqueByInheritance",
-      "number": 18,
-      "level": "ERROR",
-      "text": "CkTypeId '{ckTypeId}' defines an incoming AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}' by inheritance that violates the unique association constraint"
+      "text": "CkTypeId '{ckTypeId}' defines an outgoing AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}' by inheritance that violates the unique association role id constraint"
     },
     {
       "key": "CkTypeIdUnknownTargetCkTypeIdForAssociation",
-      "number": 19,
+      "number": 18,
       "level": "FATALERROR",
       "text": "CkTypeId '{originCkTypeId}' defines a unknown target CkTypeId '{targetCkTypeId}' for role id '{roleId}'. This may happen because a dependency to another construction kit model is missing."
+    },
+    {
+      "key": "CkTypeIdUnknown",
+      "number": 19,
+      "level": "FATALERROR",
+      "text": "CkTypeId '{ckTypeId}' is unknown. This may happen because a dependency to another construction kit model is missing."
+    },
+    {
+      "key": "CkTypeIdMultipleOutgoingAssociationRepresentingSameRole",
+      "number": 20,
+      "level": "ERROR",
+      "text": "CkTypeId '{ckTypeId}' defines an outgoing AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}'. This association is also defined between CkTypeId '{otherCkTypeId}' and target CkTypeId '{otherTargetCkTypeId}'."
     }
   ]
 }

@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.Collections.ObjectModel;
+using System.Diagnostics;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Persistence.Contracts;
@@ -6,23 +7,29 @@ using Persistence.Contracts;
 namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
 
 /// <summary>
-/// Describes 
+/// Represents a construction kit type in the dependency graph
 /// </summary>
 [DebuggerDisplay("{" + nameof(Path) + "}")]
-// ReSharper disable once ClassNeverInstantiated.Global
 public class CkEntityGraph
 {
-    public CkEntityGraph(CkId<CkTypeId> ckTypeId, bool isAbstract, bool isFinal,
-        ICollection<CkGraphTypeInheritance> baseTypes)
+    private readonly List<CkGraphTypeInheritance> _baseTypes;
+    
+    /// <summary>
+    /// Constructor
+    /// </summary>
+    /// <param name="ckTypeId"></param>
+    /// <param name="isAbstract"></param>
+    /// <param name="isFinal"></param>
+    public CkEntityGraph(CkId<CkTypeId> ckTypeId, bool isAbstract, bool isFinal)
     {
         CkTypeId = ckTypeId;
         IsAbstract = isAbstract;
         IsFinal = isFinal;
-        BaseTypes = baseTypes;
+        _baseTypes = new List<CkGraphTypeInheritance>();
+        BaseTypes = new ReadOnlyCollection<CkGraphTypeInheritance>(_baseTypes);
         Associations = new();
         Attributes = new List<CkEntityAttributeDto>();
     }
-
 
     /// <summary>
     ///     Gets or sets the construction kit id
@@ -42,7 +49,7 @@ public class CkEntityGraph
     /// <summary>
     /// Returns a list of base types of the give construction kit type
     /// </summary>
-    public ICollection<CkGraphTypeInheritance> BaseTypes { get; }
+    public IReadOnlyCollection<CkGraphTypeInheritance> BaseTypes { get; }
 
     /// <summary>
     /// Returns a list of associations including inherited ones.
@@ -61,4 +68,13 @@ public class CkEntityGraph
     /// Returns a string that describes the inheritance chain
     /// </summary>
     public string Path => CkTypeId + ": " + string.Join("->", BaseTypes.Select(x => x.BaseCkTypeId));
+
+    /// <summary>
+    /// Adds a list of base types of the current type
+    /// </summary>
+    /// <param name="baseTypeList"></param>
+    public void AddBaseTypes(IEnumerable<CkGraphTypeInheritance> baseTypeList)
+    {
+        _baseTypes.AddRange(baseTypeList);
+    }
 }

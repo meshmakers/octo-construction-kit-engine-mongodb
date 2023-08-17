@@ -30,7 +30,11 @@ public class ModelValidationException : CkModelException
         return new ModelValidationException($"CkTypeId '{ckTypeId}' is unknown for inheritance. This may happen because a dependency to another construction kit model is missing.");
     }
 
-
+    public static Exception UnknownCkTypeId(CkId<CkTypeId> ckTypeId)
+    {
+        return new ModelValidationException($"CkTypeId '{ckTypeId}' is unknown. This may happen because a dependency to another construction kit model is missing.");
+    }
+    
     public static Exception CkTypeIdAlreadyExistsInDatabase(CkId<CkTypeId> ckTypeId)
     {
         return new ModelValidationException($"CkTypeId '{ckTypeId}' already exists in database.");
