@@ -1,3 +1,4 @@
+using CkModel.Compiler.Tests.sampleData.sample_TypeNotDerivedFromSystemEntity_fail;
 using FakeItEasy;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
@@ -263,5 +264,60 @@ public class InheritanceResolverTests
         Assert.Single(compilerResult.Messages);
         Assert.Equal(MessageLevel.FatalError, compilerResult.Messages[0].MessageLevel);
         Assert.Equal(18, compilerResult.Messages[0].MessageNumber);
+    }
+    
+    [Fact]
+    public void DerivedFromFinal_CompilerErrorMessage_ThrowsException()
+    {
+        var logger = A.Fake<ILogger<InheritanceResolver> >();
+
+        CkAggregatedModelElements ckAggregatedModelElements = new();
+        ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
+        ckAggregatedModelElements.AppendModel(sampleData.sample_final_fail.Builder.Build());
+
+        CompilerResult compilerResult = new();
+        InheritanceResolver inheritanceResolver = new(logger);
+        CkModelGraph graph = new();
+        Assert.Throws<ModelValidationException>(() => inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult));
+        
+        Assert.Single(compilerResult.Messages);
+        Assert.Equal(MessageLevel.FatalError, compilerResult.Messages[0].MessageLevel);
+        Assert.Equal(21, compilerResult.Messages[0].MessageNumber);
+    }
+    
+    [Fact]
+    public void DerivedTypeDefinesFinal_OK()
+    {
+        var logger = A.Fake<ILogger<InheritanceResolver> >();
+
+        CkAggregatedModelElements ckAggregatedModelElements = new();
+        ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
+        ckAggregatedModelElements.AppendModel(sampleData.sample_final.Builder.Build());
+
+        CompilerResult compilerResult = new();
+        InheritanceResolver inheritanceResolver = new(logger);
+        CkModelGraph graph = new();
+        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult);
+        
+        Assert.Empty(compilerResult.Messages);
+    }
+    
+    [Fact]
+    public void TypeNotDerivedFromSystemEntity_CompilerErrorMessage_ThrowsException()
+    {
+        var logger = A.Fake<ILogger<InheritanceResolver> >();
+
+        CkAggregatedModelElements ckAggregatedModelElements = new();
+        ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
+        ckAggregatedModelElements.AppendModel(Builder.Build());
+
+        CompilerResult compilerResult = new();
+        InheritanceResolver inheritanceResolver = new(logger);
+        CkModelGraph graph = new();
+        Assert.Throws<ModelValidationException>(() => inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult));
+
+        Assert.Single(compilerResult.Messages);
+        Assert.Equal(MessageLevel.FatalError, compilerResult.Messages[0].MessageLevel);
+        Assert.Equal(9, compilerResult.Messages[0].MessageNumber);
     }
 }

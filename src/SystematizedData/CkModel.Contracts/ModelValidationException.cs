@@ -132,5 +132,16 @@ public class ModelValidationException : CkModelException
         return new ModelValidationException($"CkTypeId '{originCkTypeId}' defines a unknown target construction kit type id '{typeAssociationTargetCkTypeId}' for role id '{entityAssociationRoleId}'." +
                                             $" This may happen because a dependency to another construction kit model is missing.");
     }
+
+    public static Exception DerivedFromCkTypeIdThatIsFinal(CkId<CkTypeId> currentCkTypeId, CkId<CkTypeId> lastCkTypeId)
+    {
+        return new ModelValidationException(
+            $"CkTypeId '{currentCkTypeId}' is final, but CkTypeId '{lastCkTypeId}' is derived from it.");
+    }
+
+    public static Exception InheritanceMissing(string typeId)
+    {
+        return new ModelValidationException($"TypeId '{typeId}' has no inheritance definition. Ensure that attribute ckDerivedId is set.");
+    }
 }
 

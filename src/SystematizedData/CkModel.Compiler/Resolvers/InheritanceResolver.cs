@@ -243,24 +243,46 @@ public class InheritanceResolver : IInheritanceResolver
         var ckTypeIds = new List<CkGraphTypeInheritance>();
 
         int i = 0;
-        CkId<CkTypeId>? originCkTypeId = ckTypeId;
-        while (originCkTypeId != null &&
-               aggregatedModelElements.CkTypes.TryGetValue(originCkTypeId.Value, out var ckType))
+        CkId<CkTypeId>? currentCkTypeId = ckTypeId;
+        CkId<CkTypeId>? lastCkTypeId = ckTypeId;
+        while (currentCkTypeId != null &&
+               aggregatedModelElements.CkTypes.TryGetValue(currentCkTypeId.Value, out var currentCkType))
         {
-            var baseCkType = ckType.DerivedFromCkTypeId;
+            var baseCkTypeId = currentCkType.DerivedFromCkTypeId;
 
-            if (baseCkType.HasValue)
+            if (i != 0)
             {
-                ckTypeIds.Add(new CkGraphTypeInheritance(originCkTypeId.Value, baseCkType.Value, i++));
+                if (currentCkType.IsFinal)
+                {
+                    compilerResult.AddMessage(MessageCodes.DerivedFromCkTypeIdThatIsFinal(currentCkTypeId.Value, lastCkTypeId.Value));
+                    throw ModelValidationException.DerivedFromCkTypeIdThatIsFinal(currentCkTypeId.Value, lastCkTypeId.Value);
+                }
             }
 
-            originCkTypeId = baseCkType;
+            if (baseCkTypeId.HasValue)
+            {
+                ckTypeIds.Add(new CkGraphTypeInheritance(currentCkTypeId.Value, baseCkTypeId.Value, i++));
+            }
+
+            lastCkTypeId = currentCkTypeId;
+            currentCkTypeId = baseCkTypeId;
         }
 
-        if (originCkTypeId != null)
+        if (currentCkTypeId != null)
         {
-            compilerResult.AddMessage(MessageCodes.UnknownCkTypeIdForInheritance(originCkTypeId.Value));
-            throw ModelValidationException.UnknownCkTypeIdForInheritance(originCkTypeId.Value);
+            compilerResult.AddMessage(MessageCodes.UnknownCkTypeIdForInheritance(currentCkTypeId.Value));
+            throw ModelValidationException.UnknownCkTypeIdForInheritance(currentCkTypeId.Value);
+        }
+        
+        if (!ckTypeIds.Any())
+        {
+            if (!CompilerStatics.WhiteListedCkTypeIds.Any(x => x.ModelId.ModelId == ckTypeId.ModelId.ModelId
+                                                               && x.Key.TypeId == ckTypeId.Key.TypeId))
+            {
+                compilerResult.AddMessage(
+                    MessageCodes.InheritanceMissing(ckTypeId.Key.TypeId));
+                throw ModelValidationException.InheritanceMissing(ckTypeId.Key.TypeId);
+            }
         }
 
         return ckTypeIds;

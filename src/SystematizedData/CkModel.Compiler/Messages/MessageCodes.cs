@@ -89,6 +89,9 @@ internal static class MessageCodes
     internal static CompilerMessage CkTypeIdMultipleOutgoingAssociationRepresentingSameRole(object ckTypeId, object ckAssociationId, object targetCkTypeId, object otherCkTypeId, object otherTargetCkTypeId) =>
         GetMessage("CkTypeIdMultipleOutgoingAssociationRepresentingSameRole", ckTypeId, ckAssociationId, targetCkTypeId, otherCkTypeId, otherTargetCkTypeId);
 
+    internal static CompilerMessage DerivedFromCkTypeIdThatIsFinal(object baseCkTypeId, object derivedTypeId) =>
+        GetMessage("DerivedFromCkTypeIdThatIsFinal", baseCkTypeId, derivedTypeId);
+
     private static readonly Dictionary<string, CompilerMessageTemplate> Templates = new()
     {
         {
@@ -141,7 +144,7 @@ internal static class MessageCodes
         },
         {
             "InheritanceMissing",
-             new CompilerMessageTemplate(MessageLevel.Error,
+             new CompilerMessageTemplate(MessageLevel.FatalError,
                  9, "TypeId '{ckTypeId}' has no inheritance definition. Ensure that attribute ckDerivedId is set.",
                  new [] {"ckTypeId"})
         },
@@ -210,6 +213,12 @@ internal static class MessageCodes
              new CompilerMessageTemplate(MessageLevel.Error,
                  20, "CkTypeId '{ckTypeId}' defines an outgoing AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}'. This association is also defined between CkTypeId '{otherCkTypeId}' and target CkTypeId '{otherTargetCkTypeId}'.",
                  new [] {"ckTypeId", "ckAssociationId", "targetCkTypeId", "otherCkTypeId", "otherTargetCkTypeId"})
+        },
+        {
+            "DerivedFromCkTypeIdThatIsFinal",
+             new CompilerMessageTemplate(MessageLevel.FatalError,
+                 21, "CkTypeId '{baseCkTypeId}' is final, but CkTypeId '{derivedTypeId}' is derived from it.",
+                 new [] {"baseCkTypeId", "derivedTypeId"})
         },
     };
 }

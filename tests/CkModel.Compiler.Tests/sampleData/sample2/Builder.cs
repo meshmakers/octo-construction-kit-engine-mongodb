@@ -1,5 +1,4 @@
 using Meshmakers.Octo.Common.Shared;
-using Meshmakers.Octo.Common.Shared.Exchange;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
 namespace CkModel.Compiler.Tests.sampleData.sample2;

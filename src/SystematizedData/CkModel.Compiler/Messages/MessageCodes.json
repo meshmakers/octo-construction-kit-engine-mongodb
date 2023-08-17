@@ -51,7 +51,7 @@
     {
       "key": "InheritanceMissing",
       "number": 9,
-      "level": "ERROR",
+      "level": "FATALERROR",
       "text": "TypeId '{ckTypeId}' has no inheritance definition. Ensure that attribute ckDerivedId is set."
     },
     {
@@ -119,6 +119,12 @@
       "number": 20,
       "level": "ERROR",
       "text": "CkTypeId '{ckTypeId}' defines an outgoing AssociationRoleId '{ckAssociationId}' to CkTypeId '{targetCkTypeId}'. This association is also defined between CkTypeId '{otherCkTypeId}' and target CkTypeId '{otherTargetCkTypeId}'."
+    },
+    {
+      "key": "DerivedFromCkTypeIdThatIsFinal",
+      "number": 21,
+      "level": "FATALERROR",
+      "text": "CkTypeId '{baseCkTypeId}' is final, but CkTypeId '{derivedTypeId}' is derived from it."
     }
   ]
 }

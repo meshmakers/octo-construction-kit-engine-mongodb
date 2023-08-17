@@ -62,26 +62,8 @@ public class CkModelValidator : ICkModelValidator
         // 4. entities.associations -> It is not possible that a type has an association, which is defined in a base type too.
         // 5. entities.isFinal -> It is not possible that a type is final, but has a derived type.
         
-        // Check 2, 3, 4 is done by inheritance resolver.
+        // Check 1-5 is done by inheritance resolver.
         _inheritanceResolver.Resolve(aggregatedModelElements, modelGraph, validationResult);
-
-        foreach (var ckTypeKeyValue in modelGraph.Types)
-        {
-            // Check 1.
-            if (!ckTypeKeyValue.Value.BaseTypes.Any())
-            {
-                if (!CompilerStatics.WhiteListedCkTypeIds.Any(x => x.ModelId.ModelId == ckTypeKeyValue.Key.ModelId.ModelId
-                                                                   && x.Key.TypeId == ckTypeKeyValue.Key.Key.TypeId))
-                {
-                    validationResult.AddMessage(
-                        MessageCodes.InheritanceMissing(ckTypeKeyValue.Key));
-                }
-            }
-
-            // Check 2.
-            
-        }
-
 
         return validationResult;
     }
