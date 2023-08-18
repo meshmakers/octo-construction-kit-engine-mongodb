@@ -1,6 +1,7 @@
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.ModelRepositories;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Resolvers;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Resolvers;
 
 // ReSharper disable once CheckNamespace
 namespace Microsoft.Extensions.DependencyInjection;

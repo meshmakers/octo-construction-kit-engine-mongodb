@@ -1,7 +1,7 @@
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Messages;
 
-namespace CkModel.Compiler.Tests;
+namespace CkModel.Compiler.Tests.Messages;
 
 public class MessageTexts
 {

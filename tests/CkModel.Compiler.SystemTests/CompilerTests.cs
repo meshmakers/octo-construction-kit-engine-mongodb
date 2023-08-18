@@ -1,6 +1,7 @@
 using CkModel.Compiler.SystemTests.Fixtures;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
+using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Services;
 
 namespace CkModel.Compiler.SystemTests;
 

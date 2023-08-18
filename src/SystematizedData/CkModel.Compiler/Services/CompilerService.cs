@@ -1,11 +1,10 @@
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
-using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
 
-namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Services;
 
 public class CompilerService
 {

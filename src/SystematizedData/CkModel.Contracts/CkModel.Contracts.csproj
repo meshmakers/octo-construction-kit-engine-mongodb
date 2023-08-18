@@ -9,5 +9,9 @@
       <PackageReference Include="Meshmakers.Common.Shared" Version="4.0.2307.21001" />
       <PackageReference Include="YamlDotNet" Version="13.2.0" />
     </ItemGroup>
+
+    <ItemGroup>
+      <Folder Include="Services\" />
+    </ItemGroup>
     
 </Project>

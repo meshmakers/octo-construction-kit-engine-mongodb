@@ -3,6 +3,7 @@ using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Resolvers;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Resolvers;
 

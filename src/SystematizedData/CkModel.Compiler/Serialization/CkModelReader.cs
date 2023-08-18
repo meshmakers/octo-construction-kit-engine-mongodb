@@ -2,6 +2,7 @@ using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Validation;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Validation;
 using Microsoft.Extensions.Logging;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
