@@ -33,7 +33,7 @@ public class CkAggregatedModelElements
         {
             foreach (var ckAssociationRole in ckModelRoot.CkAssociationRoles)
             {
-                CkAssociationRoles.Add(new CkId<CkAssociationRoleId>(ckModelRoot.ModelId, ckAssociationRole.RoleId), ckAssociationRole);
+                CkAssociationRoles.Add(new CkId<CkAssociationRoleId>(ckModelRoot.ModelId, ckAssociationRole.AssociationRoleId), ckAssociationRole);
             }
         }
         

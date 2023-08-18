@@ -15,7 +15,7 @@ public class Builder
             {
                 new()
                 {
-                    RoleId = "Related", InboundMultiplicity = MultiplicitiesDto.N,
+                    AssociationRoleId = "Related", InboundMultiplicity = MultiplicitiesDto.N,
                     OutboundMultiplicity = MultiplicitiesDto.N, InboundName = "Related", OutboundName = "Related"
                 }
             },

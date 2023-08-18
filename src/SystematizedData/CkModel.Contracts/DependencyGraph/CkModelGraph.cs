@@ -15,13 +15,13 @@ public class CkModelGraph
         _attributes = new Dictionary<CkId<CkAttributeId>, CkAttributeGraph>();
         _associationRoles = new Dictionary<CkId<CkAssociationRoleId>, CkAssociationRoleGraph>();
         Types = new ReadOnlyDictionary<CkId<CkTypeId>, CkTypeGraph>(_entities);
-        Attributes = new Dictionary<CkId<CkAttributeId>, CkAttributeGraph>(_attributes);
-        AssociationRoles = new Dictionary<CkId<CkAssociationRoleId>, CkAssociationRoleGraph>(_associationRoles);
+        Attributes = new ReadOnlyDictionary<CkId<CkAttributeId>, CkAttributeGraph>(_attributes);
+        AssociationRoles = new ReadOnlyDictionary<CkId<CkAssociationRoleId>, CkAssociationRoleGraph>(_associationRoles);
     }
 
     public IReadOnlyDictionary<CkId<CkTypeId>, CkTypeGraph> Types { get; }
-    public Dictionary<CkId<CkAttributeId>, CkAttributeGraph> Attributes { get; }
-    public Dictionary<CkId<CkAssociationRoleId>, CkAssociationRoleGraph> AssociationRoles { get; }
+    public IReadOnlyDictionary<CkId<CkAttributeId>, CkAttributeGraph> Attributes { get; }
+    public IReadOnlyDictionary<CkId<CkAssociationRoleId>, CkAssociationRoleGraph> AssociationRoles { get; }
 
     public CkAttributeGraph GetOrCreateAttribute(CkId<CkAttributeId> ckAttributeId, CkAttributeDto ckAttributeDto)
     {

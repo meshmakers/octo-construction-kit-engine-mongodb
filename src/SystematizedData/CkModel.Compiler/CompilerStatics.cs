@@ -11,6 +11,8 @@ internal static class CompilerStatics
     public static IEnumerable<CkId<CkTypeId>> WhiteListedCkTypeIds { get; } =
         new CkId<CkTypeId>[] { new("System/Entity") };
     
+    public const string AllowedCharactersInNamesRegex = @"^[a-zA-Z0-9_.]+$";
+    
     public const string AttributesDirectoryName = "attributes";
     public const string AssociationsDirectoryName = "associations";
     public const string TypesDirectoryName = "types";

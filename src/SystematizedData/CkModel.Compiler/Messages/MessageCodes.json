@@ -131,6 +131,30 @@
       "number": 22,
       "level": "FATALERROR",
       "text": "Directory '{directory}' must be empty."
+    },
+    {
+      "key": "ModelIdContainsInvalidCharacters",
+      "number": 23,
+      "level": "FATALERROR",
+      "text": "ModelId '{modelId}' contains invalid characters. Allowed characters are A-Z, a-z, 0-9, . and _."
+    },
+    {
+      "key": "CkTypeIdContainsInvalidCharacters",
+      "number": 24,
+      "level": "ERROR",
+      "text": "CkTypeId '{ckTypeId}' contains invalid characters. Allowed characters are A-Z, a-z, 0-9, . and _."
+    },
+    {
+      "key": "CkAttributeIdContainsInvalidCharacters",
+      "number": 25,
+      "level": "ERROR",
+      "text": "CkAttributeId '{ckAttributeId}' contains invalid characters. Allowed characters are A-Z, a-z, 0-9, . and _."
+    },
+    {
+      "key": "CkAssociationIdContainsInvalidCharacters",
+      "number": 26,
+      "level": "ERROR",
+      "text": "CkAssociationId '{ckAssociationId}' contains invalid characters. Allowed characters are A-Z, a-z, 0-9, . and _."
     }
   ]
 }

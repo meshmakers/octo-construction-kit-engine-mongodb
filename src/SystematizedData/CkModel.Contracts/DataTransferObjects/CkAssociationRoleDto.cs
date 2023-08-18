@@ -3,12 +3,12 @@ using System.Text.Json.Serialization;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
-[DebuggerDisplay("{" + nameof(RoleId) + "}")]
+[DebuggerDisplay("{" + nameof(AssociationRoleId) + "}")]
 public class CkAssociationRoleDto
 {
     [JsonPropertyName("id")]
     [JsonRequired]
-    public CkAssociationRoleId RoleId { get; set; }
+    public CkAssociationRoleId AssociationRoleId { get; set; }
 
     /// <summary>
     ///     Name of the association for inbound references (e. g. Children)

@@ -220,7 +220,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
             {
                 var associationRole = new CkAssociationRole
                 {
-                    RoleId = new CkId<CkAssociationRoleId>(model.ModelId, modelAssociationRole.RoleId),
+                    RoleId = new CkId<CkAssociationRoleId>(model.ModelId, modelAssociationRole.AssociationRoleId),
                     InboundName = modelAssociationRole.InboundName,
                     OutboundName = modelAssociationRole.OutboundName,
                     InboundMultiplicity = (Multiplicities)modelAssociationRole.InboundMultiplicity,

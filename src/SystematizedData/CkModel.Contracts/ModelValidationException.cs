@@ -140,5 +140,10 @@ public class ModelValidationException : CkModelException
     {
         return new ModelValidationException($"TypeId '{typeId}' has no inheritance definition. Ensure that attribute ckDerivedId is set.");
     }
+
+    public static Exception ModelIdContainsInvalidCharacters(string modelId)
+    {
+        return new ModelValidationException($"ModelId '{modelId}' contains invalid characters. Only a-z, A-Z, 0-9, _ and . are allowed.");
+    }
 }
 

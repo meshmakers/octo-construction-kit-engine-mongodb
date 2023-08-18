@@ -1,5 +1,7 @@
+using System.Text.RegularExpressions;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Resolvers;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
 
@@ -25,6 +27,12 @@ public class CkModelValidator : ICkModelValidator
 
         // By creating the model graph, a validation is done if association roles, attributes and entities are unique.
         CkModelGraph modelGraph = _elementResolver.Resolve(model, validationResult);
+        
+        if (!Regex.IsMatch(model.ModelId.ModelId, CompilerStatics.AllowedCharactersInNamesRegex))
+        {
+            validationResult.AddMessage(MessageCodes.ModelIdContainsInvalidCharacters(model.ModelId.ModelId));
+            throw ModelValidationException.ModelIdContainsInvalidCharacters(model.ModelId.ModelId);
+        }
 
         // Before the checks, we need to build a cache of the model.
         // We check if the can retrieve the model from one of the model repository sources (e.g. database).

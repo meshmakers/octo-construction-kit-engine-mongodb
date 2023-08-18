@@ -97,6 +97,18 @@ internal static class MessageCodes
     internal static CompilerMessage DirectoryMustBeEmpty(object directory) =>
         GetMessage("DirectoryMustBeEmpty", directory);
 
+    internal static CompilerMessage ModelIdContainsInvalidCharacters(object modelId) =>
+        GetMessage("ModelIdContainsInvalidCharacters", modelId);
+
+    internal static CompilerMessage CkTypeIdContainsInvalidCharacters(object ckTypeId) =>
+        GetMessage("CkTypeIdContainsInvalidCharacters", ckTypeId);
+
+    internal static CompilerMessage CkAttributeIdContainsInvalidCharacters(object ckAttributeId) =>
+        GetMessage("CkAttributeIdContainsInvalidCharacters", ckAttributeId);
+
+    internal static CompilerMessage CkAssociationIdContainsInvalidCharacters(object ckAssociationId) =>
+        GetMessage("CkAssociationIdContainsInvalidCharacters", ckAssociationId);
+
     private static readonly Dictionary<string, CompilerMessageTemplate> Templates = new()
     {
         {
@@ -230,6 +242,30 @@ internal static class MessageCodes
              new CompilerMessageTemplate(MessageLevel.FatalError,
                  22, "Directory '{directory}' must be empty.",
                  new [] {"directory"})
+        },
+        {
+            "ModelIdContainsInvalidCharacters",
+             new CompilerMessageTemplate(MessageLevel.FatalError,
+                 23, "ModelId '{modelId}' contains invalid characters. Allowed characters are A-Z, a-z, 0-9, . and _.",
+                 new [] {"modelId"})
+        },
+        {
+            "CkTypeIdContainsInvalidCharacters",
+             new CompilerMessageTemplate(MessageLevel.Error,
+                 24, "CkTypeId '{ckTypeId}' contains invalid characters. Allowed characters are A-Z, a-z, 0-9, . and _.",
+                 new [] {"ckTypeId"})
+        },
+        {
+            "CkAttributeIdContainsInvalidCharacters",
+             new CompilerMessageTemplate(MessageLevel.Error,
+                 25, "CkAttributeId '{ckAttributeId}' contains invalid characters. Allowed characters are A-Z, a-z, 0-9, . and _.",
+                 new [] {"ckAttributeId"})
+        },
+        {
+            "CkAssociationIdContainsInvalidCharacters",
+             new CompilerMessageTemplate(MessageLevel.Error,
+                 26, "CkAssociationId '{ckAssociationId}' contains invalid characters. Allowed characters are A-Z, a-z, 0-9, . and _.",
+                 new [] {"ckAssociationId"})
         },
     };
 }

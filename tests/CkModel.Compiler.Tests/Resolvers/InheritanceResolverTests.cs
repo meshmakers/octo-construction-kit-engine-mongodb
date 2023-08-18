@@ -1,14 +1,12 @@
 using CkModel.Compiler.Tests.sampleData.sample_TypeNotDerivedFromSystemEntity_fail;
 using FakeItEasy;
-using Meshmakers.Octo.SystematizedData.CkModel.Compiler;
-using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Resolvers;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Messages;
 using Microsoft.Extensions.Logging;
 
-namespace CkModel.Compiler.Tests;
+namespace CkModel.Compiler.Tests.Resolvers;
 
 public class InheritanceResolverTests
 {

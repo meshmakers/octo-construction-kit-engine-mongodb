@@ -6,18 +6,18 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 /// <summary>
 /// Represents a versioned construction kit association id
 /// </summary>
-[DebuggerDisplay("{" + nameof(AssociationId) + "} ({" + nameof(Version) + "})")]
+[DebuggerDisplay("{" + nameof(RoleId) + "} ({" + nameof(Version) + "})")]
 [System.Text.Json.Serialization.JsonConverter(typeof(CkAssociationIdConverter))]
 public readonly struct CkAssociationRoleId : IComparable<CkAssociationRoleId>, IEquatable<CkAssociationRoleId>, ICkKey
 {
     /// <summary>
     /// Defines the name of the association, e. g. "ParentChild"
     /// </summary>
-    public string AssociationId { get; }
+    public string RoleId { get; }
     
     public CkVersion Version { get; }
 
-    public string FullName => IsEmpty ? "" : $"{AssociationId}-{Version}";
+    public string FullName => IsEmpty ? "" : $"{RoleId}-{Version}";
 
     public string SemanticVersionedFullName
     {
@@ -28,7 +28,7 @@ public readonly struct CkAssociationRoleId : IComparable<CkAssociationRoleId>, I
                 return "";
             }
             
-            var s = AssociationId;
+            var s = RoleId;
             if (Version.Major > 1)
             {
                 s += $"-{Version.Major}";
@@ -38,30 +38,30 @@ public readonly struct CkAssociationRoleId : IComparable<CkAssociationRoleId>, I
         }
     }
 
-    public bool IsEmpty => string.IsNullOrWhiteSpace(AssociationId);
+    public bool IsEmpty => string.IsNullOrWhiteSpace(RoleId);
 
-    public CkAssociationRoleId(string associationId)
+    public CkAssociationRoleId(string roleId)
     {
-        var typeIndex = associationId.IndexOf("-", StringComparison.Ordinal);
+        var typeIndex = roleId.IndexOf("-", StringComparison.Ordinal);
         if (typeIndex < 0)
         {
-            AssociationId = associationId;
+            RoleId = roleId;
             Version = "1.0.0";
         }
         else
         {
-            AssociationId = associationId.Substring(0, typeIndex);
-            Version = associationId.Substring(typeIndex + 1);
+            RoleId = roleId.Substring(0, typeIndex);
+            Version = roleId.Substring(typeIndex + 1);
         }
-        if (string.IsNullOrWhiteSpace(AssociationId))
+        if (string.IsNullOrWhiteSpace(RoleId))
         {
-            throw new ArgumentOutOfRangeException(nameof(associationId), associationId, $"{nameof(associationId)} must contain a type id");
+            throw new ArgumentOutOfRangeException(nameof(roleId), roleId, $"{nameof(roleId)} must contain a type id");
         }
     }
 
-    public CkAssociationRoleId(string associationId, string typeVersion = "1.0.0") 
+    public CkAssociationRoleId(string roleId, string typeVersion = "1.0.0") 
     {
-        AssociationId = associationId;
+        RoleId = roleId;
         Version = typeVersion;
     }
     
@@ -72,7 +72,7 @@ public readonly struct CkAssociationRoleId : IComparable<CkAssociationRoleId>, I
 
     public int CompareTo(CkAssociationRoleId other)
     {
-        var result = String.Compare(AssociationId, other.AssociationId, StringComparison.Ordinal);
+        var result = String.Compare(RoleId, other.RoleId, StringComparison.Ordinal);
         if (result != 0)
         {
             return result;
@@ -83,7 +83,7 @@ public readonly struct CkAssociationRoleId : IComparable<CkAssociationRoleId>, I
 
     public bool Equals(CkAssociationRoleId other)
     {
-        return AssociationId == other.AssociationId && Equals(Version, other.Version);
+        return RoleId == other.RoleId && Equals(Version, other.Version);
     }
 
     public TypeCode GetTypeCode()
@@ -202,7 +202,7 @@ public readonly struct CkAssociationRoleId : IComparable<CkAssociationRoleId>, I
         
         var other = (CkAssociationRoleId)obj;
         
-        return AssociationId == other.AssociationId && Version == other.Version;
+        return RoleId == other.RoleId && Version == other.Version;
     }
 
     public override int GetHashCode()
@@ -210,7 +210,7 @@ public readonly struct CkAssociationRoleId : IComparable<CkAssociationRoleId>, I
         unchecked
         {
             int hash = 15;
-            hash = hash * 22 + AssociationId.GetHashCode();
+            hash = hash * 22 + RoleId.GetHashCode();
             hash = hash * 22 + Version.GetHashCode();
             return hash;
         }

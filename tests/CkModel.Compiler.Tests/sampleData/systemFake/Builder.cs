@@ -22,7 +22,7 @@ public class Builder
             {
                 new()
                 {
-                    RoleId = "ParentChild", InboundMultiplicity = MultiplicitiesDto.One,
+                    AssociationRoleId = "ParentChild", InboundMultiplicity = MultiplicitiesDto.One,
                     OutboundMultiplicity = MultiplicitiesDto.N, InboundName = "Parent", OutboundName = "Children"
                 }
             }
