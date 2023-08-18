@@ -1,5 +1,7 @@
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Communication.Plugs.Contracts.DataTransferObjects;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
+
 // ReSharper disable UnusedType.Global
 // ReSharper disable UnusedMember.Global
 

@@ -31,9 +31,9 @@ public class CkModelValidator : ICkModelValidator
         // We combine all entities, attributes and association roles into one list.
         CkAggregatedModelElements aggregatedModelElements = new();
 
-        if (model.CkDependencies != null)
+        if (model.Dependencies != null)
         {
-            aggregatedModelElements = await _dependencyResolver.ResolveDependenciesAsync(model.CkDependencies, validationResult);
+            aggregatedModelElements = await _dependencyResolver.ResolveDependenciesAsync(model.Dependencies, validationResult);
         }
 
         // We suppose that the dependent models are already validated and we can use them.

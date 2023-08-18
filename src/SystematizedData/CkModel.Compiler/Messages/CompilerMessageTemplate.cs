@@ -1,3 +1,5 @@
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Messages;
+
 namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
 
 /// <summary>

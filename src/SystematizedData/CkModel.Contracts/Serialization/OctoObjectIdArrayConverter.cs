@@ -1,9 +1,7 @@
-using System;
-using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Meshmakers.Octo.Common.Shared;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
 
 public class OctoObjectIdArrayConverter : JsonConverter<OctoObjectId[]>
 {

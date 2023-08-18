@@ -1,9 +1,6 @@
-using Meshmakers.Octo.Common.Shared;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
-using Persistence.Contracts;
 
-namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
 public class ModelValidationException : CkModelException
 {

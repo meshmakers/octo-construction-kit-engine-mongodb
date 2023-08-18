@@ -7,6 +7,7 @@
 
     <ItemGroup>
       <PackageReference Include="Meshmakers.Common.Shared" Version="4.0.2307.21001" />
+      <PackageReference Include="YamlDotNet" Version="13.2.0" />
     </ItemGroup>
     
 </Project>

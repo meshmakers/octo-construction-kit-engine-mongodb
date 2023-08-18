@@ -3,6 +3,7 @@
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
 namespace Meshmakers.Octo.Communication.Sockets.Contracts.DataTransferObjects;
 

@@ -1,13 +1,11 @@
-using System;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Security;
-using System.Threading;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
 
-namespace Meshmakers.Octo.Common.Shared;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
 /// <summary>
 ///     Represents an Octo object id

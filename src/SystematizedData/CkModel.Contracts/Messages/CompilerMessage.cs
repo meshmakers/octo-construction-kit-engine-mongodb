@@ -1,4 +1,4 @@
-namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.Messages;
 
 /// <summary>
 /// Contains a concrete message

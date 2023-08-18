@@ -1,10 +1,8 @@
-using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
-using Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 using Microsoft.Extensions.Logging;
-using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Resolvers;
 

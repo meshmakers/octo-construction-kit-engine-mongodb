@@ -7,6 +7,8 @@
 //     the code is regenerated.
 // </auto-generated>
 //------------------------------------------------------------------------------
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Messages;
+
 namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
 
 /// <summary>
@@ -91,6 +93,9 @@ internal static class MessageCodes
 
     internal static CompilerMessage DerivedFromCkTypeIdThatIsFinal(object baseCkTypeId, object derivedTypeId) =>
         GetMessage("DerivedFromCkTypeIdThatIsFinal", baseCkTypeId, derivedTypeId);
+
+    internal static CompilerMessage DirectoryMustBeEmpty(object directory) =>
+        GetMessage("DirectoryMustBeEmpty", directory);
 
     private static readonly Dictionary<string, CompilerMessageTemplate> Templates = new()
     {
@@ -219,6 +224,12 @@ internal static class MessageCodes
              new CompilerMessageTemplate(MessageLevel.FatalError,
                  21, "CkTypeId '{baseCkTypeId}' is final, but CkTypeId '{derivedTypeId}' is derived from it.",
                  new [] {"baseCkTypeId", "derivedTypeId"})
+        },
+        {
+            "DirectoryMustBeEmpty",
+             new CompilerMessageTemplate(MessageLevel.FatalError,
+                 22, "Directory '{directory}' must be empty.",
+                 new [] {"directory"})
         },
     };
 }

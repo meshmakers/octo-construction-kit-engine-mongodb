@@ -1,7 +1,4 @@
-using System;
-using Persistence.Contracts;
-
-namespace Meshmakers.Octo.Common.Shared;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
 public readonly struct RtEntityId : IComparable<RtEntityId>, IEquatable<RtEntityId>
 {

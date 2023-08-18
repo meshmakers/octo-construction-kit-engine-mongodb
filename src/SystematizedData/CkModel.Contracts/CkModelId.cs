@@ -1,7 +1,7 @@
-using System;
 using System.Diagnostics;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
 
-namespace Meshmakers.Octo.Common.Shared;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
 /// <summary>
 /// Represents a versioned construction kit model id
@@ -10,6 +10,8 @@ namespace Meshmakers.Octo.Common.Shared;
 [System.Text.Json.Serialization.JsonConverter(typeof(CkModelIdConverter))]
 public readonly struct CkModelId : IComparable<CkModelId>, IEquatable<CkModelId>, ICkKey
 {
+    private readonly string? _modelId;
+
     public override bool Equals(object? obj)
     {
         return obj is CkModelId other && Equals(other);
@@ -20,19 +22,19 @@ public readonly struct CkModelId : IComparable<CkModelId>, IEquatable<CkModelId>
         var versionIndex = ckModelId.IndexOf("-", StringComparison.Ordinal);
         if (versionIndex > 0)
         {
-            ModelId = ckModelId.Substring(0, versionIndex);
+            _modelId = ckModelId.Substring(0, versionIndex);
             ModelVersion = ckModelId.Substring(versionIndex + 1);
         }
         else
         {
-            ModelId = ckModelId;
+            _modelId = ckModelId;
             ModelVersion = "1.0.0";
         }
     }
 
     public CkModelId(string modelId, string modelVersion)
     {
-        ModelId = modelId;
+        _modelId = modelId;
         ModelVersion = modelVersion;
     }
 
@@ -41,7 +43,8 @@ public readonly struct CkModelId : IComparable<CkModelId>, IEquatable<CkModelId>
         return new CkModelId(value);
     }
 
-    public string ModelId { get; }
+    public string ModelId => _modelId ?? "";
+
     public CkVersion ModelVersion { get; }
 
     // ReSharper disable once MemberCanBePrivate.Global

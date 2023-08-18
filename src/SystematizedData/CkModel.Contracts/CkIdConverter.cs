@@ -1,9 +1,7 @@
-using System;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Persistence.Contracts;
 
-namespace Meshmakers.Octo.Common.Shared;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
 public class CkIdAttributeIdConverter : CkIdConverter<CkAttributeId>
 {

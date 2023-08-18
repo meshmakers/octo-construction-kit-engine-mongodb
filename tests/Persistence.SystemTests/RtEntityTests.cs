@@ -1,6 +1,7 @@
 using Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
 using Meshmakers.Octo.Backend.Persistence.SystemTests.Fixtures;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Xunit;

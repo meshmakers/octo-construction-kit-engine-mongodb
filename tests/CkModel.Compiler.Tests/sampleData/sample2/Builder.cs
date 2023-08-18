@@ -1,4 +1,4 @@
-using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
 namespace CkModel.Compiler.Tests.sampleData.sample2;
@@ -10,7 +10,7 @@ public class Builder
         return new CkModelRoot
         {
             ModelId = new CkModelId("sample2", "1.0.0"),
-            CkDependencies = new List<CkModelId> { new("System", "1.0.0"), new ("sample1", "1.0.0") },
+            Dependencies = new List<CkModelId> { new("System", "1.0.0"), new ("sample1", "1.0.0") },
             CkAttributes = new List<CkAttributeDto>
             {
               new()

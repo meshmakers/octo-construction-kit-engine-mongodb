@@ -1,6 +1,5 @@
 ﻿using System.Diagnostics;
 using System.Text.Json.Serialization;
-using Meshmakers.Octo.Common.Shared;
 
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 

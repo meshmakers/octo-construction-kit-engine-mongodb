@@ -1,6 +1,3 @@
-using Meshmakers.Octo.Common.Shared;
-using Persistence.Contracts;
-
 namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
 
 public class CkGraphTypeInheritance 

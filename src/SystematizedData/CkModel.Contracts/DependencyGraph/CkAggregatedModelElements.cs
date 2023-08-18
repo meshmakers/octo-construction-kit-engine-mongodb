@@ -1,6 +1,4 @@
-using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
-using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
 
@@ -21,7 +19,7 @@ public class CkAggregatedModelElements
 
     public void AppendModel(CkModelRoot ckModelRoot)
     {
-        CkModelDependencies.Add(ckModelRoot.ModelId, ckModelRoot.CkDependencies ?? new List<CkModelId>());
+        CkModelDependencies.Add(ckModelRoot.ModelId, ckModelRoot.Dependencies ?? new List<CkModelId>());
         
         if (ckModelRoot.CkAttributes != null)
         {

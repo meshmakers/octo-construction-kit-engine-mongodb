@@ -1,6 +1,6 @@
 using System.Runtime.Serialization;
 
-namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
+namespace Persistence.Commands;
 
 [Serializable]
 public class ModelExportException : Exception

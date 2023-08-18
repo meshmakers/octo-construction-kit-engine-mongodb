@@ -1,9 +1,8 @@
-using System;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Meshmakers.Octo.Common.Shared;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
 
 public class CkAssociationIdConverter : JsonConverter<CkAssociationRoleId>
 {

@@ -1,7 +1,4 @@
-using System;
-using Meshmakers.Octo.Common.Shared;
-
-namespace Persistence.Contracts;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
 public readonly struct CkId<TKey> : IComparable<CkId<TKey>>, IEquatable<CkId<TKey>> where TKey : struct, IComparable<TKey>, ICkKey
 {

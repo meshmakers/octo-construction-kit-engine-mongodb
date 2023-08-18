@@ -1,4 +1,5 @@
 using System.Text;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.Commands;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;

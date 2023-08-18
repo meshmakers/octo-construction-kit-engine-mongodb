@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 

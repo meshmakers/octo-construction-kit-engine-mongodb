@@ -1,18 +1,22 @@
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Validation;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
 using Microsoft.Extensions.Logging;
 
-namespace Meshmakers.Octo.Common.Shared.Exchange;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
 
 public class CkModelReader
 {
     private readonly ICkModelValidator _ckModelValidator;
     private readonly ILogger<CkModelReader> _logger;
+    private readonly ICkSerializer _ckSerializer;
 
-    public CkModelReader(ILogger<CkModelReader> logger, ICkModelValidator ckModelValidator)
+    public CkModelReader(ILogger<CkModelReader> logger, ICkSerializer ckSerializer, ICkModelValidator ckModelValidator)
     {
         _ckModelValidator = ckModelValidator;
         _logger = logger;
+        _ckSerializer = ckSerializer;
     }
 
     public async Task ReadAsync(string filePath, CancellationToken? cancellationToken = null)
@@ -25,7 +29,7 @@ public class CkModelReader
         {
             using (var streamReader = new StreamReader(filePath))
             {
-                model = await CkSerializer.DeserializeAsync(streamReader);
+                model = await _ckSerializer.DeserializeModelRootAsync(streamReader);
             }
 
             if (model == null)

@@ -1,7 +1,7 @@
-using System;
 using System.Diagnostics;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
 
-namespace Meshmakers.Octo.Common.Shared;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
 /// <summary>
 /// Represents a versioned construction kit type id

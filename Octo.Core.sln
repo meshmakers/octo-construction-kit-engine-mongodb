@@ -51,6 +51,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "unittests", "unittests", "{
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "systemtests", "systemtests", "{9CDBD65B-A313-496C-8F6F-6A766FEEA544}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CkModel.Compiler.SystemTests", "tests\CkModel.Compiler.SystemTests\CkModel.Compiler.SystemTests.csproj", "{390F137B-7FC3-428B-9D51-806FAA17A5C6}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -81,6 +83,7 @@ Global
 		{B4DE0F28-605D-4586-A703-2543551CEBDD} = {30684BD2-BA15-48A4-B37F-5342F91C3188}
 		{396D3170-2BAF-4B6E-B6ED-E15488506086} = {9CDBD65B-A313-496C-8F6F-6A766FEEA544}
 		{4896425A-129C-42EB-84A7-C6B5A247AB7D} = {30684BD2-BA15-48A4-B37F-5342F91C3188}
+		{390F137B-7FC3-428B-9D51-806FAA17A5C6} = {9CDBD65B-A313-496C-8F6F-6A766FEEA544}
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{39AA64A0-FEF5-48A3-82A4-3A655953FED1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
@@ -163,5 +166,9 @@ Global
 		{B4DE0F28-605D-4586-A703-2543551CEBDD}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B4DE0F28-605D-4586-A703-2543551CEBDD}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B4DE0F28-605D-4586-A703-2543551CEBDD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{390F137B-7FC3-428B-9D51-806FAA17A5C6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{390F137B-7FC3-428B-9D51-806FAA17A5C6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{390F137B-7FC3-428B-9D51-806FAA17A5C6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{390F137B-7FC3-428B-9D51-806FAA17A5C6}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

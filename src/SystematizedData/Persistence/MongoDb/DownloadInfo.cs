@@ -1,5 +1,6 @@
 using System;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using MongoDB.Driver.GridFS;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;

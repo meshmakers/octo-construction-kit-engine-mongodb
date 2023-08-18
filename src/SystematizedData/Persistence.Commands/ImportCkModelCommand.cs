@@ -1,13 +1,15 @@
 ﻿using System.Diagnostics;
-using Meshmakers.Octo.Common.Shared;
-using Meshmakers.Octo.Common.Shared.Exchange;
+using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
+using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
+using Meshmakers.Octo.SystematizedData.Persistence.Commands;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using NLog;
-using Persistence.Contracts;
 using AttributeValueTypes = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.AttributeValueTypes;
 using CkAssociationRole = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.CkAssociationRole;
 using CkAttribute = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.CkAttribute;
@@ -18,12 +20,18 @@ using CkIndexFields = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntit
 using CkSelectionValue = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.CkSelectionValue;
 using Multiplicities = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.Multiplicities;
 
-namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
+namespace Persistence.Commands;
 
 public class ImportCkModelCommand : IImportCkModelCommand
 {
+    private readonly ICkSerializer _ckSerializer;
     private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
     private CkModelValidation? _ckModelValidation;
+
+    public ImportCkModelCommand(ICkSerializer ckSerializer)
+    {
+        _ckSerializer = ckSerializer;
+    }
 
     public async Task ImportTextAsync(IOctoSession session, ITenantCkModelRepository ckModelRepository, string jsonText,
         CancellationToken? cancellationToken = null)
@@ -34,7 +42,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
 
 
             Logger.Info("Reading CK model....");
-            var model = await CkSerializer.DeserializeAsync(jsonText);
+            var model = await _ckSerializer.DeserializeModelRootAsync(jsonText);
 
             if (model == null)
             {
@@ -43,10 +51,10 @@ public class ImportCkModelCommand : IImportCkModelCommand
             }
 
             Logger.Info("Executing import of CK model....");
-            var transientCkModel = new TransientCkModel(new DatabaseEntities.CkModel()
+            var transientCkModel = new TransientCkModel(new Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.CkModel()
             {
                 Id = model.ModelId,
-                Dependencies = model.CkDependencies?.ToArray()
+                Dependencies = model.Dependencies?.ToArray()
             });
             await ExecuteImport(session, model, transientCkModel, ckModelRepository, cancellationToken);
 
@@ -72,7 +80,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
             CkModelRoot? model;
             using (var streamReader = new StreamReader(filePath))
             {
-                model = await CkSerializer.DeserializeAsync(streamReader);
+                model = await _ckSerializer.DeserializeModelRootAsync(streamReader);
             }
 
             if (model == null)
@@ -82,10 +90,10 @@ public class ImportCkModelCommand : IImportCkModelCommand
             }
 
             Logger.Info("Executing import of CK model....");
-            var transientCkModel = new TransientCkModel(new DatabaseEntities.CkModel()
+            var transientCkModel = new TransientCkModel(new Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.CkModel()
             {
                 Id = model.ModelId,
-                Dependencies = model.CkDependencies?.ToArray()
+                Dependencies = model.Dependencies?.ToArray()
             });
             await ExecuteImport(session, model, transientCkModel, ckModelRepository, cancellationToken);
 

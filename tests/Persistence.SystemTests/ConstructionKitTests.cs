@@ -3,10 +3,12 @@ using System.Linq;
 using Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
 using Meshmakers.Octo.Backend.Persistence.SystemTests.Fixtures;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
 using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.Commands;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using MongoDB.Bson;
+using Persistence.Commands;
 using Persistence.IdentityCkModel;
 using Xunit;
 
@@ -29,7 +31,7 @@ public class ConstructionKitTests : IClassFixture<SystemFixture>
         using var session = await systemContext.StartSystemSessionAsync();
         session.StartTransaction();
         var ckModelRepository = systemContext.CreateTenantCkModelRepository();
-        var systemIdentityModelService = new CkSystemIdentityModelService(new ImportCkModelCommand());
+        var systemIdentityModelService = new CkSystemIdentityModelService(new ImportCkModelCommand(new CkJsonSerializer()));
 
         await systemIdentityModelService.ImportAsync(session, ckModelRepository);
 

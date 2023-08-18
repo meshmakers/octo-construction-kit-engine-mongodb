@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;

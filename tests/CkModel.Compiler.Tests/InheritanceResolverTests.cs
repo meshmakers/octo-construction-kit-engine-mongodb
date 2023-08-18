@@ -3,8 +3,9 @@ using FakeItEasy;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Resolvers;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
-using Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Messages;
 using Microsoft.Extensions.Logging;
 
 namespace CkModel.Compiler.Tests;

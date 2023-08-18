@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
 namespace Meshmakers.Octo.Common.Shared.Services;
 

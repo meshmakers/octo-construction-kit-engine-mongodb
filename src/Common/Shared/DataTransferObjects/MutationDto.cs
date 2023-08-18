@@ -1,3 +1,5 @@
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
+
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 public class MutationDto<TItemType> : MutationDto

@@ -1,4 +1,5 @@
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using MongoDB.Bson.Serialization;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;

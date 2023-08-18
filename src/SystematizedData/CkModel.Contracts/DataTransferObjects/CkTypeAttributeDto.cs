@@ -1,7 +1,5 @@
 ﻿using System.Diagnostics;
 using System.Text.Json.Serialization;
-using Meshmakers.Octo.Common.Shared;
-using Persistence.Contracts;
 
 // ReSharper disable AutoPropertyCanBeMadeGetOnly.Global
 // ReSharper disable UnusedAutoPropertyAccessor.Global

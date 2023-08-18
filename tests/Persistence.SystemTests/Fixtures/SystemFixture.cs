@@ -2,10 +2,12 @@ using FakeItEasy;
 using Meshmakers.Octo.Backend.Persistence.SystemTests.CkTest;
 using Meshmakers.Octo.Backend.Persistence.SystemTests.Configuration;
 using Meshmakers.Octo.Common.DistributedCache;
+using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
 using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 using Meshmakers.Octo.SystematizedData.Persistence.Commands;
 using Microsoft.Extensions.Options;
+using Persistence.Commands;
 using Persistence.InternalContracts;
 using Persistence.SystemCkModel;
 
@@ -30,7 +32,7 @@ public class SystemFixture : ConfigurationFixture, IDisposable
     public ISystemContextInternal GetSystemContext()
     {
         var distributedWithPubSubCache = A.Fake<IDistributedWithPubSubCache>();
-        var systemModelService = new CkTestModelService(new ImportCkModelCommand());
+        var systemModelService = new CkTestModelService(new ImportCkModelCommand(new CkJsonSerializer()));
         var cacheService = new CkCacheService(distributedWithPubSubCache);
         
         var options = GetOptions<SystemTestOptions>("SystemTest");

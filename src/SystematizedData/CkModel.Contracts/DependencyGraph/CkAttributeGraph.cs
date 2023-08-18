@@ -1,7 +1,5 @@
 using System.Diagnostics;
-using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
-using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
 

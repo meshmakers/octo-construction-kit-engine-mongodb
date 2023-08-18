@@ -1,5 +1,5 @@
 using Meshmakers.Octo.Common.Shared;
-using Persistence.Contracts;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
 namespace SharedTests;
 

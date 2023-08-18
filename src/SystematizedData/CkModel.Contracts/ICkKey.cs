@@ -1,6 +1,4 @@
-using System;
-
-namespace Meshmakers.Octo.Common.Shared;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
 public interface ICkKey : IConvertible
 {

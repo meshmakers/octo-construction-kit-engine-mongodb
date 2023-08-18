@@ -1,6 +1,6 @@
-using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.ModelRepositories;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
 using Microsoft.Extensions.Logging;
 
@@ -43,9 +43,9 @@ internal class DependencyResolver : IDependencyResolver
                 continue;
             }
             
-            if (ckDependencyRootModel.CkDependencies != null)
+            if (ckDependencyRootModel.Dependencies != null)
             {
-                foreach (var ckChildDependency in ckDependencyRootModel.CkDependencies)      
+                foreach (var ckChildDependency in ckDependencyRootModel.Dependencies)      
                 {
                     if (!aggregatedModelElements.CkModelDependencies.ContainsKey(ckChildDependency))
                     {

@@ -125,6 +125,12 @@
       "number": 21,
       "level": "FATALERROR",
       "text": "CkTypeId '{baseCkTypeId}' is final, but CkTypeId '{derivedTypeId}' is derived from it."
+    },
+    {
+      "key": "DirectoryMustBeEmpty",
+      "number": 22,
+      "level": "FATALERROR",
+      "text": "Directory '{directory}' must be empty."
     }
   ]
 }

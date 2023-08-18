@@ -1,8 +1,6 @@
-using System;
 using System.Text.Json;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
-namespace Meshmakers.Octo.Common.Shared;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
 public class ModelParseException : CkModelException
 {
@@ -32,6 +30,12 @@ public class ModelParseException : CkModelException
     {
         return new ModelParseException($"File '{filePath}' contains invalid construction kit model.");
     }
+    
+    public static Exception CannotDeserializeModel()
+    {
+        return new ModelParseException($"Stream contains invalid construction kit model.");
+    }
+
     
     public static Exception CannotDeserializeRtModel(string filePath)
     {

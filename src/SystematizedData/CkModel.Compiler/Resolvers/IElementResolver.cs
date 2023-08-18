@@ -1,3 +1,4 @@
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DependencyGraph;
 

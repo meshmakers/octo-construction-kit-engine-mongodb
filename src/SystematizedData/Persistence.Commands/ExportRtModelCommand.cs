@@ -1,14 +1,14 @@
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
-using Meshmakers.Octo.Common.Shared.Exchange;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
+using Meshmakers.Octo.SystematizedData.Persistence;
+using Meshmakers.Octo.SystematizedData.Persistence.Commands;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
-using Persistence.Contracts;
-using Persistence.SystemCkModel;
 using RtEntityDto = Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects.RtEntityDto;
 
-namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
+namespace Persistence.Commands;
 
 public class ExportRtModelCommand : IExportRtModelCommand
 {
@@ -32,7 +32,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
             session.StartTransaction();
 
             var query = await tenantRepository.GetRtEntityByRtIdAsync(session,
-                new RtEntityId(SystemCkModel.SystemCkModelId, SystemCkModel.SystemQueryTypeId, queryId));
+                new RtEntityId(SystemCkModel.SystemCkModel.SystemCkModelId, SystemCkModel.SystemCkModel.SystemQueryTypeId, queryId));
 
             if (CheckCancellation(cancellationToken))
             {
