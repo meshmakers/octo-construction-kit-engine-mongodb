@@ -14,18 +14,15 @@ public class CkTypeAttributeDto
     [JsonConverter(typeof(CkIdAttributeIdConverter))]
     public CkId<CkAttributeId> AttributeId { get; set; }
 
-    [JsonPropertyName("name")] [JsonRequired]
+    [JsonPropertyName("name")] 
+    [JsonRequired]
     public string AttributeName { get; set; } = null!;
 
-    [JsonPropertyName("isAutoCompleteEnabled")]
     public bool IsAutoCompleteEnabled { get; set; }
 
-    [JsonPropertyName("autoCompleteFilter")] 
     public string? AutoCompleteFilter { get; set; }
 
-    [JsonPropertyName("autoCompleteLimit")]
     public int? AutoCompleteLimit { get; set; }
 
-    [JsonPropertyName("autoIncrementReference")]
     public string? AutoIncrementReference { get; set; }
 }

@@ -17,4 +17,5 @@ internal static class CompilerStatics
     public const string AssociationsDirectoryName = "associations";
     public const string TypesDirectoryName = "types";
     public const string MetadataFile = "ckModel.yaml";
+    public const string Sample1Entity = "sample1.yaml";
 }

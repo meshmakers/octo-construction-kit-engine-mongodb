@@ -27,15 +27,15 @@ public class CkModelIdConverter : JsonConverter<CkModelId>, IYamlTypeConverter
         return type == typeof(CkModelId);
     }
 
-    public object? ReadYaml(IParser parser, Type type)
+    public object ReadYaml(IParser parser, Type type)
     {
         var value = parser.Consume<Scalar>().Value;
-        return new CkModelId(value); // Will throw instead of returning null
+        return new CkModelId(value); 
     }
 
     public void WriteYaml(IEmitter emitter, object? value, Type type)
     {
         var modelId = (CkModelId)value!;
-        emitter.Emit(new Scalar(AnchorName.Empty, TagName.Empty, modelId.SemanticVersionedFullName!, ScalarStyle.Any, true, false));
+        emitter.Emit(new Scalar(AnchorName.Empty, TagName.Empty, modelId.SemanticVersionedFullName, ScalarStyle.Any, true, false));
     }
 }

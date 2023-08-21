@@ -7,9 +7,9 @@ public interface ICkModelRepository
 {
     Task<CkModelId> FindModelIdAsync(CkModelId modelId);
     
-    Task<CkModelRoot> GetModelAsync(CkModelId modelId);
+    Task<CkCompiledModelRoot> GetModelAsync(CkModelId modelId);
     
-    Task PublishModelAsync(CkModelRoot ckModel); 
+    Task PublishModelAsync(CkCompiledModelRoot ckCompiledModel); 
     
-    Task UpdateModelAsync(CkModelRoot ckModel);
+    Task UpdateModelAsync(CkCompiledModelRoot ckCompiledModel);
 }

@@ -4,5 +4,5 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.Validation;
 
 public interface ICkModelValidator
 {
-    Task<ValidationResult> ValidateAsync(CkModelRoot model);
+    Task<ValidationResult> ValidateAsync(CkCompiledModelRoot compiledModel);
 }

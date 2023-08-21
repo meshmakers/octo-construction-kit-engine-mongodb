@@ -7,7 +7,9 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects
 
 public class CkSelectionValueDto
 {
-    [JsonPropertyName("key")][JsonRequired]  public int Key { get; set; }
+    [JsonRequired] 
+    public int Key { get; set; }
 
-    [JsonPropertyName("name")] [JsonRequired] public string Name { get; set; } = null!;
+    [JsonRequired] 
+    public string Name { get; set; } = null!;
 }

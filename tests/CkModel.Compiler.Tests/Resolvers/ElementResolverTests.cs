@@ -25,9 +25,9 @@ public class ElementResolverTests
     public void Resolve_InvalidAttributeName_AddsErrorMessage()
     {
         var ckModelRoot = sampleData.sample1.Builder.Build();
-        if (ckModelRoot.CkAttributes != null)
+        if (ckModelRoot.Attributes != null)
         {
-            ckModelRoot.CkAttributes[0].AttributeId = "Invalid_Attribute_Name!";
+            ckModelRoot.Attributes[0].AttributeId = "Invalid_Attribute_Name!";
         }
 
         var resolver = new ElementResolver();
@@ -44,9 +44,9 @@ public class ElementResolverTests
     public void Resolve_InvalidAssociationRoleId_AddsErrorMessage()
     {
         var ckModelRoot = sampleData.sample1.Builder.Build();
-        if (ckModelRoot.CkAssociationRoles != null)
+        if (ckModelRoot.AssociationRoles != null)
         {
-            ckModelRoot.CkAssociationRoles[0].AssociationRoleId = "Invalid_Assoc_Role!";
+            ckModelRoot.AssociationRoles[0].AssociationRoleId = "Invalid_Assoc_Role!";
         }
 
         var resolver = new ElementResolver();
@@ -63,9 +63,9 @@ public class ElementResolverTests
     public void Resolve_InvalidTypeId_AddsErrorMessage()
     {
         var ckModelRoot = sampleData.sample1.Builder.Build();
-        if (ckModelRoot.CkTypes != null)
+        if (ckModelRoot.Types != null)
         {
-            ckModelRoot.CkTypes[0].TypeId = "Invalid_TypeId!";
+            ckModelRoot.Types[0].TypeId = "Invalid_TypeId!";
         }
 
         var resolver = new ElementResolver();
@@ -82,9 +82,9 @@ public class ElementResolverTests
     public void Resolve_MultipleTypes_AddsErrorMessage()
     {
         var ckModelRoot = sampleData.sample1.Builder.Build();
-        if (ckModelRoot.CkTypes != null)
+        if (ckModelRoot.Types != null)
         {
-            ckModelRoot.CkTypes.Add(new CkTypeDto{TypeId = "Demo1"});
+            ckModelRoot.Types.Add(new CkTypeDto{TypeId = "Demo1"});
         }
 
         var resolver = new ElementResolver();
@@ -101,10 +101,10 @@ public class ElementResolverTests
     public void Resolve_MultipleAssociations_AddsErrorMessage()
     {
         var ckModelRoot = sampleData.sample1.Builder.Build();
-        if (ckModelRoot.CkAttributes != null)
+        if (ckModelRoot.Attributes != null)
         {
-            ckModelRoot.CkAttributes.Add(new CkAttributeDto{AttributeId = "Demo1"});
-            ckModelRoot.CkAttributes.Add(new CkAttributeDto{AttributeId = "Demo1"});
+            ckModelRoot.Attributes.Add(new CkAttributeDto{AttributeId = "Demo1"});
+            ckModelRoot.Attributes.Add(new CkAttributeDto{AttributeId = "Demo1"});
         }
 
         var resolver = new ElementResolver();
@@ -121,7 +121,7 @@ public class ElementResolverTests
     public void Resolve_MultipleAttributes_AddsErrorMessage()
     {
         var ckModelRoot = sampleData.sample1.Builder.Build();
-        ckModelRoot.CkAssociationRoles = new List<CkAssociationRoleDto>
+        ckModelRoot.AssociationRoles = new List<CkAssociationRoleDto>
         {
             new() { AssociationRoleId = "Assoc1" },
             new() { AssociationRoleId = "Assoc1" }

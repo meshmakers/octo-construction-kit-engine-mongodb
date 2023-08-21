@@ -12,11 +12,10 @@ public class CkTypeIndexDto
         Fields = new List<CkIndexFieldsDto>();
     }
 
-    [JsonPropertyName("indexType")]
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public IndexTypeDto IndexType { get; set; }
 
-    [JsonPropertyName("language")] public string? Language { get; set; }
+    public string? Language { get; set; }
 
-    [JsonPropertyName("fields")] public List<CkIndexFieldsDto> Fields { get; set; }
+    public List<CkIndexFieldsDto> Fields { get; set; }
 }

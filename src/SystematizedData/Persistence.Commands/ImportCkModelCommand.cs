@@ -77,7 +77,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
 
 
             Logger.Info("Reading CK model....");
-            CkModelRoot? model;
+            CkCompiledModelRoot? model;
             using (var streamReader = new StreamReader(filePath))
             {
                 model = await _ckSerializer.DeserializeModelRootAsync(streamReader);
@@ -106,26 +106,26 @@ public class ImportCkModelCommand : IImportCkModelCommand
         }
     }
 
-    private async Task ExecuteImport(IOctoSession session, CkModelRoot model, TransientCkModel transientCkModel,
+    private async Task ExecuteImport(IOctoSession session, CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel,
         ITenantCkModelRepository ckModelRepository,
         CancellationToken? cancellationToken)
     {
-        ProcessCkModel(model, transientCkModel);
+        ProcessCkModel(compiledModel, transientCkModel);
 
         // Transform to entities
-        ProcessCkAttributes(model, transientCkModel);
+        ProcessCkAttributes(compiledModel, transientCkModel);
         if (CheckCancellation(cancellationToken))
         {
             return;
         }
 
-        ProcessCkAssociations(model, transientCkModel);
+        ProcessCkAssociations(compiledModel, transientCkModel);
         if (CheckCancellation(cancellationToken))
         {
             return;
         }
 
-        ProcessCkEntitiesAndAssociations(model, transientCkModel);
+        ProcessCkEntitiesAndAssociations(compiledModel, transientCkModel);
         if (CheckCancellation(cancellationToken))
         {
             return;
@@ -136,7 +136,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
         await _ckModelValidation.Validate(session, transientCkModel, cancellationToken);
 
         // Delete the old version
-        if (await DeleteOldVersion(session, model.ModelId, ckModelRepository, cancellationToken))
+        if (await DeleteOldVersion(session, compiledModel.ModelId, ckModelRepository, cancellationToken))
         {
             return;
         }
@@ -212,15 +212,15 @@ public class ImportCkModelCommand : IImportCkModelCommand
         await CreateIndex(session, ckModelRepository);
     }
 
-    private void ProcessCkAssociations(CkModelRoot model, TransientCkModel transientCkModel)
+    private void ProcessCkAssociations(CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel)
     {
-        if (model.CkAssociationRoles != null)
+        if (compiledModel.AssociationRoles != null)
         {
-            foreach (var modelAssociationRole in model.CkAssociationRoles)
+            foreach (var modelAssociationRole in compiledModel.AssociationRoles)
             {
                 var associationRole = new CkAssociationRole
                 {
-                    RoleId = new CkId<CkAssociationRoleId>(model.ModelId, modelAssociationRole.AssociationRoleId),
+                    RoleId = new CkId<CkAssociationRoleId>(compiledModel.ModelId, modelAssociationRole.AssociationRoleId),
                     InboundName = modelAssociationRole.InboundName,
                     OutboundName = modelAssociationRole.OutboundName,
                     InboundMultiplicity = (Multiplicities)modelAssociationRole.InboundMultiplicity,
@@ -231,7 +231,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
         }
     }
 
-    private void ProcessCkModel(CkModelRoot model, TransientCkModel transientCkModel)
+    private void ProcessCkModel(CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel)
     {
     }
 
@@ -313,19 +313,18 @@ public class ImportCkModelCommand : IImportCkModelCommand
         return false;
     }
 
-    private void ProcessCkAttributes(CkModelRoot model, TransientCkModel transientCkModel)
+    private void ProcessCkAttributes(CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel)
     {
-        if (model.CkAttributes != null)
+        if (compiledModel.Attributes != null)
         {
-            foreach (var modelCkAttribute in model.CkAttributes)
+            foreach (var modelCkAttribute in compiledModel.Attributes)
             {
                 var ckAttribute = new CkAttribute
                 {
-                    AttributeId = new CkId<CkAttributeId>(model.ModelId, modelCkAttribute.AttributeId),
+                    AttributeId = new CkId<CkAttributeId>(compiledModel.ModelId, modelCkAttribute.AttributeId),
                     AttributeValueType = (AttributeValueTypes)modelCkAttribute.ValueType,
                     SelectionValues = modelCkAttribute.SelectionValues?.Select(sv => new CkSelectionValue
                         { Key = sv.Key, Name = sv.Name }).ToList(),
-                    DefaultValue = modelCkAttribute.DefaultValue,
                     DefaultValues = modelCkAttribute.DefaultValues
                 };
                 transientCkModel.CkAttributes.Add(ckAttribute);
@@ -333,15 +332,15 @@ public class ImportCkModelCommand : IImportCkModelCommand
         }
     }
 
-    private void ProcessCkEntitiesAndAssociations(CkModelRoot model,
+    private void ProcessCkEntitiesAndAssociations(CkCompiledModelRoot compiledModel,
         TransientCkModel transientCkModel)
     {
-        if (model.CkTypes == null)
+        if (compiledModel.Types == null)
         {
             return;
         }
 
-        foreach (var entity in model.CkTypes)
+        foreach (var entity in compiledModel.Types)
         {
             var ckEntityAttributes = new List<CkEntityAttribute>();
             if (entity.Attributes != null)
@@ -383,7 +382,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
 
             var ckEntity = new CkEntity
             {
-                CkTypeId = new CkId<CkTypeId>(model.ModelId, entity.TypeId),
+                CkTypeId = new CkId<CkTypeId>(compiledModel.ModelId, entity.TypeId),
                 IsFinal = entity.IsFinal,
                 IsAbstract = entity.IsAbstract,
                 Attributes = ckEntityAttributes,
@@ -395,7 +394,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
                 var ckEntityInheritance = new CkEntityInheritance
                 {
                     OriginCkTypeId = entity.DerivedFromCkTypeId.Value,
-                    TargetCkTypeId = new CkId<CkTypeId>(model.ModelId, entity.TypeId)
+                    TargetCkTypeId = new CkId<CkTypeId>(compiledModel.ModelId, entity.TypeId)
                 };
                 transientCkModel.CkEntityInheritances.Add(ckEntityInheritance);
             }
@@ -407,7 +406,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
                     var ckEntityAssociation = new CkEntityAssociation
                     {
                         RoleId = association.RoleId,
-                        OriginCkTypeId = new CkId<CkTypeId>(model.ModelId, ckEntity.CkTypeId.Key),
+                        OriginCkTypeId = new CkId<CkTypeId>(compiledModel.ModelId, ckEntity.CkTypeId.Key),
                         TargetCkTypeId = association.TargetCkTypeId,
                     };
                     transientCkModel.CkEntityAssociations.Add(ckEntityAssociation);

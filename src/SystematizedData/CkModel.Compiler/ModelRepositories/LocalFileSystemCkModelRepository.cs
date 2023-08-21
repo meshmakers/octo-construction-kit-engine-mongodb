@@ -10,17 +10,17 @@ public class LocalFileSystemCkModelRepository : ICkModelRepository
         throw new NotImplementedException();
     }
 
-    public Task<CkModelRoot> GetModelAsync(CkModelId modelId)
+    public Task<CkCompiledModelRoot> GetModelAsync(CkModelId modelId)
     {
         throw new NotImplementedException();
     }
 
-    public Task PublishModelAsync(CkModelRoot ckModel)
+    public Task PublishModelAsync(CkCompiledModelRoot ckCompiledModel)
     {
         throw new NotImplementedException();
     }
 
-    public Task UpdateModelAsync(CkModelRoot ckModel)
+    public Task UpdateModelAsync(CkCompiledModelRoot ckCompiledModel)
     {
         throw new NotImplementedException();
     }

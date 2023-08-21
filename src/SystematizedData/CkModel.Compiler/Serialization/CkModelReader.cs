@@ -24,7 +24,7 @@ public class CkModelReader
     {
         _logger.LogInformation("Reading CK model...");
 
-        CkModelRoot? model;
+        CkCompiledModelRoot? model;
 
         try
         {

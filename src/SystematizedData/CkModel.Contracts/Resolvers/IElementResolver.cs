@@ -5,5 +5,5 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.Resolvers;
 
 public interface IElementResolver
 {
-    CkModelGraph Resolve(CkModelRoot ckModelRoot, CompilerResult validationResult);
+    CkModelGraph Resolve(CkCompiledModelRoot ckCompiledModelRoot, CompilerResult validationResult);
 }

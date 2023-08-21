@@ -5,13 +5,13 @@ namespace CkModel.Compiler.Tests.sampleData.sample_assocs_sameIdAndTargetAtInher
 
 public class Builder
 {
-    public static CkModelRoot Build()
+    public static CkCompiledModelRoot Build()
     {
-        return new CkModelRoot
+        return new CkCompiledModelRoot
         {
             ModelId = new CkModelId("sample1", "1.0.0"),
             Dependencies = new List<CkModelId> { new("System", "1.0.0") },
-            CkAssociationRoles = new List<CkAssociationRoleDto>
+            AssociationRoles = new List<CkAssociationRoleDto>
             {
                 new()
                 {
@@ -19,7 +19,7 @@ public class Builder
                     OutboundMultiplicity = MultiplicitiesDto.N, InboundName = "Related", OutboundName = "Related"
                 }
             },
-            CkAttributes = new List<CkAttributeDto>
+            Attributes = new List<CkAttributeDto>
             {
               new()
               {
@@ -57,7 +57,7 @@ public class Builder
                   ValueType = AttributeValueTypesDto.String,
               }
             },
-            CkTypes = new List<CkTypeDto>
+            Types = new List<CkTypeDto>
             {
                 new()
                 {

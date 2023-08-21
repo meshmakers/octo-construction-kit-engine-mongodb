@@ -9,15 +9,15 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Resolvers;
 
 public class ElementResolver : IElementResolver
 {
-    public CkModelGraph Resolve(CkModelRoot ckModelRoot, CompilerResult validationResult)
+    public CkModelGraph Resolve(CkCompiledModelRoot ckCompiledModelRoot, CompilerResult validationResult)
     {
         var ckModelGraph = new CkModelGraph();
         
-        if (ckModelRoot.CkAttributes != null)
+        if (ckCompiledModelRoot.Attributes != null)
         {
-            foreach (var ckAttribute in ckModelRoot.CkAttributes)
+            foreach (var ckAttribute in ckCompiledModelRoot.Attributes)
             {
-                var ckAttributeId = new CkId<CkAttributeId>(ckModelRoot.ModelId, ckAttribute.AttributeId);
+                var ckAttributeId = new CkId<CkAttributeId>(ckCompiledModelRoot.ModelId, ckAttribute.AttributeId);
                 
                 if (!Regex.IsMatch(ckAttribute.AttributeId.AttributeId, CompilerStatics.AllowedCharactersInNamesRegex))
                 {
@@ -34,11 +34,11 @@ public class ElementResolver : IElementResolver
             }
         }
         
-        if (ckModelRoot.CkAssociationRoles != null)
+        if (ckCompiledModelRoot.AssociationRoles != null)
         {
-            foreach (var ckAssociationRole in ckModelRoot.CkAssociationRoles)
+            foreach (var ckAssociationRole in ckCompiledModelRoot.AssociationRoles)
             {
-                var ckAssociationId = new CkId<CkAssociationRoleId>(ckModelRoot.ModelId, ckAssociationRole.AssociationRoleId);
+                var ckAssociationId = new CkId<CkAssociationRoleId>(ckCompiledModelRoot.ModelId, ckAssociationRole.AssociationRoleId);
                 if (!Regex.IsMatch(ckAssociationRole.AssociationRoleId.RoleId, CompilerStatics.AllowedCharactersInNamesRegex))
                 {
                     validationResult.AddMessage(MessageCodes.CkAssociationIdContainsInvalidCharacters(ckAssociationRole.AssociationRoleId.RoleId));
@@ -53,11 +53,11 @@ public class ElementResolver : IElementResolver
             }
         }
         
-        if (ckModelRoot.CkTypes != null)
+        if (ckCompiledModelRoot.Types != null)
         {
-            foreach (var ckType in ckModelRoot.CkTypes)
+            foreach (var ckType in ckCompiledModelRoot.Types)
             {
-                var ckTypeId = new CkId<CkTypeId>(ckModelRoot.ModelId, ckType.TypeId);
+                var ckTypeId = new CkId<CkTypeId>(ckCompiledModelRoot.ModelId, ckType.TypeId);
                 if (!Regex.IsMatch(ckType.TypeId.TypeId, CompilerStatics.AllowedCharactersInNamesRegex))
                 {
                     validationResult.AddMessage(MessageCodes.CkTypeIdContainsInvalidCharacters(ckType.TypeId.TypeId));

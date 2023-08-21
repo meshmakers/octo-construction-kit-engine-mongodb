@@ -1,0 +1,33 @@
+{
+  "$id": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "$schema":{ 
+      "type": "string",
+      "format": "uri"
+    },
+    "attributes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "$ref": "ck-element-attribute.json"
+      }
+    },
+    "types": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "$ref": "ck-element-type.json"
+      }
+    },
+    "associationRoles":{
+      "type": "array",
+      "items": {
+        "type": "object",
+        "$ref": "ck-element-associationRole.json"
+      }
+    }
+  },
+  "additionalProperties": false
+}

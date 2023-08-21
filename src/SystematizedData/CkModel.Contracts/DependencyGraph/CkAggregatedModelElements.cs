@@ -17,31 +17,31 @@ public class CkAggregatedModelElements
     public Dictionary<CkId<CkAttributeId>, CkAttributeDto> CkAttributes { get; }
     public Dictionary<CkId<CkAssociationRoleId>, CkAssociationRoleDto> CkAssociationRoles { get; }
 
-    public void AppendModel(CkModelRoot ckModelRoot)
+    public void AppendModel(CkCompiledModelRoot ckCompiledModelRoot)
     {
-        CkModelDependencies.Add(ckModelRoot.ModelId, ckModelRoot.Dependencies ?? new List<CkModelId>());
+        CkModelDependencies.Add(ckCompiledModelRoot.ModelId, ckCompiledModelRoot.Dependencies ?? new List<CkModelId>());
         
-        if (ckModelRoot.CkAttributes != null)
+        if (ckCompiledModelRoot.Attributes != null)
         {
-            foreach (var ckAttribute in ckModelRoot.CkAttributes)
+            foreach (var ckAttribute in ckCompiledModelRoot.Attributes)
             {
-                CkAttributes.Add(new CkId<CkAttributeId>(ckModelRoot.ModelId, ckAttribute.AttributeId), ckAttribute);
+                CkAttributes.Add(new CkId<CkAttributeId>(ckCompiledModelRoot.ModelId, ckAttribute.AttributeId), ckAttribute);
             }
         }
         
-        if (ckModelRoot.CkAssociationRoles != null)
+        if (ckCompiledModelRoot.AssociationRoles != null)
         {
-            foreach (var ckAssociationRole in ckModelRoot.CkAssociationRoles)
+            foreach (var ckAssociationRole in ckCompiledModelRoot.AssociationRoles)
             {
-                CkAssociationRoles.Add(new CkId<CkAssociationRoleId>(ckModelRoot.ModelId, ckAssociationRole.AssociationRoleId), ckAssociationRole);
+                CkAssociationRoles.Add(new CkId<CkAssociationRoleId>(ckCompiledModelRoot.ModelId, ckAssociationRole.AssociationRoleId), ckAssociationRole);
             }
         }
         
-        if (ckModelRoot.CkTypes != null)
+        if (ckCompiledModelRoot.Types != null)
         {
-            foreach (var ckTypeDto in ckModelRoot.CkTypes)
+            foreach (var ckTypeDto in ckCompiledModelRoot.Types)
             {
-                CkTypes.Add(new CkId<CkTypeId>(ckModelRoot.ModelId, ckTypeDto.TypeId), ckTypeDto);
+                CkTypes.Add(new CkId<CkTypeId>(ckCompiledModelRoot.ModelId, ckTypeDto.TypeId), ckTypeDto);
             }
         }
     }

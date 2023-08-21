@@ -12,8 +12,6 @@ public class CkAttribute
 
     public AttributeValueTypes AttributeValueType { get; set; }
 
-    public object? DefaultValue { get; set; }
-
     public ICollection<object>? DefaultValues { get; set; }
 
     public ICollection<CkSelectionValue>? SelectionValues { get; set; }

@@ -15,7 +15,6 @@ public interface IAttributeCacheItem
     string? AutoIncrementReference { get; }
     ICollection<string>? AutoCompleteTexts { get; }
     AttributeValueTypes AttributeValueType { get; }
-    object? DefaultValue { get; }
     ICollection<object>? DefaultValues { get; }
     ICollection<CkSelectionValue>? SelectionValues { get; }
 }

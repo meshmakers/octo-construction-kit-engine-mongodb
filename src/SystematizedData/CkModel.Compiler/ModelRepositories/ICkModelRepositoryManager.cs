@@ -5,5 +5,5 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.ModelRepositories;
 
 public interface ICkModelRepositoryManager
 {
-    public Task<CkModelRoot?> LookupCkModelAsync(CkModelId ckDependency);
+    public Task<CkCompiledModelRoot?> LookupCkModelAsync(CkModelId ckDependency);
 }

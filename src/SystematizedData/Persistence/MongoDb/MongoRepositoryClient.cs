@@ -110,7 +110,6 @@ public class MongoRepositoryClient : IRepositoryClient
             cm.AutoMap();
 
             cm.GetMemberMap(c => c.AttributeValueType).SetIsRequired(true);
-            cm.GetMemberMap(c => c.DefaultValue).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.DefaultValues).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.SelectionValues).SetIgnoreIfDefault(true);
         });

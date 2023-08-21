@@ -13,7 +13,6 @@ public class CkAttributeGraph
     {
         CkAttributeId = ckAttributeId;
         ValueType = attributeDto.ValueType;
-        DefaultValue = attributeDto.DefaultValue;
         DefaultValues = attributeDto.DefaultValues;
         SelectionValues = attributeDto.SelectionValues;
     }
@@ -21,8 +20,6 @@ public class CkAttributeGraph
     public CkId<CkAttributeId> CkAttributeId { get; }
 
     public AttributeValueTypesDto ValueType { get; }
-
-    public object? DefaultValue { get; }
 
     public ICollection<object>? DefaultValues { get; }
 

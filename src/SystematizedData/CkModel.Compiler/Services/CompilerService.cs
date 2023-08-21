@@ -14,7 +14,7 @@ public class CompilerService
     {
         _ckSerializer = ckSerializer;
     }
-    
+
     public async Task CreateNewAsync(string rootPath)
     {
         ArgumentValidation.ValidateDirectoryPath(nameof(rootPath), rootPath);
@@ -28,10 +28,11 @@ public class CompilerService
             throw CompilerException.DirectoryMustBeEmpty(rootPath);
         }
 
+        var typesDirectory = Path.Combine(rootPath, CompilerStatics.TypesDirectoryName);
         Directory.CreateDirectory(Path.Combine(rootPath, CompilerStatics.AssociationsDirectoryName));
         Directory.CreateDirectory(Path.Combine(rootPath, CompilerStatics.AttributesDirectoryName));
-        Directory.CreateDirectory(Path.Combine(rootPath, CompilerStatics.TypesDirectoryName));
-     
+        Directory.CreateDirectory(typesDirectory);
+
         var modelDto = new CkMetaDto
         {
             ModelId = "Sample1",
@@ -40,11 +41,17 @@ public class CompilerService
 
         await using var streamWriter = new StreamWriter(Path.Combine(rootPath, CompilerStatics.MetadataFile));
         await _ckSerializer.SerializeAsync(streamWriter, modelDto);
-        
+
+        var ckTypeDto = new CkTypeDto
+        {
+            TypeId = "Demo1"
+        };
+        await using var streamWriterEntity = new StreamWriter(Path.Combine(typesDirectory, CompilerStatics.Sample1Entity));
+        await _ckSerializer.SerializeAsync(streamWriterEntity, new CkCompiledModelRoot { Types = new List<CkTypeDto> { ckTypeDto } });
+
         if (compilerResult.HasErrors)
         {
             throw CompilerException.CompilerResultWithErrors(compilerResult);
         }
     }
 }
-

@@ -16,9 +16,6 @@ public class CkAttributeDto
     public AttributeValueTypesDto ValueType { get; set; }
 
     [JsonPropertyName("defaultValue")]
-    public object? DefaultValue { get; set; }
-
-    [JsonPropertyName("defaultValues")]
     public ICollection<object>? DefaultValues { get; set; }
 
     [JsonPropertyName("selectionValues")]

@@ -22,17 +22,17 @@ public class CkModelValidator : ICkModelValidator
         _elementResolver = elementResolver;
     }
 
-    public async Task<ValidationResult> ValidateAsync(CkModelRoot model)
+    public async Task<ValidationResult> ValidateAsync(CkCompiledModelRoot compiledModel)
     {
         ValidationResult validationResult = new();
 
         // By creating the model graph, a validation is done if association roles, attributes and entities are unique.
-        CkModelGraph modelGraph = _elementResolver.Resolve(model, validationResult);
+        CkModelGraph modelGraph = _elementResolver.Resolve(compiledModel, validationResult);
         
-        if (!Regex.IsMatch(model.ModelId.ModelId, CompilerStatics.AllowedCharactersInNamesRegex))
+        if (!Regex.IsMatch(compiledModel.ModelId.ModelId, CompilerStatics.AllowedCharactersInNamesRegex))
         {
-            validationResult.AddMessage(MessageCodes.ModelIdContainsInvalidCharacters(model.ModelId.ModelId));
-            throw ModelValidationException.ModelIdContainsInvalidCharacters(model.ModelId.ModelId);
+            validationResult.AddMessage(MessageCodes.ModelIdContainsInvalidCharacters(compiledModel.ModelId.ModelId));
+            throw ModelValidationException.ModelIdContainsInvalidCharacters(compiledModel.ModelId.ModelId);
         }
 
         // Before the checks, we need to build a cache of the model.
@@ -40,21 +40,21 @@ public class CkModelValidator : ICkModelValidator
         // We combine all entities, attributes and association roles into one list.
         CkAggregatedModelElements aggregatedModelElements = new();
 
-        if (model.Dependencies != null)
+        if (compiledModel.Dependencies != null)
         {
-            aggregatedModelElements = await _dependencyResolver.ResolveDependenciesAsync(model.Dependencies, validationResult);
+            aggregatedModelElements = await _dependencyResolver.ResolveDependenciesAsync(compiledModel.Dependencies, validationResult);
         }
 
         // We suppose that the dependent models are already validated and we can use them.
         // So we check the current to be validated model against the dependent models.
 
         // Check: Ensure that the model forces no circular dependencies.
-        if (aggregatedModelElements.CkModelDependencies.Any(x => x.Key.ModelId == model.ModelId.ModelId))
+        if (aggregatedModelElements.CkModelDependencies.Any(x => x.Key.ModelId == compiledModel.ModelId.ModelId))
         {
-            var dependentModels = aggregatedModelElements.CkModelDependencies.Keys.Where(x => x.ModelId == model.ModelId.ModelId);
+            var dependentModels = aggregatedModelElements.CkModelDependencies.Keys.Where(x => x.ModelId == compiledModel.ModelId.ModelId);
 
             validationResult.AddMessage(
-                MessageCodes.CircularDependency(model.ModelId.ModelId, dependentModels.Select(x => x.ModelId).ToList()));
+                MessageCodes.CircularDependency(compiledModel.ModelId.ModelId, dependentModels.Select(x => x.ModelId).ToList()));
         }
 
         // Check: There are only a few places, where elements of other models are used.

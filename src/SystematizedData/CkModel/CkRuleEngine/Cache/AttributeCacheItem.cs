@@ -15,7 +15,6 @@ public class AttributeCacheItem : IAttributeCacheItem
         AttributeName = attributeName;
         AttributeId = ckAttribute.AttributeId;
         AttributeValueType = ckAttribute.AttributeValueType;
-        DefaultValue = ckAttribute.DefaultValue;
         DefaultValues = ckAttribute.DefaultValues?.ToList();
         SelectionValues = ckAttribute.SelectionValues?.ToList();
         IsAutoCompleteEnabled = ckEntityAttribute.IsAutoCompleteEnabled;
@@ -39,8 +38,6 @@ public class AttributeCacheItem : IAttributeCacheItem
     public ICollection<string>? AutoCompleteTexts { get; }
 
     public AttributeValueTypes AttributeValueType { get; }
-
-    public object? DefaultValue { get; }
 
     public ICollection<object>? DefaultValues { get; }
     public ICollection<CkSelectionValue>? SelectionValues { get; }

@@ -9,12 +9,10 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects
 [DebuggerDisplay("{" + nameof(RoleId) + "} -> {" + nameof(TargetCkTypeId) + "}")]
 public class CkTypeAssociationDto
 {
-    [JsonPropertyName("roleId")]
     [JsonRequired]
     [JsonConverter(typeof(CkIdAssociationIdConverter))]
     public CkId<CkAssociationRoleId> RoleId { get; set; }
 
-    [JsonPropertyName("targetCkTypeId")]
     [JsonRequired]
     [JsonConverter(typeof(CkIdTypeIdConverter))]
     public CkId<CkTypeId> TargetCkTypeId { get; set; }

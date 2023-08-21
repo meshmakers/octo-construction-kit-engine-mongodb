@@ -1,11 +1,4 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.InsertModifiers;
@@ -14,7 +7,6 @@ using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Mutation;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using MongoDB.Bson;
 using MongoDB.Driver;
-using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
@@ -560,7 +552,21 @@ internal class TenantRepository : ITenantRepositoryInternal
         };
         foreach (var attributeCacheItem in entityCacheItem.Attributes.Values)
         {
-            var value = attributeCacheItem.DefaultValue;
+            object? value = null;
+            if (attributeCacheItem.DefaultValues != null)
+            {
+                switch (attributeCacheItem.AttributeValueType)
+                {
+                    case AttributeValueTypes.StringArray:
+                    case AttributeValueTypes.IntArray:
+                        value = attributeCacheItem.DefaultValues;
+                        break;
+                    default:
+                        value = attributeCacheItem.DefaultValues.First();
+                        break;
+                }
+            }
+
             rtEntity.SetAttributeValue(attributeCacheItem.AttributeName, attributeCacheItem.AttributeValueType, value);
         }
 

@@ -5,13 +5,13 @@ namespace CkModel.Compiler.Tests.sampleData.sample2;
 
 public class Builder
 {
-    public static CkModelRoot Build()
+    public static CkCompiledModelRoot Build()
     {
-        return new CkModelRoot
+        return new CkCompiledModelRoot
         {
             ModelId = new CkModelId("sample2", "1.0.0"),
             Dependencies = new List<CkModelId> { new("System", "1.0.0"), new ("sample1", "1.0.0") },
-            CkAttributes = new List<CkAttributeDto>
+            Attributes = new List<CkAttributeDto>
             {
               new()
               {
@@ -49,7 +49,7 @@ public class Builder
                   ValueType = AttributeValueTypesDto.String,
               }
             },
-            CkTypes = new List<CkTypeDto>
+            Types = new List<CkTypeDto>
             {
                 new()
                 {

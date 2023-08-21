@@ -5,12 +5,12 @@ namespace CkModel.Compiler.Tests.sampleData.systemFake;
 
 public class Builder
 {
-    public static CkModelRoot Build()
+    public static CkCompiledModelRoot Build()
     {
-        return new CkModelRoot
+        return new CkCompiledModelRoot
         {
             ModelId = new CkModelId("System", "1.0.0"),
-            CkTypes = new List<CkTypeDto>
+            Types = new List<CkTypeDto>
             {
                 new()
                 {
@@ -18,7 +18,7 @@ public class Builder
                     IsAbstract = true
                 }
             },
-            CkAssociationRoles = new List<CkAssociationRoleDto>
+            AssociationRoles = new List<CkAssociationRoleDto>
             {
                 new()
                 {

@@ -1,10 +1,13 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using YamlDotNet.Core;
+using YamlDotNet.Core.Events;
+using YamlDotNet.Serialization;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
 
-public class CkAttributeIdConverter : JsonConverter<CkAttributeId>
+public class CkAttributeIdConverter : JsonConverter<CkAttributeId>, IYamlTypeConverter
 {
     public override CkAttributeId Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
@@ -17,5 +20,22 @@ public class CkAttributeIdConverter : JsonConverter<CkAttributeId>
     public override void Write(Utf8JsonWriter writer, CkAttributeId value, JsonSerializerOptions options)
     {
         writer.WriteStringValue(value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    public bool Accepts(Type type)
+    {
+        return type == typeof(CkAttributeId);
+    }
+
+    public object ReadYaml(IParser parser, Type type)
+    {
+        var value = parser.Consume<Scalar>().Value;
+        return new CkAttributeId(value); 
+    }
+
+    public void WriteYaml(IEmitter emitter, object? value, Type type)
+    {
+        var ckAttributeId = (CkAttributeId)value!;
+        emitter.Emit(new Scalar(AnchorName.Empty, TagName.Empty, ckAttributeId.SemanticVersionedFullName, ScalarStyle.Any, true, false));
     }
 }
