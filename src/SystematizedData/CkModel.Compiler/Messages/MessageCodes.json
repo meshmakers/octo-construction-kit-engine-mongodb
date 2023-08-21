@@ -155,6 +155,12 @@
       "number": 26,
       "level": "ERROR",
       "text": "CkAssociationId '{ckAssociationId}' contains invalid characters. Allowed characters are A-Z, a-z, 0-9, . and _."
+    },
+    {
+      "key": "SchemaValidationError",
+      "number": 27,
+      "level": "ERROR",
+      "text": "Schema validation failed: '{errorMessage}'"
     }
   ]
 }

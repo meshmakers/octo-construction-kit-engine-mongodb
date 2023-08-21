@@ -44,10 +44,13 @@ public class CompilerService
 
         var ckTypeDto = new CkTypeDto
         {
-            TypeId = "Demo1"
+            TypeId = "Demo1",
+            DerivedFromCkTypeId = "System/Entity"
         };
         await using var streamWriterEntity = new StreamWriter(Path.Combine(typesDirectory, CompilerStatics.Sample1Entity));
-        await _ckSerializer.SerializeAsync(streamWriterEntity, new CkCompiledModelRoot { Types = new List<CkTypeDto> { ckTypeDto } });
+        await _ckSerializer.SerializeAsync(streamWriterEntity, new CkElementsDto() { Types = new List<CkTypeDto> { ckTypeDto } });
+        
+        
 
         if (compilerResult.HasErrors)
         {

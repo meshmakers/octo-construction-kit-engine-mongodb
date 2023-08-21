@@ -109,6 +109,9 @@ internal static class MessageCodes
     internal static CompilerMessage CkAssociationIdContainsInvalidCharacters(object ckAssociationId) =>
         GetMessage("CkAssociationIdContainsInvalidCharacters", ckAssociationId);
 
+    internal static CompilerMessage SchemaValidationError(object errorMessage) =>
+        GetMessage("SchemaValidationError", errorMessage);
+
     private static readonly Dictionary<string, CompilerMessageTemplate> Templates = new()
     {
         {
@@ -266,6 +269,12 @@ internal static class MessageCodes
              new CompilerMessageTemplate(MessageLevel.Error,
                  26, "CkAssociationId '{ckAssociationId}' contains invalid characters. Allowed characters are A-Z, a-z, 0-9, . and _.",
                  new [] {"ckAssociationId"})
+        },
+        {
+            "SchemaValidationError",
+             new CompilerMessageTemplate(MessageLevel.Error,
+                 27, "Schema validation failed: '{errorMessage}'",
+                 new [] {"errorMessage"})
         },
     };
 }

@@ -21,7 +21,29 @@
     <ItemGroup>
       <ProjectReference Include="..\..\src\SystematizedData\CkModel.Compiler\CkModel.Compiler.csproj" />
 
+    </ItemGroup>
 
+
+
+    <ItemGroup>
+      <None Update="sampleData\files\ok.yaml">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+      <None Update="sampleData\files\ok.json">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+      <None Update="sampleData\files\malformedAttribute.yaml">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+      <None Update="sampleData\files\malformedAttributeValue.yaml">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+      <None Update="sampleData\files\malformedAttribute.json">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+      <None Update="sampleData\files\malformedAttributeValue.json">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
     </ItemGroup>
 
 

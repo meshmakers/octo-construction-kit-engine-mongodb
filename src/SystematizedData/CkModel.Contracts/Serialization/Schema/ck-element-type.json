@@ -127,6 +127,7 @@
     }
   },
   "additionalProperties": false,
+  "additionalItems": false,
   "required": [
     "typeId"
   ]
