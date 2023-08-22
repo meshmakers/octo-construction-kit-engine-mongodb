@@ -1,12 +1,11 @@
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.Commands;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using NLog;
 using Persistence.InternalContracts;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemTests.CkTest;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest;
 
 public class CkTestModelService : ICkSystemModelService
 {

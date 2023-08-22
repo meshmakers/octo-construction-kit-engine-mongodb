@@ -1,31 +1,74 @@
 using CkModel.Compiler.SystemTests.Fixtures;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler;
-using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
-using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Services;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Services;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit.Abstractions;
 
 namespace CkModel.Compiler.SystemTests;
 
 public class CompilerTests : IClassFixture<TemporaryDirectoryFixture>
 {
     private readonly TemporaryDirectoryFixture _fixture;
+    private readonly ITestOutputHelper _testOutputHelper;
 
-    public CompilerTests(TemporaryDirectoryFixture fixture)
+    public CompilerTests(TemporaryDirectoryFixture fixture, ITestOutputHelper testOutputHelper)
     {
         _fixture = fixture;
+        _testOutputHelper = testOutputHelper;
     }
 
     [Fact]
-    public async Task CreateNew()
+    public async Task CreateNew_ok()
     {
-        // Access _fixture.TempDirectoryPath to work with the temporary directory
-        string filePath = Path.Combine(_fixture.TempDirectoryPath, "CreateNew");
-        CompilerService compilerService = new CompilerService(new CkYamlSerializer(new CkSchemaValidator()));
-        await compilerService.CreateNewAsync(filePath);
+        await using (var serviceProvider = _fixture.Services.BuildServiceProvider())
+        {
+            // Access _fixture.TempDirectoryPath to work with the temporary directory
+            string rootPath = Path.Combine(_fixture.TempDirectoryPath, "CreateNew");
+            var compilerService = serviceProvider.GetRequiredService<ICompilerService>();
+            await compilerService.CreateNewAsync(rootPath);
 
-        Assert.True(Directory.Exists(filePath));
-        Assert.True(File.Exists(Path.Combine(filePath, CompilerStatics.MetadataFile)));
-        Assert.True(Directory.Exists(Path.Combine(filePath, CompilerStatics.TypesDirectoryName)));
-        Assert.True(Directory.Exists(Path.Combine(filePath, CompilerStatics.AssociationsDirectoryName)));
-        Assert.True(Directory.Exists(Path.Combine(filePath, CompilerStatics.AttributesDirectoryName)));
+            Assert.True(Directory.Exists(rootPath));
+            Assert.True(File.Exists(Path.Combine(rootPath, CompilerStatics.MetadataFile)));
+            Assert.True(Directory.Exists(Path.Combine(rootPath, CompilerStatics.TypesDirectoryName)));
+            Assert.True(Directory.Exists(Path.Combine(rootPath, CompilerStatics.AssociationsDirectoryName)));
+            Assert.True(Directory.Exists(Path.Combine(rootPath, CompilerStatics.AttributesDirectoryName)));
+        }
+    }
+
+    [Fact]
+    public async Task CreateNew_NonEmptyDirectory_fail()
+    {
+        await using (var serviceProvider = _fixture.Services.BuildServiceProvider())
+        {
+            // Access _fixture.TempDirectoryPath to work with the temporary directory
+            string rootPath = Path.Combine(_fixture.TempDirectoryPath, "CreateNew");
+            Directory.CreateDirectory(rootPath);
+            File.Create(Path.Combine(rootPath, "test.txt")).Close();
+            var compilerService = serviceProvider.GetRequiredService<ICompilerService>();
+            await Assert.ThrowsAsync<CompilerException>(async () => await compilerService.CreateNewAsync(rootPath));
+        }
+    }
+
+
+    [Fact]
+    public async Task Compile_ok()
+    {
+        await using (var serviceProvider = _fixture.Services.BuildServiceProvider())
+        {
+            // Access _fixture.TempDirectoryPath to work with the temporary directory
+            string rootPath = Path.Combine(_fixture.TempDirectoryPath, "CreateNew");
+            _testOutputHelper.WriteLine($"Directory: {rootPath}");
+
+            var compilerService = serviceProvider.GetRequiredService<ICompilerService>();
+            await compilerService.CreateNewAsync(rootPath);
+            await compilerService.CompileAsync(rootPath);
+
+            Assert.True(Directory.Exists(rootPath));
+            Assert.True(File.Exists(Path.Combine(rootPath, CompilerStatics.MetadataFile)));
+            Assert.True(Directory.Exists(Path.Combine(rootPath, CompilerStatics.TypesDirectoryName)));
+            Assert.True(Directory.Exists(Path.Combine(rootPath, CompilerStatics.AssociationsDirectoryName)));
+            Assert.True(Directory.Exists(Path.Combine(rootPath, CompilerStatics.AttributesDirectoryName)));
+        }
     }
 }

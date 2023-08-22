@@ -1,7 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <AssemblyName>Meshmakers.Octo.SystematizedData.Persistence.Commands</AssemblyName>
+        <RootNamespace>Meshmakers.Octo.SystematizedData.Persistence.Commands</RootNamespace>
+    </PropertyGroup>
+    
     <ItemGroup>
       <ProjectReference Include="..\CkModel.Compiler\CkModel.Compiler.csproj" />
-      <ProjectReference Include="..\CkModel\CkModel.csproj" />
+      <ProjectReference Include="..\CkModel.Engine\CkModel.Engine.csproj" />
       <ProjectReference Include="..\Persistence.IdentityCkModel\Persistence.IdentityCkModel.csproj" />
       <ProjectReference Include="..\Persistence.InternalContracts\Persistence.InternalContracts.csproj" />
       <ProjectReference Include="..\Persistence.SystemCkModel\Persistence.SystemCkModel.csproj" />

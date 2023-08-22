@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Configuration;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemTests.Configuration;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Configuration;
 
 public class SystemTestConfiguration
 {

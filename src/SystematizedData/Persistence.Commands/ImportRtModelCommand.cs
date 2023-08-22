@@ -1,20 +1,19 @@
 ﻿using System.Collections.Concurrent;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
-using Meshmakers.Octo.SystematizedData.Persistence.Commands;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
-using NLog;
+using Microsoft.Extensions.Logging;
 using Persistence.InternalContracts;
 using RtAssociation = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.RtAssociation;
 using RtEntity = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.RtEntity;
 
-namespace Persistence.Commands;
+namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
 
 public class ImportRtModelCommand : IImportRtModelCommand
 {
+    private readonly ILogger<ImportRtModelCommand> _logger;
     private readonly ISystemContextInternal _systemContext;
     private const int Max = 5000;
-    private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
     private readonly HashSet<OctoObjectId> _entityImportIds;
     private readonly ConcurrentQueue<RtAssociation> _importAssociationQueue;
 
@@ -23,8 +22,9 @@ public class ImportRtModelCommand : IImportRtModelCommand
 
     private int _entityProgressCount;
 
-    public ImportRtModelCommand(ISystemContextInternal systemContext)
+    public ImportRtModelCommand(ILogger<ImportRtModelCommand> logger, ISystemContextInternal systemContext)
     {
+        _logger = logger;
         _systemContext = systemContext;
 
         _entityImportIds = new HashSet<OctoObjectId>();
@@ -34,7 +34,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
 
     public async Task ImportText(string tenantId, string jsonText, CancellationToken? cancellationToken = null)
     {
-        Logger.Info("Importing RT entities using text started.");
+        _logger.LogInformation("Importing RT entities using text started");
 
         var tenantContext = await _systemContext.CreateChildTenantContextInternalAsync(tenantId);
         var tenantRepository = await tenantContext.CreateOrGetTenantRepositoryInternalAsync();
@@ -52,18 +52,18 @@ public class ImportRtModelCommand : IImportRtModelCommand
             // Finish the last entities
             await ImportToDatabase(session, tenantRepository);
 
-            Logger.Info($"{_entityImportIds.Count} entities, {_associationsCount} associations imported.");
+            _logger.LogInformation("{Count} entities, {AssociationsCount} associations imported", _entityImportIds.Count, _associationsCount);
         }
         catch (Exception e)
         {
-            Logger.Error(e, "Import of RT model failed.");
+            _logger.LogError(e, "Import of RT model failed");
             throw;
         }
     }
 
     public async Task Import(string tenantId, string filePath, CancellationToken? cancellationToken = null)
     {
-        Logger.Info("Importing RT entities using file started.");
+        _logger.LogInformation("Importing RT entities using file started");
 
         var session = await _systemContext.StartSystemSessionAsync();
         try
@@ -80,11 +80,11 @@ public class ImportRtModelCommand : IImportRtModelCommand
             // Finish the last entities
             await ImportToDatabase(session, tenantRepository);
 
-            Logger.Info($"{_entityImportIds.Count} entities, {_associationsCount} associations imported.");
+            _logger.LogInformation("{Count} entities, {AssociationsCount} associations imported", _entityImportIds.Count, _associationsCount);
         }
         catch (Exception e)
         {
-            Logger.Error(e, "Import of RT model failed.");
+            _logger.LogError(e, "Import of RT model failed");
             throw;
         }
     }
@@ -94,7 +94,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
         var progress = Interlocked.Increment(ref _entityProgressCount);
         if (progress > Max)
         {
-            Logger.Info($"{_importEntityQueue.Count} entities (total imports of {_entityImportIds.Count}) imported.");
+            _logger.LogInformation("{EntityCount} entities (total imports of {Count}) imported", _importEntityQueue.Count, _entityImportIds.Count);
             Interlocked.Exchange(ref _entityProgressCount, 1);
 
             await ImportToDatabase(session, tenantRepository);
@@ -110,7 +110,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
 
         if (_entityImportIds.Contains(rtEntity.RtId))
         {
-            Logger.Error($"{rtEntity.RtId} already imported.");
+            _logger.LogError("'{RtEntityRtId}' already imported", rtEntity.RtId);
             return;
         }
 
@@ -122,7 +122,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
                 entityCacheItem.Attributes.Values.FirstOrDefault(a => a.AttributeId.Equals(modelAttribute.Id));
             if (attributeCacheItem == null)
             {
-                Logger.Error($"'{modelAttribute.Id}' does not exit on type $'{entityCacheItem.CkTypeId}'");
+                _logger.LogError("'{ModelAttributeId}' does not exit on type '{CkTypeId}'", modelAttribute.Id, entityCacheItem.CkTypeId);
                 return;
             }
 
@@ -154,7 +154,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
 
     private async Task ImportToDatabase(IOctoSession session, ITenantRepositoryInternal tenantRepository)
     {
-        Logger.Info($"Importing {_importEntityQueue.Count} to database.");
+        _logger.LogInformation("Importing {Count} to database", _importEntityQueue.Count);
 
         try
         {
@@ -190,18 +190,18 @@ public class ImportRtModelCommand : IImportRtModelCommand
 
             if (importEntities.Any())
             {
-                Logger.Info("Adding entities...");
+                _logger.LogInformation("Adding entities...");
                 await tenantRepository.BulkInsertRtEntitiesAsync(session, importEntities);
             }
 
             if (importAssociations.Any())
             {
-                Logger.Info("Adding associations...");
+                _logger.LogInformation("Adding associations...");
                 await tenantRepository.BulkRtAssociationsAsync(session, importAssociations);
             }
 
 
-            Logger.Info("Add to database completed.");
+            _logger.LogInformation("Add to database completed");
         }
         catch (Exception e)
         {

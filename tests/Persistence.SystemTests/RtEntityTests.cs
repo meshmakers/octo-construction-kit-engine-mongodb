@@ -1,12 +1,11 @@
-using Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
-using Meshmakers.Octo.Backend.Persistence.SystemTests.Fixtures;
-using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
-using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest.CkModelEntities;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 using Xunit;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemTests;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
 public class RtEntityTests : IClassFixture<SystemFixture>
 {

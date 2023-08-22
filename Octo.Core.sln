@@ -23,7 +23,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Communication.Plugs.Contrac
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Communication.Sockets.Contracts", "src\Common\Communication.Sockets.Contracts\Communication.Sockets.Contracts.csproj", "{10A1CA7D-C0E7-4F56-8801-AC35D183CD0F}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CkModel", "src\SystematizedData\CkModel\CkModel.csproj", "{5DAA565C-A191-47F0-B073-E7B74F7CE401}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CkModel.Engine", "src\SystematizedData\CkModel.Engine\CkModel.Engine.csproj", "{5DAA565C-A191-47F0-B073-E7B74F7CE401}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Persistence.Contracts", "src\SystematizedData\Persistence.Contracts\Persistence.Contracts.csproj", "{01DA9056-A5F8-4D5E-9D6D-0347B11528AA}"
 EndProject

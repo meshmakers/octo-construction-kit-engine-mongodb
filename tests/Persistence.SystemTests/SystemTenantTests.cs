@@ -1,11 +1,8 @@
-using System;
-using Meshmakers.Octo.Backend.Persistence.SystemTests.Fixtures;
-using Meshmakers.Octo.SystematizedData.Persistence.Commands;
-using Persistence.IdentityCkModel;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemTests;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
 public class SystemTenantTests : IClassFixture<SystemFixture>
 {

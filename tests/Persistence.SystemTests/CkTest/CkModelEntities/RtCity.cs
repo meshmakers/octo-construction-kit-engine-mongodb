@@ -1,9 +1,4 @@
-using Meshmakers.Octo.SystematizedData.Persistence;
-using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
-using MongoDB.Bson.Serialization.Attributes;
-using Newtonsoft.Json;
-
-namespace Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest.CkModelEntities;
 
 [CkId(TestCkModel.TestCkModelId, TestCkModel.CityTypeId)]
 public class RtCity: RtLocation

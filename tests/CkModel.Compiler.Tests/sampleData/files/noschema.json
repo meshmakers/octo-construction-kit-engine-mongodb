@@ -37,7 +37,7 @@
       ],
       "associations": [
         {
-          "roleId": "System/Related",
+          "id": "System/Related",
           "targetCkTypeId": "Test/City"
         }
       ]

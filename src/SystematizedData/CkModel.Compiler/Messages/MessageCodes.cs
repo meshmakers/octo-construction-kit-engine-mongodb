@@ -112,6 +112,12 @@ internal static class MessageCodes
     internal static CompilerMessage SchemaValidationError(object errorMessage) =>
         GetMessage("SchemaValidationError", errorMessage);
 
+    internal static CompilerMessage DirectoryDoesNotExist(object directoryPath) =>
+        GetMessage("DirectoryDoesNotExist", directoryPath);
+
+    internal static CompilerMessage FileDoesNotExist(object filePath) =>
+        GetMessage("FileDoesNotExist", filePath);
+
     private static readonly Dictionary<string, CompilerMessageTemplate> Templates = new()
     {
         {
@@ -275,6 +281,18 @@ internal static class MessageCodes
              new CompilerMessageTemplate(MessageLevel.Error,
                  27, "Schema validation failed: '{errorMessage}'",
                  new [] {"errorMessage"})
+        },
+        {
+            "DirectoryDoesNotExist",
+             new CompilerMessageTemplate(MessageLevel.FatalError,
+                 28, "Directory '{directoryPath}' does not exist.",
+                 new [] {"directoryPath"})
+        },
+        {
+            "FileDoesNotExist",
+             new CompilerMessageTemplate(MessageLevel.FatalError,
+                 29, "File '{filePath}' does not exist.",
+                 new [] {"filePath"})
         },
     };
 }

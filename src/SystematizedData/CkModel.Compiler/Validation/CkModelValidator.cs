@@ -84,11 +84,11 @@ public class CkModelValidator : ICkModelValidator
             {
                 foreach (var ckTypeAttribute in ckTypeKeyValue.Value.Attributes)
                 {
-                    if (!aggregatedModelElements.CkAttributes.ContainsKey(ckTypeAttribute.AttributeId) &&
-                        !modelGraph.Attributes.ContainsKey(ckTypeAttribute.AttributeId))
+                    if (!aggregatedModelElements.CkAttributes.ContainsKey(ckTypeAttribute.CkAttributeId) &&
+                        !modelGraph.Attributes.ContainsKey(ckTypeAttribute.CkAttributeId))
                     {
                         operationResult.AddMessage(
-                            MessageCodes.UnknownAttributeOfCkTypeIdInSource(ckTypeKeyValue.Key, ckTypeAttribute.AttributeId));
+                            MessageCodes.UnknownAttributeOfCkTypeIdInSource(ckTypeKeyValue.Key, ckTypeAttribute.CkAttributeId));
                     }
                 }
             }
@@ -110,11 +110,11 @@ public class CkModelValidator : ICkModelValidator
                 foreach (var ckTypeAssociation in ckTypeKeyValue.Value.Associations)
                 {
                     // Check 3.
-                    if (!aggregatedModelElements.CkAssociationRoles.ContainsKey(ckTypeAssociation.RoleId) &&
-                        !modelGraph.AssociationRoles.ContainsKey(ckTypeAssociation.RoleId))
+                    if (!aggregatedModelElements.CkAssociationRoles.ContainsKey(ckTypeAssociation.CkRoleId) &&
+                        !modelGraph.AssociationRoles.ContainsKey(ckTypeAssociation.CkRoleId))
                     {
                         operationResult.AddMessage(
-                            MessageCodes.UnknownAssociationRoleOfCkTypeIdInSource(ckTypeKeyValue.Key, ckTypeAssociation.RoleId));
+                            MessageCodes.UnknownAssociationRoleOfCkTypeIdInSource(ckTypeKeyValue.Key, ckTypeAssociation.CkRoleId));
                     }
 
                     // Check 4.

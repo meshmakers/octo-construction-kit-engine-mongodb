@@ -2,13 +2,11 @@
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
-using Meshmakers.Octo.SystematizedData.Persistence;
-using Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Validation;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
-using Meshmakers.Octo.SystematizedData.Persistence.Commands;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
-using NLog;
+using Microsoft.Extensions.Logging;
 using AttributeValueTypes = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.AttributeValueTypes;
 using CkAssociationRole = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.CkAssociationRole;
 using CkAttribute = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.CkAttribute;
@@ -19,17 +17,19 @@ using CkIndexFields = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntit
 using CkSelectionValue = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.CkSelectionValue;
 using Multiplicities = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.Multiplicities;
 
-namespace Persistence.Commands;
+namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
 
 public class ImportCkModelCommand : IImportCkModelCommand
 {
+    private readonly ILogger<ImportCkModelCommand> _logger;
     private readonly ICkSerializer _ckSerializer;
-    private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
-    private CkModelValidation? _ckModelValidation;
+    private readonly ICkModelValidator _ckModelValidator;
 
-    public ImportCkModelCommand(ICkSerializer ckSerializer)
+    public ImportCkModelCommand(ILogger<ImportCkModelCommand> logger, ICkSerializer ckSerializer, ICkModelValidator ckModelValidator)
     {
+        _logger = logger;
         _ckSerializer = ckSerializer;
+        _ckModelValidator = ckModelValidator;
     }
 
     public async Task ImportTextAsync(IOctoSession session, ITenantCkModelRepository ckModelRepository, string jsonText,
@@ -37,33 +37,31 @@ public class ImportCkModelCommand : IImportCkModelCommand
     {
         try
         {
-            _ckModelValidation = new CkModelValidation(ckModelRepository);
-
-
-            Logger.Info("Reading CK model....");
+            _logger.LogInformation("Reading CK model....");
             var operationResult = new OperationResult();
             var model = await _ckSerializer.DeserializeModelRootAsync(jsonText, operationResult);
 
             if (model == null)
             {
-                Logger.Error("Import of CK model failed, model cannot be deserialized.");
-                throw ModelParseException.CannotDeserializeModeByJsonString(jsonText);
+                _logger.LogInformation("Import of CK model failed, model cannot be deserialized");
+                operationResult.WriteMessagesToLogger(_logger);
+                throw CommandExecutionFailedException.CannotDeserializeModelFromString(jsonText);
             }
 
-            Logger.Info("Executing import of CK model....");
+            _logger.LogInformation("Executing import of CK model....");
             var transientCkModel = new TransientCkModel(new Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.CkModel()
             {
                 Id = model.ModelId,
                 Dependencies = model.Dependencies?.ToArray()
             });
-            await ExecuteImport(session, model, transientCkModel, ckModelRepository, cancellationToken);
+            await ExecuteImport(session, model, transientCkModel, ckModelRepository, operationResult, cancellationToken);
 
 
-            Logger.Info("Import of CK model completed.");
+            _logger.LogInformation("Import of CK model completed");
         }
         catch (Exception e)
         {
-            Logger.Error(e, "Import of CK model failed.");
+            _logger.LogError(e, "Import of CK model failed");
             throw;
         }
     }
@@ -73,41 +71,52 @@ public class ImportCkModelCommand : IImportCkModelCommand
     {
         try
         {
-            _ckModelValidation = new CkModelValidation(ckModelRepository);
-
-
-            Logger.Info("Reading CK model....");
+            _logger.LogInformation("Reading CK model....");
             var operationResult = new OperationResult();
             await using var streamReader = File.OpenRead(filePath);
             var model = await _ckSerializer.DeserializeModelRootAsync(streamReader, operationResult);
 
-            if (model == null)
+            if (model == null || operationResult.HasErrors)
             {
-                Logger.Error("Import of CK model failed, model cannot be deserialized.");
-                throw ModelParseException.CannotDeserializeModel(filePath);
+                _logger.LogError("Import of CK model failed, model cannot be deserialized");
+                operationResult.WriteMessagesToLogger(_logger);
+                throw CommandExecutionFailedException.CannotDeserializeModel(filePath);
             }
-
-            Logger.Info("Executing import of CK model....");
+            
+            _logger.LogInformation("Executing import of CK model....");
             var transientCkModel = new TransientCkModel(new Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.CkModel()
             {
                 Id = model.ModelId,
                 Dependencies = model.Dependencies?.ToArray()
             });
-            await ExecuteImport(session, model, transientCkModel, ckModelRepository, cancellationToken);
+            await ExecuteImport(session, model, transientCkModel, ckModelRepository, operationResult, cancellationToken);
 
-            Logger.Info("Import of CK model completed.");
+            _logger.LogInformation("Import of CK model completed");
         }
         catch (Exception e)
         {
-            Logger.Error(e, "Import of CK model failed.");
+            _logger.LogError(e, "Import of CK model failed");
             throw;
         }
     }
 
     private async Task ExecuteImport(IOctoSession session, CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel,
-        ITenantCkModelRepository ckModelRepository,
+        ITenantCkModelRepository ckModelRepository, OperationResult operationResult,
         CancellationToken? cancellationToken)
     {
+        _logger.LogInformation("Validating of CK model");
+        await _ckModelValidator.ValidateAsync(compiledModel, operationResult);
+        if (operationResult.HasErrors)
+        {
+            _logger.LogInformation("Import of CK model failed, model is not valid");
+            operationResult.WriteMessagesToLogger(_logger);
+            throw CommandExecutionFailedException.ValidationErrors();
+        }
+        if (CheckCancellation(cancellationToken))
+        {
+            return;
+        }
+        
         ProcessCkModel(compiledModel, transientCkModel);
 
         // Transform to entities
@@ -130,8 +139,8 @@ public class ImportCkModelCommand : IImportCkModelCommand
         }
 
         // ValidateAsync
-        Debug.Assert(_ckModelValidation != null, nameof(_ckModelValidation) + " != null");
-        await _ckModelValidation.Validate(session, transientCkModel, cancellationToken);
+        Debug.Assert(_ckModelValidator != null, nameof(_ckModelValidator) + " != null");
+    
 
         // Delete the old version
         if (await DeleteOldVersion(session, compiledModel.ModelId, ckModelRepository, cancellationToken))
@@ -347,7 +356,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
                 {
                     var ckEntityAttribute = new CkEntityAttribute
                     {
-                        AttributeId = attribute.AttributeId,
+                        AttributeId = attribute.CkAttributeId,
                         AttributeName = attribute.AttributeName,
                         AutoCompleteFilter = attribute.AutoCompleteFilter,
                         AutoCompleteLimit = attribute.AutoCompleteLimit,
@@ -403,7 +412,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
                 {
                     var ckEntityAssociation = new CkEntityAssociation
                     {
-                        RoleId = association.RoleId,
+                        RoleId = association.CkRoleId,
                         OriginCkTypeId = new CkId<CkTypeId>(compiledModel.ModelId, ckEntity.CkTypeId.Key),
                         TargetCkTypeId = association.TargetCkTypeId,
                     };
@@ -419,8 +428,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
     {
         if (bulkImportResult.HasError())
         {
-            throw new OperationFailedException(
-                "Write operation was not acknowledged by database.");
+            throw CommandExecutionFailedException.BulkImportError();
         }
     }
 }

@@ -11,7 +11,7 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
 /// <summary>
 /// Implements a serializer for the CK model in JSON format.
 /// </summary>
-public class CkJsonSerializer : ICkSerializer
+public class CkJsonSerializer : ICkJsonSerializer
 {
     private const string Validation = "validation";
     private readonly JsonSerializerOptions _options;

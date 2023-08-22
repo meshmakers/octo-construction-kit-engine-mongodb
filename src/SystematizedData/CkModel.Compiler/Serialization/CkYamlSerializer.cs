@@ -16,7 +16,7 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
 /// using the <see cref="ICkSchemaValidator"/> interface. That results that the stream
 /// is used twice: for validation and for deserialization. This is not optimal.
 /// </remarks>
-public class CkYamlSerializer : ICkSerializer
+public class CkYamlSerializer : ICkYamlSerializer
 {
     private readonly ICkSchemaValidator _ckSchemaValidator;
     private readonly ISerializer _serializer;

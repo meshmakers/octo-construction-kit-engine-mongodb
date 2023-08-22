@@ -65,9 +65,9 @@ public class Builder
                     DerivedFromCkTypeId = "System/Entity",
                     Attributes = new List<CkTypeAttributeDto>
                     {
-                        new() { AttributeId = "sample1/attribute1", AttributeName = "a" },
-                        new() { AttributeId = "sample1/attribute2", AttributeName = "b" },
-                        new() { AttributeId = "sample1/attribute3", AttributeName = "c" }
+                        new() { CkAttributeId = "sample1/attribute1", AttributeName = "a" },
+                        new() { CkAttributeId = "sample1/attribute2", AttributeName = "b" },
+                        new() { CkAttributeId = "sample1/attribute3", AttributeName = "c" }
                     }
                 },
                 new()
@@ -76,9 +76,9 @@ public class Builder
                     DerivedFromCkTypeId = "sample1/Alpha1",
                     Attributes = new List<CkTypeAttributeDto>
                     {
-                        new() { AttributeId = "sample1/attribute4", AttributeName = "d" },
-                        new() { AttributeId = "sample1/attribute5", AttributeName = "e" },
-                        new() { AttributeId = "sample1/attribute6", AttributeName = "f" }
+                        new() { CkAttributeId = "sample1/attribute4", AttributeName = "d" },
+                        new() { CkAttributeId = "sample1/attribute5", AttributeName = "e" },
+                        new() { CkAttributeId = "sample1/attribute6", AttributeName = "f" }
                     }
                 },
                 new()
@@ -87,7 +87,7 @@ public class Builder
                     DerivedFromCkTypeId = "sample1/Alpha2",
                     Associations = new List<CkTypeAssociationDto>
                     {
-                        new() { RoleId = "sample1/Related", TargetCkTypeId = "sample1/Alpha1" }, // here
+                        new() { CkRoleId = "sample1/Related", TargetCkTypeId = "sample1/Alpha1" }, // here
                     }
                     
                 },
@@ -98,9 +98,9 @@ public class Builder
                     DerivedFromCkTypeId = "System/Entity",
                     Attributes = new List<CkTypeAttributeDto>
                     {
-                        new() { AttributeId = "sample1/attribute1", AttributeName = "a" },
-                        new() { AttributeId = "sample1/attribute2", AttributeName = "b" },
-                        new() { AttributeId = "sample1/attribute3", AttributeName = "c" }
+                        new() { CkAttributeId = "sample1/attribute1", AttributeName = "a" },
+                        new() { CkAttributeId = "sample1/attribute2", AttributeName = "b" },
+                        new() { CkAttributeId = "sample1/attribute3", AttributeName = "c" }
                     }
                 },
                 new()
@@ -109,9 +109,9 @@ public class Builder
                     DerivedFromCkTypeId = "sample1/Beta1",
                     Attributes = new List<CkTypeAttributeDto>
                     {
-                        new() { AttributeId = "sample1/attribute4", AttributeName = "d" },
-                        new() { AttributeId = "sample1/attribute5", AttributeName = "e" },
-                        new() { AttributeId = "sample1/attribute6", AttributeName = "f" }
+                        new() { CkAttributeId = "sample1/attribute4", AttributeName = "d" },
+                        new() { CkAttributeId = "sample1/attribute5", AttributeName = "e" },
+                        new() { CkAttributeId = "sample1/attribute6", AttributeName = "f" }
                     }
                 },
                 new()
@@ -120,7 +120,7 @@ public class Builder
                     DerivedFromCkTypeId = "sample1/Beta2",
                     Associations = new List<CkTypeAssociationDto>
                     {
-                        new() { RoleId = "sample1/Related", TargetCkTypeId = "sample1/Beta2" }, // here
+                        new() { CkRoleId = "sample1/Related", TargetCkTypeId = "sample1/Beta2" }, // here
                     }
                     
                 }

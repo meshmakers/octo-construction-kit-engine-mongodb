@@ -1,4 +1,4 @@
-namespace Meshmakers.Octo.Backend.Persistence.SystemTests;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest;
 
 internal static class TestCkModel
 {

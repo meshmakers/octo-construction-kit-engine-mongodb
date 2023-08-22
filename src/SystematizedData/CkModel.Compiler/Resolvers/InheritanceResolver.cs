@@ -87,10 +87,10 @@ public class InheritanceResolver : IInheritanceResolver
 
                 // Check if there is a duplicate association defined at the same type.
                 if (originTypeGraph.Associations.Out.Owned.Any(x =>
-                        x.RoleId == typeAssociation.RoleId && x.TargetCkTypeId == typeAssociation.TargetCkTypeId))
+                        x.CkRoleId == typeAssociation.CkRoleId && x.TargetCkTypeId == typeAssociation.TargetCkTypeId))
                 {
                     operationResult.AddMessage(MessageCodes.CkTypeIdAssociationNotUnique(originTypeGraph.CkTypeId,
-                        typeAssociation.RoleId, typeAssociation.TargetCkTypeId));
+                        typeAssociation.CkRoleId, typeAssociation.TargetCkTypeId));
                     continue;
                 }
 
@@ -101,7 +101,7 @@ public class InheritanceResolver : IInheritanceResolver
                         i.BaseCkTypeId, operationResult);
 
                     return baseCkTypeGraph.Associations.Out.Owned.Where(x =>
-                        x.RoleId == typeAssociation.RoleId && originTypeGraph.BaseTypes.Any(y =>
+                        x.CkRoleId == typeAssociation.CkRoleId && originTypeGraph.BaseTypes.Any(y =>
                             y.BaseCkTypeId == x.TargetCkTypeId)).Select(s => new { BaseCkTypeGraph = baseCkTypeGraph, s.TargetCkTypeId });
                 }).ToList();
 
@@ -111,7 +111,7 @@ public class InheritanceResolver : IInheritanceResolver
                     {
                         operationResult.AddMessage(MessageCodes.CkTypeIdMultipleOutgoingAssociationRepresentingSameRole(
                             originTypeGraph.CkTypeId,
-                            typeAssociation.RoleId, typeAssociation.TargetCkTypeId,
+                            typeAssociation.CkRoleId, typeAssociation.TargetCkTypeId,
                             duplicateTypeAssociation.BaseCkTypeGraph.CkTypeId, duplicateTypeAssociation.TargetCkTypeId));
                     }
 
@@ -135,7 +135,7 @@ public class InheritanceResolver : IInheritanceResolver
                     duplicateAttributeNames.Select(a => a.Key));
             }
 
-            var duplicateAttributeIds = ckTypeDto.Attributes.GroupBy(a => a.AttributeId).Where(a => a.Count() > 1).ToList();
+            var duplicateAttributeIds = ckTypeDto.Attributes.GroupBy(a => a.CkAttributeId).Where(a => a.Count() > 1).ToList();
             if (duplicateAttributeIds.Count > 0)
             {
                 operationResult.AddMessage(
@@ -146,10 +146,10 @@ public class InheritanceResolver : IInheritanceResolver
 
             foreach (var typeAttribute in ckTypeDto.Attributes)
             {
-                if (originTypeGraph.Attributes.Any(a => a.AttributeId == typeAttribute.AttributeId))
+                if (originTypeGraph.Attributes.Any(a => a.CkAttributeId == typeAttribute.CkAttributeId))
                 {
                     operationResult.AddMessage(
-                        MessageCodes.CkTypeIdAttributeIdNotUniqueByInheritance(originTypeGraph.CkTypeId, typeAttribute.AttributeId));
+                        MessageCodes.CkTypeIdAttributeIdNotUniqueByInheritance(originTypeGraph.CkTypeId, typeAttribute.CkAttributeId));
                     continue;
                 }
 
@@ -174,9 +174,9 @@ public class InheritanceResolver : IInheritanceResolver
         if (!aggregatedModelElements.CkTypes.ContainsKey(typeAssociation.TargetCkTypeId))
         {
             operationResult.AddMessage(MessageCodes.CkTypeIdUnknownTargetCkTypeIdForAssociation(typeGraph.CkTypeId,
-                typeAssociation.RoleId, typeAssociation.TargetCkTypeId));
+                typeAssociation.CkRoleId, typeAssociation.TargetCkTypeId));
             throw ModelValidationException.UnknownCkTypeIdForAssociationTarget(typeGraph.CkTypeId,
-                typeAssociation.RoleId, typeAssociation.TargetCkTypeId);
+                typeAssociation.CkRoleId, typeAssociation.TargetCkTypeId);
         }
 
         var targetCkTypeGraph = GetOrCreateTypeGraph(ckModelGraph, aggregatedModelElements,
@@ -218,10 +218,10 @@ public class InheritanceResolver : IInheritanceResolver
                 foreach (var typeAssociation in baseGraphType.Associations.Out.Owned)
                 {
                     if (inheritedGraphType.Associations.Out.Inherited.Any(x =>
-                            x.RoleId == typeAssociation.RoleId && x.TargetCkTypeId == typeAssociation.TargetCkTypeId))
+                            x.CkRoleId == typeAssociation.CkRoleId && x.TargetCkTypeId == typeAssociation.TargetCkTypeId))
                     {
                         operationResult.AddMessage(MessageCodes.CkTypeIdOutAssociationNotUniqueByInheritance(inheritedGraphType.CkTypeId,
-                            typeAssociation.RoleId, typeAssociation.TargetCkTypeId));
+                            typeAssociation.CkRoleId, typeAssociation.TargetCkTypeId));
                         continue;
                     }
 

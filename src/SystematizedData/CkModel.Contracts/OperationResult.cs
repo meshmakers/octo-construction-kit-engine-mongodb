@@ -1,4 +1,5 @@
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Messages;
+using Microsoft.Extensions.Logging;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
@@ -17,5 +18,27 @@ public class OperationResult
     public void AddMessage(CompilerMessage message)
     {
         Messages.Add(message);
+    }
+
+    public void WriteMessagesToLogger(ILogger logger)
+    {
+        foreach (var compilerMessage in Messages)
+        {
+            switch (compilerMessage.MessageLevel)
+            {
+                case MessageLevel.Info:
+                    logger.LogInformation("{Message}", compilerMessage.ToString());
+                    break;
+                case MessageLevel.Warning:
+                    logger.LogWarning("{Message}", compilerMessage.ToString());
+                    break;
+                case MessageLevel.Error:
+                    logger.LogError("{Message}", compilerMessage.ToString());
+                    break;
+                case MessageLevel.FatalError:
+                    logger.LogCritical("{Message}", compilerMessage.ToString());
+                    break;
+            }
+        }
     }
 }

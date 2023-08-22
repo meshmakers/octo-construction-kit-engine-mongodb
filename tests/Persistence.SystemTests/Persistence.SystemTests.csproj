@@ -1,12 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <AssemblyName>Meshmakers.Octo.Backend.Persistence.SystemTests</AssemblyName>
-        <IsPackable>false</IsPackable>
-        <PackageLicenseFile>LICENSE</PackageLicenseFile>
-        <PackageProjectUrl>https://www.meshmakers.io</PackageProjectUrl>
-        <RepositoryUrl>https://github.com/meshmakers/octomesh</RepositoryUrl>
-        <RootNamespace>Meshmakers.Octo.Backend.Persistence.SystemTests</RootNamespace>
+        <AssemblyName>Meshmakers.Octo.SystematizedData.Persistence.SystemTests</AssemblyName>
+        <RootNamespace>Meshmakers.Octo.SystematizedData.Persistence.SystemTests</RootNamespace>
     </PropertyGroup>
 
     <ItemGroup>

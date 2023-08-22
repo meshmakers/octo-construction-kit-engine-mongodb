@@ -1,11 +1,13 @@
 ﻿using System.Diagnostics;
 using System.Text.Json.Serialization;
+using YamlDotNet.Serialization;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
 [DebuggerDisplay("{" + nameof(AssociationRoleId) + "}")]
 public class CkAssociationRoleDto
 {
+    [YamlMember(Alias = "id")]
     [JsonPropertyName("id")]
     [JsonRequired]
     public CkAssociationRoleId AssociationRoleId { get; set; }

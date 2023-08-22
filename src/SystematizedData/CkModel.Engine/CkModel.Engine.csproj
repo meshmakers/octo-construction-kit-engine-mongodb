@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <AssemblyName>Meshmakers.Octo.SystematizedData.CkModel</AssemblyName>
-        <RootNamespace>Meshmakers.Octo.SystematizedData.CkModel</RootNamespace>
+        <AssemblyName>Meshmakers.Octo.SystematizedData.CkModel.Engine</AssemblyName>
+        <RootNamespace>Meshmakers.Octo.SystematizedData.CkModel.Engine</RootNamespace>
     </PropertyGroup>
 
     <ItemGroup>

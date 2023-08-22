@@ -65,9 +65,9 @@ public class Builder
                     DerivedFromCkTypeId = "System/Entity",
                     Attributes = new List<CkTypeAttributeDto>
                     {
-                        new() { AttributeId = "sample1/attribute1", AttributeName = "a" },
-                        new() { AttributeId = "sample1/attribute2", AttributeName = "b" },
-                        new() { AttributeId = "sample1/attribute3", AttributeName = "c" }
+                        new() { CkAttributeId = "sample1/attribute1", AttributeName = "a" },
+                        new() { CkAttributeId = "sample1/attribute2", AttributeName = "b" },
+                        new() { CkAttributeId = "sample1/attribute3", AttributeName = "c" }
                     }
                 },
                 new()
@@ -76,13 +76,13 @@ public class Builder
                     DerivedFromCkTypeId = "sample1/Demo1",
                     Attributes = new List<CkTypeAttributeDto>
                     {
-                        new() { AttributeId = "sample1/attribute4", AttributeName = "d" },
-                        new() { AttributeId = "sample1/attribute5", AttributeName = "e" },
-                        new() { AttributeId = "sample1/attribute6", AttributeName = "f" }
+                        new() { CkAttributeId = "sample1/attribute4", AttributeName = "d" },
+                        new() { CkAttributeId = "sample1/attribute5", AttributeName = "e" },
+                        new() { CkAttributeId = "sample1/attribute6", AttributeName = "f" }
                     },
                     Associations = new List<CkTypeAssociationDto>
                     {
-                        new() { RoleId = "System/ParentChild", TargetCkTypeId = "sample1/Demo1" },
+                        new() { CkRoleId = "System/ParentChild", TargetCkTypeId = "sample1/Demo1" },
                     }
                     
                 },
@@ -92,7 +92,7 @@ public class Builder
                     DerivedFromCkTypeId = "sample1/Demo2",
                     Associations = new List<CkTypeAssociationDto>
                     {
-                        new() { RoleId = "sample1/Related", TargetCkTypeId = "System/Entity" },
+                        new() { CkRoleId = "sample1/Related", TargetCkTypeId = "System/Entity" },
                     }
                     
                 }

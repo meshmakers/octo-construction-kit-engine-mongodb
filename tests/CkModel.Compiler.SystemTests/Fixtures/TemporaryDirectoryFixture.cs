@@ -1,6 +1,6 @@
 namespace CkModel.Compiler.SystemTests.Fixtures;
 
-public class TemporaryDirectoryFixture
+public class TemporaryDirectoryFixture : ServiceCollectionFixture, IDisposable
 {
     public string TempDirectoryPath { get; }
 

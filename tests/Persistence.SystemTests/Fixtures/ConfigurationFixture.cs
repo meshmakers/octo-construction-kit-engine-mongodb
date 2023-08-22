@@ -1,8 +1,8 @@
-using Meshmakers.Octo.Backend.Persistence.SystemTests.Configuration;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Configuration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemTests.Fixtures;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
 public class ConfigurationFixture
 {

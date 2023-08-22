@@ -34,7 +34,7 @@ public class Builder
                     TypeId = "Demo1",
                     Attributes = new List<CkTypeAttributeDto>
                     {
-                        new() { AttributeId = "sample1/attribute1", AttributeName = "a" }
+                        new() { CkAttributeId = "sample1/attribute1", AttributeName = "a" }
                     }
                 }
             },

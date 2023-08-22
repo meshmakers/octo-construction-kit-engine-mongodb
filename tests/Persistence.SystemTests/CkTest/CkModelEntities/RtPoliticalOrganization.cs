@@ -1,7 +1,6 @@
-using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest.CkModelEntities;
 
 [CkId(TestCkModel.TestCkModelId, TestCkModel.PoliticalOrganizationTypeId)]
 public class RtPoliticalOrganization : RtEntity

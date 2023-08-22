@@ -1,17 +1,18 @@
 using FakeItEasy;
-using Meshmakers.Octo.Backend.Persistence.SystemTests.CkTest;
-using Meshmakers.Octo.Backend.Persistence.SystemTests.Configuration;
 using Meshmakers.Octo.Common.DistributedCache;
+using Meshmakers.Octo.SystematizedData.CkModel.Compiler.ModelRepositories;
+using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Resolvers;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
-using Meshmakers.Octo.SystematizedData.Persistence;
+using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Validation;
 using Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 using Meshmakers.Octo.SystematizedData.Persistence.Commands;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Persistence.Commands;
 using Persistence.InternalContracts;
-using Persistence.SystemCkModel;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemTests.Fixtures;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
 public class SystemFixture : ConfigurationFixture, IDisposable
 {
@@ -28,13 +29,21 @@ public class SystemFixture : ConfigurationFixture, IDisposable
             await systemContext.CreateSystemTenantAsync();
         }));
     }
-    
+
+    public CkModelValidator CkModelValidator { get; private set; } = null!;
+
     public ISystemContextInternal GetSystemContext()
     {
+        var logger = A.Fake<ILogger<ImportCkModelCommand>>();
+        var logger2 = A.Fake<ILogger<DependencyResolver>>();
+        var logger3 = A.Fake<ILogger<InheritanceResolver>>();
         var distributedWithPubSubCache = A.Fake<IDistributedWithPubSubCache>();
-        var systemModelService = new CkTestModelService(new ImportCkModelCommand(new CkJsonSerializer()));
+        var ckModelRepositoryManager = new CkModelRepositoryManager();
+        CkModelValidator = new CkModelValidator(new DependencyResolver(logger2, ckModelRepositoryManager),
+            new InheritanceResolver(logger3), new ElementResolver());
+        var systemModelService = new CkTestModelService(new ImportCkModelCommand(logger, new CkJsonSerializer(), CkModelValidator));
         var cacheService = new CkCacheService(distributedWithPubSubCache);
-        
+
         var options = GetOptions<SystemTestOptions>("SystemTest");
 
         var systemContext = new SystemContext(new OptionsWrapper<OctoSystemConfiguration>(
@@ -46,10 +55,10 @@ public class SystemFixture : ConfigurationFixture, IDisposable
 
         return systemContext;
     }
-    
+
     public void Dispose()
     {
-      //  var systemContext = GetSystemContext();
-       // Task.WaitAll(systemContext.DeleteSystemTenantAsync());
+        //  var systemContext = GetSystemContext();
+        // Task.WaitAll(systemContext.DeleteSystemTenantAsync());
     }
 }

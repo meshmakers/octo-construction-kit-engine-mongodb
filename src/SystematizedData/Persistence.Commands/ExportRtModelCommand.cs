@@ -3,19 +3,20 @@ using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
-using Meshmakers.Octo.SystematizedData.Persistence;
-using Meshmakers.Octo.SystematizedData.Persistence.Commands;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
+using Microsoft.Extensions.Logging;
 using RtEntityDto = Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects.RtEntityDto;
 
-namespace Persistence.Commands;
+namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
 
 public class ExportRtModelCommand : IExportRtModelCommand
 {
+    private readonly ILogger<ExportRtModelCommand> _logger;
     private readonly ISystemContext _systemContext;
 
-    internal ExportRtModelCommand(ISystemContext systemContext)
+    internal ExportRtModelCommand(ILogger<ExportRtModelCommand> logger, ISystemContext systemContext)
     {
+        _logger = logger;
         _systemContext = systemContext;
     }
 
@@ -32,7 +33,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
             session.StartTransaction();
 
             var query = await tenantRepository.GetRtEntityByRtIdAsync(session,
-                new RtEntityId(SystemCkModel.SystemCkModel.SystemCkModelId, SystemCkModel.SystemCkModel.SystemQueryTypeId, queryId));
+                new RtEntityId(global::Persistence.SystemCkModel.SystemCkModel.SystemCkModelId, global::Persistence.SystemCkModel.SystemCkModel.SystemQueryTypeId, queryId));
 
             if (CheckCancellation(cancellationToken))
             {
@@ -41,7 +42,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
 
             if (query == null)
             {
-                throw new ModelExportException($"Query '{queryId}‘ does not exist.");
+                throw CommandExecutionFailedException.QueryNotFound(queryId);
             }
 
             var dataQueryOperation = new DataQueryOperation();
@@ -58,7 +59,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
             var ckTypeIdString = query.GetAttributeStringValueOrDefault("QueryCkTypeId");
             if (string.IsNullOrWhiteSpace(ckTypeIdString))
             {
-                throw new ModelExportException($"Query '{queryId}‘ has no QueryCkTypeId attribute set.");
+                throw CommandExecutionFailedException.QueryCkTypeIdNotSet(queryId);
 
             }
             var ckTypeId = new CkId<CkTypeId>(ckTypeIdString);
@@ -99,7 +100,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
         }
         catch (Exception e)
         {
-            Console.WriteLine(e);
+            _logger.LogError(e, "Exporting model failed");
             throw;
         }
     }

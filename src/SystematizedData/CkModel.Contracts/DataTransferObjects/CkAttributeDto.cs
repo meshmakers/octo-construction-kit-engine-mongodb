@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Text.Json.Serialization;
+using YamlDotNet.Serialization;
 
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 
@@ -8,16 +9,17 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects
 [DebuggerDisplay("{" + nameof(AttributeId) + "}")]
 public class CkAttributeDto
 {
-    [JsonPropertyName("id")] [JsonRequired]
+    [JsonPropertyName("id")]
+    [YamlMember(Alias = "id")]
+    [JsonRequired]
     public CkAttributeId AttributeId { get; set; }
 
-    [JsonPropertyName("valueType")]
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public AttributeValueTypesDto ValueType { get; set; }
 
-    [JsonPropertyName("defaultValue")]
+    [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitDefaults)]
     public ICollection<object>? DefaultValues { get; set; }
 
-    [JsonPropertyName("selectionValues")]
+    [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitDefaults)]
     public ICollection<CkSelectionValueDto>? SelectionValues { get; set; }
 }

@@ -1,7 +1,7 @@
-using Meshmakers.Octo.Backend.Persistence.SystemTests.Fixtures;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 using Xunit;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemTests;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
 public class BasicRtEntityTests
 {

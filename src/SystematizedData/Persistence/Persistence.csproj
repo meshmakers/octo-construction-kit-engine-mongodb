@@ -37,7 +37,7 @@
         <ProjectReference Include="..\..\Common\DistributedCache\DistributedCache.csproj" />
         <ProjectReference Include="..\..\Common\Internationalization\Internationalization.csproj" />
         <ProjectReference Include="..\..\Common\Shared\Shared.csproj" />
-        <ProjectReference Include="..\CkModel\CkModel.csproj" />
+        <ProjectReference Include="..\CkModel.Engine\CkModel.Engine.csproj" />
         <ProjectReference Include="..\Persistence.SystemCkModel\Persistence.SystemCkModel.csproj" />
     </ItemGroup>
 

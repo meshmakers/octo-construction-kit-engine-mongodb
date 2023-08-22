@@ -25,9 +25,18 @@ public class CompilerException : Exception
         return new CompilerException(operationResult);
     }
     
-    public static Exception DirectoryMustBeEmpty(string rootPath)
+    public static Exception DirectoryMustBeEmpty(string rootPath, OperationResult operationResult)
     {
-        return new CompilerException($"Directory '{rootPath}' must be empty", new OperationResult());
+        return new CompilerException($"Directory '{rootPath}' must be empty", operationResult);
     }
-    
+
+    public static Exception DirectoryDoesNotExist(string rootPath, OperationResult operationResult)
+    {
+        return new CompilerException($"Directory '{rootPath}' does not exist", operationResult);
+    }
+
+    public static Exception FileDoesNotExist(string modelPath, OperationResult operationResult)
+    {
+        return new CompilerException($"File '{modelPath}' does not exist", operationResult);
+    }
 }

@@ -1,6 +1,4 @@
-using Meshmakers.Octo.SystematizedData.Persistence;
-
-namespace Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest.CkModelEntities;
 
 [CkId(TestCkModel.TestCkModelId, TestCkModel.PlanetTypeId)]
 public class RtPlanet : RtLocation

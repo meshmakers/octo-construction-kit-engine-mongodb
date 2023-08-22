@@ -1,18 +1,12 @@
-using System.Collections.Generic;
-using System.Linq;
-using Meshmakers.Octo.Backend.Persistence.SystemTests.CkModelEntities;
-using Meshmakers.Octo.Backend.Persistence.SystemTests.Fixtures;
-using Meshmakers.Octo.Common.Shared;
+using FakeItEasy;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
-using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.Commands;
-using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
-using MongoDB.Bson;
-using Persistence.Commands;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
+using Microsoft.Extensions.Logging;
 using Persistence.IdentityCkModel;
 using Xunit;
 
-namespace Meshmakers.Octo.Backend.Persistence.SystemTests;
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
 public class ConstructionKitTests : IClassFixture<SystemFixture>
 {
@@ -27,11 +21,12 @@ public class ConstructionKitTests : IClassFixture<SystemFixture>
     public async void ImportConstructionKit()
     {
         var systemContext = _systemFixture.GetSystemContext();
+        var logger = A.Fake<ILogger<ImportCkModelCommand>>();
 
         using var session = await systemContext.StartSystemSessionAsync();
         session.StartTransaction();
         var ckModelRepository = systemContext.CreateTenantCkModelRepository();
-        var systemIdentityModelService = new CkSystemIdentityModelService(new ImportCkModelCommand(new CkJsonSerializer()));
+        var systemIdentityModelService = new CkSystemIdentityModelService(new ImportCkModelCommand(logger, new CkJsonSerializer(), _systemFixture.CkModelValidator));
 
         await systemIdentityModelService.ImportAsync(session, ckModelRepository);
 
