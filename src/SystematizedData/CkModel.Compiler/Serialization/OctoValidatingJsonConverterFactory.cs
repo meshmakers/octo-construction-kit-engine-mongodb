@@ -58,6 +58,7 @@ internal class OctoValidatingJsonConverterFactory : JsonConverterFactory
         OctoJsonSchemaAttribute jsonSchemaAttribute =
             (OctoJsonSchemaAttribute)typeToConvert.GetCustomAttributes(typeof(OctoJsonSchemaAttribute)).Single();
         Type type = typeof(OctoValidatingJsonConverter<>).MakeGenericType(typeToConvert);
+        
         Func<JsonSerializerOptions, JsonSerializerOptions> func = o =>
         {
             JsonSerializerOptions serializerOptions = new JsonSerializerOptions(o);

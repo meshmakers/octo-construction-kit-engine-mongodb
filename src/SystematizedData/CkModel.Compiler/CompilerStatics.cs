@@ -19,5 +19,4 @@ internal static class CompilerStatics
     public const string MetadataFile = "ckModel.yaml";
     public const string Sample1Entity = "sample1.yaml";
 
-    public const string CkElementsSchemaUri = "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json";
 }

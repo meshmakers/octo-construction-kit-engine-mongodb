@@ -1,6 +1,7 @@
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
+using YamlDotNet.Core;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -51,23 +52,24 @@ public class CkYamlSerializer : ICkSerializer
 
     public Task SerializeAsync(StreamWriter streamWriter, CkCompiledModelRoot compiledModel)
     {
+        
         _serializer.Serialize(streamWriter, compiledModel);
         return Task.CompletedTask;
     }
 
-    public Task SerializeAsync(StreamWriter streamWriter, CkMetaDto metaDto)
+    public Task SerializeAsync(StreamWriter streamWriter, CkMetaRootDto metaRootDto)
     {
-        _serializer.Serialize(streamWriter, metaDto);
+        _serializer.Serialize(streamWriter, metaRootDto);
         return Task.CompletedTask;
     }
 
-    public Task SerializeAsync(StreamWriter streamWriter, CkElementsDto elementsDto)
+    public Task SerializeAsync(StreamWriter streamWriter, CkElementsRootDto elementsRootDto)
     {
-        _serializer.Serialize(streamWriter, elementsDto);
+        _serializer.Serialize(streamWriter, elementsRootDto);
         return Task.CompletedTask;
     }
 
-    public Task<CkMetaDto> DeserializeMetaAsync(Stream stream, OperationResult operationResult)
+    public Task<CkMetaRootDto> DeserializeMetaAsync(Stream stream, OperationResult operationResult)
     {
         _ckSchemaValidator.ValidateMetaInYaml(stream, operationResult);
         if (operationResult.HasErrors)
@@ -76,11 +78,11 @@ public class CkYamlSerializer : ICkSerializer
         }
 
         using var streamReader = new StreamReader(stream);
-        var ckMetaDto = _deserializer.Deserialize<CkMetaDto>(streamReader);
+        var ckMetaDto = _deserializer.Deserialize<CkMetaRootDto>(streamReader);
         return Task.FromResult(ckMetaDto);
     }
 
-    public Task<CkElementsDto> DeserializeElementsAsync(Stream stream, OperationResult operationResult)
+    public Task<CkElementsRootDto> DeserializeElementsAsync(Stream stream, OperationResult operationResult)
     {
         _ckSchemaValidator.ValidateElementsInYaml(stream, operationResult);
         if (operationResult.HasErrors)
@@ -89,7 +91,7 @@ public class CkYamlSerializer : ICkSerializer
         }
 
         using var streamReader = new StreamReader(stream);
-        var ckElementsDto = _deserializer.Deserialize<CkElementsDto>(streamReader);
+        var ckElementsDto = _deserializer.Deserialize<CkElementsRootDto>(streamReader);
         return Task.FromResult(ckElementsDto);
     }
 

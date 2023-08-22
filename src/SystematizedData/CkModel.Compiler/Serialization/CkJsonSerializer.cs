@@ -1,7 +1,6 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using Json.Schema;
-using Json.Schema.Serialization;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
@@ -9,6 +8,9 @@ using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
 
+/// <summary>
+/// Implements a serializer for the CK model in JSON format.
+/// </summary>
 public class CkJsonSerializer : ICkSerializer
 {
     private const string Validation = "validation";
@@ -21,7 +23,11 @@ public class CkJsonSerializer : ICkSerializer
         { 
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault, 
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            Converters = { new OctoValidatingJsonConverterFactory {RequireFormatValidation = true, OutputFormat = OutputFormat.List} }
+            WriteIndented = true,
+            Converters =
+            {
+                new OctoValidatingJsonConverterFactory {RequireFormatValidation = true, OutputFormat = OutputFormat.List}
+            }
         };
     }
     
@@ -30,21 +36,21 @@ public class CkJsonSerializer : ICkSerializer
         await JsonSerializer.SerializeAsync(streamWriter.BaseStream, compiledModel, _options);
     }
     
-    public async Task SerializeAsync(StreamWriter streamWriter, CkMetaDto metaDto)
+    public async Task SerializeAsync(StreamWriter streamWriter, CkMetaRootDto metaRootDto)
     {
-        await JsonSerializer.SerializeAsync(streamWriter.BaseStream, metaDto);
+        await JsonSerializer.SerializeAsync(streamWriter.BaseStream, metaRootDto, _options);
     }
 
-    public async Task SerializeAsync(StreamWriter streamWriter, CkElementsDto elementsDto)
+    public async Task SerializeAsync(StreamWriter streamWriter, CkElementsRootDto elementsRootDto)
     {
-        await JsonSerializer.SerializeAsync(streamWriter.BaseStream, elementsDto);
+        await JsonSerializer.SerializeAsync(streamWriter.BaseStream, elementsRootDto, _options);
     }
 
-    public async Task<CkMetaDto> DeserializeMetaAsync(Stream stream, OperationResult operationResult)
+    public async Task<CkMetaRootDto> DeserializeMetaAsync(Stream stream, OperationResult operationResult)
     {
         try
         {
-            var ckMetaDto = await JsonSerializer.DeserializeAsync<CkMetaDto>(stream, _options);
+            var ckMetaDto = await JsonSerializer.DeserializeAsync<CkMetaRootDto>(stream, _options);
             return ckMetaDto ?? throw ModelParseException.CannotDeserializeModel();
         }
         catch (JsonException e)
@@ -54,11 +60,11 @@ public class CkJsonSerializer : ICkSerializer
         }
     }
 
-    public async Task<CkElementsDto> DeserializeElementsAsync(Stream stream, OperationResult operationResult)
+    public async Task<CkElementsRootDto> DeserializeElementsAsync(Stream stream, OperationResult operationResult)
     {
         try
         {
-            var ckElementsDto = await JsonSerializer.DeserializeAsync<CkElementsDto>(stream, _options);
+            var ckElementsDto = await JsonSerializer.DeserializeAsync<CkElementsRootDto>(stream, _options);
             return ckElementsDto ?? throw ModelParseException.CannotDeserializeModel();
         }
         catch (JsonException e)

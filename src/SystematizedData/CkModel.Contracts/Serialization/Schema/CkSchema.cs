@@ -5,26 +5,31 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization.Schem
 
 public static class CkSchema
 {
+    private static readonly JsonSchema ElementsSchemaInternal;
+    private static readonly JsonSchema MetaSchemaInternal;
+    private static readonly JsonSchema CompiledModelSchemaInternal;
     private const string SchemaPath = "Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization.Schema.{0}.json";
 
     static CkSchema()
     {
-        ElementsSchema = GetSchema(string.Format(SchemaPath, "ck-elements"));
-        MetaSchema = GetSchema(string.Format(SchemaPath, "ck-meta"));
-        CompiledModelSchema = GetSchema(string.Format(SchemaPath, "ck-compiled-model"));
-        SchemaRegistry.Global.Register(ElementsSchema);
-        SchemaRegistry.Global.Register(MetaSchema);
-        SchemaRegistry.Global.Register(CompiledModelSchema);
+        ElementsSchemaInternal = GetSchema(string.Format(SchemaPath, "ck-elements"));
+        MetaSchemaInternal = GetSchema(string.Format(SchemaPath, "ck-meta"));
+        CompiledModelSchemaInternal = GetSchema(string.Format(SchemaPath, "ck-compiled-model"));
+        SchemaRegistry.Global.Register(ElementsSchemaInternal);
+        SchemaRegistry.Global.Register(MetaSchemaInternal);
+        SchemaRegistry.Global.Register(CompiledModelSchemaInternal);
         
         SchemaRegistry.Global.Register(GetSchema(string.Format(SchemaPath, "ck-element-attribute")));
         SchemaRegistry.Global.Register(GetSchema(string.Format(SchemaPath, "ck-element-type")));
         SchemaRegistry.Global.Register(GetSchema(string.Format(SchemaPath, "ck-element-associationRole")));
     }
-    
-    public static JsonSchema ElementsSchema { get; } 
-    public static JsonSchema MetaSchema { get; } 
-    public static JsonSchema CompiledModelSchema { get; } 
-    
+
+    public static JsonSchema ElementsSchema => ElementsSchemaInternal.Bundle();
+
+    public static JsonSchema MetaSchema => MetaSchemaInternal.Bundle();
+
+    public static JsonSchema CompiledModelSchema => CompiledModelSchemaInternal.Bundle();
+
     private static JsonSchema GetSchema(string resourcesStreamPath)
     {
         var assembly = typeof(ICkSerializer).Assembly;

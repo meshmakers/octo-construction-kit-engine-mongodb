@@ -18,7 +18,7 @@ internal class OctoValidatingJsonConverter<T> : JsonConverter<T>, IOctoValidatin
         JsonSchema schema,
         Func<JsonSerializerOptions, JsonSerializerOptions> optionsFactory)
     {
-        _schema = schema.Bundle();
+        _schema = schema;
         _optionsFactory = optionsFactory;
     }
 

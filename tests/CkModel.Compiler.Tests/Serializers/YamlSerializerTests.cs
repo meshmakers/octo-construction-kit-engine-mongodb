@@ -1,10 +1,18 @@
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
+using Xunit.Abstractions;
 
 namespace CkModel.Compiler.Tests.Serializers;
 
 public class YamlSerializerTests
 {
+    private readonly ITestOutputHelper _testOutputHelper;
+
+    public YamlSerializerTests(ITestOutputHelper testOutputHelper)
+    {
+        _testOutputHelper = testOutputHelper;
+    }
+
     [Fact]
     public async Task DeserializeElementsAsync_types_ok()
     {
@@ -102,5 +110,24 @@ public class YamlSerializerTests
         Assert.True(operationResult.HasErrors);
         Assert.False(operationResult.HasFatalErrors);
         Assert.Equal(27, operationResult.Messages[0].MessageNumber);
+    }
+    
+    [Fact]
+    public async Task SerializeAsync_ok()
+    {
+        var ckYamlSerializer = new CkYamlSerializer(new CkSchemaValidator());
+
+        var stream = new MemoryStream();
+        var streamWriter = new StreamWriter(stream);
+        var ckElementsDto = sampleData.elements.Builder.Build();
+        await ckYamlSerializer.SerializeAsync(streamWriter, ckElementsDto);
+        
+        stream.Position = 0;
+        var streamReader = new StreamReader(stream);
+        var yaml = await streamReader.ReadToEndAsync();
+        _testOutputHelper.WriteLine("output:");
+        _testOutputHelper.WriteLine(yaml);
+        Assert.NotNull(yaml);
+        Assert.Contains("$schema", yaml);
     }
 }

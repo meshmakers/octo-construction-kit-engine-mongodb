@@ -19,17 +19,17 @@ public interface ICkSerializer
     /// Serializes the meta data to the stream.
     /// </summary>
     /// <param name="streamWriter">A stream ready to write used for serialization</param>
-    /// <param name="metaDto">Model to serialize</param>
+    /// <param name="metaRootDto">Model to serialize</param>
     /// <returns></returns>
-    Task SerializeAsync(StreamWriter streamWriter, CkMetaDto metaDto);
+    Task SerializeAsync(StreamWriter streamWriter, CkMetaRootDto metaRootDto);
     
     /// <summary>
     /// Serializes the elements to the stream.
     /// </summary>
     /// <param name="streamWriter">A stream ready to write used for serialization</param>
-    /// <param name="elementsDto">Model to serialize</param>
+    /// <param name="elementsRootDto">Model to serialize</param>
     /// <returns></returns>
-    Task SerializeAsync(StreamWriter streamWriter, CkElementsDto elementsDto);
+    Task SerializeAsync(StreamWriter streamWriter, CkElementsRootDto elementsRootDto);
     
     /// <summary>
     /// Deserializes the meta data from the stream.
@@ -37,7 +37,7 @@ public interface ICkSerializer
     /// <param name="stream">The stream to read</param>
     /// <param name="operationResult">A operation result object that lists all validation issues. In case of exceptions this object contains the validation errors too.</param>
     /// <returns>The deserialized object. Please check the for validation issues in operationResult.</returns>
-    Task<CkMetaDto> DeserializeMetaAsync(Stream stream, OperationResult operationResult);
+    Task<CkMetaRootDto> DeserializeMetaAsync(Stream stream, OperationResult operationResult);
     
     /// <summary>
     /// Deserializes the elements from the stream.
@@ -45,7 +45,7 @@ public interface ICkSerializer
     /// <param name="stream">The stream to read</param>
     /// <param name="operationResult">A operation result object that lists all validation issues. In case of exceptions this object contains the validation errors too.</param>
     /// <returns>The deserialized object. Please check the for validation issues in operationResult.</returns>
-    Task<CkElementsDto> DeserializeElementsAsync(Stream stream, OperationResult operationResult);
+    Task<CkElementsRootDto> DeserializeElementsAsync(Stream stream, OperationResult operationResult);
     
     /// <summary>
     /// Deserializes the compiled model from a string.

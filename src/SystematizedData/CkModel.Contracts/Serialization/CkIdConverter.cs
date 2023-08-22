@@ -4,7 +4,7 @@ using YamlDotNet.Core;
 using YamlDotNet.Core.Events;
 using YamlDotNet.Serialization;
 
-namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
 
 public class CkIdAttributeIdConverter : CkIdConverter<CkAttributeId>
 {

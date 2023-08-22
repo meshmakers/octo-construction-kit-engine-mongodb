@@ -33,7 +33,7 @@ public class CompilerService
         Directory.CreateDirectory(Path.Combine(rootPath, CompilerStatics.AttributesDirectoryName));
         Directory.CreateDirectory(typesDirectory);
 
-        var modelDto = new CkMetaDto
+        var modelDto = new CkMetaRootDto
         {
             ModelId = "Sample1",
             Dependencies = new List<CkModelId> { new("System") }
@@ -48,7 +48,7 @@ public class CompilerService
             DerivedFromCkTypeId = "System/Entity"
         };
         await using var streamWriterEntity = new StreamWriter(Path.Combine(typesDirectory, CompilerStatics.Sample1Entity));
-        await _ckSerializer.SerializeAsync(streamWriterEntity, new CkElementsDto() { Types = new List<CkTypeDto> { ckTypeDto } });
+        await _ckSerializer.SerializeAsync(streamWriterEntity, new CkElementsRootDto() { Types = new List<CkTypeDto> { ckTypeDto } });
         
         
 

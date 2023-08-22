@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Text.Json.Serialization;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
 using YamlDotNet.Serialization;
 
 // ReSharper disable AutoPropertyCanBeMadeGetOnly.Global

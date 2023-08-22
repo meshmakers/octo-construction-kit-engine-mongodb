@@ -1,10 +1,18 @@
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
+using Xunit.Abstractions;
 
 namespace CkModel.Compiler.Tests.Serializers;
 
 public class JsonSerializerTests
 {
+    private readonly ITestOutputHelper _testOutputHelper;
+
+    public JsonSerializerTests(ITestOutputHelper testOutputHelper)
+    {
+        _testOutputHelper = testOutputHelper;
+    }
+    
     [Fact]
     public async Task DeserializeElementsAsync_types_ok()
     {
@@ -100,5 +108,24 @@ public class JsonSerializerTests
         Assert.True(operationResult.HasErrors);
         Assert.False(operationResult.HasFatalErrors);
         Assert.Equal(27, operationResult.Messages[0].MessageNumber);
+    }
+    
+    [Fact]
+    public async Task SerializeAsync_ok()
+    {
+        var ckJsonSerializer = new CkJsonSerializer();
+    
+        var stream = new MemoryStream();
+        var streamWriter = new StreamWriter(stream);
+        var ckElementsDto = sampleData.elements.Builder.Build();
+        await ckJsonSerializer.SerializeAsync(streamWriter, ckElementsDto);
+        
+        stream.Position = 0;
+        var streamReader = new StreamReader(stream);
+        var json = await streamReader.ReadToEndAsync();
+        _testOutputHelper.WriteLine("output:");
+        _testOutputHelper.WriteLine(json);
+        Assert.NotNull(json);
+        Assert.Contains("$schema", json);
     }
 }
