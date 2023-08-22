@@ -6,13 +6,42 @@ namespace CkModel.Compiler.Tests.Serializers;
 public class JsonSerializerTests
 {
     [Fact]
-    public async Task DeserializeElementsAsync_ok()
+    public async Task DeserializeElementsAsync_types_ok()
     {
         var ckJsonSerializer = new CkJsonSerializer();
     
-        var stream = File.OpenRead("sampleData/files/ok.json");
+        var stream = File.OpenRead("sampleData/files/types-ok.json");
         var operationResult = new OperationResult();
-        await ckJsonSerializer.DeserializeElementsAsync(stream, operationResult);
+        var ckElementsDto = await ckJsonSerializer.DeserializeElementsAsync(stream, operationResult);
+        Assert.NotNull(ckElementsDto);
+        Assert.Empty(operationResult.Messages);
+        Assert.False(operationResult.HasErrors);
+        Assert.False(operationResult.HasFatalErrors);
+    }
+    
+    [Fact]
+    public async Task DeserializeElementsAsync_attributes_ok()
+    {
+        var ckJsonSerializer = new CkJsonSerializer();
+    
+        var stream = File.OpenRead("sampleData/files/attributes-ok.json");
+        var operationResult = new OperationResult();
+        var ckElementsDto = await ckJsonSerializer.DeserializeElementsAsync(stream, operationResult);
+        Assert.NotNull(ckElementsDto);
+        Assert.Empty(operationResult.Messages);
+        Assert.False(operationResult.HasErrors);
+        Assert.False(operationResult.HasFatalErrors);
+    }
+    
+    [Fact]
+    public async Task DeserializeElementsAsync_associations_ok()
+    {
+        var ckJsonSerializer = new CkJsonSerializer();
+    
+        var stream = File.OpenRead("sampleData/files/associations-ok.json");
+        var operationResult = new OperationResult();
+        var ckElementsDto = await ckJsonSerializer.DeserializeElementsAsync(stream, operationResult);
+        Assert.NotNull(ckElementsDto);
         Assert.Empty(operationResult.Messages);
         Assert.False(operationResult.HasErrors);
         Assert.False(operationResult.HasFatalErrors);

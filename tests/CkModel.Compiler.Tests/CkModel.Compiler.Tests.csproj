@@ -26,10 +26,10 @@
 
 
     <ItemGroup>
-      <None Update="sampleData\files\ok.yaml">
+      <None Update="sampleData\files\types-ok.yaml">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </None>
-      <None Update="sampleData\files\ok.json">
+      <None Update="sampleData\files\types-ok.json">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </None>
       <None Update="sampleData\files\malformedAttribute.yaml">
@@ -54,6 +54,18 @@
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </None>
       <None Update="sampleData\files\noschema_malformed.yaml">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+      <None Update="sampleData\files\attributes-ok.json">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+      <None Update="sampleData\files\attributes-ok.yaml">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+      <None Update="sampleData\files\associations-ok.json">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+      <None Update="sampleData\files\associations-ok.yaml">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </None>
     </ItemGroup>

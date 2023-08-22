@@ -6,18 +6,47 @@ namespace CkModel.Compiler.Tests.Serializers;
 public class YamlSerializerTests
 {
     [Fact]
-    public async Task DeserializeElementsAsync_ok()
+    public async Task DeserializeElementsAsync_types_ok()
     {
         var ckYamlSerializer = new CkYamlSerializer(new CkSchemaValidator());
 
-        var stream = File.OpenRead("sampleData/files/ok.yaml");
+        var stream = File.OpenRead("sampleData/files/types-ok.yaml");
         var operationResult = new OperationResult();
-        await ckYamlSerializer.DeserializeElementsAsync(stream, operationResult);
+        var ckElementsDto = await ckYamlSerializer.DeserializeElementsAsync(stream, operationResult);
+        Assert.NotNull(ckElementsDto);
+        Assert.Empty(operationResult.Messages);
+        Assert.False(operationResult.HasErrors);
+        Assert.False(operationResult.HasFatalErrors);
+    }
+
+    [Fact]
+    public async Task DeserializeElementsAsync_attributes_ok()
+    {
+        var ckYamlSerializer = new CkYamlSerializer(new CkSchemaValidator());
+
+        var stream = File.OpenRead("sampleData/files/attributes-ok.yaml");
+        var operationResult = new OperationResult();
+        var ckElementsDto = await ckYamlSerializer.DeserializeElementsAsync(stream, operationResult);
+        Assert.NotNull(ckElementsDto);
         Assert.Empty(operationResult.Messages);
         Assert.False(operationResult.HasErrors);
         Assert.False(operationResult.HasFatalErrors);
     }
     
+    [Fact]
+    public async Task DeserializeElementsAsync_associations_ok()
+    {
+        var ckYamlSerializer = new CkYamlSerializer(new CkSchemaValidator());
+
+        var stream = File.OpenRead("sampleData/files/associations-ok.yaml");
+        var operationResult = new OperationResult();
+        var ckElementsDto = await ckYamlSerializer.DeserializeElementsAsync(stream, operationResult);
+        Assert.NotNull(ckElementsDto);
+        Assert.Empty(operationResult.Messages);
+        Assert.False(operationResult.HasErrors);
+        Assert.False(operationResult.HasFatalErrors);
+    }
+
     [Fact]
     public async Task DeserializeElementsAsync_noSchema_ok()
     {
@@ -32,7 +61,7 @@ public class YamlSerializerTests
         Assert.False(operationResult.HasErrors);
         Assert.False(operationResult.HasFatalErrors);
     }
-    
+
     [Fact]
     public async Task DeserializeElementsAsync_noSchema_malFormed_fail()
     {
@@ -46,7 +75,7 @@ public class YamlSerializerTests
         Assert.False(operationResult.HasFatalErrors);
         Assert.Equal(27, operationResult.Messages[0].MessageNumber);
     }
-    
+
     [Fact]
     public async Task DeserializeElementsAsync_MalformedAttribute_Fail()
     {
@@ -60,7 +89,7 @@ public class YamlSerializerTests
         Assert.False(operationResult.HasFatalErrors);
         Assert.Equal(27, operationResult.Messages[0].MessageNumber);
     }
-        
+
     [Fact]
     public async Task DeserializeElementsAsync_MalformedAttributeValue_Fail()
     {

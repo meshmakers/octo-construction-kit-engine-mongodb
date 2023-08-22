@@ -11,7 +11,7 @@ public class CkSchemaValidatorTests
     {
         var schemaValidator = new CkSchemaValidator();
 
-        var stream = File.OpenRead("sampleData/files/ok.json");
+        var stream = File.OpenRead("sampleData/files/types-ok.json");
         var operationResult = new OperationResult();
         bool isValid = schemaValidator.ValidateElementsInJson(stream, operationResult);
         Assert.True(isValid);
@@ -56,7 +56,7 @@ public class CkSchemaValidatorTests
     {
         var schemaValidator = new CkSchemaValidator();
 
-        var stream = File.OpenRead("sampleData/files/ok.yaml");
+        var stream = File.OpenRead("sampleData/files/types-ok.yaml");
         var operationResult = new OperationResult();
         var isValid = schemaValidator.ValidateElementsInYaml(stream, operationResult);
         Assert.True(isValid);
