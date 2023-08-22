@@ -22,16 +22,15 @@ public class CkModelValidator : ICkModelValidator
         _elementResolver = elementResolver;
     }
 
-    public async Task<ValidationResult> ValidateAsync(CkCompiledModelRoot compiledModel)
+    public async Task ValidateAsync(CkCompiledModelRoot compiledModel, OperationResult operationResult)
     {
-        ValidationResult validationResult = new();
 
         // By creating the model graph, a validation is done if association roles, attributes and entities are unique.
-        CkModelGraph modelGraph = _elementResolver.Resolve(compiledModel, validationResult);
+        CkModelGraph modelGraph = _elementResolver.Resolve(compiledModel, operationResult);
         
         if (!Regex.IsMatch(compiledModel.ModelId.ModelId, CompilerStatics.AllowedCharactersInNamesRegex))
         {
-            validationResult.AddMessage(MessageCodes.ModelIdContainsInvalidCharacters(compiledModel.ModelId.ModelId));
+            operationResult.AddMessage(MessageCodes.ModelIdContainsInvalidCharacters(compiledModel.ModelId.ModelId));
             throw ModelValidationException.ModelIdContainsInvalidCharacters(compiledModel.ModelId.ModelId);
         }
 
@@ -42,7 +41,7 @@ public class CkModelValidator : ICkModelValidator
 
         if (compiledModel.Dependencies != null)
         {
-            aggregatedModelElements = await _dependencyResolver.ResolveDependenciesAsync(compiledModel.Dependencies, validationResult);
+            aggregatedModelElements = await _dependencyResolver.ResolveDependenciesAsync(compiledModel.Dependencies, operationResult);
         }
 
         // We suppose that the dependent models are already validated and we can use them.
@@ -53,7 +52,7 @@ public class CkModelValidator : ICkModelValidator
         {
             var dependentModels = aggregatedModelElements.CkModelDependencies.Keys.Where(x => x.ModelId == compiledModel.ModelId.ModelId);
 
-            validationResult.AddMessage(
+            operationResult.AddMessage(
                 MessageCodes.CircularDependency(compiledModel.ModelId.ModelId, dependentModels.Select(x => x.ModelId).ToList()));
         }
 
@@ -62,7 +61,7 @@ public class CkModelValidator : ICkModelValidator
         // 2. entities.ckDerivedId -> Reference to a defined type.
         // 3. entities.associations.roleId -> Reference to a defined association role.
         // 4. entities.associations.targetCkTypeId -> Reference to a defined type.
-        ValidateReferences(aggregatedModelElements, modelGraph, validationResult);
+        ValidateReferences(aggregatedModelElements, modelGraph, operationResult);
 
         // Check: Inheritance.
         // 1. entities.ckDerivedId -> Only one type cannot have a derived type: System.Entity.
@@ -72,13 +71,11 @@ public class CkModelValidator : ICkModelValidator
         // 5. entities.isFinal -> It is not possible that a type is final, but has a derived type.
         
         // Check 1-5 is done by inheritance resolver.
-        _inheritanceResolver.Resolve(aggregatedModelElements, modelGraph, validationResult);
-
-        return validationResult;
+        _inheritanceResolver.Resolve(aggregatedModelElements, modelGraph, operationResult);
     }
 
     private static void ValidateReferences(CkAggregatedModelElements aggregatedModelElements, CkModelGraph modelGraph,
-        ValidationResult validationResult)
+        OperationResult operationResult)
     {
         foreach (var ckTypeKeyValue in aggregatedModelElements.CkTypes)
         {
@@ -90,7 +87,7 @@ public class CkModelValidator : ICkModelValidator
                     if (!aggregatedModelElements.CkAttributes.ContainsKey(ckTypeAttribute.AttributeId) &&
                         !modelGraph.Attributes.ContainsKey(ckTypeAttribute.AttributeId))
                     {
-                        validationResult.AddMessage(
+                        operationResult.AddMessage(
                             MessageCodes.UnknownAttributeOfCkTypeIdInSource(ckTypeKeyValue.Key, ckTypeAttribute.AttributeId));
                     }
                 }
@@ -102,7 +99,7 @@ public class CkModelValidator : ICkModelValidator
                 if (!aggregatedModelElements.CkTypes.ContainsKey(ckTypeKeyValue.Value.DerivedFromCkTypeId.Value) &&
                     !modelGraph.Types.ContainsKey(ckTypeKeyValue.Value.DerivedFromCkTypeId.Value))
                 {
-                    validationResult.AddMessage(
+                    operationResult.AddMessage(
                         MessageCodes.UnknownCkDerivedIdOfCkTypeIdInSource(ckTypeKeyValue.Value.DerivedFromCkTypeId,
                             ckTypeKeyValue.Key));
                 }
@@ -116,7 +113,7 @@ public class CkModelValidator : ICkModelValidator
                     if (!aggregatedModelElements.CkAssociationRoles.ContainsKey(ckTypeAssociation.RoleId) &&
                         !modelGraph.AssociationRoles.ContainsKey(ckTypeAssociation.RoleId))
                     {
-                        validationResult.AddMessage(
+                        operationResult.AddMessage(
                             MessageCodes.UnknownAssociationRoleOfCkTypeIdInSource(ckTypeKeyValue.Key, ckTypeAssociation.RoleId));
                     }
 
@@ -124,7 +121,7 @@ public class CkModelValidator : ICkModelValidator
                     if (!aggregatedModelElements.CkTypes.ContainsKey(ckTypeAssociation.TargetCkTypeId) &&
                         !modelGraph.Types.ContainsKey(ckTypeAssociation.TargetCkTypeId))
                     {
-                        validationResult.AddMessage(
+                        operationResult.AddMessage(
                             MessageCodes.UnknownTargetCkTypeIdOfCkTypeIdInSource(ckTypeKeyValue.Key, ckTypeAssociation.TargetCkTypeId));
                     }
                 }

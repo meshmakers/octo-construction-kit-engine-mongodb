@@ -9,5 +9,6 @@ public class CkIndexFieldsDto
 {
     public int? Weight { get; set; }
 
-    [JsonRequired] public List<string> AttributeNames { get; set; } = null!;
+    [JsonRequired] 
+    public List<string> AttributeNames { get; set; } = null!;
 }

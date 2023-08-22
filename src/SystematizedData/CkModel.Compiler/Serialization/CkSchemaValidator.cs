@@ -1,55 +1,71 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Schema;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization.Schema;
 using Yaml2JsonNode;
 using YamlDotNet.RepresentationModel;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
 
-public class CkSchemaValidator
+public class CkSchemaValidator : ICkSchemaValidator
 {
-    private const string SchemaPath = "Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization.Schema.{0}.json";
-    private static bool _loadSchema;
-
-    // ReSharper disable once ConvertConstructorToMemberInitializers
-    public CkSchemaValidator()
+    public bool ValidateElementsInJson(Stream stream, OperationResult operationResult)
     {
-        if (!_loadSchema)
-        {
-            LoadSchema();
-            _loadSchema = true;
-        }
+        return ValidateModelJson(stream, CkSchema.ElementsSchema, operationResult);
     }
 
-    public bool ValidateElementsInJson(Stream stream, CompilerResult compilerResult)
+    public bool ValidateMetaInJson(Stream stream, OperationResult operationResult)
+    {
+        return ValidateModelJson(stream, CkSchema.MetaSchema, operationResult);
+    }
+
+    public bool ValidateCompiledModelInJson(Stream stream, OperationResult operationResult)
+    {
+        return ValidateModelJson(stream, CkSchema.CompiledModelSchema, operationResult);
+    }
+
+    public bool ValidateElementsInYaml(Stream stream, OperationResult operationResult)
+    {
+        return ValidateModelYaml(stream, CkSchema.ElementsSchema, operationResult);
+    }
+
+    public bool ValidateMetaInYaml(Stream stream, OperationResult operationResult)
+    {
+        return ValidateModelYaml(stream, CkSchema.MetaSchema, operationResult);
+    }
+
+    public bool ValidateCompiledModelInYaml(Stream stream, OperationResult operationResult)
+    {
+        return ValidateModelYaml(stream, CkSchema.CompiledModelSchema, operationResult);
+    }
+
+    private static bool ValidateModelJson(Stream stream, JsonSchema schema, OperationResult operationResult)
     {
         var json = JsonNode.Parse(stream);
 
-        var schema = new JsonSchemaBuilder()
-            .Ref(CompilerStatics.CkElementsSchemaUri)
-            .Build();
-
         var evaluationResults = schema.Evaluate(json, new EvaluationOptions { OutputFormat = OutputFormat.List});
-        return ValidateEvaluationResults(compilerResult, evaluationResults);
-
+        return ValidateEvaluationResults(operationResult, evaluationResults);
     }
 
-    public bool ValidateElementsInYaml(TextReader stream, CompilerResult compilerResult)
+    private static bool ValidateModelYaml(Stream stream, JsonSchema schema, OperationResult operationResult)
     {
+        using var memoryStream = new MemoryStream();
+        stream.CopyTo(memoryStream);
+        stream.Position = 0;
+        memoryStream.Seek(0, SeekOrigin.Begin);
+        
+        using var streamReader = new StreamReader(memoryStream);
         var yamlStream = new YamlStream();
-        yamlStream.Load(stream);
+        yamlStream.Load(streamReader);
         var singleNode = yamlStream.Documents[0].ToJsonNode();
 
-        var schema = (JsonSchema)SchemaRegistry.Global.Get(new Uri(CompilerStatics.CkElementsSchemaUri))!;
-
-        var evaluationResults = schema.Evaluate(singleNode, new EvaluationOptions { OutputFormat = OutputFormat.List});
-        return ValidateEvaluationResults(compilerResult, evaluationResults);
+        var evaluationResults = schema.Evaluate(singleNode, new EvaluationOptions { OutputFormat = OutputFormat.List });
+        return ValidateEvaluationResults(operationResult, evaluationResults);
     }
 
-    private static bool ValidateEvaluationResults(CompilerResult compilerResult, EvaluationResults evaluationResults)
+    private static bool ValidateEvaluationResults(OperationResult operationResult, EvaluationResults evaluationResults)
     {
         if (!evaluationResults.IsValid)
         {
@@ -57,34 +73,10 @@ public class CkSchemaValidator
             {
                 var path = evaluationResult.InstanceLocation.ToString();
                 var errorMessages = string.Join(", ", evaluationResults.Errors?.Values ?? Enumerable.Empty<string>());
-                compilerResult.AddMessage(MessageCodes.SchemaValidationError($"{path}: {errorMessages}"));
+                operationResult.AddMessage(MessageCodes.SchemaValidationError($"{path}: {errorMessages}"));
             }
         }
 
         return evaluationResults.IsValid;
-    }
-
-    private static void LoadSchema()
-    {
-        SchemaRegistry.Global.Register(GetSchema(string.Format(SchemaPath, "ck-elements")));
-        SchemaRegistry.Global.Register(GetSchema(string.Format(SchemaPath, "ck-meta")));
-        SchemaRegistry.Global.Register(GetSchema(string.Format(SchemaPath, "ck-compiled-model")));
-        SchemaRegistry.Global.Register(GetSchema(string.Format(SchemaPath, "ck-element-attribute")));
-        SchemaRegistry.Global.Register(GetSchema(string.Format(SchemaPath, "ck-element-attribute")));
-        SchemaRegistry.Global.Register(GetSchema(string.Format(SchemaPath, "ck-element-type")));
-        SchemaRegistry.Global.Register(GetSchema(string.Format(SchemaPath, "ck-element-associationRole")));
-    }
-
-    internal static JsonSchema GetSchema(string resourcesStreamPath)
-    {
-        var assembly = typeof(ICkSerializer).Assembly;
-        var resourcesStream = assembly.GetManifestResourceStream(resourcesStreamPath);
-        if (resourcesStream == null)
-        {
-            throw new ModelValidationException($"Resource with path '{resourcesStreamPath}' not found in assembly '{assembly.FullName}'.");
-        }
-
-        return JsonSerializer.Deserialize<JsonSchema>(resourcesStream) ??
-               throw new ModelValidationException($"Could not deserialize schema '{resourcesStreamPath}'.");
     }
 }

@@ -19,7 +19,7 @@ public class CompilerTests : IClassFixture<TemporaryDirectoryFixture>
     {
         // Access _fixture.TempDirectoryPath to work with the temporary directory
         string filePath = Path.Combine(_fixture.TempDirectoryPath, "CreateNew");
-        CompilerService compilerService = new CompilerService(new CkYamlSerializer());
+        CompilerService compilerService = new CompilerService(new CkYamlSerializer(new CkSchemaValidator()));
         await compilerService.CreateNewAsync(filePath);
 
         Assert.True(Directory.Exists(filePath));

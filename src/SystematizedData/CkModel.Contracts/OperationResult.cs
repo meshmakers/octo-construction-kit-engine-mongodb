@@ -2,9 +2,9 @@ using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Messages;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
-public class CompilerResult
+public class OperationResult
 {
-    public CompilerResult()
+    public OperationResult()
     {
         Messages = new();
     }

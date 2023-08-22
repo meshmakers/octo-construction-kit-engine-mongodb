@@ -158,7 +158,7 @@ public readonly struct CkAssociationRoleId : IComparable<CkAssociationRoleId>, I
             case TypeCode.String:
                 return ToString(provider);
             case TypeCode.Object:
-                if (conversionType == typeof(object))
+                if (conversionType == typeof(object) || conversionType == typeof(CkAssociationRoleId))
                 {
                     return this;
                 }

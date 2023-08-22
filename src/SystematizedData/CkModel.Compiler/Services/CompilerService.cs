@@ -19,12 +19,12 @@ public class CompilerService
     {
         ArgumentValidation.ValidateDirectoryPath(nameof(rootPath), rootPath);
 
-        CompilerResult compilerResult = new CompilerResult();
+        OperationResult operationResult = new OperationResult();
 
 
         if (Directory.Exists(rootPath) && !Directory.EnumerateFileSystemEntries(rootPath).Any())
         {
-            compilerResult.AddMessage(MessageCodes.DirectoryMustBeEmpty(rootPath));
+            operationResult.AddMessage(MessageCodes.DirectoryMustBeEmpty(rootPath));
             throw CompilerException.DirectoryMustBeEmpty(rootPath);
         }
 
@@ -52,9 +52,9 @@ public class CompilerService
         
         
 
-        if (compilerResult.HasErrors)
+        if (operationResult.HasErrors)
         {
-            throw CompilerException.CompilerResultWithErrors(compilerResult);
+            throw CompilerException.OperationResultWithErrors(operationResult);
         }
     }
 }

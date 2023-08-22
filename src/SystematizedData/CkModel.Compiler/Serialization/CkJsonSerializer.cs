@@ -1,7 +1,8 @@
 ﻿using System.Text.Json;
-using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Json.Schema;
+using Json.Schema.Serialization;
+using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Messages;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
@@ -10,12 +11,18 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
 
 public class CkJsonSerializer : ICkSerializer
 {
+    private const string Validation = "validation";
     private readonly JsonSerializerOptions _options;
 
     // ReSharper disable once ConvertConstructorToMemberInitializers
     public CkJsonSerializer()
     {
-        _options = new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        _options = new JsonSerializerOptions 
+        { 
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault, 
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            Converters = { new OctoValidatingJsonConverterFactory {RequireFormatValidation = true, OutputFormat = OutputFormat.List} }
+        };
     }
     
     public async Task SerializeAsync(StreamWriter streamWriter, CkCompiledModelRoot compiledModel)
@@ -33,29 +40,85 @@ public class CkJsonSerializer : ICkSerializer
         await JsonSerializer.SerializeAsync(streamWriter.BaseStream, elementsDto);
     }
 
-    public async Task<CkMetaDto> DeserializeMetaAsync(StreamReader streamReader)
+    public async Task<CkMetaDto> DeserializeMetaAsync(Stream stream, OperationResult operationResult)
     {
-        var ckMetaDto = await JsonSerializer.DeserializeAsync<CkMetaDto>(streamReader.BaseStream, _options);
-        return ckMetaDto ?? throw ModelParseException.CannotDeserializeModel();
+        try
+        {
+            var ckMetaDto = await JsonSerializer.DeserializeAsync<CkMetaDto>(stream, _options);
+            return ckMetaDto ?? throw ModelParseException.CannotDeserializeModel();
+        }
+        catch (JsonException e)
+        {
+            CheckException(operationResult, e);
+            throw ModelParseException.CannotDeserializeModel();
+        }
     }
 
-    public async Task<CkElementsDto> DeserializeElementsAsync(StreamReader streamReader)
+    public async Task<CkElementsDto> DeserializeElementsAsync(Stream stream, OperationResult operationResult)
     {
-        var ckElementsDto = await JsonSerializer.DeserializeAsync<CkElementsDto>(streamReader.BaseStream, _options);
-        return ckElementsDto ?? throw ModelParseException.CannotDeserializeModel();
+        try
+        {
+            var ckElementsDto = await JsonSerializer.DeserializeAsync<CkElementsDto>(stream, _options);
+            return ckElementsDto ?? throw ModelParseException.CannotDeserializeModel();
+        }
+        catch (JsonException e)
+        {
+            CheckException(operationResult, e);
+            throw ModelParseException.CannotDeserializeModel();
+        }
     }
 
-    public async Task<CkCompiledModelRoot?> DeserializeModelRootAsync(string s)
+
+    public async Task<CkCompiledModelRoot?> DeserializeModelRootAsync(string s, OperationResult operationResult) 
     {
         byte[] byteArray = System.Text.Encoding.UTF8.GetBytes(s);
         using var memStream = new MemoryStream(byteArray);
-        using var streamReader = new StreamReader(memStream);   
-        return await DeserializeModelRootAsync(streamReader);
+        return await DeserializeModelRootAsync(memStream, operationResult);
     }
 
-    public async Task<CkCompiledModelRoot> DeserializeModelRootAsync(StreamReader streamReader)
+
+    public async Task<CkCompiledModelRoot> DeserializeModelRootAsync(Stream stream, OperationResult operationResult)
     {
-        var ckModelRoot = await JsonSerializer.DeserializeAsync<CkCompiledModelRoot>(streamReader.BaseStream, _options);
-        return ckModelRoot ?? throw ModelParseException.CannotDeserializeModel();
+        try
+        {
+            var ckModelRoot = await JsonSerializer.DeserializeAsync<CkCompiledModelRoot>(stream, _options);
+            return ckModelRoot ?? throw ModelParseException.CannotDeserializeModel();
+        }
+        catch (JsonException e)
+        {
+            CheckException(operationResult, e);
+            throw ModelParseException.CannotDeserializeModel();
+        }
+    }
+    
+    
+    private static void CheckException(OperationResult operationResult, JsonException e)
+    {
+        if (e.Data.Contains(Validation))
+        {
+            var evaluationResults = (EvaluationResults?)e.Data[Validation];
+            if (evaluationResults != null)
+            {
+                if (!ValidateEvaluationResults(operationResult, evaluationResults))
+                {
+                    throw ModelParseException.SchemaValidationFailed();
+                }
+            }
+        }
+    }
+    
+    private static bool ValidateEvaluationResults(OperationResult operationResult, EvaluationResults evaluationResults)
+    {
+        if (!evaluationResults.IsValid)
+        {
+            foreach (var evaluationResult in evaluationResults.Details.Where(x => x.HasErrors))
+            {
+                var path = evaluationResult.InstanceLocation.ToString();
+                var errorMessages = string.Join(", ", evaluationResults.Errors?.Values ?? Enumerable.Empty<string>());
+                operationResult.AddMessage(MessageCodes.SchemaValidationError($"{path}: {errorMessages}"));
+            }
+        }
+
+        return evaluationResults.IsValid;
     }
 }

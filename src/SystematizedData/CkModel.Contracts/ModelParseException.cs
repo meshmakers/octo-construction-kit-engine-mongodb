@@ -35,8 +35,12 @@ public class ModelParseException : CkModelException
     {
         return new ModelParseException($"Stream contains invalid construction kit model.");
     }
-
     
+    public static Exception SchemaValidationFailed()
+    {
+        return new ModelParseException($"Stream contains invalid construction kit model so that the schema validation failed.");
+    }
+
     public static Exception CannotDeserializeRtModel(string filePath)
     {
         return new ModelParseException($"File '{filePath}' contains invalid runtime model.");

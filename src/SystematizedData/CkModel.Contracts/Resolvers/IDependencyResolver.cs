@@ -4,5 +4,5 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.Resolvers;
 
 public interface IDependencyResolver
 {
-    Task<CkAggregatedModelElements> ResolveDependenciesAsync(ICollection<CkModelId> dependencies, CompilerResult compilerResult);
+    Task<CkAggregatedModelElements> ResolveDependenciesAsync(ICollection<CkModelId> dependencies, OperationResult operationResult);
 }

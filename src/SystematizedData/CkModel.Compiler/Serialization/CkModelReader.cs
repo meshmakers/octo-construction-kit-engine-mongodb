@@ -1,4 +1,3 @@
-using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Validation;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
@@ -20,7 +19,7 @@ public class CkModelReader
         _ckSerializer = ckSerializer;
     }
 
-    public async Task ReadAsync(string filePath, CancellationToken? cancellationToken = null)
+    public async Task ReadAsync(string filePath, OperationResult operationResult, CancellationToken? cancellationToken = null)
     {
         _logger.LogInformation("Reading CK model...");
 
@@ -28,10 +27,8 @@ public class CkModelReader
 
         try
         {
-            using (var streamReader = new StreamReader(filePath))
-            {
-                model = await _ckSerializer.DeserializeModelRootAsync(streamReader);
-            }
+            await using var stream = File.OpenRead(filePath);
+            model = await _ckSerializer.DeserializeModelRootAsync(stream, operationResult);
 
             if (model == null)
             {
@@ -44,7 +41,7 @@ public class CkModelReader
         }
 
         _logger.LogInformation("Validating CK model...");
-        await _ckModelValidator.ValidateAsync(model);
+        await _ckModelValidator.ValidateAsync(model, operationResult);
 
         
     }

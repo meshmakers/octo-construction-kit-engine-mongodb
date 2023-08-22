@@ -11,13 +11,13 @@ public class CkSchemaValidatorTests
     {
         var schemaValidator = new CkSchemaValidator();
 
-        var streamReader = File.OpenRead("sampleData/files/ok.json");
-        var compilerResult = new CompilerResult();
-        bool isValid = schemaValidator.ValidateElementsInJson(streamReader, compilerResult);
+        var stream = File.OpenRead("sampleData/files/ok.json");
+        var operationResult = new OperationResult();
+        bool isValid = schemaValidator.ValidateElementsInJson(stream, operationResult);
         Assert.True(isValid);
-        Assert.False(compilerResult.Messages.Any());
-        Assert.False(compilerResult.HasErrors);
-        Assert.False(compilerResult.HasFatalErrors);
+        Assert.False(operationResult.Messages.Any());
+        Assert.False(operationResult.HasErrors);
+        Assert.False(operationResult.HasFatalErrors);
     }
     
     [Fact]
@@ -25,14 +25,14 @@ public class CkSchemaValidatorTests
     {
         var schemaValidator = new CkSchemaValidator();
 
-        var streamReader = File.OpenRead("sampleData/files/malformedAttribute.json");
-        var compilerResult = new CompilerResult();
-        var isValid = schemaValidator.ValidateElementsInJson(streamReader, compilerResult);
+        var stream = File.OpenRead("sampleData/files/malformedAttribute.json");
+        var operationResult = new OperationResult();
+        var isValid = schemaValidator.ValidateElementsInJson(stream, operationResult);
         Assert.False(isValid);
-        Assert.Single(compilerResult.Messages);
-        Assert.True(compilerResult.HasErrors);
-        Assert.False(compilerResult.HasFatalErrors);
-        Assert.Equal(27, compilerResult.Messages[0].MessageNumber);
+        Assert.Single(operationResult.Messages);
+        Assert.True(operationResult.HasErrors);
+        Assert.False(operationResult.HasFatalErrors);
+        Assert.Equal(27, operationResult.Messages[0].MessageNumber);
     }
     
     [Fact]
@@ -40,14 +40,14 @@ public class CkSchemaValidatorTests
     {
         var schemaValidator = new CkSchemaValidator();
 
-        var streamReader = File.OpenRead("sampleData/files/malformedAttributeValue.json");
-        var compilerResult = new CompilerResult();
-        var isValid = schemaValidator.ValidateElementsInJson(streamReader, compilerResult);
+        var stream = File.OpenRead("sampleData/files/malformedAttributeValue.json");
+        var operationResult = new OperationResult();
+        var isValid = schemaValidator.ValidateElementsInJson(stream, operationResult);
         Assert.False(isValid);
-        Assert.Single(compilerResult.Messages);
-        Assert.True(compilerResult.HasErrors);
-        Assert.False(compilerResult.HasFatalErrors);
-        Assert.Equal(27, compilerResult.Messages[0].MessageNumber);
+        Assert.Single(operationResult.Messages);
+        Assert.True(operationResult.HasErrors);
+        Assert.False(operationResult.HasFatalErrors);
+        Assert.Equal(27, operationResult.Messages[0].MessageNumber);
     }
     
     
@@ -56,13 +56,13 @@ public class CkSchemaValidatorTests
     {
         var schemaValidator = new CkSchemaValidator();
 
-        var streamReader = File.OpenText("sampleData/files/ok.yaml");
-        var compilerResult = new CompilerResult();
-        var isValid = schemaValidator.ValidateElementsInYaml(streamReader, compilerResult);
+        var stream = File.OpenRead("sampleData/files/ok.yaml");
+        var operationResult = new OperationResult();
+        var isValid = schemaValidator.ValidateElementsInYaml(stream, operationResult);
         Assert.True(isValid);
-        Assert.False(compilerResult.Messages.Any());
-        Assert.False(compilerResult.HasErrors);
-        Assert.False(compilerResult.HasFatalErrors);
+        Assert.False(operationResult.Messages.Any());
+        Assert.False(operationResult.HasErrors);
+        Assert.False(operationResult.HasFatalErrors);
     }
     
     [Fact]
@@ -70,14 +70,14 @@ public class CkSchemaValidatorTests
     {
         var schemaValidator = new CkSchemaValidator();
 
-        var streamReader = File.OpenText("sampleData/files/malformedAttribute.yaml");
-        var compilerResult = new CompilerResult();
-        var isValid = schemaValidator.ValidateElementsInYaml(streamReader, compilerResult);
+        var stream = File.OpenRead("sampleData/files/malformedAttribute.yaml");
+        var operationResult = new OperationResult();
+        var isValid = schemaValidator.ValidateElementsInYaml(stream, operationResult);
         Assert.False(isValid);
-        Assert.Single(compilerResult.Messages);
-        Assert.True(compilerResult.HasErrors);
-        Assert.False(compilerResult.HasFatalErrors);
-        Assert.Equal(27, compilerResult.Messages[0].MessageNumber);
+        Assert.Single(operationResult.Messages);
+        Assert.True(operationResult.HasErrors);
+        Assert.False(operationResult.HasFatalErrors);
+        Assert.Equal(27, operationResult.Messages[0].MessageNumber);
     }
     
     [Fact]
@@ -85,13 +85,13 @@ public class CkSchemaValidatorTests
     {
         var schemaValidator = new CkSchemaValidator();
 
-        var streamReader = File.OpenText("sampleData/files/malformedAttributeValue.yaml");
-        var compilerResult = new CompilerResult();
-        var isValid = schemaValidator.ValidateElementsInYaml(streamReader, compilerResult);
+        var stream = File.OpenRead("sampleData/files/malformedAttributeValue.yaml");
+        var operationResult = new OperationResult();
+        var isValid = schemaValidator.ValidateElementsInYaml(stream, operationResult);
         Assert.False(isValid);
-        Assert.Single(compilerResult.Messages);
-        Assert.True(compilerResult.HasErrors);
-        Assert.False(compilerResult.HasFatalErrors);
-        Assert.Equal(27, compilerResult.Messages[0].MessageNumber);
+        Assert.Single(operationResult.Messages);
+        Assert.True(operationResult.HasErrors);
+        Assert.False(operationResult.HasFatalErrors);
+        Assert.Equal(27, operationResult.Messages[0].MessageNumber);
     }
 }

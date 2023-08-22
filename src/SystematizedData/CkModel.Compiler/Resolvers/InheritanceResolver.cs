@@ -18,29 +18,29 @@ public class InheritanceResolver : IInheritanceResolver
         _logger = logger;
     }
 
-    public CkModelGraph Resolve(CkAggregatedModelElements aggregatedModelElements, CkModelGraph modelGraph, CompilerResult compilerResult)
+    public CkModelGraph Resolve(CkAggregatedModelElements aggregatedModelElements, CkModelGraph modelGraph, OperationResult operationResult)
     {
         _logger.LogInformation("Starting resolving inheritance");
 
         foreach (var ckTypeKeyValue in aggregatedModelElements.CkTypes)
         {
-            var typeGraph = GetOrCreateTypeGraph(modelGraph, aggregatedModelElements, ckTypeKeyValue.Key, compilerResult);
+            var typeGraph = GetOrCreateTypeGraph(modelGraph, aggregatedModelElements, ckTypeKeyValue.Key, operationResult);
             GetDirectedAggregationsAndAttributes(modelGraph, aggregatedModelElements, ckTypeKeyValue.Value,
-                typeGraph, compilerResult);
+                typeGraph, operationResult);
         }
 
-        BuildInheritedAssociations(modelGraph, compilerResult);
+        BuildInheritedAssociations(modelGraph, operationResult);
 
 
         return modelGraph;
     }
 
     private CkTypeGraph GetOrCreateTypeGraph(CkModelGraph modelGraph,
-        CkAggregatedModelElements aggregatedModelElements, CkId<CkTypeId> ckTypeId, CompilerResult compilerResult)
+        CkAggregatedModelElements aggregatedModelElements, CkId<CkTypeId> ckTypeId, OperationResult operationResult)
     {
         if (!aggregatedModelElements.CkTypes.TryGetValue(ckTypeId, out var ckType))
         {
-            compilerResult.AddMessage(MessageCodes.CkTypeIdUnknown(ckTypeId));
+            operationResult.AddMessage(MessageCodes.CkTypeIdUnknown(ckTypeId));
             throw ModelValidationException.UnknownCkTypeId(ckTypeId);
         }
 
@@ -51,7 +51,7 @@ public class InheritanceResolver : IInheritanceResolver
 
         if (!_handledTypesHashSet.Contains(ckTypeId))
         {
-            var baseTypes = GetBaseTypes(aggregatedModelElements, ckTypeId, compilerResult);
+            var baseTypes = GetBaseTypes(aggregatedModelElements, ckTypeId, operationResult);
             typeGraph.AddBaseTypes(baseTypes);
             _handledTypesHashSet.Add(ckTypeId);
         }
@@ -61,7 +61,7 @@ public class InheritanceResolver : IInheritanceResolver
 
     private void GetDirectedAggregationsAndAttributes(CkModelGraph ckModelGraph,
         CkAggregatedModelElements aggregatedModelElements, CkTypeDto ckTypeDto,
-        CkTypeGraph originTypeGraph, CompilerResult compilerResult)
+        CkTypeGraph originTypeGraph, OperationResult operationResult)
     {
         for (int i = originTypeGraph.BaseTypes.Count - 1; i >= 0; i--)
         {
@@ -83,13 +83,13 @@ public class InheritanceResolver : IInheritanceResolver
             foreach (var typeAssociation in ckTypeDto.Associations)
             {
                 var targetCkTypeGraph = GetOrCreateTargetCkTypeGraph(ckModelGraph, aggregatedModelElements,
-                    originTypeGraph, typeAssociation, compilerResult);
+                    originTypeGraph, typeAssociation, operationResult);
 
                 // Check if there is a duplicate association defined at the same type.
                 if (originTypeGraph.Associations.Out.Owned.Any(x =>
                         x.RoleId == typeAssociation.RoleId && x.TargetCkTypeId == typeAssociation.TargetCkTypeId))
                 {
-                    compilerResult.AddMessage(MessageCodes.CkTypeIdAssociationNotUnique(originTypeGraph.CkTypeId,
+                    operationResult.AddMessage(MessageCodes.CkTypeIdAssociationNotUnique(originTypeGraph.CkTypeId,
                         typeAssociation.RoleId, typeAssociation.TargetCkTypeId));
                     continue;
                 }
@@ -98,7 +98,7 @@ public class InheritanceResolver : IInheritanceResolver
                 var duplicateTypeAssociations = originTypeGraph.BaseTypes.SelectMany(i =>
                 {
                     var baseCkTypeGraph = GetOrCreateTypeGraph(ckModelGraph, aggregatedModelElements,
-                        i.BaseCkTypeId, compilerResult);
+                        i.BaseCkTypeId, operationResult);
 
                     return baseCkTypeGraph.Associations.Out.Owned.Where(x =>
                         x.RoleId == typeAssociation.RoleId && originTypeGraph.BaseTypes.Any(y =>
@@ -109,7 +109,7 @@ public class InheritanceResolver : IInheritanceResolver
                 {
                     foreach (var duplicateTypeAssociation in duplicateTypeAssociations)
                     {
-                        compilerResult.AddMessage(MessageCodes.CkTypeIdMultipleOutgoingAssociationRepresentingSameRole(
+                        operationResult.AddMessage(MessageCodes.CkTypeIdMultipleOutgoingAssociationRepresentingSameRole(
                             originTypeGraph.CkTypeId,
                             typeAssociation.RoleId, typeAssociation.TargetCkTypeId,
                             duplicateTypeAssociation.BaseCkTypeGraph.CkTypeId, duplicateTypeAssociation.TargetCkTypeId));
@@ -129,7 +129,7 @@ public class InheritanceResolver : IInheritanceResolver
             var duplicateAttributeNames = ckTypeDto.Attributes.GroupBy(a => a.AttributeName).Where(a => a.Count() > 1).ToList();
             if (duplicateAttributeNames.Count > 0)
             {
-                compilerResult.AddMessage(
+                operationResult.AddMessage(
                     MessageCodes.CkTypeIdAttributeNameNotUnique(originTypeGraph.CkTypeId, duplicateAttributeNames.Select(a => a.Key)));
                 throw ModelValidationException.DuplicateAttributeNamesInCkType(originTypeGraph.CkTypeId,
                     duplicateAttributeNames.Select(a => a.Key));
@@ -138,7 +138,7 @@ public class InheritanceResolver : IInheritanceResolver
             var duplicateAttributeIds = ckTypeDto.Attributes.GroupBy(a => a.AttributeId).Where(a => a.Count() > 1).ToList();
             if (duplicateAttributeIds.Count > 0)
             {
-                compilerResult.AddMessage(
+                operationResult.AddMessage(
                     MessageCodes.CkTypeIdAttributeIdNotUnique(originTypeGraph.CkTypeId, duplicateAttributeNames.Select(a => a.Key)));
                 throw ModelValidationException.DuplicateAttributeIdsInCkType(originTypeGraph.CkTypeId,
                     duplicateAttributeIds.Select(a => a.Key));
@@ -148,7 +148,7 @@ public class InheritanceResolver : IInheritanceResolver
             {
                 if (originTypeGraph.Attributes.Any(a => a.AttributeId == typeAttribute.AttributeId))
                 {
-                    compilerResult.AddMessage(
+                    operationResult.AddMessage(
                         MessageCodes.CkTypeIdAttributeIdNotUniqueByInheritance(originTypeGraph.CkTypeId, typeAttribute.AttributeId));
                     continue;
                 }
@@ -156,7 +156,7 @@ public class InheritanceResolver : IInheritanceResolver
                 if (originTypeGraph.Attributes.Any(a =>
                         string.Compare(a.AttributeName, typeAttribute.AttributeName, StringComparison.OrdinalIgnoreCase) == 0))
                 {
-                    compilerResult.AddMessage(
+                    operationResult.AddMessage(
                         MessageCodes.CkTypeIdAttributeNameNotUniqueByInheritance(originTypeGraph.CkTypeId,
                             typeAttribute.AttributeName));
                     continue;
@@ -169,22 +169,22 @@ public class InheritanceResolver : IInheritanceResolver
 
     private CkTypeGraph GetOrCreateTargetCkTypeGraph(CkModelGraph ckModelGraph,
         CkAggregatedModelElements aggregatedModelElements, CkTypeGraph typeGraph,
-        CkTypeAssociationDto typeAssociation, CompilerResult compilerResult)
+        CkTypeAssociationDto typeAssociation, OperationResult operationResult)
     {
         if (!aggregatedModelElements.CkTypes.ContainsKey(typeAssociation.TargetCkTypeId))
         {
-            compilerResult.AddMessage(MessageCodes.CkTypeIdUnknownTargetCkTypeIdForAssociation(typeGraph.CkTypeId,
+            operationResult.AddMessage(MessageCodes.CkTypeIdUnknownTargetCkTypeIdForAssociation(typeGraph.CkTypeId,
                 typeAssociation.RoleId, typeAssociation.TargetCkTypeId));
             throw ModelValidationException.UnknownCkTypeIdForAssociationTarget(typeGraph.CkTypeId,
                 typeAssociation.RoleId, typeAssociation.TargetCkTypeId);
         }
 
         var targetCkTypeGraph = GetOrCreateTypeGraph(ckModelGraph, aggregatedModelElements,
-            typeAssociation.TargetCkTypeId, compilerResult);
+            typeAssociation.TargetCkTypeId, operationResult);
         return targetCkTypeGraph;
     }
 
-    private void BuildInheritedAssociations(CkModelGraph modelGraph, CompilerResult compilerResult)
+    private void BuildInheritedAssociations(CkModelGraph modelGraph, OperationResult operationResult)
     {
         var handledInheritanceHashSet = new HashSet<Tuple<CkId<CkTypeId>, CkId<CkTypeId>>>();
         foreach (var graphType in modelGraph.Types)
@@ -220,7 +220,7 @@ public class InheritanceResolver : IInheritanceResolver
                     if (inheritedGraphType.Associations.Out.Inherited.Any(x =>
                             x.RoleId == typeAssociation.RoleId && x.TargetCkTypeId == typeAssociation.TargetCkTypeId))
                     {
-                        compilerResult.AddMessage(MessageCodes.CkTypeIdOutAssociationNotUniqueByInheritance(inheritedGraphType.CkTypeId,
+                        operationResult.AddMessage(MessageCodes.CkTypeIdOutAssociationNotUniqueByInheritance(inheritedGraphType.CkTypeId,
                             typeAssociation.RoleId, typeAssociation.TargetCkTypeId));
                         continue;
                     }
@@ -237,7 +237,7 @@ public class InheritanceResolver : IInheritanceResolver
     }
 
     private static IList<CkGraphTypeInheritance> GetBaseTypes(CkAggregatedModelElements aggregatedModelElements,
-        CkId<CkTypeId> ckTypeId, CompilerResult compilerResult)
+        CkId<CkTypeId> ckTypeId, OperationResult operationResult)
     {
         var ckTypeIds = new List<CkGraphTypeInheritance>();
 
@@ -253,7 +253,7 @@ public class InheritanceResolver : IInheritanceResolver
             {
                 if (currentCkType.IsFinal)
                 {
-                    compilerResult.AddMessage(MessageCodes.DerivedFromCkTypeIdThatIsFinal(currentCkTypeId.Value, lastCkTypeId.Value));
+                    operationResult.AddMessage(MessageCodes.DerivedFromCkTypeIdThatIsFinal(currentCkTypeId.Value, lastCkTypeId.Value));
                     throw ModelValidationException.DerivedFromCkTypeIdThatIsFinal(currentCkTypeId.Value, lastCkTypeId.Value);
                 }
             }
@@ -269,7 +269,7 @@ public class InheritanceResolver : IInheritanceResolver
 
         if (currentCkTypeId != null)
         {
-            compilerResult.AddMessage(MessageCodes.UnknownCkTypeIdForInheritance(currentCkTypeId.Value));
+            operationResult.AddMessage(MessageCodes.UnknownCkTypeIdForInheritance(currentCkTypeId.Value));
             throw ModelValidationException.UnknownCkTypeIdForInheritance(currentCkTypeId.Value);
         }
         
@@ -278,7 +278,7 @@ public class InheritanceResolver : IInheritanceResolver
             if (!CompilerStatics.WhiteListedCkTypeIds.Any(x => x.ModelId.ModelId == ckTypeId.ModelId.ModelId
                                                                && x.Key.TypeId == ckTypeId.Key.TypeId))
             {
-                compilerResult.AddMessage(
+                operationResult.AddMessage(
                     MessageCodes.InheritanceMissing(ckTypeId.Key.TypeId));
                 throw ModelValidationException.InheritanceMissing(ckTypeId.Key.TypeId);
             }

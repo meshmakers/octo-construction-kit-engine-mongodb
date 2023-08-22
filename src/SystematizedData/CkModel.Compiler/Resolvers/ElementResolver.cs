@@ -9,7 +9,7 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.Resolvers;
 
 public class ElementResolver : IElementResolver
 {
-    public CkModelGraph Resolve(CkCompiledModelRoot ckCompiledModelRoot, CompilerResult validationResult)
+    public CkModelGraph Resolve(CkCompiledModelRoot ckCompiledModelRoot, OperationResult validationResult)
     {
         var ckModelGraph = new CkModelGraph();
         

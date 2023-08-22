@@ -1,5 +1,4 @@
 ﻿using System.Diagnostics;
-using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
@@ -42,7 +41,8 @@ public class ImportCkModelCommand : IImportCkModelCommand
 
 
             Logger.Info("Reading CK model....");
-            var model = await _ckSerializer.DeserializeModelRootAsync(jsonText);
+            var operationResult = new OperationResult();
+            var model = await _ckSerializer.DeserializeModelRootAsync(jsonText, operationResult);
 
             if (model == null)
             {
@@ -77,11 +77,9 @@ public class ImportCkModelCommand : IImportCkModelCommand
 
 
             Logger.Info("Reading CK model....");
-            CkCompiledModelRoot? model;
-            using (var streamReader = new StreamReader(filePath))
-            {
-                model = await _ckSerializer.DeserializeModelRootAsync(streamReader);
-            }
+            var operationResult = new OperationResult();
+            await using var streamReader = File.OpenRead(filePath);
+            var model = await _ckSerializer.DeserializeModelRootAsync(streamReader, operationResult);
 
             if (model == null)
             {
@@ -200,7 +198,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
                 return;
             }
         }
-        
+
         await ckModelRepository.InsertCkModelAsync(session, transientCkModel.CkModel);
 
         await CreateCollections(session, ckModelRepository);

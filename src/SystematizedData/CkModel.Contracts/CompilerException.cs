@@ -2,32 +2,32 @@ namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 
 public class CompilerException : Exception
 {
-    public CompilerException(CompilerResult compilerResult) 
+    public CompilerException(OperationResult operationResult) 
         : base("Compiler result contains errors")
     {
-        CompilerResult = compilerResult;
+        OperationResult = operationResult;
     }
 
-    public CompilerException(string message, CompilerResult compilerResult) : base(message)
+    public CompilerException(string message, OperationResult operationResult) : base(message)
     {
-        CompilerResult = compilerResult;
+        OperationResult = operationResult;
     }
 
-    public CompilerException(string message, Exception inner, CompilerResult compilerResult) : base(message, inner)
+    public CompilerException(string message, Exception inner, OperationResult operationResult) : base(message, inner)
     {
-        CompilerResult = compilerResult;
+        OperationResult = operationResult;
     }
 
-    public CompilerResult CompilerResult { get; }
+    public OperationResult OperationResult { get; }
 
-    public static Exception CompilerResultWithErrors(CompilerResult compilerResult)
+    public static Exception OperationResultWithErrors(OperationResult operationResult)
     {
-        return new CompilerException(compilerResult);
+        return new CompilerException(operationResult);
     }
     
     public static Exception DirectoryMustBeEmpty(string rootPath)
     {
-        return new CompilerException($"Directory '{rootPath}' must be empty", new CompilerResult());
+        return new CompilerException($"Directory '{rootPath}' must be empty", new OperationResult());
     }
     
 }

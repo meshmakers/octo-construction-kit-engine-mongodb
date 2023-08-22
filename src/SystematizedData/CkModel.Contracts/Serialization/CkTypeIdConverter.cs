@@ -30,7 +30,7 @@ public class CkTypeIdConverter : JsonConverter<CkTypeId>, IYamlTypeConverter
     public object ReadYaml(IParser parser, Type type)
     {
         var value = parser.Consume<Scalar>().Value;
-        return new CkModelId(value); 
+        return new CkTypeId(value); 
     }
 
     public void WriteYaml(IEmitter emitter, object? value, Type type)

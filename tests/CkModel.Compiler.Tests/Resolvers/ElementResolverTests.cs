@@ -14,7 +14,7 @@ public class ElementResolverTests
         var ckModelRoot = sampleData.sample1.Builder.Build();
         
         var resolver = new ElementResolver();
-        var validationResult = new CompilerResult();
+        var validationResult = new OperationResult();
 
         var result = resolver.Resolve(ckModelRoot, validationResult);
 
@@ -31,7 +31,7 @@ public class ElementResolverTests
         }
 
         var resolver = new ElementResolver();
-        var validationResult = new CompilerResult();
+        var validationResult = new OperationResult();
     
         resolver.Resolve(ckModelRoot, validationResult);
     
@@ -50,7 +50,7 @@ public class ElementResolverTests
         }
 
         var resolver = new ElementResolver();
-        var validationResult = new CompilerResult();
+        var validationResult = new OperationResult();
     
         resolver.Resolve(ckModelRoot, validationResult);
     
@@ -69,7 +69,7 @@ public class ElementResolverTests
         }
 
         var resolver = new ElementResolver();
-        var validationResult = new CompilerResult();
+        var validationResult = new OperationResult();
     
         resolver.Resolve(ckModelRoot, validationResult);
     
@@ -88,7 +88,7 @@ public class ElementResolverTests
         }
 
         var resolver = new ElementResolver();
-        var validationResult = new CompilerResult();
+        var validationResult = new OperationResult();
     
         resolver.Resolve(ckModelRoot, validationResult);
     
@@ -108,7 +108,7 @@ public class ElementResolverTests
         }
 
         var resolver = new ElementResolver();
-        var validationResult = new CompilerResult();
+        var validationResult = new OperationResult();
     
         resolver.Resolve(ckModelRoot, validationResult);
     
@@ -128,7 +128,7 @@ public class ElementResolverTests
         };
 
         var resolver = new ElementResolver();
-        var validationResult = new CompilerResult();
+        var validationResult = new OperationResult();
     
         resolver.Resolve(ckModelRoot, validationResult);
     

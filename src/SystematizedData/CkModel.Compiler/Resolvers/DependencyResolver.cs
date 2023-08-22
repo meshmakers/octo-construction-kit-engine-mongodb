@@ -18,17 +18,17 @@ internal class DependencyResolver : IDependencyResolver
         _ckModelRepositoryManager = ckModelRepositoryManager;
     }
 
-    public async Task<CkAggregatedModelElements> ResolveDependenciesAsync(ICollection<CkModelId> dependencies, CompilerResult compilerResult)
+    public async Task<CkAggregatedModelElements> ResolveDependenciesAsync(ICollection<CkModelId> dependencies, OperationResult operationResult)
     {
         CkAggregatedModelElements aggregatedModelElements = new();
 
         _logger.LogInformation("Starting resolving dependencies");
-        await Resolve(dependencies, aggregatedModelElements, compilerResult);
+        await Resolve(dependencies, aggregatedModelElements, operationResult);
 
         return aggregatedModelElements;
     }
 
-    private async Task Resolve(ICollection<CkModelId> ckRootDependencies, CkAggregatedModelElements aggregatedModelElements, CompilerResult compilerResult)
+    private async Task Resolve(ICollection<CkModelId> ckRootDependencies, CkAggregatedModelElements aggregatedModelElements, OperationResult operationResult)
     {
         List<CkModelId> dependencies = new(ckRootDependencies);
 
@@ -40,7 +40,7 @@ internal class DependencyResolver : IDependencyResolver
             var ckDependencyRootModel = await _ckModelRepositoryManager.LookupCkModelAsync(ckDependency);
             if (ckDependencyRootModel == null)
             {
-                compilerResult.AddMessage(MessageCodes.UnknownCkModel(ckDependency));
+                operationResult.AddMessage(MessageCodes.UnknownCkModel(ckDependency));
                 continue;
             }
             

@@ -163,7 +163,7 @@ public readonly struct CkTypeId : IComparable<CkTypeId>, IEquatable<CkTypeId>, I
             case TypeCode.String:
                 return ToString(provider);
             case TypeCode.Object:
-                if (conversionType == typeof(object))
+                if (conversionType == typeof(object) || conversionType == typeof(CkTypeId))
                 {
                     return this;
                 }

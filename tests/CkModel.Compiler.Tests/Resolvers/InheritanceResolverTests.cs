@@ -19,12 +19,12 @@ public class InheritanceResolverTests
         ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
         ckAggregatedModelElements.AppendModel(sampleData.sample1.Builder.Build());
 
-        CompilerResult compilerResult = new();
+        OperationResult operationResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
         CkModelGraph graph = new();
-        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult);
+        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, operationResult);
         
-        Assert.Empty(compilerResult.Messages);
+        Assert.Empty(operationResult.Messages);
         Assert.Equal(4, graph.Types.Count);
         Assert.NotNull(graph.Types["System/Entity"]);
         Assert.NotNull(graph.Types["sample1/Demo1"]);
@@ -63,12 +63,12 @@ public class InheritanceResolverTests
         ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
         ckAggregatedModelElements.AppendModel(sampleData.sample1.Builder.Build());
         
-        CompilerResult compilerResult = new();
+        OperationResult operationResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
         CkModelGraph graph = new();
-        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult);
+        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, operationResult);
         
-        Assert.Empty(compilerResult.Messages);
+        Assert.Empty(operationResult.Messages);
         Assert.Equal(4, graph.Types.Count);
         Assert.NotNull(graph.Types["System/Entity"]);
         Assert.NotNull(graph.Types["sample1/Demo1"]);
@@ -87,14 +87,14 @@ public class InheritanceResolverTests
         ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
         ckAggregatedModelElements.AppendModel(sampleData.sample_attributes_sameName_fail.Builder.Build());
         
-        CompilerResult compilerResult = new();
+        OperationResult operationResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
         CkModelGraph graph = new();
-        Assert.Throws<ModelValidationException>(() => inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult));
+        Assert.Throws<ModelValidationException>(() => inheritanceResolver.Resolve(ckAggregatedModelElements, graph, operationResult));
 
-        Assert.Single(compilerResult.Messages);
-        Assert.Equal(MessageLevel.FatalError, compilerResult.Messages[0].MessageLevel);
-        Assert.Equal(15, compilerResult.Messages[0].MessageNumber);
+        Assert.Single(operationResult.Messages);
+        Assert.Equal(MessageLevel.FatalError, operationResult.Messages[0].MessageLevel);
+        Assert.Equal(15, operationResult.Messages[0].MessageNumber);
     }
     
     [Fact]
@@ -106,14 +106,14 @@ public class InheritanceResolverTests
         ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
         ckAggregatedModelElements.AppendModel(sampleData.sample_attributes_sameNameAtInheritance_fail.Builder.Build());
         
-        CompilerResult compilerResult = new();
+        OperationResult operationResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
         CkModelGraph graph = new();
-        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult);
+        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, operationResult);
         
-        Assert.Single(compilerResult.Messages);
-        Assert.Equal(MessageLevel.Error, compilerResult.Messages[0].MessageLevel);
-        Assert.Equal(13, compilerResult.Messages[0].MessageNumber);
+        Assert.Single(operationResult.Messages);
+        Assert.Equal(MessageLevel.Error, operationResult.Messages[0].MessageLevel);
+        Assert.Equal(13, operationResult.Messages[0].MessageNumber);
     }
         
     [Fact]
@@ -125,14 +125,14 @@ public class InheritanceResolverTests
         ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
         ckAggregatedModelElements.AppendModel(sampleData.sample_attributes_sameId_fail.Builder.Build());
         
-        CompilerResult compilerResult = new();
+        OperationResult operationResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
         CkModelGraph graph = new();
-        Assert.Throws<ModelValidationException>(() => inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult));
+        Assert.Throws<ModelValidationException>(() => inheritanceResolver.Resolve(ckAggregatedModelElements, graph, operationResult));
 
-        Assert.Single(compilerResult.Messages);
-        Assert.Equal(MessageLevel.FatalError, compilerResult.Messages[0].MessageLevel);
-        Assert.Equal(16, compilerResult.Messages[0].MessageNumber);
+        Assert.Single(operationResult.Messages);
+        Assert.Equal(MessageLevel.FatalError, operationResult.Messages[0].MessageLevel);
+        Assert.Equal(16, operationResult.Messages[0].MessageNumber);
     }
     
     [Fact]
@@ -144,14 +144,14 @@ public class InheritanceResolverTests
         ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
         ckAggregatedModelElements.AppendModel(sampleData.sample_attributes_sameIdAtInheritance_fail.Builder.Build());
         
-        CompilerResult compilerResult = new();
+        OperationResult operationResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
         CkModelGraph graph = new();
-        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult);
+        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, operationResult);
 
-        Assert.Single(compilerResult.Messages);
-        Assert.Equal(MessageLevel.Error, compilerResult.Messages[0].MessageLevel);
-        Assert.Equal(12, compilerResult.Messages[0].MessageNumber);
+        Assert.Single(operationResult.Messages);
+        Assert.Equal(MessageLevel.Error, operationResult.Messages[0].MessageLevel);
+        Assert.Equal(12, operationResult.Messages[0].MessageNumber);
     }
     
     [Fact]
@@ -163,14 +163,14 @@ public class InheritanceResolverTests
         ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
         ckAggregatedModelElements.AppendModel(sampleData.sample_assocs_sameIdAndTarget_fail.Builder.Build());
         
-        CompilerResult compilerResult = new();
+        OperationResult operationResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
         CkModelGraph graph = new();
-        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult);
+        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, operationResult);
 
-        Assert.Single(compilerResult.Messages);
-        Assert.Equal(MessageLevel.Error, compilerResult.Messages[0].MessageLevel);
-        Assert.Equal(14, compilerResult.Messages[0].MessageNumber);
+        Assert.Single(operationResult.Messages);
+        Assert.Equal(MessageLevel.Error, operationResult.Messages[0].MessageLevel);
+        Assert.Equal(14, operationResult.Messages[0].MessageNumber);
     }
     
     [Fact]
@@ -182,14 +182,14 @@ public class InheritanceResolverTests
         ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
         ckAggregatedModelElements.AppendModel(sampleData.sample_assocs_sameIdAndTargetAtInheritance_fail.Builder.Build());
         
-        CompilerResult compilerResult = new();
+        OperationResult operationResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
         CkModelGraph graph = new();
-        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult);
+        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, operationResult);
 
-        Assert.Single(compilerResult.Messages);
-        Assert.Equal(MessageLevel.Error, compilerResult.Messages[0].MessageLevel);
-        Assert.Equal(20, compilerResult.Messages[0].MessageNumber);
+        Assert.Single(operationResult.Messages);
+        Assert.Equal(MessageLevel.Error, operationResult.Messages[0].MessageLevel);
+        Assert.Equal(20, operationResult.Messages[0].MessageNumber);
     }
 
     [Fact]
@@ -201,14 +201,14 @@ public class InheritanceResolverTests
         ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
         ckAggregatedModelElements.AppendModel(sampleData.sample_assocs_sameIdAndBaseTargetAtInheritance_fail.Builder.Build());
         
-        CompilerResult compilerResult = new();
+        OperationResult operationResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
         CkModelGraph graph = new();
-        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult);
+        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, operationResult);
 
-        Assert.Single(compilerResult.Messages);
-        Assert.Equal(MessageLevel.Error, compilerResult.Messages[0].MessageLevel);
-        Assert.Equal(20, compilerResult.Messages[0].MessageNumber);
+        Assert.Single(operationResult.Messages);
+        Assert.Equal(MessageLevel.Error, operationResult.Messages[0].MessageLevel);
+        Assert.Equal(20, operationResult.Messages[0].MessageNumber);
     }
     
     [Fact]
@@ -220,12 +220,12 @@ public class InheritanceResolverTests
         ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
         ckAggregatedModelElements.AppendModel(sampleData.sample_assocs_sameRoleIdDifferentTrees_ok.Builder.Build());
         
-        CompilerResult compilerResult = new();
+        OperationResult operationResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
         CkModelGraph graph = new();
-        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult);
+        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, operationResult);
 
-        Assert.Empty(compilerResult.Messages);
+        Assert.Empty(operationResult.Messages);
     }
 
     [Fact]
@@ -236,14 +236,14 @@ public class InheritanceResolverTests
         CkAggregatedModelElements ckAggregatedModelElements = new();
         ckAggregatedModelElements.AppendModel(sampleData.sample1.Builder.Build());
 
-        CompilerResult compilerResult = new();
+        OperationResult operationResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
         CkModelGraph graph = new();
-        Assert.Throws<ModelValidationException>(() => inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult));
+        Assert.Throws<ModelValidationException>(() => inheritanceResolver.Resolve(ckAggregatedModelElements, graph, operationResult));
         
-        Assert.Single(compilerResult.Messages);
-        Assert.Equal(MessageLevel.FatalError, compilerResult.Messages[0].MessageLevel);
-        Assert.Equal(11, compilerResult.Messages[0].MessageNumber);
+        Assert.Single(operationResult.Messages);
+        Assert.Equal(MessageLevel.FatalError, operationResult.Messages[0].MessageLevel);
+        Assert.Equal(11, operationResult.Messages[0].MessageNumber);
     }
     
     [Fact]
@@ -255,14 +255,14 @@ public class InheritanceResolverTests
         ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
         ckAggregatedModelElements.AppendModel(sampleData.sample_assocs_invalidTarget_fail.Builder.Build());
 
-        CompilerResult compilerResult = new();
+        OperationResult operationResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
         CkModelGraph graph = new();
-        Assert.Throws<ModelValidationException>(() => inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult));
+        Assert.Throws<ModelValidationException>(() => inheritanceResolver.Resolve(ckAggregatedModelElements, graph, operationResult));
         
-        Assert.Single(compilerResult.Messages);
-        Assert.Equal(MessageLevel.FatalError, compilerResult.Messages[0].MessageLevel);
-        Assert.Equal(18, compilerResult.Messages[0].MessageNumber);
+        Assert.Single(operationResult.Messages);
+        Assert.Equal(MessageLevel.FatalError, operationResult.Messages[0].MessageLevel);
+        Assert.Equal(18, operationResult.Messages[0].MessageNumber);
     }
     
     [Fact]
@@ -274,14 +274,14 @@ public class InheritanceResolverTests
         ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
         ckAggregatedModelElements.AppendModel(sampleData.sample_final_fail.Builder.Build());
 
-        CompilerResult compilerResult = new();
+        OperationResult operationResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
         CkModelGraph graph = new();
-        Assert.Throws<ModelValidationException>(() => inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult));
+        Assert.Throws<ModelValidationException>(() => inheritanceResolver.Resolve(ckAggregatedModelElements, graph, operationResult));
         
-        Assert.Single(compilerResult.Messages);
-        Assert.Equal(MessageLevel.FatalError, compilerResult.Messages[0].MessageLevel);
-        Assert.Equal(21, compilerResult.Messages[0].MessageNumber);
+        Assert.Single(operationResult.Messages);
+        Assert.Equal(MessageLevel.FatalError, operationResult.Messages[0].MessageLevel);
+        Assert.Equal(21, operationResult.Messages[0].MessageNumber);
     }
     
     [Fact]
@@ -293,12 +293,12 @@ public class InheritanceResolverTests
         ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
         ckAggregatedModelElements.AppendModel(sampleData.sample_final.Builder.Build());
 
-        CompilerResult compilerResult = new();
+        OperationResult operationResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
         CkModelGraph graph = new();
-        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult);
+        inheritanceResolver.Resolve(ckAggregatedModelElements, graph, operationResult);
         
-        Assert.Empty(compilerResult.Messages);
+        Assert.Empty(operationResult.Messages);
     }
     
     [Fact]
@@ -310,13 +310,13 @@ public class InheritanceResolverTests
         ckAggregatedModelElements.AppendModel(sampleData.systemFake.Builder.Build());
         ckAggregatedModelElements.AppendModel(Builder.Build());
 
-        CompilerResult compilerResult = new();
+        OperationResult operationResult = new();
         InheritanceResolver inheritanceResolver = new(logger);
         CkModelGraph graph = new();
-        Assert.Throws<ModelValidationException>(() => inheritanceResolver.Resolve(ckAggregatedModelElements, graph, compilerResult));
+        Assert.Throws<ModelValidationException>(() => inheritanceResolver.Resolve(ckAggregatedModelElements, graph, operationResult));
 
-        Assert.Single(compilerResult.Messages);
-        Assert.Equal(MessageLevel.FatalError, compilerResult.Messages[0].MessageLevel);
-        Assert.Equal(9, compilerResult.Messages[0].MessageNumber);
+        Assert.Single(operationResult.Messages);
+        Assert.Equal(MessageLevel.FatalError, operationResult.Messages[0].MessageLevel);
+        Assert.Equal(9, operationResult.Messages[0].MessageNumber);
     }
 }
