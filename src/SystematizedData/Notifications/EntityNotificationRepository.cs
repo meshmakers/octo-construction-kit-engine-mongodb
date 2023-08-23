@@ -1,8 +1,7 @@
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.Common.Shared.Services;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.SystematizedData.Persistence.CkModelEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 

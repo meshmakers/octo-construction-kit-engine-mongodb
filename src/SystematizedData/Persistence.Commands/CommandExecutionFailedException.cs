@@ -1,4 +1,4 @@
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
 
@@ -29,6 +29,11 @@ public class CommandExecutionFailedException : Exception
     public static Exception BulkImportError()
     {
         return new CommandExecutionFailedException("Write operation was not acknowledged by database.");
+    }
+    
+    public static Exception BulkImportError(Exception e)
+    {
+        return new CommandExecutionFailedException("Write operation was not acknowledged by database.", e);
     }
 
     public static Exception CannotDeserializeModelFromString(string jsonText)

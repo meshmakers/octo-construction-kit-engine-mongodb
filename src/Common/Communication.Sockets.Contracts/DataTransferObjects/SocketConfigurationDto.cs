@@ -2,8 +2,7 @@
 // ReSharper disable ClassNeverInstantiated.Global
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 
-using Meshmakers.Octo.Common.Shared;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 
 namespace Meshmakers.Octo.Communication.Sockets.Contracts.DataTransferObjects;
 

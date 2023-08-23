@@ -1,5 +1,5 @@
-using Meshmakers.Octo.Common.Shared;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts;
+
 
 // ReSharper disable MemberCanBePrivate.Global
 // ReSharper disable ClassNeverInstantiated.Global

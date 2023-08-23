@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Microsoft.Extensions.Logging;
 using Persistence.InternalContracts;
@@ -205,7 +206,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
         }
         catch (Exception e)
         {
-            ModelParseException.CommonErrorReadRtModel(e);
+            CommandExecutionFailedException.BulkImportError(e);
         }
     }
 }

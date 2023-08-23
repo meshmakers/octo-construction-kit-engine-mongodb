@@ -1,5 +1,4 @@
-using Meshmakers.Octo.Common.Shared;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 
 namespace Persistence.IdentityCkModel.CkModelEntities;
 

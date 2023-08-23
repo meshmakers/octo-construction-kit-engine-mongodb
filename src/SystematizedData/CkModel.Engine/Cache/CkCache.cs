@@ -1,10 +1,8 @@
 using System.Collections.Concurrent;
-using Meshmakers.Octo.Common.Shared;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using NLog;
-using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine.Cache;
 
@@ -44,7 +42,7 @@ public class CkCache : ICkCache
             {
                 associationRole = await tenantCkModelRepository.GetCkAssociationRoleAsync(session, associationId);
                 associationRoles[associationId] =
-                    associationRole ?? throw ModelValidationException.CkAssociationRoleNotFound(associationId);
+                    associationRole ?? throw RuleViolationException.CkAssociationRoleNotFound(associationId);
             }
 
             return associationRole;
@@ -163,7 +161,7 @@ public class CkCache : ICkCache
         }
 
         var ckEntityAssociationCompleteList = await Task.WhenAll(ckEntityAssociationList.Select(
-            async x => new {OriginCkTypeId = x.OriginCkTypeId, TargetCkTypeId = x.TargetCkTypeId, AssocationRole = await getAssociationRoleFunc(x.RoleId) }).ToList());
+            async x => new { x.OriginCkTypeId, x.TargetCkTypeId, AssocationRole = await getAssociationRoleFunc(x.RoleId) }).ToList());
 
         var groupedAssocList = ckEntityAssociationCompleteList.GroupBy(x => x.AssocationRole.InboundName);
         if (graphDirections == GraphDirections.Outbound)

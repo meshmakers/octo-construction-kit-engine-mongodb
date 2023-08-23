@@ -1,4 +1,4 @@
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest.CkModelEntities;

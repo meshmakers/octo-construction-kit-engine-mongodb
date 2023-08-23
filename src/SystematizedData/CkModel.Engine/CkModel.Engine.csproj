@@ -7,7 +7,6 @@
 
     <ItemGroup>
       <ProjectReference Include="..\..\Common\DistributedCache\DistributedCache.csproj" />
-      <ProjectReference Include="..\CkModel.Contracts\CkModel.Contracts.csproj" />
       <ProjectReference Include="..\Persistence.InternalContracts\Persistence.InternalContracts.csproj" />
     </ItemGroup>
 

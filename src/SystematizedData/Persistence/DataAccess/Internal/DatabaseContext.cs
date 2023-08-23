@@ -1,17 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Common.Shared;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
+﻿using Meshmakers.Common.Shared;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 using MongoDB.Bson;
 using MongoDB.Driver;
-using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 

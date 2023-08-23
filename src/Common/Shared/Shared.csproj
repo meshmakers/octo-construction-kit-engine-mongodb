@@ -30,6 +30,7 @@
         <PackageReference Include="IdentityModel" Version="6.1.0" />
         <PackageReference Include="Markdig.Signed" Version="0.31.0" />
         <PackageReference Include="Meshmakers.Common.Shared" Version="4.0.2307.21001" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2308.23008" />
         <PackageReference Include="Microsoft.Extensions.Options" Version="7.0.1" />
         <PackageReference Include="NLog" Version="5.2.0" />
         <PackageReference Include="System.ComponentModel.Annotations" Version="5.0.0" />
@@ -56,8 +57,5 @@
         </None>
     </ItemGroup>
 
-    <ItemGroup>
-      <ProjectReference Include="..\..\SystematizedData\CkModel.Contracts\CkModel.Contracts.csproj" />
-    </ItemGroup>
 
 </Project>

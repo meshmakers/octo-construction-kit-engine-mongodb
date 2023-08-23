@@ -1,8 +1,8 @@
 ﻿using System.Diagnostics;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Validation;
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
+using Meshmakers.Octo.ConstructionKit.Contracts.Validation;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;

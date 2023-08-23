@@ -1,11 +1,12 @@
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Microsoft.Extensions.Logging;
-using RtEntityDto = Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects.RtEntityDto;
+using RtEntityDto = Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects.RtEntityDto;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
 

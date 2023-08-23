@@ -1,7 +1,4 @@
-using System.Collections.Generic;
-using Meshmakers.Octo.Common.Shared;
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
-using MongoDB.Bson;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 
