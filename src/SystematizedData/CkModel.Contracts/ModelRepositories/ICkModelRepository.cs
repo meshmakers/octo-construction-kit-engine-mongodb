@@ -1,11 +1,13 @@
-using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
 
-namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.ModelRepositories;
+namespace Meshmakers.Octo.SystematizedData.CkModel.Contracts.ModelRepositories;
 
 public interface ICkModelRepository
 {
-    Task<CkModelId> FindModelIdAsync(CkModelId modelId);
+    int Order { get; }
+    string RepositoryName { get; }
+    
+    Task<bool> LookupModelIdAsync(CkModelId modelId);
     
     Task<CkCompiledModelRoot> GetModelAsync(CkModelId modelId);
     

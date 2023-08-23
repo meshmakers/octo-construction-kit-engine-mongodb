@@ -58,7 +58,7 @@ public readonly struct CkVersion : IComparable<CkVersion>, IEquatable<CkVersion>
     {
         return $"{Major}.{Minor}.{Revision}";
     }
-
+    
     public override bool Equals(object? obj)
     {
         if (obj == null)

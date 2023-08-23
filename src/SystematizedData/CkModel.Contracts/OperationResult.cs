@@ -1,3 +1,4 @@
+using System.Text;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Messages;
 using Microsoft.Extensions.Logging;
 
@@ -18,6 +19,17 @@ public class OperationResult
     public void AddMessage(CompilerMessage message)
     {
         Messages.Add(message);
+    }
+    
+    public string GetMessages()
+    {
+        var stringBuilder = new StringBuilder();
+        foreach (var compilerMessage in Messages)
+        {
+            stringBuilder.AppendLine(compilerMessage.ToString());
+        }
+
+        return stringBuilder.ToString();
     }
 
     public void WriteMessagesToLogger(ILogger logger)

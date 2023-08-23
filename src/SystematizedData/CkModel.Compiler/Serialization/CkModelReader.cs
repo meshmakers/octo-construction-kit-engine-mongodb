@@ -28,7 +28,7 @@ public class CkModelReader
         try
         {
             await using var stream = File.OpenRead(filePath);
-            model = await _ckSerializer.DeserializeModelRootAsync(stream, operationResult);
+            model = await _ckSerializer.DeserializeCompiledModelRootAsync(stream, operationResult);
 
             if (model == null)
             {

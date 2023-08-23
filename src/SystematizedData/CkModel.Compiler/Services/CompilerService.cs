@@ -170,7 +170,7 @@ public class CompilerService : ICompilerService
             throw CompilerException.OperationResultWithErrors(operationResult);
         }
 
-        string compiledModelFile = $"{ckMetaDto.ModelId.SemanticVersionedFullName}.yaml";
+        string compiledModelFile = $"ck-{ckMetaDto.ModelId.SemanticVersionedFullName.ToLower()}.yaml";
         await using var streamWriter = new StreamWriter(Path.Combine(rootPath, compiledModelFile));
         await _ckSerializer.SerializeAsync(streamWriter, compiledModelRoot);
     }

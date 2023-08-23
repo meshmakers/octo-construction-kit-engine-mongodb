@@ -4,7 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
-public class ConfigurationFixture
+public class ConfigurationFixture : ServiceCollectionFixture
 {
     private readonly SystemTestConfiguration _configuration;
 
@@ -12,14 +12,9 @@ public class ConfigurationFixture
     {
         _configuration = new SystemTestConfiguration();
 
-        var serviceCollection = new ServiceCollection();
-
-        serviceCollection.Configure<SystemTestOptions>(options =>
+        Services.Configure<SystemTestOptions>(options =>
             _configuration.GetSection("systemTest").Bind(options));
-        ServiceProvider = serviceCollection.BuildServiceProvider();
     }
-
-    public ServiceProvider ServiceProvider { get; }
 
     public T GetOptions<T>(string sectionName)
     {

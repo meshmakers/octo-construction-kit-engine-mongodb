@@ -118,11 +118,13 @@ public class YamlSerializerTests
         var ckYamlSerializer = new CkYamlSerializer(new CkSchemaValidator());
 
         var stream = new MemoryStream();
-        var streamWriter = new StreamWriter(stream);
+        await using var streamWriter = new StreamWriter(stream);
         var ckElementsDto = sampleData.elements.Builder.Build();
         await ckYamlSerializer.SerializeAsync(streamWriter, ckElementsDto);
+        await streamWriter.FlushAsync();
         
         stream.Position = 0;
+        
         var streamReader = new StreamReader(stream);
         var yaml = await streamReader.ReadToEndAsync();
         _testOutputHelper.WriteLine("output:");

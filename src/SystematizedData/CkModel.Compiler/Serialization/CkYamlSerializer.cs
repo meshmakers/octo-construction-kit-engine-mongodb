@@ -52,7 +52,6 @@ public class CkYamlSerializer : ICkYamlSerializer
 
     public Task SerializeAsync(StreamWriter streamWriter, CkCompiledModelRoot compiledModel)
     {
-        
         _serializer.Serialize(streamWriter, compiledModel);
         return Task.CompletedTask;
     }
@@ -95,14 +94,14 @@ public class CkYamlSerializer : ICkYamlSerializer
         return Task.FromResult(ckElementsDto);
     }
 
-    public async Task<CkCompiledModelRoot?> DeserializeModelRootAsync(string s, OperationResult operationResult)
+    public async Task<CkCompiledModelRoot?> DeserializeCompiledModelRootAsync(string s, OperationResult operationResult)
     {
         byte[] byteArray = System.Text.Encoding.UTF8.GetBytes(s);
         using var memStream = new MemoryStream(byteArray);
-        return await DeserializeModelRootAsync(memStream, operationResult);
+        return await DeserializeCompiledModelRootAsync(memStream, operationResult);
     }
 
-    public Task<CkCompiledModelRoot> DeserializeModelRootAsync(Stream stream, OperationResult operationResult)
+    public Task<CkCompiledModelRoot> DeserializeCompiledModelRootAsync(Stream stream, OperationResult operationResult)
     {
         _ckSchemaValidator.ValidateCompiledModelInYaml(stream, operationResult);
         if (operationResult.HasErrors)

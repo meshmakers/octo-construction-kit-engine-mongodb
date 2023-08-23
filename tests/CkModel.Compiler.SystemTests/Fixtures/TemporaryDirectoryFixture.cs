@@ -2,16 +2,27 @@ namespace CkModel.Compiler.SystemTests.Fixtures;
 
 public class TemporaryDirectoryFixture : ServiceCollectionFixture, IDisposable
 {
-    public string TempDirectoryPath { get; }
+    private readonly List<string> _tempDirectoryList;
+    public string CreateTempDirectory()
+    {
+        var tempDirectoryPath = Path.Combine(Path.GetTempPath(), "CkModelCompilerTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDirectoryPath);
+        _tempDirectoryList.Add(tempDirectoryPath);
+        return tempDirectoryPath;
+    }
 
     public TemporaryDirectoryFixture()
     {
-        TempDirectoryPath = Path.Combine(Path.GetTempPath(), "CkModelCompilerTests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(TempDirectoryPath);
+        _tempDirectoryList = new List<string>();
+
     }
 
     public void Dispose()
     {
-        Directory.Delete(TempDirectoryPath, true);
+        foreach (var tempDirectoryPath in _tempDirectoryList)
+        {
+            Directory.Delete(tempDirectoryPath, true);
+
+        }
     }
 }

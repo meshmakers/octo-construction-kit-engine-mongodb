@@ -39,7 +39,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
         {
             _logger.LogInformation("Reading CK model....");
             var operationResult = new OperationResult();
-            var model = await _ckSerializer.DeserializeModelRootAsync(jsonText, operationResult);
+            var model = await _ckSerializer.DeserializeCompiledModelRootAsync(jsonText, operationResult);
 
             if (model == null)
             {
@@ -74,7 +74,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
             _logger.LogInformation("Reading CK model....");
             var operationResult = new OperationResult();
             await using var streamReader = File.OpenRead(filePath);
-            var model = await _ckSerializer.DeserializeModelRootAsync(streamReader, operationResult);
+            var model = await _ckSerializer.DeserializeCompiledModelRootAsync(streamReader, operationResult);
 
             if (model == null || operationResult.HasErrors)
             {

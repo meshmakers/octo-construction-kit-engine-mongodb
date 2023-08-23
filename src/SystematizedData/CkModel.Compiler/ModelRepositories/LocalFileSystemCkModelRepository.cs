@@ -1,18 +1,51 @@
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.DataTransferObjects;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.ModelRepositories;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
+using Microsoft.Extensions.Options;
 
 namespace Meshmakers.Octo.SystematizedData.CkModel.Compiler.ModelRepositories;
 
 public class LocalFileSystemCkModelRepository : ICkModelRepository
 {
-    public Task<CkModelId> FindModelIdAsync(CkModelId modelId)
+    private readonly IOptions<LocalCkModelRepositoryOptions> _options;
+    private readonly ICkJsonSerializer _ckJsonSerializer;
+
+    public LocalFileSystemCkModelRepository(IOptions<LocalCkModelRepositoryOptions> options, ICkJsonSerializer ckJsonSerializer)
     {
-        throw new NotImplementedException();
+        _options = options;
+        _ckJsonSerializer = ckJsonSerializer;
+    }
+    
+    public int Order => 0;
+    public string RepositoryName => "Local Repository";
+
+    public Task<bool> LookupModelIdAsync(CkModelId modelId)
+    {
+        if (!TryGetModelPath(modelId, out _))
+        {
+            return Task.FromResult(false);
+        }
+
+        return Task.FromResult(true);
     }
 
-    public Task<CkCompiledModelRoot> GetModelAsync(CkModelId modelId)
+    public async Task<CkCompiledModelRoot> GetModelAsync(CkModelId modelId)
     {
-        throw new NotImplementedException();
+        if (!TryGetModelPath(modelId, out var compiledModelFilePath) || compiledModelFilePath == null)
+        {
+            throw ModelRepositoryException.ModelNotFound(modelId, RepositoryName);
+        }
+
+        OperationResult operationResult = new();
+        await using var streamReader = File.OpenRead(compiledModelFilePath);
+        var compiledModelRoot = await _ckJsonSerializer.DeserializeCompiledModelRootAsync(streamReader, operationResult);
+        if (operationResult.HasErrors)
+        {
+            throw ModelRepositoryException.ErrorDuringModelLoad(modelId, RepositoryName, operationResult);
+        }
+
+        return compiledModelRoot;
     }
 
     public Task PublishModelAsync(CkCompiledModelRoot ckCompiledModel)
@@ -23,5 +56,33 @@ public class LocalFileSystemCkModelRepository : ICkModelRepository
     public Task UpdateModelAsync(CkCompiledModelRoot ckCompiledModel)
     {
         throw new NotImplementedException();
+    }
+
+    private bool TryGetModelPath(CkModelId ckModelId, out string? compiledModelFilePath)
+    {
+        var rootPath = _options.Value.RootPath;
+        var modelPath = Path.Combine(rootPath, "ck-models", ckModelId.ModelId);
+        if (!Directory.Exists(modelPath))
+        {
+            compiledModelFilePath = null;
+            return false;
+        }
+        
+        var modelVersionPath = Path.Combine(modelPath, ckModelId.ModelVersion.Major.ToString());
+        if (!Directory.Exists(modelVersionPath))
+        {
+            compiledModelFilePath = null;
+            return false;
+        }
+        
+        string compiledModelFile = $"ck-{ckModelId.SemanticVersionedFullName.ToLower()}.yaml";
+        compiledModelFilePath = Path.Combine(modelPath, compiledModelFile);
+        if (!File.Exists(compiledModelFilePath))
+        {
+            compiledModelFilePath = null;
+            return false;
+        }
+
+        return true;
     }
 }

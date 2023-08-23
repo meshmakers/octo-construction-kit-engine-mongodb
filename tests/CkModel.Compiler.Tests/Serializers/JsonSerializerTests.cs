@@ -116,10 +116,11 @@ public class JsonSerializerTests
         var ckJsonSerializer = new CkJsonSerializer();
     
         var stream = new MemoryStream();
-        var streamWriter = new StreamWriter(stream);
+        await using var streamWriter = new StreamWriter(stream);
         var ckElementsDto = sampleData.elements.Builder.Build();
         await ckJsonSerializer.SerializeAsync(streamWriter, ckElementsDto);
-        
+        await streamWriter.FlushAsync();
+
         stream.Position = 0;
         var streamReader = new StreamReader(stream);
         var json = await streamReader.ReadToEndAsync();

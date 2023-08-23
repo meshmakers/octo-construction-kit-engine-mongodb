@@ -1,8 +1,5 @@
-using FakeItEasy;
-using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
-using Meshmakers.Octo.SystematizedData.Persistence.Commands;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
-using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 using Persistence.IdentityCkModel;
 using Xunit;
 
@@ -21,12 +18,12 @@ public class ConstructionKitTests : IClassFixture<SystemFixture>
     public async void ImportConstructionKit()
     {
         var systemContext = _systemFixture.GetSystemContext();
-        var logger = A.Fake<ILogger<ImportCkModelCommand>>();
 
         using var session = await systemContext.StartSystemSessionAsync();
         session.StartTransaction();
         var ckModelRepository = systemContext.CreateTenantCkModelRepository();
-        var systemIdentityModelService = new CkSystemIdentityModelService(new ImportCkModelCommand(logger, new CkJsonSerializer(), _systemFixture.CkModelValidator));
+        var systemIdentityModelService = _systemFixture.Provider.GetRequiredService<CkSystemIdentityModelService>();
+        //var systemIdentityModelService = new CkSystemIdentityModelService(new ImportCkModelCommand(logger, new CkJsonSerializer(), _systemFixture.CkModelValidator));
 
         await systemIdentityModelService.ImportAsync(session, ckModelRepository);
 

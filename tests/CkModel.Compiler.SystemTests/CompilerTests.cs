@@ -23,8 +23,7 @@ public class CompilerTests : IClassFixture<TemporaryDirectoryFixture>
     {
         await using (var serviceProvider = _fixture.Services.BuildServiceProvider())
         {
-            // Access _fixture.TempDirectoryPath to work with the temporary directory
-            string rootPath = Path.Combine(_fixture.TempDirectoryPath, "CreateNew");
+            string rootPath = _fixture.CreateTempDirectory();
             var compilerService = serviceProvider.GetRequiredService<ICompilerService>();
             await compilerService.CreateNewAsync(rootPath);
 
@@ -41,8 +40,7 @@ public class CompilerTests : IClassFixture<TemporaryDirectoryFixture>
     {
         await using (var serviceProvider = _fixture.Services.BuildServiceProvider())
         {
-            // Access _fixture.TempDirectoryPath to work with the temporary directory
-            string rootPath = Path.Combine(_fixture.TempDirectoryPath, "CreateNew");
+            string rootPath = _fixture.CreateTempDirectory();
             Directory.CreateDirectory(rootPath);
             File.Create(Path.Combine(rootPath, "test.txt")).Close();
             var compilerService = serviceProvider.GetRequiredService<ICompilerService>();
@@ -56,8 +54,7 @@ public class CompilerTests : IClassFixture<TemporaryDirectoryFixture>
     {
         await using (var serviceProvider = _fixture.Services.BuildServiceProvider())
         {
-            // Access _fixture.TempDirectoryPath to work with the temporary directory
-            string rootPath = Path.Combine(_fixture.TempDirectoryPath, "CreateNew");
+            string rootPath = _fixture.CreateTempDirectory();
             _testOutputHelper.WriteLine($"Directory: {rootPath}");
 
             var compilerService = serviceProvider.GetRequiredService<ICompilerService>();

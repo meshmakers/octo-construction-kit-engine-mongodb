@@ -3,6 +3,7 @@ using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Resolvers;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Serialization;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Services;
 using Meshmakers.Octo.SystematizedData.CkModel.Compiler.Validation;
+using Meshmakers.Octo.SystematizedData.CkModel.Contracts.ModelRepositories;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Resolvers;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Serialization;
 using Meshmakers.Octo.SystematizedData.CkModel.Contracts.Services;

@@ -75,15 +75,15 @@ public class CkJsonSerializer : ICkJsonSerializer
     }
 
 
-    public async Task<CkCompiledModelRoot?> DeserializeModelRootAsync(string s, OperationResult operationResult) 
+    public async Task<CkCompiledModelRoot?> DeserializeCompiledModelRootAsync(string s, OperationResult operationResult) 
     {
         byte[] byteArray = System.Text.Encoding.UTF8.GetBytes(s);
         using var memStream = new MemoryStream(byteArray);
-        return await DeserializeModelRootAsync(memStream, operationResult);
+        return await DeserializeCompiledModelRootAsync(memStream, operationResult);
     }
 
 
-    public async Task<CkCompiledModelRoot> DeserializeModelRootAsync(Stream stream, OperationResult operationResult)
+    public async Task<CkCompiledModelRoot> DeserializeCompiledModelRootAsync(Stream stream, OperationResult operationResult)
     {
         try
         {
