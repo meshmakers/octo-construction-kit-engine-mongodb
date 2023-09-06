@@ -3,13 +3,21 @@
     <ItemGroup>
       <ProjectReference Include="..\Persistence.Contracts\Persistence.Contracts.csproj" />
       <ProjectReference Include="..\Persistence.InternalContracts\Persistence.InternalContracts.csproj" />
+      <ProjectReference Include="..\Persistence.SystemCkModel\Persistence.SystemCkModel.csproj" />
+    </ItemGroup>
+
+
+    <ItemGroup>
+      <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2309.6005" />
+      <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" Version="0.0.2309.6005" />
     </ItemGroup>
 
     <ItemGroup>
-      <None Update="ck-system-identity.json">
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </None>
+        <None Remove="ConstructionKit\ck-*.yaml" />
+        <EmbeddedResource Include="ConstructionKit\ck-*.yaml">
+            <GenerateCkModelServiceClass>true</GenerateCkModelServiceClass>
+        </EmbeddedResource>
+        <None Remove="ConstructionKit\ck-*.cache.json" />
+        <AdditionalFiles Include="ConstructionKit\ck-*.cache.json" />
     </ItemGroup>
-
-
 </Project>

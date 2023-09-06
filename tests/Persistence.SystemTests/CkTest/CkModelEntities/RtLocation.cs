@@ -1,3 +1,4 @@
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest.CkModelEntities;

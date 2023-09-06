@@ -1,0 +1,85 @@
+$schema: https://schemas.meshmakers.cloud/construction-kit-compiled.schema.json
+types:
+- typeId: User
+  derivedFromCkTypeId: System/Entity
+  isFinal: true
+  attributes:
+  - id: System.Identity/UserName
+    name: UserName
+  - id: System.Identity/NormalizedUserName
+    name: NormalizedUserName
+  - id: System.Identity/FirstName
+    name: FirstName
+  - id: System.Identity/LastName
+    name: LastName
+  - id: System.Identity/Email
+    name: Email
+  - id: System.Identity/NormalizedEmail
+    name: NormalizedEmail
+  - id: System.Identity/EmailConfirmed
+    name: EmailConfirmed
+  - id: System.Identity/PasswordHash
+    name: PasswordHash
+  - id: System.Identity/SecurityStamp
+    name: SecurityStamp
+  - id: System.Identity/ConcurrencyStamp
+    name: ConcurrencyStamp
+  - id: System.Identity/PhoneNumber
+    name: PhoneNumber
+  - id: System.Identity/PhoneNumberConfirmed
+    name: PhoneNumberConfirmed
+  - id: System.Identity/TwoFactorEnabled
+    name: TwoFactorEnabled
+  - id: System.Identity/LockoutEnd
+    name: LockoutEnd
+  - id: System.Identity/LockoutEnabled
+    name: LockoutEnabled
+  - id: System.Identity/AccessFailedCount
+    name: AccessFailedCount
+  - id: System.Identity/ResetPasswordOnLogin
+    name: ResetPasswordOnLogin
+  indexes:
+  - indexType: Ascending
+    fields:
+    - attributeNames:
+      - NormalizedEmail
+      - NormalizedUserName
+associationRoles: []
+attributes:
+- id: UserName
+  valueType: String
+- id: NormalizedUserName
+  valueType: String
+- id: Email
+  valueType: String
+- id: NormalizedEmail
+  valueType: String
+- id: EmailConfirmed
+  valueType: Boolean
+- id: PasswordHash
+  valueType: String
+- id: SecurityStamp
+  valueType: String
+- id: ConcurrencyStamp
+  valueType: String
+- id: PhoneNumber
+  valueType: String
+- id: PhoneNumberConfirmed
+  valueType: Boolean
+- id: TwoFactorEnabled
+  valueType: Boolean
+- id: LockoutEnd
+  valueType: DateTime
+- id: LockoutEnabled
+  valueType: Boolean
+- id: AccessFailedCount
+  valueType: Int
+- id: ResetPasswordOnLogin
+  valueType: String
+- id: FirstName
+  valueType: String
+- id: LastName
+  valueType: String
+modelId: System.Identity
+dependencies:
+- System

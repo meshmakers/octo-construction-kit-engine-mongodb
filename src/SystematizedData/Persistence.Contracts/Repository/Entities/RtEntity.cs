@@ -2,11 +2,6 @@
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-public class RtSystemEntity : RtEntity
-{
-    
-}
-
 /// <summary>
 ///     Represents an entity, based on information of the construction kit type
 /// </summary>
