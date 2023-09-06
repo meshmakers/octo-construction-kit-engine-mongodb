@@ -2,6 +2,11 @@
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
+public class RtSystemEntity : RtEntity
+{
+    
+}
+
 /// <summary>
 ///     Represents an entity, based on information of the construction kit type
 /// </summary>
@@ -97,6 +102,28 @@ public class RtEntity
 
         return (TValue)Convert.ChangeType(value, typeof(TValue));
     }
+    
+    public TValue GetAttributeValue<TValue>(string attributeName, TValue defaultValue = default)
+        where TValue : struct
+    {
+        if (!Attributes.TryGetValue(attributeName, out var value))
+        {
+            return defaultValue;
+        }
+
+        if (value == null)
+        {
+            return defaultValue;
+        }
+
+        // Because Convert.ChangeType cannot convert to enum types
+        if (typeof(TValue).IsEnum)
+        {
+            return (TValue)Enum.ToObject(typeof(TValue), value);
+        }
+
+        return (TValue)Convert.ChangeType(value, typeof(TValue));
+    }
 
     public object? GetAttributeValueOrDefault(string attributeName, object? defaultValue = default)
     {
@@ -130,6 +157,12 @@ public class RtEntity
 
     public void SetAttributeValue(string attributeName, AttributeValueTypes attributeValueTypes,
         object? attributeValue)
+    {
+        _attributes[attributeName] = ConvertAttributeValue(attributeValueTypes, attributeValue);
+    }
+    
+    public void SetAttributeValueNonNullable(string attributeName, AttributeValueTypes attributeValueTypes,
+        object attributeValue)
     {
         _attributes[attributeName] = ConvertAttributeValue(attributeValueTypes, attributeValue);
     }

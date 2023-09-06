@@ -2,6 +2,7 @@ steps:
 - task: Assembly-Info-NetCore@2
   displayName: "Versioning (no nuget)"
   inputs:
+    Path: '$(Build.SourcesDirectory)'
     FileNames: |
       **/*.csproj
     InsertAttributes: true

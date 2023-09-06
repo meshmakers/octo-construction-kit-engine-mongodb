@@ -1,8 +1,8 @@
 ﻿using System.Diagnostics;
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects.Ck;
 using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
-using Meshmakers.Octo.ConstructionKit.Contracts.Validation;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
@@ -23,13 +23,13 @@ public class ImportCkModelCommand : IImportCkModelCommand
 {
     private readonly ILogger<ImportCkModelCommand> _logger;
     private readonly ICkSerializer _ckSerializer;
-    private readonly ICkModelValidator _ckModelValidator;
+    private readonly ICkValidationService _ckValidationService;
 
-    public ImportCkModelCommand(ILogger<ImportCkModelCommand> logger, ICkSerializer ckSerializer, ICkModelValidator ckModelValidator)
+    public ImportCkModelCommand(ILogger<ImportCkModelCommand> logger, ICkSerializer ckSerializer, ICkValidationService ckValidationService)
     {
         _logger = logger;
         _ckSerializer = ckSerializer;
-        _ckModelValidator = ckModelValidator;
+        _ckValidationService = ckValidationService;
     }
 
     public async Task ImportTextAsync(IOctoSession session, ITenantCkModelRepository ckModelRepository, string jsonText,
@@ -105,7 +105,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
         CancellationToken? cancellationToken)
     {
         _logger.LogInformation("Validating of CK model");
-        await _ckModelValidator.ValidateAsync(compiledModel, operationResult);
+        await _ckValidationService.ValidateAsync(compiledModel, operationResult);
         if (operationResult.HasErrors)
         {
             _logger.LogInformation("Import of CK model failed, model is not valid");
@@ -139,7 +139,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
         }
 
         // ValidateAsync
-        Debug.Assert(_ckModelValidator != null, nameof(_ckModelValidator) + " != null");
+        Debug.Assert(_ckValidationService != null, nameof(_ckValidationService) + " != null");
     
 
         // Delete the old version

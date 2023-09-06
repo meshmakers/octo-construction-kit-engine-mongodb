@@ -1,8 +1,8 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.SystematizedData.Persistence.CkModelEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
+using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.InsertModifiers;
 

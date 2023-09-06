@@ -14,23 +14,30 @@ attributes:
   valueType: Int
 - id: AutoIncrement.CurrentValue
   valueType: Int
+  isOptional: true
 - id: ConfigurationValue
   valueType: String
+  isOptional: true
 - id: Query.Columns
   valueType: String
 - id: Query.CkTypeId
   valueType: String
 - id: Query.Sorting
   valueType: String
+  isOptional: true
 - id: Query.FieldFilter
   valueType: String
+  isOptional: true
 - id: Query.TextSearchFilter
   valueType: String
+  isOptional: true
 - id: Query.AttributeSearchFilter
   valueType: String
+  isOptional: true
 - id: ServiceHook.Uri
   valueType: String
 - id: ServiceHook.Action
   valueType: String
 - id: ServiceHook.ApiKey
   valueType: String
+  isOptional: true

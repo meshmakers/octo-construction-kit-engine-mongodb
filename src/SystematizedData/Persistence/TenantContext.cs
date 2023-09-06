@@ -2,7 +2,6 @@ using CkModel.CkRuleEngine;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
-using Meshmakers.Octo.SystematizedData.Persistence.CkModelEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
@@ -11,6 +10,7 @@ using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 using Microsoft.Extensions.Options;
 using Persistence.Contracts;
 using Persistence.InternalContracts;
+using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence;
 

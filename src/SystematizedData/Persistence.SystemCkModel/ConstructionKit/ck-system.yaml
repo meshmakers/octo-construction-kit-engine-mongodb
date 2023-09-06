@@ -1,0 +1,121 @@
+$schema: https://schemas.meshmakers.cloud/construction-kit-compiled.schema.json
+types:
+- typeId: Query
+  derivedFromCkTypeId: System/Entity
+  attributes:
+  - id: System/Query.CkTypeId
+    name: QueryCkTypeId
+  - id: System/Query.Columns
+    name: Columns
+  - id: System/Query.Sorting
+    name: Sorting
+  - id: System/Query.FieldFilter
+    name: FieldFilter
+  - id: System/Query.TextSearchFilter
+    name: TextSearchFilter
+  - id: System/Query.AttributeSearchFilter
+    name: AttributeSearchFilter
+  - id: System/Name
+    name: Name
+- typeId: ServiceHook
+  derivedFromCkTypeId: System/Entity
+  attributes:
+  - id: System/Enabled
+    name: Enabled
+  - id: System/Query.CkTypeId
+    name: QueryCkTypeId
+  - id: System/Query.FieldFilter
+    name: FieldFilter
+  - id: System/Name
+    name: Name
+  - id: System/ServiceHook.Uri
+    name: ServiceHookBaseUri
+  - id: System/ServiceHook.Action
+    name: ServiceHookAction
+  - id: System/ServiceHook.ApiKey
+    name: ServiceHookApiKey
+- typeId: Entity
+  isAbstract: true
+- typeId: AutoIncrement
+  derivedFromCkTypeId: System/Entity
+  attributes:
+  - id: System/AutoIncrement.Start
+    name: Start
+  - id: System/AutoIncrement.End
+    name: End
+  - id: System/AutoIncrement.CurrentValue
+    name: CurrentValue
+- typeId: Tenant
+  derivedFromCkTypeId: System/Entity
+  isFinal: true
+  attributes:
+  - id: System/TenantId
+    name: TenantId
+  - id: System/DatabaseName
+    name: DatabaseName
+  indexes:
+  - indexType: Ascending
+    fields:
+    - attributeNames:
+      - TenantId
+- typeId: Configuration
+  derivedFromCkTypeId: System/Entity
+  isFinal: true
+  attributes:
+  - id: System/ConfigurationValue
+    name: ConfigurationValue
+associationRoles:
+- id: ParentChild
+  inboundName: Parent
+  outboundName: Children
+  inboundMultiplicity: N
+  outboundMultiplicity: N
+- id: Related
+  inboundName: RelatesTo
+  outboundName: RelatesFrom
+  inboundMultiplicity: N
+  outboundMultiplicity: N
+attributes:
+- id: Name
+  valueType: String
+- id: Enabled
+  valueType: Boolean
+- id: TenantId
+  valueType: String
+- id: DatabaseName
+  valueType: String
+- id: AutoIncrement.Start
+  valueType: Int
+- id: AutoIncrement.End
+  valueType: Int
+- id: AutoIncrement.CurrentValue
+  valueType: Int
+  isOptional: true
+- id: ConfigurationValue
+  valueType: String
+  isOptional: true
+- id: Query.Columns
+  valueType: String
+- id: Query.CkTypeId
+  valueType: String
+- id: Query.Sorting
+  valueType: String
+  isOptional: true
+- id: Query.FieldFilter
+  valueType: String
+  isOptional: true
+- id: Query.TextSearchFilter
+  valueType: String
+  isOptional: true
+- id: Query.AttributeSearchFilter
+  valueType: String
+  isOptional: true
+- id: ServiceHook.Uri
+  valueType: String
+- id: ServiceHook.Action
+  valueType: String
+- id: ServiceHook.ApiKey
+  valueType: String
+  isOptional: true
+modelId: System
+dependencies: []

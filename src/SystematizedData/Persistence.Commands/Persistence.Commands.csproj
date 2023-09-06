@@ -10,5 +10,9 @@
       <ProjectReference Include="..\Persistence.InternalContracts\Persistence.InternalContracts.csproj" />
       <ProjectReference Include="..\Persistence.SystemCkModel\Persistence.SystemCkModel.csproj" />
     </ItemGroup>
+    
+    <ItemGroup>
+      <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2309.5002" />
+    </ItemGroup>
 
 </Project>
