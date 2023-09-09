@@ -12,8 +12,8 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2309.6005" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" Version="0.0.2309.6005" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2309.9007" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" Version="0.0.2309.9007" />
     </ItemGroup>
 
     <ItemGroup>
@@ -24,5 +24,6 @@
         <None Remove="ConstructionKit\ck-*.cache.json" />
         <AdditionalFiles Include="ConstructionKit\ck-*.cache.json" />
     </ItemGroup>
+
 
 </Project>

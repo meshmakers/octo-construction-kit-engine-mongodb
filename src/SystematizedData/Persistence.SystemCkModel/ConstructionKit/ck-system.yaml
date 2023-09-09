@@ -78,6 +78,13 @@ associationRoles:
 attributes:
 - id: Name
   valueType: String
+- id: DisplayName
+  valueType: String
+  isOptional: true
+- id: Description
+  valueType: String
+  isOptional: true
+  description: Further information on the item.
 - id: Enabled
   valueType: Boolean
 - id: TenantId
@@ -117,5 +124,7 @@ attributes:
 - id: ServiceHook.ApiKey
   valueType: String
   isOptional: true
+records: []
+enums: []
 modelId: System
 dependencies: []

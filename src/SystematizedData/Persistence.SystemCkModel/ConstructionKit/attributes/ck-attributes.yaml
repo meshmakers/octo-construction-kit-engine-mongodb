@@ -2,6 +2,13 @@
 attributes:
 - id: Name
   valueType: String
+- id: DisplayName
+  isOptional: true
+  valueType: String  
+- id: Description
+  valueType: String
+  isOptional: true
+  description: Further information on the item.
 - id: Enabled
   valueType: Boolean
 - id: TenantId
@@ -40,4 +47,4 @@ attributes:
   valueType: String
 - id: ServiceHook.ApiKey
   valueType: String
-  isOptional: true
+  isOptional: true   

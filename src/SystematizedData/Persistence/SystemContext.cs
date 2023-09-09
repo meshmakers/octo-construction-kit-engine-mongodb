@@ -1,12 +1,11 @@
-using System;
-using System.Threading.Tasks;
 using CkModel.CkRuleEngine;
 using Meshmakers.Octo.Common.Shared;
-using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
-using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
+using Meshmakers.Octo.SystematizedData.Persistence.CkModel;
 using Microsoft.Extensions.Options;
-using NLog;
 using Persistence.InternalContracts;
+using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence;
 
@@ -14,8 +13,8 @@ namespace Meshmakers.Octo.SystematizedData.Persistence;
 public class SystemContext : TenantContext, ISystemContextInternal
 {
     public SystemContext(IOptions<OctoSystemConfiguration> systemConfiguration,
-        ICkCacheService ckCacheService, ICkSystemModelService ckSystemModelService)
-    : base(systemConfiguration, systemConfiguration.Value.SystemTenantId, systemConfiguration.Value.SystemDatabaseName.ToLower(), ckSystemModelService, ckCacheService)
+        ICkCacheService ckCacheService, ICkModelRepositoryManager ckModelRepositoryManager)
+    : base(systemConfiguration, systemConfiguration.Value.SystemTenantId, systemConfiguration.Value.SystemDatabaseName.ToLower(), ckModelRepositoryManager, ckCacheService)
     {
     }
 
@@ -45,8 +44,17 @@ public class SystemContext : TenantContext, ISystemContextInternal
 
             // Restore the tenant system model on the newly created repository
             var ckModelRepository = CreateTenantCkModelRepository();
-            await _ckSystemModelService.ImportAsync(systemSession, ckModelRepository);
-
+            OperationResult operationResult = new();
+            var ckCompiledModelRoot = await _ckModelRepositoryManager.LookupCkModelAsync(SystemCkIds.ModelId, operationResult);
+            if (ckCompiledModelRoot == null)
+            {
+                throw TenantException.SystemModelNotFound();
+            }
+            if (operationResult.HasErrors || operationResult.HasFatalErrors)
+            {
+                throw TenantException.ErrorDuringSystemModelLoad(operationResult);
+            }
+            await _ckModelRepositoryManager.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, true, ckModelRepository);
             await systemSession.CommitTransactionAsync();
             
             // Distribute updates (post) to inform other services.

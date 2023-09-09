@@ -2,6 +2,9 @@ using CkModel.CkRuleEngine;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
+using Meshmakers.Octo.SystematizedData.Persistence.CkModel;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
@@ -22,19 +25,19 @@ public class TenantContext : ITenantContextInternal
     private readonly string _databaseName;
     protected readonly IRepositoryClient _systemRepositoryClient;
     private readonly SemaphoreSlim _semaphoreSlim = new(1, 1);
-    protected readonly ICkSystemModelService _ckSystemModelService;
+    protected readonly ICkModelRepositoryManager _ckModelRepositoryManager;
     protected readonly ICkCacheService _cacheService;
 
     protected TenantContext(IOptions<OctoSystemConfiguration> systemConfiguration,
         string tenantId,
         string databaseName,
-        ICkSystemModelService ckSystemModelService,
+        ICkModelRepositoryManager ckModelRepositoryManager,
         ICkCacheService cacheService)
     {
         TenantId = tenantId;
         _systemConfiguration = systemConfiguration;
         _databaseName = databaseName;
-        _ckSystemModelService = ckSystemModelService;
+        _ckModelRepositoryManager = ckModelRepositoryManager;
         _cacheService = cacheService;
 
         var systemConnectionOptions = new MongoConnectionOptions
@@ -85,7 +88,17 @@ public class TenantContext : ITenantContextInternal
 
             // Restore the tenant system model on the newly created repository
             var ckModelRepository = CreateTenantCkModelRepository(normalizedDatabaseName);
-            await _ckSystemModelService.ImportAsync(systemSession, ckModelRepository);
+            OperationResult operationResult = new();
+            var ckCompiledModelRoot = await _ckModelRepositoryManager.LookupCkModelAsync(SystemCkIds.ModelId, operationResult);
+            if (ckCompiledModelRoot == null)
+            {
+                throw TenantException.SystemModelNotFound();
+            }
+            if (operationResult.HasErrors || operationResult.HasFatalErrors)
+            {
+                throw TenantException.ErrorDuringSystemModelLoad(operationResult);
+            }
+            await _ckModelRepositoryManager.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, true, ckModelRepository);
 
             // Add the new tenant as child tenant of the current one
             var rtSystemTenant = new RtSystemTenant
@@ -262,7 +275,7 @@ public class TenantContext : ITenantContextInternal
         systemSession.StartTransaction();
 
         var tenant = await GetChildTenantAsync(systemSession, tenantId);
-        var context = new TenantContext(_systemConfiguration, tenantId, tenant.DatabaseName, _ckSystemModelService, _cacheService);
+        var context = new TenantContext(_systemConfiguration, tenantId, tenant.DatabaseName, _ckModelRepositoryManager, _cacheService);
 
         await systemSession.CommitTransactionAsync();
         return context;

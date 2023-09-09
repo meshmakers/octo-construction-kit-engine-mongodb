@@ -61,4 +61,14 @@ public class OperationFailedException : PersistenceException
     {
         return new OperationFailedException("No filter set.");
     }
+
+    public static Exception ValidationErrors()
+    {
+        return new OperationFailedException("Validation errors.");
+    }
+
+    public static Exception BulkImportError()
+    {
+        return new OperationFailedException("Bulk import error.");
+    }
 }

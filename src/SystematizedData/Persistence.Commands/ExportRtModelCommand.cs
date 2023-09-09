@@ -6,6 +6,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Microsoft.Extensions.Logging;
+using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
 using RtEntityDto = Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects.RtEntityDto;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
@@ -34,7 +35,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
             session.StartTransaction();
 
             var query = await tenantRepository.GetRtEntityByRtIdAsync(session,
-                new RtEntityId(global::Persistence.SystemCkModel.SystemCkModel.SystemCkModelId, global::Persistence.SystemCkModel.SystemCkModel.SystemQueryTypeId, queryId));
+                new RtEntityId(SystemCkIds.ModelId, SystemCkIds.Query, queryId));
 
             if (CheckCancellation(cancellationToken))
             {

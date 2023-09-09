@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.Serialization;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence;
 
@@ -29,5 +30,15 @@ public class TenantException : Exception
         SerializationInfo info,
         StreamingContext context) : base(info, context)
     {
+    }
+
+    internal static Exception SystemModelNotFound()
+    {
+        return new TenantException("System model not found.");
+    }
+
+    internal static Exception ErrorDuringSystemModelLoad(OperationResult operationResult)
+    {
+        return new TenantException($"Error loading system model.{Environment.NewLine}{operationResult.GetMessages()}");
     }
 }

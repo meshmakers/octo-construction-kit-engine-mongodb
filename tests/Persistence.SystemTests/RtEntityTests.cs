@@ -1,8 +1,8 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
-using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest;
-using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest.CkModelEntities;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest.ConstructionKit.Generated.Test.v1;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
+using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
 using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
@@ -29,9 +29,9 @@ public class RtEntityTests : IClassFixture<SystemFixture>
             OctoObjectId originRtId = OctoObjectId.Parse("5fc8fc3d8b2fc75f925e21bc");
 
 
-            var r = await tenantRepository.GetIndirectRtAssociationTargetsAsync<RtCity, RtLocation>(session, originRtId,
-                TestCkModel.RoleIdParentChild,
-                GraphDirections.Outbound);
+            var r = await tenantRepository.GetIndirectRtAssociationTargetsAsync<RtTestCity, RtTestLocation>(session, originRtId,
+                 SystemCkIds.ParentChild,
+                 GraphDirections.Outbound);
         }
     }
 

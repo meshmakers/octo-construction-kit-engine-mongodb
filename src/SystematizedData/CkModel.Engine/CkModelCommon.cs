@@ -1,7 +1,8 @@
 namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel;
 
-internal static class CkModelCommon
+public static class CkModelCommon
 {
+
     internal static readonly string[] KnownAnalyzerLanguages =
         { "de", "en", "es", "fi", "fr", "it", "nl", "no", "pt", "ru", "sv", "zh" };
     

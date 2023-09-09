@@ -1,0 +1,6 @@
+using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
+
+namespace Persistence.InternalContracts;
+
+public record TenantCkModelRepositorySourceIdentifier(ITenantCkModelRepository TenantCkModelRepository, IOctoSession Session);

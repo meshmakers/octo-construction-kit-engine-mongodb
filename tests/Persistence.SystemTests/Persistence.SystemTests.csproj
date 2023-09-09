@@ -20,6 +20,8 @@
             <PrivateAssets>all</PrivateAssets>
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2309.9007" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" GeneratePathProperty="true" ReferenceOutputAssembly="false" Version="0.0.2309.9007" />
     </ItemGroup>
 
     <ItemGroup>
@@ -27,6 +29,20 @@
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </None>
     </ItemGroup>
+
+    <ItemGroup>
+        <ConstructionKitFolder Include="CkTest\ConstructionKit" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Remove="CkTest\ConstructionKit\ck-*.yaml" />
+        <EmbeddedResource Include="CkTest\ConstructionKit\ck-*.yaml">
+            <GenerateCkModelServiceClass>true</GenerateCkModelServiceClass>
+        </EmbeddedResource>
+        <None Remove="CkTest\ConstructionKit\ck-*.cache.json" />
+        <AdditionalFiles Include="CkTest\ConstructionKit\ck-*.cache.json" />
+    </ItemGroup>
+
 
     <ItemGroup>
       <ProjectReference Include="..\..\src\SystematizedData\Persistence.Commands\Persistence.Commands.csproj" />

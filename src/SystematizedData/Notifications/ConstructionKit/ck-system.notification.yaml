@@ -54,15 +54,23 @@ attributes:
 - id: ErrorText
   valueType: String
 - id: Type
-  valueType: Int
-  selectionValues:
+  valueType: Enum
+  valueCkEnumId: System.Notification/NotificationTypes
+- id: Status
+  valueType: Enum
+  valueCkEnumId: System.Notification/NotificationStates
+records: []
+enums:
+- enumId: NotificationTypes
+  useFlags: false
+  values:
   - key: 1
     name: EMail
   - key: 2
     name: SMS
-- id: Status
-  valueType: Int
-  selectionValues:
+- enumId: NotificationStates
+  useFlags: false
+  values:
   - key: 0
     name: Pending
   - key: 1
