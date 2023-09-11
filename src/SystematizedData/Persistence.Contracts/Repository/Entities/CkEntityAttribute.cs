@@ -10,13 +10,6 @@ public class CkEntityAttribute
 
     public string AttributeName { get; set; } = null!;
 
-    public bool IsAutoCompleteEnabled { get; set; }
-
-    public string? AutoCompleteFilter { get; set; }
-
-    public int? AutoCompleteLimit { get; set; }
-
+    public ICollection<object>? AutoCompleteValues { get; set; }
     public string? AutoIncrementReference { get; set; }
-
-    public ICollection<string>? AutoCompleteTexts { get; set; }
 }

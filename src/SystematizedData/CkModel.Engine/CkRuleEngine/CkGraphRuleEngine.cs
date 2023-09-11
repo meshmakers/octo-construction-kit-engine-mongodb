@@ -1,7 +1,7 @@
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects.Ck;
-using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
@@ -9,10 +9,10 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 
 public class CkGraphRuleEngine : ICkGraphRuleEngine
 {
-    private readonly ICkCache _ckCache;
+    private readonly ICkCacheService _ckCache;
     private readonly ITenantRepositoryInternal _tenantRepository;
 
-    public CkGraphRuleEngine(ICkCache ckCache, ITenantRepositoryInternal tenantRepository)
+    public CkGraphRuleEngine(ICkCacheService ckCache, ITenantRepositoryInternal tenantRepository)
     {
         _ckCache = ckCache;
         _tenantRepository = tenantRepository;
@@ -62,19 +62,19 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
         // Currently, the only mandatory association has multiplicity of One
         foreach (var entityUpdateInfo in entityUpdateInfoList.Where(x => x.ModOption == EntityModOptions.Create))
         {
-            var cacheItem = _ckCache.GetEntityCacheItem(entityUpdateInfo.RtEntity.GetCkTypeId());
+            var cacheItem = _ckCache.GetCkType(_tenantRepository.TenantId, entityUpdateInfo.RtEntity.GetCkTypeId());
 
             var inboundAssociationCacheItems =
-                cacheItem.InboundAssociations.Values.SelectMany(x =>
-                    x.Where(a => a.InboundMultiplicity == Multiplicities.One));
+                cacheItem.Associations.In.All.Where(a =>
+                    a.Multiplicity == MultiplicitiesDto.One);
             foreach (var inboundAssociationCacheItem in inboundAssociationCacheItems)
             {
                 if (!associationUpdateInfoList.Any(x =>
                         x.ModOption == AssociationModOptionsDto.Create &&
-                        x.RoleId == inboundAssociationCacheItem.RoleId))
+                        x.RoleId == inboundAssociationCacheItem.CkRoleId))
                 {
                     throw RuleViolationException.AssociationCardinalityViolationOnCreate(
-                        inboundAssociationCacheItem.RoleId, MultiplicitiesDto.One,
+                        inboundAssociationCacheItem.CkRoleId, MultiplicitiesDto.One,
                         entityUpdateInfo.RtEntity.ToRtEntityId());
                 }
             }
@@ -101,26 +101,26 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
                 throw RuleViolationException.MissingTargetEntity(targetRtId);
             }
 
-            var targetCacheItem = _ckCache.GetEntityCacheItem(targetEntity.GetCkTypeId());
+            var targetCacheItem = _ckCache.GetCkType(_tenantRepository.TenantId, targetEntity.GetCkTypeId());
 
             foreach (var associationUpdateInfosByRoleId in associationUpdateInfoList.Where(a => a.Target == targetRtId)
                          .GroupBy(a => a.RoleId))
             {
-                var inboundAssociationCacheItem = targetCacheItem.InboundAssociations.Values
-                    .SelectMany(x => x.Where(a => a.RoleId == associationUpdateInfosByRoleId.Key)).FirstOrDefault();
+                var inboundAssociationCacheItem = targetCacheItem.Associations.In.All.FirstOrDefault(a => a.CkRoleId == associationUpdateInfosByRoleId.Key);
                 if (inboundAssociationCacheItem == null)
                 {
                     throw RuleViolationException.AssociationNotAllowed(
                         associationUpdateInfosByRoleId.Key, targetRtId);
 
                 }
+                var targetCkTypeGraph = _ckCache.GetCkType(_tenantRepository.TenantId, inboundAssociationCacheItem.TargetCkTypeId);
 
                 foreach (var associationUpdateInfo in associationUpdateInfosByRoleId)
                 {
                     var originEntity = await GetEntity(session, entityUpdateInfoList, associationUpdateInfo.Origin);
-                    var originCacheItem = _ckCache.GetEntityCacheItem(originEntity.GetCkTypeId());
+                    var originCacheItem = _ckCache.GetCkType(_tenantRepository.TenantId, originEntity.GetCkTypeId());
 
-                    if (!inboundAssociationCacheItem.AllowedTypes.Contains(originCacheItem))
+                    if (targetCkTypeGraph.DerivedTypes.All(x => x.InheritorCkTypeId != originCacheItem.CkTypeId))
                     {
                         throw RuleViolationException.AssociationNotAllowed(
                             associationUpdateInfosByRoleId.Key, targetRtId);
@@ -139,7 +139,7 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
                 if (changeDelta < 0)
                 {
                     if (storedTargetAssociations == CurrentMultiplicity.One &&
-                        inboundAssociationCacheItem.InboundMultiplicity == Multiplicities.One)
+                        inboundAssociationCacheItem.Multiplicity == MultiplicitiesDto.One)
                     {
                         throw RuleViolationException.AssociationCardinalityViolationOnDelete(
                             associationUpdateInfosByRoleId.Key, MultiplicitiesDto.One, targetRtId);
@@ -149,8 +149,8 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
                 if (changeDelta > 0)
                 {
                     if (storedTargetAssociations == CurrentMultiplicity.One &&
-                        (inboundAssociationCacheItem.InboundMultiplicity == Multiplicities.One ||
-                         inboundAssociationCacheItem.InboundMultiplicity == Multiplicities.ZeroOrOne))
+                        (inboundAssociationCacheItem.Multiplicity == MultiplicitiesDto.One ||
+                         inboundAssociationCacheItem.Multiplicity == MultiplicitiesDto.ZeroOrOne))
                     {
                         throw RuleViolationException.AssociationCardinalityViolationOnModification(
                             associationUpdateInfosByRoleId.Key, MultiplicitiesDto.One, targetRtId);
@@ -172,24 +172,25 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
                 throw RuleViolationException.MissingOriginEntity(originRtId);
             }
 
-            var originCacheItem = _ckCache.GetEntityCacheItem(originEntity.GetCkTypeId());
+            var originCacheItem = _ckCache.GetCkType(_tenantRepository.TenantId, originEntity.GetCkTypeId());
 
             foreach (var associationUpdateInfosByRoleId in associationUpdateInfoList.Where(a => a.Origin == originRtId)
                          .GroupBy(a => a.RoleId))
             {
-                var outboundAssociationCacheItem = originCacheItem.OutboundAssociations.Values
-                    .SelectMany(x => x.Where(a => a.RoleId == associationUpdateInfosByRoleId.Key)).FirstOrDefault();
+                var outboundAssociationCacheItem = originCacheItem.Associations.Out.All.FirstOrDefault(a => a.CkRoleId == associationUpdateInfosByRoleId.Key);
                 if (outboundAssociationCacheItem == null)
                 {
                     throw RuleViolationException.InboundAssociationNotAllowedForCkType(associationUpdateInfosByRoleId.Key, originRtId, originCacheItem.CkTypeId);
                 }
+                
+                var targetCkTypeGraph = _ckCache.GetCkType(_tenantRepository.TenantId, outboundAssociationCacheItem.TargetCkTypeId);
 
                 foreach (var associationUpdateInfo in associationUpdateInfosByRoleId)
                 {
                     var targetEntity = await GetEntity(session, entityUpdateInfoList, associationUpdateInfo.Target);
-                    var targetCacheItem = _ckCache.GetEntityCacheItem(targetEntity.GetCkTypeId());
+                    var targetCacheItem = _ckCache.GetCkType(_tenantRepository.TenantId, targetEntity.GetCkTypeId());
 
-                    if (!outboundAssociationCacheItem.AllowedTypes.Contains(targetCacheItem))
+                    if (targetCkTypeGraph.DerivedTypes.All(x => x.InheritorCkTypeId != targetCacheItem.CkTypeId))
                     {
                         throw RuleViolationException.OutboundAssociationNotAllowedForCkType(associationUpdateInfosByRoleId.Key, originRtId, targetCacheItem.CkTypeId);
                     }
@@ -207,7 +208,7 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
                 if (changeDelta < 0)
                 {
                     if (storedOriginAssociations == CurrentMultiplicity.One &&
-                        outboundAssociationCacheItem.OutboundMultiplicity == Multiplicities.One)
+                        outboundAssociationCacheItem.Multiplicity == MultiplicitiesDto.One)
                     {
                         throw RuleViolationException.AssociationCardinalityViolationOnDelete(associationUpdateInfosByRoleId.Key, MultiplicitiesDto.One, originRtId);
                     }
@@ -216,8 +217,8 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
                 if (changeDelta > 0)
                 {
                     if (storedOriginAssociations == CurrentMultiplicity.One &&
-                        (outboundAssociationCacheItem.OutboundMultiplicity == Multiplicities.One ||
-                         outboundAssociationCacheItem.OutboundMultiplicity == Multiplicities.ZeroOrOne))
+                        (outboundAssociationCacheItem.Multiplicity == MultiplicitiesDto.One ||
+                         outboundAssociationCacheItem.Multiplicity == MultiplicitiesDto.ZeroOrOne))
                     {
                         throw RuleViolationException.AssociationCardinalityViolationOnModification(associationUpdateInfosByRoleId.Key, MultiplicitiesDto.One, originRtId);
                     }

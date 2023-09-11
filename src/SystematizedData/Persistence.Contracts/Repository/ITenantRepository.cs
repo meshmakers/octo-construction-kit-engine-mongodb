@@ -1,4 +1,5 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
@@ -6,7 +7,9 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 public interface ITenantRepository
 {
-    IEntityCacheItem GetEntityCacheItem(CkId<CkTypeId> ckTypeId);
+    public string TenantId { get; }
+    
+    CkTypeGraph GetEntityCacheItem(CkId<CkTypeId> ckTypeId);
     
     #region Transaction Handling
 
@@ -102,7 +105,7 @@ public interface ITenantRepository
     RtEntity CreateTransientRtEntity(CkId<CkTypeId> ckTypeId);
 
     // ReSharper disable once UnusedMemberInSuper.Global
-    RtEntity CreateTransientRtEntity(IEntityCacheItem entityCacheItem);
+    RtEntity CreateTransientRtEntity(CkTypeGraph ckTypeGraph);
     TEntity CreateTransientRtEntity<TEntity>() where TEntity : RtEntity, new();
 
     #endregion Transient data
@@ -146,7 +149,7 @@ public interface ITenantRepository
         string regexFilterValue, int takeCount);
 
     Task UpdateAutoCompleteTexts(IOctoSession session, CkId<CkTypeId> ckTypeId, string attributeName,
-        IEnumerable<string> autoCompleteTexts);
+        IEnumerable<object> autoCompleteValues);
 
     #endregion Advanced functionality
 }

@@ -1,6 +1,6 @@
 $schema: https://schemas.meshmakers.cloud/construction-kit-compiled.schema.json
 types:
-- typeId: System.NotificationTemplate
+- typeId: NotificationTemplate
   derivedFromCkTypeId: System/Entity
   attributes:
   - id: System.Notification/SubjectTemplate
@@ -9,7 +9,7 @@ types:
     name: BodyTemplate
   - id: System.Notification/Type
     name: Type
-- typeId: Message
+- typeId: NotificationMessage
   derivedFromCkTypeId: System/Entity
   attributes:
   - id: System.Notification/SubjectText
@@ -28,7 +28,7 @@ types:
     name: SendStatus
   - id: System.Notification/ErrorText
     name: ErrorText
-- typeId: System.UI.Page
+- typeId: Page
   derivedFromCkTypeId: System/Entity
   attributes:
   - id: System.Notification/Page.Content
@@ -41,24 +41,30 @@ attributes:
   valueType: String
 - id: BodyText
   valueType: String
+  isOptional: true
 - id: SubjectTemplate
   valueType: String
 - id: SubjectText
   valueType: String
 - id: SentDateTime
   valueType: DateTime
+  isOptional: true
 - id: LastTryDateTime
   valueType: DateTime
+  isOptional: true
 - id: RecipientAddress
   valueType: String
 - id: ErrorText
   valueType: String
+  isOptional: true
 - id: Type
   valueType: Enum
   valueCkEnumId: System.Notification/NotificationTypes
 - id: Status
   valueType: Enum
   valueCkEnumId: System.Notification/NotificationStates
+  defaultValues:
+  - value: 0
 records: []
 enums:
 - enumId: NotificationTypes

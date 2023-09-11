@@ -327,10 +327,7 @@ public class DatabaseCkModelRepository : ICkModelRepository
                     {
                         AttributeId = attribute.CkAttributeId,
                         AttributeName = attribute.AttributeName,
-                        AutoCompleteFilter = attribute.AutoCompleteFilter,
-                        AutoCompleteLimit = attribute.AutoCompleteLimit,
-                        IsAutoCompleteEnabled = attribute.IsAutoCompleteEnabled,
-                        AutoIncrementReference = attribute.AutoIncrementReference
+                        AutoCompleteValues = attribute.AutoCompleteValues
                     };
 
                     ckEntityAttributes.Add(ckEntityAttribute);

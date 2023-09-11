@@ -1,6 +1,8 @@
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.InsertModifiers;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Mutation;
@@ -12,11 +14,13 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 internal class TenantRepository : ITenantRepositoryInternal
 {
-    private readonly ICkCache _ckCache;
+    private readonly string _tenantId;
+    private readonly ICkCacheService _ckCache;
     private readonly IDatabaseContext _databaseContext;
 
-    public TenantRepository(ICkCache ckCache, IDatabaseContext databaseContext)
+    public TenantRepository(string tenantId, ICkCacheService ckCache, IDatabaseContext databaseContext)
     {
+        _tenantId = tenantId;
         _ckCache = ckCache;
         _databaseContext = databaseContext;
     }
@@ -24,9 +28,11 @@ internal class TenantRepository : ITenantRepositoryInternal
 
     #region Helper
 
-    public IEntityCacheItem GetEntityCacheItem(CkId<CkTypeId> ckTypeId)
+    public string TenantId => _tenantId;
+
+    public CkTypeGraph GetEntityCacheItem(CkId<CkTypeId> ckTypeId)
     {
-        var entityCacheItem = _ckCache.GetEntityCacheItem(ckTypeId);
+        var entityCacheItem = _ckCache.GetCkType(_tenantId, ckTypeId);
         if (entityCacheItem == null)
         {
             throw new OperationFailedException($"Type '{ckTypeId}' does not exist.");
@@ -248,7 +254,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         var entityCacheItem = GetEntityCacheItem(ckTypeId);
 
         var query =
-            new SingleOriginRtQuery(entityCacheItem, _databaseContext, dataQueryOperation.Language);
+            new SingleOriginRtQuery(_ckCache, _tenantId, entityCacheItem, _databaseContext, dataQueryOperation.Language);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddIdFilter(rtIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
@@ -339,7 +345,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         var entityCacheItem = GetEntityCacheItem(targetCkTypeId);
 
         var hierarchicalRtQuery =
-            new MultipleOriginHierarchicalRtQuery(entityCacheItem, _databaseContext, dataQueryOperation.Language,
+            new MultipleOriginHierarchicalRtQuery(_ckCache, _tenantId, entityCacheItem, _databaseContext, dataQueryOperation.Language,
                 originRtIds,
                 originCkTypeId, roleId, graphDirection, targetCkTypeId);
 
@@ -366,7 +372,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         var entityCacheItem = GetEntityCacheItem(targetCkTypeId);
 
         var originHierarchicalRtQuery =
-            new MultipleOriginHierarchicalRtQuery<TTargetEntity>(entityCacheItem, _databaseContext,
+            new MultipleOriginHierarchicalRtQuery<TTargetEntity>(_ckCache, _tenantId, entityCacheItem, _databaseContext,
                 dataQueryOperation.Language,
                 originRtIds,
                 originCkTypeId, roleId, graphDirection, targetCkTypeId);
@@ -402,7 +408,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         var entityCacheItem = GetEntityCacheItem(targetCkTypeId);
 
         var hierarchicalRtQuery =
-            new MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity>(entityCacheItem, _databaseContext,
+            new MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity>(_ckCache, _tenantId, entityCacheItem, _databaseContext,
                 dataQueryOperation.Language,
                 originRtIds,
                 originCkTypeId, roleId, graphDirection, targetCkTypeId);
@@ -435,7 +441,7 @@ internal class TenantRepository : ITenantRepositoryInternal
     {
         var entityCacheItem = GetEntityCacheItem(ckTypeId);
         var query =
-            new SingleOriginRtQuery<TEntity>(entityCacheItem, _databaseContext, dataQueryOperation.Language);
+            new SingleOriginRtQuery<TEntity>(_ckCache, _tenantId, entityCacheItem, _databaseContext, dataQueryOperation.Language);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
@@ -514,13 +520,13 @@ internal class TenantRepository : ITenantRepositoryInternal
 
     public RtEntity CreateTransientRtEntity(CkId<CkTypeId> ckTypeId)
     {
-        var entityCacheItem = _ckCache.GetEntityCacheItem(ckTypeId);
+        var entityCacheItem = _ckCache.GetCkType(_tenantId, ckTypeId);
         return CreateTransientRtEntity<RtEntity>(entityCacheItem);
     }
 
-    public RtEntity CreateTransientRtEntity(IEntityCacheItem entityCacheItem)
+    public RtEntity CreateTransientRtEntity(CkTypeGraph ckTypeGraph)
     {
-        return CreateTransientRtEntity<RtEntity>(entityCacheItem);
+        return CreateTransientRtEntity<RtEntity>(ckTypeGraph);
     }
 
     public TEntity CreateTransientRtEntity<TEntity>() where TEntity : RtEntity, new()
@@ -532,7 +538,7 @@ internal class TenantRepository : ITenantRepositoryInternal
                                            $" is defined. Is attribute '{typeof(CkIdAttribute).FullName}' missing?");
         }
 
-        var entityCacheItem = _ckCache.GetEntityCacheItem(ckTypeId);
+        var entityCacheItem = _ckCache.GetCkType(_tenantId, ckTypeId);
         if (entityCacheItem == null)
         {
             throw new InvalidCkTypeIdException($"Construction Kit Id '{ckTypeId}' was not found in model cache." +
@@ -542,32 +548,33 @@ internal class TenantRepository : ITenantRepositoryInternal
         return CreateTransientRtEntity<TEntity>(entityCacheItem);
     }
 
-    private TEntity CreateTransientRtEntity<TEntity>(IEntityCacheItem entityCacheItem)
+    private TEntity CreateTransientRtEntity<TEntity>(CkTypeGraph ckTypeGraph)
         where TEntity : RtEntity, new()
     {
         var rtEntity = new TEntity
         {
             RtId = OctoObjectId.GenerateNewId(),
-            CkTypeId = entityCacheItem.CkTypeId
+            CkTypeId = ckTypeGraph.CkTypeId
         };
-        foreach (var attributeCacheItem in entityCacheItem.Attributes.Values)
+        foreach (var ckTypeAttributeDto in ckTypeGraph.AllAttributes.Values)
         {
+            
             object? value = null;
-            if (attributeCacheItem.DefaultValues != null)
+            if (ckTypeAttributeDto.DefaultValues != null)
             {
-                switch (attributeCacheItem.AttributeValueType)
+                switch (ckTypeAttributeDto.ValueType)
                 {
-                    case AttributeValueTypes.StringArray:
-                    case AttributeValueTypes.IntArray:
-                        value = attributeCacheItem.DefaultValues;
+                    case AttributeValueTypesDto.StringArray:
+                    case AttributeValueTypesDto.IntArray:
+                        value = ckTypeAttributeDto.DefaultValues;
                         break;
                     default:
-                        value = attributeCacheItem.DefaultValues.First();
+                        value = ckTypeAttributeDto.DefaultValues.First();
                         break;
                 }
             }
 
-            rtEntity.SetAttributeValue(attributeCacheItem.AttributeName, attributeCacheItem.AttributeValueType, value);
+            rtEntity.SetAttributeValue(ckTypeAttributeDto.AttributeName, ckTypeAttributeDto.ValueType, value);
         }
 
         return rtEntity;
@@ -746,7 +753,7 @@ internal class TenantRepository : ITenantRepositoryInternal
             throw new InvalidCkTypeIdException($"Construction Kit Id '{ckTypeId}' is invalid.");
         }
 
-        if (!entityCacheItem.Attributes.Keys.Contains(attributeName))
+        if (entityCacheItem.AllAttributes.All(x => x.Value.AttributeName != attributeName))
         {
             throw new InvalidAttributeException(
                 $"Attribute '{attributeName}' does not exist at type '{ckTypeId}'");
@@ -791,7 +798,7 @@ internal class TenantRepository : ITenantRepositoryInternal
 
 
     public async Task UpdateAutoCompleteTexts(IOctoSession session, CkId<CkTypeId> ckTypeId, string attributeName,
-        IEnumerable<string> autoCompleteTexts)
+        IEnumerable<object> autoCompleteValues)
     {
         ArgumentValidation.ValidateString(nameof(attributeName), attributeName);
 
@@ -809,7 +816,7 @@ internal class TenantRepository : ITenantRepositoryInternal
                 $"Attribute with name '{attributeName}' does not exist on type '{ckTypeId}'");
         }
 
-        attribute.AutoCompleteTexts = autoCompleteTexts.ToList();
+        attribute.AutoCompleteValues = autoCompleteValues.ToList();
 
         try
         {

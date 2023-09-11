@@ -20,7 +20,7 @@ public class RtEntityTests : IClassFixture<SystemFixture>
     public async void TestGetIndirectRtAssociationTargets()
     {
         var systemContext = _systemFixture.GetSystemContext();
-        var tenantRepository = await systemContext.CreateOrGetTenantRepositoryAsync();
+        var tenantRepository = systemContext.CreateOrGetTenantRepository();
 
         using (var session = await tenantRepository.StartSessionAsync())
         {
@@ -29,7 +29,7 @@ public class RtEntityTests : IClassFixture<SystemFixture>
             OctoObjectId originRtId = OctoObjectId.Parse("5fc8fc3d8b2fc75f925e21bc");
 
 
-            var r = await tenantRepository.GetIndirectRtAssociationTargetsAsync<RtTestCity, RtTestLocation>(session, originRtId,
+            var r = await tenantRepository.GetIndirectRtAssociationTargetsAsync<RtCity, RtLocation>(session, originRtId,
                  SystemCkIds.ParentChild,
                  GraphDirections.Outbound);
         }
@@ -39,7 +39,7 @@ public class RtEntityTests : IClassFixture<SystemFixture>
     public async void Test1()
     {
         var systemContext = _systemFixture.GetSystemContext();
-        var tenantRepository = await systemContext.CreateOrGetTenantRepositoryAsync();
+        var tenantRepository = systemContext.CreateOrGetTenantRepository();
 
         using (var session = await tenantRepository.StartSessionAsync())
         {
@@ -67,7 +67,7 @@ public class RtEntityTests : IClassFixture<SystemFixture>
     public async void Test2()
     {
         var systemContext = _systemFixture.GetSystemContext();
-        var tenantRepository = await systemContext.CreateOrGetTenantRepositoryAsync();
+        var tenantRepository = systemContext.CreateOrGetTenantRepository();
 
         using (var session = await tenantRepository.StartSessionAsync())
         {

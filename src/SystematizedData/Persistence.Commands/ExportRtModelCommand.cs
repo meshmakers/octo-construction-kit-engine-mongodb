@@ -27,7 +27,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
         CancellationToken? cancellationToken)
     {
         var tenantContext = await _systemContext.CreateChildTenantContextAsync(tenantId);
-        var tenantRepository = await tenantContext.CreateOrGetTenantRepositoryAsync();
+        var tenantRepository = tenantContext.CreateOrGetTenantRepository();
 
         var session = await tenantRepository.StartSessionAsync();
         try
@@ -84,10 +84,10 @@ public class ExportRtModelCommand : IExportRtModelCommand
 
                 exEntity.Attributes.AddRange(entity.Attributes.Select(pair =>
                 {
-                    var attributeCacheItem = entityCacheItem.Attributes[pair.Key];
+                    var attributeCacheItem = entityCacheItem.AllAttributes[pair.Key];
                     return new RtAttributeDto
                     {
-                        Id = attributeCacheItem.AttributeId,
+                        Id = attributeCacheItem.CkAttributeId,
                         Value = pair.Value
                     };
                 }));

@@ -1,4 +1,5 @@
 ﻿using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
@@ -150,19 +151,19 @@ public class RtEntity
         return (string)value;
     }
 
-    public void SetAttributeValue(string attributeName, AttributeValueTypes attributeValueTypes,
+    public void SetAttributeValue(string attributeName, AttributeValueTypesDto attributeValueTypes,
         object? attributeValue)
     {
         _attributes[attributeName] = ConvertAttributeValue(attributeValueTypes, attributeValue);
     }
     
-    public void SetAttributeValueNonNullable(string attributeName, AttributeValueTypes attributeValueTypes,
+    public void SetAttributeValueNonNullable(string attributeName, AttributeValueTypesDto attributeValueTypes,
         object attributeValue)
     {
         _attributes[attributeName] = ConvertAttributeValue(attributeValueTypes, attributeValue);
     }
 
-    public static object? ConvertAttributeValue(AttributeValueTypes attributeValueTypes, object? value)
+    public static object? ConvertAttributeValue(AttributeValueTypesDto attributeValueTypes, object? value)
     {
         if (value == null)
         {
@@ -171,14 +172,14 @@ public class RtEntity
 
         switch (attributeValueTypes)
         {
-            case AttributeValueTypes.String:
+            case AttributeValueTypesDto.String:
                 if (value is string)
                 {
                     return value;
                 }
 
                 return value.ToString();
-            case AttributeValueTypes.Double:
+            case AttributeValueTypesDto.Double:
                 if (value is double)
                 {
                     return value;
@@ -190,7 +191,7 @@ public class RtEntity
                 }
 
                 break;
-            case AttributeValueTypes.Boolean:
+            case AttributeValueTypesDto.Boolean:
                 if (value is bool)
                 {
                     return value;
@@ -202,7 +203,7 @@ public class RtEntity
                 }
 
                 break;
-            case AttributeValueTypes.Int:
+            case AttributeValueTypesDto.Int:
                 if (value is int)
                 {
                     return value;
@@ -214,7 +215,7 @@ public class RtEntity
                 }
 
                 break;
-            case AttributeValueTypes.DateTime:
+            case AttributeValueTypesDto.DateTime:
                 value = Convert.ToDateTime(value);
                 break;
         }

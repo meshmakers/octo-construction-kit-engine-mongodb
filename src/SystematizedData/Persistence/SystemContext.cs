@@ -1,8 +1,7 @@
-using CkModel.CkRuleEngine;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
-using Meshmakers.Octo.SystematizedData.Persistence.CkModel;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Microsoft.Extensions.Options;
 using Persistence.InternalContracts;
 using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
@@ -13,8 +12,10 @@ namespace Meshmakers.Octo.SystematizedData.Persistence;
 public class SystemContext : TenantContext, ISystemContextInternal
 {
     public SystemContext(IOptions<OctoSystemConfiguration> systemConfiguration,
+        ISystemMessageService systemMessageService,
         ICkCacheService ckCacheService, ICkModelRepositoryManager ckModelRepositoryManager)
-    : base(systemConfiguration, systemConfiguration.Value.SystemTenantId, systemConfiguration.Value.SystemDatabaseName.ToLower(), ckModelRepositoryManager, ckCacheService)
+    : base(systemConfiguration, systemConfiguration.Value.SystemTenantId, systemConfiguration.Value.SystemDatabaseName.ToLower(), 
+        systemMessageService, ckModelRepositoryManager, ckCacheService)
     {
     }
 
@@ -34,7 +35,7 @@ public class SystemContext : TenantContext, ISystemContextInternal
         try
         {
             // Distribute updates (post) to inform other services.
-            await _cacheService.DistributeTenantModificationPreEventAsync(normalizedTenantId);
+            await _systemMessageService.DistributeTenantModificationPreEventAsync(normalizedTenantId);
 
             using var systemSession = await StartSystemSessionAsync();
             systemSession.StartTransaction();
@@ -58,7 +59,7 @@ public class SystemContext : TenantContext, ISystemContextInternal
             await systemSession.CommitTransactionAsync();
             
             // Distribute updates (post) to inform other services.
-            await _cacheService.DistributeTenantModificationPostEventAsync(normalizedTenantId);
+            await _systemMessageService.DistributeTenantModificationPostEventAsync(normalizedTenantId);
         }
         catch (Exception)
         {
@@ -91,9 +92,9 @@ public class SystemContext : TenantContext, ISystemContextInternal
         var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
         var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.MakeKey();
 
-        await _cacheService.DistributeTenantModificationPreEventAsync(normalizedTenantId);
+        await _systemMessageService.DistributeTenantModificationPreEventAsync(normalizedTenantId);
         await _systemRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
-        await _cacheService.DistributeTenantModificationPostEventAsync(normalizedTenantId);
+        await _systemMessageService.DistributeTenantModificationPostEventAsync(normalizedTenantId);
     }
 
     // ReSharper disable once MemberCanBePrivate.Global

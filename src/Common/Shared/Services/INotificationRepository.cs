@@ -26,7 +26,7 @@ public interface INotificationRepository
     /// <param name="subject">The subject of the E-Mail message</param>
     /// <param name="htmlMessage">The HTML formatted E-Mail body message</param>
     /// <returns></returns>
-    Task AddEMailMessageAsync(string tenantId, string emailAddress, string subject, string htmlMessage);
+    Task AddEMailMessageAsync(string tenantId, string emailAddress, string subject, string? htmlMessage);
 
     /// <summary>
     /// Adds a notification message to the repository using short message service.
@@ -47,7 +47,7 @@ public interface INotificationRepository
     /// <param name="htmlMessage">The HTML formatted E-Mail body message</param>
     /// <param name="associatedRtId">The entity identifier the notification event is associated to.</param>
     /// <returns></returns>
-    Task AddEMailMessageAsync(string tenantId, string emailAddress, string? subject, string? htmlMessage,
+    Task AddEMailMessageAsync(string tenantId, string emailAddress, string subject, string? htmlMessage,
         RtEntityId? associatedRtId);
 
     /// <summary>

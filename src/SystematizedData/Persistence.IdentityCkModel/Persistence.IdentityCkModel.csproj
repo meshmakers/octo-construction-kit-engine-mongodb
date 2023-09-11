@@ -8,8 +8,8 @@
 
 
     <ItemGroup>
-      <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2309.9007" />
-      <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" Version="0.0.2309.9007" />
+      <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2309.11012" />
+      <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" Version="0.0.2309.11012" />
     </ItemGroup>
 
     <ItemGroup>

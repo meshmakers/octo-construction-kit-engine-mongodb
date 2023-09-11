@@ -1,5 +1,6 @@
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.InsertModifiers;
@@ -12,12 +13,12 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Mutation;
 public class BulkRtMutation
 {
     private readonly IDatabaseContext _databaseContext;
-    private readonly ICkCache _ckCache;
+    private readonly ICkCacheService _ckCache;
     private readonly ITenantRepositoryInternal _tenantRepository;
     private readonly IAutoIncrementModifier _autoIncrementModifier;
 
     internal BulkRtMutation(IDatabaseContext databaseContext,
-        ICkCache ckCache,
+        ICkCacheService ckCache,
         ITenantRepositoryInternal tenantRepository,
         IAutoIncrementModifier autoIncrementModifier)
     {

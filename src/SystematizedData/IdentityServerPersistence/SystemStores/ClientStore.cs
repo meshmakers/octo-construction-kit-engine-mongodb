@@ -1,8 +1,9 @@
 ﻿using Duende.IdentityServer.Models;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Backend.Persistence.SystemEntities;
 using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
+using Persistence.Contracts;
+using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
 
@@ -11,13 +12,14 @@ public class ClientStore : IOctoClientStore
     private readonly ICachedCollection<OctoClient> _clientCollection;
     private readonly IRepository _repository;
 
-    public ClientStore(ISystemContext systemContext)
+    public ClientStore(ITenantContext tenantContext)
     {
+        tenantContext.CreateOrGetTenantRepositoryAsync()
         _repository = systemContext.SystemDatabase;
         _clientCollection = _repository.GetCollection<OctoClient>();
     }
 
-    public async Task CreateAsync(OctoClient octoClient)
+    public async Task CreateAsync(RtSystemIdentityClient octoClient)
     {
         var session = await _repository.StartSessionAsync();
         session.StartTransaction();
@@ -58,7 +60,7 @@ public class ClientStore : IOctoClientStore
         return result;
     }
 
-    public async Task<IEnumerable<OctoClient>> GetClients()
+    public async Task<IEnumerable<RtSystemIdentityClient>> GetClients()
     {
         var session = await _repository.StartSessionAsync();
         session.StartTransaction();
@@ -69,7 +71,7 @@ public class ClientStore : IOctoClientStore
         return result;
     }
 
-    public async Task UpdateAsync(string clientId, OctoClient client)
+    public async Task UpdateAsync(string clientId, RtSystemIdentityClient client)
     {
         ArgumentValidation.ValidateString(nameof(clientId), clientId);
 
@@ -87,7 +89,7 @@ public class ClientStore : IOctoClientStore
         await session.CommitTransactionAsync();
     }
 
-    private async Task<OctoClient> GetClientByClientId(IOctoSession session, string clientId)
+    private async Task<RtSystemIdentityClient> GetClientByClientId(IOctoSession session, string clientId)
     {
         var client = await _clientCollection.FindSingleOrDefaultAsync(session, x => x.ClientId == clientId);
         return client;

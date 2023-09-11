@@ -140,11 +140,8 @@ public class MongoRepositoryClient : IRepositoryClient
             cm.AutoMap();
 
             cm.GetMemberMap(c => c.AttributeName).SetIsRequired(true);
-            cm.GetMemberMap(c => c.IsAutoCompleteEnabled).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.AutoCompleteFilter).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.AutoCompleteLimit).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.AutoIncrementReference).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.AutoCompleteTexts).SetIgnoreIfDefault(true);
+            cm.GetMemberMap(c => c.AutoCompleteValues).SetIgnoreIfDefault(true);
         });
         
         BsonClassMap.TryRegisterClassMap<CkEntityInheritance>(cm =>

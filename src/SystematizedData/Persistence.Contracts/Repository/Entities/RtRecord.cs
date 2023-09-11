@@ -1,3 +1,5 @@
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 public class RtRecord
@@ -18,12 +20,12 @@ public class RtRecord
         return null;
     }
 
-    public void SetAttributeValue(string attributeName, AttributeValueTypes attributeValueTypes,
+    public void SetAttributeValue(string attributeName, AttributeValueTypesDto attributeValueTypes,
         object? attributeValue)
     {
     }
     
-    public void SetAttributeValueNonNullable(string attributeName, AttributeValueTypes attributeValueTypes,
+    public void SetAttributeValueNonNullable(string attributeName, AttributeValueTypesDto attributeValueTypes,
         object attributeValue)
     {
     }

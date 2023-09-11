@@ -1,4 +1,5 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
@@ -9,10 +10,10 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.InsertModifier
 public class AutoIncrementModifier : IAutoIncrementModifier
 {
     private readonly IDatabaseContext _databaseContext;
-    private readonly ICkCache _ckCache;
+    private readonly ICkCacheService _ckCache;
     private readonly ITenantRepository _tenantRepository;
 
-    public AutoIncrementModifier(IDatabaseContext databaseContext, ICkCache ckCache, ITenantRepository tenantRepository)
+    public AutoIncrementModifier(IDatabaseContext databaseContext, ICkCacheService ckCache, ITenantRepository tenantRepository)
     {
         _databaseContext = databaseContext;
         _ckCache = ckCache;
@@ -21,13 +22,13 @@ public class AutoIncrementModifier : IAutoIncrementModifier
     
     public async Task RunAutoIncrementAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, IEnumerable<RtEntity> rtEntities)
     {
-        var entityCacheItem = _ckCache.GetEntityCacheItem(ckTypeId);
+        var entityCacheItem = _ckCache.GetCkType(_tenantRepository.TenantId, ckTypeId);
         if (entityCacheItem == null)
         {
             throw new InvalidCkTypeIdException($"Construction Kit Type Id '{ckTypeId}' is invalid.");
         }
 
-        var autoIncrementReferences = entityCacheItem.Attributes.Values
+        var autoIncrementReferences = entityCacheItem.AllAttributes.Values
             .Where(a => !string.IsNullOrEmpty(a.AutoIncrementReference)).ToList();
         if (!autoIncrementReferences.Any())
         {
@@ -43,12 +44,12 @@ public class AutoIncrementModifier : IAutoIncrementModifier
             }
         };
 
-        var autoIncrementerSet = await _tenantRepository.GetRtEntitiesByTypeAsync<RtSystemAutoIncrement>(session, dataQueryOperation);
+        var autoIncrementerSet = await _tenantRepository.GetRtEntitiesByTypeAsync<RtAutoIncrement>(session, dataQueryOperation);
 
         foreach (var rtEntity in rtEntities)
         foreach (var autoIncrementReference in autoIncrementReferences)
         {
-            var attributeCacheItem = entityCacheItem.Attributes[autoIncrementReference.AttributeName];
+            var attributeCacheItem = entityCacheItem.AllAttributes[autoIncrementReference.AttributeName];
             if (attributeCacheItem == null)
             {
                 throw new InvalidAttributeException(
@@ -63,12 +64,12 @@ public class AutoIncrementModifier : IAutoIncrementModifier
                     $"Autoincrement reference '{autoIncrementReference.AutoIncrementReference}' does not exist at Ck-Id {ckTypeId}");
             }
             rtEntity.SetAttributeValue(autoIncrementReference.AttributeName,
-                attributeCacheItem.AttributeValueType,
+                attributeCacheItem.ValueType,
                 await ExecuteAutoIncrementAsync(session, autoIncrement));
         }
     }
 
-    public async Task<long> ExecuteAutoIncrementAsync(IOctoSession session, RtSystemAutoIncrement autoIncrement)
+    public async Task<long> ExecuteAutoIncrementAsync(IOctoSession session, RtAutoIncrement autoIncrement)
     {
         var end = autoIncrement.End;
         if (!autoIncrement.CurrentValue.HasValue)

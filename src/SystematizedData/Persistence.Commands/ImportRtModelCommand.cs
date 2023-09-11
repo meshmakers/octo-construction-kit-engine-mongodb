@@ -38,7 +38,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
         _logger.LogInformation("Importing RT entities using text started");
 
         var tenantContext = await _systemContext.CreateChildTenantContextInternalAsync(tenantId);
-        var tenantRepository = await tenantContext.CreateOrGetTenantRepositoryInternalAsync();
+        var tenantRepository = tenantContext.CreateOrGetTenantRepositoryInternal();
 
         var session = await tenantRepository.StartSessionAsync();
         try
@@ -71,7 +71,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
         {
             session.StartTransaction();
             var tenantContext = await _systemContext.CreateChildTenantContextInternalAsync(tenantId);
-            var tenantRepository = await tenantContext.CreateOrGetTenantRepositoryInternalAsync();
+            var tenantRepository = tenantContext.CreateOrGetTenantRepositoryInternal();
 
             using (var stream = File.OpenText(filePath))
             {
@@ -120,14 +120,14 @@ public class ImportRtModelCommand : IImportRtModelCommand
         foreach (var modelAttribute in modelRtEntity.Attributes)
         {
             var attributeCacheItem =
-                entityCacheItem.Attributes.Values.FirstOrDefault(a => a.AttributeId.Equals(modelAttribute.Id));
+                entityCacheItem.AllAttributes.Values.FirstOrDefault(a => a.CkAttributeId.Equals(modelAttribute.Id));
             if (attributeCacheItem == null)
             {
                 _logger.LogError("'{ModelAttributeId}' does not exit on type '{CkTypeId}'", modelAttribute.Id, entityCacheItem.CkTypeId);
                 return;
             }
 
-            rtEntity.SetAttributeValue(attributeCacheItem.AttributeName, attributeCacheItem.AttributeValueType,
+            rtEntity.SetAttributeValue(attributeCacheItem.AttributeName, attributeCacheItem.ValueType,
                 modelAttribute.Value);
         }
 

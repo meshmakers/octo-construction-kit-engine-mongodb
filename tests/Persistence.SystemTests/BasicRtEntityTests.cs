@@ -22,7 +22,7 @@ public class BasicRtEntityTests
         }
         await systemContext.CreateSystemTenantAsync();
 
-        var tenantRepository = await systemContext.CreateOrGetTenantRepositoryAsync();
+        var tenantRepository = systemContext.CreateOrGetTenantRepository();
        // tenantRepository.CreateTransientRtEntity<>()
     }
 }

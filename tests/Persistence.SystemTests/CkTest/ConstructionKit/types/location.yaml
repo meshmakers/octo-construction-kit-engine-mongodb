@@ -2,14 +2,14 @@
 types:
 - typeId: Location
   derivedFromCkTypeId: System/Entity
-  isFinal: true
+  isFinal: false
   isAbstract: true
   attributes:
   - id: Test/Designation
     name: Designation
 - typeId: Planet
   derivedFromCkTypeId: Test/Location
-  isFinal: false
+  isFinal: true
   isAbstract: false
 - typeId: City
   derivedFromCkTypeId: Test/Location

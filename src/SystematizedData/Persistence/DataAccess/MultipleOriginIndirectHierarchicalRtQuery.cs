@@ -1,6 +1,8 @@
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.Formulas;
@@ -13,11 +15,11 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 // ReSharper disable once UnusedType.Global
 internal class MultipleOriginIndirectHierarchicalRtQuery : MultipleOriginIndirectHierarchicalRtQuery<RtEntity>
 {
-    internal MultipleOriginIndirectHierarchicalRtQuery(IEntityCacheItem targetEntityCacheItem,
+    internal MultipleOriginIndirectHierarchicalRtQuery(ICkCacheService ckCacheService, string tenantId, CkTypeGraph targetEntityCacheItem,
         IDatabaseContext databaseContext,
         string language, IEnumerable<OctoObjectId> rtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkId<CkTypeId> targetCkTypeId)
-        : base(targetEntityCacheItem, databaseContext, language, rtIds, originCkTypeId, roleId, graphDirection,
+        : base(ckCacheService, tenantId, targetEntityCacheItem, databaseContext, language, rtIds, originCkTypeId, roleId, graphDirection,
             targetCkTypeId)
     {
     }
@@ -31,14 +33,18 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
     private readonly CkId<CkAssociationRoleId> _roleId;
     private readonly IEnumerable<OctoObjectId> _rtIds;
     private readonly CkId<CkTypeId> _targetCkTypeId;
-    private readonly IEntityCacheItem _targetEntityCacheItem;
+    private readonly ICkCacheService _ckCacheService;
+    private readonly string _tenantId;
+    private readonly CkTypeGraph _targetEntityCacheItem;
 
-    internal MultipleOriginIndirectHierarchicalRtQuery(IEntityCacheItem targetEntityCacheItem,
+    internal MultipleOriginIndirectHierarchicalRtQuery(ICkCacheService ckCacheService, string tenantId, CkTypeGraph targetEntityCacheItem,
         IDatabaseContext databaseContext,
         string language, IEnumerable<OctoObjectId> rtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkId<CkTypeId> targetCkTypeId)
         : base(language)
     {
+        _ckCacheService = ckCacheService;
+        _tenantId = tenantId;
         _targetEntityCacheItem = targetEntityCacheItem;
         _databaseContext = databaseContext;
         _rtIds = rtIds;
@@ -179,7 +185,7 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
 
     protected override bool IsAttributeNameValid(string attributeName)
     {
-        return _targetEntityCacheItem.Attributes.TryGetValue(attributeName, out var _) ||
+        return _targetEntityCacheItem.AllAttributes.TryGetValue(attributeName, out var _) ||
                attributeName == nameof(RtEntity.RtId) ||
                attributeName == nameof(RtEntity.RtCreationDateTime) ||
                attributeName == nameof(RtEntity.RtChangedDateTime) ||
@@ -205,7 +211,7 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
     protected override object? ResolveSearchAttributeValue(string attributeName, object? searchTerm, out bool isEnum)
     {
         if (searchTerm != null &&
-            _targetEntityCacheItem.Attributes.TryGetValue(attributeName, out var attributeCacheItem))
+            _targetEntityCacheItem.AllAttributes.TryGetValue(attributeName, out var attributeCacheItem))
         {
             var searchTermString = searchTerm.ToString();
 
@@ -215,12 +221,13 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
                 return null;
             }
 
-            if (attributeCacheItem.SelectionValues != null)
+            if (attributeCacheItem.ValueType == AttributeValueTypesDto.Enum && attributeCacheItem.ValueCkEnumId != null)
             {
+                var ckEnumGraph = _ckCacheService.GetCkEnum(_tenantId, attributeCacheItem.ValueCkEnumId.Value);
                 var searchTermStringEnum = searchTermString.Replace("_", "");
 
                 // Search for match in selection value
-                var result = attributeCacheItem.SelectionValues.FirstOrDefault(x =>
+                var result = ckEnumGraph.Values.FirstOrDefault(x =>
                     string.Equals(x.Name, searchTermStringEnum, StringComparison.OrdinalIgnoreCase));
                 if (result != null)
                 {
@@ -243,9 +250,9 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
 
                 if (!double.IsNaN(result))
                 {
-                    switch (attributeCacheItem.AttributeValueType)
+                    switch (attributeCacheItem.ValueType)
                     {
-                        case AttributeValueTypes.DateTime:
+                        case AttributeValueTypesDto.DateTime:
                             isEnum = false;
                             return new DateTime((long)result);
                     }
@@ -258,7 +265,7 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
 
             // Change to the type of attribute
             isEnum = false;
-            return RtEntity.ConvertAttributeValue(attributeCacheItem.AttributeValueType, searchTerm);
+            return RtEntity.ConvertAttributeValue(attributeCacheItem.ValueType, searchTerm);
         }
 
         return base.ResolveSearchAttributeValue(attributeName, searchTerm, out isEnum);

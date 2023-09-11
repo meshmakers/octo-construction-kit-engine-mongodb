@@ -11,17 +11,17 @@ public class NotificationMessageDto : RtEntityDto
     /// <summary>
     /// Gets or sets the subject text.
     /// </summary>
-    public string? SubjectText { get; set; }
+    public string SubjectText { get; set; } = null!;
     
     /// <summary>
     /// Gets or sets the body text.
     /// </summary>
     public string? BodyText { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the recipient address.
     /// </summary>
-    public string? RecipientAddress { get; set; }
+    public string RecipientAddress { get; set; } = null!;
 
     /// <summary>
     /// Gets or sets the notification type.

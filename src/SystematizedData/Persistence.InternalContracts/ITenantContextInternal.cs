@@ -7,5 +7,5 @@ public interface ITenantContextInternal : ITenantContext
 {
     Task<ITenantContextInternal> CreateChildTenantContextInternalAsync(string tenantId);
     
-    Task<ITenantRepositoryInternal> CreateOrGetTenantRepositoryInternalAsync();
+    ITenantRepositoryInternal CreateOrGetTenantRepositoryInternal();
 }

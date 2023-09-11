@@ -1,17 +1,15 @@
-﻿using System.Collections.Generic;
-using System.Threading.Tasks;
-using Duende.IdentityServer.Stores;
-using Meshmakers.Octo.Backend.Persistence.SystemEntities;
+﻿using Duende.IdentityServer.Stores;
+using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
 
 public interface IOctoClientStore : IClientStore
 {
-    Task<IEnumerable<OctoClient>> GetClients();
+    Task<IEnumerable<RtSystemIdentityClient>> GetClients();
 
-    Task CreateAsync(OctoClient client);
+    Task CreateAsync(RtSystemIdentityClient client);
 
-    Task UpdateAsync(string clientId, OctoClient client);
+    Task UpdateAsync(string clientId, RtSystemIdentityClient client);
 
     Task DeleteAsync(string clientId);
 }

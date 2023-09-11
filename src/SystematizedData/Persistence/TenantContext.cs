@@ -1,10 +1,9 @@
-using CkModel.CkRuleEngine;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
-using Meshmakers.Octo.SystematizedData.Persistence.CkModel;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
@@ -19,24 +18,28 @@ namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 public class TenantContext : ITenantContextInternal
 {
+    private readonly SemaphoreSlim _semaphoreSlim = new(1, 1);
+
     public string TenantId { get; }
 
     protected readonly IOptions<OctoSystemConfiguration> _systemConfiguration;
     private readonly string _databaseName;
     protected readonly IRepositoryClient _systemRepositoryClient;
-    private readonly SemaphoreSlim _semaphoreSlim = new(1, 1);
     protected readonly ICkModelRepositoryManager _ckModelRepositoryManager;
     protected readonly ICkCacheService _cacheService;
+    protected readonly ISystemMessageService _systemMessageService;
 
     protected TenantContext(IOptions<OctoSystemConfiguration> systemConfiguration,
         string tenantId,
         string databaseName,
+        ISystemMessageService systemMessageService,
         ICkModelRepositoryManager ckModelRepositoryManager,
         ICkCacheService cacheService)
     {
         TenantId = tenantId;
         _systemConfiguration = systemConfiguration;
         _databaseName = databaseName;
+        _systemMessageService = systemMessageService;
         _ckModelRepositoryManager = ckModelRepositoryManager;
         _cacheService = cacheService;
 
@@ -81,7 +84,7 @@ public class TenantContext : ITenantContextInternal
         try
         {
             // Distribute updates (post) to inform other services.
-            await _cacheService.DistributeTenantModificationPreEventAsync(tenantId);
+            await _systemMessageService.DistributeTenantModificationPreEventAsync(tenantId);
 
             // Create database
             await CreateTenantInternalAsync(databaseName);
@@ -101,17 +104,17 @@ public class TenantContext : ITenantContextInternal
             await _ckModelRepositoryManager.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, true, ckModelRepository);
 
             // Add the new tenant as child tenant of the current one
-            var rtSystemTenant = new RtSystemTenant
+            var rtSystemTenant = new RtTenant
             {
                 TenantId = normalizedTenantId,
                 DatabaseName = normalizedDatabaseName
             };
 
-            var tenantRepository = await CreateTenantRepositoryAsync();
+            var tenantRepository = CreateTenantRepository();
             await tenantRepository.InsertOneRtEntityAsync(systemSession, rtSystemTenant);
 
             // Distribute updates (post) to inform other services.
-            await _cacheService.DistributeTenantModificationPostEventAsync(tenantId);
+            await _systemMessageService.DistributeTenantModificationPostEventAsync(tenantId);
         }
         catch (Exception)
         {
@@ -163,13 +166,13 @@ public class TenantContext : ITenantContextInternal
             throw new DatabaseException($"Database '{databaseName}' does not exist.");
         }
 
-        var octoTenant = new RtSystemTenant
+        var octoTenant = new RtTenant
         {
             TenantId = tenantId,
             DatabaseName = databaseName
         };
 
-        var tenantRepository = await CreateTenantRepositoryAsync();
+        var tenantRepository = CreateTenantRepository();
         await tenantRepository.InsertOneRtEntityAsync(systemSession, octoTenant);
     }
 
@@ -182,9 +185,9 @@ public class TenantContext : ITenantContextInternal
             throw new TenantException($"Tenant '{tenantId}' does not exists.");
         }
 
-        var tenantRepository = await CreateTenantRepositoryAsync();
-        await tenantRepository.DeleteOneRtEntityAsync<RtSystemTenant>(systemSession,
-            new List<FieldFilter> { new(nameof(RtSystemTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
+        var tenantRepository = CreateTenantRepository();
+        await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
+            new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
     }
 
     // ReSharper disable once UnusedMember.Global
@@ -198,10 +201,10 @@ public class TenantContext : ITenantContextInternal
             throw new TenantException($"Tenant '{tenantId}' does not exist.");
         }
 
-        await _cacheService.DistributeTenantModificationPreEventAsync(tenantId);
+        await _systemMessageService.DistributeTenantModificationPreEventAsync(tenantId);
         await DropChildTenantAsync(systemSession, tenantId);
         await CreateChildTenantAsync(systemSession, octoTenant.DatabaseName, tenantId);
-        await _cacheService.DistributeTenantModificationPostEventAsync(tenantId);
+        await _systemMessageService.DistributeTenantModificationPostEventAsync(tenantId);
     }
 
     // ReSharper disable once MemberCanBePrivate.Global
@@ -209,7 +212,7 @@ public class TenantContext : ITenantContextInternal
     {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
-        var tenantRepository = await CreateTenantRepositoryAsync();
+        var tenantRepository = CreateTenantRepository();
 
         var octoTenant = await GetRtTenantAsync(systemSession, tenantId);
         if (octoTenant == null)
@@ -217,12 +220,12 @@ public class TenantContext : ITenantContextInternal
             throw new TenantException($"Tenant '{tenantId}' does not exist.");
         }
 
-        await _cacheService.DistributeTenantModificationPreEventAsync(tenantId);
+        await _systemMessageService.DistributeTenantModificationPreEventAsync(tenantId);
         await _systemRepositoryClient.DropRepositoryAsync(octoTenant.DatabaseName);
 
-        await tenantRepository.DeleteOneRtEntityAsync<RtSystemTenant>(systemSession,
-            new List<FieldFilter> { new(nameof(RtSystemTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
-        await _cacheService.DistributeTenantModificationPostEventAsync(tenantId);
+        await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
+            new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
+        await _systemMessageService.DistributeTenantModificationPostEventAsync(tenantId);
     }
 
     // ReSharper disable once MemberCanBePrivate.Global
@@ -237,9 +240,9 @@ public class TenantContext : ITenantContextInternal
     public async Task<PagedResult<OctoTenant>> GetChildTenantsAsync(IOctoSession systemSession, int? skip = null,
         int? take = null)
     {
-        var tenantRepository = await CreateTenantRepositoryAsync();
+        var tenantRepository = CreateTenantRepository();
 
-        var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtSystemTenant>(systemSession, new DataQueryOperation(), skip, take);
+        var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(systemSession, new DataQueryOperation(), skip, take);
         return new PagedResult<OctoTenant>(result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName)),
             skip, take, result.TotalCount);
     }
@@ -275,7 +278,8 @@ public class TenantContext : ITenantContextInternal
         systemSession.StartTransaction();
 
         var tenant = await GetChildTenantAsync(systemSession, tenantId);
-        var context = new TenantContext(_systemConfiguration, tenantId, tenant.DatabaseName, _ckModelRepositoryManager, _cacheService);
+        var context = new TenantContext(_systemConfiguration, tenantId, tenant.DatabaseName, _systemMessageService,
+            _ckModelRepositoryManager, _cacheService);
 
         await systemSession.CommitTransactionAsync();
         return context;
@@ -286,17 +290,25 @@ public class TenantContext : ITenantContextInternal
         return CreateTenantCkModelRepository(_databaseName);
     }
 
-    public async Task<ITenantRepository> CreateOrGetTenantRepositoryAsync()
+    public ITenantRepository CreateOrGetTenantRepository()
     {
-        var result = await CreateOrGetTenantRepositoryInternal();
+        var result = CreateOrGetTenantRepositoryInternal();
         return result;
     }
 
-    public async Task<ITenantRepositoryInternal> CreateOrGetTenantRepositoryInternalAsync()
+    public ITenantRepositoryInternal CreateOrGetTenantRepositoryInternal()
     {
-        var result = await CreateOrGetTenantRepositoryInternal();
+        try
+        {
+            _semaphoreSlim.Wait();
 
-        return result;
+            var databaseContext = CreateDatabaseContext(_databaseName);
+            return new TenantRepository(TenantId, _cacheService, databaseContext);
+        }
+        finally
+        {
+            _semaphoreSlim.Release();
+        }
     }
 
     #endregion Access management
@@ -337,16 +349,16 @@ public class TenantContext : ITenantContextInternal
 
     public async Task SetConfigurationAsync(IOctoSession systemSession, string key, object value)
     {
-        var tenantRepository = await CreateTenantRepositoryAsync();
+        var tenantRepository = CreateTenantRepository();
 
         var dataQueryOperation = new DataQueryOperation();
-        dataQueryOperation.AppendFieldFilter(nameof(RtSystemConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);
+        dataQueryOperation.AppendFieldFilter(nameof(RtConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);
 
-        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtSystemConfiguration>(systemSession, dataQueryOperation);
+        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtConfiguration>(systemSession, dataQueryOperation);
         var configuration = resultSet.Items.FirstOrDefault();
         if (configuration == null)
         {
-            configuration = new RtSystemConfiguration { RtWellKnownName = key, ConfigurationValue = value.Serialize() };
+            configuration = new RtConfiguration { RtWellKnownName = key, ConfigurationValue = value.Serialize() };
             await tenantRepository.InsertOneRtEntityAsync(systemSession, configuration);
         }
 
@@ -368,17 +380,15 @@ public class TenantContext : ITenantContextInternal
         return tenantCkModelRepository;
     }
 
-    private async Task<ITenantRepositoryInternal> CreateTenantRepositoryAsync()
+    private ITenantRepositoryInternal CreateTenantRepository()
     {
-        return await CreateChildTenantRepositoryAsync(TenantId, _databaseName);
+        return CreateChildTenantRepository(TenantId, _databaseName);
     }
 
-    private async Task<ITenantRepositoryInternal> CreateChildTenantRepositoryAsync(string tenantId, string databaseName)
+    private ITenantRepositoryInternal CreateChildTenantRepository(string tenantId, string databaseName)
     {
         var databaseContext = CreateDatabaseContext(databaseName);
-        var tenantCkModelRepository = new TenantCkModelRepository(databaseContext);
-        var ckCache = await _cacheService.GetOrCreateCkCacheAsync(tenantId, tenantCkModelRepository);
-        return new TenantRepository(ckCache, databaseContext);
+        return new TenantRepository(tenantId, _cacheService, databaseContext);
     }
 
 
@@ -387,32 +397,15 @@ public class TenantContext : ITenantContextInternal
         return new DatabaseContext(_systemRepositoryClient, databaseName);
     }
 
-    private async Task<ITenantRepositoryInternal> CreateOrGetTenantRepositoryInternal()
-    {
-        try
-        {
-            await _semaphoreSlim.WaitAsync();
-
-            var databaseContext = CreateDatabaseContext(_databaseName);
-            var tenantCkModelRepository = CreateTenantCkModelRepository();
-            var ckCache = await _cacheService.GetOrCreateCkCacheAsync(TenantId, tenantCkModelRepository);
-            return new TenantRepository(ckCache, databaseContext);
-        }
-        finally
-        {
-            _semaphoreSlim.Release();
-        }
-    }
-
-    private async Task<RtSystemTenant?> GetRtTenantAsync(IOctoSession systemSession,
+    private async Task<RtTenant?> GetRtTenantAsync(IOctoSession systemSession,
         string tenantId)
     {
-        var tenantRepository = await CreateTenantRepositoryAsync();
+        var tenantRepository = CreateTenantRepository();
 
         var dataQueryOperation = new DataQueryOperation();
-        dataQueryOperation.AppendFieldFilter(nameof(RtSystemTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey());
+        dataQueryOperation.AppendFieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey());
 
-        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtSystemTenant>(systemSession, dataQueryOperation);
+        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(systemSession, dataQueryOperation);
         return resultSet.Items.FirstOrDefault();
     }
 
@@ -423,12 +416,12 @@ public class TenantContext : ITenantContextInternal
 
     private async Task<TType?> GetConfigAsync<TType>(IOctoSession systemSession, string key, TType? defaultValue)
     {
-        var tenantRepository = await CreateTenantRepositoryAsync();
+        var tenantRepository = CreateTenantRepository();
 
         var dataQueryOperation = new DataQueryOperation();
-        dataQueryOperation.AppendFieldFilter(nameof(RtSystemConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);
+        dataQueryOperation.AppendFieldFilter(nameof(RtConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);
 
-        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtSystemConfiguration>(systemSession, dataQueryOperation);
+        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtConfiguration>(systemSession, dataQueryOperation);
         var configuration = resultSet.Items.FirstOrDefault();
         if (configuration == null || configuration.ConfigurationValue == null)
         {

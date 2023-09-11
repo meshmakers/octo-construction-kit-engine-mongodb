@@ -1,3 +1,4 @@
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
@@ -5,10 +6,10 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;
 
 public class CkEntityRuleEngine : ICkEntityRuleEngine
 {
-    private readonly ICkCache _ckCache;
+    private readonly ICkCacheService _ckCache;
     private readonly ITenantRepositoryInternal _tenantRepository;
 
-    public CkEntityRuleEngine(ICkCache ckCache, ITenantRepositoryInternal tenantRepository)
+    public CkEntityRuleEngine(ICkCacheService ckCache, ITenantRepositoryInternal tenantRepository)
     {
         _ckCache = ckCache;
         _tenantRepository = tenantRepository;

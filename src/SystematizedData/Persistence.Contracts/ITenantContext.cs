@@ -32,7 +32,7 @@ public interface ITenantContext
 
     ITenantCkModelRepository CreateTenantCkModelRepository();
 
-    Task<ITenantRepository> CreateOrGetTenantRepositoryAsync();
+    ITenantRepository CreateOrGetTenantRepository();
 
     Task<TValueType?> GetConfigurationAsync<TValueType>(IOctoSession systemSession, string key,
         TValueType? defaultValue) where

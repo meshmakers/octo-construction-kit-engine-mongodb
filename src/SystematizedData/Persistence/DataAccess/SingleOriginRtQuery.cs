@@ -1,7 +1,7 @@
-using System;
-using System.Linq;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.Formulas;
@@ -10,25 +10,29 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 internal class SingleOriginRtQuery : SingleOriginRtQuery<RtEntity>
 {
-    internal SingleOriginRtQuery(IEntityCacheItem entityCacheItem, IDatabaseContext databaseContext, string language)
-        : base(entityCacheItem, databaseContext, language)
+    internal SingleOriginRtQuery(ICkCacheService ckCacheService, string tenantId, CkTypeGraph entityCacheItem, IDatabaseContext databaseContext, string language)
+        : base(ckCacheService, tenantId, entityCacheItem, databaseContext, language)
     {
     }
 }
 
 internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<TEntity> where TEntity : RtEntity, new()
 {
-    private readonly IEntityCacheItem _entityCacheItem;
+    private readonly ICkCacheService _ckCacheService;
+    private readonly string _tenantId;
+    private readonly CkTypeGraph _entityCacheItem;
 
-    internal SingleOriginRtQuery(IEntityCacheItem entityCacheItem, IDatabaseContext databaseContext, string language)
+    internal SingleOriginRtQuery(ICkCacheService ckCacheService, string tenantId, CkTypeGraph entityCacheItem, IDatabaseContext databaseContext, string language)
         : base(databaseContext.GetRtCollection<TEntity>(entityCacheItem.CkTypeId), language)
     {
+        _ckCacheService = ckCacheService;
+        _tenantId = tenantId;
         _entityCacheItem = entityCacheItem;
     }
 
     protected override bool IsAttributeNameValid(string attributeName)
     {
-        return _entityCacheItem.Attributes.TryGetValue(attributeName, out var _) ||
+        return _entityCacheItem.AllAttributes.TryGetValue(attributeName, out var _) ||
                attributeName == nameof(RtEntity.RtId) ||
                attributeName == nameof(RtEntity.RtCreationDateTime) ||
                attributeName == nameof(RtEntity.RtChangedDateTime) ||
@@ -59,14 +63,15 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<TEntity> where T
     protected override object? ResolveSearchAttributeValue(string attributeName, object? searchTerm, out bool isEnum)
     {
         if (searchTerm != null &&
-            _entityCacheItem.Attributes.TryGetValue(attributeName, out var attributeCacheItem))
+            _entityCacheItem.AllAttributes.TryGetValue(attributeName, out var attributeCacheItem))
         {
-            if (attributeCacheItem.SelectionValues != null)
+            if (attributeCacheItem.ValueType == AttributeValueTypesDto.Enum && attributeCacheItem.ValueCkEnumId != null)
             {
+                var ckEnumGraph = _ckCacheService.GetCkEnum(_tenantId, attributeCacheItem.ValueCkEnumId.Value);
                 var searchTermString = searchTerm.ToString()?.Replace("_", "");
 
                 // Search for match in selection value
-                var result = attributeCacheItem.SelectionValues.FirstOrDefault(x =>
+                var result = ckEnumGraph.Values.FirstOrDefault(x =>
                     string.Equals(x.Name, searchTermString, StringComparison.OrdinalIgnoreCase));
                 if (result != null)
                 {
@@ -91,9 +96,9 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<TEntity> where T
 
                     if (!double.IsNaN(result))
                     {
-                        switch (attributeCacheItem.AttributeValueType)
+                        switch (attributeCacheItem.ValueType)
                         {
-                            case AttributeValueTypes.DateTime:
+                            case AttributeValueTypesDto.DateTime:
                                 isEnum = false;
                                 return new DateTime((long)result);
                         }
@@ -107,7 +112,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<TEntity> where T
 
             // Change to the type of attribute
             isEnum = false;
-            return RtEntity.ConvertAttributeValue(attributeCacheItem.AttributeValueType, searchTerm);
+            return RtEntity.ConvertAttributeValue(attributeCacheItem.ValueType, searchTerm);
         }
 
         return base.ResolveSearchAttributeValue(attributeName, searchTerm, out isEnum);

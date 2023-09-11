@@ -2,8 +2,9 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.Common.Shared.Services;
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.SystematizedData.Persistence.CkModelEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
+using Meshmakers.Octo.SystematizedData.Persistence.Notifications.ConstructionKit.Generated.System.Notification.v1;
+using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemStores;
 
@@ -21,7 +22,7 @@ public class EntityNotificationRepository : INotificationRepository
         await AddShortMessageAsync(tenantId, toPhoneNumber, message, null);
     }
 
-    public async Task AddEMailMessageAsync(string tenantId, string emailAddress, string? subject,
+    public async Task AddEMailMessageAsync(string tenantId, string emailAddress, string subject,
         string? htmlMessage)
     {
         await AddEMailMessageAsync(tenantId, emailAddress, subject, htmlMessage, null);
@@ -53,7 +54,7 @@ public class EntityNotificationRepository : INotificationRepository
         }
     }
 
-    public async Task AddEMailMessageAsync(string tenantId, string emailAddress, string? subject,
+    public async Task AddEMailMessageAsync(string tenantId, string emailAddress, string subject,
         string? htmlMessage, RtEntityId? associatedRtId)
     {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
@@ -85,20 +86,20 @@ public class EntityNotificationRepository : INotificationRepository
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
         var tenantContext = await _systemContext.CreateChildTenantContextAsync(tenantId);
-        var tenantRepository = await tenantContext.CreateOrGetTenantRepositoryAsync();
+        var tenantRepository = tenantContext.CreateOrGetTenantRepository();
         var session = await tenantRepository.StartSessionAsync();
         session.StartTransaction();
 
-        var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtSystemNotificationMessage>(session,
+        var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtNotificationMessage>(session,
             new DataQueryOperation
             {
                 FieldFilters = new[]
                 {
-                    new FieldFilter(nameof(RtSystemNotificationMessage.SendStatus), FieldFilterOperator.Equals,
+                    new FieldFilter(nameof(RtNotificationMessage.SendStatus), FieldFilterOperator.Equals,
                         SendStatusDto.Pending),
-                    new FieldFilter(nameof(RtSystemNotificationMessage.LastTryDateTime),
+                    new FieldFilter(nameof(RtNotificationMessage.LastTryDateTime),
                         FieldFilterOperator.LessEqualThan, DateTime.UtcNow.AddMinutes(-5)),
-                    new FieldFilter(nameof(RtSystemNotificationMessage.NotificationType), FieldFilterOperator.Equals,
+                    new FieldFilter(nameof(RtNotificationMessage.NotificationType), FieldFilterOperator.Equals,
                         notificationType)
                 }
             });
@@ -116,7 +117,7 @@ public class EntityNotificationRepository : INotificationRepository
 
 
         var tenantContext = await _systemContext.CreateChildTenantContextAsync(tenantId);
-        var tenantRepository = await tenantContext.CreateOrGetTenantRepositoryAsync();
+        var tenantRepository = tenantContext.CreateOrGetTenantRepository();
         var session = await tenantRepository.StartSessionAsync();
         session.StartTransaction();
 
@@ -128,7 +129,7 @@ public class EntityNotificationRepository : INotificationRepository
 
         await session.CommitTransactionAsync();
 
-        return entityUpdateInfos.Select(x => CreateNotificationMessage((RtSystemNotificationMessage)x.RtEntity));
+        return entityUpdateInfos.Select(x => CreateNotificationMessage((RtNotificationMessage)x.RtEntity));
     }
 
 
@@ -138,7 +139,7 @@ public class EntityNotificationRepository : INotificationRepository
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
         var tenantContext = await _systemContext.CreateChildTenantContextAsync(tenantId);
-        var tenantRepository = await tenantContext.CreateOrGetTenantRepositoryAsync();
+        var tenantRepository = tenantContext.CreateOrGetTenantRepository();
         var session = await tenantRepository.StartSessionAsync();
         session.StartTransaction();
 
@@ -148,7 +149,7 @@ public class EntityNotificationRepository : INotificationRepository
         if (targetRtId != null)
         {
             associationUpdateInfos.Add(new AssociationUpdateInfo(rtEntity.ToRtEntityId(), targetRtId.Value,
-                NotificationCkModel.RelatedRoleId, AssociationModOptionsDto.Create));
+                SystemCkIds.Related, AssociationModOptionsDto.Create));
         }
 
         await tenantRepository.ApplyChanges(session, new[]
@@ -159,10 +160,10 @@ public class EntityNotificationRepository : INotificationRepository
         await session.CommitTransactionAsync();
     }
 
-    private static RtSystemNotificationMessage CreateRtEntity(NotificationMessageDto notificationMessageDto,
+    private static RtNotificationMessage CreateRtEntity(NotificationMessageDto notificationMessageDto,
         ITenantRepository tenantContext)
     {
-        var rtEntity = tenantContext.CreateTransientRtEntity<RtSystemNotificationMessage>();
+        var rtEntity = tenantContext.CreateTransientRtEntity<RtNotificationMessage>();
 
         ApplyDtoData(notificationMessageDto, rtEntity);
 
@@ -170,7 +171,7 @@ public class EntityNotificationRepository : INotificationRepository
     }
 
     private static void ApplyDtoData(NotificationMessageDto notificationMessageDto,
-        RtSystemNotificationMessage rtEntity)
+        RtNotificationMessage rtEntity)
     {
         rtEntity.SubjectText = notificationMessageDto.SubjectText;
         rtEntity.BodyText = notificationMessageDto.BodyText;
@@ -179,19 +180,19 @@ public class EntityNotificationRepository : INotificationRepository
         rtEntity.LastTryDateTime = notificationMessageDto.LastTryDateTime;
         rtEntity.ErrorText = notificationMessageDto.ErrorText;
         rtEntity.SendStatus = notificationMessageDto.SendStatus == null
-            ? SendStatus.Pending
-            : (SendStatus)notificationMessageDto.SendStatus;
+            ? RtNotificationStatesEnum.Pending
+            : (RtNotificationStatesEnum)notificationMessageDto.SendStatus;
         rtEntity.NotificationType = notificationMessageDto.NotificationType == null
-            ? NotificationTypes.EMail
-            : (NotificationTypes)notificationMessageDto.NotificationType;
+            ? RtNotificationTypesEnum.EMail
+            : (RtNotificationTypesEnum)notificationMessageDto.NotificationType;
     }
 
-    private static async Task<RtSystemNotificationMessage> PrepareUpdateRtEntityAsync(IOctoSession session,
+    private static async Task<RtNotificationMessage> PrepareUpdateRtEntityAsync(IOctoSession session,
         NotificationMessageDto notificationMessageDto,
         ITenantRepository tenantRepository)
     {
         var rtEntity =
-            await tenantRepository.GetRtEntityByRtIdAsync<RtSystemNotificationMessage>(session,
+            await tenantRepository.GetRtEntityByRtIdAsync<RtNotificationMessage>(session,
                 notificationMessageDto.RtId);
         if (rtEntity == null)
         {
@@ -204,7 +205,7 @@ public class EntityNotificationRepository : INotificationRepository
         return rtEntity;
     }
 
-    private static NotificationMessageDto CreateNotificationMessage(RtSystemNotificationMessage rtEntity)
+    private static NotificationMessageDto CreateNotificationMessage(RtNotificationMessage rtEntity)
     {
         return new NotificationMessageDto
         {
