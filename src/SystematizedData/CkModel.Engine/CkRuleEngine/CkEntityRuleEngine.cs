@@ -1,5 +1,4 @@
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
-using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.CkModel.CkRuleEngine;

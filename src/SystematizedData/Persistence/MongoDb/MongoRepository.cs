@@ -66,11 +66,11 @@ public class MongoRepository : IRepositoryInternal
         return name;
     }
 
-    public ICachedCollection<T> GetCollection<T>(string? suffix = null) where T : class, new()
+    public IDatabaseCollection<T> GetCollection<T>(string? suffix = null) where T : class, new()
     {
         var name = GetCollectionName<T>(suffix);
 
-        return new CachedCollection<T>(_database.GetCollection<T>(name));
+        return new DatabaseCollection<T>(_database.GetCollection<T>(name));
     }
 
     public async Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,

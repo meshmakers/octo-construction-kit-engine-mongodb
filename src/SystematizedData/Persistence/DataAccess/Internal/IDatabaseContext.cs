@@ -4,27 +4,23 @@ using MongoDB.Bson;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 
-public interface IDatabaseContext
+public interface IDatabaseContext : ICkDatabaseContext
 {
-    ICachedCollection<DatabaseEntities.CkModel> CkModels { get; }
-    ICachedCollection<CkEntity> CkEntities { get; }
-    ICachedCollection<CkAttribute> CkAttributes { get; }
-    ICachedCollection<CkAssociationRole> CkAssociationRoles { get; }
-    ICachedCollection<CkEntityAssociation> CkEntityAssociations { get; }
-    ICachedCollection<CkEntityInheritance> CkEntityInheritances { get; }
-    ICachedCollection<RtAssociation> RtAssociations { get; }
+    public IDatabaseCollection<DatabaseEntities.CkModel> CkModelsInternal { get; }
+    public IDatabaseCollection<CkAttribute> CkAttributesInternal { get; }
+    public IDatabaseCollection<CkType> CkTypesInternal { get; }
+
+    IDatabaseCollection<RtAssociation> RtAssociations { get; }
     Task<IOctoSession> StartSessionAsync();
     IOctoSession StartSession();
 
-    ICachedCollection<TEntity> GetRtCollection<TEntity>(CkId<CkTypeId> ckTypeId) where TEntity : RtEntity, new();
-    ICachedCollection<TEntity> GetRtCollection<TEntity>() where TEntity : RtEntity, new();
+    IDatabaseCollection<TEntity> GetRtCollection<TEntity>(CkId<CkTypeId> ckTypeId) where TEntity : RtEntity, new();
+    IDatabaseCollection<TEntity> GetRtCollection<TEntity>() where TEntity : RtEntity, new();
 
     Task<ICollection<CkTypeInfo>> GetCkTypeInfoAsync(IOctoSession session);
     Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, string ckTypeId);
-    Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, CkEntity ckEntity);
+    Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, CkType ckType);
 
-    Task UpdateCollectionsAsync(IOctoSession session);
-    Task UpdateIndexAsync(IOctoSession session);
 
     #region Large Binaries
 

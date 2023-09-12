@@ -1,9 +1,6 @@
 ﻿using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
-using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
-using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Microsoft.Extensions.Logging;
 using Persistence.InternalContracts;
 
@@ -13,19 +10,17 @@ public class ImportCkModelCommand : IImportCkModelCommand
 {
     private readonly ILogger<ImportCkModelCommand> _logger;
     private readonly ICkSerializer _ckSerializer;
-    private readonly ICkValidationService _ckValidationService;
-    private readonly ICkModelRepositoryManager _ckModelRepositoryManager;
+    private readonly ICkModelRepositoryService _ckModelRepositoryService;
 
-    public ImportCkModelCommand(ILogger<ImportCkModelCommand> logger, ICkSerializer ckSerializer, ICkValidationService ckValidationService,
-        ICkModelRepositoryManager ckModelRepositoryManager)
+    public ImportCkModelCommand(ILogger<ImportCkModelCommand> logger, ICkSerializer ckSerializer, 
+        ICkModelRepositoryService ckModelRepositoryService)
     {
         _logger = logger;
         _ckSerializer = ckSerializer;
-        _ckValidationService = ckValidationService;
-        _ckModelRepositoryManager = ckModelRepositoryManager;
+        _ckModelRepositoryService = ckModelRepositoryService;
     }
 
-    public async Task ImportTextAsync(IOctoSession session, ITenantCkModelRepository ckModelRepository, string jsonText,
+    public async Task ImportTextAsync(string tenantId, string jsonText,
         CancellationToken? cancellationToken = null)
     {
         try
@@ -42,7 +37,8 @@ public class ImportCkModelCommand : IImportCkModelCommand
             }
 
             _logger.LogInformation("Executing import of CK model....");
-            await _ckModelRepositoryManager.PublishModelAsync(InternalConstants.CkModelRepositoryName, model, false, ckModelRepository);
+            // await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, model, false, 
+            //     new TenantDatabaseSourceIdentifier(databaseContext, session));
 
             _logger.LogInformation("Import of CK model completed");
         }
@@ -53,7 +49,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
         }
     }
 
-    public async Task ImportAsync(IOctoSession session, ITenantCkModelRepository ckModelRepository, string filePath,
+    public async Task ImportAsync(string tenantId, string filePath,
         CancellationToken? cancellationToken = null)
     {
         try
@@ -71,7 +67,8 @@ public class ImportCkModelCommand : IImportCkModelCommand
             }
             
             _logger.LogInformation("Executing import of CK model....");
-            await _ckModelRepositoryManager.PublishModelAsync(InternalConstants.CkModelRepositoryName, model, false, ckModelRepository);
+            // await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, model, false,
+            //     new TenantDatabaseSourceIdentifier(databaseContext, session));
 
             _logger.LogInformation("Import of CK model completed");
         }

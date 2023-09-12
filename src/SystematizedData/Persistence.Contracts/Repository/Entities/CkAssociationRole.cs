@@ -1,11 +1,25 @@
 ﻿using System.Diagnostics;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects.Ck;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 [DebuggerDisplay("{" + nameof(RoleId) + "}: {" + nameof(InboundName) + "}->{" + nameof(OutboundName) + "}")]
 public class CkAssociationRole 
 {
+    /// <summary>
+    ///     Constructor
+    /// </summary>
+    public CkAssociationRole()
+    {
+        Attributes = new HashSet<CkTypeAttribute>();
+    }
+    
+    /// <summary>
+    ///     Gets or sets the construction kit model id 
+    /// </summary>
+    public CkModelId CkModelId { get; set; }
+    
     /// <summary>
     ///     Returns the mongodb ID
     /// </summary>
@@ -24,11 +38,15 @@ public class CkAssociationRole
     /// <summary>
     ///     Multiplicity of the inbound association
     /// </summary>
-    public Multiplicities InboundMultiplicity { get; set; }
+    public MultiplicitiesDto InboundMultiplicity { get; set; }
 
     /// <summary>
     ///     Multiplicity of the outbound association
     /// </summary>
-    public Multiplicities OutboundMultiplicity { get; set; }
+    public MultiplicitiesDto OutboundMultiplicity { get; set; }
 
+    /// <summary>
+    ///     Gets or sets a list of attributes
+    /// </summary>
+    public ICollection<CkTypeAttribute> Attributes { get; set; }
 }

@@ -5,7 +5,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 public class CkAttributeQuery : SingleOriginQuery<CkAttribute>
 {
-    public CkAttributeQuery(IDatabaseContext databaseContext) : base(databaseContext.CkAttributes)
+    public CkAttributeQuery(IDatabaseContext databaseContext) : base(databaseContext.CkAttributesInternal)
     {
     }
 }

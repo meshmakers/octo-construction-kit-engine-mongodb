@@ -2,13 +2,12 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
-using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Persistence.Contracts;
 using Persistence.InternalContracts;
@@ -22,26 +21,30 @@ public class TenantContext : ITenantContextInternal
 
     public string TenantId { get; }
 
+    private readonly ILoggerFactory _loggerFactory;
     protected readonly IOptions<OctoSystemConfiguration> _systemConfiguration;
     private readonly string _databaseName;
     protected readonly IRepositoryClient _systemRepositoryClient;
-    protected readonly ICkModelRepositoryManager _ckModelRepositoryManager;
+    protected readonly ICkModelRepositoryService _ckModelRepositoryService;
     protected readonly ICkCacheService _cacheService;
+    private readonly IModelLoaderService _modelLoaderService;
     protected readonly ISystemMessageService _systemMessageService;
 
-    protected TenantContext(IOptions<OctoSystemConfiguration> systemConfiguration,
+    protected TenantContext(ILoggerFactory loggerFactory, IOptions<OctoSystemConfiguration> systemConfiguration,
         string tenantId,
         string databaseName,
         ISystemMessageService systemMessageService,
-        ICkModelRepositoryManager ckModelRepositoryManager,
-        ICkCacheService cacheService)
+        ICkModelRepositoryService ckModelRepositoryService,
+        ICkCacheService cacheService, IModelLoaderService modelLoaderService)
     {
         TenantId = tenantId;
+        _loggerFactory = loggerFactory;
         _systemConfiguration = systemConfiguration;
         _databaseName = databaseName;
         _systemMessageService = systemMessageService;
-        _ckModelRepositoryManager = ckModelRepositoryManager;
+        _ckModelRepositoryService = ckModelRepositoryService;
         _cacheService = cacheService;
+        _modelLoaderService = modelLoaderService;
 
         var systemConnectionOptions = new MongoConnectionOptions
         {
@@ -53,7 +56,7 @@ public class TenantContext : ITenantContextInternal
             AllowInsecureTls = _systemConfiguration.Value.AllowInsecureTls
         };
 
-        _systemRepositoryClient = new MongoRepositoryClient(systemConnectionOptions);
+        _systemRepositoryClient = new MongoRepositoryClient(loggerFactory.CreateLogger<MongoRepositoryClient>(), systemConnectionOptions);
     }
 
     #region Transaction handling
@@ -90,9 +93,9 @@ public class TenantContext : ITenantContextInternal
             await CreateTenantInternalAsync(databaseName);
 
             // Restore the tenant system model on the newly created repository
-            var ckModelRepository = CreateTenantCkModelRepository(normalizedDatabaseName);
+            var databaseContext = CreateDatabaseContext(normalizedDatabaseName);
             OperationResult operationResult = new();
-            var ckCompiledModelRoot = await _ckModelRepositoryManager.LookupCkModelAsync(SystemCkIds.ModelId, operationResult);
+            var ckCompiledModelRoot = await _ckModelRepositoryService.LookupCkModelAsync(SystemCkIds.ModelId, operationResult);
             if (ckCompiledModelRoot == null)
             {
                 throw TenantException.SystemModelNotFound();
@@ -101,7 +104,8 @@ public class TenantContext : ITenantContextInternal
             {
                 throw TenantException.ErrorDuringSystemModelLoad(operationResult);
             }
-            await _ckModelRepositoryManager.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, true, ckModelRepository);
+            await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, true,
+                new TenantDatabaseSourceIdentifier(databaseContext, systemSession));
 
             // Add the new tenant as child tenant of the current one
             var rtSystemTenant = new RtTenant
@@ -110,7 +114,7 @@ public class TenantContext : ITenantContextInternal
                 DatabaseName = normalizedDatabaseName
             };
 
-            var tenantRepository = CreateTenantRepository();
+            var tenantRepository = await CreateTenantRepositoryAsync();
             await tenantRepository.InsertOneRtEntityAsync(systemSession, rtSystemTenant);
 
             // Distribute updates (post) to inform other services.
@@ -144,9 +148,9 @@ public class TenantContext : ITenantContextInternal
         await repository.CreateCollectionIfNotExistsAsync<DatabaseEntities.CkModel>(false);
         await repository.CreateCollectionIfNotExistsAsync<CkAssociationRole>(false);
         await repository.CreateCollectionIfNotExistsAsync<CkAttribute>(false);
-        await repository.CreateCollectionIfNotExistsAsync<CkEntity>(false);
-        await repository.CreateCollectionIfNotExistsAsync<CkEntityAssociation>(false);
-        await repository.CreateCollectionIfNotExistsAsync<CkEntityInheritance>(false);
+        await repository.CreateCollectionIfNotExistsAsync<CkType>(false);
+        await repository.CreateCollectionIfNotExistsAsync<CkTypeAssociation>(false);
+        await repository.CreateCollectionIfNotExistsAsync<CkTypeInheritance>(false);
         await repository.CreateCollectionIfNotExistsAsync<RtAssociation>(true);
     }
 
@@ -172,7 +176,7 @@ public class TenantContext : ITenantContextInternal
             DatabaseName = databaseName
         };
 
-        var tenantRepository = CreateTenantRepository();
+        var tenantRepository = await CreateTenantRepositoryAsync();
         await tenantRepository.InsertOneRtEntityAsync(systemSession, octoTenant);
     }
 
@@ -185,7 +189,7 @@ public class TenantContext : ITenantContextInternal
             throw new TenantException($"Tenant '{tenantId}' does not exists.");
         }
 
-        var tenantRepository = CreateTenantRepository();
+        var tenantRepository = await CreateTenantRepositoryAsync();
         await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
             new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
     }
@@ -212,7 +216,7 @@ public class TenantContext : ITenantContextInternal
     {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
-        var tenantRepository = CreateTenantRepository();
+        var tenantRepository = await CreateTenantRepositoryAsync();
 
         var octoTenant = await GetRtTenantAsync(systemSession, tenantId);
         if (octoTenant == null)
@@ -240,7 +244,7 @@ public class TenantContext : ITenantContextInternal
     public async Task<PagedResult<OctoTenant>> GetChildTenantsAsync(IOctoSession systemSession, int? skip = null,
         int? take = null)
     {
-        var tenantRepository = CreateTenantRepository();
+        var tenantRepository = await CreateTenantRepositoryAsync();
 
         var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(systemSession, new DataQueryOperation(), skip, take);
         return new PagedResult<OctoTenant>(result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName)),
@@ -278,16 +282,11 @@ public class TenantContext : ITenantContextInternal
         systemSession.StartTransaction();
 
         var tenant = await GetChildTenantAsync(systemSession, tenantId);
-        var context = new TenantContext(_systemConfiguration, tenantId, tenant.DatabaseName, _systemMessageService,
-            _ckModelRepositoryManager, _cacheService);
+        var context = new TenantContext(_loggerFactory, _systemConfiguration, tenantId, tenant.DatabaseName, _systemMessageService,
+            _ckModelRepositoryService, _cacheService, _modelLoaderService);
 
         await systemSession.CommitTransactionAsync();
         return context;
-    }
-
-    public ITenantCkModelRepository CreateTenantCkModelRepository()
-    {
-        return CreateTenantCkModelRepository(_databaseName);
     }
 
     public ITenantRepository CreateOrGetTenantRepository()
@@ -349,7 +348,7 @@ public class TenantContext : ITenantContextInternal
 
     public async Task SetConfigurationAsync(IOctoSession systemSession, string key, object value)
     {
-        var tenantRepository = CreateTenantRepository();
+        var tenantRepository = await CreateTenantRepositoryAsync();
 
         var dataQueryOperation = new DataQueryOperation();
         dataQueryOperation.AppendFieldFilter(nameof(RtConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);
@@ -373,26 +372,22 @@ public class TenantContext : ITenantContextInternal
 
     #region Private methods
 
-    private ITenantCkModelRepository CreateTenantCkModelRepository(string databaseName)
+    private async Task<ITenantRepositoryInternal> CreateTenantRepositoryAsync()
     {
-        var databaseContext = CreateDatabaseContext(databaseName);
-        var tenantCkModelRepository = new TenantCkModelRepository(databaseContext);
-        return tenantCkModelRepository;
+        return await CreateChildTenantRepositoryAsync(TenantId, _databaseName);
     }
 
-    private ITenantRepositoryInternal CreateTenantRepository()
-    {
-        return CreateChildTenantRepository(TenantId, _databaseName);
-    }
-
-    private ITenantRepositoryInternal CreateChildTenantRepository(string tenantId, string databaseName)
+    private async Task<ITenantRepositoryInternal> CreateChildTenantRepositoryAsync(string tenantId, string databaseName)
     {
         var databaseContext = CreateDatabaseContext(databaseName);
+        using var session = await databaseContext.StartSessionAsync();
+        await _modelLoaderService.LoadAsync(tenantId, session, databaseContext);
+        
         return new TenantRepository(tenantId, _cacheService, databaseContext);
     }
 
 
-    private IDatabaseContext CreateDatabaseContext(string databaseName)
+    protected IDatabaseContext CreateDatabaseContext(string databaseName)
     {
         return new DatabaseContext(_systemRepositoryClient, databaseName);
     }
@@ -400,7 +395,7 @@ public class TenantContext : ITenantContextInternal
     private async Task<RtTenant?> GetRtTenantAsync(IOctoSession systemSession,
         string tenantId)
     {
-        var tenantRepository = CreateTenantRepository();
+        var tenantRepository = await CreateTenantRepositoryAsync();
 
         var dataQueryOperation = new DataQueryOperation();
         dataQueryOperation.AppendFieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey());
@@ -416,7 +411,7 @@ public class TenantContext : ITenantContextInternal
 
     private async Task<TType?> GetConfigAsync<TType>(IOctoSession systemSession, string key, TType? defaultValue)
     {
-        var tenantRepository = CreateTenantRepository();
+        var tenantRepository = await CreateTenantRepositoryAsync();
 
         var dataQueryOperation = new DataQueryOperation();
         dataQueryOperation.AppendFieldFilter(nameof(RtConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);

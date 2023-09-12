@@ -1,8 +1,9 @@
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects.Ck;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.ConstructionKit.Engine.Resolvers;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.InsertModifiers;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Mutation;
@@ -27,7 +28,7 @@ internal class TenantRepository : ITenantRepositoryInternal
 
 
     #region Helper
-
+    
     public string TenantId => _tenantId;
 
     public CkTypeGraph GetEntityCacheItem(CkId<CkTypeId> ckTypeId)
@@ -76,7 +77,7 @@ internal class TenantRepository : ITenantRepositoryInternal
     public async Task<AggregatedBulkImportResult> BulkInsertRtEntitiesAsync(IOctoSession session,
         IEnumerable<RtEntity> rtEntityList)
     {
-        var results = new List<BulkImportResult>();
+        var results = new List<IBulkImportResult>();
         foreach (var groupedEntities in rtEntityList.GroupBy(x => x.CkTypeId))
         {
             if (string.IsNullOrWhiteSpace(groupedEntities.Key.FullName))
@@ -205,10 +206,10 @@ internal class TenantRepository : ITenantRepositoryInternal
         return new ResultSet<CkAttribute>(resultSet, totalCount);
     }
 
-    public async Task<IResultSet<CkEntity>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<CkTypeId> ckTypeIds,
+    public async Task<IResultSet<CkType>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<CkTypeId> ckTypeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
-        var resultSet = new List<CkEntity>();
+        var resultSet = new List<CkType>();
         long totalCount = 0;
 
         var query = new CkEntityQuery(_databaseContext);
@@ -222,7 +223,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         resultSet.AddRange(tempResultSet.Items);
         totalCount += tempResultSet.TotalCount;
 
-        return new ResultSet<CkEntity>(resultSet, totalCount);
+        return new ResultSet<CkType>(resultSet, totalCount);
     }
 
     public async Task<RtEntity?> GetRtEntityByRtIdAsync(IOctoSession session, RtEntityId rtEntityId)
@@ -450,7 +451,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<RtAssociation> GetRtAssociationAsync(IOctoSession session, RtEntityId rtEntityIdOrigin,
+    public async Task<RtAssociation?> GetRtAssociationOrDefaultAsync(IOctoSession session, RtEntityId rtEntityIdOrigin,
         RtEntityId rtEntityIdTarget,
         CkId<CkAssociationRoleId> roleId)
     {
@@ -803,7 +804,7 @@ internal class TenantRepository : ITenantRepositoryInternal
         ArgumentValidation.ValidateString(nameof(attributeName), attributeName);
 
         var ckEntity =
-            await _databaseContext.CkEntities.FindSingleOrDefaultAsync(session, x => x.CkTypeId == ckTypeId);
+            await _databaseContext.CkTypes.FindSingleOrDefaultAsync(session, x => x.CkTypeId == ckTypeId);
         if (ckEntity == null)
         {
             throw new EntityNotFoundException($"'{ckTypeId}' does not exist in database.");
@@ -820,7 +821,7 @@ internal class TenantRepository : ITenantRepositoryInternal
 
         try
         {
-            await _databaseContext.CkEntities.ReplaceByIdAsync(session, ckEntity.CkTypeId, ckEntity);
+            await _databaseContext.CkTypes.ReplaceByIdAsync(session, ckEntity.CkTypeId, ckEntity);
         }
         catch (Exception e)
         {

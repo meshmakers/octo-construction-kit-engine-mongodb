@@ -1,3 +1,4 @@
+using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Persistence.InternalContracts;
 
@@ -7,6 +8,13 @@ public class SystemFixture : ConfigurationFixture, IDisposable
 {
     public SystemFixture()
     {
+        Services.Configure<OctoSystemConfiguration>(t =>
+        {
+            var options = base.GetOptions<SystemTestOptions>("systemTest");
+            t.AdminUserPassword = options.AdminUserPassword;
+            t.DatabaseUserPassword = options.DatabaseUserPassword;
+        });
+        
         Provider = Services.BuildServiceProvider();
 
         Task.WaitAll(Task.Run(async () =>

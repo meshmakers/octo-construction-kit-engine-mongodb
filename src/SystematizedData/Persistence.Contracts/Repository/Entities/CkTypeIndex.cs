@@ -1,6 +1,6 @@
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
-public class CkEntityIndex 
+public class CkTypeIndex 
 {
     public IndexTypes IndexType { get; set; }
 

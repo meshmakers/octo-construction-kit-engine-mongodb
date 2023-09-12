@@ -7,16 +7,21 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 ///     Represents a definition of a construction kit type
 /// </summary>
 [DebuggerDisplay("{" + nameof(CkTypeId) + "}")]
-public class CkEntity 
+public class CkType 
 {
     /// <summary>
     ///     Constructor
     /// </summary>
-    public CkEntity()
+    public CkType()
     {
-        Attributes = new HashSet<CkEntityAttribute>();
-        Indexes = new HashSet<CkEntityIndex>();
+        Attributes = new HashSet<CkTypeAttribute>();
+        Indexes = new HashSet<CkTypeIndex>();
     }
+
+    /// <summary>
+    ///     Gets or sets the construction kit model id 
+    /// </summary>
+    public CkModelId CkModelId { get; set; }
     
     /// <summary>
     ///     Gets or sets the construction kit id
@@ -36,12 +41,12 @@ public class CkEntity
     /// <summary>
     ///     Gets or sets a list of attributes
     /// </summary>
-    public ICollection<CkEntityAttribute> Attributes { get; set; }
+    public ICollection<CkTypeAttribute> Attributes { get; set; }
 
     /// <summary>
     ///     Gets or sets a list of defined indexes
     /// </summary>
-    public ICollection<CkEntityIndex>? Indexes { get; set; }
+    public ICollection<CkTypeIndex>? Indexes { get; set; }
 
     /// <summary>
     /// Gets or sets if the change stream should include pre and post images

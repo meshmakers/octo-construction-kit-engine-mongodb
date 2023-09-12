@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using MongoDB.Bson;
@@ -6,7 +7,7 @@ using MongoDB.Bson.Serialization.Serializers;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence;
 
-public class ModelIdSerializer : StructSerializerBase<CkModelId>, IRepresentationConfigurable<ModelIdSerializer>
+public class ModelIdSerializer : StructSerializerBase<CkModelId>, IBsonDocumentSerializer, IRepresentationConfigurable<ModelIdSerializer>
 {
     private readonly BsonType _representation;
     public ModelIdSerializer()
@@ -18,7 +19,6 @@ public class ModelIdSerializer : StructSerializerBase<CkModelId>, IRepresentatio
     {
         switch (representation)
         {
-            case BsonType.ObjectId:
             case BsonType.String:
                 break;
 
@@ -28,6 +28,19 @@ public class ModelIdSerializer : StructSerializerBase<CkModelId>, IRepresentatio
         }
 
         _representation = representation;
+    }
+    
+    public bool TryGetMemberSerializationInfo(string memberName, [UnscopedRef] out BsonSerializationInfo serializationInfo)
+    {
+        if (memberName == nameof(CkModelId.ModelId))
+        {
+            serializationInfo = new BsonSerializationInfo(memberName, new ModelIdSerializer(), typeof(string));
+            return true;
+        }
+
+
+        serializationInfo = null!;
+        return false;
     }
 
     public override CkModelId Deserialize(BsonDeserializationContext context, BsonDeserializationArgs args)

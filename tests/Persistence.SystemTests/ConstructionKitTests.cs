@@ -20,7 +20,6 @@ public class ConstructionKitTests : IClassFixture<SystemFixture>
 
         using var session = await systemContext.StartSystemSessionAsync();
         session.StartTransaction();
-        var ckModelRepository = systemContext.CreateTenantCkModelRepository();
         //var systemIdentityModelService = _systemFixture.Provider.GetRequiredService<CkSystemIdentityModelService>();
         //var systemIdentityModelService = new CkSystemIdentityModelService(new ImportCkModelCommand(logger, new CkJsonSerializer(), _systemFixture.CkModelValidator));
 

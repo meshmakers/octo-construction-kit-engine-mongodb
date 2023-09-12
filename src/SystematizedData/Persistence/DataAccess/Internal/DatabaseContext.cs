@@ -2,6 +2,7 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
+using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -10,13 +11,17 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 internal sealed class DatabaseContext : IDatabaseContext
 {
     private readonly IRepositoryInternal _repository;
-
+    private readonly IDatabaseCollection<DatabaseEntities.CkModel> _ckModels;
+    private readonly IDatabaseCollection<CkType> _ckTypes;
+    private readonly IDatabaseCollection<CkTypeInheritance> _ckTypeInheritances;
+    private readonly IDatabaseCollection<CkAttribute> _ckAttributes;
+    
     // ReSharper disable once PrivateFieldCanBeConvertedToLocalVariable
     private readonly IRepositoryClient _repositoryClient;
 
-    public DatabaseContext(string dataSourceHost, string databaseName, string databaseUser, string? databasePassword,
+    public DatabaseContext(ILoggerFactory loggerFactory, string dataSourceHost, string databaseName, string databaseUser, string? databasePassword,
         string authenticationDatabaseName, bool useTls, bool allowInsecureTls)
-        : this(new MongoRepositoryClient(new MongoConnectionOptions
+        : this(new MongoRepositoryClient(loggerFactory.CreateLogger<MongoRepositoryClient>(), new MongoConnectionOptions
         {
             MongoDbHost = dataSourceHost,
             MongoDbUsername = databaseUser,
@@ -36,12 +41,28 @@ internal sealed class DatabaseContext : IDatabaseContext
         _repositoryClient = repositoryClient;
         _repository = (IRepositoryInternal)_repositoryClient.GetRepository(databaseName);
 
-        CkModels = _repository.GetCollection<DatabaseEntities.CkModel>();
-        CkEntities = _repository.GetCollection<CkEntity>();
-        CkAttributes = _repository.GetCollection<CkAttribute>();
+        _ckModels = _repository.GetCollection<DatabaseEntities.CkModel>();
+        CkModels = _ckModels;
+        CkModelsInternal = _ckModels;
+        
+        _ckTypes = _repository.GetCollection<CkType>();
+        CkTypes = _ckTypes;
+        CkTypesInternal = _ckTypes;
+        
+        CkRecords = _repository.GetCollection<CkRecord>();
+        
+        CkEnums = _repository.GetCollection<CkEnum>();
+        _ckAttributes = _repository.GetCollection<CkAttribute>();
+        CkAttributes = _ckAttributes;
+        CkAttributesInternal = _ckAttributes;
+        
         CkAssociationRoles = _repository.GetCollection<CkAssociationRole>();
-        CkEntityAssociations = _repository.GetCollection<CkEntityAssociation>();
-        CkEntityInheritances = _repository.GetCollection<CkEntityInheritance>();
+        CkTypeAssociations = _repository.GetCollection<CkTypeAssociation>();
+        
+        _ckTypeInheritances = _repository.GetCollection<CkTypeInheritance>();
+        CkTypeInheritances = _ckTypeInheritances;
+        
+        CkRecordInheritances = _repository.GetCollection<CkRecordInheritance>();
         RtAssociations = _repository.GetCollection<RtAssociation>();
     }
 
@@ -58,13 +79,13 @@ internal sealed class DatabaseContext : IDatabaseContext
         return session;
     }
 
-    public ICachedCollection<TEntity> GetRtCollection<TEntity>(CkId<CkTypeId> ckTypeId) where TEntity : RtEntity, new()
+    public IDatabaseCollection<TEntity> GetRtCollection<TEntity>(CkId<CkTypeId> ckTypeId) where TEntity : RtEntity, new()
     {
         var suffix = ckTypeId.SemanticVersionedFullName.Replace("/", "_");
         return _repository.GetCollection<TEntity>(suffix);
     }
 
-    public ICachedCollection<TEntity> GetRtCollection<TEntity>() where TEntity : RtEntity, new()
+    public IDatabaseCollection<TEntity> GetRtCollection<TEntity>() where TEntity : RtEntity, new()
     {
         var ckTypeId = RtEntityExtensions.GetCkTypeId<TEntity>();
         return GetRtCollection<TEntity>(ckTypeId);
@@ -72,7 +93,7 @@ internal sealed class DatabaseContext : IDatabaseContext
 
     public async Task<ICollection<CkTypeInfo>> GetCkTypeInfoAsync(IOctoSession session)
     {
-        var aggregate = CkEntities.Aggregate(session);
+        var aggregate = _ckTypes.Aggregate(session);
 
         return await AggregateCkTypeInfo(aggregate).ToListAsync();
     }
@@ -83,26 +104,32 @@ internal sealed class DatabaseContext : IDatabaseContext
         return await GetCkTypeInfoAsync(session, ckEntity);
     }
 
-    public async Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, CkEntity ckEntity)
+    public async Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, CkType ckType)
     {
-        var filter = Builders<CkEntity>.Filter.BuildIdFilter(ckEntity.CkTypeId);
+        var filter = Builders<CkType>.Filter.BuildIdFilter(ckType.CkTypeId);
 
-        var aggregate = CkEntities.Aggregate(session).Match(filter);
+        var aggregate = _ckTypes.Aggregate(session).Match(filter);
 
         return await AggregateCkTypeInfo(aggregate).SingleOrDefaultAsync();
     }
 
-    public ICachedCollection<DatabaseEntities.CkModel> CkModels { get; }
-    public ICachedCollection<CkEntity> CkEntities { get; }
-    public ICachedCollection<CkAttribute> CkAttributes { get; }
-    public ICachedCollection<CkAssociationRole> CkAssociationRoles { get; }
-    public ICachedCollection<CkEntityAssociation> CkEntityAssociations { get; }
-    public ICachedCollection<CkEntityInheritance> CkEntityInheritances { get; }
-    public ICachedCollection<RtAssociation> RtAssociations { get; }
+    public ICkDatabaseCollection<DatabaseEntities.CkModel> CkModels { get; }
+    public IDatabaseCollection<DatabaseEntities.CkModel> CkModelsInternal { get; }
+    public ICkDatabaseCollection<CkType> CkTypes { get; }
+    public IDatabaseCollection<CkType> CkTypesInternal { get; }
+    public ICkDatabaseCollection<CkRecord> CkRecords { get; }
+    public ICkDatabaseCollection<CkEnum> CkEnums { get; }
+    public ICkDatabaseCollection<CkAttribute> CkAttributes { get; }
+    public IDatabaseCollection<CkAttribute> CkAttributesInternal { get; }
+    public ICkDatabaseCollection<CkAssociationRole> CkAssociationRoles { get; }
+    public ICkDatabaseCollection<CkTypeAssociation> CkTypeAssociations { get; }
+    public ICkDatabaseCollection<CkTypeInheritance> CkTypeInheritances { get; }
+    public ICkDatabaseCollection<CkRecordInheritance> CkRecordInheritances { get; }
+    public IDatabaseCollection<RtAssociation> RtAssociations { get; }
 
     public async Task UpdateCollectionsAsync(IOctoSession session)
     {
-        var ckEntities = (await CkEntities.GetAsync(session)).ToList();
+        var ckEntities = (await _ckTypes.GetAsync(session)).ToList();
         foreach (var ckEntity in ckEntities)
         {
             if (!ckEntity.IsAbstract)
@@ -115,7 +142,7 @@ internal sealed class DatabaseContext : IDatabaseContext
 
     public async Task UpdateIndexAsync(IOctoSession session)
     {
-        var ckEntities = (await CkEntities.GetAsync(session)).ToList();
+        var ckEntities = (await _ckTypes.GetAsync(session)).ToList();
 
         foreach (var ckEntity in ckEntities)
         {
@@ -159,34 +186,34 @@ internal sealed class DatabaseContext : IDatabaseContext
         }
     }
 
-    private IAggregateFluent<CkTypeInfo> AggregateCkTypeInfo(IAggregateFluent<CkEntity> aggregate)
+    private IAggregateFluent<CkTypeInfo> AggregateCkTypeInfo(IAggregateFluent<CkType> aggregate)
     {
-        return aggregate.GraphLookup(CkEntityInheritances.GetMongoCollection(),
-                x => x.OriginCkTypeId,
-                x => x.TargetCkTypeId,
+        return aggregate.GraphLookup(_ckTypeInheritances.GetMongoCollection(),
+                x => x.BaseCkTypeId,
+                x => x.InheritorCkTypeId,
                 x => x.CkTypeId,
                 (CkTypeInfo x) => x.BaseTypes, (CkBaseTypeInfo i) => i.BaseTypeDepthIndex)
-            .Lookup<CkTypeInfo, CkTypeInfo>(_repository.GetCollectionName<CkEntityAssociation>(),
+            .Lookup<CkTypeInfo, CkTypeInfo>(_repository.GetCollectionName<CkTypeAssociation>(),
                 "baseTypes.originCkTypeId",
                 "originCkTypeId",
                 "associations.out.inherited")
-            .Lookup<CkTypeInfo, CkTypeInfo>(_repository.GetCollectionName<CkEntityAssociation>(),
+            .Lookup<CkTypeInfo, CkTypeInfo>(_repository.GetCollectionName<CkTypeAssociation>(),
                 Constants.IdField,
                 "originCkTypeId",
                 "associations.out.owned")
-            .Lookup<CkTypeInfo, CkTypeInfo>(_repository.GetCollectionName<CkEntityAssociation>(),
+            .Lookup<CkTypeInfo, CkTypeInfo>(_repository.GetCollectionName<CkTypeAssociation>(),
                 "baseTypes.originCkTypeId",
                 "targetCkTypeId",
                 "associations.in.inherited")
-            .Lookup<CkTypeInfo, CkTypeInfo>(_repository.GetCollectionName<CkEntityAssociation>(),
+            .Lookup<CkTypeInfo, CkTypeInfo>(_repository.GetCollectionName<CkTypeAssociation>(),
                 Constants.IdField,
                 "targetCkTypeId",
                 "associations.in.owned");
     }
 
-    private async Task<CkEntity> GetCkEntityAsync(IOctoSession session, string ckTypeId)
+    private async Task<CkType> GetCkEntityAsync(IOctoSession session, string ckTypeId)
     {
-        var ckEntity = await CkEntities.DocumentAsync(session, ckTypeId);
+        var ckEntity = await _ckTypes.DocumentAsync(session, ckTypeId);
         if (ckEntity == null)
         {
             throw new EntityNotFoundException($"'{ckTypeId}' does not exist in database.");

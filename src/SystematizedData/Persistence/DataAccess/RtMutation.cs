@@ -11,11 +11,11 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 public class RtMutation<TEntity> : Mutation<TEntity> where TEntity : RtEntity, new()
 {
-    private readonly ICachedCollection<TEntity> _cachedCollection;
+    private readonly IDatabaseCollection<TEntity> _databaseCollection;
 
-    public RtMutation(ICachedCollection<TEntity> cachedCollection)
+    public RtMutation(IDatabaseCollection<TEntity> databaseCollection)
     {
-        _cachedCollection = cachedCollection;
+        _databaseCollection = databaseCollection;
     }
     
     public async Task ExecuteDeleteOneAsync(IOctoSession session)
@@ -31,7 +31,7 @@ public class RtMutation<TEntity> : Mutation<TEntity> where TEntity : RtEntity, n
         
         performanceMonitor.SetCheckPoint("definitions created");
 
-        await _cachedCollection.DeleteOneAsync(session, filterDefinitions);
+        await _databaseCollection.DeleteOneAsync(session, filterDefinitions);
     }
     
     protected override string ResolveAttributeName(string attributeName)

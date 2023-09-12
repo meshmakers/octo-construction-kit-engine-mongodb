@@ -18,7 +18,6 @@ public class OctoTypeIdSerializer : StructSerializerBase<CkTypeId>, IRepresentat
     {
         switch (representation)
         {
-            case BsonType.ObjectId:
             case BsonType.String:
                 break;
 

@@ -1,14 +1,10 @@
-using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
-using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
-using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
-
 namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
 
 public interface IImportCkModelCommand
 {
-    Task ImportTextAsync(IOctoSession session, ITenantCkModelRepository ckModelRepository, string jsonText,
+    Task ImportTextAsync(string tenantId, string jsonText,
         CancellationToken? cancellationToken = null);
 
-    Task ImportAsync(IOctoSession session, ITenantCkModelRepository ckModelRepository, string filePath,
+    Task ImportAsync(string tenantId, string filePath,
         CancellationToken? cancellationToken = null);
 }

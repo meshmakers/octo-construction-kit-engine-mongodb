@@ -1,6 +1,5 @@
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.SystematizedData.Persistence;
-using Meshmakers.Octo.SystematizedData.Persistence.CkRuleEngine.Cache;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 namespace Persistence.Contracts;
@@ -29,8 +28,6 @@ public interface ITenantContext
         int? take = null);
 
     Task<OctoTenant> GetChildTenantAsync(IOctoSession systemSession, string tenantId);
-
-    ITenantCkModelRepository CreateTenantCkModelRepository();
 
     ITenantRepository CreateOrGetTenantRepository();
 

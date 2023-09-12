@@ -25,18 +25,18 @@ public class CkTypeInfo
     public IEnumerable<CkBaseTypeInfo> BaseTypes { get; set; } = new List<CkBaseTypeInfo>();
     public CkTypeDirectedAggregations Associations { get; set; } = new();
 
-    public ICollection<CkEntityIndex>? Indexes { get; set; }
+    public ICollection<CkTypeIndex>? Indexes { get; set; }
 
 
     /// <summary>
     ///     Gets or sets a list of attributes
     /// </summary>
-    public ICollection<CkEntityAttribute> Attributes { get; set; } = new List<CkEntityAttribute>();
+    public ICollection<CkTypeAttribute> Attributes { get; set; } = new List<CkTypeAttribute>();
 
     /// <summary>
     ///     Gets or sets a list of text search languages
     /// </summary>
-    public ICollection<CkEntityIndex>? TextSearchLanguages { get; set; }
+    public ICollection<CkTypeIndex>? TextSearchLanguages { get; set; }
 
     public string Path => CkTypeId + ": " + string.Join("->", BaseTypes.Select(x => x.OriginCkTypeId));
 }

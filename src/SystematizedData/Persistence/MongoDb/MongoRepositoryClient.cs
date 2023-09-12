@@ -3,11 +3,13 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
+using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Conventions;
 using MongoDB.Bson.Serialization.IdGenerators;
 using MongoDB.Driver;
+using MongoDB.Driver.Core.Events;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 
@@ -19,7 +21,7 @@ public class MongoRepositoryClient : IRepositoryClient
     private const string OctoConventionSerialization ="octo-convention-serialization";
     private readonly Guid _instanceId = Guid.NewGuid();
 
-    public MongoRepositoryClient(MongoConnectionOptions mongoConnectionOptions)
+    public MongoRepositoryClient(ILogger<MongoRepositoryClient> logger, MongoConnectionOptions mongoConnectionOptions)
     {
         ArgumentValidation.ValidateString(nameof(mongoConnectionOptions.MongoDbHost),
             mongoConnectionOptions.MongoDbHost);
@@ -56,24 +58,31 @@ public class MongoRepositoryClient : IRepositoryClient
         MongoClientSettings settings = MongoClientSettings.FromUrl(urlBuilder.ToMongoUrl());
         settings.ReadConcern = ReadConcern.Majority;
         settings.WriteConcern = new WriteConcern(WriteConcern.WMode.Majority, TimeSpan.FromSeconds(2));
-        _client = new MongoClient(urlBuilder.ToMongoUrl());
+        settings.ClusterConfigurator = cb => {
+            cb.Subscribe<CommandStartedEvent>(e => {
+                logger.LogInformation("{ObjCommandName} - {Json}", e.CommandName, e.Command.ToJson());
+            });
+        };
+        _client = new MongoClient(settings);
 
         RegisterClassMaps();
     }
 
-    public static bool isRegistered = false;
+    public static bool _isRegistered = false;
 
     private static void RegisterClassMaps()
     {
-        if (isRegistered)
+        if (_isRegistered)
         {
             return;
         }
-        isRegistered = true;
+        _isRegistered = true;
         
         BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
         BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>());
         BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());
+        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkRecordId, OctoRecordIdSerializer>());
+        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkEnumId, OctoEnumIdSerializer>());
         BsonSerializer.TryRegisterSerializer(new OctoObjectIdSerializer());
         BsonSerializer.TryRegisterSerializer(new ModelIdSerializer());
         
@@ -86,17 +95,37 @@ public class MongoRepositoryClient : IRepositoryClient
             //cm.MapMember(c => c.Dependencies).SetIsRequired(true);
         });
         
-        BsonClassMap.TryRegisterClassMap<CkEntity>(cm =>
+        BsonClassMap.TryRegisterClassMap<CkType>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.CkTypeId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.IsFinal).SetIsRequired(true);
-            cm.GetMemberMap(c => c.IsAbstract).SetIsRequired(true);
+            cm.GetMemberMap(c => c.IsFinal).SetIgnoreIfDefault(true);
+            cm.GetMemberMap(c => c.IsAbstract).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.Attributes).SetIsRequired(true);
             cm.GetMemberMap(c => c.Indexes).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.EnableChangeStreamPreAndPostImages).SetIgnoreIfDefault(true);
+        });
+        
+        BsonClassMap.TryRegisterClassMap<CkRecord>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.MapIdMember(c => c.CkRecordId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
+            cm.AutoMap();
+
+            cm.GetMemberMap(c => c.IsFinal).SetIsRequired(true);
+            cm.GetMemberMap(c => c.IsAbstract).SetIgnoreIfDefault(true);
+            cm.GetMemberMap(c => c.Attributes).SetIgnoreIfDefault(true);
+        });
+        
+        BsonClassMap.TryRegisterClassMap<CkEnum>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.MapIdMember(c => c.CkEnumId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
+            cm.AutoMap();
+
+            cm.GetMemberMap(c => c.Values).SetIsRequired(true);
         });
         
         BsonClassMap.TryRegisterClassMap<CkAttribute>(cm =>
@@ -107,7 +136,6 @@ public class MongoRepositoryClient : IRepositoryClient
 
             cm.GetMemberMap(c => c.AttributeValueType).SetIsRequired(true);
             cm.GetMemberMap(c => c.DefaultValues).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.SelectionValues).SetIgnoreIfDefault(true);
         });
         
         BsonClassMap.TryRegisterClassMap<CkAssociationRole>(cm =>
@@ -122,7 +150,7 @@ public class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.OutboundName).SetIgnoreIfDefault(true);
         });
         
-        BsonClassMap.TryRegisterClassMap<CkEntityAssociation>(cm =>
+        BsonClassMap.TryRegisterClassMap<CkTypeAssociation>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.AssociationId).SetIdGenerator(new OctoObjectIdGenerator());
@@ -133,7 +161,7 @@ public class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.TargetCkTypeId).SetIsRequired(true);
         });
         
-        BsonClassMap.TryRegisterClassMap<CkEntityAttribute>(cm =>
+        BsonClassMap.TryRegisterClassMap<CkTypeAttribute>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.AttributeId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
@@ -144,17 +172,17 @@ public class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.AutoCompleteValues).SetIgnoreIfDefault(true);
         });
         
-        BsonClassMap.TryRegisterClassMap<CkEntityInheritance>(cm =>
+        BsonClassMap.TryRegisterClassMap<CkTypeInheritance>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.InheritanceId).SetIdGenerator(new OctoObjectIdGenerator());
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.OriginCkTypeId).SetIsRequired(true);
-            cm.GetMemberMap(c => c.TargetCkTypeId).SetIsRequired(true);
+            cm.GetMemberMap(c => c.BaseCkTypeId).SetIsRequired(true);
+            cm.GetMemberMap(c => c.InheritorCkTypeId).SetIsRequired(true);
         });
         
-        BsonClassMap.TryRegisterClassMap<CkEntityIndex>(cm =>
+        BsonClassMap.TryRegisterClassMap<CkTypeIndex>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.AutoMap();

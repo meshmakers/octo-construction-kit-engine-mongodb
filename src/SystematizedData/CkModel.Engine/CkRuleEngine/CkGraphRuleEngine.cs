@@ -235,7 +235,7 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
             var origin = d.Origin;
             var target = d.Target;
 
-            var rtAssociation = await _tenantRepository.GetRtAssociationAsync(session,
+            var rtAssociation = await _tenantRepository.GetRtAssociationOrDefaultAsync(session,
                 origin,
                 target,
                 d.RoleId);
@@ -257,7 +257,7 @@ public class CkGraphRuleEngine : ICkGraphRuleEngine
             var origin = associationUpdateInfo.Origin;
             var target = associationUpdateInfo.Target;
 
-            var rtAssociation = await _tenantRepository.GetRtAssociationAsync(session,
+            var rtAssociation = await _tenantRepository.GetRtAssociationOrDefaultAsync(session,
                 origin,
                 target,
                 associationUpdateInfo.RoleId);

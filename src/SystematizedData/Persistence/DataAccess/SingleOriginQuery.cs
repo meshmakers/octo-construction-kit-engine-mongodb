@@ -9,13 +9,13 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 public abstract class SingleOriginQuery<TEntity> : Query<TEntity> where TEntity : class, new()
 {
-    private readonly ICachedCollection<TEntity> _cachedCollection;
+    private readonly IDatabaseCollection<TEntity> _databaseCollection;
 
-    protected internal SingleOriginQuery(ICachedCollection<TEntity> cachedCollection,
+    protected internal SingleOriginQuery(IDatabaseCollection<TEntity> databaseCollection,
         string language = "en")
         : base(language)
     {
-        _cachedCollection = cachedCollection;
+        _databaseCollection = databaseCollection;
     }
 
     public async Task<ResultSet<TEntity>> ExecuteQuery(IOctoSession octoSession, int? skip = null, int? take = null)
@@ -67,7 +67,7 @@ public abstract class SingleOriginQuery<TEntity> : Query<TEntity> where TEntity 
                 })));
 
             var pipelineDefinition = PipelineDefinition<TEntity, QueryResult<TEntity>>.Create(pipelineStageDefinitions);
-            var resultAggregate = _cachedCollection.Aggregate(octoSession, pipelineDefinition);
+            var resultAggregate = _databaseCollection.Aggregate(octoSession, pipelineDefinition);
             var result = await resultAggregate.SingleOrDefaultAsync();
             return new ResultSet<TEntity>(result);
         }
@@ -75,7 +75,7 @@ public abstract class SingleOriginQuery<TEntity> : Query<TEntity> where TEntity 
         {
             var pipelineDefinition = PipelineDefinition<TEntity, TEntity>.Create(pipelineStageDefinitions);
 
-            var aggregate = _cachedCollection.Aggregate(octoSession, pipelineDefinition);
+            var aggregate = _databaseCollection.Aggregate(octoSession, pipelineDefinition);
             var resultNoTotalCount = await aggregate.ToListAsync();
             return new ResultSet<TEntity>(resultNoTotalCount, resultNoTotalCount.Count);
         }

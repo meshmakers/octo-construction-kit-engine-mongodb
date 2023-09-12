@@ -1,16 +1,52 @@
 using System.Diagnostics;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects.Ck;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
+/// <summary>
+/// Represents a construction kit attribute in database
+/// </summary>
 [DebuggerDisplay("{" + nameof(AttributeId) + "}")]
-public class CkAttribute 
+public class CkAttribute
 {
+    /// <summary>
+    ///     Gets or sets the construction kit model id 
+    /// </summary>
+    public CkModelId CkModelId { get; set; }
+    
+    /// <summary>
+    /// The id of the attribute
+    /// </summary>
     public CkId<CkAttributeId> AttributeId { get; set; }
 
-    public AttributeValueTypes AttributeValueType { get; set; }
+    /// <summary>
+    /// Value type of the attribute
+    /// </summary>
+    public AttributeValueTypesDto AttributeValueType { get; set; }
 
+    /// <summary>
+    /// Default value of the attribute
+    /// </summary>
     public ICollection<object>? DefaultValues { get; set; }
 
-    public ICollection<CkSelectionValue>? SelectionValues { get; set; }
+    /// <summary>
+    /// Defines the enum of the attribute if the value type is a enum.
+    /// </summary>
+    public CkId<CkEnumId>? ValueCkEnumId { get; set; }
+
+    /// <summary>
+    /// Defines the record of the attribute if the value type is a record.
+    /// </summary>
+    public CkId<CkRecordId>? ValueCkRecordId { get; set; }
+
+    /// <summary>
+    /// If true, the attribute is optional, that means it can be null
+    /// </summary>
+    public bool IsOptional { get; set; }
+    
+    /// <summary>
+    /// An optional description of the attribute
+    /// </summary>
+    public string? Description { get; set; }
 }

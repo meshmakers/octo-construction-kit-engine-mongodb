@@ -1,5 +1,6 @@
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects.Ck;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
@@ -32,7 +33,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<TEntity> where T
 
     protected override bool IsAttributeNameValid(string attributeName)
     {
-        return _entityCacheItem.AllAttributes.TryGetValue(attributeName, out var _) ||
+        return _entityCacheItem.AllAttributesByName.ContainsKey(attributeName) ||
                attributeName == nameof(RtEntity.RtId) ||
                attributeName == nameof(RtEntity.RtCreationDateTime) ||
                attributeName == nameof(RtEntity.RtChangedDateTime) ||
@@ -63,7 +64,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<TEntity> where T
     protected override object? ResolveSearchAttributeValue(string attributeName, object? searchTerm, out bool isEnum)
     {
         if (searchTerm != null &&
-            _entityCacheItem.AllAttributes.TryGetValue(attributeName, out var attributeCacheItem))
+            _entityCacheItem.AllAttributesByName.TryGetValue(attributeName, out var attributeCacheItem))
         {
             if (attributeCacheItem.ValueType == AttributeValueTypesDto.Enum && attributeCacheItem.ValueCkEnumId != null)
             {

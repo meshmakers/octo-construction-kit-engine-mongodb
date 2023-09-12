@@ -3,6 +3,6 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 public class CkTypeAggregations
 {
-    public ICollection<CkEntityAssociation>? Owned { get; set; }
-    public ICollection<CkEntityAssociation>? Inherited { get; set; }
+    public ICollection<CkTypeAssociation>? Owned { get; set; }
+    public ICollection<CkTypeAssociation>? Inherited { get; set; }
 }

@@ -14,7 +14,7 @@ public interface IRepository
 {
     Task CreateCollectionIfNotExistsAsync<TCollection>(bool enableChangeStreamPreAndPostImages, string? suffix = null) where TCollection : class, new();
 
-    ICachedCollection<T> GetCollection<T>(string? suffix = null) where T : class, new();
+    IDatabaseCollection<T> GetCollection<T>(string? suffix = null) where T : class, new();
 
     Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,
         CancellationToken cancellationToken = default);

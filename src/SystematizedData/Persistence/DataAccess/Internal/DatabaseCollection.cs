@@ -8,7 +8,7 @@ using NLog;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 
-internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
+internal class DatabaseCollection<TDocument> : IDatabaseCollection<TDocument>
     where TDocument : class, new()
 
 {
@@ -16,7 +16,7 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
     private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
     private readonly IMongoCollection<TDocument> _documentCollection;
 
-    internal CachedCollection(IMongoCollection<TDocument> documentCollection)
+    internal DatabaseCollection(IMongoCollection<TDocument> documentCollection)
     {
         _documentCollection = documentCollection;
     }
@@ -151,7 +151,7 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
         }
     }
 
-    public async Task<TDocument> FindSingleOrDefaultAsync(IOctoSession session,
+    public async Task<TDocument?> FindSingleOrDefaultAsync(IOctoSession session,
         Expression<Func<TDocument, bool>> expression)
     {
         try
@@ -363,7 +363,7 @@ internal class CachedCollection<TDocument> : ICachedCollection<TDocument>
         }
     }
 
-    public async Task<BulkImportResult> BulkImportAsync(IOctoSession session, IEnumerable<TDocument> documentList)
+    public async Task<IBulkImportResult> BulkImportAsync(IOctoSession session, IEnumerable<TDocument> documentList)
     {
         try
         {

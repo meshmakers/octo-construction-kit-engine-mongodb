@@ -1,4 +1,4 @@
-using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -6,19 +6,18 @@ using MongoDB.Bson.Serialization.Serializers;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence;
 
-public class CkIdSerializer<TKey, TKeySerializer> : StructSerializerBase<CkId<TKey>>, IRepresentationConfigurable<CkIdSerializer<TKey, TKeySerializer>> where TKey : struct, IComparable<TKey>, ICkKey where TKeySerializer : StructSerializerBase<TKey>
+public class OctoEnumIdSerializer : StructSerializerBase<CkEnumId>, IRepresentationConfigurable<OctoEnumIdSerializer>
 {
     private readonly BsonType _representation;
-    public CkIdSerializer()
+    public OctoEnumIdSerializer()
         : this(BsonType.String)
     {
     }
     
-    public CkIdSerializer(BsonType representation)
+    public OctoEnumIdSerializer(BsonType representation)
     {
         switch (representation)
         {
-            case BsonType.ObjectId:
             case BsonType.String:
                 break;
 
@@ -30,7 +29,7 @@ public class CkIdSerializer<TKey, TKeySerializer> : StructSerializerBase<CkId<TK
         _representation = representation;
     }
 
-    public override CkId<TKey> Deserialize(BsonDeserializationContext context, BsonDeserializationArgs args)
+    public override CkEnumId Deserialize(BsonDeserializationContext context, BsonDeserializationArgs args)
     {
         var bsonReader = context.Reader;
 
@@ -38,21 +37,21 @@ public class CkIdSerializer<TKey, TKeySerializer> : StructSerializerBase<CkId<TK
         switch (bsonType)
         {
             case BsonType.String:
-                return new CkId<TKey>(bsonReader.ReadString());
+                return new CkEnumId(bsonReader.ReadString());
 
             default:
                 throw CreateCannotDeserializeFromBsonTypeException(bsonType);
         }
     }
 
-    public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args, CkId<TKey> value)
+    public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args, CkEnumId value)
     {
         var bsonWriter = context.Writer;
 
         switch (_representation)
         {
             case BsonType.String:
-                bsonWriter.WriteString(value.ToString());
+                bsonWriter.WriteString(value.ToString(CultureInfo.InvariantCulture));
                 break;
 
             default:
@@ -61,14 +60,14 @@ public class CkIdSerializer<TKey, TKeySerializer> : StructSerializerBase<CkId<TK
         }
     }
 
-    public CkIdSerializer<TKey, TKeySerializer> WithRepresentation(BsonType representation)
+    public OctoEnumIdSerializer WithRepresentation(BsonType representation)
     {
         if (representation == _representation)
         {
             return this;
         }
 
-        return new CkIdSerializer<TKey, TKeySerializer>(representation);
+        return new OctoEnumIdSerializer(representation);
     }
 
     public BsonType Representation => _representation;
