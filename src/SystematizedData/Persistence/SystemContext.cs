@@ -1,8 +1,10 @@
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Persistence.Contracts;
 using Persistence.InternalContracts;
 using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
 
@@ -109,4 +111,18 @@ public class SystemContext : TenantContext, ISystemContextInternal
     }
 
     #endregion TenantId Context Handling
+
+
+    /// <summary>
+    /// Creates a tenant context.
+    /// </summary>
+    /// <param name="session"></param>
+    /// <param name="tenantId"></param>
+    /// <returns></returns>
+    public async Task<ITenantContext> GetTenantContextAsync(IOctoSession session, string tenantId)
+    {
+        return await GetTenantContextInternalAsync(session, tenantId);
+    }
+
+
 }

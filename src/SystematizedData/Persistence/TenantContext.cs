@@ -2,6 +2,7 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects.Ck;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
@@ -82,7 +83,7 @@ public class TenantContext : ITenantContextInternal
         var normalizedTenantId = tenantId.MakeKey();
         if (await IsTenantExistingAsync(systemSession, normalizedTenantId))
         {
-            throw new TenantException($"Tenant '{normalizedTenantId}' already exists.");
+            throw TenantException.TenantDoesAlreadyExist(tenantId);
         }
 
         try
@@ -176,7 +177,7 @@ public class TenantContext : ITenantContextInternal
         
         if (await IsTenantExistingAsync(systemSession, tenantId))
         {
-            throw new TenantException($"Tenant '{tenantId}' already exists.");
+            throw TenantException.TenantDoesAlreadyExist(tenantId);
         }
 
         if (!await IsDatabaseAlreadyExistingAsync(databaseName))
@@ -230,7 +231,7 @@ public class TenantContext : ITenantContextInternal
         var octoTenant = await GetRtTenantAsync(systemSession, tenantId);
         if (octoTenant == null)
         {
-            throw new TenantException($"Tenant '{tenantId}' does not exist.");
+            throw TenantException.TenantDoesNotExist(tenantId);
         }
         
         await _systemMessageService.DistributeTenantModificationPreEventAsync(tenantId);
@@ -316,6 +317,25 @@ public class TenantContext : ITenantContextInternal
     #endregion Tenant management
 
     #region Access management
+
+    /// <summary>
+    /// Creates a tenant context.
+    /// </summary>
+    /// <param name="session"></param>
+    /// <param name="tenantId"></param>
+    /// <returns></returns>
+    public async Task<ITenantContextInternal> GetTenantContextInternalAsync(IOctoSession session, string tenantId)
+    {
+        var rtSystemTenant = await GetRtSystemTenantAsync(session, tenantId);
+        if (rtSystemTenant == null)
+        {
+            throw TenantException.TenantDoesNotExist(tenantId);
+        }
+
+        var context = new TenantContext(_loggerFactory, _systemConfiguration, tenantId, rtSystemTenant.DatabaseName, _systemMessageService,
+            _ckModelRepositoryService, _cacheService, _modelLoaderService);
+        return context;
+    }
 
     public async Task<ITenantContext> GetChildTenantContextAsync(string tenantId)
     {
@@ -423,6 +443,21 @@ public class TenantContext : ITenantContextInternal
 
     #region Construction Kits
 
+    public async Task ImportCkModelAsync(IOctoSystemSession systemSession, CkCompiledModelRoot ckCompiledModelRoot)
+    {
+        try
+        {
+            await _systemMessageService.DistributeTenantModificationPreEventAsync(TenantId);
+            var databaseContext = CreateDatabaseContext(_databaseName);
+            await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, false,
+                new TenantDatabaseSourceIdentifier(databaseContext, systemSession));
+        }
+        finally
+        {
+            await _systemMessageService.DistributeTenantModificationPostEventAsync(TenantId);
+        }
+    }
+    
     public async Task ImportCkModelAsync(IOctoSystemSession systemSession, CkModelId ckModelId, OperationResult operationResult)
     {
         var ckCompiledModelRoot = await _ckModelRepositoryService.LookupCkModelAsync(ckModelId, operationResult);
@@ -453,7 +488,7 @@ public class TenantContext : ITenantContextInternal
 
     #region Private methods
 
-    private async Task<ITenantRepositoryInternal> GetTenantRepositoryInternalAsync(string tenantId, string databaseName)
+    protected async Task<ITenantRepositoryInternal> GetTenantRepositoryInternalAsync(string tenantId, string databaseName)
     {
         try
         {
@@ -494,7 +529,7 @@ public class TenantContext : ITenantContextInternal
         return resultSet.Items.FirstOrDefault();
     }
     
-    private async Task<RtTenant?> GetRtSystemTenantAsync(IOctoSession systemSession,
+    protected async Task<RtTenant?> GetRtSystemTenantAsync(IOctoSession systemSession,
         string tenantId)
     {
         var tenantRepository = await GetSystemTenantRepositoryAsync();

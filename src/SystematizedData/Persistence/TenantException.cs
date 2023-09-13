@@ -51,4 +51,14 @@ public class TenantException : Exception
     {
         return new TenantException($"Error loading model {ckModelId}.{Environment.NewLine}{operationResult.GetMessages()}");
     }
+
+    public static Exception TenantDoesAlreadyExist(string tenantId)
+    {
+        return new TenantException($"Tenant {tenantId} does already exist.");
+    }
+
+    public static Exception TenantDoesNotExist(string tenantId)
+    {
+        return new TenantException($"Tenant '{tenantId}' does not exist.");
+    }
 }

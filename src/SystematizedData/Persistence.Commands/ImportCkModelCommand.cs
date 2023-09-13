@@ -1,8 +1,6 @@
 ﻿using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
-using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Microsoft.Extensions.Logging;
-using Persistence.InternalContracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
 
@@ -10,14 +8,14 @@ public class ImportCkModelCommand : IImportCkModelCommand
 {
     private readonly ILogger<ImportCkModelCommand> _logger;
     private readonly ICkSerializer _ckSerializer;
-    private readonly ICkModelRepositoryService _ckModelRepositoryService;
+    private readonly ISystemContext _systemContext;
 
     public ImportCkModelCommand(ILogger<ImportCkModelCommand> logger, ICkSerializer ckSerializer, 
-        ICkModelRepositoryService ckModelRepositoryService)
+        ISystemContext systemContext)
     {
         _logger = logger;
         _ckSerializer = ckSerializer;
-        _ckModelRepositoryService = ckModelRepositoryService;
+        _systemContext = systemContext;
     }
 
     public async Task ImportTextAsync(string tenantId, string jsonText,
@@ -27,9 +25,9 @@ public class ImportCkModelCommand : IImportCkModelCommand
         {
             _logger.LogInformation("Reading CK model....");
             var operationResult = new OperationResult();
-            var model = await _ckSerializer.DeserializeCompiledModelRootAsync(jsonText, operationResult);
+            var ckCompiledModelRoot = await _ckSerializer.DeserializeCompiledModelRootAsync(jsonText, operationResult);
 
-            if (model == null)
+            if (ckCompiledModelRoot == null)
             {
                 _logger.LogInformation("Import of CK model failed, model cannot be deserialized");
                 operationResult.WriteMessagesToLogger(_logger);
@@ -37,8 +35,12 @@ public class ImportCkModelCommand : IImportCkModelCommand
             }
 
             _logger.LogInformation("Executing import of CK model....");
-            // await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, model, false, 
-            //     new TenantDatabaseSourceIdentifier(databaseContext, session));
+            using var session = await _systemContext.GetSystemSessionAsync();
+            session.StartTransaction();
+            var tenantContext = await _systemContext.GetTenantContextAsync(session, tenantId);
+            await session.CommitTransactionAsync();
+
+            await tenantContext.ImportCkModelAsync(session, ckCompiledModelRoot);
 
             _logger.LogInformation("Import of CK model completed");
         }
@@ -57,9 +59,9 @@ public class ImportCkModelCommand : IImportCkModelCommand
             _logger.LogInformation("Reading CK model....");
             var operationResult = new OperationResult();
             await using var streamReader = File.OpenRead(filePath);
-            var model = await _ckSerializer.DeserializeCompiledModelRootAsync(streamReader, operationResult);
+            var ckCompiledModelRoot = await _ckSerializer.DeserializeCompiledModelRootAsync(streamReader, operationResult);
 
-            if (model == null || operationResult.HasErrors)
+            if (ckCompiledModelRoot == null || operationResult.HasErrors)
             {
                 _logger.LogError("Import of CK model failed, model cannot be deserialized");
                 operationResult.WriteMessagesToLogger(_logger);
@@ -67,8 +69,11 @@ public class ImportCkModelCommand : IImportCkModelCommand
             }
             
             _logger.LogInformation("Executing import of CK model....");
-            // await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, model, false,
-            //     new TenantDatabaseSourceIdentifier(databaseContext, session));
+            using var session = await _systemContext.GetSystemSessionAsync();
+            session.StartTransaction();
+            var tenantContext = await _systemContext.GetTenantContextAsync(session, tenantId);
+            await session.CommitTransactionAsync();
+            await tenantContext.ImportCkModelAsync(session, ckCompiledModelRoot);
 
             _logger.LogInformation("Import of CK model completed");
         }

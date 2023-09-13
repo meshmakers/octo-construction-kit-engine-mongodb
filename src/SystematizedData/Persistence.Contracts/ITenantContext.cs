@@ -1,5 +1,6 @@
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects.Ck;
 using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
@@ -22,7 +23,7 @@ public interface ITenantContext
     Task<IOctoSystemSession> GetSystemSessionAsync();
 
     #region Access Management
-
+    
     /// <summary>
     /// Creates a child tenant context.
     /// </summary>
@@ -64,14 +65,6 @@ public interface ITenantContext
     /// <returns></returns>
     Task<bool> IsChildTenantExistingAsync(IOctoSystemSession systemSession, string tenantId);
 
-    /// <summary>
-    /// Returns true if a tenant is existing. It is check if a tenant is existing for another tenant too.
-    /// </summary>
-    /// <param name="systemSession"></param>
-    /// <param name="tenantId"></param>
-    /// <returns></returns>
-    Task<bool> IsTenantExistingAsync(IOctoSystemSession systemSession, string tenantId);
-
     Task<PagedResult<OctoTenant>> GetChildTenantsAsync(IOctoSystemSession systemSession, int? skip = null,
         int? take = null);
 
@@ -97,6 +90,14 @@ public interface ITenantContext
     #endregion Configuration
 
     #region Construction Kits
+
+    /// <summary>
+    /// Imports a construction kit model into the tenant.
+    /// </summary>
+    /// <param name="systemSession"></param>
+    /// <param name="ckCompiledModelRoot"></param>
+    /// <returns></returns>
+    Task ImportCkModelAsync(IOctoSystemSession systemSession, CkCompiledModelRoot ckCompiledModelRoot);
 
     /// <summary>
     /// Imports a construction kit model into the tenant.

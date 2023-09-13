@@ -11,7 +11,7 @@ public interface ITenantContextInternal : ITenantContext
     #region Access Management
 
     /// <summary>
-    /// Creates a child tenant context.
+    /// Gets a child tenant context.
     /// </summary>
     /// <param name="tenantId"></param>
     /// <returns></returns>
