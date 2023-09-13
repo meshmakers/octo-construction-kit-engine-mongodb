@@ -55,43 +55,103 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
 
         Assert.False(r2);
     }
-
+    
     [Fact]
-    public async void CreateIndirectTenantAndDeleteAsync()
+    public async void CreateTwoChildTenantsAndDeleteAsync()
     {
+        // Create child tenant "Father" form octo system
         var systemContext = _systemFixture.GetSystemContext();
-        using var session = await systemContext.GetSystemSessionAsync();
-        session.StartTransaction();
-        await systemContext.CreateChildTenantAsync(session, "TestTenant", "TestTenant");
+        using (var session = await systemContext.GetSystemSessionAsync())
+        {
+            session.StartTransaction();
+            
+            await systemContext.CreateChildTenantAsync(session, "Father", "Father");
+            await session.CommitTransactionAsync();
+        }
+        var fatherTenantContext = await systemContext.GetChildTenantContextAsync("Father");
 
-        await session.CommitTransactionAsync();
+        // Create child tenant "Girl" from child tenant "Father"
+        using (var session = await systemContext.GetSystemSessionAsync())
+        {
+            session.StartTransaction();
 
-        using var session2 = await systemContext.GetSystemSessionAsync();
-        session2.StartTransaction();
-        var testTenantContext = await systemContext.GetChildTenantContextAsync("TestTenant");
+            await fatherTenantContext.CreateChildTenantAsync(session, "Girl", "Girl");
+            await session.CommitTransactionAsync();
+        }
 
-        await testTenantContext.CreateChildTenantAsync(session2, "TestTenant2", "TestTenant2");
+        // Check if tenant Girl Exists
+        using (var session = await systemContext.GetSystemSessionAsync())
+        {
+            session.StartTransaction();
 
-        await session2.CommitTransactionAsync();
-
-
-        using var session3 = await testTenantContext.GetSystemSessionAsync();
-        session3.StartTransaction();
-        var r = await testTenantContext.GetChildTenantAsync(session3, "TestTenant2");
-        await session3.CommitTransactionAsync();
-
-        Assert.Equal("testtenant2", r.TenantId);
-        Assert.Equal("testtenant2", r.DatabaseName);
+            Assert.True(await systemContext.IsTenantExistingAsync(session, "Father"));
+            Assert.True(await systemContext.IsTenantExistingAsync(session, "Girl"));
 
 
-        using var session4 = await testTenantContext.GetSystemSessionAsync();
-        session4.StartTransaction();
-        await testTenantContext.DropChildTenantAsync(session4, "TestTenant2");
-        await session4.CommitTransactionAsync();
+            await session.CommitTransactionAsync();
+        }
 
-        using var session5 = await testTenantContext.GetSystemSessionAsync();
-        session5.StartTransaction();
-        await systemContext.DropChildTenantAsync(session5, "TestTenant");
-        await session5.CommitTransactionAsync();
+        // Drop childs
+        using (var session = await systemContext.GetSystemSessionAsync())
+        {
+            session.StartTransaction();
+
+            await fatherTenantContext.DropChildTenantAsync(session, "Girl");
+
+            await session.CommitTransactionAsync();
+        }
+        
+        using (var session = await systemContext.GetSystemSessionAsync())
+        {
+            session.StartTransaction();
+
+            await systemContext.DropChildTenantAsync(session, "Father");
+
+            await session.CommitTransactionAsync();
+        }
+
+    }
+    
+    
+    [Fact]
+    public async void AttachAndDetachTenant()
+    {
+        // Create child tenant "Father" form octo system
+        var systemContext = _systemFixture.GetSystemContext();
+        using (var session = await systemContext.GetSystemSessionAsync())
+        {
+            session.StartTransaction();
+            
+            await systemContext.CreateChildTenantAsync(session, "Father", "Father");
+            await session.CommitTransactionAsync();
+        }
+
+        // Detach Father
+        using (var session = await systemContext.GetSystemSessionAsync())
+        {
+            session.StartTransaction();
+
+            await systemContext.DetachChildTenantAsync(session, "Father");
+            await session.CommitTransactionAsync();
+        }
+
+        // Attach Father
+        using (var session = await systemContext.GetSystemSessionAsync())
+        {
+            session.StartTransaction();
+
+            await systemContext.AttachChildTenantAsync(session, "Father", "Father");
+            await session.CommitTransactionAsync();
+        }
+        
+        // Drop
+        using (var session = await systemContext.GetSystemSessionAsync())
+        {
+            session.StartTransaction();
+
+            await systemContext.DropChildTenantAsync(session, "Father");
+
+            await session.CommitTransactionAsync();
+        }
     }
 }

@@ -13,6 +13,9 @@ attributes:
   valueType: Boolean
 - id: TenantId
   valueType: String
+- id: ParentTenantId
+  valueType: String
+  isOptional: true
 - id: DatabaseName
   valueType: String
 - id: AutoIncrement.Start

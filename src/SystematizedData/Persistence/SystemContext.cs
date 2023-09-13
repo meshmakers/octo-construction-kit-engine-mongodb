@@ -14,7 +14,7 @@ public class SystemContext : TenantContext, ISystemContextInternal
     public SystemContext(ILoggerFactory loggerFactory, IOptions<OctoSystemConfiguration> systemConfiguration,
         ISystemMessageService systemMessageService,
         ICkCacheService ckCacheService, ICkModelRepositoryService ckModelRepositoryService, IModelLoaderService modelLoaderService)
-    : base(loggerFactory, systemConfiguration, systemConfiguration.Value.SystemTenantId, systemConfiguration.Value.SystemDatabaseName.ToLower(), 
+    : base(loggerFactory, systemConfiguration, systemConfiguration.Value.SystemTenantId.MakeKey(), systemConfiguration.Value.SystemDatabaseName.ToLower(), 
         systemMessageService, ckModelRepositoryService, ckCacheService, modelLoaderService)
     {
     }

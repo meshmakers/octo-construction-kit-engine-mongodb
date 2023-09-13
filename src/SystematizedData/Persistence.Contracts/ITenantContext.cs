@@ -8,7 +8,7 @@ namespace Persistence.Contracts;
 /// <summary>
 /// Represents a tenant context, that allows the management operations of a tenant.
 /// </summary>
-public interface ITenantContext 
+public interface ITenantContext
 {
     /// <summary>
     /// Returns the tenant id of the context.
@@ -20,8 +20,8 @@ public interface ITenantContext
     /// </summary>
     /// <returns></returns>
     Task<IOctoSystemSession> GetSystemSessionAsync();
-    
-    #region Access Management 
+
+    #region Access Management
 
     /// <summary>
     /// Creates a child tenant context.
@@ -40,23 +40,37 @@ public interface ITenantContext
     /// Returns an object that allows access to the tenant repository.
     /// </summary>
     /// <returns></returns>
-    Task<ITenantRepository> GetTenantRepositoryAsync();    
-    
-    #endregion Access Management 
-    
+    Task<ITenantRepository> GetTenantRepositoryAsync();
+
+    #endregion Access Management
+
     #region Tenant Management
 
     Task CreateChildTenantAsync(IOctoSystemSession systemSession, string databaseName, string tenantId);
 
     Task AttachChildTenantAsync(IOctoSystemSession systemSession, string databaseName, string tenantId);
-    
+
     Task DetachChildTenantAsync(IOctoSystemSession systemSession, string tenantId);
-    
+
     Task ClearChildTenantAsync(IOctoSystemSession systemSession, string tenantId);
 
     Task DropChildTenantAsync(IOctoSystemSession systemSession, string tenantId);
 
+    /// <summary>
+    /// Returns true if a child tenant with the given name exists.
+    /// </summary>
+    /// <param name="systemSession"></param>
+    /// <param name="tenantId"></param>
+    /// <returns></returns>
     Task<bool> IsChildTenantExistingAsync(IOctoSystemSession systemSession, string tenantId);
+
+    /// <summary>
+    /// Returns true if a tenant is existing. It is check if a tenant is existing for another tenant too.
+    /// </summary>
+    /// <param name="systemSession"></param>
+    /// <param name="tenantId"></param>
+    /// <returns></returns>
+    Task<bool> IsTenantExistingAsync(IOctoSystemSession systemSession, string tenantId);
 
     Task<PagedResult<OctoTenant>> GetChildTenantsAsync(IOctoSystemSession systemSession, int? skip = null,
         int? take = null);
@@ -64,9 +78,9 @@ public interface ITenantContext
     Task<OctoTenant> GetChildTenantAsync(IOctoSystemSession systemSession, string tenantId);
 
     #endregion Tenant Management
-    
+
     #region Configuration
-    
+
     Task<TValueType?> GetConfigurationAsync<TValueType>(IOctoSystemSession systemSession, string key,
         TValueType? defaultValue) where
         TValueType : class;
@@ -77,9 +91,9 @@ public interface ITenantContext
         where TValueType : struct;
 
     Task SetConfigurationAsync(IOctoSystemSession systemSession, string key, string value);
-    
+
     Task SetConfigurationAsync(IOctoSystemSession systemSession, string key, object value);
-    
+
     #endregion Configuration
 
     #region Construction Kits
@@ -92,7 +106,6 @@ public interface ITenantContext
     /// <param name="operationResult">Object that contains validation messages during load of construction kits</param>
     /// <returns></returns>
     Task ImportCkModelAsync(IOctoSystemSession systemSession, CkModelId ckModelId, OperationResult operationResult);
-
 
     #endregion
 }

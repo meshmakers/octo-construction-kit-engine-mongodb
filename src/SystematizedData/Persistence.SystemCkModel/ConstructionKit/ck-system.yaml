@@ -1,5 +1,31 @@
 $schema: https://schemas.meshmakers.cloud/construction-kit-compiled.schema.json
 types:
+- typeId: Entity
+  isAbstract: true
+- typeId: Tenant
+  derivedFromCkTypeId: System/Entity
+  isFinal: true
+  attributes:
+  - id: System/TenantId
+    name: TenantId
+  - id: System/ParentTenantId
+    name: ParentTenantId
+  - id: System/DatabaseName
+    name: DatabaseName
+  indexes:
+  - indexType: Ascending
+    fields:
+    - attributeNames:
+      - TenantId
+- typeId: AutoIncrement
+  derivedFromCkTypeId: System/Entity
+  attributes:
+  - id: System/AutoIncrement.Start
+    name: Start
+  - id: System/AutoIncrement.End
+    name: End
+  - id: System/AutoIncrement.CurrentValue
+    name: CurrentValue
 - typeId: Query
   derivedFromCkTypeId: System/Entity
   attributes:
@@ -17,6 +43,12 @@ types:
     name: AttributeSearchFilter
   - id: System/Name
     name: Name
+- typeId: Configuration
+  derivedFromCkTypeId: System/Entity
+  isFinal: true
+  attributes:
+  - id: System/ConfigurationValue
+    name: ConfigurationValue
 - typeId: ServiceHook
   derivedFromCkTypeId: System/Entity
   attributes:
@@ -34,36 +66,6 @@ types:
     name: ServiceHookAction
   - id: System/ServiceHook.ApiKey
     name: ServiceHookApiKey
-- typeId: Entity
-  isAbstract: true
-- typeId: AutoIncrement
-  derivedFromCkTypeId: System/Entity
-  attributes:
-  - id: System/AutoIncrement.Start
-    name: Start
-  - id: System/AutoIncrement.End
-    name: End
-  - id: System/AutoIncrement.CurrentValue
-    name: CurrentValue
-- typeId: Tenant
-  derivedFromCkTypeId: System/Entity
-  isFinal: true
-  attributes:
-  - id: System/TenantId
-    name: TenantId
-  - id: System/DatabaseName
-    name: DatabaseName
-  indexes:
-  - indexType: Ascending
-    fields:
-    - attributeNames:
-      - TenantId
-- typeId: Configuration
-  derivedFromCkTypeId: System/Entity
-  isFinal: true
-  attributes:
-  - id: System/ConfigurationValue
-    name: ConfigurationValue
 associationRoles:
 - id: ParentChild
   inboundName: Parent
@@ -89,6 +91,9 @@ attributes:
   valueType: Boolean
 - id: TenantId
   valueType: String
+- id: ParentTenantId
+  valueType: String
+  isOptional: true
 - id: DatabaseName
   valueType: String
 - id: AutoIncrement.Start

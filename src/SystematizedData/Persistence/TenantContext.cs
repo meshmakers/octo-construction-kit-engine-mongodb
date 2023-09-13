@@ -3,7 +3,6 @@ using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
-using Meshmakers.Octo.SystematizedData.Persistence.CkModel;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
@@ -78,9 +77,10 @@ public class TenantContext : ITenantContextInternal
     {
         ArgumentValidation.ValidateString(nameof(databaseName), databaseName);
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
+        
         var normalizedDatabaseName = databaseName.ToLower();
         var normalizedTenantId = tenantId.MakeKey();
-        if (await IsChildTenantExistingAsync(systemSession, normalizedTenantId))
+        if (await IsTenantExistingAsync(systemSession, normalizedTenantId))
         {
             throw new TenantException($"Tenant '{normalizedTenantId}' already exists.");
         }
@@ -111,14 +111,27 @@ public class TenantContext : ITenantContextInternal
                 new TenantDatabaseSourceIdentifier(databaseContext, systemSession));
 
             // Add the new tenant as child tenant of the current one
+            if (TenantId != _systemConfiguration.Value.SystemTenantId.MakeKey())
+            {
+                var rtTenant = new RtTenant
+                {
+                    TenantId = normalizedTenantId,
+                    DatabaseName = normalizedDatabaseName
+                };
+
+                var tenantRepository = await GetTenantRepositoryInternalAsync();
+                await tenantRepository.InsertOneRtEntityAsync(systemSession, rtTenant);
+            }
+
+            // Add the new tenant in system tenant to be found in future operations
             var rtSystemTenant = new RtTenant
             {
                 TenantId = normalizedTenantId,
+                ParentTenantId = TenantId,
                 DatabaseName = normalizedDatabaseName
             };
-
-            var tenantRepository = await GetTenantRepositoryInternalAsync();
-            await tenantRepository.InsertOneRtEntityAsync(systemSession, rtSystemTenant);
+            var systemTenantRepository = await GetSystemTenantRepositoryInternalAsync();
+            await systemTenantRepository.InsertOneRtEntityAsync(systemSession, rtSystemTenant);
 
             // Distribute updates (post) to inform other services.
             await _systemMessageService.DistributeTenantModificationPostEventAsync(tenantId);
@@ -148,12 +161,7 @@ public class TenantContext : ITenantContextInternal
             _systemConfiguration.Value.DatabaseUserPassword);
 
         var repository = _systemRepositoryClient.GetRepository(normalizedDatabaseName);
-        await repository.CreateCollectionIfNotExistsAsync<DatabaseEntities.CkModel>(false);
-        await repository.CreateCollectionIfNotExistsAsync<CkAssociationRole>(false);
-        await repository.CreateCollectionIfNotExistsAsync<CkAttribute>(false);
-        await repository.CreateCollectionIfNotExistsAsync<CkType>(false);
-        await repository.CreateCollectionIfNotExistsAsync<CkTypeAssociation>(false);
-        await repository.CreateCollectionIfNotExistsAsync<CkTypeInheritance>(false);
+        
         await repository.CreateCollectionIfNotExistsAsync<RtAssociation>(true);
     }
 
@@ -163,7 +171,10 @@ public class TenantContext : ITenantContextInternal
     {
         ArgumentValidation.ValidateString(nameof(databaseName), databaseName);
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
-        if (await IsChildTenantExistingAsync(systemSession, tenantId))
+        var normalizedDatabaseName = databaseName.ToLower();
+        var normalizedTenantId = tenantId.MakeKey();
+        
+        if (await IsTenantExistingAsync(systemSession, tenantId))
         {
             throw new TenantException($"Tenant '{tenantId}' already exists.");
         }
@@ -173,14 +184,28 @@ public class TenantContext : ITenantContextInternal
             throw new DatabaseException($"Database '{databaseName}' does not exist.");
         }
 
-        var octoTenant = new RtTenant
+        // Add the new tenant as child tenant of the current one
+        if (TenantId != _systemConfiguration.Value.SystemTenantId.MakeKey())
         {
-            TenantId = tenantId,
-            DatabaseName = databaseName
-        };
+            var octoTenant = new RtTenant
+            {
+                TenantId = tenantId,
+                DatabaseName = databaseName
+            };
 
-        var tenantRepository = await GetTenantRepositoryInternalAsync();
-        await tenantRepository.InsertOneRtEntityAsync(systemSession, octoTenant);
+            var tenantRepository = await GetTenantRepositoryInternalAsync();
+            await tenantRepository.InsertOneRtEntityAsync(systemSession, octoTenant);
+        }
+
+        // Add the new tenant in system tenant to be found in future operations
+        var rtSystemTenant = new RtTenant
+        {
+            TenantId = normalizedTenantId,
+            ParentTenantId = TenantId,
+            DatabaseName = normalizedDatabaseName
+        };
+        var systemTenantRepository = await GetSystemTenantRepositoryInternalAsync();
+        await systemTenantRepository.InsertOneRtEntityAsync(systemSession, rtSystemTenant);
     }
 
     public async Task DetachChildTenantAsync(IOctoSystemSession systemSession, string tenantId)
@@ -207,7 +232,7 @@ public class TenantContext : ITenantContextInternal
         {
             throw new TenantException($"Tenant '{tenantId}' does not exist.");
         }
-
+        
         await _systemMessageService.DistributeTenantModificationPreEventAsync(tenantId);
         await DropChildTenantAsync(systemSession, tenantId);
         await CreateChildTenantAsync(systemSession, octoTenant.DatabaseName, tenantId);
@@ -220,7 +245,7 @@ public class TenantContext : ITenantContextInternal
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
         var tenantRepository = await GetTenantRepositoryInternalAsync();
-
+        
         var octoTenant = await GetRtTenantAsync(systemSession, tenantId);
         if (octoTenant == null)
         {
@@ -230,8 +255,19 @@ public class TenantContext : ITenantContextInternal
         await _systemMessageService.DistributeTenantModificationPreEventAsync(tenantId);
         await _systemRepositoryClient.DropRepositoryAsync(octoTenant.DatabaseName);
 
+        // Deletes the tenant entry from the current tenant
         await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
             new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
+        
+        // If the current tenant is not the system tenant, we need to delete the tenant entry in system tenant too.
+        // Add the new tenant as child tenant of the current one
+        if (TenantId != _systemConfiguration.Value.SystemTenantId.MakeKey())
+        {
+            var systemTenantRepository = await GetSystemTenantRepositoryInternalAsync();
+            await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession, 
+                new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
+        }
+        
         await _systemMessageService.DistributeTenantModificationPostEventAsync(tenantId);
     }
 
@@ -241,6 +277,14 @@ public class TenantContext : ITenantContextInternal
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
         var octoTenant = await GetRtTenantAsync(systemSession, tenantId);
+        return octoTenant != null;
+    }
+    
+    public async Task<bool> IsTenantExistingAsync(IOctoSystemSession systemSession, string tenantId)
+    {
+        ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
+
+        var octoTenant = await GetRtSystemTenantAsync(systemSession, tenantId);
         return octoTenant != null;
     }
 
@@ -442,6 +486,18 @@ public class TenantContext : ITenantContextInternal
         string tenantId)
     {
         var tenantRepository = await GetTenantRepositoryAsync();
+
+        var dataQueryOperation = new DataQueryOperation();
+        dataQueryOperation.AppendFieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey());
+
+        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(systemSession, dataQueryOperation);
+        return resultSet.Items.FirstOrDefault();
+    }
+    
+    private async Task<RtTenant?> GetRtSystemTenantAsync(IOctoSession systemSession,
+        string tenantId)
+    {
+        var tenantRepository = await GetSystemTenantRepositoryAsync();
 
         var dataQueryOperation = new DataQueryOperation();
         dataQueryOperation.AppendFieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey());
