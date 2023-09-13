@@ -21,13 +21,13 @@ public class TenantConfigurationTests: IClassFixture<SystemFixture>
     public async void SetGetConfigurationAsString()
     {
         var systemContext = _systemFixture.GetSystemContext();
-        using var session = await systemContext.StartSystemSessionAsync();
+        using var session = await systemContext.GetSystemSessionAsync();
         session.StartTransaction();
         await systemContext.SetConfigurationAsync(session, "test", "398FE06C-4E21-433F-A8EA-1BDD74E1B167");
 
         await session.CommitTransactionAsync();
         
-        using var session2 = await systemContext.StartSystemSessionAsync();
+        using var session2 = await systemContext.GetSystemSessionAsync();
         session2.StartTransaction();
         
         var r = await systemContext.GetConfigurationAsync(session2, "test");
@@ -41,13 +41,13 @@ public class TenantConfigurationTests: IClassFixture<SystemFixture>
     public async void SetGetConfigurationAsObject()
     {
         var systemContext = _systemFixture.GetSystemContext();
-        using var session = await systemContext.StartSystemSessionAsync();
+        using var session = await systemContext.GetSystemSessionAsync();
         session.StartTransaction();
         await systemContext.SetConfigurationAsync(session, "test", new TestClass { TestProperty = "398FE06C-4E21-433F-A8EA-1BDD74E1B168" });
 
         await session.CommitTransactionAsync();
         
-        using var session2 = await systemContext.StartSystemSessionAsync();
+        using var session2 = await systemContext.GetSystemSessionAsync();
         session2.StartTransaction();
         
         var r = await systemContext.GetConfigurationAsync<TestClass>(session2, "test", null);
@@ -61,7 +61,7 @@ public class TenantConfigurationTests: IClassFixture<SystemFixture>
     public async void GetConfigurationObject_NoKey()
     {
         var systemContext = _systemFixture.GetSystemContext();
-        using var session2 = await systemContext.StartSystemSessionAsync();
+        using var session2 = await systemContext.GetSystemSessionAsync();
         session2.StartTransaction();
         
         var r = await systemContext.GetConfigurationAsync<TestClass>(session2, "B227CD7A-6BEE-499A-A888-2961E0D06545", null);
@@ -75,7 +75,7 @@ public class TenantConfigurationTests: IClassFixture<SystemFixture>
     public async void GetConfigurationString_NoKey()
     {
         var systemContext = _systemFixture.GetSystemContext();
-        using var session2 = await systemContext.StartSystemSessionAsync();
+        using var session2 = await systemContext.GetSystemSessionAsync();
         session2.StartTransaction();
         
         var r = await systemContext.GetConfigurationAsync(session2, "B227CD7A-6BEE-499A-A888-2961E0D06546");

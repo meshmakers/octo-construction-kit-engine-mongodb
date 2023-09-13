@@ -37,7 +37,7 @@ public class SystemContext : TenantContext, ISystemContextInternal
             // Distribute updates (post) to inform other services.
             await _systemMessageService.DistributeTenantModificationPreEventAsync(normalizedTenantId);
 
-            using var systemSession = await StartSystemSessionAsync();
+            using var systemSession = await GetSystemSessionAsync();
             systemSession.StartTransaction();
             
             // Create database

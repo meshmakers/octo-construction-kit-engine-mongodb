@@ -45,6 +45,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\..\src\SystematizedData\Persistence.Commands\Persistence.Commands.csproj" />
+      <ProjectReference Include="..\..\src\SystematizedData\Persistence.IdentityCkModel\Persistence.IdentityCkModel.csproj" />
       <ProjectReference Include="..\..\src\SystematizedData\Persistence\Persistence.csproj" />
     </ItemGroup>
 

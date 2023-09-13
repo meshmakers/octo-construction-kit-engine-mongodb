@@ -268,7 +268,7 @@ public class MongoRepositoryClient : IRepositoryClient
     }
     
     
-    public async Task<IOctoSession> StartSessionAsync()
+    public async Task<IOctoSystemSession> GetSessionAsync()
     {
         var session = await _client.StartSessionAsync();
         return new OctoSession(session, _client.Settings.ApplicationName);

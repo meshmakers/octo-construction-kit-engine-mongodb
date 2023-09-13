@@ -1,6 +1,5 @@
-using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
-namespace Persistence.Contracts.Repository;
+namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 public interface IOctoSystemSession : IOctoSession
 {

@@ -41,4 +41,14 @@ public class TenantException : Exception
     {
         return new TenantException($"Error loading system model.{Environment.NewLine}{operationResult.GetMessages()}");
     }
+
+    public static Exception ModelNotFound(CkModelId ckModelId)
+    {
+        return new TenantException($"Model {ckModelId} not found by repository management.");
+    }
+
+    public static Exception ErrorDuringModelLoad(CkModelId ckModelId, OperationResult operationResult)
+    {
+        return new TenantException($"Error loading model {ckModelId}.{Environment.NewLine}{operationResult.GetMessages()}");
+    }
 }

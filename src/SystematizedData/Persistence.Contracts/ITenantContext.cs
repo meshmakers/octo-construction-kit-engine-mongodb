@@ -1,46 +1,98 @@
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 namespace Persistence.Contracts;
 
+/// <summary>
+/// Represents a tenant context, that allows the management operations of a tenant.
+/// </summary>
 public interface ITenantContext 
 {
+    /// <summary>
+    /// Returns the tenant id of the context.
+    /// </summary>
     string TenantId { get; }
 
-    Task<IOctoSession> StartSystemSessionAsync();
-
-    Task<ITenantContext> CreateChildTenantContextAsync(string tenantId);
-
-    Task CreateChildTenantAsync(IOctoSession systemSession, string databaseName, string tenantId);
-
-    Task AttachChildTenantAsync(IOctoSession systemSession, string databaseName, string tenantId);
+    /// <summary>
+    /// Gets the system session object
+    /// </summary>
+    /// <returns></returns>
+    Task<IOctoSystemSession> GetSystemSessionAsync();
     
-    Task DetachChildTenantAsync(IOctoSession systemSession, string tenantId);
+    #region Access Management 
+
+    /// <summary>
+    /// Creates a child tenant context.
+    /// </summary>
+    /// <param name="tenantId"></param>
+    /// <returns></returns>
+    Task<ITenantContext> GetChildTenantContextAsync(string tenantId);
+
+    /// <summary>
+    /// Returns an object that allows access to the system tenant repository.
+    /// </summary>
+    /// <returns></returns>
+    Task<ITenantRepository> GetSystemTenantRepositoryAsync();
+
+    /// <summary>
+    /// Returns an object that allows access to the tenant repository.
+    /// </summary>
+    /// <returns></returns>
+    Task<ITenantRepository> GetTenantRepositoryAsync();    
     
-    Task ClearChildTenantAsync(IOctoSession systemSession, string tenantId);
+    #endregion Access Management 
+    
+    #region Tenant Management
 
-    Task DropChildTenantAsync(IOctoSession systemSession, string tenantId);
+    Task CreateChildTenantAsync(IOctoSystemSession systemSession, string databaseName, string tenantId);
 
-    Task<bool> IsChildTenantExistingAsync(IOctoSession systemSession, string tenantId);
+    Task AttachChildTenantAsync(IOctoSystemSession systemSession, string databaseName, string tenantId);
+    
+    Task DetachChildTenantAsync(IOctoSystemSession systemSession, string tenantId);
+    
+    Task ClearChildTenantAsync(IOctoSystemSession systemSession, string tenantId);
 
-    Task<PagedResult<OctoTenant>> GetChildTenantsAsync(IOctoSession systemSession, int? skip = null,
+    Task DropChildTenantAsync(IOctoSystemSession systemSession, string tenantId);
+
+    Task<bool> IsChildTenantExistingAsync(IOctoSystemSession systemSession, string tenantId);
+
+    Task<PagedResult<OctoTenant>> GetChildTenantsAsync(IOctoSystemSession systemSession, int? skip = null,
         int? take = null);
 
-    Task<OctoTenant> GetChildTenantAsync(IOctoSession systemSession, string tenantId);
+    Task<OctoTenant> GetChildTenantAsync(IOctoSystemSession systemSession, string tenantId);
 
-    ITenantRepository CreateOrGetTenantRepository();
-
-    Task<TValueType?> GetConfigurationAsync<TValueType>(IOctoSession systemSession, string key,
+    #endregion Tenant Management
+    
+    #region Configuration
+    
+    Task<TValueType?> GetConfigurationAsync<TValueType>(IOctoSystemSession systemSession, string key,
         TValueType? defaultValue) where
         TValueType : class;
 
-    Task<string?> GetConfigurationAsync(IOctoSession systemSession, string key, string? defaultValue = null);
+    Task<string?> GetConfigurationAsync(IOctoSystemSession systemSession, string key, string? defaultValue = null);
 
-    Task SetConfigurationAsync<TValueType>(IOctoSession systemSession, string key, TValueType value)
+    Task SetConfigurationAsync<TValueType>(IOctoSystemSession systemSession, string key, TValueType value)
         where TValueType : struct;
 
-    Task SetConfigurationAsync(IOctoSession systemSession, string key, string value);
+    Task SetConfigurationAsync(IOctoSystemSession systemSession, string key, string value);
     
-    Task SetConfigurationAsync(IOctoSession systemSession, string key, object value);
+    Task SetConfigurationAsync(IOctoSystemSession systemSession, string key, object value);
+    
+    #endregion Configuration
+
+    #region Construction Kits
+
+    /// <summary>
+    /// Imports a construction kit model into the tenant.
+    /// </summary>
+    /// <param name="systemSession">The system session object</param>
+    /// <param name="ckModelId">The construction kit model id to load</param>
+    /// <param name="operationResult">Object that contains validation messages during load of construction kits</param>
+    /// <returns></returns>
+    Task ImportCkModelAsync(IOctoSystemSession systemSession, CkModelId ckModelId, OperationResult operationResult);
+
+
+    #endregion
 }

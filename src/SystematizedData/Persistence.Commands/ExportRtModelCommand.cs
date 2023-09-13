@@ -26,8 +26,8 @@ public class ExportRtModelCommand : IExportRtModelCommand
     public async Task ExportAsync(string tenantId, OctoObjectId queryId, string filePath,
         CancellationToken? cancellationToken)
     {
-        var tenantContext = await _systemContext.CreateChildTenantContextAsync(tenantId);
-        var tenantRepository = tenantContext.CreateOrGetTenantRepository();
+        var tenantContext = await _systemContext.GetChildTenantContextAsync(tenantId);
+        var tenantRepository = await tenantContext.GetTenantRepositoryAsync();
 
         var session = await tenantRepository.StartSessionAsync();
         try

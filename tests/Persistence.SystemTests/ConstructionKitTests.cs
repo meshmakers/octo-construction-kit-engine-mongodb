@@ -1,5 +1,5 @@
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
@@ -18,14 +18,17 @@ public class ConstructionKitTests : IClassFixture<SystemFixture>
     {
         var systemContext = _systemFixture.GetSystemContext();
 
-        using var session = await systemContext.StartSystemSessionAsync();
+        using var session = await systemContext.GetSystemSessionAsync();
         session.StartTransaction();
-        //var systemIdentityModelService = _systemFixture.Provider.GetRequiredService<CkSystemIdentityModelService>();
-        //var systemIdentityModelService = new CkSystemIdentityModelService(new ImportCkModelCommand(logger, new CkJsonSerializer(), _systemFixture.CkModelValidator));
 
-       // await systemIdentityModelService.ImportAsync(session, ckModelRepository);
+        var operationResult = new OperationResult();
+        await systemContext.ImportCkModelAsync(session, new CkModelId("Test-1.0.0"), operationResult);
+        await systemContext.ImportCkModelAsync(session, new CkModelId("System.Identity-1.0.0"), operationResult);
 
         await session.CommitTransactionAsync();
+        
+        Assert.False(operationResult.HasErrors);
+        Assert.False(operationResult.HasFatalErrors);
     }
 
 

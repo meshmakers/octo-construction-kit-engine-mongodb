@@ -66,9 +66,9 @@ internal sealed class DatabaseContext : IDatabaseContext
         RtAssociations = _repository.GetCollection<RtAssociation>();
     }
 
-    public async Task<IOctoSession> StartSessionAsync()
+    public async Task<IOctoSession> GetSessionAsync()
     {
-        var session = await _repositoryClient.StartSessionAsync();
+        var session = await _repositoryClient.GetSessionAsync();
         return session;
     }
 

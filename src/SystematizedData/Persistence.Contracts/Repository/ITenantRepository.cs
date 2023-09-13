@@ -17,8 +17,6 @@ public interface ITenantRepository
     #endregion Transaction Handling
 
     #region Data manipulation
-    
-
 
     Task ApplyChanges(IOctoSession session, IReadOnlyList<EntityUpdateInfo> entityUpdateInfoList,
         IReadOnlyList<AssociationUpdateInfo> associationUpdateInfoList);

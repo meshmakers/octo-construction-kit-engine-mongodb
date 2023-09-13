@@ -28,7 +28,7 @@ internal class TenantRepository : ITenantRepositoryInternal
 
 
     #region Helper
-    
+
     public string TenantId => _tenantId;
 
     public CkTypeGraph GetEntityCacheItem(CkId<CkTypeId> ckTypeId)
@@ -48,7 +48,7 @@ internal class TenantRepository : ITenantRepositoryInternal
 
     public async Task<IOctoSession> StartSessionAsync()
     {
-        return await _databaseContext.StartSessionAsync();
+        return await _databaseContext.GetSessionAsync();
     }
 
     #endregion Transaction Handling

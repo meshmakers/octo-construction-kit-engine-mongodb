@@ -11,7 +11,7 @@ public interface IDatabaseContext : ICkDatabaseContext
     public IDatabaseCollection<CkType> CkTypesInternal { get; }
 
     IDatabaseCollection<RtAssociation> RtAssociations { get; }
-    Task<IOctoSession> StartSessionAsync();
+    Task<IOctoSession> GetSessionAsync();
     IOctoSession StartSession();
 
     IDatabaseCollection<TEntity> GetRtCollection<TEntity>(CkId<CkTypeId> ckTypeId) where TEntity : RtEntity, new();
