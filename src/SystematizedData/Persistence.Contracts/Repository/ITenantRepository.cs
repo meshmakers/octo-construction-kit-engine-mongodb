@@ -12,7 +12,7 @@ public interface ITenantRepository
     
     #region Transaction Handling
 
-    Task<IOctoSession> StartSessionAsync();
+    Task<IOctoSession> GetSessionAsync();
 
     #endregion Transaction Handling
 
@@ -149,4 +149,39 @@ public interface ITenantRepository
         IEnumerable<object> autoCompleteValues);
 
     #endregion Advanced functionality
+    
+    #region Simple Data Modification
+    
+    Task InsertOneRtEntityAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, RtEntity rtEntity);
+
+    Task InsertOneRtEntityAsync<TEntity>(IOctoSession session, TEntity rtEntity)
+        where TEntity : RtEntity, new();
+
+    Task ReplaceOneRtEntityByIdAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, OctoObjectId rtId, RtEntity rtEntity);
+
+    Task ReplaceOneRtEntityByIdAsync<TEntity>(IOctoSession session, OctoObjectId rtId, TEntity rtEntity)
+        where TEntity : RtEntity, new();
+    
+    Task ReplaceOneRtEntityAsync<TEntity>(IOctoSession session, ICollection<FieldFilter> fieldFilters, TEntity entity)
+        where TEntity : RtEntity, new();
+
+    Task DeleteOneRtEntityByRtIdAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, OctoObjectId rtId);
+    
+    Task DeleteOneRtEntityByRtIdAsync<TEntity>(IOctoSession session, OctoObjectId rtId)
+        where TEntity : RtEntity, new();
+
+    Task DeleteOneRtEntityAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, ICollection<FieldFilter> fieldFilters);
+    
+    Task DeleteOneRtEntityAsync<TEntity>(IOctoSession session, ICollection<FieldFilter> fieldFilters)
+        where TEntity : RtEntity, new();
+    
+    Task DeleteManyRtEntitiesAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, ICollection<FieldFilter> fieldFilters);
+    
+    Task DeleteManyRtEntitiesAsync<TEntity>(IOctoSession session, ICollection<FieldFilter> fieldFilters)
+        where TEntity : RtEntity, new();
+    
+    #endregion Simple Data Modification
+
+    IQueryable<TEntity> AsQueryable<TEntity>()
+        where TEntity : RtEntity, new();
 }

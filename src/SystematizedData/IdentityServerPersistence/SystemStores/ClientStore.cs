@@ -1,30 +1,28 @@
-﻿using Duende.IdentityServer.Models;
+﻿using AutoMapper;
+using Duende.IdentityServer.Models;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
-using Persistence.Contracts;
 using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
 
 public class ClientStore : IOctoClientStore
 {
-    private readonly ICachedCollection<OctoClient> _clientCollection;
-    private readonly IRepository _repository;
+    private readonly ITenantRepository _tenantRepository;
+    private readonly IMapper _mapper;
 
-    public ClientStore(ITenantContext tenantContext)
+    public ClientStore(ITenantRepository tenantRepository, IMapper mapper)
     {
-        tenantContext.CreateOrGetTenantRepositoryAsync()
-        _repository = systemContext.SystemDatabase;
-        _clientCollection = _repository.GetCollection<OctoClient>();
+        _tenantRepository = tenantRepository;
+        _mapper = mapper;
     }
 
-    public async Task CreateAsync(RtSystemIdentityClient octoClient)
+    public async Task CreateAsync(RtClient octoClient)
     {
-        var session = await _repository.StartSessionAsync();
+        var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        await _clientCollection.InsertAsync(session, octoClient);
+        await _tenantRepository.InsertOneRtEntityAsync(session, octoClient);
 
         await session.CommitTransactionAsync();
     }
@@ -33,65 +31,88 @@ public class ClientStore : IOctoClientStore
     {
         ArgumentValidation.ValidateString(nameof(clientId), clientId);
 
-        var session = await _repository.StartSessionAsync();
+        var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
         var client = await GetClientByClientId(session, clientId);
         if (client == null)
         {
-            throw new EntityNotFoundException($"Client id '{clientId}' does not exist.");
+            throw new NotExistingException($"Client id '{clientId}' does not exist.");
         }
 
-        await _clientCollection.DeleteOneAsync(session, client.Id);
+        await _tenantRepository.DeleteOneRtEntityByRtIdAsync<RtClient>(session, client.RtId);
 
         await session.CommitTransactionAsync();
     }
 
-    public async Task<Client> FindClientByIdAsync(string clientId)
+    public async Task<Client?> FindClientByIdAsync(string clientId)
     {
         ArgumentValidation.ValidateString(nameof(clientId), clientId);
 
-        var session = await _repository.StartSessionAsync();
+        var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        var result = await _clientCollection.FindSingleOrDefaultAsync(session, x => x.ClientId == clientId);
+        DataQueryOperation dataQueryOperation = new()
+        {
+            FieldFilters = new List<FieldFilter>
+            {
+                new(nameof(RtClient.ClientId), FieldFilterOperator.Equals, clientId)
+            }
+        };
+        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtClient>(session, dataQueryOperation);
+        
 
         await session.CommitTransactionAsync();
-        return result;
+        var client = result.Items.FirstOrDefault();
+        if (client == null)
+        {
+            return null;
+        }
+
+        return _mapper.Map<Client>(client);
     }
 
-    public async Task<IEnumerable<RtSystemIdentityClient>> GetClients()
+    public async Task<IEnumerable<RtClient>> GetClients()
     {
-        var session = await _repository.StartSessionAsync();
+        var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        var result = await _clientCollection.GetAsync(session);
+        DataQueryOperation dataQueryOperation = new();
+
+        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtClient>(session, dataQueryOperation);
 
         await session.CommitTransactionAsync();
-        return result;
+        return result.Items;
     }
 
-    public async Task UpdateAsync(string clientId, RtSystemIdentityClient client)
+    public async Task UpdateAsync(string clientId, RtClient client)
     {
         ArgumentValidation.ValidateString(nameof(clientId), clientId);
 
-        var session = await _repository.StartSessionAsync();
+        var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
         var dbClient = await GetClientByClientId(session, clientId);
         if (dbClient == null)
         {
-            throw new EntityNotFoundException($"Client id '{clientId}' does not exist.");
+            throw new NotExistingException($"Client id '{clientId}' does not exist.");
         }
 
-        await _clientCollection.ReplaceByIdAsync(session, dbClient.Id, client);
+        await _tenantRepository.ReplaceOneRtEntityByIdAsync(session, dbClient.RtId, client);
 
         await session.CommitTransactionAsync();
     }
 
-    private async Task<RtSystemIdentityClient> GetClientByClientId(IOctoSession session, string clientId)
+    private async Task<RtClient?> GetClientByClientId(IOctoSession session, string clientId)
     {
-        var client = await _clientCollection.FindSingleOrDefaultAsync(session, x => x.ClientId == clientId);
-        return client;
+        DataQueryOperation dataQueryOperation = new()
+        {
+            FieldFilters = new List<FieldFilter>
+            {
+                new(nameof(RtClient.ClientId), FieldFilterOperator.Equals, clientId)
+            }
+        };
+        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtClient>(session, dataQueryOperation);
+        return result.Items.FirstOrDefault();
     }
 }

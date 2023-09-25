@@ -22,7 +22,7 @@ public class RtEntityTests : IClassFixture<SystemFixture>
         var systemContext = _systemFixture.GetSystemContext();
         var tenantRepository = await systemContext.GetTenantRepositoryAsync();
 
-        using (var session = await tenantRepository.StartSessionAsync())
+        using (var session = await tenantRepository.GetSessionAsync())
         {
             session.StartTransaction();
 
@@ -41,7 +41,7 @@ public class RtEntityTests : IClassFixture<SystemFixture>
         var systemContext = _systemFixture.GetSystemContext();
         var tenantRepository = await systemContext.GetTenantRepositoryAsync();
 
-        using (var session = await tenantRepository.StartSessionAsync())
+        using (var session = await tenantRepository.GetSessionAsync())
         {
             // var result = await tenantContext.GetRtEntitiesByTypeAsync(session, "PaketService.Contact",
             //     new DataQueryOperation(), 0, 5);
@@ -69,7 +69,7 @@ public class RtEntityTests : IClassFixture<SystemFixture>
         var systemContext = _systemFixture.GetSystemContext();
         var tenantRepository = await systemContext.GetTenantRepositoryAsync();
 
-        using (var session = await tenantRepository.StartSessionAsync())
+        using (var session = await tenantRepository.GetSessionAsync())
         {
             // var result = await tenantRepository.GetRtEntitiesByTypeAsync(session, "PaketService.ParcelShipment",
             //     new DataQueryOperation(), 0, 10);

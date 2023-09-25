@@ -1,15 +1,13 @@
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using Meshmakers.Octo.Backend.Persistence.SystemEntities;
+using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
 
 public interface IOctoIdentityProviderStore
 {
-    Task<OctoIdentityProvider?> GetAsync(string id);
+    Task<RtIdentityProvider?> GetAsync(string id);
 
-    Task<IEnumerable<OctoIdentityProvider>> GetAllAsync();
+    Task<IEnumerable<RtIdentityProvider>> GetAllAsync();
 
-    Task StoreAsync(OctoIdentityProvider identityProvider);
+    Task StoreAsync(RtIdentityProvider identityProvider);
     Task RemoveAsync(string id);
 }

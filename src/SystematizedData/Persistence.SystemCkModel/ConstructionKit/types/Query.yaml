@@ -11,11 +11,15 @@ types:
     name: Columns
   - id: System/Query.Sorting
     name: Sorting
+    isOptional: true
   - id: System/Query.FieldFilter
     name: FieldFilter
+    isOptional: true
   - id: System/Query.TextSearchFilter
     name: TextSearchFilter
+    isOptional: true
   - id: System/Query.AttributeSearchFilter
     name: AttributeSearchFilter
+    isOptional: true
   - id: System/Name
     name: Name

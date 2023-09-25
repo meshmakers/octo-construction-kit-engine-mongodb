@@ -1,424 +1,518 @@
-using System.ComponentModel;
 using System.Globalization;
-using System.Linq.Expressions;
 using System.Security.Claims;
-using Meshmakers.Octo.Backend.Persistence.SystemEntities;
+using Meshmakers.Common.Shared;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Microsoft.AspNetCore.Identity;
-using Persistence.Contracts;
-using Persistence.IdentityCkModel.CkModelEntities;
+using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
 
-public class OctoUserStore :
-    IUserClaimStore<RtIdentityUser>,
-    IUserStore<RtIdentityUser>,
-    IDisposable,
-    IUserLoginStore<RtIdentityUser>,
-    IUserRoleStore<RtIdentityUser>,
-    IUserPasswordStore<RtIdentityUser>,
-    IUserSecurityStampStore<RtIdentityUser>,
-    IUserEmailStore<RtIdentityUser>,
-    IUserPhoneNumberStore<RtIdentityUser>,
-    IQueryableUserStore<RtIdentityUser>,
-    IUserTwoFactorStore<RtIdentityUser>,
-    IUserLockoutStore<RtIdentityUser>,
-    IUserAuthenticatorKeyStore<RtIdentityUser>,
-    IUserAuthenticationTokenStore<RtIdentityUser>,
-    IUserTwoFactorRecoveryCodeStore<RtIdentityUser>,
-    IProtectedUserStore<RtIdentityUser>
-
+public sealed class OctoUserStore :
+    IUserClaimStore<RtUser>,
+    IUserLoginStore<RtUser>,
+    IUserRoleStore<RtUser>,
+    IUserPasswordStore<RtUser>,
+    IUserSecurityStampStore<RtUser>,
+    IUserEmailStore<RtUser>,
+    IUserPhoneNumberStore<RtUser>,
+    IQueryableUserStore<RtUser>,
+    IUserTwoFactorStore<RtUser>,
+    IUserLockoutStore<RtUser>,
+    IUserAuthenticatorKeyStore<RtUser>,
+    IUserAuthenticationTokenStore<RtUser>,
+    IUserTwoFactorRecoveryCodeStore<RtUser>,
+    IProtectedUserStore<RtUser>
 {
-    private readonly ITenantContext _tenantContext;
-    private static readonly InsertOneOptions InsertOneOptions = new InsertOneOptions();
-    private static readonly MongoDB.Driver.FindOptions<RtIdentityUser> FindOptions = new MongoDB.Driver.FindOptions<RtIdentityUser>();
-    private static readonly ReplaceOptions ReplaceOptions = new ReplaceOptions();
-    private const string InternalLoginProvider = "[AspNeRtIdentityUserStore]";
+    private const string InternalLoginProvider = "[AspNetUserStore]";
     private const string AuthenticatorKeyTokenName = "AuthenticatorKey";
     private const string RecoveryCodeTokenName = "RecoveryCodes";
     private bool _disposed;
 
-    public IdentityErrorDescriber ErrorDescriber { get; set; }
+    private IdentityErrorDescriber ErrorDescriber { get; }
 
-    public OctoUserStore(
-        ITenantContext tenantContext,
-        IdentityErrorDescriber describer)
+
+    private readonly ITenantRepository _tenantRepository;
+
+    public OctoUserStore(ITenantRepository tenantRepository, IdentityErrorDescriber? describer)
     {
-        _tenantContext = tenantContext;
+        _tenantRepository = tenantRepository;
         ErrorDescriber = describer ?? new IdentityErrorDescriber();
+        Users = _tenantRepository.AsQueryable<RtUser>();
     }
 
     public async Task SetTokenAsync(
-        RtIdentityUser user,
+        RtUser user,
         string loginProvider,
         string name,
-        string value,
+        string? value,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        IdentityUserToken<string>? token = await FindTokenAsync(user, loginProvider, name, cancellationToken);
-        if (token == null)
+        ArgumentValidation.Validate(nameof(user), user);
+
+        using (var session = await _tenantRepository.GetSessionAsync())
         {
-            user.Tokens.Add(new IdentityUserToken<string>()
+            session.StartTransaction();
+
+            var token = await FindTokenAsync(session, user, loginProvider, name);
+            if (token == null)
             {
-                UserId = user.Id.ToString(),
-                LoginProvider = loginProvider,
-                Name = name,
-                Value = value
-            });
-        }
-        else
-        {
-            token.Value = value;
-            user.Tokens[
-                user.Tokens.FindIndex(
-                    (Predicate<IdentityUserToken<string>>)(x => x.LoginProvider == token.LoginProvider && x.Name == token.Name))] = token;
+                user.UserTokens.Add(new RtUserTokenRecord
+                {
+                    UserId = user.RtId.ToString(),
+                    LoginProvider = loginProvider,
+                    Name = name,
+                    Value = value
+                });
+            }
+            else
+            {
+                token.Value = value;
+                user.UserTokens[
+                        user.UserTokens.FindIndex(
+                            x => x.LoginProvider == token.LoginProvider && x.Name == token.Name)] =
+                    token;
+            }
+
+            await session.CommitTransactionAsync();
         }
     }
 
     public async Task RemoveTokenAsync(
-        RtIdentityUser user,
+        RtUser user,
         string loginProvider,
         string name,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        IdentityUserToken<string> entry = await FindTokenAsync(user, loginProvider, name, cancellationToken);
-        if (entry == null)
-            ;
-        else
-            user.Tokens.RemoveAll(
-                (Predicate<IdentityUserToken<string>>)(x => x.LoginProvider == entry.LoginProvider && x.Name == entry.Name));
+        ArgumentValidation.Validate(nameof(user), user);
+
+        using (var session = await _tenantRepository.GetSessionAsync())
+        {
+            session.StartTransaction();
+
+            var entry = await FindTokenAsync(session, user, loginProvider, name);
+            if (entry != null)
+            {
+                user.UserTokens.RemoveAll(x => x.LoginProvider == entry.LoginProvider && x.Name == entry.Name);
+            }
+
+            await session.CommitTransactionAsync();
+        }
     }
 
-    public async Task<string> GetTokenAsync(
-        RtIdentityUser user,
+    public async Task<string?> GetTokenAsync(
+        RtUser user,
         string loginProvider,
         string name,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        return (await FindTokenAsync(user, loginProvider, name, cancellationToken))?.Value;
+
+        ArgumentValidation.Validate(nameof(user), user);
+
+        using (var session = await _tenantRepository.GetSessionAsync())
+        {
+            session.StartTransaction();
+
+            var rtUserTokenRecord = await FindTokenAsync(session, user, loginProvider, name);
+            if (rtUserTokenRecord == null)
+            {
+                throw NotExistingException.UserTokenDoesNotExist(user.RtId, loginProvider, name);
+            }
+
+            await session.CommitTransactionAsync();
+
+            return rtUserTokenRecord.Value;
+        }
     }
 
-    public Task<string> GetAuthenticatorKeyAsync(RtIdentityUser user, CancellationToken cancellationToken = default) =>
-        GetTokenAsync(user, "[AspNeRtIdentityUserStore]", "AuthenticatorKey", cancellationToken);
+    public Task<string?> GetAuthenticatorKeyAsync(RtUser user, CancellationToken cancellationToken = default) =>
+        GetTokenAsync(user, InternalLoginProvider, AuthenticatorKeyTokenName, cancellationToken);
 
     public Task SetAuthenticatorKeyAsync(
-        RtIdentityUser user,
+        RtUser user,
         string key,
         CancellationToken cancellationToken = default)
     {
-        return SetTokenAsync(user, "[AspNeRtIdentityUserStore]", "AuthenticatorKey", key, cancellationToken);
+        return SetTokenAsync(user, InternalLoginProvider, AuthenticatorKeyTokenName, key, cancellationToken);
     }
 
-    public async Task<IdentityResult> CreateAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public async Task<IdentityResult> CreateAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        await _userCollection.InsertOneAsync(user, UserStore<RtIdentityUser, TRole, TKey>.InsertOneOptions, cancellationToken)
-            .ConfigureAwait(false);
+        ArgumentValidation.Validate(nameof(user), user);
+
+        using var session = await _tenantRepository.GetSessionAsync().ConfigureAwait(false);
+        session.StartTransaction();
+
+        await _tenantRepository.InsertOneRtEntityAsync(session, user).ConfigureAwait(false);
+
+        await session.CommitTransactionAsync().ConfigureAwait(false);
         return IdentityResult.Success;
     }
 
-    public async Task<IdentityResult> DeleteAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public async Task<IdentityResult> DeleteAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        DeleteResult deleteResult = await _userCollection
-            .DeleteOneAsync<RtIdentityUser>(
-                (Expression<Func<RtIdentityUser, bool>>)(x => x.Id.Equals(user.Id) && x.ConcurrencyStamp.Equals(user.ConcurrencyStamp)),
-                cancellationToken).ConfigureAwait(false);
-        if (deleteResult.IsAcknowledged || deleteResult.DeletedCount != 0L)
+        ArgumentValidation.Validate(nameof(user), user);
+
+        using var session = await _tenantRepository.GetSessionAsync().ConfigureAwait(false);
+        session.StartTransaction();
+
+        List<FieldFilter> fieldFilters = new()
+        {
+            new FieldFilter(nameof(RtUser.ConcurrencyStamp), FieldFilterOperator.Equals, user.ConcurrencyStamp),
+            new FieldFilter(nameof(RtUser.RtId), FieldFilterOperator.Equals, user.RtId)
+        };
+
+        try
+        {
+            await _tenantRepository.DeleteOneRtEntityAsync<RtUser>(session, fieldFilters).ConfigureAwait(false);
+            await session.CommitTransactionAsync().ConfigureAwait(false);
             return IdentityResult.Success;
-        return IdentityResult.Failed(ErrorDescriber.ConcurrencyFailure());
+        }
+        catch (PersistenceException)
+        {
+            return IdentityResult.Failed(ErrorDescriber.ConcurrencyFailure());
+        }
     }
 
-    public Task<RtIdentityUser> FindByIdAsync(string userId, CancellationToken cancellationToken = default)
+    public Task<RtUser?> FindByIdAsync(string userId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        return ByIdAsync(ConvertIdFromString(userId), cancellationToken);
+        return GetUserByIdAsync(ConvertIdFromString(userId), cancellationToken);
     }
 
-    public Task<RtIdentityUser> FindByNameAsync(
+    public async Task<RtUser?> FindByNameAsync(
         string normalizedUserName,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        return _userCollection.FirstOrDefaultAsync<RtIdentityUser>(
-            (Expression<Func<RtIdentityUser, bool>>)(x => x.NormalizedUserName == normalizedUserName), cancellationToken);
+
+        using var session = await _tenantRepository.GetSessionAsync().ConfigureAwait(false);
+        session.StartTransaction();
+
+        DataQueryOperation dataQueryOperation = new()
+        {
+            FieldFilters = new List<FieldFilter>
+            {
+                new(nameof(RtUser.NormalizedUserName), FieldFilterOperator.Equals, normalizedUserName)
+            }
+        };
+
+        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtUser>(session, dataQueryOperation);
+
+        await session.CommitTransactionAsync();
+
+        return result.Items.FirstOrDefault();
     }
 
-    public async Task<IdentityResult> UpdateAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public async Task<IdentityResult> UpdateAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
         string currentConcurrencyStamp = user != null ? user.ConcurrencyStamp : throw new ArgumentNullException(nameof(user));
         user.ConcurrencyStamp = Guid.NewGuid().ToString();
-        ReplaceOneResult replaceOneResult = await _userCollection
-            .ReplaceOneAsync<RtIdentityUser>(
-                (Expression<Func<RtIdentityUser, bool>>)(x => x.Id.Equals(user.Id) && x.ConcurrencyStamp.Equals(currentConcurrencyStamp)),
-                user, UserStore<RtIdentityUser, TRole, TKey>.ReplaceOptions, cancellationToken).ConfigureAwait(false);
-        if (replaceOneResult.IsAcknowledged || replaceOneResult.ModifiedCount != 0L)
+
+        using var session = await _tenantRepository.GetSessionAsync().ConfigureAwait(false);
+        session.StartTransaction();
+
+        List<FieldFilter> fieldFilters = new List<FieldFilter>
+        {
+            new(nameof(RtUser.ConcurrencyStamp), FieldFilterOperator.Equals, currentConcurrencyStamp)
+        };
+
+        try
+        {
+            await _tenantRepository.ReplaceOneRtEntityAsync(session, fieldFilters, user).ConfigureAwait(false);
+            await session.CommitTransactionAsync();
             return IdentityResult.Success;
-        return IdentityResult.Failed(ErrorDescriber.ConcurrencyFailure());
+        }
+        catch (PersistenceException)
+        {
+            return IdentityResult.Failed(ErrorDescriber.ConcurrencyFailure());
+        }
     }
 
     public Task AddClaimsAsync(
-        RtIdentityUser user,
+        RtUser user,
         IEnumerable<Claim> claims,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        if (claims == null)
-            throw new ArgumentNullException(nameof(claims));
+        ArgumentValidation.Validate(nameof(user), user);
+        ArgumentValidation.Validate(nameof(claims), claims);
+
         foreach (Claim claim in claims)
         {
-            IdentityUserClaim<string> identityUserClaim = new IdentityUserClaim<string>()
+            var userClaim = new RtUserClaimRecord
             {
                 ClaimType = claim.Type,
                 ClaimValue = claim.Value
             };
-            user.Claims.Add(identityUserClaim);
+            user.Claims ??= new List<RtUserClaimRecord>();
+            user.Claims.Add(userClaim);
         }
 
         return Task.FromResult(false);
     }
 
     public Task ReplaceClaimAsync(
-        RtIdentityUser user,
+        RtUser user,
         Claim claim,
         Claim newClaim,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        if (claim == null)
-            throw new ArgumentNullException(nameof(claim));
-        if (newClaim == null)
-            throw new ArgumentNullException(nameof(newClaim));
-        foreach (IdentityUserClaim<string> identityUserClaim in user.Claims
-                     .Where<IdentityUserClaim<string>>(
-                         (Func<IdentityUserClaim<string>, bool>)(uc => uc.ClaimValue == claim.Value && uc.ClaimType == claim.Type))
-                     .ToList<IdentityUserClaim<string>>())
+
+        ArgumentValidation.Validate(nameof(user), user);
+        ArgumentValidation.Validate(nameof(claim), claim);
+        ArgumentValidation.Validate(nameof(newClaim), newClaim);
+
+        if (user.Claims != null)
         {
-            identityUserClaim.ClaimValue = newClaim.Value;
-            identityUserClaim.ClaimType = newClaim.Type;
+            foreach (var userClaim in user.Claims
+                         .Where(uc =>
+                             uc.ClaimValue == claim.Value &&
+                             uc.ClaimType == claim.Type)
+                         .ToList())
+            {
+                userClaim.ClaimValue = newClaim.Value;
+                userClaim.ClaimType = newClaim.Type;
+            }
         }
 
         return Task.CompletedTask;
     }
 
     public Task RemoveClaimsAsync(
-        RtIdentityUser user,
+        RtUser user,
         IEnumerable<Claim> claims,
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        if (claims == null)
-            throw new ArgumentNullException(nameof(claims));
+        ArgumentValidation.Validate(nameof(user), user);
+        ArgumentValidation.Validate(nameof(claims), claims);
+
         foreach (Claim claim1 in claims)
         {
             Claim claim = claim1;
-            user.Claims.RemoveAll((Predicate<IdentityUserClaim<string>>)(x => x.ClaimType == claim.Type && x.ClaimValue == claim.Value));
+            user.Claims?.RemoveAll(x => x.ClaimType == claim.Type && x.ClaimValue == claim.Value);
         }
 
         return Task.CompletedTask;
     }
 
-    public async Task<IList<RtIdentityUser>> GeRtIdentityUsersForClaimAsync(
-        Claim claim,
-        CancellationToken cancellationToken = default)
+    public async Task<IList<RtUser>> GetUsersForClaimAsync(Claim claim, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (claim == null)
-            throw new ArgumentNullException(nameof(claim));
-        return (IList<RtIdentityUser>)(await _userCollection
-            .WhereAsync<RtIdentityUser>(
-                (Expression<Func<RtIdentityUser, bool>>)(u =>
-                    u.Claims.Any<IdentityUserClaim<string>>(
-                        (Func<IdentityUserClaim<string>, bool>)(c => c.ClaimType == claim.Type && c.ClaimValue == claim.Value))),
-                cancellationToken).ConfigureAwait(false)).ToList<RtIdentityUser>();
+        ArgumentValidation.Validate(nameof(claim), claim);
+
+
+        using var session = await _tenantRepository.GetSessionAsync().ConfigureAwait(false);
+        session.StartTransaction();
+
+        // TODO: Fix here
+        // DataQueryOperation dataQueryOperation = new()
+        // {
+        //     FieldFilters = new List<FieldFilter>
+        //     {
+        //         new (nameof(RtUser.Claims), FieldFilterOperator.Equals, normalizedUserName)
+        //     }
+        // };
+        //
+        // var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtUser>(session, dataQueryOperation);
+        //
+        // await session.CommitTransactionAsync();
+        //
+        // if (!result.Items.Any())
+        // {
+        //     throw NotExistingException.UserWithNameDoesNotExist(normalizedUserName);
+        // }
+        //
+
+        // return (IList<RtUser>)(await _userCollection
+        //     .WhereAsync<RtUser>(
+        //         (Expression<Func<RtUser, bool>>)(u =>
+        //             u.Claims.Any<IdentityUserClaim<string>>(
+        //                 (Func<IdentityUserClaim<string>, bool>)(c => c.ClaimType == claim.Type && c.ClaimValue == claim.Value))),
+        //         cancellationToken).ConfigureAwait(false)).ToList<RtUser>();
+        await session.CommitTransactionAsync();
+        return new List<RtUser>();
     }
 
-    public Task<string> GetNormalizedUserNameAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public Task<string?> GetNormalizedUserNameAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        return user != null ? Task.FromResult<string>(user.NormalizedUserName) : throw new ArgumentNullException(nameof(user));
+        return user != null ? Task.FromResult(user.NormalizedUserName) : throw new ArgumentNullException(nameof(user));
     }
 
-    public Task<string> GeRtIdentityUserIdAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public Task<string> GetUserIdAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
         return user != null
-            ? Task.FromResult(ConvertIdToString(user.Id))
+            ? Task.FromResult(ConvertIdToString(user.RtId))
             : throw new ArgumentNullException(nameof(user));
     }
 
-    public Task<string> GeRtIdentityUserNameAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public Task<string?> GetUserNameAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        return user != null ? Task.FromResult<string>(user.UserName) : throw new ArgumentNullException(nameof(user));
+        return user != null ? Task.FromResult(user.UserName) : throw new ArgumentNullException(nameof(user));
     }
 
-    public async Task<IList<Claim>> GetClaimsAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public async Task<IList<Claim>> GetClaimsAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        // ISSUE: variable of a boxed type
-        __Boxed<RtIdentityUser> local = (object)await ByIdAsync(user.Id, cancellationToken).ConfigureAwait(true);
-        List<Claim> claimsAsync;
-        if (local == null)
-        {
-            claimsAsync = null;
-        }
-        else
-        {
-            List<IdentityUserClaim<string>> claims = local.Claims;
-            if (claims == null)
-            {
-                claimsAsync = null;
-            }
-            else
-            {
-                IEnumerable<Claim> source =
-                    claims.Select(
-                        (Func<IdentityUserClaim<string>, Claim>)(x => new Claim(x.ClaimType, x.ClaimValue)));
-                claimsAsync = source != null ? source.ToList<Claim>() : null;
-            }
-        }
 
-        if (claimsAsync == null)
-            claimsAsync = new List<Claim>();
-        return claimsAsync;
+        ArgumentValidation.Validate(nameof(user), user);
+
+        var dbUser = await GetUserByIdAsync(user.RtId, cancellationToken).ConfigureAwait(true);
+        if (dbUser == null)
+        {
+            throw NotExistingException.UserWithIdDoesNotExist(user.RtId);
+        }
+        
+        var source =
+            dbUser.Claims?.Select(x => new Claim(x.ClaimType, x.ClaimValue));
+        var claimsAsync = source?.ToList();
+
+        return claimsAsync ?? new List<Claim>();
     }
 
     public Task SetNormalizedUserNameAsync(
-        RtIdentityUser user,
-        string normalizedName,
+        RtUser user,
+        string? normalizedName,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
+        ArgumentValidation.Validate(nameof(user), user);
+
         user.NormalizedUserName = normalizedName;
         return Task.CompletedTask;
     }
 
-    public Task SeRtIdentityUserNameAsync(RtIdentityUser user, string userName,
+    public Task SetUserNameAsync(RtUser user, string? userName,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
+        ArgumentValidation.Validate(nameof(user), user);
+
         user.UserName = userName;
         return Task.CompletedTask;
     }
 
-    public Task<string> GetEmailAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public Task<string?> GetEmailAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        return user != null ? Task.FromResult<string>(user.Email) : throw new ArgumentNullException(nameof(user));
+        return user != null ? Task.FromResult(user.Email) : throw new ArgumentNullException(nameof(user));
     }
 
-    public Task<bool> GetEmailConfirmedAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public Task<bool> GetEmailConfirmedAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
         return user != null ? Task.FromResult(user.EmailConfirmed) : throw new ArgumentNullException(nameof(user));
     }
 
-    public Task<RtIdentityUser> FindByEmailAsync(string normalizedEmail, CancellationToken cancellationToken = default)
+    public async Task<RtUser?> FindByEmailAsync(string normalizedEmail, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        return _userCollection.FirstOrDefaultAsync<RtIdentityUser>(
-            (Expression<Func<RtIdentityUser, bool>>)(u => u.NormalizedEmail == normalizedEmail), cancellationToken);
+
+        using var session = await _tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+
+        DataQueryOperation dataQueryOperation = new()
+        {
+            FieldFilters = new List<FieldFilter>
+            {
+                new(nameof(RtUser.NormalizedEmail), FieldFilterOperator.Equals, normalizedEmail)
+            }
+        };
+
+        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtUser>(session, dataQueryOperation);
+        await session.CommitTransactionAsync();
+        if (!result.Items.Any())
+        {
+            throw NotExistingException.UserDoesNotExist(normalizedEmail);
+        }
+
+        return result.Items.First();
     }
 
-    public Task<string> GetNormalizedEmailAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public Task<string?> GetNormalizedEmailAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        return user != null ? Task.FromResult<string>(user.NormalizedEmail) : throw new ArgumentNullException(nameof(user));
+        return user != null ? Task.FromResult(user.NormalizedEmail) : throw new ArgumentNullException(nameof(user));
     }
 
     public Task SetEmailConfirmedAsync(
-        RtIdentityUser user,
+        RtUser user,
         bool confirmed,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
+        ArgumentValidation.Validate(nameof(user), user);
+
         user.EmailConfirmed = confirmed;
         return Task.CompletedTask;
     }
 
     public Task SetNormalizedEmailAsync(
-        RtIdentityUser user,
-        string normalizedEmail,
+        RtUser user,
+        string? normalizedEmail,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
+        ArgumentValidation.Validate(nameof(user), user);
+
         user.NormalizedEmail = normalizedEmail;
         return Task.CompletedTask;
     }
 
-    public Task SetEmailAsync(RtIdentityUser user, string email, CancellationToken cancellationToken = default)
+    public Task SetEmailAsync(RtUser user, string? email, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
+        ArgumentValidation.Validate(nameof(user), user);
+
         user.Email = email;
         return Task.CompletedTask;
     }
 
-    public Task<int> GetAccessFailedCountAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public Task<int> GetAccessFailedCountAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        return user != null ? Task.FromResult<int>(user.AccessFailedCount) : throw new ArgumentNullException(nameof(user));
+        return user != null ? Task.FromResult(user.AccessFailedCount) : throw new ArgumentNullException(nameof(user));
     }
 
-    public Task<bool> GetLockoutEnabledAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public Task<bool> GetLockoutEnabledAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
@@ -426,154 +520,147 @@ public class OctoUserStore :
     }
 
     public Task<int> IncrementAccessFailedCountAsync(
-        RtIdentityUser user,
+        RtUser user,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
+        ArgumentValidation.Validate(nameof(user), user);
+
         ++user.AccessFailedCount;
-        return Task.FromResult<int>(user.AccessFailedCount);
+        return Task.FromResult(user.AccessFailedCount);
     }
 
-    public Task ResetAccessFailedCountAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public Task ResetAccessFailedCountAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
+        ArgumentValidation.Validate(nameof(user), user);
+
         user.AccessFailedCount = 0;
         return Task.CompletedTask;
     }
 
     public Task<DateTimeOffset?> GetLockoutEndDateAsync(
-        RtIdentityUser user,
+        RtUser user,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        return user != null ? Task.FromResult(user.LockoutEnd) : throw new ArgumentNullException(nameof(user));
+        return Task.FromResult(user.LockoutEnd);
     }
 
     public Task SetLockoutEndDateAsync(
-        RtIdentityUser user,
+        RtUser user,
         DateTimeOffset? lockoutEnd,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
+        ArgumentValidation.Validate(nameof(user), user);
+
         user.LockoutEnd = lockoutEnd;
         return Task.CompletedTask;
     }
 
     public Task SetLockoutEnabledAsync(
-        RtIdentityUser user,
+        RtUser user,
         bool enabled,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
+        ArgumentValidation.Validate(nameof(user), user);
+
         user.LockoutEnabled = enabled;
         return Task.CompletedTask;
     }
 
-    public Task AddLoginAsync(RtIdentityUser user, UserLoginInfo login, CancellationToken cancellationToken = default)
+    public Task AddLoginAsync(RtUser user, UserLoginInfo login, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        if (login == null)
-            throw new ArgumentNullException(nameof(login));
-        IdentityUserLogin<string> identityUserLogin = new IdentityUserLogin<string>()
+        ArgumentValidation.Validate(nameof(user), user);
+        ArgumentValidation.Validate(nameof(login), login);
+
+        var rtUserLoginRecord = new RtUserLoginRecord
         {
-            UserId = ConvertIdToString(user.Id),
+            UserId = ConvertIdToString(user.RtId),
             LoginProvider = login.LoginProvider,
             ProviderDisplayName = login.ProviderDisplayName,
             ProviderKey = login.ProviderKey
         };
-        user.Logins.Add(identityUserLogin);
+        user.UserLogins ??= new List<RtUserLoginRecord>();
+        user.UserLogins.Add(rtUserLoginRecord);
         return Task.CompletedTask;
     }
 
     public Task RemoveLoginAsync(
-        RtIdentityUser user,
+        RtUser user,
         string loginProvider,
         string providerKey,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        user.Logins.RemoveAll(
-            (Predicate<IdentityUserLogin<string>>)(x => x.LoginProvider == loginProvider && x.ProviderKey == providerKey));
+        ArgumentValidation.Validate(nameof(user), user);
+
+        user.UserLogins?.RemoveAll(x => x.LoginProvider == loginProvider && x.ProviderKey == providerKey);
         return Task.CompletedTask;
     }
 
-    public async Task<RtIdentityUser> FindByLoginAsync(
+    public async Task<RtUser?> FindByLoginAsync(
         string loginProvider,
         string providerKey,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        return await _userCollection
-            .FirstOrDefaultAsync<RtIdentityUser>(
-                (Expression<Func<RtIdentityUser, bool>>)(u =>
-                    u.Logins.Any<IdentityUserLogin<string>>((Func<IdentityUserLogin<string>, bool>)(l =>
-                        l.LoginProvider == loginProvider && l.ProviderKey == providerKey))), cancellationToken).ConfigureAwait(true);
+
+        using var session = await _tenantRepository.GetSessionAsync().ConfigureAwait(false);
+        session.StartTransaction();
+
+        // TODO: Fix here
+        //
+        // return await _userCollection
+        //     .FirstOrDefaultAsync<RtUser>(
+        //         (Expression<Func<RtUser, bool>>)(u =>
+        //             u.Logins.Any<IdentityUserLogin<string>>((Func<IdentityUserLogin<string>, bool>)(l =>
+        //                 l.LoginProvider == loginProvider && l.ProviderKey == providerKey))), cancellationToken).ConfigureAwait(true);
+        await session.CommitTransactionAsync();
+        return null!;
     }
 
     public async Task<IList<UserLoginInfo>> GetLoginsAsync(
-        RtIdentityUser user,
+        RtUser user,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        // ISSUE: variable of a boxed type
-        __Boxed<RtIdentityUser> local = (object)await ByIdAsync(user.Id, cancellationToken).ConfigureAwait(true);
-        List<UserLoginInfo> loginsAsync;
-        if (local == null)
-        {
-            loginsAsync = null;
-        }
-        else
-        {
-            List<IdentityUserLogin<string>> logins = local.Logins;
-            if (logins == null)
-            {
-                loginsAsync = null;
-            }
-            else
-            {
-                IEnumerable<UserLoginInfo> source = logins.Select(
-                    (Func<IdentityUserLogin<string>, UserLoginInfo>)(x =>
-                        new UserLoginInfo(x.LoginProvider, x.ProviderKey, x.ProviderDisplayName)));
-                loginsAsync = source != null ? source.ToList<UserLoginInfo>() : null;
-            }
-        }
+        ArgumentValidation.Validate(nameof(user), user);
 
-        if (loginsAsync == null)
-            loginsAsync = new List<UserLoginInfo>();
-        return loginsAsync;
+        var dbUser = await GetUserByIdAsync(user.RtId, cancellationToken).ConfigureAwait(false);
+        if (dbUser == null)
+        {
+            throw NotExistingException.UserWithIdDoesNotExist(user.RtId);
+        }
+        var source = dbUser.UserLogins?.Select(
+            x =>
+                new UserLoginInfo(x.LoginProvider, x.ProviderKey, x.ProviderDisplayName));
+
+        var userLoginInfos = source?.ToList() ?? new List<UserLoginInfo>();
+        return userLoginInfos;
     }
 
-    public Task<string> GetPasswordHashAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public Task<string?> GetPasswordHashAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        return user != null ? Task.FromResult<string>(user.PasswordHash) : throw new ArgumentNullException(nameof(user));
+
+        return Task.FromResult(user.PasswordHash);
     }
 
-    public Task<bool> HasPasswordAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public Task<bool> HasPasswordAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
@@ -581,26 +668,26 @@ public class OctoUserStore :
     }
 
     public Task SetPasswordHashAsync(
-        RtIdentityUser user,
-        string passwordHash,
+        RtUser user,
+        string? passwordHash,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
+        ArgumentValidation.Validate(nameof(user), user);
+
         user.PasswordHash = passwordHash;
         return Task.CompletedTask;
     }
 
-    public Task<string> GetPhoneNumberAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public Task<string?> GetPhoneNumberAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        return user != null ? Task.FromResult<string>(user.PhoneNumber) : throw new ArgumentNullException(nameof(user));
+        return user != null ? Task.FromResult(user.PhoneNumber) : throw new ArgumentNullException(nameof(user));
     }
 
-    public Task<bool> GetPhoneNumberConfirmedAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public Task<bool> GetPhoneNumberConfirmedAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
@@ -608,186 +695,213 @@ public class OctoUserStore :
     }
 
     public Task SetPhoneNumberAsync(
-        RtIdentityUser user,
-        string phoneNumber,
+        RtUser user,
+        string? phoneNumber,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
+        ArgumentValidation.Validate(nameof(user), user);
+
         user.PhoneNumber = phoneNumber;
         return Task.CompletedTask;
     }
 
     public Task SetPhoneNumberConfirmedAsync(
-        RtIdentityUser user,
+        RtUser user,
         bool confirmed,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
+        ArgumentValidation.Validate(nameof(user), user);
+
         user.PhoneNumberConfirmed = confirmed;
         return Task.CompletedTask;
     }
 
     public async Task AddToRoleAsync(
-        RtIdentityUser user,
+        RtUser user,
         string normalizedRoleName,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        if (string.IsNullOrWhiteSpace(normalizedRoleName))
-            throw new ArgumentNullException("Value cannot be null or empty.", nameof(normalizedRoleName));
-        user.Roles.Add(ConvertIdToString((await FindRoleAsync(normalizedRoleName, cancellationToken) ??
-                                          throw new InvalidOperationException(string.Format(
-                                              CultureInfo.CurrentCulture, "Role {0} does not exist.",
-                                              normalizedRoleName))).Id));
+        ArgumentValidation.Validate(nameof(user), user);
+        ArgumentValidation.ValidateString(nameof(normalizedRoleName), normalizedRoleName);
+        user.RoleIds.Add(ConvertIdToString((await FindRoleAsync(normalizedRoleName, cancellationToken) ??
+                                            throw new InvalidOperationException(string.Format(
+                                                CultureInfo.CurrentCulture, "Role {0} does not exist.",
+                                                normalizedRoleName))).RtId));
     }
 
     public async Task RemoveFromRoleAsync(
-        RtIdentityUser user,
+        RtUser user,
         string normalizedRoleName,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        if (string.IsNullOrWhiteSpace(normalizedRoleName))
-            throw new ArgumentNullException("Value cannot be null or empty.", nameof(normalizedRoleName));
-        TRole roleAsync = await FindRoleAsync(normalizedRoleName, cancellationToken);
-        if ((object)roleAsync == null)
-            return;
-        user.Roles.Remove(ConvertIdToString(roleAsync.Id));
-    }
+        ArgumentValidation.Validate(nameof(user), user);
+        ArgumentValidation.ValidateString(nameof(normalizedRoleName), normalizedRoleName);
 
-    public async Task<IList<RtIdentityUser>> GeRtIdentityUsersInRoleAsync(
-        string normalizedRoleName,
-        CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        ThrowIfDisposed();
-        if (string.IsNullOrEmpty(normalizedRoleName))
-            throw new ArgumentNullException(nameof(normalizedRoleName));
-        TRole roleAsync = await FindRoleAsync(normalizedRoleName, cancellationToken);
-        if ((object)roleAsync == null)
-            return new List<RtIdentityUser>();
-        return (IList<RtIdentityUser>)(await _userCollection.FindAsync<RtIdentityUser>(
-            Builders<RtIdentityUser>.Filter.AnyEq<string>((Expression<Func<RtIdentityUser, IEnumerable<string>>>)(x => x.Roles),
-                ConvertIdToString(roleAsync.Id)),
-            (MongoDB.Driver.FindOptions<RtIdentityUser, RtIdentityUser>)UserStore<RtIdentityUser, TRole, TKey>.FindOptions,
-            cancellationToken).ConfigureAwait(true)).ToList<RtIdentityUser>();
-    }
-
-    public async Task<IList<string>> GetRolesAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
-    {
-        UserStore<RtIdentityUser, TRole, TKey> userStore1 = this;
-        cancellationToken.ThrowIfCancellationRequested();
-        userStore1.ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        RtIdentityUser user1 = await userStore1.ByIdAsync(user.Id, cancellationToken).ConfigureAwait(true);
-        if (user1 == null)
-            return new List<string>();
-        List<string> roles = new List<string>();
-        foreach (string role1 in user1.Roles)
+        var roleAsync = await FindRoleAsync(normalizedRoleName, cancellationToken);
+        if (roleAsync == null)
         {
-            UserStore<RtIdentityUser, TRole, TKey> userStore = userStore1;
-            string item = role1;
-            TRole role2 = await userStore1._roleCollection
-                .FirstOrDefaultAsync<TRole>((Expression<Func<TRole, bool>>)(r => r.Id.Equals(userStore1.ConvertIdFromString(item))),
-                    cancellationToken).ConfigureAwait(true);
-            if ((object)role2 != null)
-                roles.Add(role2.Name);
+            return;
+        }
+
+        user.RoleIds.Remove(ConvertIdToString(roleAsync.RtId));
+    }
+
+    public async Task<IList<RtUser>> GetUsersInRoleAsync(
+        string normalizedRoleName,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ThrowIfDisposed();
+
+        ArgumentValidation.ValidateString(nameof(normalizedRoleName), normalizedRoleName);
+
+        var roleAsync = await FindRoleAsync(normalizedRoleName, cancellationToken);
+        if (roleAsync == null)
+        {
+            return new List<RtUser>();
+        }
+
+        using var session = await _tenantRepository.GetSessionAsync().ConfigureAwait(false);
+        session.StartTransaction();
+        
+        DataQueryOperation dataQueryOperation = new()
+        {
+            FieldFilters = new List<FieldFilter>
+            {
+                new(nameof(RtUser.RoleIds), FieldFilterOperator.AnyEq, ConvertIdToString(roleAsync.RtId))
+            }
+        };
+
+
+        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtUser>(session, dataQueryOperation).ConfigureAwait(true);
+        await session.CommitTransactionAsync();
+
+        return result.Items.ToList();
+    }
+
+    public async Task<IList<string>> GetRolesAsync(RtUser user, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ThrowIfDisposed();
+
+        ArgumentValidation.Validate(nameof(user), user);
+
+
+        var dbUser = await GetUserByIdAsync(user.RtId, cancellationToken).ConfigureAwait(true);
+        if (dbUser == null)
+        {
+            throw NotExistingException.UserWithIdDoesNotExist(user.RtId);
+        }
+
+        List<string> roles = new List<string>();
+        foreach (string roleRtIdString in dbUser.RoleIds)
+        {
+            var role = await GetRoleByIdAsync(ConvertIdFromString(roleRtIdString), cancellationToken).ConfigureAwait(true);
+            if (!string.IsNullOrWhiteSpace(role.Name))
+            {
+                roles.Add(role.Name);
+            }
         }
 
         return roles;
     }
 
     public async Task<bool> IsInRoleAsync(
-        RtIdentityUser user,
+        RtUser user,
         string normalizedRoleName,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        RtIdentityUser dbUser = await ByIdAsync(user.Id, cancellationToken).ConfigureAwait(true);
-        TRole role = await FindRoleAsync(normalizedRoleName, cancellationToken).ConfigureAwait(true);
-        if ((object)role == null)
-            return false;
-        // ISSUE: variable of a boxed type
-        __Boxed<RtIdentityUser> local = (object)dbUser;
-        return local != null && local.Roles.Contains(ConvertIdToString(role.Id));
-    }
+        ArgumentValidation.Validate(nameof(user), user);
 
-    public Task<string> GetSecurityStampAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+        var dbUser = await GetUserByIdAsync(user.RtId, cancellationToken).ConfigureAwait(true);
+        if (dbUser == null)
+        {
+            throw NotExistingException.UserWithIdDoesNotExist(user.RtId);
+        }
+        
+        var role = await FindRoleAsync(normalizedRoleName, cancellationToken).ConfigureAwait(true);
+
+        if (role == null)
+        {
+            return false;
+        }
+
+        return dbUser.RoleIds.Contains(ConvertIdToString(role.RtId));
+    }
+    
+    public Task<string?> GetSecurityStampAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        return user != null ? Task.FromResult<string>(user.SecurityStamp) : throw new ArgumentNullException(nameof(user));
+        return user != null ? Task.FromResult(user.SecurityStamp) : throw new ArgumentNullException(nameof(user));
     }
 
     public Task SetSecurityStampAsync(
-        RtIdentityUser user,
+        RtUser user,
         string stamp,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
+        ArgumentValidation.Validate(nameof(user), user);
+
         user.SecurityStamp = stamp != null ? stamp : throw new ArgumentNullException(nameof(stamp));
         return Task.CompletedTask;
     }
 
     public Task ReplaceCodesAsync(
-        RtIdentityUser user,
+        RtUser user,
         IEnumerable<string> recoveryCodes,
         CancellationToken cancellationToken = default)
     {
         string str = string.Join(";", recoveryCodes);
-        return SetTokenAsync(user, "[AspNeRtIdentityUserStore]", "RecoveryCodes", str, cancellationToken);
+        return SetTokenAsync(user, InternalLoginProvider, RecoveryCodeTokenName, str, cancellationToken);
     }
 
     public async Task<bool> RedeemCodeAsync(
-        RtIdentityUser user,
+        RtUser user,
         string code,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        if (code == null)
-            throw new ArgumentNullException(nameof(code));
-        string[] source =
-            (await GetTokenAsync(user, "[AspNeRtIdentityUserStore]", "RecoveryCodes", cancellationToken) ?? "").Split(';');
-        if (!source.Contains(code))
+        ArgumentValidation.Validate(nameof(user), user);
+        ArgumentValidation.ValidateString(nameof(code), code);
+
+        var token = await GetTokenAsync(user, InternalLoginProvider, RecoveryCodeTokenName, cancellationToken);
+        var source = token?.Split(';');
+        if (source == null || !source.Contains(code))
+        {
             return false;
-        List<string> recoveryCodes = new List<string>(source.Where<string>((Func<string, bool>)(s => s != code)));
+        }
+        
+
+        List<string> recoveryCodes = new List<string>(source.Where(s => s != code));
         await ReplaceCodesAsync(user, recoveryCodes, cancellationToken);
         return true;
     }
 
-    public async Task<int> CountCodesAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public async Task<int> CountCodesAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        string str = await GetTokenAsync(user, "[AspNeRtIdentityUserStore]", "RecoveryCodes", cancellationToken) ?? "";
-        return str.Length <= 0 ? 0 : str.Split(';').Length;
+        ArgumentValidation.Validate(nameof(user), user);
+
+        var str = await GetTokenAsync(user, InternalLoginProvider, RecoveryCodeTokenName, cancellationToken);
+        return str == null || str.Length <= 0 ? 0 : str.Split(';').Length;
     }
 
-    public Task<bool> GetTwoFactorEnabledAsync(RtIdentityUser user, CancellationToken cancellationToken = default)
+    public Task<bool> GetTwoFactorEnabledAsync(RtUser user, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
@@ -795,89 +909,133 @@ public class OctoUserStore :
     }
 
     public Task SetTwoFactorEnabledAsync(
-        RtIdentityUser user,
+        RtUser user,
         bool enabled,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
+        ArgumentValidation.Validate(nameof(user), user);
+
         user.TwoFactorEnabled = enabled;
         return Task.CompletedTask;
     }
 
-    protected void ThrowIfDisposed()
+    private void ThrowIfDisposed()
     {
         if (_disposed)
+        {
             throw new ObjectDisposedException(GetType().Name);
+        }
     }
 
     public void Dispose() => _disposed = true;
 
-    public virtual TKey ConvertIdFromString(string id) =>
-        id == null ? default(TKey) : (TKey)TypeDescriptor.GetConverter(typeof(TKey)).ConvertFromInvariantString(id);
+    private OctoObjectId ConvertIdFromString(string id) => new(id);
 
-    public virtual string ConvertIdToString(TKey id) => Equals((object)id, (object)default(TKey)) ? (string)null : id.ToString();
+    private string ConvertIdToString(OctoObjectId id) => id.ToString();
 
-    private Task<TRole> FindRoleAsync(
+    private async Task<RtRole?> FindRoleAsync(
         string normalizedRoleName,
         CancellationToken cancellationToken = default)
     {
-        return _roleCollection.FirstOrDefaultAsync<TRole>((Expression<Func<TRole, bool>>)(x => x.NormalizedName == normalizedRoleName),
-            cancellationToken);
+        DataQueryOperation dataQueryOperation = new()
+        {
+            FieldFilters = new List<FieldFilter>
+            {
+                new(nameof(RtRole.NormalizedName), FieldFilterOperator.Equals, normalizedRoleName)
+            }
+        };
+
+        using var session = await _tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtRole>(session, dataQueryOperation);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        await session.CommitTransactionAsync();
+        return result.Items.FirstOrDefault();
     }
 
-    private async Task<IdentityUserToken<string>?> FindTokenAsync(
+    private async Task<RtUserTokenRecord?> FindTokenAsync(
         IOctoSession session,
-        RtIdentityUser user,
+        RtUser user,
         string loginProvider,
-        string name,
-        CancellationToken cancellationToken = default)
+        string name)
     {
-        var local = await _tenantContext.Repository.GetRtEntityAsync<RtIdentityUser>(session, user.RtId).ConfigureAwait(false);
-        IdentityUserToken<string>? tokenAsync;
-        if (local == null)
-        {
-            tokenAsync = null;
-        }
-        else
-        {
-            List<IdentityUserToken<string>> tokens = local.Tokens;
-            tokenAsync = tokens != null
-                ? tokens.FirstOrDefault(
-                    (Func<IdentityUserToken<string>, bool>)(x => x.LoginProvider == loginProvider && x.Name == name))
-                : null;
-        }
+        var local = await _tenantRepository.GetRtEntityByRtIdAsync<RtUser>(session, user.RtId).ConfigureAwait(false);
+        var tokenAsync = local?.UserTokens.FirstOrDefault(x => x.LoginProvider == loginProvider && x.Name == name);
 
         return tokenAsync;
     }
 
-    private async Task UpdateAsync<TFieldValue>(
-        RtIdentityUser user,
-        Expression<Func<RtIdentityUser, TFieldValue>> expression,
-        TFieldValue value,
+    private async Task<RtUser?> GetUserByIdAsync(OctoObjectId rtId,
         CancellationToken cancellationToken = default)
     {
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        UpdateResult updateResult = await _userCollection
-            .UpdateOneAsync<RtIdentityUser>((Expression<Func<RtIdentityUser, bool>>)(x => x.Id.Equals(user.Id)),
-                Builders<RtIdentityUser>.Update.Set<TFieldValue>(expression, value), cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
+        using var session = await _tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+
+        var result = await _tenantRepository.GetRtEntityByRtIdAsync<RtUser>(session, rtId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        await session.CommitTransactionAsync();
+
+        return result;
     }
 
-    private async Task AddAsync<TFieldValue>(
-        RtIdentityUser user,
-        Expression<Func<RtIdentityUser, IEnumerable<TFieldValue>>> expression,
-        TFieldValue value,
+    private async Task<RtRole> GetRoleByIdAsync(OctoObjectId rtId,
         CancellationToken cancellationToken = default)
     {
-        if (user == null)
-            throw new ArgumentNullException(nameof(user));
-        UpdateResult updateResult = await _userCollection
-            .UpdateOneAsync<RtIdentityUser>((Expression<Func<RtIdentityUser, bool>>)(x => x.Id.Equals(user.Id)),
-                Builders<RtIdentityUser>.Update.AddToSet<TFieldValue>(expression, value), cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
+        using var session = await _tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+
+        var result = await _tenantRepository.GetRtEntityByRtIdAsync<RtRole>(session, rtId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        await session.CommitTransactionAsync();
+
+        return result ?? throw NotExistingException.RoleWithIdDoesNotExist(rtId);
     }
+
+    //
+    // private async Task UpdateAsync<TFieldValue>(
+    //     RtUser user,
+    //     Expression<Func<RtUser, TFieldValue>> expression,
+    //     TFieldValue value,
+    //     CancellationToken cancellationToken = default)
+    // {
+    //     if (user == null)
+    //         throw new ArgumentNullException(nameof(user));
+    //     UpdateResult updateResult = await _userCollection
+    //         .UpdateOneAsync<RtUser>((Expression<Func<RtUser, bool>>)(x => x.Id.Equals(user.Id)),
+    //             Builders<RtUser>.Update.Set<TFieldValue>(expression, value), cancellationToken: cancellationToken)
+    //         .ConfigureAwait(false);
+    // }
+    //
+    // private async Task AddAsync<TFieldValue>(
+    //     RtUser user,
+    //     Expression<Func<RtUser, IEnumerable<TFieldValue>>> expression,
+    //     TFieldValue value,
+    //     CancellationToken cancellationToken = default)
+    // {
+    //     if (user == null)
+    //     {
+    //         throw new ArgumentNullException(nameof(user));
+    //     }
+    //     
+    //     using var session = await _tenantRepository.GetSessionAsync();
+    //     session.StartTransaction();
+    //     
+    //     await _tenantRepository.InsertOneRtEntityAsync(session, user);
+    //
+    //     await session.CommitTransactionAsync();
+    //
+    //     UpdateResult updateResult = await _userCollection
+    //         .UpdateOneAsync<RtUser>((Expression<Func<RtUser, bool>>)(x => x.Id.Equals(user.Id)),
+    //             Builders<RtUser>.Update.AddToSet<TFieldValue>(expression, value), cancellationToken: cancellationToken)
+    //         .ConfigureAwait(false);
+    // }
+    public IQueryable<RtUser> Users { get; }
 }

@@ -7,3 +7,4 @@ types:
   attributes:
     - id: System/ConfigurationValue
       name: ConfigurationValue
+      isOptional: true

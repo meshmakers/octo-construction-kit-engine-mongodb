@@ -1,16 +1,10 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
+﻿using AutoMapper;
 using Duende.IdentityServer.Models;
 using Duende.IdentityServer.Stores;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Backend.Persistence.DataAccess;
-using Meshmakers.Octo.Backend.Persistence.DataAccess.Internal;
-using Meshmakers.Octo.Backend.Persistence.MongoDb;
-using Meshmakers.Octo.Backend.Persistence.SystemEntities;
-using MongoDB.Driver;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using NLog;
+using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
 
@@ -20,45 +14,46 @@ public class PersistentGrantStore : IOctoPersistentGrantStore
 
     private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
 
-    private readonly ICachedCollection<OctoPersistedGrant> _persistentGrantCollection;
-    private readonly IRepository _repository;
+    private readonly ITenantRepository _tenantRepository;
+    private readonly IMapper _mapper;
 
-    public PersistentGrantStore(ISystemContext systemContext)
+    public PersistentGrantStore(ITenantRepository tenantRepository, IMapper mapper)
     {
-        _repository = systemContext.SystemDatabase;
-        _persistentGrantCollection = _repository.GetCollection<OctoPersistedGrant>();
+        _tenantRepository = tenantRepository;
+        _mapper = mapper;
     }
+
 
     public async Task StoreAsync(PersistedGrant grant)
     {
-        var session = await _repository.StartSessionAsync();
+        var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        var persistedGrant = (OctoPersistedGrant)await GetAsync(session, grant.Key);
+        var persistedGrant = await GetRtPersistentGrantByKeyAsync(session, grant.Key);
         if (persistedGrant == null)
         {
             var appGrant = GetApplicationPersistedGrant(grant);
 
-            await _persistentGrantCollection.InsertAsync(session, appGrant);
+            await _tenantRepository.InsertOneRtEntityAsync(session, appGrant);
         }
         else
         {
             var appGrant = GetApplicationPersistedGrant(grant);
 
-            await _persistentGrantCollection.ReplaceByIdAsync(session, persistedGrant.Id, appGrant);
+            await _tenantRepository.ReplaceOneRtEntityByIdAsync(session, persistedGrant.RtId, appGrant);
         }
 
         await session.CommitTransactionAsync();
     }
 
-    public async Task<PersistedGrant> GetAsync(string key)
+    public async Task<PersistedGrant?> GetAsync(string key)
     {
         ArgumentValidation.ValidateString(nameof(key), key);
 
-        var session = await _repository.StartSessionAsync();
+        var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        var result = await _persistentGrantCollection.FindSingleOrDefaultAsync(session, x => x.Key == key);
+        var result = await GetAsync(session, key);
 
         await session.CommitTransactionAsync();
         return result;
@@ -67,37 +62,55 @@ public class PersistentGrantStore : IOctoPersistentGrantStore
 
     public async Task<IEnumerable<PersistedGrant>> GetAllAsync(PersistedGrantFilter filter)
     {
-        var session = await _repository.StartSessionAsync();
+        var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
-
-        var result = await _persistentGrantCollection.FindManyAsync(session,
-            grant => grant.SubjectId == filter.SubjectId && grant.SessionId == filter.SessionId &&
-                     grant.ClientId == filter.ClientId && grant.Type == filter.Type);
+        
+        DataQueryOperation dataQueryOperation = new()
+        {
+            FieldFilters = new List<FieldFilter>
+            {
+                new(nameof(RtPersistedGrant.SubjectId), FieldFilterOperator.Equals, filter.SubjectId),
+                new(nameof(RtPersistedGrant.SessionId), FieldFilterOperator.Equals, filter.SessionId),
+                new(nameof(RtPersistedGrant.ClientId), FieldFilterOperator.Equals, filter.ClientId),
+                new(nameof(RtPersistedGrant.GrantType), FieldFilterOperator.Equals, filter.Type)
+            }
+        };
+        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtPersistedGrant>(session,
+            dataQueryOperation);
 
         await session.CommitTransactionAsync();
-        return result;
+        return result.Items.Select(_mapper.Map<PersistedGrant>);
     }
 
     public async Task RemoveAsync(string key)
     {
         ArgumentValidation.ValidateString(nameof(key), key);
 
-        var session = await _repository.StartSessionAsync();
+        var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        await _persistentGrantCollection.DeleteOneAsync(session, x => x.Key == key);
+        var fieldFilters = new List<FieldFilter>
+        {
+            new(nameof(RtPersistedGrant.GrantKey), FieldFilterOperator.Equals, key),
+        };
+        await _tenantRepository.DeleteOneRtEntityAsync<RtPersistedGrant>(session, fieldFilters);
 
         await session.CommitTransactionAsync();
     }
 
     public async Task RemoveAllAsync(PersistedGrantFilter filter)
     {
-        var session = await _repository.StartSessionAsync();
+        var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        await _persistentGrantCollection.DeleteOneAsync(session, grant =>
-            grant.SubjectId == filter.SubjectId && grant.SessionId == filter.SessionId &&
-            grant.ClientId == filter.ClientId && grant.Type == filter.Type);
+        var fieldFilters = new List<FieldFilter>
+        {
+            new(nameof(RtPersistedGrant.SubjectId), FieldFilterOperator.Equals, filter.SubjectId),
+            new(nameof(RtPersistedGrant.SessionId), FieldFilterOperator.Equals, filter.SessionId),
+            new(nameof(RtPersistedGrant.ClientId), FieldFilterOperator.Equals, filter.ClientId),
+            new(nameof(RtPersistedGrant.GrantType), FieldFilterOperator.Equals, filter.Type)
+        };
+        await _tenantRepository.DeleteOneRtEntityAsync<RtPersistedGrant>(session, fieldFilters);
 
         await session.CommitTransactionAsync();
     }
@@ -112,7 +125,7 @@ public class PersistentGrantStore : IOctoPersistentGrantStore
         {
             Logger.Trace("Querying for expired grants to remove");
 
-            var session = await _repository.StartSessionAsync();
+            var session = await _tenantRepository.GetSessionAsync();
             session.StartTransaction();
 
             await RemoveGrantsAsync(session);
@@ -121,28 +134,13 @@ public class PersistentGrantStore : IOctoPersistentGrantStore
         }
         catch (Exception ex)
         {
-            Logger.Error("Exception removing expired grants: {exception}", ex.Message);
+            Logger.Error("Exception removing expired grants: {Exception}", ex.Message);
         }
     }
 
-    private static OctoPersistedGrant GetApplicationPersistedGrant(PersistedGrant grant)
+    private RtPersistedGrant GetApplicationPersistedGrant(PersistedGrant grant)
     {
-        var appGrant = grant as OctoPersistedGrant;
-        if (appGrant == null)
-        {
-            appGrant = new OctoPersistedGrant
-            {
-                ClientId = grant.ClientId,
-                Key = grant.Key,
-                Data = grant.Data,
-                SubjectId = grant.SubjectId,
-                Type = grant.Type,
-                CreationTime = grant.CreationTime,
-                Expiration = grant.Expiration
-            };
-        }
-
-        return appGrant;
+        return _mapper.Map<RtPersistedGrant>(grant);
     }
 
     public async Task RemoveAllAsync(string subjectId, string clientId, string type)
@@ -151,20 +149,39 @@ public class PersistentGrantStore : IOctoPersistentGrantStore
         ArgumentValidation.ValidateString(nameof(clientId), clientId);
         ArgumentValidation.ValidateString(nameof(type), type);
 
-        var session = await _repository.StartSessionAsync();
+        var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        await _persistentGrantCollection.DeleteOneAsync(session, grant =>
-            grant.SubjectId == subjectId && grant.ClientId == clientId && grant.Type == type);
+        var fieldFilters = new List<FieldFilter>
+        {
+            new(nameof(RtPersistedGrant.SubjectId), FieldFilterOperator.Equals, subjectId),
+            new(nameof(RtPersistedGrant.ClientId), FieldFilterOperator.Equals, clientId),
+            new(nameof(RtPersistedGrant.GrantType), FieldFilterOperator.Equals, type)
+        };
+        await _tenantRepository.DeleteManyRtEntitiesAsync<RtPersistedGrant>(session, fieldFilters);
 
         await session.CommitTransactionAsync();
     }
 
-    public async Task<PersistedGrant> GetAsync(IOctoSession session, string key)
+    private async Task<PersistedGrant?> GetAsync(IOctoSession session, string key)
     {
-        return await _persistentGrantCollection.FindSingleOrDefaultAsync(session, x => x.Key == key);
+        var rtPersistentGrant = await GetRtPersistentGrantByKeyAsync(session, key);
+        return _mapper.Map<PersistedGrant>(rtPersistentGrant);
     }
-
+    
+    private async Task<RtPersistedGrant?> GetRtPersistentGrantByKeyAsync(IOctoSession session, string key)
+    {
+        DataQueryOperation dataQueryOperation = new()
+        {
+            FieldFilters = new List<FieldFilter>
+            {
+                new(nameof(RtPersistedGrant.GrantKey), FieldFilterOperator.Equals, key)
+            }
+        };
+        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtPersistedGrant>(session, dataQueryOperation);
+        return result.Items.FirstOrDefault();
+    }
+    
     /// <summary>
     ///     Removes the stale persisted grants.
     /// </summary>
@@ -172,13 +189,21 @@ public class PersistentGrantStore : IOctoPersistentGrantStore
     private async Task RemoveGrantsAsync(IOctoSession session)
     {
         var found = int.MaxValue;
+        
+        DataQueryOperation dataQueryOperation = new()
+        {
+            FieldFilters = new List<FieldFilter>
+            {
+                new(nameof(RtPersistedGrant.ExpirationDateTime), FieldFilterOperator.LessEqualThan, DateTime.UtcNow)
+            }
+        };
 
         while (found >= TokenCleanupBatchSize)
         {
-            var query = await _persistentGrantCollection.FindManyAsync(session,
-                grant => grant.Expiration < DateTime.UtcNow,
+            var query = await _tenantRepository.GetRtEntitiesByTypeAsync<RtPersistedGrant>(session,
+                dataQueryOperation,
                 0, TokenCleanupBatchSize);
-            var expiredGrants = query.OrderBy(x => x.Key)
+            var expiredGrants = query.Items.OrderBy(x => x.GrantKey)
                 .ToList();
 
             found = expiredGrants.Count;
@@ -190,10 +215,10 @@ public class PersistentGrantStore : IOctoPersistentGrantStore
                 {
                     foreach (var persistedGrant in expiredGrants)
                     {
-                        await _persistentGrantCollection.DeleteOneAsync(session, persistedGrant.Id);
+                        await _tenantRepository.DeleteOneRtEntityByRtIdAsync<RtPersistedGrant>(session, persistedGrant.RtId);
                     }
                 }
-                catch (MongoException ex)
+                catch (OperationFailedException ex)
                 {
                     // we get this if/when someone else already deleted the records
                     // we want to essentially ignore this, and keep working

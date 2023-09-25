@@ -12,4 +12,9 @@ public class CkTypeAttribute
 
     public ICollection<object>? AutoCompleteValues { get; set; }
     public string? AutoIncrementReference { get; set; }
+    
+    /// <summary>
+    /// If true, the attribute is optional, that means it can be null
+    /// </summary>
+    public bool IsOptional { get; set; }
 }

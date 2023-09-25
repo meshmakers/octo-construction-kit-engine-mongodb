@@ -3,11 +3,9 @@ attributes:
 - id: Name
   valueType: String
 - id: DisplayName
-  isOptional: true
   valueType: String  
 - id: Description
   valueType: String
-  isOptional: true
   description: Further information on the item.
 - id: Enabled
   valueType: Boolean
@@ -15,7 +13,6 @@ attributes:
   valueType: String
 - id: ParentTenantId
   valueType: String
-  isOptional: true
 - id: DatabaseName
   valueType: String
 - id: AutoIncrement.Start
@@ -24,30 +21,23 @@ attributes:
   valueType: Int
 - id: AutoIncrement.CurrentValue
   valueType: Int
-  isOptional: true
 - id: ConfigurationValue
   valueType: String
-  isOptional: true
 - id: Query.Columns
   valueType: String
 - id: Query.CkTypeId
   valueType: String
 - id: Query.Sorting
   valueType: String
-  isOptional: true
 - id: Query.FieldFilter
   valueType: String
-  isOptional: true
 - id: Query.TextSearchFilter
   valueType: String
-  isOptional: true
 - id: Query.AttributeSearchFilter
   valueType: String
-  isOptional: true
 - id: ServiceHook.Uri
   valueType: String
 - id: ServiceHook.Action
   valueType: String
 - id: ServiceHook.ApiKey
   valueType: String
-  isOptional: true   

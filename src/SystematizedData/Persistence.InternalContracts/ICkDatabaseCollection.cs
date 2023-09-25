@@ -18,5 +18,5 @@ public interface ICkDatabaseCollection<TDocument> where TDocument : class, new()
     Task<TDocument?> FindSingleOrDefaultAsync(IOctoSession session, Expression<Func<TDocument, bool>> expression);
 
     Task ReplaceByIdAsync<TField>(IOctoSession session, TField id, TDocument document);
-
+    
 }

@@ -258,6 +258,8 @@ public class Engine<TEntity> where TEntity : class, new()
             case FieldFilterOperator.MatchRegEx:
                 return Builders<TEntity>.Filter.Regex(attributeName,
                     new BsonRegularExpression(value?.ToString()));
+            case FieldFilterOperator.AnyEq:
+                return Builders<TEntity>.Filter.AnyEq(attributeName, value);
             default:
                 throw new NotImplementedException("Value is not implemented.");
         }

@@ -3,15 +3,15 @@ attributes:
 - id: UserName
   valueType: String
   description: The user name.
-  
+
 - id: NormalizedUserName
   valueType: String
   description: The normalized user name.
-
+  
 - id: NormalizedName
   valueType: String
-  description: The normalized name.  
-  
+  description: The normalized name.
+
 - id: Email
   valueType: String
   description: The email address of the user.
@@ -27,7 +27,7 @@ attributes:
 - id: PasswordHash
   valueType: String
   description: The salted and hashed representation of the password for this user.
-  
+
 - id: SecurityStamp
   valueType: String
   description: A random value that should change whenever a users credentials have been compromised.
@@ -39,7 +39,7 @@ attributes:
 - id: PhoneNumber
   valueType: String
   description: The phone number of the user.
-  
+
 - id: PhoneNumberConfirmed
   valueType: Boolean
   description: Indicates if the phone number of the user has been confirmed.
@@ -49,9 +49,9 @@ attributes:
   description: Indicates if two factor authentication is enabled for the user.
   
 - id: LockoutEnd
-  valueType: DateTime
+  valueType: DateTimeOffset
   description: The date and time, in UTC, when any user lockout ends.
-  
+
 - id: LockoutEnabled
   valueType: Boolean
   description: Flag indicating if the user could be locked out.
@@ -72,9 +72,9 @@ attributes:
   valueType: String
   description: The last name of the user.
   
-- id: RoleNames
+- id: RoleIds
   valueType: StringArray
-  description: The names of the roles the user is a member of.
+  description: The id of roles the user is a member of.
   
 - id: ClaimType
   valueType: String
@@ -101,13 +101,18 @@ attributes:
   valueType: String
     
 - id: ProviderDisplayName
-  valueType: String  
-    
-- id: Claims
+  valueType: String
+  
+- id: UserClaims
   valueType: RecordArray
-  valueCkRecordId: System.Identity/Claim
+  valueCkRecordId: System.Identity/UserClaim
   description: The claims of the user.
   
+- id: RoleClaims
+  valueType: RecordArray
+  valueCkRecordId: System.Identity/RoleClaim
+  description: The claims of a role.  
+
 - id: UserLogins
   valueType: RecordArray
   valueCkRecordId: System.Identity/UserLogin
@@ -120,6 +125,7 @@ attributes:
     
 - id: SubjectIds
   valueType: StringArray
+
 - id: IdentityRoleIds
   valueType: StringArray
 - id: GrantKey
@@ -136,15 +142,13 @@ attributes:
   valueType: DateTime
 - id: ExpirationDateTime
   valueType: DateTime
-  isOptional: true
 - id: ConsumedDateTime
   valueType: DateTime    
-  isOptional: true
 - id: Data
   valueType: String
 - id: PermissionId
   valueType: String
-- id: UserClaims
+- id: ResourceClaims
   valueType: StringArray
 - id: IsRequired
   valueType: Boolean
@@ -215,7 +219,6 @@ attributes:
   description: Specifies allowed URIs to redirect to after logout
 - id: FrontChannelLogoutUri
   valueType: String
-  isOptional: true
   description: Specifies logout URI at client for HTTP front-channel based logout.
 - id: FrontChannelLogoutSessionRequired
   valueType: Boolean
@@ -224,7 +227,6 @@ attributes:
   description: Specifies if the user's session id should be sent to the FrontChannelLogoutUri. Defaults to true.
 - id: BackChannelLogoutUri
   valueType: String
-  isOptional: true
   description: Specifies logout URI at client for HTTP back-channel based logout.
 - id: BackChannelLogoutSessionRequired
   valueType: Boolean
@@ -270,7 +272,6 @@ attributes:
   description: Sliding lifetime of a refresh token in seconds. Defaults to 1296000 seconds / 15 days
 - id: ConsentLifetime
   valueType: Int
-  isOptional: true
   description: Lifetime of a user consent in seconds. Defaults to null (no expiration)
 - id: RefreshTokenUsage
   valueType: Enum
@@ -315,21 +316,17 @@ attributes:
   description: Gets or sets a value indicating whether client claims should be always included in the access tokens - or only for client credentials flow.
 - id: ClientClaimsPrefix
   valueType: String
-  isOptional: true
   defaultValues:
     - value: client_
   description: Gets or sets a value to prefix it on client claim types. Defaults to client_.
 - id: PairWiseSubjectSalt
   valueType: String
-  isOptional: true
   description: Gets or sets a salt value used in pair-wise subjectId generation for users of this client.
 - id: UserSsoLifetime
   valueType: Int
-  isOptional: true
   description: Lifetime of user's single sign-on session (in seconds). Defaults to null (no expiration).
 - id: UserCodeType
   valueType: String
-  isOptional: true
   description: Specifies the user code type for the device flow. Defaults to null.
 - id: DeviceCodeLifetime
   valueType: Int
@@ -338,22 +335,18 @@ attributes:
   description: Specifies the lifetime (in seconds) of the device code. Defaults to 300 seconds / 5 minutes.
 - id: CibaLifetime
   valueType: Int
-  isOptional: true
   description: The backchannel authentication request lifetime in seconds.
 - id: PollingInterval
   valueType: Int
-  isOptional: true
   description: The backchannel authentication request polling interval in seconds.
 - id: CoordinateLifetimeWithUserSession
   valueType: Boolean
-  isOptional: true
   description: When enabled, the client's token lifetimes (e.g. refresh tokens) will be tied to the user's session lifetime.
 - id: AllowedCorsOrigins
   valueType: StringArray
   description: Gets or sets the allowed CORS origins for JavaScript clients.
 - id: InitiateLoginUri
   valueType: String
-  isOptional: true
   description: Gets of sets a URI that can be used to initiate login from the IdentityServer host or a third party.
 - id: IdentityProviderType
   valueType: Enum
@@ -368,3 +361,8 @@ attributes:
 - id: ClientSecret
   valueType: String
   description: Gets or sets the client secret of the application.
+- id: ShowInDiscoveryDocument
+  valueType: Boolean
+  defaultValues:
+    - value: true
+  description: Gets or sets a value indicating whether the client will be shown in the discovery document. Defaults to true.

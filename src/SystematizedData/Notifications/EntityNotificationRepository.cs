@@ -87,7 +87,7 @@ public class EntityNotificationRepository : INotificationRepository
 
         var tenantContext = await _systemContext.GetChildTenantContextAsync(tenantId);
         var tenantRepository = await tenantContext.GetTenantRepositoryAsync();
-        var session = await tenantRepository.StartSessionAsync();
+        var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
         var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtNotificationMessage>(session,
@@ -118,7 +118,7 @@ public class EntityNotificationRepository : INotificationRepository
 
         var tenantContext = await _systemContext.GetChildTenantContextAsync(tenantId);
         var tenantRepository = await tenantContext.GetTenantRepositoryAsync();
-        var session = await tenantRepository.StartSessionAsync();
+        var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
         var entityUpdateInfos = await Task.WhenAll(notificationMessages.Select(async dto =>
@@ -140,7 +140,7 @@ public class EntityNotificationRepository : INotificationRepository
 
         var tenantContext = await _systemContext.GetChildTenantContextAsync(tenantId);
         var tenantRepository = await tenantContext.GetTenantRepositoryAsync();
-        var session = await tenantRepository.StartSessionAsync();
+        var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
         var rtEntity = CreateRtEntity(notificationMessageDto, tenantRepository);

@@ -98,6 +98,34 @@ public class RtEntity
 
         return (TValue)Convert.ChangeType(value, typeof(TValue));
     }
+
+    public List<TValue> GetAttributeValues<TValue>(string attributeName)
+    {
+        if (!Attributes.TryGetValue(attributeName, out var value))
+        {
+            return new List<TValue>();
+        }
+        if (value == null)
+        {
+            return  new List<TValue>();
+        }
+        
+        return new List<TValue>((IEnumerable<TValue> )Convert.ChangeType(value, typeof(IEnumerable<TValue>)));
+    }
+    
+    public List<TValue>? GetAttributeValuesOrDefault<TValue>(string attributeName)
+    {
+        if (!Attributes.TryGetValue(attributeName, out var value))
+        {
+            return default;
+        }
+        if (value == null)
+        {
+            return default;
+        }
+        
+        return new List<TValue>((IEnumerable<TValue> )Convert.ChangeType(value, typeof(IEnumerable<TValue>)));
+    }
     
     public TValue GetAttributeValue<TValue>(string attributeName, TValue defaultValue = default)
         where TValue : struct

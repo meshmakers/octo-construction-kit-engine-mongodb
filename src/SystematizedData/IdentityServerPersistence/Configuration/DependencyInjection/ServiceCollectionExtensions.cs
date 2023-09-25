@@ -1,15 +1,13 @@
 // ReSharper disable once CheckNamespace
 
-using System.ComponentModel;
-using Meshmakers.Octo.Backend.Persistence.SystemEntities;
+using Duende.IdentityServer.Models;
 using Meshmakers.Octo.Backend.Persistence.SystemStores;
-using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.Configuration.DependencyInjection;
-using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 using Microsoft.AspNetCore.Identity;
-using OctoObjectIdConverter = Meshmakers.Octo.SystematizedData.Persistence.MongoDb.OctoObjectIdConverter;
+using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
 
+// ReSharper disable once CheckNamespace
 namespace Microsoft.Extensions.DependencyInjection;
 
 public static class ServiceCollectionExtensions
@@ -28,6 +26,23 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IOctoResourceStore, ResourceStore>();
         services.AddScoped<IOctoPersistentGrantStore, PersistentGrantStore>();
         services.AddScoped<IOctoIdentityProviderStore, IdentityProviderStore>();
+        services.AddAutoMapper(cfg =>
+        {
+            cfg.CreateMap<RtClient, Client>();
+            cfg.CreateMap<RtPersistedGrant, PersistedGrant>()
+                .ForMember(dest => dest.Type, opt => opt.MapFrom(src => src.GrantType))
+                .ForMember(dest => dest.Key, opt => opt.MapFrom(src => src.GrantKey))
+                .ForMember(dest => dest.CreationTime, opt => opt.MapFrom(src => src.CreationDateTime))
+                .ForMember(dest => dest.Expiration, opt => opt.MapFrom(src => src.ExpirationDateTime));
+            cfg.CreateMap<RtIdentityResource, IdentityResource>()
+                .ForMember(dest => dest.Emphasize, opt => opt.MapFrom(src => src.IsEmphasized))
+                .ForMember(dest => dest.Required, opt => opt.MapFrom(src => src.IsRequired));
+            cfg.CreateMap<RtApiResource, ApiResource>();
+            cfg.CreateMap<RtApiScope, ApiScope>()
+                .ForMember(dest => dest.Emphasize, opt => opt.MapFrom(src => src.IsEmphasized))
+                .ForMember(dest => dest.Required, opt => opt.MapFrom(src => src.IsRequired));
+
+        });
 
         AddIdentity(services, setupAction);
 
@@ -37,16 +52,13 @@ public static class ServiceCollectionExtensions
     private static void AddIdentity(IServiceCollection services, Action<IdentityOptions>? setupAction)
     {
         var builder = services
-            .AddIdentity<OctoUser, OctoRole>(setupAction ?? null!)
+            .AddIdentity<RtUser, RtRole>(setupAction ?? null!)
             .AddRoleStore<OctoRoleStore>()
             .AddUserStore<OctoUserStore>()
-            .AddUserManager<UserManager<OctoUser>>()
-            .AddRoleManager<RoleManager<OctoRole>>()
+            .AddUserManager<UserManager<RtUser>>()
+            .AddRoleManager<RoleManager<RtRole>>()
             .AddDefaultTokenProviders()
             .AddErrorDescriber<OctoErrorDescriber>();
-
-        // register custom ObjectId TypeConverter
-        RegisterTypeConverter<OctoObjectId, OctoObjectIdConverter>();
 
         if (builder.RoleType != null)
         {
@@ -56,13 +68,5 @@ public static class ServiceCollectionExtensions
 
         builder.Services.AddTransient(
             typeof(IUserStore<>).MakeGenericType(builder.UserType), typeof(OctoUserStore));
-    }
-    
-    private static void RegisterTypeConverter<T, TC>() where TC : TypeConverter
-    {
-        var attr = new Attribute[1];
-        var vConv = new TypeConverterAttribute(typeof(TC));
-        attr[0] = vConv;
-        TypeDescriptor.AddAttributes(typeof(T), attr);
     }
 }

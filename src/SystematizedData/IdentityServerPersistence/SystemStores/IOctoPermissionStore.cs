@@ -1,12 +1,11 @@
-using System.Threading.Tasks;
-using Meshmakers.Octo.Backend.Persistence.SystemEntities;
+using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
 
 public interface IOctoPermissionStore
 {
-    Task StorePermissionAsync(OctoPermission octoPermission);
-    Task<OctoPermission> GetPermissionById(string permissionId);
+    Task StorePermissionAsync(RtPermission octoPermission);
+    Task<RtPermission?> GetPermissionById(string permissionId);
 
     Task EnsurePermission(string permissionId);
 }

@@ -56,10 +56,12 @@ types:
     name: PostLogoutRedirectUris
   - id: System.Identity/FrontChannelLogoutUri
     name: FrontChannelLogoutUri
+    isOptional: true
   - id: System.Identity/FrontChannelLogoutSessionRequired
     name: FrontChannelLogoutSessionRequired
   - id: System.Identity/BackChannelLogoutUri
     name: BackChannelLogoutUri
+    isOptional: true
   - id: System.Identity/BackChannelLogoutSessionRequired
     name: BackChannelLogoutSessionRequired
   - id: System.Identity/AllowOfflineAccess
@@ -82,6 +84,7 @@ types:
     name: SlidingRefreshTokenLifetime
   - id: System.Identity/ConsentLifetime
     name: ConsentLifetime
+    isOptional: true
   - id: System.Identity/UpdateAccessTokenClaimsOnRefresh
     name: UpdateAccessTokenClaimsOnRefresh
   - id: System.Identity/RefreshTokenExpiration
@@ -100,24 +103,32 @@ types:
     name: AlwaysSendClientClaims
   - id: System.Identity/ClientClaimsPrefix
     name: ClientClaimsPrefix
+    isOptional: true
   - id: System.Identity/PairWiseSubjectSalt
     name: PairWiseSubjectSalt
+    isOptional: true
   - id: System.Identity/UserSsoLifetime
     name: UserSsoLifetime
+    isOptional: true
   - id: System.Identity/UserCodeType
     name: UserCodeType
+    isOptional: true
   - id: System.Identity/DeviceCodeLifetime
     name: DeviceCodeLifetime
   - id: System.Identity/CibaLifetime
     name: CibaLifetime
+    isOptional: true
   - id: System.Identity/PollingInterval
     name: PollingInterval
+    isOptional: true
   - id: System.Identity/CoordinateLifetimeWithUserSession
     name: CoordinateLifetimeWithUserSession
+    isOptional: true
   - id: System.Identity/AllowedCorsOrigins
     name: AllowedCorsOrigins
   - id: System.Identity/InitiateLoginUri
     name: InitiateLoginUri
+    isOptional: true
 - typeId: ApiResource
   derivedFromCkTypeId: System.Identity/Resource
   isFinal: true
@@ -164,14 +175,19 @@ types:
   attributes:
   - id: System/Name
     name: Name
+    isOptional: true
   - id: System.Identity/NormalizedName
     name: NormalizedName
+    isOptional: true
   - id: System.Identity/ConcurrencyStamp
     name: ConcurrencyStamp
   - id: System.Identity/SubjectIds
     name: SubjectIds
   - id: System.Identity/IdentityRoleIds
     name: IdentityRoleIds
+  - id: System.Identity/RoleClaims
+    name: Claims
+    isOptional: true
 - typeId: AzureEntraIdentityProvider
   derivedFromCkTypeId: System.Identity/IdentityProvider
   isFinal: true
@@ -206,8 +222,10 @@ types:
     name: CreationDateTime
   - id: System.Identity/ExpirationDateTime
     name: ExpirationDateTime
+    isOptional: true
   - id: System.Identity/ConsumedDateTime
     name: ConsumedDateTime
+    isOptional: true
   - id: System.Identity/Data
     name: Data
 - typeId: PermissionRole
@@ -244,46 +262,59 @@ types:
   attributes:
   - id: System.Identity/UserName
     name: UserName
+    isOptional: true
   - id: System.Identity/NormalizedUserName
     name: NormalizedUserName
+    isOptional: true
   - id: System.Identity/FirstName
     name: FirstName
+    isOptional: true
   - id: System.Identity/LastName
     name: LastName
+    isOptional: true
   - id: System/Description
     name: Description
+    isOptional: true
   - id: System.Identity/Email
     name: Email
+    isOptional: true
   - id: System.Identity/NormalizedEmail
     name: NormalizedEmail
+    isOptional: true
   - id: System.Identity/EmailConfirmed
     name: EmailConfirmed
   - id: System.Identity/PasswordHash
     name: PasswordHash
+    isOptional: true
   - id: System.Identity/SecurityStamp
     name: SecurityStamp
+    isOptional: true
   - id: System.Identity/ConcurrencyStamp
     name: ConcurrencyStamp
   - id: System.Identity/PhoneNumber
     name: PhoneNumber
+    isOptional: true
   - id: System.Identity/PhoneNumberConfirmed
     name: PhoneNumberConfirmed
   - id: System.Identity/TwoFactorEnabled
     name: TwoFactorEnabled
   - id: System.Identity/LockoutEnd
     name: LockoutEnd
+    isOptional: true
   - id: System.Identity/LockoutEnabled
     name: LockoutEnabled
   - id: System.Identity/AccessFailedCount
     name: AccessFailedCount
   - id: System.Identity/ResetPasswordOnLogin
     name: ResetPasswordOnLogin
-  - id: System.Identity/RoleNames
-    name: RoleNames
-  - id: System.Identity/Claims
-    name: Claim
+  - id: System.Identity/RoleIds
+    name: RoleIds
+  - id: System.Identity/UserClaims
+    name: Claims
+    isOptional: true
   - id: System.Identity/UserLogins
-    name: UserLogin
+    name: UserLogins
+    isOptional: true
   - id: System.Identity/UserTokens
     name: UserTokens
   indexes:
@@ -304,8 +335,10 @@ types:
     name: DisplayName
   - id: System/Description
     name: Description
-  - id: System.Identity/UserClaims
-    name: UserClaims
+  - id: System.Identity/ResourceClaims
+    name: Claims
+  - id: System.Identity/ShowInDiscoveryDocument
+    name: ShowInDiscoveryDocument
 associationRoles: []
 attributes:
 - id: UserName
@@ -345,7 +378,7 @@ attributes:
   valueType: Boolean
   description: Indicates if two factor authentication is enabled for the user.
 - id: LockoutEnd
-  valueType: DateTime
+  valueType: DateTimeOffset
   description: The date and time, in UTC, when any user lockout ends.
 - id: LockoutEnabled
   valueType: Boolean
@@ -362,9 +395,9 @@ attributes:
 - id: LastName
   valueType: String
   description: The last name of the user.
-- id: RoleNames
+- id: RoleIds
   valueType: StringArray
-  description: The names of the roles the user is a member of.
+  description: The id of roles the user is a member of.
 - id: ClaimType
   valueType: String
   description: The type of the claim.
@@ -384,10 +417,14 @@ attributes:
   valueType: String
 - id: ProviderDisplayName
   valueType: String
-- id: Claims
+- id: UserClaims
   valueType: RecordArray
-  valueCkRecordId: System.Identity/Claim
+  valueCkRecordId: System.Identity/UserClaim
   description: The claims of the user.
+- id: RoleClaims
+  valueType: RecordArray
+  valueCkRecordId: System.Identity/RoleClaim
+  description: The claims of a role.
 - id: UserLogins
   valueType: RecordArray
   valueCkRecordId: System.Identity/UserLogin
@@ -414,15 +451,13 @@ attributes:
   valueType: DateTime
 - id: ExpirationDateTime
   valueType: DateTime
-  isOptional: true
 - id: ConsumedDateTime
   valueType: DateTime
-  isOptional: true
 - id: Data
   valueType: String
 - id: PermissionId
   valueType: String
-- id: UserClaims
+- id: ResourceClaims
   valueType: StringArray
 - id: IsRequired
   valueType: Boolean
@@ -493,7 +528,6 @@ attributes:
   description: Specifies allowed URIs to redirect to after logout
 - id: FrontChannelLogoutUri
   valueType: String
-  isOptional: true
   description: Specifies logout URI at client for HTTP front-channel based logout.
 - id: FrontChannelLogoutSessionRequired
   valueType: Boolean
@@ -502,7 +536,6 @@ attributes:
   description: Specifies if the user's session id should be sent to the FrontChannelLogoutUri. Defaults to true.
 - id: BackChannelLogoutUri
   valueType: String
-  isOptional: true
   description: Specifies logout URI at client for HTTP back-channel based logout.
 - id: BackChannelLogoutSessionRequired
   valueType: Boolean
@@ -548,7 +581,6 @@ attributes:
   description: Sliding lifetime of a refresh token in seconds. Defaults to 1296000 seconds / 15 days
 - id: ConsentLifetime
   valueType: Int
-  isOptional: true
   description: Lifetime of a user consent in seconds. Defaults to null (no expiration)
 - id: RefreshTokenUsage
   valueType: Enum
@@ -595,19 +627,15 @@ attributes:
   valueType: String
   defaultValues:
   - value: client_
-  isOptional: true
   description: Gets or sets a value to prefix it on client claim types. Defaults to client_.
 - id: PairWiseSubjectSalt
   valueType: String
-  isOptional: true
   description: Gets or sets a salt value used in pair-wise subjectId generation for users of this client.
 - id: UserSsoLifetime
   valueType: Int
-  isOptional: true
   description: Lifetime of user's single sign-on session (in seconds). Defaults to null (no expiration).
 - id: UserCodeType
   valueType: String
-  isOptional: true
   description: Specifies the user code type for the device flow. Defaults to null.
 - id: DeviceCodeLifetime
   valueType: Int
@@ -616,22 +644,18 @@ attributes:
   description: Specifies the lifetime (in seconds) of the device code. Defaults to 300 seconds / 5 minutes.
 - id: CibaLifetime
   valueType: Int
-  isOptional: true
   description: The backchannel authentication request lifetime in seconds.
 - id: PollingInterval
   valueType: Int
-  isOptional: true
   description: The backchannel authentication request polling interval in seconds.
 - id: CoordinateLifetimeWithUserSession
   valueType: Boolean
-  isOptional: true
   description: When enabled, the client's token lifetimes (e.g. refresh tokens) will be tied to the user's session lifetime.
 - id: AllowedCorsOrigins
   valueType: StringArray
   description: Gets or sets the allowed CORS origins for JavaScript clients.
 - id: InitiateLoginUri
   valueType: String
-  isOptional: true
   description: Gets of sets a URI that can be used to initiate login from the IdentityServer host or a third party.
 - id: IdentityProviderType
   valueType: Enum
@@ -646,6 +670,11 @@ attributes:
 - id: ClientSecret
   valueType: String
   description: Gets or sets the client secret of the application.
+- id: ShowInDiscoveryDocument
+  valueType: Boolean
+  defaultValues:
+  - value: true
+  description: Gets or sets a value indicating whether the client will be shown in the discovery document. Defaults to true.
 records:
 - recordId: Secret
   isFinal: true
@@ -654,8 +683,10 @@ records:
     name: Description
   - id: System.Identity/ExpirationDateTime
     name: ExpirationDateTime
+    isOptional: true
   - id: System.Identity/Value
     name: Value
+    isOptional: true
   - id: System.Identity/SecretType
     name: Type
 - recordId: ClientClaim
@@ -676,7 +707,10 @@ records:
     name: Name
   - id: System.Identity/UserId
     name: UserId
-- recordId: Claim
+  - id: System.Identity/Value
+    name: Value
+    isOptional: true
+- recordId: UserClaim
   isFinal: true
   attributes:
   - id: System.Identity/ClaimType
@@ -694,8 +728,16 @@ records:
     name: ProviderKey
   - id: System.Identity/ProviderDisplayName
     name: ProviderDisplayName
+    isOptional: true
   - id: System.Identity/UserId
     name: UserId
+- recordId: RoleClaim
+  isFinal: true
+  attributes:
+  - id: System.Identity/ClaimType
+    name: ClaimType
+  - id: System.Identity/ClaimValue
+    name: ClaimValue
 enums:
 - enumId: TokenUsage
   useFlags: false

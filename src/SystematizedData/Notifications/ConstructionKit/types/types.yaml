@@ -20,15 +20,19 @@ types:
       name: SubjectText
     - id: System.Notification/BodyText
       name: BodyText
+      isOptional: true
     - id: System.Notification/RecipientAddress
       name: RecipientAddress
     - id: System.Notification/Type
       name: NotificationType
     - id: System.Notification/SentDateTime
       name: SentDateTime
+      isOptional: true
     - id: System.Notification/LastTryDateTime
       name: LastTryDateTime
+      isOptional: true
     - id: System.Notification/Status
       name: SendStatus
     - id: System.Notification/ErrorText
       name: ErrorText
+      isOptional: true

@@ -5,6 +5,7 @@ using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using NLog;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 
@@ -201,6 +202,22 @@ internal class DatabaseCollection<TDocument> : IDatabaseCollection<TDocument>
         }
     }
 
+    public async Task ReplaceOneAsync(IOctoSession session, FilterDefinition<TDocument> filterDefinition, TDocument entity)
+    {
+        try
+        {
+            var result = await _documentCollection.ReplaceOneAsync(((IOctoSessionInternal)session).SessionHandle,
+                filterDefinition, entity);
+            ThrowIfNotAcknowledged(result.IsAcknowledged);
+            ThrowIfMatchedCountZero<TDocument>(result.MatchedCount, filterDefinition);
+        }
+        catch (MongoWriteException ex)
+        {
+            Logger.Error(ex);
+            HandleWriteException<TDocument>(ex);
+        }
+    }
+
     public async Task UpdateOneAsync<TField>(IOctoSession session, TField id,
         UpdateDefinition<TDocument> updateDefinition)
     {
@@ -355,6 +372,22 @@ internal class DatabaseCollection<TDocument> : IDatabaseCollection<TDocument>
                     expression);
             ThrowIfNotAcknowledged(deleteResult.IsAcknowledged);
             ThrowIfMatchedCountZero<TDocument>(deleteResult.DeletedCount, expression);
+        }
+        catch (MongoException e)
+        {
+            Logger.Error(e);
+            throw new OperationFailedException(e.Message, e);
+        }
+    }
+
+    public async Task DeleteManyAsync(IOctoSession session, FilterDefinition<TDocument> filter)
+    {
+        try
+        {
+            var deleteResult =
+                await _documentCollection.DeleteManyAsync(((IOctoSessionInternal)session).SessionHandle,
+                    filter);
+            ThrowIfNotAcknowledged(deleteResult.IsAcknowledged);
         }
         catch (MongoException e)
         {

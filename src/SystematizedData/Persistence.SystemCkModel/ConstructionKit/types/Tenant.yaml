@@ -8,7 +8,8 @@ types:
   - id: System/TenantId
     name: TenantId
   - id: System/ParentTenantId
-    name: ParentTenantId    
+    name: ParentTenantId
+    isOptional: true
   - id: System/DatabaseName
     name: DatabaseName
   indexes:

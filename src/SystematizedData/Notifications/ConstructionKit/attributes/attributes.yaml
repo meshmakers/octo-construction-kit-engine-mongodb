@@ -4,22 +4,18 @@ attributes:
   valueType: String
 - id: BodyText
   valueType: String
-  isOptional: true
 - id: SubjectTemplate
   valueType: String
 - id: SubjectText
   valueType: String
 - id: SentDateTime
   valueType: DateTime
-  isOptional: true
 - id: LastTryDateTime
   valueType: DateTime
-  isOptional: true
 - id: RecipientAddress
   valueType: String
 - id: ErrorText
   valueType: String
-  isOptional: true
 - id: Type
   valueType: Enum
   valueCkEnumId: System.Notification/NotificationTypes

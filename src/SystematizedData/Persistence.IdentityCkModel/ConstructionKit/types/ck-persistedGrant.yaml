@@ -28,9 +28,11 @@ types:
           
       - id: System.Identity/ExpirationDateTime
         name: ExpirationDateTime
-        
+        isOptional: true
+      
       - id: System.Identity/ConsumedDateTime
         name: ConsumedDateTime
-        
+        isOptional: true
+      
       - id: System.Identity/Data
         name: Data

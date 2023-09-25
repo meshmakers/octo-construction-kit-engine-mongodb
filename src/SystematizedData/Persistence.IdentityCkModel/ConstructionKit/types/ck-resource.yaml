@@ -7,13 +7,13 @@ types:
     attributes:
       - id: System/Enabled
         name: Enabled
-
       - id: System/Name
         name: Name
       - id: System/DisplayName
         name: DisplayName
       - id: System/Description
         name: Description     
-      - id: System.Identity/UserClaims
-        name: UserClaims
-        
+      - id: System.Identity/ResourceClaims
+        name: Claims
+      - id: System.Identity/ShowInDiscoveryDocument
+        name: ShowInDiscoveryDocument

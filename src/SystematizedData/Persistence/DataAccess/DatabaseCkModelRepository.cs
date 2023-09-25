@@ -104,18 +104,18 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     AttributeName = a.AttributeName,
                     CkAttributeId = a.AttributeId,
                     AutoCompleteValues = a.AutoCompleteValues?.ToList(),
-                    AutoIncrementReference = a.AutoIncrementReference
+                    AutoIncrementReference = a.AutoIncrementReference,
+                    IsOptional = a.IsOptional
                 }).ToList(),
                 DerivedFromCkRecordId = ckRecordInheritances.FirstOrDefault(x=> x.InheritorCkRecordId == r.CkRecordId)?.BaseCkRecordId
             }).ToList(),
             Attributes = ckAttributes.Select(a=> new CkAttributeDto
             {
                 AttributeId = a.AttributeId.Key,
-                ValueType = (AttributeValueTypesDto)a.AttributeValueType,
+                ValueType = a.AttributeValueType,
                 ValueCkEnumId = a.ValueCkEnumId,
                 ValueCkRecordId = a.ValueCkRecordId,
                 DefaultValues = a.DefaultValues?.ToList(),
-                IsOptional = a.IsOptional,
                 Description = a.Description
             }).ToList(),
             Types = ckTypes.Select(t=> new CkTypeDto
@@ -128,7 +128,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     AttributeName = a.AttributeName,
                     CkAttributeId = a.AttributeId,
                     AutoCompleteValues = a.AutoCompleteValues?.ToList(),
-                    AutoIncrementReference = a.AutoIncrementReference
+                    AutoIncrementReference = a.AutoIncrementReference,
+                    IsOptional = a.IsOptional
                 }).ToList(),
                 Associations = ckTypeAssociations.Select(a=> new CkTypeAssociationDto
                 {
@@ -150,7 +151,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     AttributeName = a.AttributeName,
                     CkAttributeId = a.AttributeId,
                     AutoCompleteValues = a.AutoCompleteValues?.ToList(),
-                    AutoIncrementReference = a.AutoIncrementReference
+                    AutoIncrementReference = a.AutoIncrementReference,
+                    IsOptional = a.IsOptional
                 }).ToList(),
             }).ToList()
         };
@@ -500,7 +502,6 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     ValueCkEnumId = ckAttributeDto.ValueCkEnumId,
                     ValueCkRecordId = ckAttributeDto.ValueCkRecordId,
                     DefaultValues = ckAttributeDto.DefaultValues,
-                    IsOptional = ckAttributeDto.IsOptional,
                     Description = ckAttributeDto.Description
                 };
                 transientCkModel.CkAttributes.Add(ckAttribute);

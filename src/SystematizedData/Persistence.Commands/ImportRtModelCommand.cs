@@ -40,7 +40,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
         var tenantContext = await _systemContext.GetChildTenantContextInternalAsync(tenantId);
         var tenantRepository = await tenantContext.GetTenantRepositoryInternalAsync();
 
-        var session = await tenantRepository.StartSessionAsync();
+        var session = await tenantRepository.GetSessionAsync();
         try
         {
             session.StartTransaction();

@@ -11,3 +11,4 @@ types:
       name: End
     - id: System/AutoIncrement.CurrentValue
       name: CurrentValue
+      isOptional: true

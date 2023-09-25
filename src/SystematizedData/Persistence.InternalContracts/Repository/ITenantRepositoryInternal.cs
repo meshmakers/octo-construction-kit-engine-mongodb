@@ -16,23 +16,6 @@ public interface ITenantRepositoryInternal : ITenantRepository
     RtAssociation CreateTransientRtAssociation(RtEntityId originRtEntityId,  CkId<CkAssociationRoleId> roleId,
         RtEntityId targetRtEntityId);
 
-    Task InsertOneRtEntityAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, RtEntity rtEntity);
 
-    Task InsertOneRtEntityAsync<TEntity>(IOctoSession session, TEntity rtEntity)
-        where TEntity : RtEntity, new();
-    
-    Task ReplaceOneRtEntityByIdAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, OctoObjectId rtId, RtEntity rtEntity);
 
-    Task ReplaceOneRtEntityByIdAsync<TEntity>(IOctoSession session, OctoObjectId rtId, TEntity rtEntity)
-        where TEntity : RtEntity, new();
-
-    Task DeleteOneRtEntityByRtIdAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, OctoObjectId rtId);
-    
-    Task DeleteOneRtEntityByRtIdAsync<TEntity>(IOctoSession session, OctoObjectId rtId)
-        where TEntity : RtEntity, new();
-
-    Task DeleteOneRtEntityAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, ICollection<FieldFilter> fieldFilters);
-    
-    Task DeleteOneRtEntityAsync<TEntity>(IOctoSession session, ICollection<FieldFilter> fieldFilters)
-        where TEntity : RtEntity, new();
 }

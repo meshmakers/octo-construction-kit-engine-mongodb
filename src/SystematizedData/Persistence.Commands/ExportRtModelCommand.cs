@@ -29,7 +29,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
         var tenantContext = await _systemContext.GetChildTenantContextAsync(tenantId);
         var tenantRepository = await tenantContext.GetTenantRepositoryAsync();
 
-        var session = await tenantRepository.StartSessionAsync();
+        var session = await tenantRepository.GetSessionAsync();
         try
         {
             session.StartTransaction();

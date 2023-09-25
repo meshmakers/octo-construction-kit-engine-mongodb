@@ -10,5 +10,6 @@ records:
     name: ProviderKey
   - id: System.Identity/ProviderDisplayName
     name: ProviderDisplayName
+    isOptional: true
   - id: System.Identity/UserId
     name: UserId    

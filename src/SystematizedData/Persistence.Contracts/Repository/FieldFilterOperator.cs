@@ -11,5 +11,10 @@ public enum FieldFilterOperator
     In = 6,
     NotIn = 7,
     Like = 8,
-    MatchRegEx = 9
+    MatchRegEx = 9,
+   
+    /// <summary>
+    /// Arrays: Any element equals
+    /// </summary>
+    AnyEq = 10
 }

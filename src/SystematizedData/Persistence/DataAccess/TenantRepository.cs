@@ -3,13 +3,13 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects.Ck;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
-using Meshmakers.Octo.ConstructionKit.Engine.Resolvers;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.InsertModifiers;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Mutation;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
@@ -46,7 +46,7 @@ internal class TenantRepository : ITenantRepositoryInternal
 
     #region Transaction Handling
 
-    public async Task<IOctoSession> StartSessionAsync()
+    public async Task<IOctoSession> GetSessionAsync()
     {
         return await _databaseContext.GetSessionAsync();
     }
@@ -108,6 +108,7 @@ internal class TenantRepository : ITenantRepositoryInternal
     public async Task InsertOneRtEntityAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, RtEntity rtEntity)
     {
         var rtCollection = _databaseContext.GetRtCollection<RtEntity>(ckTypeId);
+        PrepareEntityForModification(rtEntity);
         await rtCollection.InsertAsync(session, rtEntity);
     }
 
@@ -142,6 +143,15 @@ internal class TenantRepository : ITenantRepositoryInternal
         await rtCollection.ReplaceByIdAsync(session, rtId, rtEntity);
     }
 
+    public async Task ReplaceOneRtEntityAsync<TEntity>(IOctoSession session, ICollection<FieldFilter> fieldFilters, TEntity entity) where TEntity : RtEntity, new()
+    {
+        var rtCollection = _databaseContext.GetRtCollection<TEntity>();
+
+        var mutation = new RtMutation<TEntity>(rtCollection);
+        mutation.AddFieldFilters(fieldFilters);
+        await mutation.ExecuteReplaceOneAsync(session, entity);
+    }
+
     public async Task DeleteOneRtEntityByRtIdAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, OctoObjectId rtId)
     {
         var rtCollection = _databaseContext.GetRtCollection<RtEntity>(ckTypeId);
@@ -165,7 +175,25 @@ internal class TenantRepository : ITenantRepositoryInternal
         
         await DeleteOneRtEntityAsync<TEntity>(session, ckTypeId, fieldFilters);
     }
-    
+
+    public async Task DeleteManyRtEntitiesAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, ICollection<FieldFilter> fieldFilters)
+    {
+        await DeleteManyRtEntitiesAsync<RtEntity>(session, ckTypeId, fieldFilters);
+    }
+
+    public async Task DeleteManyRtEntitiesAsync<TEntity>(IOctoSession session, ICollection<FieldFilter> fieldFilters) where TEntity : RtEntity, new()
+    {
+        var ckTypeId = RtEntityExtensions.GetCkTypeId<TEntity>();
+        
+        await DeleteManyRtEntitiesAsync<TEntity>(session, ckTypeId, fieldFilters);
+    }
+
+    public IQueryable<TEntity> AsQueryable<TEntity>() where TEntity : RtEntity, new()
+    {
+        var rtCollection = _databaseContext.GetRtCollection<TEntity>();
+        return rtCollection.GetMongoCollection().AsQueryable();
+    }
+
     private async Task DeleteOneRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId, ICollection<FieldFilter> fieldFilters) where TEntity : RtEntity, new()
     {
         var rtCollection = _databaseContext.GetRtCollection<TEntity>(ckTypeId);
@@ -173,6 +201,15 @@ internal class TenantRepository : ITenantRepositoryInternal
         var mutation = new RtMutation<TEntity>(rtCollection);
         mutation.AddFieldFilters(fieldFilters);
         await mutation.ExecuteDeleteOneAsync(session);
+    }
+    
+    private async Task DeleteManyRtEntitiesAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId, ICollection<FieldFilter> fieldFilters) where TEntity : RtEntity, new()
+    {
+        var rtCollection = _databaseContext.GetRtCollection<TEntity>(ckTypeId);
+
+        var mutation = new RtMutation<TEntity>(rtCollection);
+        mutation.AddFieldFilters(fieldFilters);
+        await mutation.ExecuteDeleteManyAsync(session);
     }
 
     public async Task<IBulkImportResult> BulkRtAssociationsAsync(IOctoSession session,

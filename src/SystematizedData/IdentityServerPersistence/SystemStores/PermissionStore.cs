@@ -1,54 +1,55 @@
-using System.Threading.Tasks;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Backend.Persistence.DataAccess.Internal;
-using Meshmakers.Octo.Backend.Persistence.MongoDb;
-using Meshmakers.Octo.Backend.Persistence.SystemEntities;
-using Meshmakers.Octo.SystematizedData.Persistence;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
+using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
 
 public class PermissionStore : IOctoPermissionStore
 {
-    private readonly ICachedCollection<OctoPermission> _permissionCollection;
-    private readonly IRepository _repository;
+    private readonly ITenantRepository _tenantRepository;
 
-    public PermissionStore(ISystemContext systemContext)
+    public PermissionStore(ITenantRepository tenantRepository)
     {
-        _repository = systemContext.SystemDatabase;
-
-        _permissionCollection = _repository.GetCollection<OctoPermission>();
+        _tenantRepository = tenantRepository;
     }
 
-    public async Task StorePermissionAsync(OctoPermission octoPermission)
+    public async Task StorePermissionAsync(RtPermission octoPermission)
     {
-        var session = await _repository.StartSessionAsync();
+        var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
         var persistentPermission = await GetPermissionById(octoPermission.PermissionId);
         if (persistentPermission == null)
         {
-            await _permissionCollection.InsertAsync(session, octoPermission);
+            await _tenantRepository.InsertOneRtEntityAsync(session, octoPermission);
         }
         else
         {
-            await _permissionCollection.ReplaceByIdAsync(session, persistentPermission.Id,
+            await _tenantRepository.ReplaceOneRtEntityByIdAsync(session, persistentPermission.RtId,
                 octoPermission);
         }
 
         await session.CommitTransactionAsync();
     }
 
-    public async Task<OctoPermission> GetPermissionById(string permissionId)
+    public async Task<RtPermission?> GetPermissionById(string permissionId)
     {
         ArgumentValidation.ValidateString(nameof(permissionId), permissionId);
 
-        var session = await _repository.StartSessionAsync();
+        var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        var result = await _permissionCollection.FindSingleOrDefaultAsync(session, x => x.PermissionId == permissionId);
+        DataQueryOperation dataQueryOperation = new()
+        {
+            FieldFilters = new List<FieldFilter>
+            {
+                new(nameof(RtPermission.PermissionId), FieldFilterOperator.Equals, permissionId)
+            }
+        };
+        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtPermission>(session, dataQueryOperation);
 
         await session.CommitTransactionAsync();
-        return result;
+        return result.Items.FirstOrDefault();
     }
 
     public async Task EnsurePermission(string permissionId)
@@ -56,7 +57,7 @@ public class PermissionStore : IOctoPermissionStore
         var permission = await GetPermissionById(permissionId);
         if (permission == null)
         {
-            permission = new OctoPermission
+            permission = new RtPermission
             {
                 PermissionId = permissionId
             };

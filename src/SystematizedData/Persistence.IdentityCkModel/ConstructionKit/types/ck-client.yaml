@@ -68,10 +68,12 @@ types:
         name: PostLogoutRedirectUris        
       - id: System.Identity/FrontChannelLogoutUri
         name: FrontChannelLogoutUri
+        isOptional: true
       - id: System.Identity/FrontChannelLogoutSessionRequired
         name: FrontChannelLogoutSessionRequired
       - id: System.Identity/BackChannelLogoutUri
         name: BackChannelLogoutUri
+        isOptional: true
       - id: System.Identity/BackChannelLogoutSessionRequired
         name: BackChannelLogoutSessionRequired
       - id: System.Identity/AllowOfflineAccess
@@ -94,6 +96,7 @@ types:
         name: SlidingRefreshTokenLifetime
       - id: System.Identity/ConsentLifetime
         name: ConsentLifetime
+        isOptional: true        
       - id: System.Identity/UpdateAccessTokenClaimsOnRefresh
         name: UpdateAccessTokenClaimsOnRefresh
       - id: System.Identity/RefreshTokenExpiration
@@ -112,21 +115,29 @@ types:
         name: AlwaysSendClientClaims
       - id: System.Identity/ClientClaimsPrefix
         name: ClientClaimsPrefix
+        isOptional: true
       - id: System.Identity/PairWiseSubjectSalt
         name: PairWiseSubjectSalt
+        isOptional: true
       - id: System.Identity/UserSsoLifetime
         name: UserSsoLifetime
+        isOptional: true
       - id: System.Identity/UserCodeType
         name: UserCodeType
+        isOptional: true
       - id: System.Identity/DeviceCodeLifetime
         name: DeviceCodeLifetime
       - id: System.Identity/CibaLifetime
         name: CibaLifetime
+        isOptional: true
       - id: System.Identity/PollingInterval
         name: PollingInterval
+        isOptional: true
       - id: System.Identity/CoordinateLifetimeWithUserSession
         name: CoordinateLifetimeWithUserSession
+        isOptional: true
       - id: System.Identity/AllowedCorsOrigins
         name: AllowedCorsOrigins
       - id: System.Identity/InitiateLoginUri
         name: InitiateLoginUri
+        isOptional: true

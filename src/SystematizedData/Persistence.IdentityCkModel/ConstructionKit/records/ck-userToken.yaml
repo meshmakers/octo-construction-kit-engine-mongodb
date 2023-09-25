@@ -10,3 +10,6 @@ records:
     name: Name
   - id: System.Identity/UserId
     name: UserId    
+  - id: System.Identity/Value
+    name: Value
+    isOptional: true

@@ -16,18 +16,22 @@ types:
     name: SubjectText
   - id: System.Notification/BodyText
     name: BodyText
+    isOptional: true
   - id: System.Notification/RecipientAddress
     name: RecipientAddress
   - id: System.Notification/Type
     name: NotificationType
   - id: System.Notification/SentDateTime
     name: SentDateTime
+    isOptional: true
   - id: System.Notification/LastTryDateTime
     name: LastTryDateTime
+    isOptional: true
   - id: System.Notification/Status
     name: SendStatus
   - id: System.Notification/ErrorText
     name: ErrorText
+    isOptional: true
 - typeId: Page
   derivedFromCkTypeId: System/Entity
   attributes:
@@ -41,22 +45,18 @@ attributes:
   valueType: String
 - id: BodyText
   valueType: String
-  isOptional: true
 - id: SubjectTemplate
   valueType: String
 - id: SubjectText
   valueType: String
 - id: SentDateTime
   valueType: DateTime
-  isOptional: true
 - id: LastTryDateTime
   valueType: DateTime
-  isOptional: true
 - id: RecipientAddress
   valueType: String
 - id: ErrorText
   valueType: String
-  isOptional: true
 - id: Type
   valueType: Enum
   valueCkEnumId: System.Notification/NotificationTypes

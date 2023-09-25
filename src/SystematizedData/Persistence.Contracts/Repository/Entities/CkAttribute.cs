@@ -39,11 +39,6 @@ public class CkAttribute
     /// Defines the record of the attribute if the value type is a record.
     /// </summary>
     public CkId<CkRecordId>? ValueCkRecordId { get; set; }
-
-    /// <summary>
-    /// If true, the attribute is optional, that means it can be null
-    /// </summary>
-    public bool IsOptional { get; set; }
     
     /// <summary>
     /// An optional description of the attribute

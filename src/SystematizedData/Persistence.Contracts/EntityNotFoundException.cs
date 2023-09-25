@@ -1,7 +1,7 @@
-﻿using System;
-using System.Runtime.Serialization;
+﻿using System.Runtime.Serialization;
+using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
-namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
+namespace Persistence.Contracts;
 
 [Serializable]
 public class EntityNotFoundException : OperationFailedException

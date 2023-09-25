@@ -10,6 +10,7 @@ types:
     name: TenantId
   - id: System/ParentTenantId
     name: ParentTenantId
+    isOptional: true
   - id: System/DatabaseName
     name: DatabaseName
   indexes:
@@ -26,6 +27,7 @@ types:
     name: End
   - id: System/AutoIncrement.CurrentValue
     name: CurrentValue
+    isOptional: true
 - typeId: Query
   derivedFromCkTypeId: System/Entity
   attributes:
@@ -35,12 +37,16 @@ types:
     name: Columns
   - id: System/Query.Sorting
     name: Sorting
+    isOptional: true
   - id: System/Query.FieldFilter
     name: FieldFilter
+    isOptional: true
   - id: System/Query.TextSearchFilter
     name: TextSearchFilter
+    isOptional: true
   - id: System/Query.AttributeSearchFilter
     name: AttributeSearchFilter
+    isOptional: true
   - id: System/Name
     name: Name
 - typeId: Configuration
@@ -49,6 +55,7 @@ types:
   attributes:
   - id: System/ConfigurationValue
     name: ConfigurationValue
+    isOptional: true
 - typeId: ServiceHook
   derivedFromCkTypeId: System/Entity
   attributes:
@@ -66,6 +73,7 @@ types:
     name: ServiceHookAction
   - id: System/ServiceHook.ApiKey
     name: ServiceHookApiKey
+    isOptional: true
 associationRoles:
 - id: ParentChild
   inboundName: Parent
@@ -82,10 +90,8 @@ attributes:
   valueType: String
 - id: DisplayName
   valueType: String
-  isOptional: true
 - id: Description
   valueType: String
-  isOptional: true
   description: Further information on the item.
 - id: Enabled
   valueType: Boolean
@@ -93,7 +99,6 @@ attributes:
   valueType: String
 - id: ParentTenantId
   valueType: String
-  isOptional: true
 - id: DatabaseName
   valueType: String
 - id: AutoIncrement.Start
@@ -102,33 +107,26 @@ attributes:
   valueType: Int
 - id: AutoIncrement.CurrentValue
   valueType: Int
-  isOptional: true
 - id: ConfigurationValue
   valueType: String
-  isOptional: true
 - id: Query.Columns
   valueType: String
 - id: Query.CkTypeId
   valueType: String
 - id: Query.Sorting
   valueType: String
-  isOptional: true
 - id: Query.FieldFilter
   valueType: String
-  isOptional: true
 - id: Query.TextSearchFilter
   valueType: String
-  isOptional: true
 - id: Query.AttributeSearchFilter
   valueType: String
-  isOptional: true
 - id: ServiceHook.Uri
   valueType: String
 - id: ServiceHook.Action
   valueType: String
 - id: ServiceHook.ApiKey
   valueType: String
-  isOptional: true
 records: []
 enums: []
 modelId: System

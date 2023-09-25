@@ -7,8 +7,11 @@ types:
     attributes:
       - id: System/Name
         name: Name
+        isOptional: true
+        
       - id: System.Identity/NormalizedName
-        name: NormalizedName        
+        name: NormalizedName
+        isOptional: true
 
       - id: System.Identity/ConcurrencyStamp
         name: ConcurrencyStamp
@@ -18,3 +21,7 @@ types:
 
       - id: System.Identity/IdentityRoleIds
         name: IdentityRoleIds
+
+      - id: System.Identity/RoleClaims
+        name: Claims
+        isOptional: true

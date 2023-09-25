@@ -14,9 +14,6 @@ public interface IDatabaseCollection<TDocument> : ICkDatabaseCollection<TDocumen
     Task<ICollection<TDocument>> FindManyAsync(IOctoSession session, FilterDefinition<TDocument> filterDefinition,
         SortDefinition<TDocument>? sort = null, int? skip = null, int? take = null);
 
-
-
-
     Task InsertMultipleAsync(IOctoSession session, IEnumerable<TDocument> documentCollection);
 
 
@@ -33,7 +30,9 @@ public interface IDatabaseCollection<TDocument> : ICkDatabaseCollection<TDocumen
 
     Task DeleteManyAsync<TField>(IOctoSession session, IEnumerable<TField> ids);
     Task DeleteManyAsync(IOctoSession session, Expression<Func<TDocument, bool>> expression);
+    Task DeleteManyAsync(IOctoSession session, FilterDefinition<TDocument> filter);
 
+    Task ReplaceOneAsync(IOctoSession session, FilterDefinition<TDocument> filter, TDocument entity);
 
     IUpdateStream<TDocument> Subscribe(UpdateTypes updateTypes,
         Func<FilterDefinition<ChangeStreamDocument<TDocument>>?>? documentFilterFunc = null,

@@ -5,6 +5,7 @@ using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using Persistence.Contracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess.Internal;
 

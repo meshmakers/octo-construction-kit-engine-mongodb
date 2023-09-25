@@ -6,40 +6,50 @@ types:
   isAbstract: false
   attributes:
   - id: System.Identity/UserName
-    name: UserName    
+    name: UserName
+    isOptional: true
     
   - id: System.Identity/NormalizedUserName
     name: NormalizedUserName
+    isOptional: true
     
   - id: System.Identity/FirstName
     name: FirstName
+    isOptional: true
 
   - id: System.Identity/LastName
-    name: LastName    
+    name: LastName
+    isOptional: true
     
   - id: System/Description
     name: Description
+    isOptional: true
     
   - id: System.Identity/Email
     name: Email
+    isOptional: true
     
   - id: System.Identity/NormalizedEmail
     name: NormalizedEmail
+    isOptional: true
     
   - id: System.Identity/EmailConfirmed
     name: EmailConfirmed
     
   - id: System.Identity/PasswordHash
     name: PasswordHash
+    isOptional: true
     
   - id: System.Identity/SecurityStamp
     name: SecurityStamp
+    isOptional: true
     
   - id: System.Identity/ConcurrencyStamp
     name: ConcurrencyStamp
     
   - id: System.Identity/PhoneNumber
     name: PhoneNumber
+    isOptional: true
     
   - id: System.Identity/PhoneNumberConfirmed
     name: PhoneNumberConfirmed
@@ -49,7 +59,8 @@ types:
     
   - id: System.Identity/LockoutEnd
     name: LockoutEnd
-    
+    isOptional: true
+  
   - id: System.Identity/LockoutEnabled
     name: LockoutEnabled
     
@@ -59,14 +70,16 @@ types:
   - id: System.Identity/ResetPasswordOnLogin
     name: ResetPasswordOnLogin
     
-  - id: System.Identity/RoleNames
-    name: RoleNames
+  - id: System.Identity/RoleIds
+    name: RoleIds
     
-  - id: System.Identity/Claims
-    name: Claim    
-    
+  - id: System.Identity/UserClaims
+    name: Claims
+    isOptional: true
+  
   - id: System.Identity/UserLogins
-    name: UserLogin
+    name: UserLogins
+    isOptional: true
     
   - id: System.Identity/UserTokens
     name: UserTokens    

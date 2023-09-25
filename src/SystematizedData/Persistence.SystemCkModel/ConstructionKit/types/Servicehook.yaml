@@ -19,3 +19,4 @@ types:
     name: ServiceHookAction
   - id: System/ServiceHook.ApiKey
     name: ServiceHookApiKey
+    isOptional: true
