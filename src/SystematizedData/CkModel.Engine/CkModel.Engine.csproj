@@ -6,7 +6,6 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\..\Common\DistributedCache\DistributedCache.csproj" />
       <ProjectReference Include="..\Persistence.InternalContracts\Persistence.InternalContracts.csproj" />
     </ItemGroup>
 

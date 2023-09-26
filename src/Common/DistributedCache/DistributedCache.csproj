@@ -4,9 +4,6 @@
         <AssemblyName>Meshmakers.Octo.Common.DistributedCache</AssemblyName>
         <IsPackable>true</IsPackable>
         <PackageId>Meshmakers.Octo.Common.DistributedCache</PackageId>
-        <PackageLicenseFile>LICENSE</PackageLicenseFile>
-        <PackageProjectUrl>https://www.meshmakers.io</PackageProjectUrl>
-        <RepositoryUrl>https://github.com/meshmakers/octomesh</RepositoryUrl>
         <RootNamespace>Meshmakers.Octo.Common.DistributedCache</RootNamespace>
     </PropertyGroup>
 

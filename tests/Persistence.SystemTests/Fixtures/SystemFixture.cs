@@ -35,15 +35,6 @@ public class SystemFixture : ConfigurationFixture, IDisposable
     {
 
         return Provider.GetRequiredService<ISystemContextInternal>();
-            //
-            // var systemContext = new SystemContext(new OptionsWrapper<OctoSystemConfiguration>(
-            //     new OctoSystemConfiguration
-            //     {
-            //         AdminUserPassword = options.AdminUserPassword,
-            //         DatabaseUserPassword = options.DatabaseUserPassword
-            //     }), cacheService, systemModelService);
-            //
-            // return systemContext;
     }
 
     public void Dispose()

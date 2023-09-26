@@ -5,10 +5,7 @@
         <Description>The persistance layer of Octo Mesh (direct read/write operations to database)</Description>
         <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
         <PackageId>Meshmakers.Octo.SystematizedData.Persistence</PackageId>
-        <PackageLicenseFile>LICENSE</PackageLicenseFile>
-        <PackageProjectUrl>https://www.meshmakers.io</PackageProjectUrl>
         <RootNamespace>Meshmakers.Octo.SystematizedData.Persistence</RootNamespace>
-        <Version>1.0.0</Version>
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">

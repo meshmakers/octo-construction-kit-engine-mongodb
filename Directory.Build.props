@@ -4,14 +4,17 @@
     </PropertyGroup>
     <Import Condition="Exists($(BaseDirectoryBuildPath))" Project="$(BaseDirectoryBuildPath)" />
     <PropertyGroup>
-        <RepositoryUrl>https://github.com/meshmakers/octo-core</RepositoryUrl>
-        <Authors>meshmakers GmbH</Authors>
-        <Company>meshmakers GmbH</Company>
-        <Copyright>https://www.meshmakers.io</Copyright>
+        <Authors>meshmakers GmbH and Contributors</Authors>
+        <Company>meshmakers GmbH and Contributors</Company>
+        <Copyright>(c) 2022-2023 meshmakers GmbH</Copyright>
         <LangVersion>latestmajor</LangVersion>
         <Nullable>enable</Nullable>
         <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
         <ImplicitUsings>true</ImplicitUsings>
+        <RepositoryUrl>https://github.com/meshmakers/octo-core</RepositoryUrl>
+        <PackageLicenseFile>LICENSE</PackageLicenseFile>
+        <PackageProjectUrl>https://www.meshmakers.io</PackageProjectUrl>
+        <PackageTags>Octo data mesh iot</PackageTags>
         <TargetFramework>net7.0</TargetFramework>
     </PropertyGroup>
 </Project>

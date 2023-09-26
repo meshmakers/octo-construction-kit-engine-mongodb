@@ -3,8 +3,6 @@
     <PropertyGroup>
         <AssemblyName>Meshmakers.Octo.Common.Internationalization</AssemblyName>
         <PackageId>Meshmakers.Octo.Common.Intenationalization</PackageId>
-        <PackageLicenseFile>LICENSE</PackageLicenseFile>
-        <RepositoryUrl>https://github.com/meshmakers/octomesh</RepositoryUrl>
         <RootNamespace>Meshmakers.Octo.Common.Internationalization</RootNamespace>
         <IsPackable>false</IsPackable>
         <TargetFramework>net7.0</TargetFramework>
