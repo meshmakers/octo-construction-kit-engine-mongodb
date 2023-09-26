@@ -2,12 +2,12 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
-using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
+using Meshmakers.Octo.Runtime.Contracts.DataTransferObjects;
+using Meshmakers.Octo.Runtime.Contracts.Serialization;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Microsoft.Extensions.Logging;
 using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
-using RtEntityDto = Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects.RtEntityDto;
+using RtEntityDto = Meshmakers.Octo.Runtime.Contracts.DataTransferObjects.RtEntityDto;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
 
@@ -15,11 +15,13 @@ public class ExportRtModelCommand : IExportRtModelCommand
 {
     private readonly ILogger<ExportRtModelCommand> _logger;
     private readonly ISystemContext _systemContext;
+    private readonly IRtSerializer _rtSerializer;
 
-    internal ExportRtModelCommand(ILogger<ExportRtModelCommand> logger, ISystemContext systemContext)
+    internal ExportRtModelCommand(ILogger<ExportRtModelCommand> logger, ISystemContext systemContext, IRtSerializer rtSerializer)
     {
         _logger = logger;
         _systemContext = systemContext;
+        _rtSerializer = rtSerializer;
     }
 
 
@@ -71,7 +73,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
             var entityCacheItem = tenantRepository.GetEntityCacheItem(ckTypeId);
 
             var model = new RtModelRootDto();
-            model.RtEntities.AddRange(resultSet.Items.Select(entity =>
+            model.Entities.AddRange(resultSet.Items.Select(entity =>
             {
                 var exEntity = new RtEntityDto
                 {
@@ -96,7 +98,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
             }));
 
             await using var streamWriter = new StreamWriter(filePath);
-            await RtSerializer.SerializeAsync(streamWriter, model);
+            await _rtSerializer.SerializeAsync(streamWriter, model);
 
             await session.CommitTransactionAsync();
         }

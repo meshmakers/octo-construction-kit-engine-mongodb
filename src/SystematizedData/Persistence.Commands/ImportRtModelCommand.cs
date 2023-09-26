@@ -1,7 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
-using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
+using Meshmakers.Octo.Runtime.Contracts.DataTransferObjects;
+using Meshmakers.Octo.Runtime.Contracts.Serialization;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Microsoft.Extensions.Logging;
 using Persistence.InternalContracts;
@@ -14,6 +14,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
 {
     private readonly ILogger<ImportRtModelCommand> _logger;
     private readonly ISystemContextInternal _systemContext;
+    private readonly IRtSerializer _rtSerializer;
     private const int Max = 5000;
     private readonly HashSet<OctoObjectId> _entityImportIds;
     private readonly ConcurrentQueue<RtAssociation> _importAssociationQueue;
@@ -23,10 +24,11 @@ public class ImportRtModelCommand : IImportRtModelCommand
 
     private int _entityProgressCount;
 
-    public ImportRtModelCommand(ILogger<ImportRtModelCommand> logger, ISystemContextInternal systemContext)
+    public ImportRtModelCommand(ILogger<ImportRtModelCommand> logger, ISystemContextInternal systemContext, IRtSerializer rtSerializer)
     {
         _logger = logger;
         _systemContext = systemContext;
+        _rtSerializer = rtSerializer;
 
         _entityImportIds = new HashSet<OctoObjectId>();
         _importEntityQueue = new ConcurrentQueue<RtEntity>();
@@ -47,7 +49,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
 
             using (var stream = new StreamReader(jsonText))
             {
-                await RtSerializer.DeserializeAsync(stream, x => ImportEntity(session, x, tenantRepository), cancellationToken);
+                //await _rtSerializer.DeserializeAsync(stream, "-", x => ImportEntity(session, x, tenantRepository), cancellationToken);
             }
 
             // Finish the last entities
@@ -75,7 +77,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
 
             using (var stream = File.OpenText(filePath))
             {
-                await RtSerializer.DeserializeAsync(stream, x => ImportEntity(session, x, tenantRepository), cancellationToken);
+               // await RtSerializer.DeserializeAsync(stream, x => ImportEntity(session, x, tenantRepository), cancellationToken);
             }
 
             // Finish the last entities
