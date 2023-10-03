@@ -15,14 +15,11 @@ public class ImportRtModelCommand : IImportRtModelCommand
     private readonly ILogger<ImportRtModelCommand> _logger;
     private readonly ISystemContextInternal _systemContext;
     private readonly IRtSerializer _rtSerializer;
-    private const int Max = 5000;
     private readonly HashSet<OctoObjectId> _entityImportIds;
     private readonly ConcurrentQueue<RtAssociation> _importAssociationQueue;
 
     private readonly ConcurrentQueue<RtEntity> _importEntityQueue;
     private int _associationsCount;
-
-    private int _entityProgressCount;
 
     public ImportRtModelCommand(ILogger<ImportRtModelCommand> logger, ISystemContextInternal systemContext, IRtSerializer rtSerializer)
     {
@@ -47,15 +44,12 @@ public class ImportRtModelCommand : IImportRtModelCommand
         {
             session.StartTransaction();
 
-            using (var stream = new StreamReader(jsonText))
-            {
-                //await _rtSerializer.DeserializeAsync(stream, "-", x => ImportEntity(session, x, tenantRepository), cancellationToken);
-            }
+            OperationResult operationResult = new();
+            var rtModelRoot = await _rtSerializer.DeserializeAsync(jsonText, "-", operationResult);
+            await ImportEntityAsync(session, rtModelRoot.Entities, tenantRepository);
 
-            // Finish the last entities
-            await ImportToDatabase(session, tenantRepository);
-
-            _logger.LogInformation("{Count} entities, {AssociationsCount} associations imported", _entityImportIds.Count, _associationsCount);
+            _logger.LogInformation("{Count} entities, {AssociationsCount} associations imported", _entityImportIds.Count,
+                _associationsCount);
         }
         catch (Exception e)
         {
@@ -75,15 +69,20 @@ public class ImportRtModelCommand : IImportRtModelCommand
             var tenantContext = await _systemContext.GetChildTenantContextInternalAsync(tenantId);
             var tenantRepository = await tenantContext.GetTenantRepositoryInternalAsync();
 
-            using (var stream = File.OpenText(filePath))
+            await using (var stream = File.OpenRead(filePath))
             {
-               // await RtSerializer.DeserializeAsync(stream, x => ImportEntity(session, x, tenantRepository), cancellationToken);
+                var rtDeserializeStream = await _rtSerializer.DeserializeStreamAsync(stream, cancellationToken);
+                rtDeserializeStream.BulkDeserialized += async (_, args) =>
+                {
+                    await ImportEntityAsync(session, args.DeserializedEntities, tenantRepository);
+
+                    args.IsHandled = true;
+                };
+                await rtDeserializeStream.ReadAsync();
             }
 
-            // Finish the last entities
-            await ImportToDatabase(session, tenantRepository);
-
-            _logger.LogInformation("{Count} entities, {AssociationsCount} associations imported", _entityImportIds.Count, _associationsCount);
+            _logger.LogInformation("{Count} entities, {AssociationsCount} associations imported", _entityImportIds.Count,
+                _associationsCount);
         }
         catch (Exception e)
         {
@@ -92,67 +91,75 @@ public class ImportRtModelCommand : IImportRtModelCommand
         }
     }
 
-    private async Task ImportEntity(IOctoSession session, RtEntityDto modelRtEntity, ITenantRepositoryInternal tenantRepository)
+    private async Task ImportEntityAsync(IOctoSession session, IEnumerable<RtEntityDto> modelRtEntities,
+        ITenantRepositoryInternal tenantRepository)
     {
-        var progress = Interlocked.Increment(ref _entityProgressCount);
-        if (progress > Max)
+        await Parallel.ForEachAsync(modelRtEntities, (modelRtEntity, token) =>
         {
-            _logger.LogInformation("{EntityCount} entities (total imports of {Count}) imported", _importEntityQueue.Count, _entityImportIds.Count);
-            Interlocked.Exchange(ref _entityProgressCount, 1);
+            var entityCacheItem = tenantRepository.GetEntityCacheItem(modelRtEntity.CkTypeId);
 
-            await ImportToDatabase(session, tenantRepository);
-        }
+            var rtEntity = tenantRepository.CreateTransientRtEntity(modelRtEntity.CkTypeId);
+            rtEntity.RtId = modelRtEntity.RtId;
+            rtEntity.RtChangedDateTime = modelRtEntity.RtChangedDateTime;
+            rtEntity.RtCreationDateTime = modelRtEntity.RtCreationDateTime;
+            rtEntity.RtWellKnownName = modelRtEntity.RtWellKnownName;
 
-        var entityCacheItem = tenantRepository.GetEntityCacheItem(modelRtEntity.CkTypeId);
-
-        var rtEntity = tenantRepository.CreateTransientRtEntity(modelRtEntity.CkTypeId);
-        rtEntity.RtId = modelRtEntity.RtId;
-        rtEntity.RtChangedDateTime = modelRtEntity.RtChangedDateTime;
-        rtEntity.RtCreationDateTime = modelRtEntity.RtCreationDateTime;
-        rtEntity.RtWellKnownName = modelRtEntity.RtWellKnownName;
-
-        if (_entityImportIds.Contains(rtEntity.RtId))
-        {
-            _logger.LogError("'{RtEntityRtId}' already imported", rtEntity.RtId);
-            return;
-        }
-
-        _entityImportIds.Add(rtEntity.RtId);
-
-        foreach (var modelAttribute in modelRtEntity.Attributes)
-        {
-            var attributeCacheItem =
-                entityCacheItem.AllAttributes.Values.FirstOrDefault(a => a.CkAttributeId.Equals(modelAttribute.Id));
-            if (attributeCacheItem == null)
+            if (_entityImportIds.Contains(rtEntity.RtId))
             {
-                _logger.LogError("'{ModelAttributeId}' does not exit on type '{CkTypeId}'", modelAttribute.Id, entityCacheItem.CkTypeId);
-                return;
+                _logger.LogError("'{RtEntityRtId}' already imported", rtEntity.RtId);
+                return ValueTask.CompletedTask;
             }
 
-            rtEntity.SetAttributeValue(attributeCacheItem.AttributeName, attributeCacheItem.ValueType,
-                modelAttribute.Value);
-        }
-
-        _importEntityQueue.Enqueue(rtEntity);
-
-        if (modelRtEntity.Associations != null && modelRtEntity.Associations.Count > 0)
-        {
-            var originId = rtEntity.RtId;
-
-            foreach (var association in modelRtEntity.Associations)
+            lock (_entityImportIds)
             {
-                var rtAssociation = new RtAssociation
+                _entityImportIds.Add(rtEntity.RtId);
+            }
+
+            token.ThrowIfCancellationRequested();
+
+            foreach (var modelAttribute in modelRtEntity.Attributes)
+            {
+                var attributeCacheItem =
+                    entityCacheItem.AllAttributes.Values.FirstOrDefault(a => a.CkAttributeId.Equals(modelAttribute.Id));
+                if (attributeCacheItem == null)
                 {
-                    AssociationRoleId = association.RoleId,
-                    OriginRtId = originId,
-                    OriginCkTypeId = rtEntity.CkTypeId,
-                    TargetRtId = association.TargetRtId,
-                    TargetCkTypeId = association.TargetCkTypeId
-                };
-                _importAssociationQueue.Enqueue(rtAssociation);
-                Interlocked.Increment(ref _associationsCount);
+                    _logger.LogError("'{ModelAttributeId}' does not exit on type '{CkTypeId}'", modelAttribute.Id,
+                        entityCacheItem.CkTypeId);
+                    throw CommandExecutionFailedException.AttributeNotFound(modelAttribute.Id,
+                        entityCacheItem.CkTypeId);
+                }
+
+                rtEntity.SetAttributeValue(attributeCacheItem.AttributeName, attributeCacheItem.ValueType,
+                    modelAttribute.Value);
             }
-        }
+
+            _importEntityQueue.Enqueue(rtEntity);
+
+            if (modelRtEntity.Associations != null && modelRtEntity.Associations.Count > 0)
+            {
+                var originId = rtEntity.RtId;
+
+                foreach (var association in modelRtEntity.Associations)
+                {
+                    var rtAssociation = new RtAssociation
+                    {
+                        AssociationRoleId = association.RoleId,
+                        OriginRtId = originId,
+                        OriginCkTypeId = rtEntity.CkTypeId,
+                        TargetRtId = association.TargetRtId,
+                        TargetCkTypeId = association.TargetCkTypeId
+                    };
+                    _importAssociationQueue.Enqueue(rtAssociation);
+                    Interlocked.Increment(ref _associationsCount);
+                }
+            }
+
+            return ValueTask.CompletedTask;
+        });
+        
+        _logger.LogInformation("{EntityCount} entities (total imports of {Count}) imported", _importEntityQueue.Count,
+            _entityImportIds.Count);
+        await ImportToDatabase(session, tenantRepository);
     }
 
     private async Task ImportToDatabase(IOctoSession session, ITenantRepositoryInternal tenantRepository)

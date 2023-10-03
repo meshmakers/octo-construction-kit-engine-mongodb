@@ -50,4 +50,9 @@ public class CommandExecutionFailedException : Exception
     {
         return new CommandExecutionFailedException($"Query '{queryId}‘ has no QueryCkTypeId attribute set.");
     }
+
+    public static Exception AttributeNotFound(CkId<CkAttributeId> modelAttributeId, CkId<CkTypeId> ckTypeId)
+    {
+        return new CommandExecutionFailedException($"Attribute '{modelAttributeId}' does not exist in type '{ckTypeId}'.");
+    }
 }

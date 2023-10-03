@@ -5,7 +5,7 @@
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2309.26005" />
+      <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2310.3001" />
     </ItemGroup>
 
 </Project>
