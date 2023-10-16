@@ -32,7 +32,7 @@
         <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
         <PackageReference Include="NLog" Version="5.2.4" />
         <PackageReference Include="System.Reactive" Version="6.0.0" />
-        <PackageReference Include="MongoDB.Bson" Version="2.20.0" />
+        <PackageReference Include="MongoDB.Bson" Version="2.22.0" />
         <PackageReference Include="MongoDB.Driver" Version="2.20.0" />
         <PackageReference Include="AspNetCore.Identity.Mongo" Version="8.3.3" />
     </ItemGroup>
