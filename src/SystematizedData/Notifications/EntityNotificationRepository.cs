@@ -2,9 +2,11 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.Common.Shared.Services;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.Notifications.ConstructionKit.Generated.System.Notification.v1;
 using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
+using AssociationModOptionsDto = Meshmakers.Octo.Common.Shared.DataTransferObjects.AssociationModOptionsDto;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemStores;
 
@@ -122,7 +124,7 @@ public class EntityNotificationRepository : INotificationRepository
         session.StartTransaction();
 
         var entityUpdateInfos = await Task.WhenAll(notificationMessages.Select(async dto =>
-            new EntityUpdateInfo(await PrepareUpdateRtEntityAsync(session, dto, tenantRepository),
+            new EntityUpdateInfo<RtNotificationMessage>(await PrepareUpdateRtEntityAsync(session, dto, tenantRepository),
                 EntityModOptions.Update)));
 
         await tenantRepository.ApplyChanges(session, entityUpdateInfos);

@@ -2,10 +2,12 @@ using System.Globalization;
 using System.Security.Claims;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.SystematizedData.Persistence;
+using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Microsoft.AspNetCore.Identity;
 using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
+using PersistenceException = Meshmakers.Octo.SystematizedData.Persistence.PersistenceException;
 
 namespace Meshmakers.Octo.Backend.Persistence.SystemStores;
 
@@ -60,6 +62,7 @@ public sealed class OctoUserStore :
             var token = await FindTokenAsync(session, user, loginProvider, name);
             if (token == null)
             {
+                user.UserTokens ??= new List<RtUserTokenRecord>();
                 user.UserTokens.Add(new RtUserTokenRecord
                 {
                     UserId = user.RtId.ToString(),
@@ -71,6 +74,7 @@ public sealed class OctoUserStore :
             else
             {
                 token.Value = value;
+                user.UserTokens ??= new List<RtUserTokenRecord>();
                 user.UserTokens[
                         user.UserTokens.FindIndex(
                             x => x.LoginProvider == token.LoginProvider && x.Name == token.Name)] =
@@ -96,7 +100,7 @@ public sealed class OctoUserStore :
             session.StartTransaction();
 
             var entry = await FindTokenAsync(session, user, loginProvider, name);
-            if (entry != null)
+            if (entry != null && user.UserTokens != null)
             {
                 user.UserTokens.RemoveAll(x => x.LoginProvider == entry.LoginProvider && x.Name == entry.Name);
             }
@@ -202,13 +206,8 @@ public sealed class OctoUserStore :
         using var session = await _tenantRepository.GetSessionAsync().ConfigureAwait(false);
         session.StartTransaction();
 
-        DataQueryOperation dataQueryOperation = new()
-        {
-            FieldFilters = new List<FieldFilter>
-            {
-                new(nameof(RtUser.NormalizedUserName), FieldFilterOperator.Equals, normalizedUserName)
-            }
-        };
+        var dataQueryOperation = DataQueryOperation.Create()
+            .FieldFilter(nameof(RtUser.NormalizedUserName), FieldFilterOperator.Equals, normalizedUserName);
 
         var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtUser>(session, dataQueryOperation);
 
@@ -443,14 +442,8 @@ public sealed class OctoUserStore :
         using var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-
-        DataQueryOperation dataQueryOperation = new()
-        {
-            FieldFilters = new List<FieldFilter>
-            {
-                new(nameof(RtUser.NormalizedEmail), FieldFilterOperator.Equals, normalizedEmail)
-            }
-        };
+        var dataQueryOperation = DataQueryOperation.Create()
+            .FieldFilter(nameof(RtUser.NormalizedEmail), FieldFilterOperator.Equals, normalizedEmail);
 
         var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtUser>(session, dataQueryOperation);
         await session.CommitTransactionAsync();
@@ -729,6 +722,7 @@ public sealed class OctoUserStore :
         ThrowIfDisposed();
         ArgumentValidation.Validate(nameof(user), user);
         ArgumentValidation.ValidateString(nameof(normalizedRoleName), normalizedRoleName);
+        user.RoleIds ??= new List<string>();
         user.RoleIds.Add(ConvertIdToString((await FindRoleAsync(normalizedRoleName, cancellationToken) ??
                                             throw new InvalidOperationException(string.Format(
                                                 CultureInfo.CurrentCulture, "Role {0} does not exist.",
@@ -751,7 +745,7 @@ public sealed class OctoUserStore :
             return;
         }
 
-        user.RoleIds.Remove(ConvertIdToString(roleAsync.RtId));
+        user.RoleIds?.Remove(ConvertIdToString(roleAsync.RtId));
     }
 
     public async Task<IList<RtUser>> GetUsersInRoleAsync(
@@ -771,15 +765,9 @@ public sealed class OctoUserStore :
 
         using var session = await _tenantRepository.GetSessionAsync().ConfigureAwait(false);
         session.StartTransaction();
-        
-        DataQueryOperation dataQueryOperation = new()
-        {
-            FieldFilters = new List<FieldFilter>
-            {
-                new(nameof(RtUser.RoleIds), FieldFilterOperator.AnyEq, ConvertIdToString(roleAsync.RtId))
-            }
-        };
 
+        var dataQueryOperation = DataQueryOperation.Create()
+            .FieldFilter(nameof(RtUser.RoleIds), FieldFilterOperator.AnyEq, ConvertIdToString(roleAsync.RtId));
 
         var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtUser>(session, dataQueryOperation).ConfigureAwait(true);
         await session.CommitTransactionAsync();
@@ -802,6 +790,10 @@ public sealed class OctoUserStore :
         }
 
         List<string> roles = new List<string>();
+        if (dbUser.RoleIds == null)
+        {
+            return roles;
+        }
         foreach (string roleRtIdString in dbUser.RoleIds)
         {
             var role = await GetRoleByIdAsync(ConvertIdFromString(roleRtIdString), cancellationToken).ConfigureAwait(true);
@@ -836,7 +828,7 @@ public sealed class OctoUserStore :
             return false;
         }
 
-        return dbUser.RoleIds.Contains(ConvertIdToString(role.RtId));
+        return dbUser.RoleIds?.Contains(ConvertIdToString(role.RtId)) ?? false;
     }
     
     public Task<string?> GetSecurityStampAsync(RtUser user, CancellationToken cancellationToken = default)
@@ -939,13 +931,8 @@ public sealed class OctoUserStore :
         string normalizedRoleName,
         CancellationToken cancellationToken = default)
     {
-        DataQueryOperation dataQueryOperation = new()
-        {
-            FieldFilters = new List<FieldFilter>
-            {
-                new(nameof(RtRole.NormalizedName), FieldFilterOperator.Equals, normalizedRoleName)
-            }
-        };
+        var dataQueryOperation = DataQueryOperation.Create()
+            .FieldFilter(nameof(RtRole.NormalizedName), FieldFilterOperator.Equals, normalizedRoleName);
 
         using var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
@@ -964,7 +951,7 @@ public sealed class OctoUserStore :
         string name)
     {
         var local = await _tenantRepository.GetRtEntityByRtIdAsync<RtUser>(session, user.RtId).ConfigureAwait(false);
-        var tokenAsync = local?.UserTokens.FirstOrDefault(x => x.LoginProvider == loginProvider && x.Name == name);
+        var tokenAsync = local?.UserTokens?.FirstOrDefault(x => x.LoginProvider == loginProvider && x.Name == name);
 
         return tokenAsync;
     }

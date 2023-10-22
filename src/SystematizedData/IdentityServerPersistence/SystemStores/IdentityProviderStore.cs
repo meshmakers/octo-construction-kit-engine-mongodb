@@ -1,6 +1,7 @@
 using AutoMapper;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
 

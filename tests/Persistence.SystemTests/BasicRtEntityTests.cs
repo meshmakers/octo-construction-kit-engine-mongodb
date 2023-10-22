@@ -2,16 +2,19 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
 public class BasicRtEntityTests: IClassFixture<SystemFixture>
 {
     private readonly SystemFixture _systemFixture;
+    private readonly ITestOutputHelper _testOutputHelper;
 
-    public BasicRtEntityTests(SystemFixture systemFixture)
+    public BasicRtEntityTests(SystemFixture systemFixture, ITestOutputHelper testOutputHelper)
     {
         _systemFixture = systemFixture;
+        _testOutputHelper = testOutputHelper;
     }
 
     [Fact]
@@ -31,13 +34,22 @@ public class BasicRtEntityTests: IClassFixture<SystemFixture>
         using var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        var x = tenantRepository.CreateTransientRtEntity<RtUser>();
-        x.UserName = "test";
-        x.Email = "demo@demo.com";
-        x.ConcurrencyStamp = Guid.NewGuid().ToString();
-        await tenantRepository.InsertOneRtEntityAsync(session, x);
+        try
+        {
+            var x = tenantRepository.CreateTransientRtEntity<RtUser>();
+            x.UserName = "test";
+            x.Email = "demo@demo.com";
+            x.ConcurrencyStamp = Guid.NewGuid().ToString();
+            await tenantRepository.InsertOneRtEntityAsync(session, x);
 
-        await session.CommitTransactionAsync();
+            await session.CommitTransactionAsync();  
+        }
+        catch (Exception e)
+        {
+            _testOutputHelper.WriteLine(e.ToString());
+            await session.AbortTransactionAsync();
+            throw;
+        }
 
     }
 }

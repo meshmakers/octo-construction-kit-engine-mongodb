@@ -1,19 +1,18 @@
 ﻿using System.Collections.Concurrent;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.DataTransferObjects;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.Serialization;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Microsoft.Extensions.Logging;
-using Persistence.InternalContracts;
-using RtAssociation = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.RtAssociation;
-using RtEntity = Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities.RtEntity;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.Commands;
 
 public class ImportRtModelCommand : IImportRtModelCommand
 {
     private readonly ILogger<ImportRtModelCommand> _logger;
-    private readonly ISystemContextInternal _systemContext;
+    private readonly ISystemContext _systemContext;
     private readonly IRtSerializer _rtSerializer;
     private readonly HashSet<OctoObjectId> _entityImportIds;
     private readonly ConcurrentQueue<RtAssociation> _importAssociationQueue;
@@ -21,7 +20,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
     private readonly ConcurrentQueue<RtEntity> _importEntityQueue;
     private int _associationsCount;
 
-    public ImportRtModelCommand(ILogger<ImportRtModelCommand> logger, ISystemContextInternal systemContext, IRtSerializer rtSerializer)
+    public ImportRtModelCommand(ILogger<ImportRtModelCommand> logger, ISystemContext systemContext, IRtSerializer rtSerializer)
     {
         _logger = logger;
         _systemContext = systemContext;
@@ -36,8 +35,8 @@ public class ImportRtModelCommand : IImportRtModelCommand
     {
         _logger.LogInformation("Importing RT entities using text started");
 
-        var tenantContext = await _systemContext.GetChildTenantContextInternalAsync(tenantId);
-        var tenantRepository = await tenantContext.GetTenantRepositoryInternalAsync();
+        var tenantContext = await _systemContext.GetChildTenantContextAsync(tenantId);
+        var tenantRepository = await tenantContext.GetTenantRepositoryAsync();
 
         var session = await tenantRepository.GetSessionAsync();
         try
@@ -66,8 +65,8 @@ public class ImportRtModelCommand : IImportRtModelCommand
         try
         {
             session.StartTransaction();
-            var tenantContext = await _systemContext.GetChildTenantContextInternalAsync(tenantId);
-            var tenantRepository = await tenantContext.GetTenantRepositoryInternalAsync();
+            var tenantContext = await _systemContext.GetChildTenantContextAsync(tenantId);
+            var tenantRepository = await tenantContext.GetTenantRepositoryAsync();
 
             await using (var stream = File.OpenRead(filePath))
             {
@@ -92,7 +91,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
     }
 
     private async Task ImportEntityAsync(IOctoSession session, IEnumerable<RtEntityDto> modelRtEntities,
-        ITenantRepositoryInternal tenantRepository)
+        ITenantRepository tenantRepository)
     {
         await Parallel.ForEachAsync(modelRtEntities, (modelRtEntity, token) =>
         {
@@ -162,7 +161,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
         await ImportToDatabase(session, tenantRepository);
     }
 
-    private async Task ImportToDatabase(IOctoSession session, ITenantRepositoryInternal tenantRepository)
+    private async Task ImportToDatabase(IOctoSession session, ITenantRepository tenantRepository)
     {
         _logger.LogInformation("Importing {Count} to database", _importEntityQueue.Count);
 

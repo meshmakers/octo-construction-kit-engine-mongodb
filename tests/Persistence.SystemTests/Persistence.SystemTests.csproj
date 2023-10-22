@@ -10,9 +10,9 @@
         <PackageReference Include="Microsoft.Extensions.Configuration" Version="7.0.0" />
         <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="7.0.4" />
         <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="7.0.0" />
-        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.6.2" />
-        <PackageReference Include="xunit" Version="2.4.2" />
-        <PackageReference Include="xunit.runner.visualstudio" Version="2.4.5">
+        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.7.2" />
+        <PackageReference Include="xunit" Version="2.5.3" />
+        <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3">
             <PrivateAssets>all</PrivateAssets>
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
@@ -20,8 +20,8 @@
             <PrivateAssets>all</PrivateAssets>
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2310.3001" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" GeneratePathProperty="true" ReferenceOutputAssembly="false" Version="0.0.2310.3001" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2310.22001" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" GeneratePathProperty="true" ReferenceOutputAssembly="false" Version="0.0.2310.22001" />
     </ItemGroup>
 
     <ItemGroup>
@@ -46,7 +46,7 @@
     <ItemGroup>
       <ProjectReference Include="..\..\src\SystematizedData\Persistence.Commands\Persistence.Commands.csproj" />
       <ProjectReference Include="..\..\src\SystematizedData\Persistence.IdentityCkModel\Persistence.IdentityCkModel.csproj" />
-      <ProjectReference Include="..\..\src\SystematizedData\Persistence\Persistence.csproj" />
+      <ProjectReference Include="..\..\src\SystematizedData\Persistence.MongoDb\Persistence.MongoDb.csproj" />
     </ItemGroup>
 
 

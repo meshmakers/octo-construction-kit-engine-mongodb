@@ -2,6 +2,7 @@
 using Duende.IdentityServer.Models;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
 
@@ -140,13 +141,9 @@ public class ResourceStore : IOctoResourceStore
         {
             session.StartTransaction();
 
-            DataQueryOperation dataQueryOperation = new()
-            {
-                FieldFilters = new List<FieldFilter>
-                {
-                    new(nameof(RtApiResource.Name), FieldFilterOperator.Equals, apiResourceName)
-                }
-            };
+            DataQueryOperation dataQueryOperation = DataQueryOperation.Create()
+                .FieldFilter(nameof(RtApiResource.Name), FieldFilterOperator.Equals, apiResourceName);
+            
             var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtApiResource>(session, dataQueryOperation);
 
             await session.CommitTransactionAsync();
@@ -163,13 +160,9 @@ public class ResourceStore : IOctoResourceStore
         {
             session.StartTransaction();
 
-            DataQueryOperation dataQueryOperation = new()
-            {
-                FieldFilters = new List<FieldFilter>
-                {
-                    new(nameof(RtIdentityResource.Name), FieldFilterOperator.Equals, identityResourceName)
-                }
-            };
+            DataQueryOperation dataQueryOperation = DataQueryOperation.Create()
+                .FieldFilter(nameof(RtIdentityResource.Name), FieldFilterOperator.Equals, identityResourceName);
+            
             var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtIdentityResource>(session, dataQueryOperation);
 
             await session.CommitTransactionAsync();
@@ -226,13 +219,9 @@ public class ResourceStore : IOctoResourceStore
         {
             session.StartTransaction();
 
-            DataQueryOperation dataQueryOperation = new()
-            {
-                FieldFilters = new List<FieldFilter>
-                {
-                    new(nameof(RtIdentityResource.Name), FieldFilterOperator.In, scopeNames)
-                }
-            };
+            DataQueryOperation dataQueryOperation = DataQueryOperation.Create()
+                .FieldFilter(nameof(RtIdentityResource.Name), FieldFilterOperator.In, scopeNames);
+            
             var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtIdentityResource>(session, dataQueryOperation);
 
             await session.CommitTransactionAsync();
@@ -247,13 +236,9 @@ public class ResourceStore : IOctoResourceStore
         {
             session.StartTransaction();
 
-            DataQueryOperation dataQueryOperation = new()
-            {
-                FieldFilters = new List<FieldFilter>
-                {
-                    new(nameof(RtApiScope.Name), FieldFilterOperator.In, scopeNames)
-                }
-            };
+            DataQueryOperation dataQueryOperation = DataQueryOperation.Create()
+                .FieldFilter(nameof(RtApiScope.Name), FieldFilterOperator.In, scopeNames);
+            
             var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtApiScope>(session, dataQueryOperation);
 
             await session.CommitTransactionAsync();
@@ -275,13 +260,9 @@ public class ResourceStore : IOctoResourceStore
         {
             session.StartTransaction();
 
-            DataQueryOperation dataQueryOperation = new()
-            {
-                FieldFilters = new List<FieldFilter>
-                {
-                    new(nameof(RtApiResource.Scopes), FieldFilterOperator.AnyEq, scopeNames)
-                }
-            };
+            var dataQueryOperation = DataQueryOperation.Create()
+                .FieldFilter(nameof(RtApiResource.Scopes), FieldFilterOperator.AnyEq, scopeNames);
+
             var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtApiResource>(session, dataQueryOperation);
 
             await session.CommitTransactionAsync();
@@ -296,13 +277,9 @@ public class ResourceStore : IOctoResourceStore
         {
             session.StartTransaction();
 
-            DataQueryOperation dataQueryOperation = new()
-            {
-                FieldFilters = new List<FieldFilter>
-                {
-                    new(nameof(RtApiResource.Name), FieldFilterOperator.In, apiResourceNames)
-                }
-            };
+            var dataQueryOperation = DataQueryOperation.Create()
+                .FieldFilter(nameof(RtApiResource.Name), FieldFilterOperator.In, apiResourceNames);
+
             var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtApiResource>(session, dataQueryOperation);
 
             await session.CommitTransactionAsync();

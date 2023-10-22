@@ -2,7 +2,6 @@
 
     <ItemGroup>
       <ProjectReference Include="..\Persistence.Contracts\Persistence.Contracts.csproj" />
-      <ProjectReference Include="..\Persistence.InternalContracts\Persistence.InternalContracts.csproj" />
     </ItemGroup>
 
     <ItemGroup>
@@ -15,8 +14,8 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2310.3001" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" GeneratePathProperty="true" ReferenceOutputAssembly="false" Version="0.0.2310.3001" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2310.22001" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" GeneratePathProperty="true" ReferenceOutputAssembly="false" Version="0.0.2310.22001" />
     </ItemGroup>
 
 </Project>

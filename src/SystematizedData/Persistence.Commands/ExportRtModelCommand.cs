@@ -3,8 +3,8 @@ using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.DataTransferObjects;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.Serialization;
-using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Microsoft.Extensions.Logging;
 using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
 using RtEntityDto = Meshmakers.Octo.Runtime.Contracts.DataTransferObjects.RtEntityDto;
@@ -37,7 +37,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
             session.StartTransaction();
 
             var query = await tenantRepository.GetRtEntityByRtIdAsync(session,
-                new RtEntityId(SystemCkIds.ModelId, SystemCkIds.Query, queryId));
+                new RtEntityId(SystemCkIds.ModelId, SystemCkIds.QueryTypeId, queryId));
 
             if (CheckCancellation(cancellationToken))
             {
@@ -49,17 +49,28 @@ public class ExportRtModelCommand : IExportRtModelCommand
                 throw CommandExecutionFailedException.QueryNotFound(queryId);
             }
 
-            var dataQueryOperation = new DataQueryOperation();
+            var dataQueryOperation = DataQueryOperation.Create();
 
             var sortingDtoList = query.GetAttributeStringValueOrDefault("Sorting")?.Deserialize<ICollection<SortDto>>();
-            dataQueryOperation.SortOrders = sortingDtoList?.Select(dto =>
-                new SortOrderItem(dto.AttributeName.ToPascalCase(), (SortOrders)dto.SortOrder)).ToList() ?? new List<SortOrderItem>();
+            if (sortingDtoList != null)
+            {
+                foreach (var sortDto in sortingDtoList)
+                {
+                    dataQueryOperation.SortOrder(sortDto.AttributeName.ToPascalCase(), (SortOrders)sortDto.SortOrder);
+                }
+            }
+
             var fieldFilterDtoList =
                 query.GetAttributeStringValueOrDefault("FieldFilter")?.Deserialize<ICollection<FieldFilterDto>>();
-            dataQueryOperation.FieldFilters = fieldFilterDtoList?.Select(dto =>
-                new FieldFilter(TransformAttributeName(dto.AttributeName), (FieldFilterOperator)dto.Operator,
-                    dto.ComparisonValue)).ToList() ?? new List<FieldFilter>();
-
+            if (fieldFilterDtoList != null)
+            {
+                foreach (var fieldFilterDto in fieldFilterDtoList)
+                {
+                    dataQueryOperation.FieldFilter(TransformAttributeName(fieldFilterDto.AttributeName),
+                        (FieldFilterOperator)fieldFilterDto.Operator, fieldFilterDto.ComparisonValue);
+                }
+            }
+            
             var ckTypeIdString = query.GetAttributeStringValueOrDefault("QueryCkTypeId");
             if (string.IsNullOrWhiteSpace(ckTypeIdString))
             {

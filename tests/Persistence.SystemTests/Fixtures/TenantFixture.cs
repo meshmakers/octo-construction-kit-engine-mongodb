@@ -5,7 +5,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
 public class TenantFixture : SystemFixture
 {
-    public async Task<ITenantRepositoryInternal> GetTenantRepositoryAsync()
+    public async Task<ITenantRepository> GetTenantRepositoryAsync()
     {
         var options = GetOptions<SystemTestOptions>("SystemTest");
 
@@ -13,6 +13,6 @@ public class TenantFixture : SystemFixture
 
         var tenantContext = await systemContext.GetChildTenantContextInternalAsync(options.TenantId);
 
-        return await tenantContext.GetTenantRepositoryInternalAsync();
+        return await tenantContext.GetTenantRepositoryAsync();
     }
 }

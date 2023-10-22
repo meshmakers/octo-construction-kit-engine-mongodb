@@ -6,13 +6,12 @@
     </PropertyGroup>
     
     <ItemGroup>
-      <ProjectReference Include="..\Persistence.InternalContracts\Persistence.InternalContracts.csproj" />
       <ProjectReference Include="..\Persistence.SystemCkModel\Persistence.SystemCkModel.csproj" />
     </ItemGroup>
     
     <ItemGroup>
-      <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="0.0.2310.3001" />
-      <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2310.3001" />
+      <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="0.0.2310.22001" />
+      <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2310.22001" />
     </ItemGroup>
 
 </Project>

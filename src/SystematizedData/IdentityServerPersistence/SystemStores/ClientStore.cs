@@ -1,6 +1,8 @@
 ﻿using AutoMapper;
 using Duende.IdentityServer.Models;
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
 
@@ -52,13 +54,9 @@ public class ClientStore : IOctoClientStore
         var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        DataQueryOperation dataQueryOperation = new()
-        {
-            FieldFilters = new List<FieldFilter>
-            {
-                new(nameof(RtClient.ClientId), FieldFilterOperator.Equals, clientId)
-            }
-        };
+        DataQueryOperation dataQueryOperation = DataQueryOperation.Create()
+            .FieldFilter(nameof(RtClient.ClientId), FieldFilterOperator.Equals, clientId);
+        
         var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtClient>(session, dataQueryOperation);
         
 
@@ -105,13 +103,9 @@ public class ClientStore : IOctoClientStore
 
     private async Task<RtClient?> GetClientByClientId(IOctoSession session, string clientId)
     {
-        DataQueryOperation dataQueryOperation = new()
-        {
-            FieldFilters = new List<FieldFilter>
-            {
-                new(nameof(RtClient.ClientId), FieldFilterOperator.Equals, clientId)
-            }
-        };
+        DataQueryOperation dataQueryOperation = DataQueryOperation.Create()
+            .FieldFilter(nameof(RtClient.ClientId), FieldFilterOperator.Equals, clientId);
+
         var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtClient>(session, dataQueryOperation);
         return result.Items.FirstOrDefault();
     }

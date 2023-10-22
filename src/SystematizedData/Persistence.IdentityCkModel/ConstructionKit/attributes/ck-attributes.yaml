@@ -23,6 +23,8 @@ attributes:
 - id: EmailConfirmed
   valueType: Boolean
   description: Indicates if the email address of the user has been confirmed.
+  defaultValues:
+  - false
   
 - id: PasswordHash
   valueType: String
@@ -43,11 +45,15 @@ attributes:
 - id: PhoneNumberConfirmed
   valueType: Boolean
   description: Indicates if the phone number of the user has been confirmed.
-  
+  defaultValues:
+  - false
+
 - id: TwoFactorEnabled
   valueType: Boolean
   description: Indicates if two factor authentication is enabled for the user.
-  
+  defaultValues:
+  - false
+      
 - id: LockoutEnd
   valueType: DateTimeOffset
   description: The date and time, in UTC, when any user lockout ends.
@@ -55,15 +61,21 @@ attributes:
 - id: LockoutEnabled
   valueType: Boolean
   description: Flag indicating if the user could be locked out.
-  
+  defaultValues:
+  - false
+      
 - id: AccessFailedCount
   valueType: Int
   description: The number of failed login attempts for the current user.
-  
+  defaultValues:
+  - 0
+      
 - id: ResetPasswordOnLogin
   valueType: String
   description: Force the user to change the password after the next login.
-  
+  defaultValues:
+  - true
+      
 - id: FirstName
   valueType: String
   description: The first name of the user.
@@ -223,7 +235,7 @@ attributes:
 - id: FrontChannelLogoutSessionRequired
   valueType: Boolean
   defaultValues:
-    - value: true
+  - true
   description: Specifies if the user's session id should be sent to the FrontChannelLogoutUri. Defaults to true.
 - id: BackChannelLogoutUri
   valueType: String
@@ -231,7 +243,7 @@ attributes:
 - id: BackChannelLogoutSessionRequired
   valueType: Boolean
   defaultValues:
-    - value: true
+  - true
   description: Specifies if the user's session id should be sent to the BackChannelLogoutUri. Defaults to true.
 - id: AllowOfflineAccess
   valueType: Boolean
@@ -245,7 +257,7 @@ attributes:
 - id: IdentityTokenLifetime
   valueType: Int
   defaultValues:
-    - value: 300
+  - 300
   description: Lifetime of identity token in seconds (defaults to 300 seconds / 5 minutes)
 - id: AllowedIdentityTokenSigningAlgorithms
   valueType: StringArray
@@ -253,22 +265,22 @@ attributes:
 - id: AccessTokenLifetime
   valueType: Int
   defaultValues:
-    - value: 3600
+  - 3600
   description: Lifetime of access token in seconds (defaults to 3600 seconds / 1 hour)
 - id: AuthorizationCodeLifetime
   valueType: Int
   defaultValues:
-    - value: 300
+  - 300
   description: Lifetime of authorization code in seconds (defaults to 300 seconds / 5 minutes)
 - id: AbsoluteRefreshTokenLifetime
   valueType: Int
   defaultValues:
-    - value: 2592000
+  - 2592000
   description: Maximum lifetime of a refresh token in seconds. Defaults to 2592000 seconds / 30 days
 - id: SlidingRefreshTokenLifetime
   valueType: Int
   defaultValues:
-    - value: 1296000
+  - 1296000
   description: Sliding lifetime of a refresh token in seconds. Defaults to 1296000 seconds / 15 days
 - id: ConsentLifetime
   valueType: Int
@@ -284,18 +296,18 @@ attributes:
   valueType: Enum
   valueCkEnumId: System.Identity/TokenExpiration
   defaultValues:
-    - value: 1
+  - 1
   description: Gets or sets a value indicating whether the access token (and its claims) should be updated on a refresh token request.
 - id: AccessTokenType
   valueType: Enum
   valueCkEnumId: System.Identity/TokenType
   defaultValues:
-    - value: 0
+  - 0
   description: Specifies whether the access token is a reference token or a self contained JWT token (defaults to Jwt).
 - id: EnableLocalLogin
   valueType: Boolean
   defaultValues:
-    - value: true
+  - true
   description: Specifies if this client can use local accounts. Defaults to true.
 - id: IdentityProviderRestrictions
   valueType: StringArray
@@ -303,7 +315,7 @@ attributes:
 - id: IncludeJwtId
   valueType: Boolean
   defaultValues:
-    - value: true
+  - true
   description: Value indicating whether JWT access tokens should include an identifier. Defaults to true.
 - id: ClientClaims
   valueType: RecordArray
@@ -312,12 +324,12 @@ attributes:
 - id: AlwaysSendClientClaims
   valueType: Boolean
   defaultValues:
-    - value: false
+  - false
   description: Gets or sets a value indicating whether client claims should be always included in the access tokens - or only for client credentials flow.
 - id: ClientClaimsPrefix
   valueType: String
   defaultValues:
-    - value: client_
+  - client_
   description: Gets or sets a value to prefix it on client claim types. Defaults to client_.
 - id: PairWiseSubjectSalt
   valueType: String
@@ -331,7 +343,7 @@ attributes:
 - id: DeviceCodeLifetime
   valueType: Int
   defaultValues:
-    - value: 300
+  - 300
   description: Specifies the lifetime (in seconds) of the device code. Defaults to 300 seconds / 5 minutes.
 - id: CibaLifetime
   valueType: Int
@@ -364,5 +376,5 @@ attributes:
 - id: ShowInDiscoveryDocument
   valueType: Boolean
   defaultValues:
-    - value: true
+  - true
   description: Gets or sets a value indicating whether the client will be shown in the discovery document. Defaults to true.

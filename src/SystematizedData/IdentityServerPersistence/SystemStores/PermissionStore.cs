@@ -1,4 +1,5 @@
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
 
@@ -39,13 +40,9 @@ public class PermissionStore : IOctoPermissionStore
         var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        DataQueryOperation dataQueryOperation = new()
-        {
-            FieldFilters = new List<FieldFilter>
-            {
-                new(nameof(RtPermission.PermissionId), FieldFilterOperator.Equals, permissionId)
-            }
-        };
+        var dataQueryOperation = DataQueryOperation.Create()
+            .FieldFilter(nameof(RtPermission.PermissionId), FieldFilterOperator.Equals, permissionId);
+        
         var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtPermission>(session, dataQueryOperation);
 
         await session.CommitTransactionAsync();

@@ -1,4 +1,5 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest.ConstructionKit.Generated.Test.v1;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
@@ -75,9 +76,8 @@ public class RtEntityTests : IClassFixture<SystemFixture>
             //     new DataQueryOperation(), 0, 10);
 
 
-            var dataOperation = new DataQueryOperation();
-            dataOperation.FieldFilters = new List<FieldFilter>(new[]
-                { new FieldFilter("LastName", FieldFilterOperator.Like, "K*") });
+            var dataOperation = DataQueryOperation.Create()
+                .FieldFilter("LastName", FieldFilterOperator.Like, "K*");
             // [LastName, Kastler]
             // dataOperation.SortOrders = new List<SortOrderItem>(new[]
             // {

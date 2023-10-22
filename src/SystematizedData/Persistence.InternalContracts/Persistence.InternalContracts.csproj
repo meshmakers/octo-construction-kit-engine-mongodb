@@ -4,4 +4,12 @@
       <ProjectReference Include="..\Persistence.Contracts\Persistence.Contracts.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+      <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="0.0.2310.20009" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Folder Include="Repository\" />
+    </ItemGroup>
+
 </Project>

@@ -7,7 +7,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{892E504C
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Persistence.SystemTests", "tests\Persistence.SystemTests\Persistence.SystemTests.csproj", "{396D3170-2BAF-4B6E-B6ED-E15488506086}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Persistence", "src\SystematizedData\Persistence\Persistence.csproj", "{64BAC7AA-3218-4EE0-97EE-8B6DB3DDEAE8}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Persistence.MongoDb", "src\SystematizedData\Persistence.MongoDb\Persistence.MongoDb.csproj", "{64BAC7AA-3218-4EE0-97EE-8B6DB3DDEAE8}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "common", "common", "{B9B131D7-591F-4F70-9F67-0B41D136ABE8}"
 EndProject
@@ -25,8 +25,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Communication.Sockets.Contr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Persistence.Contracts", "src\SystematizedData\Persistence.Contracts\Persistence.Contracts.csproj", "{01DA9056-A5F8-4D5E-9D6D-0347B11528AA}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Persistence.InternalContracts", "src\SystematizedData\Persistence.InternalContracts\Persistence.InternalContracts.csproj", "{C6A3E5DB-1E74-4153-B1BB-459896CEDCEF}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Persistence.SystemCkModel", "src\SystematizedData\Persistence.SystemCkModel\Persistence.SystemCkModel.csproj", "{3DE32BBD-DCC5-4094-BDFF-622866A287EF}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Persistence.Commands", "src\SystematizedData\Persistence.Commands\Persistence.Commands.csproj", "{B0AE3434-B99B-46EF-B054-6B937F1FFC17}"
@@ -42,8 +40,6 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "unittests", "unittests", "{30684BD2-BA15-48A4-B37F-5342F91C3188}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "systemtests", "systemtests", "{9CDBD65B-A313-496C-8F6F-6A766FEEA544}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CkModel.Engine", "src\SystematizedData\CkModel.Engine\CkModel.Engine.csproj", "{ADC8F4E1-B91E-422E-8987-64E600F0B5A9}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -61,7 +57,6 @@ Global
 		{B60DDBAF-0BCD-4129-BF06-4BCDCD4910FF} = {B9B131D7-591F-4F70-9F67-0B41D136ABE8}
 		{10A1CA7D-C0E7-4F56-8801-AC35D183CD0F} = {B9B131D7-591F-4F70-9F67-0B41D136ABE8}
 		{01DA9056-A5F8-4D5E-9D6D-0347B11528AA} = {B55553CF-14AC-483E-AD30-B8FBFE5B94D9}
-		{C6A3E5DB-1E74-4153-B1BB-459896CEDCEF} = {B55553CF-14AC-483E-AD30-B8FBFE5B94D9}
 		{3DE32BBD-DCC5-4094-BDFF-622866A287EF} = {B55553CF-14AC-483E-AD30-B8FBFE5B94D9}
 		{B0AE3434-B99B-46EF-B054-6B937F1FFC17} = {B55553CF-14AC-483E-AD30-B8FBFE5B94D9}
 		{518455A2-B191-4669-BF5C-9C709F6BC665} = {B55553CF-14AC-483E-AD30-B8FBFE5B94D9}
@@ -71,7 +66,6 @@ Global
 		{9CDBD65B-A313-496C-8F6F-6A766FEEA544} = {892E504C-F5AE-42E7-9271-53552EB95CF4}
 		{396D3170-2BAF-4B6E-B6ED-E15488506086} = {9CDBD65B-A313-496C-8F6F-6A766FEEA544}
 		{4896425A-129C-42EB-84A7-C6B5A247AB7D} = {30684BD2-BA15-48A4-B37F-5342F91C3188}
-		{ADC8F4E1-B91E-422E-8987-64E600F0B5A9} = {B55553CF-14AC-483E-AD30-B8FBFE5B94D9}
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{39AA64A0-FEF5-48A3-82A4-3A655953FED1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
@@ -110,10 +104,6 @@ Global
 		{01DA9056-A5F8-4D5E-9D6D-0347B11528AA}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{01DA9056-A5F8-4D5E-9D6D-0347B11528AA}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{01DA9056-A5F8-4D5E-9D6D-0347B11528AA}.Release|Any CPU.Build.0 = Release|Any CPU
-		{C6A3E5DB-1E74-4153-B1BB-459896CEDCEF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{C6A3E5DB-1E74-4153-B1BB-459896CEDCEF}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{C6A3E5DB-1E74-4153-B1BB-459896CEDCEF}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{C6A3E5DB-1E74-4153-B1BB-459896CEDCEF}.Release|Any CPU.Build.0 = Release|Any CPU
 		{3DE32BBD-DCC5-4094-BDFF-622866A287EF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{3DE32BBD-DCC5-4094-BDFF-622866A287EF}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3DE32BBD-DCC5-4094-BDFF-622866A287EF}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -138,9 +128,5 @@ Global
 		{4896425A-129C-42EB-84A7-C6B5A247AB7D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4896425A-129C-42EB-84A7-C6B5A247AB7D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{4896425A-129C-42EB-84A7-C6B5A247AB7D}.Release|Any CPU.Build.0 = Release|Any CPU
-		{ADC8F4E1-B91E-422E-8987-64E600F0B5A9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{ADC8F4E1-B91E-422E-8987-64E600F0B5A9}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{ADC8F4E1-B91E-422E-8987-64E600F0B5A9}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{ADC8F4E1-B91E-422E-8987-64E600F0B5A9}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

@@ -2,6 +2,8 @@
 using Duende.IdentityServer.Models;
 using Duende.IdentityServer.Stores;
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using NLog;
 using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
@@ -64,17 +66,13 @@ public class PersistentGrantStore : IOctoPersistentGrantStore
     {
         var session = await _tenantRepository.GetSessionAsync();
         session.StartTransaction();
+
+        var dataQueryOperation = DataQueryOperation.Create()
+            .FieldFilter(nameof(RtPersistedGrant.SubjectId), FieldFilterOperator.Equals, filter.SubjectId)
+            .FieldFilter(nameof(RtPersistedGrant.SessionId), FieldFilterOperator.Equals, filter.SessionId)
+            .FieldFilter(nameof(RtPersistedGrant.ClientId), FieldFilterOperator.Equals, filter.ClientId)
+            .FieldFilter(nameof(RtPersistedGrant.GrantType), FieldFilterOperator.Equals, filter.Type);
         
-        DataQueryOperation dataQueryOperation = new()
-        {
-            FieldFilters = new List<FieldFilter>
-            {
-                new(nameof(RtPersistedGrant.SubjectId), FieldFilterOperator.Equals, filter.SubjectId),
-                new(nameof(RtPersistedGrant.SessionId), FieldFilterOperator.Equals, filter.SessionId),
-                new(nameof(RtPersistedGrant.ClientId), FieldFilterOperator.Equals, filter.ClientId),
-                new(nameof(RtPersistedGrant.GrantType), FieldFilterOperator.Equals, filter.Type)
-            }
-        };
         var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtPersistedGrant>(session,
             dataQueryOperation);
 
@@ -171,13 +169,9 @@ public class PersistentGrantStore : IOctoPersistentGrantStore
     
     private async Task<RtPersistedGrant?> GetRtPersistentGrantByKeyAsync(IOctoSession session, string key)
     {
-        DataQueryOperation dataQueryOperation = new()
-        {
-            FieldFilters = new List<FieldFilter>
-            {
-                new(nameof(RtPersistedGrant.GrantKey), FieldFilterOperator.Equals, key)
-            }
-        };
+        var dataQueryOperation = DataQueryOperation.Create()
+            .FieldFilter(nameof(RtPersistedGrant.GrantKey), FieldFilterOperator.Equals, key);
+        
         var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtPersistedGrant>(session, dataQueryOperation);
         return result.Items.FirstOrDefault();
     }
@@ -189,14 +183,9 @@ public class PersistentGrantStore : IOctoPersistentGrantStore
     private async Task RemoveGrantsAsync(IOctoSession session)
     {
         var found = int.MaxValue;
-        
-        DataQueryOperation dataQueryOperation = new()
-        {
-            FieldFilters = new List<FieldFilter>
-            {
-                new(nameof(RtPersistedGrant.ExpirationDateTime), FieldFilterOperator.LessEqualThan, DateTime.UtcNow)
-            }
-        };
+
+        var dataQueryOperation = DataQueryOperation.Create()
+            .FieldFilter(nameof(RtPersistedGrant.ExpirationDateTime), FieldFilterOperator.LessEqualThan, DateTime.UtcNow);
 
         while (found >= TokenCleanupBatchSize)
         {

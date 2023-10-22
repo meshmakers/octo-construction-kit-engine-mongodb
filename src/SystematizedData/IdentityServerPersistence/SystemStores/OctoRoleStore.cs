@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.SystematizedData.Persistence;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Microsoft.AspNetCore.Identity;
@@ -160,13 +161,8 @@ public sealed class OctoRoleStore :
         using var session = await _tenantRepository.GetSessionAsync().ConfigureAwait(false);
         session.StartTransaction();
 
-        DataQueryOperation dataQueryOperation = new()
-        {
-            FieldFilters = new List<FieldFilter>
-            {
-                new(nameof(RtRole.NormalizedName), FieldFilterOperator.Equals, normalizedName)
-            }
-        };
+        var dataQueryOperation = DataQueryOperation.Create()
+            .FieldFilter(nameof(RtRole.NormalizedName), FieldFilterOperator.Equals, normalizedName);
 
         var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtRole>(session, dataQueryOperation);
 

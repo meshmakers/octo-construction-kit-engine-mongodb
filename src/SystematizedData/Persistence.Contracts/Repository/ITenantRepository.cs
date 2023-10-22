@@ -1,31 +1,16 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
+using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
-public interface ITenantRepository
+public interface ITenantRepository : IRuntimeRepository
 {
-    public string TenantId { get; }
-    
     CkTypeGraph GetEntityCacheItem(CkId<CkTypeId> ckTypeId);
-    
-    #region Transaction Handling
-
-    Task<IOctoSession> GetSessionAsync();
-
-    #endregion Transaction Handling
-
-    #region Data manipulation
-
-    Task ApplyChanges(IOctoSession session, IReadOnlyList<EntityUpdateInfo> entityUpdateInfoList,
-        IReadOnlyList<AssociationUpdateInfo> associationUpdateInfoList);
-
-    // ReSharper disable once UnusedMember.Global
-    Task ApplyChanges(IOctoSession session, IReadOnlyList<AssociationUpdateInfo> associationUpdateInfoList);
-    Task ApplyChanges(IOctoSession session, IReadOnlyList<EntityUpdateInfo> entityUpdateInfoList);
-
-    #endregion Data manipulation
 
     #region Data query
 
@@ -35,15 +20,7 @@ public interface ITenantRepository
     Task<IResultSet<CkType>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<CkTypeId> ckTypeIds,
         DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null);
-
-    Task<RtEntity?> GetRtEntityByRtIdAsync(IOctoSession session, RtEntityId rtEntityId);
-
-    Task<TEntity?> GetRtEntityByRtIdAsync<TEntity>(IOctoSession session, OctoObjectId rtId)
-        where TEntity : RtEntity, new();
-
-    Task<IResultSet<RtEntity>> GetRtEntitiesByIdAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, IReadOnlyList<OctoObjectId> rtIds,
-        DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
-
+    
     Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId, CkId<CkTypeId> targetCkTypeId,
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
@@ -69,43 +46,7 @@ public interface ITenantRepository
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
         int? take = null) where TOriginEntity : RtEntity where TTargetEntity : RtEntity, new();
 
-    Task<RtAssociation?> GetRtAssociationOrDefaultAsync(IOctoSession session, RtEntityId rtEntityIdOrigin,
-        RtEntityId rtEntityIdTarget,
-        CkId<CkAssociationRoleId> roleId);
-
-    Task<IReadOnlyList<RtAssociation>> GetRtAssociationsAsync(IOctoSession session, OctoObjectId rtId,
-        GraphDirections graphDirections, CkId<CkAssociationRoleId> roleId);
-
-    Task<IReadOnlyList<RtAssociation>> GetRtAssociationsAsync(IOctoSession session, OctoObjectId rtId,
-        GraphDirections graphDirections);
-
-    Task<IResultSet<RtEntity>> GetRtEntitiesByTypeAsync(IOctoSession session, CkId<CkTypeId> ckTypeId,
-        DataQueryOperation dataQueryOperation,
-        int? skip = null, int? take = null);
-
-    Task<IResultSet<TEntity>> GetRtEntitiesByTypeAsync<TEntity>(IOctoSession session,
-        DataQueryOperation dataQueryOperation,
-        int? skip = null, int? take = null) where TEntity : RtEntity, new();
-
-    // ReSharper disable once UnusedMember.Global
-    Task<IReadOnlyList<RtAssociation>> GetRtAssociationsAsync(IOctoSession session, string rtId,
-        GraphDirections graphDirections,
-        CkId<CkAssociationRoleId> roleId);
-
-    Task<IReadOnlyList<RtAssociation>> GetRtAssociationsAsync(IOctoSession session, string rtId,
-        GraphDirections graphDirections);
-
     #endregion Data query
-
-    #region Transient data
-
-    RtEntity CreateTransientRtEntity(CkId<CkTypeId> ckTypeId);
-
-    // ReSharper disable once UnusedMemberInSuper.Global
-    RtEntity CreateTransientRtEntity(CkTypeGraph ckTypeGraph);
-    TEntity CreateTransientRtEntity<TEntity>() where TEntity : RtEntity, new();
-
-    #endregion Transient data
 
     #region Large Binaries
 
@@ -125,6 +66,11 @@ public interface ITenantRepository
     #endregion Large Binaries
 
     #region Advanced functionality
+    
+    Task<AggregatedBulkImportResult>
+        BulkInsertRtEntitiesAsync(IOctoSession session, IEnumerable<RtEntity> rtEntityList);
+
+    Task<IBulkImportResult> BulkRtAssociationsAsync(IOctoSession session, IEnumerable<RtAssociation> rtAssociations);
 
     IUpdateStream<RtEntity> SubscribeToRtEntities(CkId<CkTypeId> ckTypeId, UpdateStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default);
@@ -149,39 +95,4 @@ public interface ITenantRepository
         IEnumerable<object> autoCompleteValues);
 
     #endregion Advanced functionality
-    
-    #region Simple Data Modification
-    
-    Task InsertOneRtEntityAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, RtEntity rtEntity);
-
-    Task InsertOneRtEntityAsync<TEntity>(IOctoSession session, TEntity rtEntity)
-        where TEntity : RtEntity, new();
-
-    Task ReplaceOneRtEntityByIdAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, OctoObjectId rtId, RtEntity rtEntity);
-
-    Task ReplaceOneRtEntityByIdAsync<TEntity>(IOctoSession session, OctoObjectId rtId, TEntity rtEntity)
-        where TEntity : RtEntity, new();
-    
-    Task ReplaceOneRtEntityAsync<TEntity>(IOctoSession session, ICollection<FieldFilter> fieldFilters, TEntity entity)
-        where TEntity : RtEntity, new();
-
-    Task DeleteOneRtEntityByRtIdAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, OctoObjectId rtId);
-    
-    Task DeleteOneRtEntityByRtIdAsync<TEntity>(IOctoSession session, OctoObjectId rtId)
-        where TEntity : RtEntity, new();
-
-    Task DeleteOneRtEntityAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, ICollection<FieldFilter> fieldFilters);
-    
-    Task DeleteOneRtEntityAsync<TEntity>(IOctoSession session, ICollection<FieldFilter> fieldFilters)
-        where TEntity : RtEntity, new();
-    
-    Task DeleteManyRtEntitiesAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, ICollection<FieldFilter> fieldFilters);
-    
-    Task DeleteManyRtEntitiesAsync<TEntity>(IOctoSession session, ICollection<FieldFilter> fieldFilters)
-        where TEntity : RtEntity, new();
-    
-    #endregion Simple Data Modification
-
-    IQueryable<TEntity> AsQueryable<TEntity>()
-        where TEntity : RtEntity, new();
 }

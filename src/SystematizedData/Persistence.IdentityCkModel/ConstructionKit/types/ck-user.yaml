@@ -72,6 +72,7 @@ types:
     
   - id: System.Identity/RoleIds
     name: RoleIds
+    isOptional: true
     
   - id: System.Identity/UserClaims
     name: Claims
@@ -82,7 +83,8 @@ types:
     isOptional: true
     
   - id: System.Identity/UserTokens
-    name: UserTokens    
+    name: UserTokens
+    isOptional: true
     
   indexes:
   - indexType: Ascending
