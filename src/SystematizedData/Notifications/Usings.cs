@@ -1,2 +1,1 @@
-global using Meshmakers.Octo.SystematizedData.Persistence.DatabaseEntities;
-global using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+global using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;

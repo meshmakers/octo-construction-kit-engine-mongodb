@@ -3,10 +3,10 @@ using Meshmakers.Octo.Common.Shared.DataTransferObjects;
 using Meshmakers.Octo.Common.Shared.Services;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.Notifications.ConstructionKit.Generated.System.Notification.v1;
 using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
-using AssociationModOptionsDto = Meshmakers.Octo.Common.Shared.DataTransferObjects.AssociationModOptionsDto;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemStores;
 
@@ -93,18 +93,14 @@ public class EntityNotificationRepository : INotificationRepository
         session.StartTransaction();
 
         var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtNotificationMessage>(session,
-            new DataQueryOperation
-            {
-                FieldFilters = new[]
-                {
-                    new FieldFilter(nameof(RtNotificationMessage.SendStatus), FieldFilterOperator.Equals,
-                        SendStatusDto.Pending),
-                    new FieldFilter(nameof(RtNotificationMessage.LastTryDateTime),
-                        FieldFilterOperator.LessEqualThan, DateTime.UtcNow.AddMinutes(-5)),
-                    new FieldFilter(nameof(RtNotificationMessage.NotificationType), FieldFilterOperator.Equals,
-                        notificationType)
-                }
-            });
+            DataQueryOperation.Create()
+                .FieldFilter(nameof(RtNotificationMessage.SendStatus), FieldFilterOperator.Equals,
+                    SendStatusDto.Pending)
+                .FieldFilter(nameof(RtNotificationMessage.LastTryDateTime),
+                    FieldFilterOperator.LessEqualThan, DateTime.UtcNow.AddMinutes(-5))
+                .FieldFilter(nameof(RtNotificationMessage.NotificationType), FieldFilterOperator.Equals,
+                    notificationType)
+            );
 
         await session.CommitTransactionAsync();
 
@@ -122,16 +118,21 @@ public class EntityNotificationRepository : INotificationRepository
         var tenantRepository = await tenantContext.GetTenantRepositoryAsync();
         var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
+        
+        List<EntityUpdateInfo<RtNotificationMessage>> entityUpdateInfos = new List<EntityUpdateInfo<RtNotificationMessage>>();
+        foreach (var notificationMessageDto in notificationMessages)
+        {
+            var rtNotificationMessage = await PrepareUpdateRtEntityAsync(session, notificationMessageDto, tenantRepository);
+            entityUpdateInfos.Add(EntityUpdateInfo<RtNotificationMessage>.CreateUpdate(rtNotificationMessage.ToRtEntityId(),
+                rtNotificationMessage));
+        }
 
-        var entityUpdateInfos = await Task.WhenAll(notificationMessages.Select(async dto =>
-            new EntityUpdateInfo<RtNotificationMessage>(await PrepareUpdateRtEntityAsync(session, dto, tenantRepository),
-                EntityModOptions.Update)));
-
-        await tenantRepository.ApplyChanges(session, entityUpdateInfos);
+        var operationResult = new OperationResult();
+        await tenantRepository.ApplyChanges(session, entityUpdateInfos, operationResult);
 
         await session.CommitTransactionAsync();
 
-        return entityUpdateInfos.Select(x => CreateNotificationMessage((RtNotificationMessage)x.RtEntity));
+        return entityUpdateInfos.Select(x => CreateNotificationMessage(x.RtEntity!));
     }
 
 
@@ -154,11 +155,13 @@ public class EntityNotificationRepository : INotificationRepository
                 SystemCkIds.Related, AssociationModOptionsDto.Create));
         }
 
+        var operationResult = new OperationResult();
         await tenantRepository.ApplyChanges(session, new[]
         {
-            new EntityUpdateInfo(rtEntity, EntityModOptions.Create)
-        }, associationUpdateInfos);
+            EntityUpdateInfo<RtNotificationMessage>.CreateInsert(rtEntity)
+        }, associationUpdateInfos, operationResult);
 
+        
         await session.CommitTransactionAsync();
     }
 

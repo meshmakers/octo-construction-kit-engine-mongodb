@@ -22,5 +22,5 @@ attributes:
 - id: Status
   valueType: Enum
   defaultValues:
-    - value: 0
+  - 0
   valueCkEnumId: System.Notification/NotificationStates

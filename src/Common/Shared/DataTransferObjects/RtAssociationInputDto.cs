@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts;
 
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 

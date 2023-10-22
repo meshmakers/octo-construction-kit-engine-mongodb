@@ -64,7 +64,7 @@ attributes:
   valueType: Enum
   valueCkEnumId: System.Notification/NotificationStates
   defaultValues:
-  - value: 0
+  - 0
 records: []
 enums:
 - enumId: NotificationTypes
