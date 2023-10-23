@@ -1,6 +1,6 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest.ConstructionKit.Generated.Test.v1;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
-using Persistence.IdentityCkModel.ConstructionKit.Generated.System.Identity.v1;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -36,10 +36,8 @@ public class BasicRtEntityTests: IClassFixture<SystemFixture>
 
         try
         {
-            var x = tenantRepository.CreateTransientRtEntity<RtUser>();
-            x.UserName = "test";
-            x.Email = "demo@demo.com";
-            x.ConcurrencyStamp = Guid.NewGuid().ToString();
+            var x = tenantRepository.CreateTransientRtEntity<RtPlanet>();
+            x.Designation = "test";
             await tenantRepository.InsertOneRtEntityAsync(session, x);
 
             await session.CommitTransactionAsync();  

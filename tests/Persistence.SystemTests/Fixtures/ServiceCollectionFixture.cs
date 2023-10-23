@@ -13,7 +13,6 @@ public class ServiceCollectionFixture
         Services.AddOctoPersistence();
         Services.AddOctoCommands();
         Services.AddCkModelTest();
-        Services.AddCkModelSystemIdentity();
         Services.AddLogging(loggingBuilder =>
         {
             loggingBuilder.ClearProviders();
