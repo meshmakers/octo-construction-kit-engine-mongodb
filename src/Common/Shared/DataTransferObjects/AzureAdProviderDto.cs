@@ -5,12 +5,12 @@ namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 /// <summary>
 /// Identity provider configuration specifically for Azure Active Directory.
 /// </summary>
-public class AzureAdProviderDto : IdentityProviderDto
+public class AzureEntraProviderDto : IdentityProviderDto
 {
     /// <summary>
     /// Constructor
     /// </summary>
-    public AzureAdProviderDto()
+    public AzureEntraProviderDto()
     {
         Type = IdentityProviderTypesDto.MicrosoftAzureAd;
     }
