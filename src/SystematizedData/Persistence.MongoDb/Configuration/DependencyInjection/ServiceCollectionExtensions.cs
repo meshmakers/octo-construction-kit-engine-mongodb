@@ -9,7 +9,7 @@ namespace Microsoft.Extensions.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddOctoPersistence(
+    public static IServiceCollection AddOctoMongoDbPersistence(
         this IServiceCollection services,
         Action<OctoSystemConfiguration>? setupSystemConfigurationAction = null)
     {
@@ -27,8 +27,7 @@ public static class ServiceCollectionExtensions
         
         // Add services of Persistence module
         services.AddTransient<ICkModelRepository, DatabaseCkModelRepository>();
-        services.AddSingleton<ISystemContextInternal, SystemContext>();
-        services.AddSingleton<ISystemContext>(provider => provider.GetRequiredService<ISystemContext>());
+        services.AddSingleton<ISystemContext, SystemContext>();
         services.AddSingleton<ISystemMessageService, SystemMessageService>();
         services.AddSingleton<IModelLoaderService, ModelLoaderService>();
 

@@ -10,7 +10,7 @@ public class ServiceCollectionFixture
     public ServiceCollectionFixture()
     {
         Services = new ServiceCollection();
-        Services.AddOctoPersistence();
+        Services.AddOctoMongoDbPersistence();
         Services.AddOctoCommands();
         Services.AddCkModelTest();
         Services.AddLogging(loggingBuilder =>

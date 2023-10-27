@@ -25,11 +25,19 @@ public interface ITenantContext
     #region Access Management
     
     /// <summary>
-    /// Creates a child tenant context.
+    /// Gets a child tenant context.
     /// </summary>
     /// <param name="tenantId"></param>
     /// <returns></returns>
     Task<ITenantContext> GetChildTenantContextAsync(string tenantId);
+
+    /// <summary>
+    /// Gets a child tenant context.
+    /// </summary>
+    /// <param name="systemSession"></param>
+    /// <param name="tenantId"></param>
+    /// <returns></returns>
+    Task<ITenantContext> GetChildTenantContextAsync(IOctoSystemSession systemSession, string tenantId);
 
     /// <summary>
     /// Returns an object that allows access to the system tenant repository.

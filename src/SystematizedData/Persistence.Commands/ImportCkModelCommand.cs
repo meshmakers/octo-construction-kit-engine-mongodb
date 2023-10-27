@@ -37,7 +37,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
             _logger.LogInformation("Executing import of CK model....");
             using var session = await _systemContext.GetSystemSessionAsync();
             session.StartTransaction();
-            var tenantContext = await _systemContext.GetTenantContextAsync(session, tenantId);
+            var tenantContext = await _systemContext.GetChildTenantContextAsync(session, tenantId);
             await session.CommitTransactionAsync();
 
             await tenantContext.ImportCkModelAsync(session, ckCompiledModelRoot);
@@ -71,7 +71,7 @@ public class ImportCkModelCommand : IImportCkModelCommand
             _logger.LogInformation("Executing import of CK model....");
             using var session = await _systemContext.GetSystemSessionAsync();
             session.StartTransaction();
-            var tenantContext = await _systemContext.GetTenantContextAsync(session, tenantId);
+            var tenantContext = await _systemContext.GetChildTenantContextAsync(session, tenantId);
             await session.CommitTransactionAsync();
             await tenantContext.ImportCkModelAsync(session, ckCompiledModelRoot);
 

@@ -12,7 +12,7 @@ public static class ApplicationBuilderExtensions
     /// <param name="app">The application.</param>
     /// <returns></returns>
     // ReSharper disable once UnusedMethodReturnValue.Global
-    public static IApplicationBuilder UseOctoPersistence(
+    public static IApplicationBuilder UseOctoMongoDbPersistence(
         this IApplicationBuilder app)
     {
         ConfigureOcto(app).GetAwaiter().GetResult();

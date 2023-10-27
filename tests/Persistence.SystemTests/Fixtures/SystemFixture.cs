@@ -31,10 +31,10 @@ public class SystemFixture : ConfigurationFixture, IDisposable
 
     public ServiceProvider Provider { get; private set; }
 
-    public ISystemContextInternal GetSystemContext()
+    public ISystemContext GetSystemContext()
     {
 
-        return Provider.GetRequiredService<ISystemContextInternal>();
+        return Provider.GetRequiredService<ISystemContext>();
     }
 
     public void Dispose()

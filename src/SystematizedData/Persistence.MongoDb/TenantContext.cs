@@ -19,7 +19,7 @@ using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence;
 
-public class TenantContext : ITenantContextInternal
+public class TenantContext : ITenantContext
 {
     private readonly SemaphoreSlim _semaphoreSlim = new(1, 1);
 
@@ -323,41 +323,26 @@ public class TenantContext : ITenantContextInternal
 
     #region Access management
 
-    /// <summary>
-    /// Creates a tenant context.
-    /// </summary>
-    /// <param name="session"></param>
-    /// <param name="tenantId"></param>
-    /// <returns></returns>
-    public async Task<ITenantContextInternal> GetTenantContextInternalAsync(IOctoSession session, string tenantId)
+    public async Task<ITenantContext> GetChildTenantContextAsync(string tenantId)
     {
-        var rtSystemTenant = await GetRtSystemTenantAsync(session, tenantId);
-        if (rtSystemTenant == null)
-        {
-            throw TenantException.TenantDoesNotExist(tenantId);
-        }
+        using var systemSession = await GetSystemSessionAsync();
+        systemSession.StartTransaction();
+        
+        var context = await GetChildTenantContextAsync(systemSession, tenantId);
+        
+        await systemSession.CommitTransactionAsync();
 
-        var context = new TenantContext(_loggerFactory, _systemConfiguration, tenantId, rtSystemTenant.DatabaseName, _systemMessageService,
-            _ckModelRepositoryService, _cacheService, _modelLoaderService, _bulkRtMutation);
         return context;
     }
 
-    public async Task<ITenantContext> GetChildTenantContextAsync(string tenantId)
-    {
-        return await GetChildTenantContextInternalAsync(tenantId);
-    }
-
-    public async Task<ITenantContextInternal> GetChildTenantContextInternalAsync(string tenantId)
+    public async Task<ITenantContext> GetChildTenantContextAsync(IOctoSystemSession systemSession, string tenantId)
     {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
-        using var systemSession = await GetSystemSessionAsync();
-        systemSession.StartTransaction();
 
         var tenant = await GetChildTenantAsync(systemSession, tenantId);
         var context = new TenantContext(_loggerFactory, _systemConfiguration, tenantId, tenant.DatabaseName, _systemMessageService,
             _ckModelRepositoryService, _cacheService, _modelLoaderService, _bulkRtMutation);
 
-        await systemSession.CommitTransactionAsync();
         return context;
     }
 

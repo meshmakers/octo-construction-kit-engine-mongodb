@@ -12,7 +12,7 @@ using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
 namespace Meshmakers.Octo.SystematizedData.Persistence;
 
 // ReSharper disable once UnusedMember.Global
-public class SystemContext : TenantContext, ISystemContextInternal
+public class SystemContext : TenantContext, ISystemContext
 {
     public SystemContext(ILoggerFactory loggerFactory, IOptions<OctoSystemConfiguration> systemConfiguration,
         ISystemMessageService systemMessageService,
@@ -115,16 +115,6 @@ public class SystemContext : TenantContext, ISystemContextInternal
     #endregion TenantId Context Handling
 
 
-    /// <summary>
-    /// Creates a tenant context.
-    /// </summary>
-    /// <param name="session"></param>
-    /// <param name="tenantId"></param>
-    /// <returns></returns>
-    public async Task<ITenantContext> GetTenantContextAsync(IOctoSession session, string tenantId)
-    {
-        return await GetTenantContextInternalAsync(session, tenantId);
-    }
 
 
 }

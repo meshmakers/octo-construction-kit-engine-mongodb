@@ -84,8 +84,8 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
         {
             session.StartTransaction();
 
-            Assert.True(await systemContext.IsTenantExistingAsync(session, "Father"));
-            Assert.True(await systemContext.IsTenantExistingAsync(session, "Girl"));
+            Assert.True(await systemContext.IsChildTenantExistingAsync(session, "Father"));
+            Assert.True(await systemContext.IsChildTenantExistingAsync(session, "Girl"));
 
 
             await session.CommitTransactionAsync();

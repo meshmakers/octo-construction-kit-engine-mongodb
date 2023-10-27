@@ -37,6 +37,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "unittests", "unittests", "{
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "systemtests", "systemtests", "{9CDBD65B-A313-496C-8F6F-6A766FEEA544}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "samples", "samples", "{78596951-178D-452C-81DB-3F0AEC4691EF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WebService.Sample", "samples\WebService.Sample\WebService.Sample.csproj", "{957CCCF5-7F27-4746-A023-96C95FAAEA96}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -60,6 +64,7 @@ Global
 		{9CDBD65B-A313-496C-8F6F-6A766FEEA544} = {892E504C-F5AE-42E7-9271-53552EB95CF4}
 		{396D3170-2BAF-4B6E-B6ED-E15488506086} = {9CDBD65B-A313-496C-8F6F-6A766FEEA544}
 		{4896425A-129C-42EB-84A7-C6B5A247AB7D} = {30684BD2-BA15-48A4-B37F-5342F91C3188}
+		{957CCCF5-7F27-4746-A023-96C95FAAEA96} = {78596951-178D-452C-81DB-3F0AEC4691EF}
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{39AA64A0-FEF5-48A3-82A4-3A655953FED1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
@@ -114,5 +119,9 @@ Global
 		{4896425A-129C-42EB-84A7-C6B5A247AB7D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4896425A-129C-42EB-84A7-C6B5A247AB7D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{4896425A-129C-42EB-84A7-C6B5A247AB7D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{957CCCF5-7F27-4746-A023-96C95FAAEA96}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{957CCCF5-7F27-4746-A023-96C95FAAEA96}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{957CCCF5-7F27-4746-A023-96C95FAAEA96}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{957CCCF5-7F27-4746-A023-96C95FAAEA96}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
