@@ -464,6 +464,14 @@ public class TenantContext : ITenantContext
         }
     }
 
+    public async Task<bool> IsCkModelExistingAsync(IOctoSystemSession systemSession, CkModelId ckModelId)
+    {
+        var databaseContext = CreateDatabaseContext(_databaseName);
+
+        return await _ckModelRepositoryService.IsCkModelExistingAsync(InternalConstants.CkModelRepositoryName, ckModelId,
+            new TenantDatabaseSourceIdentifier(databaseContext, systemSession));
+    }
+
     #endregion
 
     #region Private methods

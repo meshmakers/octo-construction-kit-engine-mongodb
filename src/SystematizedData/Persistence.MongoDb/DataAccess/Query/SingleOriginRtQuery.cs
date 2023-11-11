@@ -1,3 +1,4 @@
+using System.Collections;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
@@ -80,6 +81,12 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                     isEnum = false;
                     return result.Key;
                 }
+            }
+            
+            if (searchTerm is IEnumerable e)
+            {
+                isEnum = false;
+                return e;
             }
 
             if (searchTerm.ToString()?.StartsWith("@") == true)

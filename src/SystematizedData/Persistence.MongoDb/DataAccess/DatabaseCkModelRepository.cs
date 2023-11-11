@@ -39,14 +39,14 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     }
 
     /// <inheritdoc />
-    public async Task<bool> LookupModelIdAsync(CkModelId modelId, object? sourceIdentifier = null)
+    public async Task<bool> IsModelIdExistingAsync(CkModelId modelId, object? sourceIdentifier = null)
     {
         var sourceIdentifierObject =
             ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier), sourceIdentifier);
-
+        
         var ckModel = await sourceIdentifierObject.DatabaseContext.CkModels
             .FindSingleOrDefaultAsync(sourceIdentifierObject.Session, e => e.Id == modelId);
-
+        
         return ckModel != null;
     }
 

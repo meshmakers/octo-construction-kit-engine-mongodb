@@ -1,11 +1,9 @@
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
-using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Persistence.Contracts;
 using Persistence.InternalContracts;
 using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
 

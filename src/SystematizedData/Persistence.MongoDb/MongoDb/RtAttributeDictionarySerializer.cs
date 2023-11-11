@@ -1,31 +1,46 @@
-using System.Collections.Generic;
-using System.Linq;
+using System.Collections;
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Options;
 using MongoDB.Bson.Serialization.Serializers;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence;
 
-internal class RtAttributeDictionarySerializer : DictionarySerializerBase<Dictionary<string, object>>
+internal class RtAttributeDictionarySerializer : DictionaryInterfaceImplementerSerializer<Dictionary<string, object?>>
 {
     public RtAttributeDictionarySerializer() :
         base(DictionaryRepresentation.Document)
     {
     }
 
-    protected override Dictionary<string, object> CreateInstance()
-    {
-        return new Dictionary<string, object>();
-    }
 
     public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args,
-        Dictionary<string, object>? value)
+        Dictionary<string, object?>? value)
     {
         if (value != null)
         {
             var dic = value.ToDictionary(d => d.Key.ToCamelCase(), d => d.Value);
-            BsonSerializer.Serialize(context.Writer, dic);
+
+            var bsonWriter = context.Writer;
+            bsonWriter.WriteStartDocument();
+
+            foreach (var keyValuePair in dic)
+            {
+                bsonWriter.WriteName(keyValuePair.Key);
+                if (keyValuePair.Value == null)
+                {
+                    bsonWriter.WriteNull();
+                    continue;
+                }
+
+                var actualType = keyValuePair.Value.GetType();
+
+                var serializer = BsonSerializer.LookupSerializer(actualType);
+                serializer.Serialize(context, args, keyValuePair.Value);
+            }
+
+            bsonWriter.WriteEndDocument();
         }
         else
         {
@@ -34,16 +49,16 @@ internal class RtAttributeDictionarySerializer : DictionarySerializerBase<Dictio
         }
     }
 
-    public override Dictionary<string, object> Deserialize(BsonDeserializationContext context,
+    public override Dictionary<string, object?> Deserialize(BsonDeserializationContext context,
         BsonDeserializationArgs args)
     {
-        var dic = BsonSerializer.Deserialize<Dictionary<string, object>>(context.Reader);
+        var dic = BsonSerializer.Deserialize<Dictionary<string, object?>>(context.Reader);
         if (dic == null)
         {
             return null!;
         }
 
-        var ret = new Dictionary<string, object>();
+        var ret = new Dictionary<string, object?>();
         foreach (var pair in dic)
         {
             ret[pair.Key.ToPascalCase()] = pair.Value;
