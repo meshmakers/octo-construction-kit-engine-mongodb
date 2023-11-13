@@ -19,7 +19,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Duende.IdentityServer.Storage" Version="6.3.5" />
+        <PackageReference Include="Duende.IdentityServer.Storage" Version="6.3.6" />
         <PackageReference Include="MathParser.org-mXparser" Version="5.2.1" />
         <PackageReference Include="Meshmakers.Octo.ConstructionKit.Engine" Version="0.0.2311.1003" />
         <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="0.0.2311.1003" />
