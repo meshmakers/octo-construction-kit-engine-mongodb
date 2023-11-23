@@ -59,6 +59,10 @@ public class MongoRepositoryClient : IRepositoryClient
         // TODO: It seams that secondary servers do not have any work. This seems not be possibly. Other solution?
         // urlBuilder.ReadPreference = ReadPreference.SecondaryPreferred; 
 
+        var objectSerializer = new ObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
+                                                            type.FullName?.StartsWith(typeof(RtEntity).Namespace!) == true);
+        BsonSerializer.RegisterSerializer(objectSerializer);
+        
         ConfigureMongoDriver();
         MongoClientSettings settings = MongoClientSettings.FromUrl(urlBuilder.ToMongoUrl());
         settings.ReadConcern = ReadConcern.Majority;
@@ -73,6 +77,8 @@ public class MongoRepositoryClient : IRepositoryClient
         _client = new MongoClient(settings);
 
         RegisterClassMaps();
+        
+
     }
 
     private static bool _isRegistered;
@@ -264,7 +270,7 @@ public class MongoRepositoryClient : IRepositoryClient
             cm.SetIsRootClass(true);
             cm.SetIgnoreExtraElements(true);
 
-            cm.MapMember(c => c.CkRecordId).SetElementName(nameof(RtEntity.CkTypeId).ToCamelCase()).SetIsRequired(true);
+            cm.MapMember(c => c.CkRecordId).SetElementName(nameof(RtRecord.CkRecordId).ToCamelCase()).SetIsRequired(true);
         });
 
         BsonClassMap.TryRegisterClassMap<RtAssociation>(cm =>

@@ -122,7 +122,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             }).ToList(),
             Types = ckTypes.Select(t=> new CkTypeDto
             {
-                TypeId = t.CkTypeId.Key,
+                TypeId = t.CkTypeId.Key,    
                 IsAbstract = t.IsAbstract,
                 IsFinal = t.IsFinal,
                 Attributes = t.Attributes.Select(a=> new CkTypeAttributeDto
@@ -503,7 +503,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     AttributeValueType = ckAttributeDto.ValueType,
                     ValueCkEnumId = ckAttributeDto.ValueCkEnumId,
                     ValueCkRecordId = ckAttributeDto.ValueCkRecordId,
-                    DefaultValues = ckAttributeDto.DefaultValues,
+                    DefaultValues = ckAttributeDto.DefaultValues?.Select(dv =>
+                        AttributeValueConverter.ConvertAttributeValue(ckAttributeDto.ValueType, dv)!).ToList(),
                     Description = ckAttributeDto.Description
                 };
                 transientCkModel.CkAttributes.Add(ckAttribute);

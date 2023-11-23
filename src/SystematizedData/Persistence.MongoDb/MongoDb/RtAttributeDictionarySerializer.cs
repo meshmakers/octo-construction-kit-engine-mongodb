@@ -1,6 +1,5 @@
-using System.Collections;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.SystematizedData.Persistence.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Options;
 using MongoDB.Bson.Serialization.Serializers;
@@ -34,10 +33,31 @@ internal class RtAttributeDictionarySerializer : DictionaryInterfaceImplementerS
                     continue;
                 }
 
-                var actualType = keyValuePair.Value.GetType();
-
-                var serializer = BsonSerializer.LookupSerializer(actualType);
-                serializer.Serialize(context, args, keyValuePair.Value);
+                switch (keyValuePair.Value)
+                {
+                    case IEnumerable<string> enumerable:
+                        bsonWriter.WriteStartArray();
+                        foreach (var item in enumerable)
+                        {
+                            bsonWriter.WriteString(item);
+                        }
+                        bsonWriter.WriteEndArray();
+                        break;
+                    case IEnumerable<RtRecord> enumerable:
+                        bsonWriter.WriteStartArray();
+                        var recordSerializer = BsonSerializer.LookupSerializer(typeof(RtRecord)); 
+                        foreach (var item in enumerable)
+                        {
+                            recordSerializer.Serialize(context, args, item);
+                        }
+                        bsonWriter.WriteEndArray();
+                        break;
+                    default:
+                        var actualType = keyValuePair.Value.GetType();
+                        var serializer = BsonSerializer.LookupSerializer(actualType);
+                        serializer.Serialize(context, args, keyValuePair.Value);
+                        break;
+                }
             }
 
             bsonWriter.WriteEndDocument();
@@ -52,7 +72,7 @@ internal class RtAttributeDictionarySerializer : DictionaryInterfaceImplementerS
     public override Dictionary<string, object?> Deserialize(BsonDeserializationContext context,
         BsonDeserializationArgs args)
     {
-        var dic = BsonSerializer.Deserialize<Dictionary<string, object?>>(context.Reader);
+        var dic = base.Deserialize(context, args);
         if (dic == null)
         {
             return null!;

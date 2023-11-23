@@ -4,9 +4,4 @@
       <ProjectReference Include="..\..\Common\Shared\Shared.csproj" />
     </ItemGroup>
 
-    <ItemGroup>
-      <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2311.14003" />
-      <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="0.0.2311.14003" />
-    </ItemGroup>
-
 </Project>
