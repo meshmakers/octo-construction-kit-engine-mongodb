@@ -20,8 +20,8 @@
             <PrivateAssets>all</PrivateAssets>
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2311.23004" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" GeneratePathProperty="true" ReferenceOutputAssembly="false" Version="0.0.2311.23004" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2311.27006" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" GeneratePathProperty="true" ReferenceOutputAssembly="false" Version="0.0.2311.27006" />
     </ItemGroup>
 
     <ItemGroup>
