@@ -36,7 +36,7 @@ public class BasicRtEntityTests: IClassFixture<SystemFixture>
 
         try
         {
-            var x = tenantRepository.CreateTransientRtEntity<RtPlanet>();
+            var x = await tenantRepository.CreateTransientRtEntityAsync<RtPlanet>();
             x.Designation = "test";
             await tenantRepository.InsertOneRtEntityAsync(session, x);
 

@@ -29,25 +29,9 @@ public class ModelLoaderService : IModelLoaderService
         
         
         OperationResult operationResult = new();
-
-
         var ckModels = await databaseContext.CkModels.GetAsync(session);
         CkModelGraph modelGraph = await _modelResolver.ResolveAsync(ckModels.Select(x=> x.Id).ToList(), operationResult);
-        // foreach (var ckModel in ckModels)
-        // {
-        //     OperationResult operationResult = new();
-        //     var compiledModelRoot = await _ckModelRepositoryService.LookupCkModelAsync(ckModel.Id, operationResult,
-        //         new TenantDatabaseSourceIdentifier(databaseContext, session));
-        //     if (compiledModelRoot == null)
-        //     {
-        //         throw new Exception("Very bad");
-        //     }
-        //     modelGraph.AppendModel(compiledModelRoot);
-        // }
-
         _cacheService.CreateTenant(tenantId);
         _cacheService.LoadCkModelGraph(tenantId, modelGraph);
-
     }
-    
 }

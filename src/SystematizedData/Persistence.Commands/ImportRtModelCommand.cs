@@ -93,11 +93,11 @@ public class ImportRtModelCommand : IImportRtModelCommand
     private async Task ImportEntityAsync(IOctoSession session, IEnumerable<RtEntityDto> modelRtEntities,
         ITenantRepository tenantRepository)
     {
-        await Parallel.ForEachAsync(modelRtEntities, (modelRtEntity, token) =>
+        await Parallel.ForEachAsync(modelRtEntities, async (modelRtEntity, token) =>
         {
             var entityCacheItem = tenantRepository.GetEntityCacheItem(modelRtEntity.CkTypeId);
 
-            var rtEntity = tenantRepository.CreateTransientRtEntity(modelRtEntity.CkTypeId);
+            var rtEntity = await tenantRepository.CreateTransientRtEntityAsync(modelRtEntity.CkTypeId).ConfigureAwait(false);
             rtEntity.RtId = modelRtEntity.RtId;
             rtEntity.RtChangedDateTime = modelRtEntity.RtChangedDateTime;
             rtEntity.RtCreationDateTime = modelRtEntity.RtCreationDateTime;
@@ -106,7 +106,6 @@ public class ImportRtModelCommand : IImportRtModelCommand
             if (_entityImportIds.Contains(rtEntity.RtId))
             {
                 _logger.LogError("'{RtEntityRtId}' already imported", rtEntity.RtId);
-                return ValueTask.CompletedTask;
             }
 
             lock (_entityImportIds)
@@ -152,8 +151,6 @@ public class ImportRtModelCommand : IImportRtModelCommand
                     Interlocked.Increment(ref _associationsCount);
                 }
             }
-
-            return ValueTask.CompletedTask;
         });
         
         _logger.LogInformation("{EntityCount} entities (total imports of {Count}) imported", _importEntityQueue.Count,

@@ -40,10 +40,30 @@ public class RtEntityTests : IClassFixture<SystemFixture>
     public async void Test1()
     {
         var systemContext = _systemFixture.GetSystemContext();
+        using var systemSession = await systemContext.GetSystemSessionAsync();
+        systemSession.StartTransaction();
+
+        OperationResult operationResult = new();
+        await systemContext.ImportCkModelAsync(systemSession, new CkModelId("System.Identity-1.0.0"), operationResult);
+        await systemSession.CommitTransactionAsync();
+        
         var tenantRepository = await systemContext.GetTenantRepositoryAsync();
 
         using (var session = await tenantRepository.GetSessionAsync())
         {
+            session.StartTransaction();
+
+            var scopeNames = new []{"openid", "profile", "offline_access", "identityAPI.full_access"};
+            var dataQueryOperation = DataQueryOperation.Create()
+                .FieldFilter( "Scopes", FieldFilterOperator.In, scopeNames);
+
+            var result = await tenantRepository.GetRtEntitiesByTypeAsync(session, "System.Identity/ApiResource", dataQueryOperation);
+
+            await session.CommitTransactionAsync();
+            
+            Assert.Equal(1, result.TotalCount);
+            Assert.Single(result.Items);
+
             // var result = await tenantContext.GetRtEntitiesByTypeAsync(session, "PaketService.Contact",
             //     new DataQueryOperation(), 0, 5);
             //

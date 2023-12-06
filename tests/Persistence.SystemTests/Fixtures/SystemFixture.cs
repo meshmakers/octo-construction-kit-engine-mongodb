@@ -24,7 +24,7 @@ public class SystemFixture : ConfigurationFixture, IDisposable
             {
                 await systemContext.DeleteSystemTenantAsync();
             }
-
+        
             await systemContext.CreateSystemTenantAsync();
         }));
     }

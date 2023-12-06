@@ -146,7 +146,7 @@ public class EntityNotificationRepository : INotificationRepository
         var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        var rtEntity = CreateRtEntity(notificationMessageDto, tenantRepository);
+        var rtEntity = await CreateRtEntityAsync(notificationMessageDto, tenantRepository);
 
         var associationUpdateInfos = new List<AssociationUpdateInfo>();
         if (targetRtId != null)
@@ -165,10 +165,10 @@ public class EntityNotificationRepository : INotificationRepository
         await session.CommitTransactionAsync();
     }
 
-    private static RtNotificationMessage CreateRtEntity(NotificationMessageDto notificationMessageDto,
+    private static async Task<RtNotificationMessage> CreateRtEntityAsync(NotificationMessageDto notificationMessageDto,
         ITenantRepository tenantContext)
     {
-        var rtEntity = tenantContext.CreateTransientRtEntity<RtNotificationMessage>();
+        var rtEntity = await tenantContext.CreateTransientRtEntityAsync<RtNotificationMessage>();
 
         ApplyDtoData(notificationMessageDto, rtEntity);
 

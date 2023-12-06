@@ -46,6 +46,11 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
 
     #region Transaction Handling
 
+    protected override Task RefreshCkCacheServiceAsync(ICkCacheService ckCacheService)
+    {
+        throw new NotImplementedException();
+    }
+
     public override async Task<IOctoSession> GetSessionAsync()
     {
         return await _databaseContext.GetSessionAsync();
