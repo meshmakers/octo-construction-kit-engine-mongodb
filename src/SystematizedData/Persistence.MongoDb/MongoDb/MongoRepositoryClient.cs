@@ -61,6 +61,7 @@ public class MongoRepositoryClient : IRepositoryClient
 
         var objectSerializer = new ObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
                                                             type.FullName?.StartsWith(typeof(RtEntity).Namespace!) == true);
+
         BsonSerializer.TryRegisterSerializer(objectSerializer);
         
         ConfigureMongoDriver();
