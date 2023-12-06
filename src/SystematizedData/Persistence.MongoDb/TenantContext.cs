@@ -125,7 +125,7 @@ public class TenantContext : ITenantContext
                     DatabaseName = normalizedDatabaseName
                 };
 
-                var tenantRepository = await GetTenantRepositoryAsync();
+                var tenantRepository = GetTenantRepository();
                 await tenantRepository.InsertOneRtEntityAsync(systemSession, rtTenant);
             }
 
@@ -136,7 +136,7 @@ public class TenantContext : ITenantContext
                 ParentTenantId = TenantId,
                 DatabaseName = normalizedDatabaseName
             };
-            var systemTenantRepository = await GetSystemTenantRepositoryAsync();
+            var systemTenantRepository = GetSystemTenantRepository();
             await systemTenantRepository.InsertOneRtEntityAsync(systemSession, rtSystemTenant);
 
             // Distribute updates (post) to inform other services.
@@ -199,7 +199,7 @@ public class TenantContext : ITenantContext
                 DatabaseName = databaseName
             };
 
-            var tenantRepository = await GetTenantRepositoryAsync();
+            var tenantRepository = GetTenantRepository();
             await tenantRepository.InsertOneRtEntityAsync(systemSession, octoTenant);
         }
 
@@ -210,7 +210,7 @@ public class TenantContext : ITenantContext
             ParentTenantId = TenantId,
             DatabaseName = normalizedDatabaseName
         };
-        var systemTenantRepository = await GetSystemTenantRepositoryAsync();
+        var systemTenantRepository = GetSystemTenantRepository();
         await systemTenantRepository.InsertOneRtEntityAsync(systemSession, rtSystemTenant);
     }
 
@@ -223,7 +223,7 @@ public class TenantContext : ITenantContext
             throw new TenantException($"Tenant '{tenantId}' does not exists.");
         }
 
-        var tenantRepository = await GetTenantRepositoryAsync();
+        var tenantRepository = GetTenantRepository();
         await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
             new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
     }
@@ -250,7 +250,7 @@ public class TenantContext : ITenantContext
     {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
-        var tenantRepository = await GetTenantRepositoryAsync();
+        var tenantRepository = GetTenantRepository();
 
         var octoTenant = await GetRtTenantAsync(systemSession, tenantId);
         if (octoTenant == null)
@@ -269,7 +269,7 @@ public class TenantContext : ITenantContext
         // Add the new tenant as child tenant of the current one
         if (TenantId != _systemConfiguration.Value.SystemTenantId.MakeKey())
         {
-            var systemTenantRepository = await GetSystemTenantRepositoryAsync();
+            var systemTenantRepository = GetSystemTenantRepository();
             await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
                 new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
         }
@@ -297,7 +297,7 @@ public class TenantContext : ITenantContext
     public async Task<PagedResult<OctoTenant>> GetChildTenantsAsync(IOctoSystemSession systemSession, int? skip = null,
         int? take = null)
     {
-        var tenantRepository = await GetTenantRepositoryAsync();
+        var tenantRepository = GetTenantRepository();
 
         var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(systemSession, new DataQueryOperation(), skip, take);
         return new PagedResult<OctoTenant>(result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName)),
@@ -346,18 +346,18 @@ public class TenantContext : ITenantContext
         return context;
     }
 
-    public async Task<ITenantRepository> GetSystemTenantRepositoryAsync()
+    public ITenantRepository GetSystemTenantRepository()
     {
         var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
         var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.MakeKey();
         
-        var result = await GetTenantRepositoryAsync(normalizedTenantId, normalizedDatabaseName);
+        var result = GetTenantRepository(normalizedTenantId, normalizedDatabaseName);
         return result;
     }
 
-    public async Task<ITenantRepository> GetTenantRepositoryAsync()
+    public ITenantRepository GetTenantRepository()
     {
-        var result = await GetTenantRepositoryAsync(TenantId, _databaseName);
+        var result = GetTenantRepository(TenantId, _databaseName);
         return result;
     }
 
@@ -399,7 +399,7 @@ public class TenantContext : ITenantContext
 
     public async Task SetConfigurationAsync(IOctoSystemSession systemSession, string key, object value)
     {
-        var tenantRepository = await GetTenantRepositoryAsync();
+        var tenantRepository = GetTenantRepository();
 
         var dataQueryOperation = DataQueryOperation.Create()
             .FieldFilter(nameof(RtConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);
@@ -476,21 +476,15 @@ public class TenantContext : ITenantContext
 
     #region Private methods
 
-    private async Task<ITenantRepository> GetTenantRepositoryAsync(string tenantId, string databaseName)
+    private ITenantRepository GetTenantRepository(string tenantId, string databaseName)
     {
         try
         {
-            await _semaphoreSlim.WaitAsync();
+            _semaphoreSlim.Wait();
 
             var databaseContext = CreateDatabaseContext(databaseName);
-            var session = await databaseContext.GetSessionAsync();
-            session.StartTransaction();
 
-            await _modelLoaderService.LoadAsync(tenantId, session, databaseContext);
-            var tenantRepository = new TenantRepository(tenantId, _cacheService, databaseContext, _bulkRtMutation);
-
-            await session.CommitTransactionAsync();
-
+            var tenantRepository = new TenantRepository(tenantId, _cacheService, _modelLoaderService, databaseContext, _bulkRtMutation);
             return tenantRepository;
         }
         finally
@@ -508,7 +502,7 @@ public class TenantContext : ITenantContext
     private async Task<RtTenant?> GetRtTenantAsync(IOctoSession systemSession,
         string tenantId)
     {
-        var tenantRepository = await GetTenantRepositoryAsync();
+        var tenantRepository = GetTenantRepository();
 
         var dataQueryOperation = DataQueryOperation.Create()
             .FieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey());
@@ -520,7 +514,7 @@ public class TenantContext : ITenantContext
     private async Task<RtTenant?> GetRtSystemTenantAsync(IOctoSession systemSession,
         string tenantId)
     {
-        var tenantRepository = await GetSystemTenantRepositoryAsync();
+        var tenantRepository = GetSystemTenantRepository();
 
         var dataQueryOperation = DataQueryOperation.Create()
             .FieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey());
@@ -536,7 +530,7 @@ public class TenantContext : ITenantContext
 
     private async Task<TType?> GetConfigAsync<TType>(IOctoSession systemSession, string key, TType? defaultValue)
     {
-        var tenantRepository = await GetTenantRepositoryAsync();
+        var tenantRepository = GetTenantRepository();
 
         var dataQueryOperation = DataQueryOperation.Create()
             .FieldFilter(nameof(RtConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);

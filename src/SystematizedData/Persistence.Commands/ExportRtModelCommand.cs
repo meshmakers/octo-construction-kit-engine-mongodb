@@ -29,7 +29,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
         CancellationToken? cancellationToken)
     {
         var tenantContext = await _systemContext.GetChildTenantContextAsync(tenantId);
-        var tenantRepository = await tenantContext.GetTenantRepositoryAsync();
+        var tenantRepository = tenantContext.GetTenantRepository();
 
         var session = await tenantRepository.GetSessionAsync();
         try

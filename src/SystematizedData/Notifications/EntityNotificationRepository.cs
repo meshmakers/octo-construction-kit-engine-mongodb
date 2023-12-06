@@ -88,7 +88,7 @@ public class EntityNotificationRepository : INotificationRepository
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
         var tenantContext = await _systemContext.GetChildTenantContextAsync(tenantId);
-        var tenantRepository = await tenantContext.GetTenantRepositoryAsync();
+        var tenantRepository = tenantContext.GetTenantRepository();
         var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
@@ -115,7 +115,7 @@ public class EntityNotificationRepository : INotificationRepository
 
 
         var tenantContext = await _systemContext.GetChildTenantContextAsync(tenantId);
-        var tenantRepository = await tenantContext.GetTenantRepositoryAsync();
+        var tenantRepository = tenantContext.GetTenantRepository();
         var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
         
@@ -142,7 +142,7 @@ public class EntityNotificationRepository : INotificationRepository
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
         var tenantContext = await _systemContext.GetChildTenantContextAsync(tenantId);
-        var tenantRepository = await tenantContext.GetTenantRepositoryAsync();
+        var tenantRepository = tenantContext.GetTenantRepository();
         var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 

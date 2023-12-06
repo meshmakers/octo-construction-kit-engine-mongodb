@@ -13,6 +13,6 @@ public class TenantFixture : SystemFixture
 
         var tenantContext = await systemContext.GetChildTenantContextAsync(options.TenantId);
 
-        return await tenantContext.GetTenantRepositoryAsync();
+        return tenantContext.GetTenantRepository();
     }
 }

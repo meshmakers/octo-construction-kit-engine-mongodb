@@ -1,9 +1,7 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
-using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.CkTest.ConstructionKit.Generated.Test.v1;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
-using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
 using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
@@ -21,7 +19,7 @@ public class RtEntityTests : IClassFixture<SystemFixture>
     public async void TestGetIndirectRtAssociationTargets()
     {
         var systemContext = _systemFixture.GetSystemContext();
-        var tenantRepository = await systemContext.GetTenantRepositoryAsync();
+        var tenantRepository = systemContext.GetTenantRepository();
 
         using (var session = await tenantRepository.GetSessionAsync())
         {
@@ -47,7 +45,7 @@ public class RtEntityTests : IClassFixture<SystemFixture>
         await systemContext.ImportCkModelAsync(systemSession, new CkModelId("System.Identity-1.0.0"), operationResult);
         await systemSession.CommitTransactionAsync();
         
-        var tenantRepository = await systemContext.GetTenantRepositoryAsync();
+        var tenantRepository = systemContext.GetTenantRepository();
 
         using (var session = await tenantRepository.GetSessionAsync())
         {
@@ -88,7 +86,7 @@ public class RtEntityTests : IClassFixture<SystemFixture>
     public async void Test2()
     {
         var systemContext = _systemFixture.GetSystemContext();
-        var tenantRepository = await systemContext.GetTenantRepositoryAsync();
+        var tenantRepository = systemContext.GetTenantRepository();
 
         using (var session = await tenantRepository.GetSessionAsync())
         {

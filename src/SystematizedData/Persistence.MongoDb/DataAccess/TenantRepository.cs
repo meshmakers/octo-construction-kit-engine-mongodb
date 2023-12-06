@@ -19,12 +19,14 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
 {
     private readonly ICkCacheService _ckCache;
+    private readonly IModelLoaderService _modelLoaderService;
     private readonly IDatabaseContext _databaseContext;
 
-    public TenantRepository(string tenantId, ICkCacheService ckCache, IDatabaseContext databaseContext, IBulkRtMutation bulkRtMutation)
+    public TenantRepository(string tenantId, ICkCacheService ckCache, IModelLoaderService modelLoaderService, IDatabaseContext databaseContext, IBulkRtMutation bulkRtMutation)
         : base(tenantId, ckCache, databaseContext, bulkRtMutation)
     {
         _ckCache = ckCache;
+        _modelLoaderService = modelLoaderService;
         _databaseContext = databaseContext;
     }
 
@@ -46,9 +48,14 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
 
     #region Transaction Handling
 
-    protected override Task RefreshCkCacheServiceAsync(ICkCacheService ckCacheService)
+    protected override async Task RefreshCkCacheServiceAsync(ICkCacheService ckCacheService)
     {
-        throw new NotImplementedException();
+        var session = await _databaseContext.GetSessionAsync();
+        session.StartTransaction();
+        
+        await _modelLoaderService.LoadAsync(TenantId, session, _databaseContext);
+
+        await session.CommitTransactionAsync();
     }
 
     public override async Task<IOctoSession> GetSessionAsync()

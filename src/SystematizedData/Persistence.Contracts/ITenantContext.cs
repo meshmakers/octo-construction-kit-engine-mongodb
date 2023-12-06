@@ -43,13 +43,13 @@ public interface ITenantContext
     /// Returns an object that allows access to the system tenant repository.
     /// </summary>
     /// <returns></returns>
-    Task<ITenantRepository> GetSystemTenantRepositoryAsync();
+    ITenantRepository GetSystemTenantRepository();
 
     /// <summary>
     /// Returns an object that allows access to the tenant repository.
     /// </summary>
     /// <returns></returns>
-    Task<ITenantRepository> GetTenantRepositoryAsync();
+    ITenantRepository GetTenantRepository();
 
     #endregion Access Management
 
