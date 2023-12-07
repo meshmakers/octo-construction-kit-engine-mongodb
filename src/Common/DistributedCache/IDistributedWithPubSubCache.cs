@@ -1,7 +1,3 @@
-using System;
-using System.Threading.Tasks;
-using StackExchange.Redis;
-
 namespace Meshmakers.Octo.Common.DistributedCache;
 
 /// <summary>

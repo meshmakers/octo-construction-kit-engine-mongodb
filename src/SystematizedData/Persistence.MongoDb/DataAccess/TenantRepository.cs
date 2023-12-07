@@ -18,14 +18,12 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
 {
-    private readonly ICkCacheService _ckCache;
     private readonly IModelLoaderService _modelLoaderService;
     private readonly IDatabaseContext _databaseContext;
 
     public TenantRepository(string tenantId, ICkCacheService ckCache, IModelLoaderService modelLoaderService, IDatabaseContext databaseContext, IBulkRtMutation bulkRtMutation)
         : base(tenantId, ckCache, databaseContext, bulkRtMutation)
     {
-        _ckCache = ckCache;
         _modelLoaderService = modelLoaderService;
         _databaseContext = databaseContext;
     }
@@ -33,9 +31,11 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
 
     #region Helper
 
-    public CkTypeGraph GetEntityCacheItem(CkId<CkTypeId> ckTypeId)
+    public async Task<CkTypeGraph> GetEntityCacheItemAsync(CkId<CkTypeId> ckTypeId)
     {
-        var entityCacheItem = _ckCache.GetCkType(TenantId, ckTypeId);
+        var ckCacheService = await GetCkCacheService();
+
+        var entityCacheItem = ckCacheService.GetCkType(TenantId, ckTypeId);
         if (entityCacheItem == null)
         {
             throw new OperationFailedException($"Type '{ckTypeId}' does not exist.");
@@ -206,10 +206,11 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
         int? take = null)
     {
-        var entityCacheItem = GetEntityCacheItem(targetCkTypeId);
-
+        var ckCacheService = await GetCkCacheService();
+        var entityCacheItem = await GetEntityCacheItemAsync(targetCkTypeId);
+        
         var hierarchicalRtQuery =
-            new MultipleOriginHierarchicalRtQuery(_ckCache, TenantId, entityCacheItem, _databaseContext, dataQueryOperation.Language,
+            new MultipleOriginHierarchicalRtQuery(ckCacheService, TenantId, entityCacheItem, _databaseContext, dataQueryOperation.Language,
                 originRtIds,
                 originCkTypeId, roleId, graphDirection, targetCkTypeId);
 
@@ -233,10 +234,11 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var originCkTypeId = RtEntityExtensions.GetCkTypeId<TOriginEntity>();
         var targetCkTypeId = RtEntityExtensions.GetCkTypeId<TTargetEntity>();
 
-        var entityCacheItem = GetEntityCacheItem(targetCkTypeId);
+        var ckCacheService = await GetCkCacheService();
+        var entityCacheItem = await GetEntityCacheItemAsync(targetCkTypeId);
 
         var originHierarchicalRtQuery =
-            new MultipleOriginHierarchicalRtQuery<TTargetEntity>(_ckCache, TenantId, entityCacheItem, _databaseContext,
+            new MultipleOriginHierarchicalRtQuery<TTargetEntity>(ckCacheService, TenantId, entityCacheItem, _databaseContext,
                 dataQueryOperation.Language,
                 originRtIds,
                 originCkTypeId, roleId, graphDirection, targetCkTypeId);
@@ -271,10 +273,11 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var originCkTypeId = RtEntityExtensions.GetCkTypeId<TOriginEntity>();
         var targetCkTypeId = RtEntityExtensions.GetCkTypeId<TTargetEntity>();
 
-        var entityCacheItem = GetEntityCacheItem(targetCkTypeId);
+        var ckCacheService = await GetCkCacheService();
+        var entityCacheItem = await GetEntityCacheItemAsync(targetCkTypeId);
 
         var hierarchicalRtQuery =
-            new MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity>(_ckCache, TenantId, entityCacheItem, _databaseContext,
+            new MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity>(ckCacheService, TenantId, entityCacheItem, _databaseContext,
                 dataQueryOperation.Language,
                 originRtIds,
                 originCkTypeId, roleId, graphDirection, targetCkTypeId);
@@ -292,9 +295,10 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         DataQueryOperation dataQueryOperation, int? skip = null,
         int? take = null)
     {
-        var entityCacheItem = GetEntityCacheItem(ckTypeId);
+        var ckCacheService = await GetCkCacheService();
+        var entityCacheItem = await GetEntityCacheItemAsync(ckTypeId);
         var query =
-            new SingleOriginRtQuery<TEntity>(_ckCache, TenantId, entityCacheItem, _databaseContext, dataQueryOperation.Language);
+            new SingleOriginRtQuery<TEntity>(ckCacheService, TenantId, entityCacheItem, _databaseContext, dataQueryOperation.Language);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
@@ -314,12 +318,13 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
             return new ResultSet<TEntity>(new List<TEntity>(), 0);
         }
 
+        var ckCacheService = await GetCkCacheService();
         var resultSet = new List<TEntity>();
         long totalCount = 0;
-        var entityCacheItem = GetEntityCacheItem(ckTypeId);
+        var entityCacheItem = await GetEntityCacheItemAsync(ckTypeId);
 
         var query =
-            new SingleOriginRtQuery<TEntity>(_ckCache, TenantId, entityCacheItem, _databaseContext, dataQueryOperation.Language);
+            new SingleOriginRtQuery<TEntity>(ckCacheService, TenantId, entityCacheItem, _databaseContext, dataQueryOperation.Language);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddIdFilter(rtIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
@@ -499,7 +504,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         ArgumentValidation.ValidateString(nameof(attributeName), attributeName);
         ArgumentValidation.ValidateString(nameof(regexFilterValue), regexFilterValue);
 
-        var entityCacheItem = GetEntityCacheItem(ckTypeId);
+        var entityCacheItem = await GetEntityCacheItemAsync(ckTypeId);
         if (entityCacheItem == null)
         {
             throw new InvalidCkTypeIdException($"Construction Kit Id '{ckTypeId}' is invalid.");

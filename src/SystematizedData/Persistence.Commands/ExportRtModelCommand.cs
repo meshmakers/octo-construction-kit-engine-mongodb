@@ -81,7 +81,7 @@ public class ExportRtModelCommand : IExportRtModelCommand
 
             var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync(session, ckTypeId, dataQueryOperation);
 
-            var entityCacheItem = tenantRepository.GetEntityCacheItem(ckTypeId);
+            var entityCacheItem = await tenantRepository.GetEntityCacheItemAsync(ckTypeId);
 
             var model = new RtModelRootDto();
             model.Entities.AddRange(resultSet.Items.Select(entity =>

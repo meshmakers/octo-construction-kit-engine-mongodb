@@ -95,7 +95,7 @@ public class ImportRtModelCommand : IImportRtModelCommand
     {
         await Parallel.ForEachAsync(modelRtEntities, async (modelRtEntity, token) =>
         {
-            var entityCacheItem = tenantRepository.GetEntityCacheItem(modelRtEntity.CkTypeId);
+            var entityCacheItem = await tenantRepository.GetEntityCacheItemAsync(modelRtEntity.CkTypeId);
 
             var rtEntity = await tenantRepository.CreateTransientRtEntityAsync(modelRtEntity.CkTypeId).ConfigureAwait(false);
             rtEntity.RtId = modelRtEntity.RtId;

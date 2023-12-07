@@ -10,7 +10,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
 
 public interface ITenantRepository : IRuntimeRepository
 {
-    CkTypeGraph GetEntityCacheItem(CkId<CkTypeId> ckTypeId);
+    Task<CkTypeGraph> GetEntityCacheItemAsync(CkId<CkTypeId> ckTypeId);
 
     #region Data query
 
