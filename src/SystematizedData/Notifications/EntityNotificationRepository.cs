@@ -128,7 +128,7 @@ public class EntityNotificationRepository : INotificationRepository
         }
 
         var operationResult = new OperationResult();
-        await tenantRepository.ApplyChanges(session, entityUpdateInfos, operationResult);
+        await tenantRepository.ApplyChangesAsync(session, entityUpdateInfos, operationResult);
 
         await session.CommitTransactionAsync();
 
@@ -156,7 +156,7 @@ public class EntityNotificationRepository : INotificationRepository
         }
 
         var operationResult = new OperationResult();
-        await tenantRepository.ApplyChanges(session, new[]
+        await tenantRepository.ApplyChangesAsync(session, new[]
         {
             EntityUpdateInfo<RtNotificationMessage>.CreateInsert(rtEntity)
         }, associationUpdateInfos, operationResult);

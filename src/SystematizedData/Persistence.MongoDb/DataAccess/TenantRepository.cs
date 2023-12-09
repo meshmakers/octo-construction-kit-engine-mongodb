@@ -33,7 +33,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
 
     public async Task<CkTypeGraph> GetEntityCacheItemAsync(CkId<CkTypeId> ckTypeId)
     {
-        var ckCacheService = await GetCkCacheService();
+        var ckCacheService = await GetCkCacheServiceAsync();
 
         var entityCacheItem = ckCacheService.GetCkType(TenantId, ckTypeId);
         if (entityCacheItem == null)
@@ -206,7 +206,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
         int? take = null)
     {
-        var ckCacheService = await GetCkCacheService();
+        var ckCacheService = await GetCkCacheServiceAsync();
         var entityCacheItem = await GetEntityCacheItemAsync(targetCkTypeId);
         
         var hierarchicalRtQuery =
@@ -234,7 +234,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var originCkTypeId = RtEntityExtensions.GetCkTypeId<TOriginEntity>();
         var targetCkTypeId = RtEntityExtensions.GetCkTypeId<TTargetEntity>();
 
-        var ckCacheService = await GetCkCacheService();
+        var ckCacheService = await GetCkCacheServiceAsync();
         var entityCacheItem = await GetEntityCacheItemAsync(targetCkTypeId);
 
         var originHierarchicalRtQuery =
@@ -273,7 +273,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var originCkTypeId = RtEntityExtensions.GetCkTypeId<TOriginEntity>();
         var targetCkTypeId = RtEntityExtensions.GetCkTypeId<TTargetEntity>();
 
-        var ckCacheService = await GetCkCacheService();
+        var ckCacheService = await GetCkCacheServiceAsync();
         var entityCacheItem = await GetEntityCacheItemAsync(targetCkTypeId);
 
         var hierarchicalRtQuery =
@@ -295,7 +295,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         DataQueryOperation dataQueryOperation, int? skip = null,
         int? take = null)
     {
-        var ckCacheService = await GetCkCacheService();
+        var ckCacheService = await GetCkCacheServiceAsync();
         var entityCacheItem = await GetEntityCacheItemAsync(ckTypeId);
         var query =
             new SingleOriginRtQuery<TEntity>(ckCacheService, TenantId, entityCacheItem, _databaseContext, dataQueryOperation.Language);
@@ -318,7 +318,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
             return new ResultSet<TEntity>(new List<TEntity>(), 0);
         }
 
-        var ckCacheService = await GetCkCacheService();
+        var ckCacheService = await GetCkCacheServiceAsync();
         var resultSet = new List<TEntity>();
         long totalCount = 0;
         var entityCacheItem = await GetEntityCacheItemAsync(ckTypeId);

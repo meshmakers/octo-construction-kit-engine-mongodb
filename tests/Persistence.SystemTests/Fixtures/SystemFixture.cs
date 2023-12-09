@@ -17,16 +17,16 @@ public class SystemFixture : ConfigurationFixture, IDisposable
         
         Provider = Services.BuildServiceProvider();
 
-        Task.WaitAll(Task.Run(async () =>
-        {
-            var systemContext = GetSystemContext();
-            if (await systemContext.IsSystemTenantExistingAsync())
-            {
-                await systemContext.DeleteSystemTenantAsync();
-            }
-        
-            await systemContext.CreateSystemTenantAsync();
-        }));
+        // Task.WaitAll(Task.Run(async () =>
+        // {
+        //     var systemContext = GetSystemContext();
+        //     if (await systemContext.IsSystemTenantExistingAsync())
+        //     {
+        //         await systemContext.DeleteSystemTenantAsync();
+        //     }
+        //
+        //     await systemContext.CreateSystemTenantAsync();
+        // }));
     }
 
     public ServiceProvider Provider { get; private set; }

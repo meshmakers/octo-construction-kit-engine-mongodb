@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Diagnostics;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
@@ -100,14 +99,11 @@ public class MongoRepositoryClient : IRepositoryClient
         BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkEnumId, OctoEnumIdSerializer>());
         BsonSerializer.TryRegisterSerializer(new OctoObjectIdSerializer());
         BsonSerializer.TryRegisterSerializer(new ModelIdSerializer());
-     //   BsonSerializer.TryRegisterSerializer(new RtRecordSerializer());
         BsonClassMap.TryRegisterClassMap<CkModel>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.Id).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
-            //cm.MapMember(c => c.ScopeId).SetIsRequired(true);
-            //cm.MapMember(c => c.Dependencies).SetIsRequired(true);
         });
 
         BsonClassMap.TryRegisterClassMap<CkType>(cm =>

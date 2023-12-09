@@ -83,6 +83,60 @@ public class RtEntityTests : IClassFixture<SystemFixture>
     }
 
     [Fact]
+    public async void Test1_1()
+    {
+        var planetDesignation = Guid.NewGuid().ToString();
+        var systemContext = _systemFixture.GetSystemContext();
+        using var systemSession = await systemContext.GetSystemSessionAsync();
+        systemSession.StartTransaction();
+
+        OperationResult operationResult = new();
+        await systemContext.ImportCkModelAsync(systemSession, new CkModelId("Test-1.0.0"), operationResult);
+        await systemSession.CommitTransactionAsync();
+
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using (var session = await tenantRepository.GetSessionAsync())
+        {
+            session.StartTransaction();
+
+            var planet = await tenantRepository.CreateTransientRtEntityAsync<RtPlanet>();
+            planet.Designation = planetDesignation;
+
+            await tenantRepository.InsertOneRtEntityAsync(session, planet);
+
+            await session.CommitTransactionAsync();
+        }
+
+    }
+    
+    [Fact]
+    public async void Test1_2()
+    {
+        var planetDesignation = "da1d0128-635f-46b3-8071-bf2a4d271c07";
+
+        var systemContext = _systemFixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using (var session = await tenantRepository.GetSessionAsync())
+        {
+            session.StartTransaction();
+            var dataQueryOperation = DataQueryOperation.Create()
+                .FieldFilter( nameof(RtPlanet.Designation), FieldFilterOperator.Equals, planetDesignation);
+            
+          //  var result = await tenantRepository.GetRtEntitiesByTypeAsync(session, "Test/Planet", dataQueryOperation);
+            var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtPlanet>(session, dataQueryOperation);
+
+            await session.CommitTransactionAsync();
+            
+            Assert.Equal(1, result.TotalCount);
+            Assert.Single(result.Items);
+
+        }
+    }
+
+
+    [Fact]
     public async void Test2()
     {
         var systemContext = _systemFixture.GetSystemContext();

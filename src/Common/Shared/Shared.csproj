@@ -28,8 +28,8 @@
         <PackageReference Include="IdentityModel" Version="6.2.0" />
         <PackageReference Include="Markdig.Signed" Version="0.33.0" />
         <PackageReference Include="Meshmakers.Common.Shared" Version="4.0.2309.9001" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2312.6001" />
-        <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="0.0.2312.6001" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2312.7001" />
+        <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="0.0.2312.7001" />
         <PackageReference Include="Microsoft.Extensions.Options" Version="7.0.1" />
         <PackageReference Include="NLog" Version="5.2.5" />
         <PackageReference Include="System.ComponentModel.Annotations" Version="5.0.0" />
