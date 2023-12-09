@@ -1,4 +1,4 @@
-using Meshmakers.Octo.SystematizedData.Persistence;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Microsoft.AspNetCore.Mvc;
 
 namespace WebService.Sample.Controllers;

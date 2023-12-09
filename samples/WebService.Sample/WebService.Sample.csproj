@@ -14,7 +14,7 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\..\src\SystematizedData\Persistence.MongoDb\Persistence.MongoDb.csproj" />
+      <ProjectReference Include="..\..\src\MongoDb\Runtime.Engine.MongoDb\Runtime.Engine.MongoDb.csproj" />
     </ItemGroup>
 
 </Project>

@@ -1,5 +1,5 @@
-using Meshmakers.Octo.SystematizedData.Persistence;
-using Meshmakers.Octo.SystematizedData.Persistence.Configuration;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Configuration;
 using NLog;
 using NLog.Web;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
@@ -21,7 +21,8 @@ try
     // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddSwaggerGen();
-    builder.Services.AddOctoMongoDbPersistence();
+    builder.Services.AddRuntimeEngine()
+        .AddMongoDbRuntimeRepository();
 
     // NLog: Setup NLog for Dependency injection
     builder.Logging.ClearProviders();
