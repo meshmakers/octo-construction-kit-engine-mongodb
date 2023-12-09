@@ -1,5 +1,3 @@
-using System;
-using System.Threading.Tasks;
 using Meshmakers.Octo.Common.Shared;
 using StackExchange.Redis;
 
@@ -9,10 +7,10 @@ namespace Meshmakers.Octo.Common.DistributedCache;
 ///     Implements a channel
 /// </summary>
 /// <typeparam name="TValue">Type of value in messages</typeparam>
-internal class Channel<TValue> : IChannel<TValue> 
+internal class Channel<TValue> : IChannel<TValue>
 {
-    private readonly string _currentClientName;
     private readonly ChannelMessageQueue _channelMessageQueue;
+    private readonly string _currentClientName;
 
     internal Channel(string currentClientName, ChannelMessageQueue channelMessageQueue)
     {
@@ -31,23 +29,14 @@ internal class Channel<TValue> : IChannel<TValue>
     {
         _channelMessageQueue.OnMessage(async channelMessage =>
         {
-            if (!channelMessage.Message.HasValue)
-            {
-                return;
-            }
+            if (!channelMessage.Message.HasValue) return;
 
             string? serializedObject = channelMessage.Message;
-            if (string.IsNullOrWhiteSpace(serializedObject))
-            {
-                return;
-            }
+            if (string.IsNullOrWhiteSpace(serializedObject)) return;
 
             var o = serializedObject.Deserialize<ChannelMessage<TValue>>();
-            if (o.SenderClientName == _currentClientName)
-            {
-                return;
-            }
-            
+            if (o.SenderClientName == _currentClientName) return;
+
             await action(o);
         });
     }

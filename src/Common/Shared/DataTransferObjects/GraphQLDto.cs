@@ -4,6 +4,5 @@ namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 public class GraphQlDto
 {
-    [JsonIgnore]
-    public object? UserContext { get; set; }
+    [JsonIgnore] public object? UserContext { get; set; }
 }

@@ -22,7 +22,7 @@ public class IdentityProviderDto
     ///     The key for the identity provider type as represented in the JSON.
     /// </summary>
     public const string TypeJsonName = "type";
-    
+
     /// <summary>
     ///     The source type of the identity provider (e.g. AzureAD, OpenLDAP ...).
     /// </summary>

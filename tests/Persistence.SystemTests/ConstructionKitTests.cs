@@ -12,7 +12,7 @@ public class ConstructionKitTests : IClassFixture<SystemFixture>
     {
         _systemFixture = systemFixture;
     }
-    
+
     [Fact]
     public async void ImportConstructionKit()
     {
@@ -26,10 +26,8 @@ public class ConstructionKitTests : IClassFixture<SystemFixture>
         await systemContext.ImportCkModelAsync(session, new CkModelId("System.Identity-1.0.0"), operationResult);
 
         await session.CommitTransactionAsync();
-        
+
         Assert.False(operationResult.HasErrors);
         Assert.False(operationResult.HasFatalErrors);
     }
-
-
 }

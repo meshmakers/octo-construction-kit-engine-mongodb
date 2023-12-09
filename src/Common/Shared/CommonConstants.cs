@@ -1,7 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-
-namespace Meshmakers.Octo.Common.Shared;
+﻿namespace Meshmakers.Octo.Common.Shared;
 
 public static class CommonConstants
 {
@@ -125,31 +122,16 @@ public static class CommonConstants
         var list = GetDefaultScopes(scopes);
 
         if (apiScopes.HasFlag(ApiScopes.AssetSystemApiFullAccess))
-        {
             list.Add(SystemApiFullAccess);
-        }
-        else if (apiScopes.HasFlag(ApiScopes.AssetSystemApiReadOnly))
-        {
-            list.Add(SystemApiReadOnly);
-        }
+        else if (apiScopes.HasFlag(ApiScopes.AssetSystemApiReadOnly)) list.Add(SystemApiReadOnly);
 
         if (apiScopes.HasFlag(ApiScopes.IdentityApiFullAccess))
-        {
             list.Add(IdentityApiFullAccess);
-        }
-        else if (apiScopes.HasFlag(ApiScopes.IdentityApiReadOnly))
-        {
-            list.Add(IdentityApiReadOnly);
-        }
+        else if (apiScopes.HasFlag(ApiScopes.IdentityApiReadOnly)) list.Add(IdentityApiReadOnly);
 
         if (apiScopes.HasFlag(ApiScopes.BotApiFullAccess))
-        {
             list.Add(BotApiFullAccess);
-        }
-        else if (apiScopes.HasFlag(ApiScopes.BotApiReadOnly))
-        {
-            list.Add(BotApiReadOnly);
-        }
+        else if (apiScopes.HasFlag(ApiScopes.BotApiReadOnly)) list.Add(BotApiReadOnly);
 
 
         return string.Join(" ", list.ToArray());
@@ -158,30 +140,15 @@ public static class CommonConstants
     private static List<string> GetDefaultScopes(DefaultScopes scopes)
     {
         var list = new List<string>();
-        if (scopes.HasFlag(DefaultScopes.OpenId))
-        {
-            list.Add(Scopes.OpenId);
-        }
+        if (scopes.HasFlag(DefaultScopes.OpenId)) list.Add(Scopes.OpenId);
 
-        if (scopes.HasFlag(DefaultScopes.Profile))
-        {
-            list.Add(Scopes.Profile);
-        }
+        if (scopes.HasFlag(DefaultScopes.Profile)) list.Add(Scopes.Profile);
 
-        if (scopes.HasFlag(DefaultScopes.Email))
-        {
-            list.Add(Scopes.Email);
-        }
+        if (scopes.HasFlag(DefaultScopes.Email)) list.Add(Scopes.Email);
 
-        if (scopes.HasFlag(DefaultScopes.Role))
-        {
-            list.Add(Scopes.Role);
-        }
+        if (scopes.HasFlag(DefaultScopes.Role)) list.Add(Scopes.Role);
 
-        if (scopes.HasFlag(DefaultScopes.OfflineAccess))
-        {
-            list.Add(Scopes.OfflineAccess);
-        }
+        if (scopes.HasFlag(DefaultScopes.OfflineAccess)) list.Add(Scopes.OfflineAccess);
 
         return list;
     }

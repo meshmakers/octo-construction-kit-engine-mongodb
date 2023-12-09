@@ -1,4 +1,3 @@
-using System;
 using Meshmakers.Octo.Common.DistributedCache;
 using Microsoft.Extensions.DependencyInjection;
 

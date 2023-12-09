@@ -5,12 +5,11 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
 public class ServiceCollectionFixture
 {
-    public ServiceCollection Services { get; }
-
     public ServiceCollectionFixture()
     {
         Services = new ServiceCollection();
-        Services.AddOctoMongoDbPersistence();
+        Services.AddRuntimeEngine()
+            .AddMongoDbRuntimeRepository();
         Services.AddOctoCommands();
         Services.AddCkModelTest();
         Services.AddLogging(loggingBuilder =>
@@ -20,6 +19,5 @@ public class ServiceCollectionFixture
         });
     }
 
-    
-
+    public ServiceCollection Services { get; }
 }

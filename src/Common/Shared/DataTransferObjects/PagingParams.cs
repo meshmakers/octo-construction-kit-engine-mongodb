@@ -9,7 +9,7 @@ public class PagingParams
         Skip = 0;
         Take = 100;
     }
-    
+
     public int Skip { get; set; }
     public int Take { get; set; }
 

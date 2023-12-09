@@ -1,5 +1,4 @@
-﻿using System;
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 
 namespace Meshmakers.Octo.Common.Shared;
 
@@ -46,10 +45,7 @@ public class PerformanceMonitor : IDisposable
         // operations, as well as in your methods that use the resource.
         if (!_isDisposed)
         {
-            if (disposing)
-            {
-                _item.Stop();
-            }
+            if (disposing) _item.Stop();
 
             // Indicate that the instance has been disposed.
             _isDisposed = true;

@@ -22,7 +22,7 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
         var result = await systemContext.IsSystemTenantExistingAsync();
         Assert.True(result);
     }
-    
+
     [Fact]
     public async void CreateChildTenantAndDeleteAsync()
     {
@@ -55,7 +55,7 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
 
         Assert.False(r2);
     }
-    
+
     [Fact]
     public async void CreateTwoChildTenantsAndDeleteAsync()
     {
@@ -64,10 +64,11 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
         using (var session = await systemContext.GetSystemSessionAsync())
         {
             session.StartTransaction();
-            
+
             await systemContext.CreateChildTenantAsync(session, "Father", "Father");
             await session.CommitTransactionAsync();
         }
+
         var fatherTenantContext = await systemContext.GetChildTenantContextAsync("Father");
 
         // Create child tenant "Girl" from child tenant "Father"
@@ -100,7 +101,7 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
 
             await session.CommitTransactionAsync();
         }
-        
+
         using (var session = await systemContext.GetSystemSessionAsync())
         {
             session.StartTransaction();
@@ -109,10 +110,9 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
 
             await session.CommitTransactionAsync();
         }
-
     }
-    
-    
+
+
     [Fact]
     public async void AttachAndDetachTenant()
     {
@@ -121,7 +121,7 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
         using (var session = await systemContext.GetSystemSessionAsync())
         {
             session.StartTransaction();
-            
+
             await systemContext.CreateChildTenantAsync(session, "Father", "Father");
             await session.CommitTransactionAsync();
         }
@@ -143,7 +143,7 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
             await systemContext.AttachChildTenantAsync(session, "Father", "Father");
             await session.CommitTransactionAsync();
         }
-        
+
         // Drop
         using (var session = await systemContext.GetSystemSessionAsync())
         {

@@ -6,12 +6,12 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="FakeItEasy" Version="8.0.0" />
-        <PackageReference Include="Microsoft.Extensions.Configuration" Version="7.0.0" />
-        <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="7.0.4" />
-        <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="7.0.0" />
-        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
-        <PackageReference Include="xunit" Version="2.6.1" />
+        <PackageReference Include="FakeItEasy" Version="8.0.0"/>
+        <PackageReference Include="Microsoft.Extensions.Configuration" Version="7.0.0"/>
+        <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="7.0.4"/>
+        <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="7.0.0"/>
+        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0"/>
+        <PackageReference Include="xunit" Version="2.6.1"/>
         <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3">
             <PrivateAssets>all</PrivateAssets>
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -20,8 +20,7 @@
             <PrivateAssets>all</PrivateAssets>
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2312.7001" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" GeneratePathProperty="true" ReferenceOutputAssembly="false" Version="0.0.2312.7001" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" GeneratePathProperty="true" ReferenceOutputAssembly="false" Version="0.0.2312.7001"/>
     </ItemGroup>
 
     <ItemGroup>
@@ -31,23 +30,22 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ConstructionKitFolder Include="CkTest\ConstructionKit" />
+        <ConstructionKitFolder Include="CkTest\ConstructionKit"/>
     </ItemGroup>
 
     <ItemGroup>
-        <None Remove="**\ConstructionKit\ck-*.yaml" />
+        <None Remove="**\ConstructionKit\ck-*.yaml"/>
         <EmbeddedResource Include="**\ConstructionKit\ck-*.yaml">
             <GenerateCkModelServiceClass>true</GenerateCkModelServiceClass>
         </EmbeddedResource>
-        <None Remove="**\ConstructionKit\ck-*.cache.json" />
-        <AdditionalFiles Include="**\ConstructionKit\ck-*.cache.json" />
+        <None Remove="**\ConstructionKit\ck-*.cache.json"/>
+        <AdditionalFiles Include="**\ConstructionKit\ck-*.cache.json"/>
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\..\src\SystematizedData\Persistence.Commands\Persistence.Commands.csproj" />
-      <ProjectReference Include="..\..\src\SystematizedData\Persistence.MongoDb\Persistence.MongoDb.csproj" />
+        <ProjectReference Include="..\..\src\Common\Persistence.Commands\Persistence.Commands.csproj"/>
+        <ProjectReference Include="..\..\src\MongoDb\Runtime.Engine.MongoDb\Runtime.Engine.MongoDb.csproj"/>
     </ItemGroup>
-
 
 
 </Project>

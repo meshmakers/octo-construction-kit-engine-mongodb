@@ -1,5 +1,4 @@
-using System.Collections.Generic;
-using System.Linq;
+
 
 // ReSharper disable MemberCanBePrivate.Global
 
@@ -29,11 +28,9 @@ public class PagedResult<T>
     public PagingHeader? GetHeader()
     {
         if (Skip.HasValue && Take.HasValue)
-        {
             return new PagingHeader(
                 TotalCount, Skip.Value,
                 Take.Value);
-        }
 
         return null;
     }

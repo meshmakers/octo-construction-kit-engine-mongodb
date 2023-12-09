@@ -1,6 +1,6 @@
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Persistence.InternalContracts;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
@@ -10,11 +10,11 @@ public class SystemFixture : ConfigurationFixture, IDisposable
     {
         Services.Configure<OctoSystemConfiguration>(t =>
         {
-            var options = base.GetOptions<SystemTestOptions>("systemTest");
+            var options = GetOptions<SystemTestOptions>("systemTest");
             t.AdminUserPassword = options.AdminUserPassword;
             t.DatabaseUserPassword = options.DatabaseUserPassword;
         });
-        
+
         Provider = Services.BuildServiceProvider();
 
         // Task.WaitAll(Task.Run(async () =>
@@ -29,17 +29,16 @@ public class SystemFixture : ConfigurationFixture, IDisposable
         // }));
     }
 
-    public ServiceProvider Provider { get; private set; }
-
-    public ISystemContext GetSystemContext()
-    {
-
-        return Provider.GetRequiredService<ISystemContext>();
-    }
+    public ServiceProvider Provider { get; }
 
     public void Dispose()
     {
         //  var systemContext = GetSystemContext();
         // Task.WaitAll(systemContext.DeleteSystemTenantAsync());
+    }
+
+    public ISystemContext GetSystemContext()
+    {
+        return Provider.GetRequiredService<ISystemContext>();
     }
 }

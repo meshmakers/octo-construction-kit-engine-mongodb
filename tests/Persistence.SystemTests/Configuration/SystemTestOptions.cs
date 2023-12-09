@@ -1,4 +1,5 @@
 // ReSharper disable UnusedAutoPropertyAccessor.Global
+
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Configuration;
 
 // ReSharper disable once ClassNeverInstantiated.Global

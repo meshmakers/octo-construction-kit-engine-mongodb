@@ -25,12 +25,12 @@ public class RtEntityTests : IClassFixture<SystemFixture>
         {
             session.StartTransaction();
 
-            OctoObjectId originRtId = OctoObjectId.Parse("5fc8fc3d8b2fc75f925e21bc");
+            var originRtId = OctoObjectId.Parse("5fc8fc3d8b2fc75f925e21bc");
 
 
             var r = await tenantRepository.GetIndirectRtAssociationTargetsAsync<RtCity, RtLocation>(session, originRtId,
-                 SystemCkIds.ParentChild,
-                 GraphDirections.Outbound);
+                SystemCkIds.ParentChild,
+                GraphDirections.Outbound);
         }
     }
 
@@ -44,21 +44,21 @@ public class RtEntityTests : IClassFixture<SystemFixture>
         OperationResult operationResult = new();
         await systemContext.ImportCkModelAsync(systemSession, new CkModelId("System.Identity-1.0.0"), operationResult);
         await systemSession.CommitTransactionAsync();
-        
+
         var tenantRepository = systemContext.GetTenantRepository();
 
         using (var session = await tenantRepository.GetSessionAsync())
         {
             session.StartTransaction();
 
-            var scopeNames = new []{"openid", "profile", "offline_access", "identityAPI.full_access"};
+            var scopeNames = new[] { "openid", "profile", "offline_access", "identityAPI.full_access" };
             var dataQueryOperation = DataQueryOperation.Create()
-                .FieldFilter( "Scopes", FieldFilterOperator.In, scopeNames);
+                .FieldFilter("Scopes", FieldFilterOperator.In, scopeNames);
 
             var result = await tenantRepository.GetRtEntitiesByTypeAsync(session, "System.Identity/ApiResource", dataQueryOperation);
 
             await session.CommitTransactionAsync();
-            
+
             Assert.Equal(1, result.TotalCount);
             Assert.Single(result.Items);
 
@@ -107,9 +107,8 @@ public class RtEntityTests : IClassFixture<SystemFixture>
 
             await session.CommitTransactionAsync();
         }
-
     }
-    
+
     [Fact]
     public async void Test1_2()
     {
@@ -122,16 +121,15 @@ public class RtEntityTests : IClassFixture<SystemFixture>
         {
             session.StartTransaction();
             var dataQueryOperation = DataQueryOperation.Create()
-                .FieldFilter( nameof(RtPlanet.Designation), FieldFilterOperator.Equals, planetDesignation);
-            
-          //  var result = await tenantRepository.GetRtEntitiesByTypeAsync(session, "Test/Planet", dataQueryOperation);
+                .FieldFilter(nameof(RtPlanet.Designation), FieldFilterOperator.Equals, planetDesignation);
+
+            //  var result = await tenantRepository.GetRtEntitiesByTypeAsync(session, "Test/Planet", dataQueryOperation);
             var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtPlanet>(session, dataQueryOperation);
 
             await session.CommitTransactionAsync();
-            
+
             Assert.Equal(1, result.TotalCount);
             Assert.Single(result.Items);
-
         }
     }
 

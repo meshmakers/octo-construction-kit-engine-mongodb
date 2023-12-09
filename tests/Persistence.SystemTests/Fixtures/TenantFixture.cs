@@ -1,4 +1,4 @@
-using Meshmakers.Octo.SystematizedData.Persistence.DataAccess;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Configuration;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;

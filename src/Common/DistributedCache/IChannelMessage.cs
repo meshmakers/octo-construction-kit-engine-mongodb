@@ -9,12 +9,12 @@ public interface IChannelMessage<out TValue>
     ///     Returns the message
     /// </summary>
     TValue? Message { get; }
-    
+
     /// <summary>
-    /// Return the client name of the sender.
+    ///     Return the client name of the sender.
     /// </summary>
     /// <remarks>
-    /// Must be unique in the in redis instance.
+    ///     Must be unique in the in redis instance.
     /// </remarks>
-    string SenderClientName {get;}
+    string SenderClientName { get; }
 }

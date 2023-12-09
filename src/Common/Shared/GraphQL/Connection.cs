@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-
 namespace Meshmakers.Octo.Common.Shared.GraphQL;
 
 // ReSharper disable once ClassNeverInstantiated.Global

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <Description>Octo Mesh Runtime Contracts for MongoDB.</Description>
+        <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+        <AssemblyName>Meshmakers.Octo.Runtime.Contracts.MongoDb</AssemblyName>
+        <RootNamespace>Meshmakers.Octo.Runtime.Contracts.MongoDb</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\Common\Shared\Shared.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2312.7001"/>
+        <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="0.0.2312.7001"/>
+    </ItemGroup>
+
+</Project>

@@ -9,12 +9,12 @@ public enum IdentityProviderTypesDto
     ///     Google Account
     /// </summary>
     Google = 0,
-    
+
     /// <summary>
     ///     Microsoft Account
     /// </summary>
     Microsoft = 1,
-    
+
     /// <summary>
     ///     Azure Active Directory.
     /// </summary>

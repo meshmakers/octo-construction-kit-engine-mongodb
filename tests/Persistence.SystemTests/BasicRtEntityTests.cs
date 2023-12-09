@@ -6,7 +6,7 @@ using Xunit.Abstractions;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
-public class BasicRtEntityTests: IClassFixture<SystemFixture>
+public class BasicRtEntityTests : IClassFixture<SystemFixture>
 {
     private readonly SystemFixture _systemFixture;
     private readonly ITestOutputHelper _testOutputHelper;
@@ -21,7 +21,7 @@ public class BasicRtEntityTests: IClassFixture<SystemFixture>
     public async void CreateRtEntity()
     {
         var systemContext = _systemFixture.GetSystemContext();
-        
+
         using var systemSession = await systemContext.GetSystemSessionAsync();
         systemSession.StartTransaction();
 
@@ -40,7 +40,7 @@ public class BasicRtEntityTests: IClassFixture<SystemFixture>
             x.Designation = "test";
             await tenantRepository.InsertOneRtEntityAsync(session, x);
 
-            await session.CommitTransactionAsync();  
+            await session.CommitTransactionAsync();
         }
         catch (Exception e)
         {
@@ -48,6 +48,5 @@ public class BasicRtEntityTests: IClassFixture<SystemFixture>
             await session.AbortTransactionAsync();
             throw;
         }
-
     }
 }

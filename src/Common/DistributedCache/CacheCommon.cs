@@ -16,27 +16,27 @@ public static class CacheCommon
     public const string KeyCorsClients = "CorsPolicyProvider_CorsClients";
 
     /// <summary>
-    /// Key of tenant updates for pre processing
+    ///     Key of tenant updates for pre processing
     /// </summary>
     public const string KeyTenantPreUpdate = "TenantUpdatePre";
-    
+
     /// <summary>
-    /// Key of tenant updates for post processing
+    ///     Key of tenant updates for post processing
     /// </summary>
     public const string KeyTenantPostUpdate = "TenantUpdatePost";
-    
+
     /// <summary>
-    /// Channel of communication controller pool updates
+    ///     Channel of communication controller pool updates
     /// </summary>
     public const string KeyCommunicationControllerPoolUpdate = "CommunicationController_Pools_Update";
-    
+
     /// <summary>
-    /// Channel of communication controller plug updates
+    ///     Channel of communication controller plug updates
     /// </summary>
     public const string KeyCommunicationControllerPlugUpdate = "CommunicationController_Plugs_Update";
-    
+
     /// <summary>
-    /// Channel of communication controller socket updates
+    ///     Channel of communication controller socket updates
     /// </summary>
     public const string KeyCommunicationControllerSocketUpdate = "CommunicationController_Socket_Update";
 }

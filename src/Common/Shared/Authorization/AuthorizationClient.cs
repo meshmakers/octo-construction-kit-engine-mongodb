@@ -1,9 +1,7 @@
-using System;
-using System.Net.Http;
-using System.Threading.Tasks;
 using IdentityModel.Client;
 using Meshmakers.Common.Shared;
 using Microsoft.Extensions.Options;
+
 // ReSharper disable UnusedType.Global
 
 namespace Meshmakers.Octo.Common.Shared.Authorization;
@@ -11,30 +9,24 @@ namespace Meshmakers.Octo.Common.Shared.Authorization;
 public class AuthorizationClient : IAuthorizationClient
 {
     private IDiscoveryCache? _cache;
-    
+
     public AuthorizationClient(IOptionsMonitor<AuthorizationOptions> options)
     {
         Options = options.CurrentValue;
-        
+
         options.OnChange(CreateCache);
-        if (!string.IsNullOrWhiteSpace(options.CurrentValue.IssuerUri))
-        {
-            CreateCache(options.CurrentValue);
-        }
+        if (!string.IsNullOrWhiteSpace(options.CurrentValue.IssuerUri)) CreateCache(options.CurrentValue);
     }
 
     private IDiscoveryCache Cache
     {
         get
         {
-            if (_cache == null)
-            {
-                throw new ServiceConfigurationMissingException("Discovery cache not initialized.");
-            }
+            if (_cache == null) throw new ServiceConfigurationMissingException("Discovery cache not initialized.");
             return _cache;
         }
     }
-    
+
     // ReSharper disable once MemberCanBePrivate.Global
     protected AuthorizationOptions Options { get; private set; }
 
@@ -52,10 +44,7 @@ public class AuthorizationClient : IAuthorizationClient
             Token = accessToken
         });
 
-        if (response.IsError)
-        {
-            return new UserInfoData(false, null);
-        }
+        if (response.IsError) return new UserInfoData(false, null);
 
         return new UserInfoData(true, response.Claims);
     }
@@ -79,10 +68,7 @@ public class AuthorizationClient : IAuthorizationClient
             Token = accessToken
         });
 
-        if (result.IsError || !result.IsActive)
-        {
-            return false;
-        }
+        if (result.IsError || !result.IsActive) return false;
 
         return true;
     }
@@ -90,11 +76,8 @@ public class AuthorizationClient : IAuthorizationClient
     private void CreateCache(AuthorizationOptions authorizationOptions)
     {
         Options = authorizationOptions;
-        
-        if (string.IsNullOrWhiteSpace(Options.IssuerUri))
-        {
-            throw new ServiceConfigurationMissingException("Issuer URI is not configured.");
-        }
+
+        if (string.IsNullOrWhiteSpace(Options.IssuerUri)) throw new ServiceConfigurationMissingException("Issuer URI is not configured.");
 
         var url = new Uri(Options.IssuerUri);
         _cache = new DiscoveryCache(url.AbsoluteUri.TrimEnd('/'));
@@ -102,10 +85,7 @@ public class AuthorizationClient : IAuthorizationClient
 
     private static void ValidateResponse(ProtocolResponse response)
     {
-        if (response.IsError)
-        {
-            throw AuthorizationFailedException.AuthenticationFailed(response.Error, response.Exception);
-        }
+        if (response.IsError) throw AuthorizationFailedException.AuthenticationFailed(response.Error, response.Exception);
     }
 
     // ReSharper disable once MemberCanBePrivate.Global

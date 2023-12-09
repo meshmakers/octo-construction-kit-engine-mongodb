@@ -1,5 +1,3 @@
-using System;
-
 namespace Meshmakers.Octo.Common.Shared.Authorization;
 
 [Serializable]
@@ -8,8 +6,8 @@ public class AuthorizationFailedException : Exception
     public AuthorizationFailedException(string message) : base(message)
     {
     }
-    
-    public AuthorizationFailedException(string message, Exception? innerException) 
+
+    public AuthorizationFailedException(string message, Exception? innerException)
         : base(message, innerException)
     {
     }

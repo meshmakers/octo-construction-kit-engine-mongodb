@@ -18,7 +18,7 @@ internal record ChannelMessage<TValue> : IChannelMessage<TValue>
         SenderClientName = senderClientName;
         Message = message;
     }
-    
+
     /// <inheritdoc />
     public string SenderClientName { get; init; } = null!;
 

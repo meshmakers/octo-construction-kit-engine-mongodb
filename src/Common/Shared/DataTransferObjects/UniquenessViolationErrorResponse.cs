@@ -1,6 +1,4 @@
-﻿using System.Collections.Generic;
-
-namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
+﻿namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 /// <summary>
 ///     Returned when the creation or update of a resource
