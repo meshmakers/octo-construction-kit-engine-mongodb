@@ -274,7 +274,7 @@ public class TenantContext : ITenantContext
     {
         var tenantRepository = GetTenantRepository();
 
-        var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(systemSession, new DataQueryOperation(), skip, take);
+        var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(systemSession, DataQueryOperation.Create(), skip, take);
         return new PagedResult<OctoTenant>(result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName)),
             skip, take, result.TotalCount);
     }

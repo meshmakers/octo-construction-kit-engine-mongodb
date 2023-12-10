@@ -288,7 +288,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         CkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection) where TOriginEntity : RtEntity where TTargetEntity : RtEntity, new()
     {
-        var dataQueryOperation = new DataQueryOperation();
+        var dataQueryOperation = DataQueryOperation.Create();
 
         var resultSets = await GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(session, new[] { originRtId }, roleId,
             graphDirection, null, dataQueryOperation);
