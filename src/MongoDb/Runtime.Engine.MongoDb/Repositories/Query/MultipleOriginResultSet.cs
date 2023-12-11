@@ -9,7 +9,8 @@ internal class MultipleOriginResultSet<TEntity> : Dictionary<OctoObjectId, IResu
     IMultipleOriginResultSet<TEntity>
 {
     public MultipleOriginResultSet(List<QueryMultipleResult<TEntity>> queryMultipleResult)
-        : base(queryMultipleResult.ToDictionary(k => k.Id, v => (IResultSet<TEntity>)new ResultSet<TEntity>(v.Targets, v.TotalCount)))
+        : base(queryMultipleResult.ToDictionary(k => k.Id,
+            v => (IResultSet<TEntity>)new ResultSet<TEntity>(v.Targets, v.TotalCount, v.Grouping)))
     {
     }
 }

@@ -6,9 +6,11 @@ using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Formulas;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
@@ -118,5 +120,16 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         }
 
         return base.ResolveSearchAttributeValue(attributeName, searchTerm, out isEnum);
+    }
+    
+    protected override IEnumerable<GroupingResult>? CalculateGrouping(IEnumerable<TEntity> resultList)
+    {
+        if (GroupBy == null)
+        {
+            return null;
+        }
+
+        var statisticFunctions = new RtStatisticFunctions<TEntity>(_entityCacheItem, GroupBy);
+        return statisticFunctions.Calculate(resultList);
     }
 }

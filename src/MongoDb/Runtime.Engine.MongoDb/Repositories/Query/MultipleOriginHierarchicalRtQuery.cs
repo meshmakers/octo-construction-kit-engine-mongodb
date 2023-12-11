@@ -6,10 +6,12 @@ using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Formulas;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
+using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using PersistenceException = Meshmakers.Octo.Runtime.Contracts.MongoDb.PersistenceException;
@@ -136,6 +138,11 @@ internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetE
         }
 
         var result = await aggregate2.ToListAsync();
+        
+        foreach (var multipleResult in result)
+        {
+            multipleResult.Grouping = CalculateGrouping(multipleResult.Targets);
+        }
 
         return new MultipleOriginResultSet<TTargetEntity>(result);
     }
@@ -215,5 +222,16 @@ internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetE
         }
 
         return base.ResolveSearchAttributeValue(attributeName, searchTerm, out isEnum);
+    }
+    
+    protected override IEnumerable<GroupingResult>? CalculateGrouping(IEnumerable<TTargetEntity> resultList)
+    {
+        if (GroupBy == null)
+        {
+            return null;
+        }
+
+        var statisticFunctions = new RtStatisticFunctions<TTargetEntity>(_targetEntityCacheItem, GroupBy);
+        return statisticFunctions.Calculate(resultList);
     }
 }

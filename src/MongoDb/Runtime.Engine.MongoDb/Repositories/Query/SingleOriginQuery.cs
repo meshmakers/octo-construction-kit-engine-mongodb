@@ -62,7 +62,8 @@ public abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
             var pipelineDefinition = PipelineDefinition<TEntity, QueryResult<TEntity>>.Create(pipelineStageDefinitions);
             var resultAggregate = _mongoDbDataSourceCollection.Aggregate(octoSession, pipelineDefinition);
             var result = await resultAggregate.SingleOrDefaultAsync();
-            return new ResultSet<TEntity>(result.Result, result.TotalCount.FirstOrDefault()?.Count ?? 0);
+            var grouping = CalculateGrouping(result.Result);
+            return new ResultSet<TEntity>(result.Result, result.TotalCount.FirstOrDefault()?.Count ?? 0, grouping);
         }
         else // Return result directly if there is no paging enabled
         {
@@ -70,7 +71,8 @@ public abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
 
             var aggregate = _mongoDbDataSourceCollection.Aggregate(octoSession, pipelineDefinition);
             var resultNoTotalCount = await aggregate.ToListAsync();
-            return new ResultSet<TEntity>(resultNoTotalCount, resultNoTotalCount.Count);
+            var grouping = CalculateGrouping(resultNoTotalCount);
+            return new ResultSet<TEntity>(resultNoTotalCount, resultNoTotalCount.Count, grouping);
         }
     }
 }

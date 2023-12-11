@@ -22,6 +22,8 @@ public abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, ne
 
     public string Language { get; }
 
+    protected FieldGroupBy? GroupBy { get; private set; }
+
     protected override void AddPreFieldFilters(List<FilterDefinition<TEntity>> filters)
     {
         base.AddPreFieldFilters(filters);
@@ -53,6 +55,12 @@ public abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, ne
             pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Sort(sortDefinition));
         }
     }
+    
+    protected virtual IEnumerable<GroupingResult>? CalculateGrouping(IEnumerable<TEntity> resultList)
+    {
+        return null;
+    }
+
 
     internal void AddTextSearchFilter(TextSearchFilter? textSearchFilter)
     {
@@ -126,4 +134,16 @@ public abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, ne
             }
         }
     }
+    
+    internal void AddGrouping(FieldGroupBy? groupByDto)
+    {
+        if (groupByDto == null)
+        {
+            return;
+        }
+
+        GroupBy = groupByDto;
+    }
+    
+    
 }

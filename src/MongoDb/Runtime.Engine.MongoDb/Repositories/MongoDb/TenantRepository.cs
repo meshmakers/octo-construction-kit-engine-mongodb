@@ -51,11 +51,9 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         IReadOnlyList<OctoObjectId> rtIds, DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null)
     {
-        if (!rtIds.Any()) return new ResultSet<TEntity>(new List<TEntity>(), 0);
+        if (!rtIds.Any()) return new ResultSet<TEntity>(new List<TEntity>(), 0, null);
 
         var ckCacheService = await GetCkCacheServiceAsync();
-        var resultSet = new List<TEntity>();
-        long totalCount = 0;
         var entityCacheItem = await GetEntityCacheItemAsync(ckTypeId);
 
         var query =
@@ -66,12 +64,9 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         query.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        query.AddGrouping(dataQueryOperation.FieldGroupBy);
 
-        var tempResultSet = await query.ExecuteQuery(session, skip, take);
-        resultSet.AddRange(tempResultSet.Items);
-        totalCount += tempResultSet.TotalCount;
-
-        return new ResultSet<TEntity>(resultSet, totalCount);
+        return await query.ExecuteQuery(session, skip, take);
     }
 
     #region Transaction Handling
@@ -166,41 +161,29 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         IReadOnlyList<string> attributeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
-        var resultSet = new List<CkAttribute>();
-        long totalCount = 0;
-
         var query = new CkAttributeQuery(_mongoDbRepositoryDataSource);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddIdFilter(attributeIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         query.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        query.AddGrouping(dataQueryOperation.FieldGroupBy);
 
-        var tempResultSet = await query.ExecuteQuery(session, skip, take);
-        resultSet.AddRange(tempResultSet.Items);
-        totalCount += tempResultSet.TotalCount;
-
-        return new ResultSet<CkAttribute>(resultSet, totalCount);
+        return await query.ExecuteQuery(session, skip, take);
     }
 
     public async Task<IResultSet<CkType>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<CkTypeId> ckTypeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
-        var resultSet = new List<CkType>();
-        long totalCount = 0;
-
         var query = new CkTypeQuery(_mongoDbRepositoryDataSource);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddIdFilter(ckTypeIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         query.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        query.AddGrouping(dataQueryOperation.FieldGroupBy);
 
-        var tempResultSet = await query.ExecuteQuery(session, skip, take);
-        resultSet.AddRange(tempResultSet.Items);
-        totalCount += tempResultSet.TotalCount;
-
-        return new ResultSet<CkType>(resultSet, totalCount);
+        return await query.ExecuteQuery(session, skip, take);
     }
 
     public async Task<IResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session, OctoObjectId originRtId,
@@ -250,6 +233,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         hierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         hierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         hierarchicalRtQuery.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        hierarchicalRtQuery.AddGrouping(dataQueryOperation.FieldGroupBy);
 
         return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
     }
@@ -279,6 +263,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         originHierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         originHierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         originHierarchicalRtQuery.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        originHierarchicalRtQuery.AddGrouping(dataQueryOperation.FieldGroupBy);
 
         return await originHierarchicalRtQuery.ExecuteQuery(session, skip, take);
     }
@@ -319,6 +304,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         hierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         hierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         hierarchicalRtQuery.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        hierarchicalRtQuery.AddGrouping(dataQueryOperation.FieldGroupBy);
 
         return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
     }
@@ -336,6 +322,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         query.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        query.AddGrouping(dataQueryOperation.FieldGroupBy);
 
         return await query.ExecuteQuery(session, skip, take);
     }
