@@ -1,4 +1,5 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Configuration;
 using NLog;
 using NLog.Web;

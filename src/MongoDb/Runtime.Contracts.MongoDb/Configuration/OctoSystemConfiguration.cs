@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
+namespace Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 
 public class OctoSystemConfiguration
 {

@@ -1,4 +1,5 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
