@@ -158,7 +158,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     #region Data query
 
     public async Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session,
-        IReadOnlyList<string> attributeIds,
+        IReadOnlyList<CkId<CkAttributeId>> attributeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var query = new CkAttributeQuery(_mongoDbRepositoryDataSource);
@@ -172,7 +172,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkType>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<CkTypeId> ckTypeIds,
+    public async Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkId<CkTypeId>> ckTypeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var query = new CkTypeQuery(_mongoDbRepositoryDataSource);

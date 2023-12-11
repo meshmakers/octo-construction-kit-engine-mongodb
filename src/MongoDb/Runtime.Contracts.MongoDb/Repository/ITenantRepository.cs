@@ -13,10 +13,10 @@ public interface ITenantRepository : IRuntimeRepository
 
     #region Data query
 
-    Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session, IReadOnlyList<string> attributeIds,
+    Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session, IReadOnlyList<CkId<CkAttributeId>> attributeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
 
-    Task<IResultSet<CkType>> GetCkEntityAsync(IOctoSession session, IReadOnlyList<CkTypeId> ckTypeIds,
+    Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkId<CkTypeId>> ckTypeIds,
         DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null);
 
