@@ -5,6 +5,12 @@ namespace Meshmakers.Octo.Common.DistributedCache;
 /// </summary>
 public static class CacheCommon
 {
+    internal const string FilePrefix = "CacheFile_";
+    internal const string EventPrefix = "CacheEvent_";
+    internal const string OperationPrefix = "CacheOperation_";
+    internal const string LastEventPrefix = "LastCacheEvent_";
+    
+    
     /// <summary>
     ///     Channel of identity provider updates
     /// </summary>

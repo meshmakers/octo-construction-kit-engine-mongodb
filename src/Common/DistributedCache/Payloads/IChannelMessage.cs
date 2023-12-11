@@ -1,15 +1,10 @@
-namespace Meshmakers.Octo.Common.DistributedCache;
+namespace Meshmakers.Octo.Common.DistributedCache.Payloads;
 
 /// <summary>
-///     Interface of a channel message
+/// Interface of a channel message
 /// </summary>
-public interface IChannelMessage<out TValue>
+public interface IChannelMessage
 {
-    /// <summary>
-    ///     Returns the message
-    /// </summary>
-    TValue? Message { get; }
-
     /// <summary>
     ///     Return the client name of the sender.
     /// </summary>

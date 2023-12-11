@@ -7,37 +7,51 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 public class SystemMessageService : ISystemMessageService
 {
     private readonly ICkCacheService _ckCacheService;
-    private readonly IDistributedWithPubSubCache _distributedWithPubSubCache;
+    private readonly IDistributedCache _distributedCache;
 
-    public SystemMessageService(IDistributedWithPubSubCache distributedWithPubSubCache, ICkCacheService ckCacheService)
+    public SystemMessageService(IDistributedCache distributedCache, ICkCacheService ckCacheService)
     {
-        _distributedWithPubSubCache = distributedWithPubSubCache;
+        _distributedCache = distributedCache;
         _ckCacheService = ckCacheService;
-
-        var sub = distributedWithPubSubCache.Subscribe<string>(CacheCommon.KeyTenantPreUpdate);
-        sub.OnMessage(channelMessage =>
-        {
-            if (!string.IsNullOrWhiteSpace(channelMessage.Message)) UnloadCache(channelMessage.Message);
-
-            return Task.CompletedTask;
-        });
     }
 
 
     public async Task DistributeTenantModificationPreEventAsync(string tenantId)
     {
-        await _distributedWithPubSubCache.PublishAsync(CacheCommon.KeyTenantPreUpdate, tenantId);
+        await _distributedCache.TriggerEventAsync(CacheCommon.KeyTenantPreUpdate, tenantId);
     }
 
     public async Task DistributeTenantModificationPostEventAsync(string tenantId)
     {
-        await _distributedWithPubSubCache.PublishAsync(CacheCommon.KeyTenantPostUpdate, tenantId);
+        await _distributedCache.TriggerEventAsync(CacheCommon.KeyTenantPostUpdate, tenantId);
     }
 
     private void UnloadCache(string tenantId)
     {
         var key = tenantId.MakeKey();
 
-        if (_ckCacheService.IsTenantLoaded(key)) _ckCacheService.Unload(key);
+        if (_ckCacheService.IsTenantLoaded(key))
+        {
+            _ckCacheService.Unload(key);
+        }
+    }
+
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        var sub = await _distributedCache.SubscribeEventAsync<string>(CacheCommon.KeyTenantPreUpdate);
+        sub.OnEvent(tenantId =>
+        {
+            if (!string.IsNullOrWhiteSpace(tenantId))
+            {
+                UnloadCache(tenantId);
+            }
+
+            return Task.CompletedTask;
+        });
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        throw new NotImplementedException();
     }
 }

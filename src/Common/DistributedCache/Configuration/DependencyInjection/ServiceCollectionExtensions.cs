@@ -1,13 +1,13 @@
 using Meshmakers.Octo.Common.DistributedCache;
-using Microsoft.Extensions.DependencyInjection;
+using Meshmakers.Octo.Common.DistributedCache.Configuration.Options;
 
 // ReSharper disable once CheckNamespace
-namespace Meshmakers.Octo.Backend.DistributedCache;
+namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
 ///     DI extension methods for adding distributed cache with pub sub
 /// </summary>
-public static class DistributedCacheWithPubSubExtensions
+public static class ServiceCollectionExtensions
 {
     /// <summary>
     ///     Adds a distributed cache with pub sub mechanisms to the service collection
@@ -20,7 +20,7 @@ public static class DistributedCacheWithPubSubExtensions
     public static IServiceCollection AddDistributedPubSubCache(this IServiceCollection services)
     {
         services.AddOptions();
-        services.Add(ServiceDescriptor.Singleton<IDistributedWithPubSubCache, DistributedWithPubSubCache>());
+        services.Add(ServiceDescriptor.Singleton<IDistributedCache, DistributedCache>());
         return services;
     }
 

@@ -1,4 +1,4 @@
-namespace Meshmakers.Octo.Common.DistributedCache;
+namespace Meshmakers.Octo.Common.DistributedCache.Payloads;
 
 /// <summary>
 ///     Represents a cache stream

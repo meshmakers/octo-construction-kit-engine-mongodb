@@ -1,4 +1,3 @@
-using Meshmakers.Octo.Backend.DistributedCache;
 using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
@@ -28,8 +27,11 @@ public static class RuntimeEngineBuilderExtensions
         // Add services of Persistence module
         builder.Services.AddTransient<ICkModelRepository, DatabaseCkModelRepository>();
         builder.Services.AddSingleton<ISystemContext, SystemContext>();
-        builder.Services.AddSingleton<ISystemMessageService, SystemMessageService>();
         builder.Services.AddSingleton<IModelLoaderService, ModelLoaderService>();
+
+        builder.Services.AddSingleton<SystemMessageService>();
+        builder.Services.AddHostedService<SystemMessageService>(provider => provider.GetRequiredService<SystemMessageService>());
+        builder.Services.AddSingleton<ISystemMessageService>(provider => provider.GetRequiredService<SystemMessageService>());
 
         return builder;
     }

@@ -1,11 +1,11 @@
 using System.Text.Json.Serialization;
 
-namespace Meshmakers.Octo.Common.DistributedCache;
+namespace Meshmakers.Octo.Common.DistributedCache.Payloads;
 
 /// <summary>
 ///     Implements a channel message
 /// </summary>
-internal record ChannelMessage<TValue> : IChannelMessage<TValue>
+internal record ChannelEvent<TValue> : ChannelMessage
 {
     /// <summary>
     ///     Constructor
@@ -13,14 +13,11 @@ internal record ChannelMessage<TValue> : IChannelMessage<TValue>
     /// <param name="senderClientName">The client name of the sender</param>
     /// <param name="message">Message of channel</param>
     [JsonConstructor]
-    public ChannelMessage(string senderClientName, TValue? message)
+    public ChannelEvent(string senderClientName, TValue? message)
+      : base (senderClientName)
     {
-        SenderClientName = senderClientName;
         Message = message;
     }
-
-    /// <inheritdoc />
-    public string SenderClientName { get; init; } = null!;
 
     /// <inheritdoc />
     public TValue? Message { get; init; }
