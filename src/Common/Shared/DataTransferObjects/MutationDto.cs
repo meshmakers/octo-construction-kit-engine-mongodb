@@ -4,7 +4,7 @@ namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 public class MutationDto<TItemType> : MutationDto
 {
-    public TItemType? Item { get; init; }
+    public TItemType Item { get; init; } = default(TItemType)!;
 }
 
 public class MutationDto

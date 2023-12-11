@@ -92,7 +92,8 @@ public static class CommonConstants
     public const string GraphQLErrorDataStore = "OCTO1003";
     public const string GraphQLErrorCommon = "OCTO1004";
     public const string GraphQLDeleteOperationsNotSupported = "OCTO1005";
-    public const string GraphQLCkModelViolation = "OCTO1006";
+    public const string GraphQLOperationError = "OCTO1006_{0}";
+    public const string GraphQLOperationFatalError = "OCTO1007_{0}";
 
     public const string AdministratorsRole = "Administrators";
     public const string ManagersRole = "Managers";

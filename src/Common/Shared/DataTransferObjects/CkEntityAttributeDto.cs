@@ -1,11 +1,13 @@
 using System.Text.Json.Serialization;
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 public class CkEntityAttributeDto
 {
-    public string? AttributeId { get; init; }
-    public string? AttributeName { get; init; }
+    public CkId<CkAttributeId> CkAttributeId { get; init; }
+    public string AttributeName { get; init; } = null!;
 
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public AttributeValueTypesDto AttributeValueType { get; init; }
@@ -18,7 +20,7 @@ public class CkEntityAttributeDto
 
     public string? AutoIncrementReference { get; init; }
 
-    public ICollection<string>? AutoCompleteTexts { get; init; }
+    public  IReadOnlyCollection<object>? AutoCompleteValues { get; init; }
 
     public CkAttributeDto? Attribute { get; init; }
 }
