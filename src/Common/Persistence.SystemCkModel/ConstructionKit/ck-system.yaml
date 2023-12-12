@@ -1,23 +1,5 @@
 $schema: https://schemas.meshmakers.cloud/construction-kit-compiled.schema.json
 types:
-- typeId: Entity
-  isAbstract: true
-- typeId: Tenant
-  derivedFromCkTypeId: System/Entity
-  isFinal: true
-  attributes:
-  - id: System/TenantId
-    name: TenantId
-  - id: System/ParentTenantId
-    name: ParentTenantId
-    isOptional: true
-  - id: System/DatabaseName
-    name: DatabaseName
-  indexes:
-  - indexType: Ascending
-    fields:
-    - attributeNames:
-      - TenantId
 - typeId: AutoIncrement
   derivedFromCkTypeId: System/Entity
   attributes:
@@ -28,6 +10,15 @@ types:
   - id: System/AutoIncrement.CurrentValue
     name: CurrentValue
     isOptional: true
+- typeId: Configuration
+  derivedFromCkTypeId: System/Entity
+  isFinal: true
+  attributes:
+  - id: System/ConfigurationValue
+    name: ConfigurationValue
+    isOptional: true
+- typeId: Entity
+  isAbstract: true
 - typeId: Query
   derivedFromCkTypeId: System/Entity
   attributes:
@@ -49,13 +40,6 @@ types:
     isOptional: true
   - id: System/Name
     name: Name
-- typeId: Configuration
-  derivedFromCkTypeId: System/Entity
-  isFinal: true
-  attributes:
-  - id: System/ConfigurationValue
-    name: ConfigurationValue
-    isOptional: true
 - typeId: ServiceHook
   derivedFromCkTypeId: System/Entity
   attributes:
@@ -74,6 +58,22 @@ types:
   - id: System/ServiceHook.ApiKey
     name: ServiceHookApiKey
     isOptional: true
+- typeId: Tenant
+  derivedFromCkTypeId: System/Entity
+  isFinal: true
+  attributes:
+  - id: System/TenantId
+    name: TenantId
+  - id: System/ParentTenantId
+    name: ParentTenantId
+    isOptional: true
+  - id: System/DatabaseName
+    name: DatabaseName
+  indexes:
+  - indexType: Ascending
+    fields:
+    - attributeNames:
+      - TenantId
 associationRoles:
 - id: ParentChild
   inboundName: Parent
