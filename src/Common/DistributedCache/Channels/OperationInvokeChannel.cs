@@ -47,8 +47,18 @@ public class OperationInvokeChannel<TInvoke, TResult> : IOperationInvokeChannel<
                 return;
             }
 
-            var result = await action(o.Arguments);
-            var resultMessage = new ChannelOperationResult<TResult>(_currentClientName, o.OperationId, result);
+            TResult? result = default;
+            OperationError? error = default;
+            try
+            {
+                result = await action(o.Arguments);
+            }
+            catch (DistributedOperationFailedException<OperationError> e)
+            {
+                error = e.Error;
+            }
+       
+            var resultMessage = new ChannelOperationResult<TResult>(_currentClientName, o.OperationId, result, error);
             await _subscriber.PublishAsync(RedisChannel.Literal(_channelName), resultMessage.Serialize());
         });
     }

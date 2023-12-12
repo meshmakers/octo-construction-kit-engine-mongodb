@@ -52,6 +52,13 @@ public class DistributedCache : IDistributedCache
         return new EventChannel<TValue>(_currentClientName, await _subscriber.SubscribeAsync(
             RedisChannel.Literal(CacheCommon.EventPrefix + eventName)));
     }
+    
+    /// <inheritdoc />
+    public IEventChannel<TValue> SubscribeEvent<TValue>(string eventName)
+    {
+        return new EventChannel<TValue>(_currentClientName, _subscriber.Subscribe(
+            RedisChannel.Literal(CacheCommon.EventPrefix + eventName)));
+    }
 
     /// <inheritdoc />
     public async Task TriggerEventAsync<T>(string eventName, T value)
@@ -76,19 +83,23 @@ public class DistributedCache : IDistributedCache
     }
     
     /// <inheritdoc />
-    public async Task<IOperationResultChannel<TError, TResult>> InvokeOperationAsync<TInvoke, TError, TResult>(string operationName, TInvoke arguments)
+    public async Task<TResult> InvokeOperationAsync<TInvoke, TResult>(string operationName, TInvoke arguments)
     {
         ArgumentValidation.ValidateString(nameof(operationName), operationName);
 
-        var channelName = CacheCommon.OperationPrefix + operationName;
+        Guid operationId = Guid.NewGuid();
+        var requestChannelName = CacheCommon.OperationPrefix + operationName;
+        var responseChannelName = CacheCommon.OperationPrefix + operationName + operationId;
 
-        await _subscriber.PublishAsync(RedisChannel.Literal(channelName), 
-            new ChannelOperationInvoke<TInvoke>(_currentClientName, Guid.NewGuid(), arguments).Serialize());
-        
-        return new OperationResultChannel<TError, TResult>(_currentClientName, await _subscriber.SubscribeAsync(
-            RedisChannel.Literal(CacheCommon.OperationPrefix + operationName)));
+        await _subscriber.PublishAsync(RedisChannel.Literal(requestChannelName), 
+            new ChannelOperationInvoke<TInvoke>(_currentClientName, operationId, arguments).Serialize());
+
+        var resultChannel = new OperationResultChannel<TResult>(_currentClientName, await _subscriber.SubscribeAsync(
+            RedisChannel.Literal(responseChannelName)));
+
+        return await resultChannel.Task;
     }
-
+    
     /// <inheritdoc />
     public async Task CacheStreamAsync(string cacheStreamKey, byte[] value, string contentType, TimeSpan? expiry = null)
     {

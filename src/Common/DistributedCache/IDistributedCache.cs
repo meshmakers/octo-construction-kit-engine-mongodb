@@ -27,6 +27,14 @@ public interface IDistributedCache
     /// <typeparam name="TValue">Type of value in messages</typeparam>
     /// <returns>The channel to access e. g. messages</returns>
     Task<IEventChannel<TValue>> SubscribeEventAsync<TValue>(string eventName);
+    
+    /// <summary>
+    ///     Subscribes to an event channel
+    /// </summary>
+    /// <param name="eventName">The name of the event</param>
+    /// <typeparam name="TValue">Type of value in messages</typeparam>
+    /// <returns>The channel to access e. g. messages</returns>
+    IEventChannel<TValue> SubscribeEvent<TValue>(string eventName);
 
     /// <summary>
     ///     Publish a message to the given channel
@@ -44,18 +52,15 @@ public interface IDistributedCache
     /// <returns></returns>
     Task<IOperationInvokeChannel<TInvoke, TResult>> SubscribeInvokeOperationAsync<TInvoke, TResult>(string operationName);
 
-
     /// <summary>
     /// Invokes an operation and returns the possibility to subscribe to the result.
     /// </summary>
     /// <param name="operationName">The name of operation</param>
     /// <param name="arguments">Argument of the operation</param>
     /// <typeparam name="TInvoke">The type of invoke arguments</typeparam>
-    /// <typeparam name="TError">The error type when operation failed</typeparam>
     /// <typeparam name="TResult">The result type when operation succeeded</typeparam>
     /// <returns></returns>
-    Task<IOperationResultChannel<TError, TResult>> InvokeOperationAsync<TInvoke, TError, TResult>(string operationName, TInvoke arguments);
-    
+    Task<TResult> InvokeOperationAsync<TInvoke, TResult>(string operationName, TInvoke arguments);
     
     /// <summary>
     ///     Caches a stream for the given amount of time

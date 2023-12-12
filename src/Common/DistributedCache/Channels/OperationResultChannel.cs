@@ -8,23 +8,23 @@ namespace Meshmakers.Octo.Common.DistributedCache.Channels;
 /// Implements an operation result channel
 /// </summary>
 /// <typeparam name="TResult">Result type of operation results</typeparam>
-/// <typeparam name="TError">Error type of operation results</typeparam>
-public class OperationResultChannel<TError, TResult> : IOperationResultChannel<TError, TResult>
+public class OperationResultChannel<TResult> : IOperationResultChannel<TResult>
 {
-    private readonly string _currentClientName;
     private readonly ChannelMessageQueue _channelMessageQueue;
+    private readonly TaskCompletionSource<TResult> _taskCompletionSource;
+    
+    /// <summary>
+    /// Returns the task of the operation result
+    /// </summary>
+    public Task<TResult> Task => _taskCompletionSource.Task;
 
     internal OperationResultChannel(string currentClientName, 
         ChannelMessageQueue channelMessageQueue)
     {
-        _currentClientName = currentClientName;
         _channelMessageQueue = channelMessageQueue;
-    }
-
-    /// <inheritdoc />
-    public void OnSuccess(Func<TResult, Task> action)
-    {
-        _channelMessageQueue.OnMessage(async channelMessage =>
+        _taskCompletionSource = new TaskCompletionSource<TResult>();
+        
+        _channelMessageQueue.OnMessage(channelMessage =>
         {
             if (!channelMessage.Message.HasValue)
             {
@@ -38,38 +38,23 @@ public class OperationResultChannel<TError, TResult> : IOperationResultChannel<T
             }
 
             var o = serializedObject.Deserialize<ChannelOperationResult<TResult>>();
-            if (o.SenderClientName == _currentClientName)
+            if (o.SenderClientName == currentClientName)
             {
                 return;
             }
 
-            await action(o.Result);
-        });
-    }
-
-    /// <inheritdoc />
-    public void OnError(Func<TError, Task> action)
-    {
-        _channelMessageQueue.OnMessage(async channelMessage =>
-        {
-            if (!channelMessage.Message.HasValue)
+            if (o.Result != null)
             {
-                return;
+                _taskCompletionSource.SetResult(o.Result);
             }
-
-            string? serializedObject = channelMessage.Message;
-            if (string.IsNullOrWhiteSpace(serializedObject))
+            else if (o.Error != null)
             {
-                return;
+                _taskCompletionSource.SetException(new DistributedOperationFailedException<OperationError>(o.Error));
             }
-
-            var o = serializedObject.Deserialize<ChannelOperationError<TError>>();
-            if (o.SenderClientName == _currentClientName)
+            else
             {
-                return;
+                _taskCompletionSource.SetException(new Exception("Operation failed"));
             }
-
-            await action(o.Error);
         });
     }
 

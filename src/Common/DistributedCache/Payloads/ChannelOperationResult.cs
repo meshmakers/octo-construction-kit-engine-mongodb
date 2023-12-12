@@ -3,9 +3,9 @@ namespace Meshmakers.Octo.Common.DistributedCache.Payloads;
 /// <summary>
 ///    Implements an operation payload
 /// </summary>
-/// <typeparam name="TValue"></typeparam>
+/// <typeparam name="TResult">Type of result object</typeparam>
 // ReSharper disable once ClassNeverInstantiated.Global
-public record ChannelOperationResult<TValue> : ChannelMessage
+public record ChannelOperationResult<TResult> : ChannelMessage
 {
     /// <summary>
     /// Constructor
@@ -13,11 +13,13 @@ public record ChannelOperationResult<TValue> : ChannelMessage
     /// <param name="senderClientName">The client name of the sender</param>
     /// <param name="operationId">Operation id, that identifiers the unique call</param>
     /// <param name="result">Return object of the operation invoke</param>
-    public ChannelOperationResult(string senderClientName, Guid operationId, TValue result)
+    /// <param name="error">Error object of the operation invoke</param>
+    public ChannelOperationResult(string senderClientName, Guid operationId, TResult? result, OperationError? error)
         : base(senderClientName)
     {
         OperationId = operationId;
         Result = result;
+        Error = error;
     }
     
     /// <summary>
@@ -28,5 +30,10 @@ public record ChannelOperationResult<TValue> : ChannelMessage
     /// <summary>
     /// Returns the result of the operation
     /// </summary>
-    public TValue Result { get; init; } = default!;
+    public TResult? Result { get; init; }
+    
+    /// <summary>
+    /// Returns the error object of the operation
+    /// </summary>
+    public OperationError? Error { get; init; }
 }

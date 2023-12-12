@@ -45,4 +45,24 @@ public static class CacheCommon
     ///     Channel of communication controller socket updates
     /// </summary>
     public const string KeyCommunicationControllerSocketUpdate = "CommunicationController_Socket_Update";
+
+    /// <summary>
+    /// Export runtime data
+    /// </summary>
+    public const string ExportRtOperation = "ExportRt";
+    
+    /// <summary>
+    /// Import runtime data
+    /// </summary>
+    public const string ImportRtOperation = "ImportRt";
+    
+    /// <summary>
+    /// Import construction kit model data
+    /// </summary>
+    public const string ImportCkOperation = "ImportCk";
+    
+    /// <summary>
+    /// Export construction kit model data
+    /// </summary>
+    public const string ExportCkOperation = "ExportCk";
 }
