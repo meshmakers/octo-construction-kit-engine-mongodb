@@ -1,4 +1,6 @@
+using Meshmakers.Octo.Common.DistributionEventHub.Services;
 using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.Common.Shared.DistributionEventHub.Messages;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -15,12 +17,12 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 public class SystemContext : TenantContext, ISystemContext
 {
     public SystemContext(ILoggerFactory loggerFactory, IOptions<OctoSystemConfiguration> systemConfiguration,
-        ISystemMessageService systemMessageService,
+        IDistributionEventHubService distributionEventHubService,
         ICkCacheService ckCacheService, ICkModelRepositoryService ckModelRepositoryService, IModelLoaderService modelLoaderService,
         IBulkRtMutation bulkRtMutation)
         : base(loggerFactory, systemConfiguration, systemConfiguration.Value.SystemTenantId.MakeKey(),
             systemConfiguration.Value.SystemDatabaseName.ToLower(),
-            systemMessageService, ckModelRepositoryService, ckCacheService, modelLoaderService, bulkRtMutation)
+            distributionEventHubService, ckModelRepositoryService, ckCacheService, modelLoaderService, bulkRtMutation)
     {
     }
 
@@ -36,8 +38,8 @@ public class SystemContext : TenantContext, ISystemContext
 
         try
         {
-            // Distribute updates (post) to inform other services.
-            await _systemMessageService.DistributeTenantModificationPreEventAsync(normalizedTenantId);
+            // Distribute updates (pre) to inform other services.
+            await _distributionEventHubService.PublishAsync(new PreUpdateTenant(normalizedTenantId));
 
             using var systemSession = await GetSystemSessionAsync();
             systemSession.StartTransaction();
@@ -59,7 +61,7 @@ public class SystemContext : TenantContext, ISystemContext
             await systemSession.CommitTransactionAsync();
 
             // Distribute updates (post) to inform other services.
-            await _systemMessageService.DistributeTenantModificationPostEventAsync(normalizedTenantId);
+            await _distributionEventHubService.PublishAsync(new PosUpdateTenant(normalizedTenantId));
         }
         catch (Exception)
         {
@@ -86,9 +88,9 @@ public class SystemContext : TenantContext, ISystemContext
         var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
         var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.MakeKey();
 
-        await _systemMessageService.DistributeTenantModificationPreEventAsync(normalizedTenantId);
+        await _distributionEventHubService.PublishAsync(new PreUpdateTenant(normalizedTenantId));
         await _systemRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
-        await _systemMessageService.DistributeTenantModificationPostEventAsync(normalizedTenantId);
+        await _distributionEventHubService.PublishAsync(new PosUpdateTenant(normalizedTenantId));
     }
 
     // ReSharper disable once MemberCanBePrivate.Global

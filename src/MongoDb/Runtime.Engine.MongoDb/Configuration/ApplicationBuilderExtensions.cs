@@ -23,6 +23,9 @@ public static class ApplicationBuilderExtensions
     {
         var systemContext = app.ApplicationServices.GetRequiredService<ISystemContext>();
 
-        if (!await systemContext.IsSystemTenantExistingAsync()) await systemContext.CreateSystemTenantAsync();
+        if (!await systemContext.IsSystemTenantExistingAsync())
+        {
+            await systemContext.CreateSystemTenantAsync();
+        }
     }
 }

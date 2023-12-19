@@ -1,9 +1,9 @@
-namespace Meshmakers.Octo.Common.DistributedCache.DistributedOperations;
+namespace Meshmakers.Octo.Common.Shared.DistributionEventHub.Commands;
 
 /// <summary>
-/// Arguments for import runtime data
+/// Arguments for import construction kit data
 /// </summary>
-public record CacheKeyArguments: ArgumentBase
+public record ImportCkCommandRequest: CommandBaseRequest
 {
     /// <summary>
     /// Returns the cache file key
@@ -15,7 +15,7 @@ public record CacheKeyArguments: ArgumentBase
     /// </summary>
     /// <param name="tenantId"></param>
     /// <param name="cacheFileKey"></param>
-    public CacheKeyArguments(string tenantId, string cacheFileKey) 
+    public ImportCkCommandRequest(string tenantId, string cacheFileKey) 
         : base(tenantId)
     {
         CacheFileKey = cacheFileKey;

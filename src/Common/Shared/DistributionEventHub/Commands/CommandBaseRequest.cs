@@ -1,15 +1,15 @@
-namespace Meshmakers.Octo.Common.DistributedCache.DistributedOperations;
+namespace Meshmakers.Octo.Common.Shared.DistributionEventHub.Commands;
 
 /// <summary>
-/// Base class for arguments of operations
+/// Base class for commands
 /// </summary>
-public abstract record ArgumentBase
+public abstract record CommandBaseRequest
 {
     /// <summary>
     /// Constructor
     /// </summary>
     /// <param name="tenantId">Tenant id if null the system tenant is used.</param>
-    protected ArgumentBase(string? tenantId)
+    protected CommandBaseRequest(string? tenantId)
     {
         TenantId = tenantId;
     }

@@ -2,19 +2,19 @@ using System.Text.Json.Serialization;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
 
-namespace Meshmakers.Octo.Common.DistributedCache.DistributedOperations;
+namespace Meshmakers.Octo.Common.Shared.DistributionEventHub.Commands;
 
 /// <summary>
 /// Export runtime data arguments
 /// </summary>
-public record ExportRtArguments : ArgumentBase
+public record ExportRtCommandRequest : CommandBaseRequest
 {
     /// <summary>
     /// Constructor
     /// </summary>
     /// <param name="tenantId"></param>
     /// <param name="queryId"></param>
-    public ExportRtArguments(string tenantId, OctoObjectId queryId) 
+    public ExportRtCommandRequest(string tenantId, OctoObjectId queryId) 
         : base(tenantId)
     {
         QueryId = queryId;

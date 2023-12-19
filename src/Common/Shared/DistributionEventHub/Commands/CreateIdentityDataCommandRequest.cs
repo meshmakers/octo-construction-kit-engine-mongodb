@@ -1,17 +1,17 @@
-using Meshmakers.Octo.Common.DistributedCache.DistributedOperations.Payloads;
+using Meshmakers.Octo.Common.Shared.DistributionEventHub.Commands.Payloads;
 
-namespace Meshmakers.Octo.Common.DistributedCache.DistributedOperations;
+namespace Meshmakers.Octo.Common.Shared.DistributionEventHub.Commands;
 
 /// <summary>
 /// Create client at identity service argument
 /// </summary>
-public record CreateIdentityDataArgument : ArgumentBase
+public record CreateIdentityDataCommandRequest : CommandBaseRequest
 {
     /// <summary>
     /// Constructor
     /// </summary>
     /// <param name="tenantId">Tenant id</param>
-    public CreateIdentityDataArgument(string? tenantId)
+    public CreateIdentityDataCommandRequest(string? tenantId)
         : base(tenantId)
     {
     }

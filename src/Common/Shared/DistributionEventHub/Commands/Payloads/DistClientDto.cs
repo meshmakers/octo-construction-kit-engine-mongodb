@@ -1,4 +1,4 @@
-namespace Meshmakers.Octo.Common.DistributedCache.DistributedOperations.Payloads;
+namespace Meshmakers.Octo.Common.Shared.DistributionEventHub.Commands.Payloads;
 
 /// <summary>
 /// Represents a client.
@@ -21,22 +21,22 @@ public record DistClientDto(string ClientId, string ClientName, string ClientUri
     /// <summary>
     /// Gets or sets redirect uris.
     /// </summary>
-    public ICollection<string> RedirectUris { get; init; } = null!;
+    public ICollection<string> RedirectUris { get; } = new List<string>();
     
     /// <summary>
     /// Gets or sets post logout redirect uris.
     /// </summary>
-    public ICollection<string> PostLogoutRedirectUris { get; init; } = null!;
+    public ICollection<string> PostLogoutRedirectUris { get; } = new List<string>();
     
     /// <summary>
     /// Gets or sets allowed cors origins.
     /// </summary>
-    public ICollection<string> AllowedCorsOrigins { get; init; } = null!;
+    public ICollection<string> AllowedCorsOrigins { get; } = new List<string>();
     
     /// <summary>
     /// Gets or sets allowed scopes.
     /// </summary>
-    public ICollection<string> AllowedScopes { get; init; } = null!;
+    public ICollection<string> AllowedScopes { get; } = new List<string>();
 
     /// <summary>
     /// Gets or sets if offline access is allowed.

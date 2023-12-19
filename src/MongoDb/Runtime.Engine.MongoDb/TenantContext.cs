@@ -1,6 +1,8 @@
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.Common.DistributionEventHub.Services;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DataTransferObjects;
+using Meshmakers.Octo.Common.Shared.DistributionEventHub.Messages;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
@@ -26,18 +28,19 @@ public class TenantContext : ITenantContext
     private readonly ICkCacheService _cacheService;
     protected readonly ICkModelRepositoryService _ckModelRepositoryService;
     private readonly string _databaseName;
+    protected readonly IDistributionEventHubService _distributionEventHubService;
 
     private readonly ILoggerFactory _loggerFactory;
     private readonly IModelLoaderService _modelLoaderService;
     private readonly SemaphoreSlim _semaphoreSlim = new(1, 1);
     protected readonly IOptions<OctoSystemConfiguration> _systemConfiguration;
-    protected readonly ISystemMessageService _systemMessageService;
+
     protected readonly IRepositoryClient _systemRepositoryClient;
 
     protected TenantContext(ILoggerFactory loggerFactory, IOptions<OctoSystemConfiguration> systemConfiguration,
         string tenantId,
         string databaseName,
-        ISystemMessageService systemMessageService,
+        IDistributionEventHubService distributionEventHubService,
         ICkModelRepositoryService ckModelRepositoryService,
         ICkCacheService cacheService, IModelLoaderService modelLoaderService, IBulkRtMutation bulkRtMutation)
     {
@@ -45,7 +48,7 @@ public class TenantContext : ITenantContext
         _loggerFactory = loggerFactory;
         _systemConfiguration = systemConfiguration;
         _databaseName = databaseName;
-        _systemMessageService = systemMessageService;
+        _distributionEventHubService = distributionEventHubService;
         _ckModelRepositoryService = ckModelRepositoryService;
         _cacheService = cacheService;
         _modelLoaderService = modelLoaderService;
@@ -91,8 +94,8 @@ public class TenantContext : ITenantContext
 
         try
         {
-            // Distribute updates (post) to inform other services.
-            await _systemMessageService.DistributeTenantModificationPreEventAsync(tenantId);
+            // Distribute updates (pre) to inform other services.
+            await _distributionEventHubService.PublishAsync(new PreUpdateTenant(tenantId));
 
             // Create database
             await CreateTenantInternalAsync(databaseName);
@@ -133,7 +136,7 @@ public class TenantContext : ITenantContext
             await systemTenantRepository.InsertOneRtEntityAsync(systemSession, rtSystemTenant);
 
             // Distribute updates (post) to inform other services.
-            await _systemMessageService.DistributeTenantModificationPostEventAsync(tenantId);
+            await _distributionEventHubService.PublishAsync(new PosUpdateTenant(tenantId));
         }
         catch (Exception)
         {
@@ -218,10 +221,10 @@ public class TenantContext : ITenantContext
         var octoTenant = await GetRtTenantAsync(systemSession, tenantId);
         if (octoTenant == null) throw TenantException.TenantDoesNotExist(tenantId);
 
-        await _systemMessageService.DistributeTenantModificationPreEventAsync(tenantId);
+        await _distributionEventHubService.PublishAsync(new PreUpdateTenant(tenantId));
         await DropChildTenantAsync(systemSession, tenantId);
         await CreateChildTenantAsync(systemSession, octoTenant.DatabaseName, tenantId);
-        await _systemMessageService.DistributeTenantModificationPostEventAsync(tenantId);
+        await _distributionEventHubService.PublishAsync(new PosUpdateTenant(tenantId));
     }
 
     // ReSharper disable once MemberCanBePrivate.Global
@@ -234,7 +237,7 @@ public class TenantContext : ITenantContext
         var octoTenant = await GetRtTenantAsync(systemSession, tenantId);
         if (octoTenant == null) throw new TenantException($"Tenant '{tenantId}' does not exist.");
 
-        await _systemMessageService.DistributeTenantModificationPreEventAsync(tenantId);
+        await _distributionEventHubService.PublishAsync(new PreUpdateTenant(tenantId));
         await _systemRepositoryClient.DropRepositoryAsync(octoTenant.DatabaseName);
 
         // Deletes the tenant entry from the current tenant
@@ -250,7 +253,7 @@ public class TenantContext : ITenantContext
                 new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
         }
 
-        await _systemMessageService.DistributeTenantModificationPostEventAsync(tenantId);
+        await _distributionEventHubService.PublishAsync(new PosUpdateTenant(tenantId));
     }
 
     // ReSharper disable once MemberCanBePrivate.Global
@@ -313,7 +316,7 @@ public class TenantContext : ITenantContext
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
         var tenant = await GetChildTenantAsync(systemSession, tenantId);
-        var context = new TenantContext(_loggerFactory, _systemConfiguration, tenantId, tenant.DatabaseName, _systemMessageService,
+        var context = new TenantContext(_loggerFactory, _systemConfiguration, tenantId, tenant.DatabaseName, _distributionEventHubService,
             _ckModelRepositoryService, _cacheService, _modelLoaderService, _bulkRtMutation);
 
         return context;
@@ -400,14 +403,14 @@ public class TenantContext : ITenantContext
     {
         try
         {
-            await _systemMessageService.DistributeTenantModificationPreEventAsync(TenantId);
+            await _distributionEventHubService.PublishAsync(new PreUpdateTenant(TenantId));
             var databaseContext = CreateDatabaseContext(_databaseName);
             await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, false,
                 new TenantDatabaseSourceIdentifier(databaseContext, systemSession));
         }
         finally
         {
-            await _systemMessageService.DistributeTenantModificationPostEventAsync(TenantId);
+            await _distributionEventHubService.PublishAsync(new PosUpdateTenant(TenantId));
         }
     }
 
@@ -421,14 +424,14 @@ public class TenantContext : ITenantContext
 
         try
         {
-            await _systemMessageService.DistributeTenantModificationPreEventAsync(TenantId);
+            await _distributionEventHubService.PublishAsync(new PreUpdateTenant(TenantId));
             var databaseContext = CreateDatabaseContext(_databaseName);
             await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, false,
                 new TenantDatabaseSourceIdentifier(databaseContext, systemSession));
         }
         finally
         {
-            await _systemMessageService.DistributeTenantModificationPostEventAsync(TenantId);
+            await _distributionEventHubService.PublishAsync(new PosUpdateTenant(TenantId));
         }
     }
 

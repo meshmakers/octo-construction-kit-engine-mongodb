@@ -46,8 +46,8 @@ public class MongoRepository : IRepositoryInternal
     }
 
     public IMongoDbDataSourceCollection<TKey, T> GetCollection<TKey, T>(IMongoDataSourceMapper<TKey, T> mongoDataSourceMapper,
-        string? suffix = null)
-        where TKey : notnull
+        string? suffix = null)        where TKey : notnull
+
         where T : class, new()
     {
         var name = GetCollectionName<T>(suffix);

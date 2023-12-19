@@ -1,4 +1,4 @@
-namespace Meshmakers.Octo.Common.DistributedCache.DistributedOperations.Payloads;
+namespace Meshmakers.Octo.Common.Shared.DistributionEventHub.Commands.Payloads;
 
 /// <summary>
 /// Represents an API scope.
