@@ -1,7 +1,7 @@
 namespace Meshmakers.Octo.Common.Shared.DistributionEventHub.Messages;
 
 /// <summary>
-/// Command to update the CORS clients for a tenant
+/// Used to signal that identity provider configuration for a tenant is updated.
 /// </summary>
 /// <param name="TenantId"></param>
-public record CorsClientsUpdate(string? TenantId);
+public record IdentityProviderUpdate(string? TenantId);
