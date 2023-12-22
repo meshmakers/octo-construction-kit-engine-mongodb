@@ -56,24 +56,6 @@ types:
   - id: System/ConfigurationValue
     name: ConfigurationValue
     isOptional: true
-- typeId: ServiceHook
-  derivedFromCkTypeId: System/Entity
-  attributes:
-  - id: System/Enabled
-    name: Enabled
-  - id: System/Query.CkTypeId
-    name: QueryCkTypeId
-  - id: System/Query.FieldFilter
-    name: FieldFilter
-  - id: System/Name
-    name: Name
-  - id: System/ServiceHook.Uri
-    name: ServiceHookBaseUri
-  - id: System/ServiceHook.Action
-    name: ServiceHookAction
-  - id: System/ServiceHook.ApiKey
-    name: ServiceHookApiKey
-    isOptional: true
 associationRoles:
 - id: ParentChild
   inboundName: Parent
@@ -120,12 +102,6 @@ attributes:
 - id: Query.TextSearchFilter
   valueType: String
 - id: Query.AttributeSearchFilter
-  valueType: String
-- id: ServiceHook.Uri
-  valueType: String
-- id: ServiceHook.Action
-  valueType: String
-- id: ServiceHook.ApiKey
   valueType: String
 records: []
 enums: []
