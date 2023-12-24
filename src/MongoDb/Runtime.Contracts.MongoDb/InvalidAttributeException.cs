@@ -23,10 +23,4 @@ public class InvalidAttributeException : OperationFailedException
     public InvalidAttributeException(string message, Exception inner) : base(message, inner)
     {
     }
-
-    protected InvalidAttributeException(
-        SerializationInfo info,
-        StreamingContext context) : base(info, context)
-    {
-    }
 }

@@ -23,10 +23,4 @@ public class NotificationSendFailedException : Exception
     public NotificationSendFailedException(string message, Exception inner) : base(message, inner)
     {
     }
-
-    protected NotificationSendFailedException(
-        SerializationInfo info,
-        StreamingContext context) : base(info, context)
-    {
-    }
 }

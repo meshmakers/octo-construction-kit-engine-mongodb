@@ -23,10 +23,4 @@ public class EntityNotFoundException : OperationFailedException
     public EntityNotFoundException(string message, Exception inner) : base(message, inner)
     {
     }
-
-    protected EntityNotFoundException(
-        SerializationInfo info,
-        StreamingContext context) : base(info, context)
-    {
-    }
 }

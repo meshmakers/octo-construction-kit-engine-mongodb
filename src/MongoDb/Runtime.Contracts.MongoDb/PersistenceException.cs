@@ -23,10 +23,4 @@ public class PersistenceException : Exception
     public PersistenceException(string message, Exception inner) : base(message, inner)
     {
     }
-
-    protected PersistenceException(
-        SerializationInfo info,
-        StreamingContext context) : base(info, context)
-    {
-    }
 }

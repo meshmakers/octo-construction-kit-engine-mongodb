@@ -16,10 +16,4 @@ public class ServiceConfigurationMissingException : Exception
     public ServiceConfigurationMissingException(string message, Exception inner) : base(message, inner)
     {
     }
-
-    protected ServiceConfigurationMissingException(
-        SerializationInfo info,
-        StreamingContext context) : base(info, context)
-    {
-    }
 }

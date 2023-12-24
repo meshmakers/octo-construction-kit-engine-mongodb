@@ -23,10 +23,4 @@ public class InvalidCkTypeIdException : OperationFailedException
     public InvalidCkTypeIdException(string message, Exception inner) : base(message, inner)
     {
     }
-
-    protected InvalidCkTypeIdException(
-        SerializationInfo info,
-        StreamingContext context) : base(info, context)
-    {
-    }
 }

@@ -24,12 +24,6 @@ public class ConfigurationErrorException : Exception
     {
     }
 
-    protected ConfigurationErrorException(
-        SerializationInfo info,
-        StreamingContext context) : base(info, context)
-    {
-    }
-
     public static Exception InvalidConfigurationValue(string configurationName, string? value)
     {
         return new ConfigurationErrorException(

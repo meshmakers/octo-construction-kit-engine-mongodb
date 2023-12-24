@@ -23,10 +23,4 @@ public class AutoIncrementFailedException : OperationFailedException
     public AutoIncrementFailedException(string message, Exception inner) : base(message, inner)
     {
     }
-
-    protected AutoIncrementFailedException(
-        SerializationInfo info,
-        StreamingContext context) : base(info, context)
-    {
-    }
 }

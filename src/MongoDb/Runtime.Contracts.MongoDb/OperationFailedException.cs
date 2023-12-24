@@ -24,12 +24,6 @@ public class OperationFailedException : PersistenceException
     {
     }
 
-    protected OperationFailedException(
-        SerializationInfo info,
-        StreamingContext context) : base(info, context)
-    {
-    }
-
     public static Exception CreateWithMessage(string text)
     {
         return new OperationFailedException(text);
