@@ -480,7 +480,10 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         ArgumentValidation.ValidateString(nameof(regexFilterValue), regexFilterValue);
 
         var entityCacheItem = await GetEntityCacheItemAsync(ckTypeId);
-        if (entityCacheItem == null) throw new InvalidCkTypeIdException($"Construction Kit Id '{ckTypeId}' is invalid.");
+        if (entityCacheItem == null)
+        {
+            throw new InvalidCkTypeIdException($"Construction Kit Id '{ckTypeId}' is invalid.");
+        }
 
         if (entityCacheItem.AllAttributes.All(x => x.Value.AttributeName != attributeName))
             throw new InvalidAttributeException(

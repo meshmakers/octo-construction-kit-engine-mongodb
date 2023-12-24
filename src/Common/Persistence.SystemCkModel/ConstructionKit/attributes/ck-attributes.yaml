@@ -35,9 +35,4 @@ attributes:
     valueType: String
   - id: Query.AttributeSearchFilter
     valueType: String
-  - id: ServiceHook.Uri
-    valueType: String
-  - id: ServiceHook.Action
-    valueType: String
-  - id: ServiceHook.ApiKey
-    valueType: String
+
