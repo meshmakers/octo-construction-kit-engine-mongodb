@@ -21,8 +21,8 @@
         <PackageReference Include="Duende.IdentityServer.Storage" Version="6.3.7" />
         <PackageReference Include="MathParser.org-mXparser" Version="5.2.1"/>
         <PackageReference Include="Meshmakers.Octo.Common.DistributionEventHub" Version="0.0.2312.19003" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Engine" Version="0.0.2312.12001" />
-        <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="0.0.2312.12001" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Engine" Version="0.0.2312.22001" />
+        <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="0.0.2312.22001" />
         <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="8.0.0" />
         <PackageReference Include="MongoDB.Driver.GridFS" Version="2.23.1" />
         <PackageReference Include="NLog" Version="5.2.7" />
