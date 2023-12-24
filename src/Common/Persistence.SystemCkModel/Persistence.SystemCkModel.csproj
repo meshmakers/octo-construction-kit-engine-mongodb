@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+    <PropertyGroup>
+        <OctoSkipCkCompile Condition="'$(Configuration)'=='Release'">true</OctoSkipCkCompile>
+    </PropertyGroup>
+
     <ItemGroup>
         <None Remove="ConstructionKit\ck-*.yaml"/>
         <EmbeddedResource Include="ConstructionKit\ck-*.yaml">
