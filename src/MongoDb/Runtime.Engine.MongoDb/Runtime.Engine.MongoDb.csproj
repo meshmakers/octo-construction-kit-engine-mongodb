@@ -19,7 +19,7 @@
 
     <ItemGroup>
         <PackageReference Include="MathParser.org-mXparser" Version="5.2.1"/>
-        <PackageReference Include="Meshmakers.Octo.Common.DistributionEventHub" Version="0.0.2312.25001" />
+        <PackageReference Include="Meshmakers.Octo.Common.DistributionEventHub" Version="0.0.2312.25002" />
         <PackageReference Include="Meshmakers.Octo.ConstructionKit.Engine" Version="0.0.2312.25001" />
         <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="0.0.2312.25001" />
         <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="8.0.0" />
