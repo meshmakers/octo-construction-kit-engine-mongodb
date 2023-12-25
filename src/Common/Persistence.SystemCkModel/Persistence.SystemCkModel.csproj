@@ -14,8 +14,9 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="0.0.2312.24001" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" GeneratePathProperty="true" ReferenceOutputAssembly="false" Version="0.0.2312.24001" />
+        <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="0.0.2312.25001" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" 
+                          ReferenceOutputAssembly="false" Version="0.0.2312.25001" PrivateAssets="all" />
     </ItemGroup>
 
 </Project>
