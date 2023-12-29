@@ -31,7 +31,7 @@ public static class RuntimeEngineBuilderExtensions
         
             configureDistributionEventHub?.Invoke(c);
             
-            c.AddBroadcastEventConsumer<PreUpdateTenantConsumer, PreUpdateTenant>("generic::pre-update-tenant");
+            c.AddBroadcastEventConsumer<PreUpdateTenantConsumer, PreUpdateTenant>();
         });
         // Add basic construction kits. Hopefully we can leave it at one.
         builder.Services.AddCkModelSystem();

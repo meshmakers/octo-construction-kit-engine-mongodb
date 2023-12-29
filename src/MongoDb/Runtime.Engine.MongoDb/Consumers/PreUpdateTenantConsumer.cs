@@ -1,4 +1,4 @@
-using Meshmakers.Octo.Common.DistributionEventHub.Commands;
+using Meshmakers.Octo.Common.DistributionEventHub.Consumers;
 using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Common.Shared.DistributionEventHub.Messages;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
