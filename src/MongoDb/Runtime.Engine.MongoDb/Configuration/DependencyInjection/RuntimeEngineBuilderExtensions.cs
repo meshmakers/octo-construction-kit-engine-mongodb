@@ -24,7 +24,6 @@ public static class RuntimeEngineBuilderExtensions
         }
 
         // Adding dependent octo modules
-        builder.Services.AddRuntimeEngine();
         builder.Services.AddDistributionEventHub(c =>
         {
             c.UniqueServiceAddress = uniqueBrokerServiceAddress;
@@ -33,6 +32,8 @@ public static class RuntimeEngineBuilderExtensions
             
             c.AddBroadcastEventConsumer<PreUpdateTenantConsumer, PreUpdateTenant>();
         });
+        builder.Services.AddRuntimeEngine();
+        
         // Add basic construction kits. Hopefully we can leave it at one.
         builder.Services.AddCkModelSystem();
 

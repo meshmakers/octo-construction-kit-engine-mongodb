@@ -417,10 +417,15 @@ public class TenantContext : ITenantContext
     public async Task ImportCkModelAsync(IOctoSystemSession systemSession, CkModelId ckModelId, OperationResult operationResult)
     {
         var ckCompiledModelRoot = await _ckModelRepositoryService.LookupCkModelAsync(ckModelId, operationResult);
-        if (ckCompiledModelRoot == null) throw TenantException.ModelNotFound(ckModelId);
+        if (ckCompiledModelRoot == null)
+        {
+            throw TenantException.ModelNotFound(ckModelId);
+        }
 
         if (operationResult.HasErrors || operationResult.HasFatalErrors)
+        {
             throw TenantException.ErrorDuringModelLoad(ckModelId, operationResult);
+        }
 
         try
         {
