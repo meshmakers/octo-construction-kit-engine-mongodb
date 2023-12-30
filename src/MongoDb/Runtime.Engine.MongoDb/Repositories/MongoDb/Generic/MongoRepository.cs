@@ -1,4 +1,4 @@
-﻿using Meshmakers.Octo.Common.Shared;
+﻿using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
 using MongoDB.Bson;
 using MongoDB.Driver;

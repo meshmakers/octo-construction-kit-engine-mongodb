@@ -1,3 +1,4 @@
+using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
@@ -40,6 +41,7 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services.AddTransient<ICkModelRepository, DatabaseCkModelRepository>();
         builder.Services.AddSingleton<ISystemContext, SystemContext>();
         builder.Services.AddSingleton<IModelLoaderService, ModelLoaderService>();
+        builder.Services.AddSingleton<IMetricsContext, MetricsContext>();
         builder.Services.TryAddSingleton<ITenantNotifications, DefaultTenantNotifications>();
         
         return builder;

@@ -1,4 +1,5 @@
-using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Common.Metrics.Context;
+using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -18,6 +19,7 @@ public class SystemContext : TenantContext, ISystemContext
     /// <summary>
     /// Initializes a new instance of the <see cref="SystemContext"/> class.
     /// </summary>
+    /// <param name="metricsContext"></param>
     /// <param name="loggerFactory"></param>
     /// <param name="systemConfiguration"></param>
     /// <param name="tenantNotifications"></param>
@@ -25,11 +27,11 @@ public class SystemContext : TenantContext, ISystemContext
     /// <param name="ckModelRepositoryService"></param>
     /// <param name="modelLoaderService"></param>
     /// <param name="bulkRtMutation"></param>
-    public SystemContext(ILoggerFactory loggerFactory, IOptions<OctoSystemConfiguration> systemConfiguration,
+    public SystemContext(IMetricsContext metricsContext, ILoggerFactory loggerFactory, IOptions<OctoSystemConfiguration> systemConfiguration,
         ITenantNotifications tenantNotifications,
         ICkCacheService ckCacheService, ICkModelRepositoryService ckModelRepositoryService, IModelLoaderService modelLoaderService,
         IBulkRtMutation bulkRtMutation)
-        : base(loggerFactory, systemConfiguration, systemConfiguration.Value.SystemTenantId.MakeKey(),
+        : base(metricsContext, loggerFactory, systemConfiguration, systemConfiguration.Value.SystemTenantId.NormalizeString(),
             systemConfiguration.Value.SystemDatabaseName.ToLower(),
             tenantNotifications, ckModelRepositoryService, ckCacheService, modelLoaderService, bulkRtMutation)
     {
@@ -46,7 +48,7 @@ public class SystemContext : TenantContext, ISystemContext
         }
 
         var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
-        var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.MakeKey();
+        var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.NormalizeString();
 
         try
         {
@@ -108,7 +110,7 @@ public class SystemContext : TenantContext, ISystemContext
         }
 
         var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
-        var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.MakeKey();
+        var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.NormalizeString();
 
         try
         {

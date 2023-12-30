@@ -1,5 +1,5 @@
+using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
@@ -11,18 +11,20 @@ public abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
     where TEntity : class, new()
     where TKey : notnull
 {
+    private readonly IMetricsContext _metricsContext;
     private readonly IMongoDbDataSourceCollection<TKey, TEntity> _mongoDbDataSourceCollection;
 
-    protected internal SingleOriginQuery(IMongoDbDataSourceCollection<TKey, TEntity> mongoDbDataSourceCollection,
+    protected internal SingleOriginQuery(IMetricsContext metricsContext, IMongoDbDataSourceCollection<TKey, TEntity> mongoDbDataSourceCollection,
         string language = "en")
         : base(language)
     {
+        _metricsContext = metricsContext;
         _mongoDbDataSourceCollection = mongoDbDataSourceCollection;
     }
 
     public async Task<ResultSet<TEntity>> ExecuteQuery(IOctoSession octoSession, int? skip = null, int? take = null)
     {
-        using var performanceMonitor = new PerformanceMonitor();
+        using var meter = _metricsContext.CreateRuntimeMeter();
         var pipelineStageDefinitions = new List<IPipelineStageDefinition>();
 
         // In documentation, text search must be at first place
@@ -33,7 +35,7 @@ public abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
 
         AddSortConstraintsToPipeline(pipelineStageDefinitions);
 
-        performanceMonitor.SetCheckPoint("definitions created");
+        meter.SetCheckpoint("definitions created");
 
         if (skip.HasValue || take.HasValue)
         {

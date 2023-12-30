@@ -1,3 +1,4 @@
+using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
@@ -20,13 +21,15 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
 {
+    private readonly IMetricsContext _metricsContext;
     private readonly IModelLoaderService _modelLoaderService;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
 
-    public TenantRepository(string tenantId, ICkCacheService ckCache, IModelLoaderService modelLoaderService,
+    public TenantRepository(string tenantId, IMetricsContext metricsContext,  ICkCacheService ckCache, IModelLoaderService modelLoaderService,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource, IBulkRtMutation bulkRtMutation)
         : base(tenantId, ckCache, mongoDbRepositoryDataSource, bulkRtMutation)
     {
+        _metricsContext = metricsContext;
         _modelLoaderService = modelLoaderService;
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
     }
@@ -57,7 +60,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var entityCacheItem = await GetEntityCacheItemAsync(ckTypeId);
 
         var query =
-            new SingleOriginRtQuery<TEntity>(ckCacheService, TenantId, entityCacheItem, _mongoDbRepositoryDataSource,
+            new SingleOriginRtQuery<TEntity>(_metricsContext, ckCacheService, TenantId, entityCacheItem, _mongoDbRepositoryDataSource,
                 dataQueryOperation.Language);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddIdFilter(rtIds);
@@ -161,7 +164,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         IReadOnlyList<CkId<CkAttributeId>> attributeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
-        var query = new CkAttributeQuery(_mongoDbRepositoryDataSource);
+        var query = new CkAttributeQuery(_metricsContext, _mongoDbRepositoryDataSource);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddIdFilter(attributeIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
@@ -175,7 +178,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     public async Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkId<CkTypeId>> ckTypeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
-        var query = new CkTypeQuery(_mongoDbRepositoryDataSource);
+        var query = new CkTypeQuery(_metricsContext, _mongoDbRepositoryDataSource);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddIdFilter(ckTypeIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
@@ -316,7 +319,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var ckCacheService = await GetCkCacheServiceAsync();
         var entityCacheItem = await GetEntityCacheItemAsync(ckTypeId);
         var query =
-            new SingleOriginRtQuery<TEntity>(ckCacheService, TenantId, entityCacheItem, _mongoDbRepositoryDataSource,
+            new SingleOriginRtQuery<TEntity>(_metricsContext, ckCacheService, TenantId, entityCacheItem, _mongoDbRepositoryDataSource,
                 dataQueryOperation.Language);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);

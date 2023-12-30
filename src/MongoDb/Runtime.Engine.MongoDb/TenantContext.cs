@@ -1,5 +1,5 @@
+using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Common.Shared;
 using Meshmakers.Octo.Communication.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
@@ -29,6 +29,7 @@ public class TenantContext : ITenantContext
     private readonly string _databaseName;
     protected readonly ITenantNotifications _tenantNotifications;
 
+    private readonly IMetricsContext _metricsContext;
     private readonly ILoggerFactory _loggerFactory;
     private readonly IModelLoaderService _modelLoaderService;
     private readonly SemaphoreSlim _semaphoreSlim = new(1, 1);
@@ -36,7 +37,7 @@ public class TenantContext : ITenantContext
 
     protected readonly IRepositoryClient _systemRepositoryClient;
 
-    protected TenantContext(ILoggerFactory loggerFactory, IOptions<OctoSystemConfiguration> systemConfiguration,
+    protected TenantContext(IMetricsContext metricsContext, ILoggerFactory loggerFactory, IOptions<OctoSystemConfiguration> systemConfiguration,
         string tenantId,
         string databaseName,
         ITenantNotifications tenantNotifications,
@@ -44,6 +45,7 @@ public class TenantContext : ITenantContext
         ICkCacheService cacheService, IModelLoaderService modelLoaderService, IBulkRtMutation bulkRtMutation)
     {
         TenantId = tenantId;
+        _metricsContext = metricsContext;
         _loggerFactory = loggerFactory;
         _systemConfiguration = systemConfiguration;
         _databaseName = databaseName;
@@ -88,7 +90,7 @@ public class TenantContext : ITenantContext
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
         var normalizedDatabaseName = databaseName.ToLower();
-        var normalizedTenantId = tenantId.MakeKey();
+        var normalizedTenantId = tenantId.NormalizeString();
         if (await IsTenantExistingAsync(systemSession, normalizedTenantId))
         {
             throw TenantException.TenantDoesAlreadyExist(tenantId);
@@ -117,7 +119,7 @@ public class TenantContext : ITenantContext
                 new TenantDatabaseSourceIdentifier(databaseContext, systemSession));
 
             // Add the new tenant as child tenant of the current one
-            if (TenantId != _systemConfiguration.Value.SystemTenantId.MakeKey())
+            if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
             {
                 var rtTenant = new RtTenant
                 {
@@ -180,7 +182,7 @@ public class TenantContext : ITenantContext
         ArgumentValidation.ValidateString(nameof(databaseName), databaseName);
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
         var normalizedDatabaseName = databaseName.ToLower();
-        var normalizedTenantId = tenantId.MakeKey();
+        var normalizedTenantId = tenantId.NormalizeString();
 
         if (await IsTenantExistingAsync(systemSession, tenantId))
         {
@@ -198,7 +200,7 @@ public class TenantContext : ITenantContext
             await _tenantNotifications.NotifyPreTenantCreateAsync(tenantId);
 
             // Add the new tenant as child tenant of the current one
-            if (TenantId != _systemConfiguration.Value.SystemTenantId.MakeKey())
+            if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
             {
                 var octoTenant = new RtTenant
                 {
@@ -243,7 +245,8 @@ public class TenantContext : ITenantContext
             
             var tenantRepository = GetTenantRepository();
             await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
-                new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
+                new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals,
+                    tenantId.NormalizeString()) });
         }
         finally
         {
@@ -297,15 +300,17 @@ public class TenantContext : ITenantContext
 
             // Deletes the tenant entry from the current tenant
             await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
-                new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
+                new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, 
+                    tenantId.NormalizeString()) });
 
             // If the current tenant is not the system tenant, we need to delete the tenant entry in system tenant too.
             // Add the new tenant as child tenant of the current one
-            if (TenantId != _systemConfiguration.Value.SystemTenantId.MakeKey())
+            if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
             {
                 var systemTenantRepository = GetSystemTenantRepository();
                 await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
-                    new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
+                    new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, 
+                        tenantId.NormalizeString()) });
             }
         }
         finally
@@ -345,7 +350,7 @@ public class TenantContext : ITenantContext
     {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
-        var normalizedTenantId = tenantId.MakeKey();
+        var normalizedTenantId = tenantId.NormalizeString();
 
         var rtSystemTenant = await GetRtTenantAsync(systemSession, normalizedTenantId);
         if (rtSystemTenant == null) throw new TenantException($"Tenant '{tenantId}' not found.");
@@ -374,7 +379,7 @@ public class TenantContext : ITenantContext
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
         var tenant = await GetChildTenantAsync(systemSession, tenantId);
-        var context = new TenantContext(_loggerFactory, _systemConfiguration, tenantId, tenant.DatabaseName, _tenantNotifications,
+        var context = new TenantContext(_metricsContext, _loggerFactory, _systemConfiguration, tenantId, tenant.DatabaseName, _tenantNotifications,
             _ckModelRepositoryService, _cacheService, _modelLoaderService, _bulkRtMutation);
 
         return context;
@@ -383,7 +388,7 @@ public class TenantContext : ITenantContext
     public ITenantRepository GetSystemTenantRepository()
     {
         var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
-        var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.MakeKey();
+        var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.NormalizeString();
 
         var result = GetTenantRepository(normalizedTenantId, normalizedDatabaseName);
         return result;
@@ -518,7 +523,7 @@ public class TenantContext : ITenantContext
 
             var databaseContext = CreateDatabaseContext(databaseName);
 
-            var tenantRepository = new TenantRepository(tenantId, _cacheService, _modelLoaderService, databaseContext, _bulkRtMutation);
+            var tenantRepository = new TenantRepository(tenantId, _metricsContext, _cacheService, _modelLoaderService, databaseContext, _bulkRtMutation);
             return tenantRepository;
         }
         finally
@@ -539,7 +544,7 @@ public class TenantContext : ITenantContext
         var tenantRepository = GetTenantRepository();
 
         var dataQueryOperation = DataQueryOperation.Create()
-            .FieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey());
+            .FieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.NormalizeString());
 
         var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(systemSession, dataQueryOperation);
         return resultSet.Items.FirstOrDefault();
@@ -551,7 +556,7 @@ public class TenantContext : ITenantContext
         var tenantRepository = GetSystemTenantRepository();
 
         var dataQueryOperation = DataQueryOperation.Create()
-            .FieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey());
+            .FieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.NormalizeString());
 
         var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(systemSession, dataQueryOperation);
         return resultSet.Items.FirstOrDefault();
@@ -571,7 +576,10 @@ public class TenantContext : ITenantContext
 
         var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtConfiguration>(systemSession, dataQueryOperation);
         var configuration = resultSet.Items.FirstOrDefault();
-        if (configuration == null || configuration.ConfigurationValue == null) return defaultValue;
+        if (configuration == null || configuration.ConfigurationValue == null)
+        {
+            return defaultValue;
+        }
 
         var result = configuration.ConfigurationValue.Deserialize<TType>();
         return result;

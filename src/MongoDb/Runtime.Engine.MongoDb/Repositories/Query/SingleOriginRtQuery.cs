@@ -1,4 +1,5 @@
 using System.Collections;
+using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
@@ -16,9 +17,9 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
 internal class SingleOriginRtQuery : SingleOriginRtQuery<RtEntity>
 {
-    internal SingleOriginRtQuery(ICkCacheService ckCacheService, string tenantId, CkTypeGraph entityCacheItem,
+    internal SingleOriginRtQuery(IMetricsContext metricsContext, ICkCacheService ckCacheService, string tenantId, CkTypeGraph entityCacheItem,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource, string language)
-        : base(ckCacheService, tenantId, entityCacheItem, mongoDbRepositoryDataSource, language)
+        : base(metricsContext, ckCacheService, tenantId, entityCacheItem, mongoDbRepositoryDataSource, language)
     {
     }
 }
@@ -29,9 +30,9 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
     private readonly CkTypeGraph _entityCacheItem;
     private readonly string _tenantId;
 
-    internal SingleOriginRtQuery(ICkCacheService ckCacheService, string tenantId, CkTypeGraph entityCacheItem,
+    internal SingleOriginRtQuery(IMetricsContext metricsContext, ICkCacheService ckCacheService, string tenantId, CkTypeGraph entityCacheItem,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource, string language)
-        : base(mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(entityCacheItem.CkTypeId), language)
+        : base(metricsContext, mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(entityCacheItem.CkTypeId), language)
     {
         _ckCacheService = ckCacheService;
         _tenantId = tenantId;
