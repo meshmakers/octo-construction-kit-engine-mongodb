@@ -1,6 +1,5 @@
 using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Communication.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
@@ -15,6 +14,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
+using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
@@ -336,14 +336,14 @@ public class TenantContext : ITenantContext
         return octoTenant != null;
     }
 
-    public async Task<PagedResult<OctoTenant>> GetChildTenantsAsync(IOctoSystemSession systemSession, int? skip = null,
+    public async Task<IResultSet<OctoTenant>> GetChildTenantsAsync(IOctoSystemSession systemSession, int? skip = null,
         int? take = null)
     {
         var tenantRepository = GetTenantRepository();
 
         var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(systemSession, DataQueryOperation.Create(), skip, take);
-        return new PagedResult<OctoTenant>(result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName)),
-            skip, take, result.TotalCount);
+        return new ResultSet<OctoTenant>(result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName)),
+            result.TotalCount, null);
     }
 
     public async Task<OctoTenant> GetChildTenantAsync(IOctoSystemSession systemSession, string tenantId)

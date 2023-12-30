@@ -1,7 +1,7 @@
-using Meshmakers.Octo.Communication.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 
@@ -72,7 +72,7 @@ public interface ITenantContext
     /// <returns></returns>
     Task<bool> IsChildTenantExistingAsync(IOctoSystemSession systemSession, string tenantId);
 
-    Task<PagedResult<OctoTenant>> GetChildTenantsAsync(IOctoSystemSession systemSession, int? skip = null,
+    Task<IResultSet<OctoTenant>> GetChildTenantsAsync(IOctoSystemSession systemSession, int? skip = null,
         int? take = null);
 
     Task<OctoTenant> GetChildTenantAsync(IOctoSystemSession systemSession, string tenantId);

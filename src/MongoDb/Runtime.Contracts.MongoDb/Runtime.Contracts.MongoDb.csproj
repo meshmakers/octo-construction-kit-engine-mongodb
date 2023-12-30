@@ -8,7 +8,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Meshmakers.Octo.Communication.Contracts" Version="3.0.6" />
+      <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="3.0.3" />
     </ItemGroup>
 
 </Project>
