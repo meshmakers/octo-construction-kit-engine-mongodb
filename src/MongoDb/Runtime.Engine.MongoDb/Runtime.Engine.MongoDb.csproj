@@ -24,7 +24,7 @@
         <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="0.0.2312.25001" />
         <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="8.0.0" />
         <PackageReference Include="MongoDB.Driver.GridFS" Version="2.23.1" />
-        <PackageReference Include="NLog" Version="5.2.7" />
+        <PackageReference Include="NLog" Version="5.2.8" />
         <PackageReference Include="System.Reactive" Version="6.0.0"/>
         <PackageReference Include="MongoDB.Bson" Version="2.23.1" />
         <PackageReference Include="MongoDB.Driver" Version="2.23.1" />

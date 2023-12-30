@@ -31,7 +31,7 @@
         <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2312.25001" />
         <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="0.0.2312.25001" />
         <PackageReference Include="Microsoft.Extensions.Options" Version="8.0.0" />
-        <PackageReference Include="NLog" Version="5.2.7" />
+        <PackageReference Include="NLog" Version="5.2.8" />
         <PackageReference Include="System.ComponentModel.Annotations" Version="5.0.0"/>
         <PackageReference Include="System.Text.Json" Version="8.0.0" />
     </ItemGroup>
