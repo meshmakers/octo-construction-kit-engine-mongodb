@@ -1,6 +1,6 @@
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Common.Shared.DataTransferObjects;
-using Meshmakers.Octo.Common.Shared.Services;
+using Meshmakers.Octo.Communication.Contracts.DataTransferObjects;
+using Meshmakers.Octo.Communication.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -177,7 +177,7 @@ public class EntityNotificationRepository : INotificationRepository
     private static void ApplyDtoData(NotificationMessageDto notificationMessageDto,
         RtNotificationMessage rtEntity)
     {
-        rtEntity.SubjectText = notificationMessageDto.SubjectText;
+        rtEntity.SubjectText = notificationMessageDto.SubjectText ?? string.Empty;
         rtEntity.BodyText = notificationMessageDto.BodyText;
         rtEntity.RecipientAddress = notificationMessageDto.RecipientAddress;
         rtEntity.SentDateTime = notificationMessageDto.SentDateTime;

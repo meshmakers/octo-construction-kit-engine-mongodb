@@ -21,7 +21,7 @@ try
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddSwaggerGen();
     builder.Services.AddRuntimeEngine()
-        .AddMongoDbRuntimeRepository("WebServicesSample");
+        .AddMongoDbRuntimeRepository();
 
     // NLog: Setup NLog for Dependency injection
     builder.Logging.ClearProviders();

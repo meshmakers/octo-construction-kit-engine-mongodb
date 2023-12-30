@@ -1,8 +1,6 @@
 using Meshmakers.Common.Shared;
-using Meshmakers.Octo.Common.DistributionEventHub.Services;
 using Meshmakers.Octo.Common.Shared;
-using Meshmakers.Octo.Common.Shared.DataTransferObjects;
-using Meshmakers.Octo.Common.Shared.DistributionEventHub.Messages;
+using Meshmakers.Octo.Communication.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
@@ -10,6 +8,7 @@ using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
@@ -28,7 +27,7 @@ public class TenantContext : ITenantContext
     private readonly ICkCacheService _cacheService;
     protected readonly ICkModelRepositoryService _ckModelRepositoryService;
     private readonly string _databaseName;
-    protected readonly IDistributionEventHubService _distributionEventHubService;
+    protected readonly ITenantNotifications _tenantNotifications;
 
     private readonly ILoggerFactory _loggerFactory;
     private readonly IModelLoaderService _modelLoaderService;
@@ -40,7 +39,7 @@ public class TenantContext : ITenantContext
     protected TenantContext(ILoggerFactory loggerFactory, IOptions<OctoSystemConfiguration> systemConfiguration,
         string tenantId,
         string databaseName,
-        IDistributionEventHubService distributionEventHubService,
+        ITenantNotifications tenantNotifications,
         ICkModelRepositoryService ckModelRepositoryService,
         ICkCacheService cacheService, IModelLoaderService modelLoaderService, IBulkRtMutation bulkRtMutation)
     {
@@ -48,7 +47,7 @@ public class TenantContext : ITenantContext
         _loggerFactory = loggerFactory;
         _systemConfiguration = systemConfiguration;
         _databaseName = databaseName;
-        _distributionEventHubService = distributionEventHubService;
+        _tenantNotifications = tenantNotifications;
         _ckModelRepositoryService = ckModelRepositoryService;
         _cacheService = cacheService;
         _modelLoaderService = modelLoaderService;
@@ -90,12 +89,15 @@ public class TenantContext : ITenantContext
 
         var normalizedDatabaseName = databaseName.ToLower();
         var normalizedTenantId = tenantId.MakeKey();
-        if (await IsTenantExistingAsync(systemSession, normalizedTenantId)) throw TenantException.TenantDoesAlreadyExist(tenantId);
+        if (await IsTenantExistingAsync(systemSession, normalizedTenantId))
+        {
+            throw TenantException.TenantDoesAlreadyExist(tenantId);
+        }
 
         try
         {
             // Distribute updates (pre) to inform other services.
-            await _distributionEventHubService.PublishAsync(new PreUpdateTenant(tenantId));
+            await _tenantNotifications.NotifyPreTenantCreateAsync(tenantId);
 
             // Create database
             await CreateTenantInternalAsync(databaseName);
@@ -107,7 +109,9 @@ public class TenantContext : ITenantContext
             if (ckCompiledModelRoot == null) throw TenantException.SystemModelNotFound();
 
             if (operationResult.HasErrors || operationResult.HasFatalErrors)
+            {
                 throw TenantException.ErrorDuringSystemModelLoad(operationResult);
+            }
 
             await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, true,
                 new TenantDatabaseSourceIdentifier(databaseContext, systemSession));
@@ -134,14 +138,16 @@ public class TenantContext : ITenantContext
             };
             var systemTenantRepository = GetSystemTenantRepository();
             await systemTenantRepository.InsertOneRtEntityAsync(systemSession, rtSystemTenant);
-
-            // Distribute updates (post) to inform other services.
-            await _distributionEventHubService.PublishAsync(new PosUpdateTenant(tenantId));
         }
         catch (Exception)
         {
             await _systemRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
             throw;
+        }
+        finally
+        {
+            // Distribute updates (post) to inform other services.
+            await _tenantNotifications.NotifyPosTenantCreateAsync(tenantId);
         }
     }
 
@@ -153,7 +159,9 @@ public class TenantContext : ITenantContext
         var normalizedDatabaseName = databaseName.ToLower();
 
         if (await IsDatabaseAlreadyExistingAsync(normalizedDatabaseName))
+        {
             throw TenantException.TenantDatabaseDoesAlreadyExist(normalizedDatabaseName);
+        }
 
         await _systemRepositoryClient.CreateRepositoryAsync(normalizedDatabaseName);
         await _systemRepositoryClient.CreateUser(_systemConfiguration.Value.AuthenticationDatabaseName,
@@ -174,43 +182,74 @@ public class TenantContext : ITenantContext
         var normalizedDatabaseName = databaseName.ToLower();
         var normalizedTenantId = tenantId.MakeKey();
 
-        if (await IsTenantExistingAsync(systemSession, tenantId)) throw TenantException.TenantDoesAlreadyExist(tenantId);
-
-        if (!await IsDatabaseAlreadyExistingAsync(databaseName)) throw TenantException.TenantDatabaseDoesNotExist(databaseName);
-
-        // Add the new tenant as child tenant of the current one
-        if (TenantId != _systemConfiguration.Value.SystemTenantId.MakeKey())
+        if (await IsTenantExistingAsync(systemSession, tenantId))
         {
-            var octoTenant = new RtTenant
-            {
-                TenantId = tenantId,
-                DatabaseName = databaseName
-            };
-
-            var tenantRepository = GetTenantRepository();
-            await tenantRepository.InsertOneRtEntityAsync(systemSession, octoTenant);
+            throw TenantException.TenantDoesAlreadyExist(tenantId);
         }
 
-        // Add the new tenant in system tenant to be found in future operations
-        var rtSystemTenant = new RtTenant
+        if (!await IsDatabaseAlreadyExistingAsync(databaseName))
         {
-            TenantId = normalizedTenantId,
-            ParentTenantId = TenantId,
-            DatabaseName = normalizedDatabaseName
-        };
-        var systemTenantRepository = GetSystemTenantRepository();
-        await systemTenantRepository.InsertOneRtEntityAsync(systemSession, rtSystemTenant);
+            throw TenantException.TenantDatabaseDoesNotExist(databaseName);
+        }
+
+        try
+        {
+            // Distribute updates (pre) to inform other services.
+            await _tenantNotifications.NotifyPreTenantCreateAsync(tenantId);
+
+            // Add the new tenant as child tenant of the current one
+            if (TenantId != _systemConfiguration.Value.SystemTenantId.MakeKey())
+            {
+                var octoTenant = new RtTenant
+                {
+                    TenantId = tenantId,
+                    DatabaseName = databaseName
+                };
+
+                var tenantRepository = GetTenantRepository();
+                await tenantRepository.InsertOneRtEntityAsync(systemSession, octoTenant);
+            }
+
+            // Add the new tenant in system tenant to be found in future operations
+            var rtSystemTenant = new RtTenant
+            {
+                TenantId = normalizedTenantId,
+                ParentTenantId = TenantId,
+                DatabaseName = normalizedDatabaseName
+            };
+            var systemTenantRepository = GetSystemTenantRepository();
+            await systemTenantRepository.InsertOneRtEntityAsync(systemSession, rtSystemTenant);
+        }
+        finally
+        {
+            // Distribute updates (post) to inform other services.
+            await _tenantNotifications.NotifyPosTenantCreateAsync(tenantId);
+        }
     }
 
     public async Task DetachChildTenantAsync(IOctoSystemSession systemSession, string tenantId)
     {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
         var octoTenant = await GetRtTenantAsync(systemSession, tenantId);
-        if (octoTenant == null) throw new TenantException($"Tenant '{tenantId}' does not exists.");
+        if (octoTenant == null)
+        {
+            throw new TenantException($"Tenant '{tenantId}' does not exists.");
+        }
 
-        var tenantRepository = GetTenantRepository();
-        await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
-            new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
+        try
+        {
+            // Distribute updates (pre) to inform other services.
+            await _tenantNotifications.NotifyPreTenantDeleteAsync(tenantId);
+            
+            var tenantRepository = GetTenantRepository();
+            await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
+                new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
+        }
+        finally
+        {
+            // Distribute updates (post) to inform other services.
+            await _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId);
+        }
     }
 
     // ReSharper disable once UnusedMember.Global
@@ -219,12 +258,22 @@ public class TenantContext : ITenantContext
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
         var octoTenant = await GetRtTenantAsync(systemSession, tenantId);
-        if (octoTenant == null) throw TenantException.TenantDoesNotExist(tenantId);
+        if (octoTenant == null)
+        {
+            throw TenantException.TenantDoesNotExist(tenantId);
+        }
 
-        await _distributionEventHubService.PublishAsync(new PreUpdateTenant(tenantId));
-        await DropChildTenantAsync(systemSession, tenantId);
-        await CreateChildTenantAsync(systemSession, octoTenant.DatabaseName, tenantId);
-        await _distributionEventHubService.PublishAsync(new PosUpdateTenant(tenantId));
+        try
+        {
+            await _tenantNotifications.NotifyPreTenantUpdateAsync(tenantId);
+            
+            await DropChildTenantAsync(systemSession, tenantId);
+            await CreateChildTenantAsync(systemSession, octoTenant.DatabaseName, tenantId);
+        }
+        finally
+        {
+            await _tenantNotifications.NotifyPosTenantUpdateAsync(tenantId);
+        }
     }
 
     // ReSharper disable once MemberCanBePrivate.Global
@@ -235,25 +284,34 @@ public class TenantContext : ITenantContext
         var tenantRepository = GetTenantRepository();
 
         var octoTenant = await GetRtTenantAsync(systemSession, tenantId);
-        if (octoTenant == null) throw new TenantException($"Tenant '{tenantId}' does not exist.");
-
-        await _distributionEventHubService.PublishAsync(new PreUpdateTenant(tenantId));
-        await _systemRepositoryClient.DropRepositoryAsync(octoTenant.DatabaseName);
-
-        // Deletes the tenant entry from the current tenant
-        await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
-            new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
-
-        // If the current tenant is not the system tenant, we need to delete the tenant entry in system tenant too.
-        // Add the new tenant as child tenant of the current one
-        if (TenantId != _systemConfiguration.Value.SystemTenantId.MakeKey())
+        if (octoTenant == null)
         {
-            var systemTenantRepository = GetSystemTenantRepository();
-            await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
-                new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
+            throw new TenantException($"Tenant '{tenantId}' does not exist.");
         }
 
-        await _distributionEventHubService.PublishAsync(new PosUpdateTenant(tenantId));
+        try
+        {
+            await _tenantNotifications.NotifyPreTenantDeleteAsync(tenantId);
+            
+            await _systemRepositoryClient.DropRepositoryAsync(octoTenant.DatabaseName);
+
+            // Deletes the tenant entry from the current tenant
+            await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
+                new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
+
+            // If the current tenant is not the system tenant, we need to delete the tenant entry in system tenant too.
+            // Add the new tenant as child tenant of the current one
+            if (TenantId != _systemConfiguration.Value.SystemTenantId.MakeKey())
+            {
+                var systemTenantRepository = GetSystemTenantRepository();
+                await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
+                    new List<FieldFilter> { new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.MakeKey()) });
+            }
+        }
+        finally
+        {
+            await _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId);
+        }
     }
 
     // ReSharper disable once MemberCanBePrivate.Global
@@ -316,7 +374,7 @@ public class TenantContext : ITenantContext
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
         var tenant = await GetChildTenantAsync(systemSession, tenantId);
-        var context = new TenantContext(_loggerFactory, _systemConfiguration, tenantId, tenant.DatabaseName, _distributionEventHubService,
+        var context = new TenantContext(_loggerFactory, _systemConfiguration, tenantId, tenant.DatabaseName, _tenantNotifications,
             _ckModelRepositoryService, _cacheService, _modelLoaderService, _bulkRtMutation);
 
         return context;
@@ -403,14 +461,14 @@ public class TenantContext : ITenantContext
     {
         try
         {
-            await _distributionEventHubService.PublishAsync(new PreUpdateTenant(TenantId));
+            await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId);
             var databaseContext = CreateDatabaseContext(_databaseName);
             await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, false,
                 new TenantDatabaseSourceIdentifier(databaseContext, systemSession));
         }
         finally
         {
-            await _distributionEventHubService.PublishAsync(new PosUpdateTenant(TenantId));
+            await _tenantNotifications.NotifyPosTenantUpdateAsync(TenantId);
         }
     }
 
@@ -429,14 +487,14 @@ public class TenantContext : ITenantContext
 
         try
         {
-            await _distributionEventHubService.PublishAsync(new PreUpdateTenant(TenantId));
+            await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId);
             var databaseContext = CreateDatabaseContext(_databaseName);
             await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, false,
                 new TenantDatabaseSourceIdentifier(databaseContext, systemSession));
         }
         finally
         {
-            await _distributionEventHubService.PublishAsync(new PosUpdateTenant(TenantId));
+            await _tenantNotifications.NotifyPosTenantUpdateAsync(TenantId);
         }
     }
 

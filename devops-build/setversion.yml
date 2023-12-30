@@ -4,7 +4,6 @@ steps:
   inputs:
     FileNames: |
       **/*.csproj
-      !src/ConstructionKit.Templates/Templates/**/*.csproj
     InsertAttributes: true
     FileEncoding: 'auto'
     Product: $(Build.SourceBranchName) - $(Build.SourceVersion) (release)
@@ -13,8 +12,3 @@ steps:
     InformationalVersion: $(Build.BuildNumber)
     PackageVersion: $(Build.BuildNumber)
     DisableTelemetry: true  
-- task: VersionJSONFile@2
-  displayName: Set Version package.json
-  inputs:
-    versionForJSONFileFormat: '{1}.{2}.{3}-{4}'
-    FilenamePattern: ^package.json

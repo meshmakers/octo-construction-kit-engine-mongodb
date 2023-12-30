@@ -19,9 +19,8 @@
 
     <ItemGroup>
         <PackageReference Include="MathParser.org-mXparser" Version="5.2.1"/>
-        <PackageReference Include="Meshmakers.Octo.Common.DistributionEventHub" Version="0.0.2312.29001" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Engine" Version="0.0.2312.25001" />
-        <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="0.0.2312.25001" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Engine" Version="3.0.1" />
+        <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="3.0.1" />
         <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="8.0.0" />
         <PackageReference Include="MongoDB.Driver.GridFS" Version="2.23.1" />
         <PackageReference Include="NLog" Version="5.2.8" />
@@ -31,8 +30,8 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\Common\Shared\Shared.csproj"/>
         <ProjectReference Include="..\..\Common\Persistence.SystemCkModel\Persistence.SystemCkModel.csproj"/>
+        <ProjectReference Include="..\..\Common\Shared\Shared.csproj" />
         <ProjectReference Include="..\Runtime.Contracts.MongoDb\Runtime.Contracts.MongoDb.csproj"/>
     </ItemGroup>
 

@@ -9,8 +9,7 @@ public class ServiceCollectionFixture
     {
         Services = new ServiceCollection();
         Services.AddRuntimeEngine()
-            .AddMongoDbRuntimeRepository("PersistenceSystemTests");
-        Services.AddOctoCommands();
+            .AddMongoDbRuntimeRepository();
         Services.AddCkModelTest();
         Services.AddLogging(loggingBuilder =>
         {

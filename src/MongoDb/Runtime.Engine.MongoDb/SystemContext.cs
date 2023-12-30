@@ -1,10 +1,9 @@
-using Meshmakers.Octo.Common.DistributionEventHub.Services;
 using Meshmakers.Octo.Common.Shared;
-using Meshmakers.Octo.Common.Shared.DistributionEventHub.Messages;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
 using Microsoft.Extensions.Logging;
@@ -16,13 +15,23 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 // ReSharper disable once UnusedMember.Global
 public class SystemContext : TenantContext, ISystemContext
 {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SystemContext"/> class.
+    /// </summary>
+    /// <param name="loggerFactory"></param>
+    /// <param name="systemConfiguration"></param>
+    /// <param name="tenantNotifications"></param>
+    /// <param name="ckCacheService"></param>
+    /// <param name="ckModelRepositoryService"></param>
+    /// <param name="modelLoaderService"></param>
+    /// <param name="bulkRtMutation"></param>
     public SystemContext(ILoggerFactory loggerFactory, IOptions<OctoSystemConfiguration> systemConfiguration,
-        IDistributionEventHubService distributionEventHubService,
+        ITenantNotifications tenantNotifications,
         ICkCacheService ckCacheService, ICkModelRepositoryService ckModelRepositoryService, IModelLoaderService modelLoaderService,
         IBulkRtMutation bulkRtMutation)
         : base(loggerFactory, systemConfiguration, systemConfiguration.Value.SystemTenantId.MakeKey(),
             systemConfiguration.Value.SystemDatabaseName.ToLower(),
-            distributionEventHubService, ckModelRepositoryService, ckCacheService, modelLoaderService, bulkRtMutation)
+            tenantNotifications, ckModelRepositoryService, ckCacheService, modelLoaderService, bulkRtMutation)
     {
     }
 
@@ -31,7 +40,10 @@ public class SystemContext : TenantContext, ISystemContext
     // ReSharper disable once MemberCanBePrivate.Global
     public async Task CreateSystemTenantAsync()
     {
-        if (await IsSystemTenantExistingAsync()) throw TenantException.SystemTenantAlreadyExisting();
+        if (await IsSystemTenantExistingAsync())
+        {
+            throw TenantException.SystemTenantAlreadyExisting();
+        }
 
         var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
         var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.MakeKey();
@@ -39,7 +51,7 @@ public class SystemContext : TenantContext, ISystemContext
         try
         {
             // Distribute updates (pre) to inform other services.
-            await _distributionEventHubService.PublishAsync(new PreUpdateTenant(normalizedTenantId));
+            await _tenantNotifications.NotifyPreTenantCreateAsync(normalizedTenantId);
 
             using var systemSession = await GetSystemSessionAsync();
             systemSession.StartTransaction();
@@ -60,20 +72,27 @@ public class SystemContext : TenantContext, ISystemContext
                 new TenantDatabaseSourceIdentifier(ckModelRepository, systemSession));
             await systemSession.CommitTransactionAsync();
 
-            // Distribute updates (post) to inform other services.
-            await _distributionEventHubService.PublishAsync(new PosUpdateTenant(normalizedTenantId));
+           
         }
         catch (Exception)
         {
             await _systemRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
             throw;
         }
+        finally
+        {
+            // Distribute updates (post) to inform other services.
+            await _tenantNotifications.NotifyPosTenantCreateAsync(normalizedTenantId);
+        }
     }
 
     // ReSharper disable once UnusedMember.Global
     public async Task ClearSystemTenantAsync()
     {
-        if (!await IsSystemTenantExistingAsync()) throw TenantException.SystemTenantDatabaseNotExisting();
+        if (!await IsSystemTenantExistingAsync())
+        {
+            throw TenantException.SystemTenantDatabaseNotExisting();
+        }
 
         await DeleteSystemTenantAsync();
         await CreateSystemTenantAsync();
@@ -83,14 +102,23 @@ public class SystemContext : TenantContext, ISystemContext
     // ReSharper disable once UnusedMember.Global
     public async Task DeleteSystemTenantAsync()
     {
-        if (!await IsSystemTenantExistingAsync()) throw TenantException.SystemTenantDatabaseNotExisting();
+        if (!await IsSystemTenantExistingAsync())
+        {
+            throw TenantException.SystemTenantDatabaseNotExisting();
+        }
 
         var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
         var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.MakeKey();
 
-        await _distributionEventHubService.PublishAsync(new PreUpdateTenant(normalizedTenantId));
-        await _systemRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
-        await _distributionEventHubService.PublishAsync(new PosUpdateTenant(normalizedTenantId));
+        try
+        {
+            await _tenantNotifications.NotifyPreTenantDeleteAsync(normalizedTenantId);
+            await _systemRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
+        }
+        finally
+        {
+            await _tenantNotifications.NotifyPosTenantDeleteAsync(normalizedTenantId);
+        }
     }
 
     // ReSharper disable once MemberCanBePrivate.Global

@@ -28,8 +28,6 @@
         <PackageReference Include="IdentityModel" Version="6.2.0"/>
         <PackageReference Include="Markdig.Signed" Version="0.34.0" />
         <PackageReference Include="Meshmakers.Common.Shared" Version="4.0.2312.25001" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2312.25001" />
-        <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="0.0.2312.25001" />
         <PackageReference Include="Microsoft.Extensions.Options" Version="8.0.0" />
         <PackageReference Include="NLog" Version="5.2.8" />
         <PackageReference Include="System.ComponentModel.Annotations" Version="5.0.0"/>
@@ -46,6 +44,14 @@
             <PackagePath/>
             <Link>meshmakers64.png</Link>
         </None>
+        <EmbeddedResource Remove="DataTransferObjects\**" />
+        <None Remove="DataTransferObjects\**" />
+        <EmbeddedResource Remove="GraphQL\**" />
+        <None Remove="GraphQL\**" />
+        <EmbeddedResource Remove="Services\**" />
+        <None Remove="Services\**" />
+        <EmbeddedResource Remove="Assets\**" />
+        <None Remove="Assets\**" />
     </ItemGroup>
 
     <ItemGroup>
@@ -54,6 +60,18 @@
             <PackagePath/>
             <Link>LICENSE</Link>
         </None>
+    </ItemGroup>
+
+    <ItemGroup>
+      <Compile Remove="DataTransferObjects\**" />
+      <Compile Remove="GraphQL\**" />
+      <Compile Remove="Services\**" />
+      <Compile Remove="Assets\**" />
+      <Compile Remove="PasswordGenerator.cs" />
+      <Compile Remove="ServiceConfigurationMissingException.cs" />
+      <Compile Remove="CkIdTypeIdExtensions.cs" />
+      <Compile Remove="CommonConstants.cs" />
+      <Compile Remove="JsonConverterWithArgsAttribute.cs" />
     </ItemGroup>
 
 
