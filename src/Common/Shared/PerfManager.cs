@@ -1,6 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text;
 using NLog;
 
@@ -27,10 +25,7 @@ public class PerfManager
 
     internal PerfItem CreateMeasurement(string methodName)
     {
-        if (_items.ContainsKey(methodName))
-        {
-            return _items[methodName];
-        }
+        if (_items.ContainsKey(methodName)) return _items[methodName];
 
         var itm = new PerfItem(methodName);
         _items.Add(methodName, itm);
@@ -63,10 +58,7 @@ public class PerfManager
         x += "Execution time" + _separator;
         stringBuilder.AppendLine(x);
 
-        foreach (var item in _items.Values)
-        {
-            item.WriteToStream(stringBuilder);
-        }
+        foreach (var item in _items.Values) item.WriteToStream(stringBuilder);
 
         return stringBuilder.ToString();
     }

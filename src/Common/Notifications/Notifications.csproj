@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <AssemblyName>Meshmakers.Octo.SystematizedData.Persistence.Notifications</AssemblyName>
+        <RootNamespace>Meshmakers.Octo.SystematizedData.Persistence.Notifications</RootNamespace>
+        <OctoSkipCkCompile Condition="'$(Configuration)'=='Release'">true</OctoSkipCkCompile>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Shared\Shared.csproj"/>
+        <ProjectReference Include="..\..\MongoDb\Runtime.Contracts.MongoDb\Runtime.Contracts.MongoDb.csproj"/>
+        <ProjectReference Include="..\Persistence.SystemCkModel\Persistence.SystemCkModel.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Contracts" Version="0.0.2312.25001" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer"
+                          ReferenceOutputAssembly="false" Version="0.0.2312.25001" PrivateAssets="all" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Remove="ConstructionKit\ck-*.yaml"/>
+        <EmbeddedResource Include="ConstructionKit\ck-*.yaml">
+            <GenerateCkModelServiceClass>true</GenerateCkModelServiceClass>
+        </EmbeddedResource>
+        <None Remove="ConstructionKit\ck-*.cache.json"/>
+        <AdditionalFiles Include="ConstructionKit\ck-*.cache.json"/>
+    </ItemGroup>
+
+
+</Project>

@@ -1,4 +1,4 @@
-using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 
 // ReSharper disable MemberCanBePrivate.Global
 // ReSharper disable ClassNeverInstantiated.Global
@@ -29,7 +29,7 @@ public record PoolCommunicationAdapterDto
     /// <summary>
     /// Gets or sets the construction kit identifier of the communication adapter.
     /// </summary>
-    public string AdapterCkId { get; set; } = null!;
+    public string AdapterCkTypeId { get; set; } = null!;
     
     /// <summary>
     /// Gets or sets the docker image name of the communication adapter.

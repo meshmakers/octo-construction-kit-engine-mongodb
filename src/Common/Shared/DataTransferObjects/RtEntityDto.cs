@@ -1,31 +1,31 @@
-using System;
-using System.Collections.Generic;
-using Newtonsoft.Json;
+using System.Text.Json.Serialization;
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
 
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 public class RtEntityDto : GraphQlDto
 {
-    [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
-    [JsonConverter(typeof(NewtonOctoObjectIdConverter))]
-    public OctoObjectId? RtId { get; set; }
+    [JsonConverter(typeof(OctoObjectIdConverter))]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public OctoObjectId RtId { get; set; }
 
     /// <summary>
     ///     Returns the creation date time
     /// </summary>
-    [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public DateTime? RtCreationDateTime { get; set; }
 
     /// <summary>
     ///     Returns the last change date time
     /// </summary>
-    [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public DateTime? RtChangedDateTime { get; set; }
 
-    [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
-    public string? CkId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public CkId<CkTypeId> CkTypeId { get; set; }
 
-    [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public string? RtWellKnownName { get; set; }
 
     [JsonExtensionData]

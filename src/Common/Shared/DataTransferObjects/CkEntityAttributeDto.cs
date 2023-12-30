@@ -1,26 +1,26 @@
-using System.Collections.Generic;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
+using System.Text.Json.Serialization;
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 public class CkEntityAttributeDto
 {
-    public string? AttributeId { get; set; }
-    public string? AttributeName { get; set; }
+    public CkId<CkAttributeId> CkAttributeId { get; init; }
+    public string AttributeName { get; init; } = null!;
 
-    [JsonConverter(typeof(StringEnumConverter), typeof(ConstantCaseNamingStrategy))]
-    public AttributeValueTypesDto AttributeValueType { get; set; }
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public AttributeValueTypesDto AttributeValueType { get; init; }
 
-    public bool IsAutoCompleteEnabled { get; set; }
+    public bool IsAutoCompleteEnabled { get; init; }
 
-    public string? AutoCompleteFilter { get; set; }
+    public string? AutoCompleteFilter { get; init; }
 
-    public int AutoCompleteLimit { get; set; }
+    public int AutoCompleteLimit { get; init; }
 
-    public string? AutoIncrementReference { get; set; }
+    public string? AutoIncrementReference { get; init; }
 
-    public ICollection<string>? AutoCompleteTexts { get; set; }
+    public  IReadOnlyCollection<object>? AutoCompleteValues { get; init; }
 
-    public CkAttributeDto? Attribute { get; set; }
+    public CkAttributeDto? Attribute { get; init; }
 }

@@ -1,5 +1,4 @@
-using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
+using System.Text.Json.Serialization;
 
 // ReSharper disable PropertyCanBeMadeInitOnly.Global
 
@@ -7,9 +6,9 @@ namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 public class FieldFilterDto
 {
-    public string? AttributeName { get; set; }
+    public string AttributeName { get; set; } = null!;
 
-    [JsonConverter(typeof(StringEnumConverter), typeof(ConstantCaseNamingStrategy))]
+    [JsonConverter(typeof(JsonStringEnumConverter))]
     public FieldFilterOperatorDto Operator { get; set; }
 
     public object? ComparisonValue { get; set; }

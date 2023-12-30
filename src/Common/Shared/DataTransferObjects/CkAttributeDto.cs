@@ -1,17 +1,14 @@
-using System.Collections.Generic;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
+using System.Text.Json.Serialization;
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 public class CkAttributeDto
 {
-    public string? AttributeId { get; set; }
+    public CkId<CkAttributeId> CkAttributeId { get; set; }
 
-    public ScopeIdsDto ScopeId { get; set; }
-
-    [JsonConverter(typeof(StringEnumConverter), typeof(ConstantCaseNamingStrategy))]
-
+    [JsonConverter(typeof(JsonStringEnumConverter))]
     public AttributeValueTypesDto AttributeValueType { get; set; }
 
     public object? DefaultValue { get; set; }

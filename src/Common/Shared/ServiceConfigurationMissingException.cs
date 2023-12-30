@@ -1,4 +1,3 @@
-using System;
 using System.Runtime.Serialization;
 
 namespace Meshmakers.Octo.Common.Shared;
@@ -15,12 +14,6 @@ public class ServiceConfigurationMissingException : Exception
     }
 
     public ServiceConfigurationMissingException(string message, Exception inner) : base(message, inner)
-    {
-    }
-
-    protected ServiceConfigurationMissingException(
-        SerializationInfo info,
-        StreamingContext context) : base(info, context)
     {
     }
 }

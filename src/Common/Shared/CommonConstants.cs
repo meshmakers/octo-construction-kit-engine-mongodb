@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-
-namespace Meshmakers.Octo.Common.Shared;
+﻿namespace Meshmakers.Octo.Common.Shared;
 
 public static class CommonConstants
 {
@@ -96,14 +92,14 @@ public static class CommonConstants
     public const string GraphQLErrorDataStore = "OCTO1003";
     public const string GraphQLErrorCommon = "OCTO1004";
     public const string GraphQLDeleteOperationsNotSupported = "OCTO1005";
-    public const string GraphQLCkModelViolation = "OCTO1006";
+    public const string GraphQLOperationError = "OCTO1006_{0}";
+    public const string GraphQLOperationFatalError = "OCTO1007_{0}";
 
     public const string AdministratorsRole = "Administrators";
     public const string ManagersRole = "Managers";
     public const string DevelopersRole = "Developers";
     public const string UsersRole = "Users";
 
-    public static readonly DateTime UnixEpoch = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
     /// <summary>
     ///     Defines default scopes as minimal constraint
@@ -120,50 +116,24 @@ public static class CommonConstants
     ///     Returns a scope definition including default scopes and api scopes
     /// </summary>
     /// <param name="apiScopes">Enum flags for API scopes.</param>
-    /// <param name="customScopes">Additional custom scopes to be added to the token</param>
     /// <param name="scopes">Default scopes that are added </param>
     /// <returns></returns>
-    public static string GetScopes(ApiScopes apiScopes, IEnumerable<string>? customScopes = null, DefaultScopes scopes = DefaultScopes.UserDefault)
+    public static string GetScopes(ApiScopes apiScopes, DefaultScopes scopes = DefaultScopes.UserDefault)
     {
         var list = GetDefaultScopes(scopes);
 
         if (apiScopes.HasFlag(ApiScopes.AssetSystemApiFullAccess))
-        {
             list.Add(SystemApiFullAccess);
-        }
-        else if (apiScopes.HasFlag(ApiScopes.AssetSystemApiReadOnly))
-        {
-            list.Add(SystemApiReadOnly);
-        }
+        else if (apiScopes.HasFlag(ApiScopes.AssetSystemApiReadOnly)) list.Add(SystemApiReadOnly);
 
         if (apiScopes.HasFlag(ApiScopes.IdentityApiFullAccess))
-        {
             list.Add(IdentityApiFullAccess);
-        }
-        else if (apiScopes.HasFlag(ApiScopes.IdentityApiReadOnly))
-        {
-            list.Add(IdentityApiReadOnly);
-        }
+        else if (apiScopes.HasFlag(ApiScopes.IdentityApiReadOnly)) list.Add(IdentityApiReadOnly);
 
         if (apiScopes.HasFlag(ApiScopes.BotApiFullAccess))
-        {
             list.Add(BotApiFullAccess);
-        }
-        else if (apiScopes.HasFlag(ApiScopes.BotApiReadOnly))
-        {
-            list.Add(BotApiReadOnly);
-        }
+        else if (apiScopes.HasFlag(ApiScopes.BotApiReadOnly)) list.Add(BotApiReadOnly);
 
-        if (customScopes != null)
-        {
-            foreach (var customScope in customScopes)
-            {
-                if (list.All(s => string.Compare(s, customScope, StringComparison.OrdinalIgnoreCase) != 0))
-                {
-                    list.Add(customScope);
-                }
-            }
-        }
 
         return string.Join(" ", list.ToArray());
     }
@@ -171,30 +141,15 @@ public static class CommonConstants
     private static List<string> GetDefaultScopes(DefaultScopes scopes)
     {
         var list = new List<string>();
-        if (scopes.HasFlag(DefaultScopes.OpenId))
-        {
-            list.Add(Scopes.OpenId);
-        }
+        if (scopes.HasFlag(DefaultScopes.OpenId)) list.Add(Scopes.OpenId);
 
-        if (scopes.HasFlag(DefaultScopes.Profile))
-        {
-            list.Add(Scopes.Profile);
-        }
+        if (scopes.HasFlag(DefaultScopes.Profile)) list.Add(Scopes.Profile);
 
-        if (scopes.HasFlag(DefaultScopes.Email))
-        {
-            list.Add(Scopes.Email);
-        }
+        if (scopes.HasFlag(DefaultScopes.Email)) list.Add(Scopes.Email);
 
-        if (scopes.HasFlag(DefaultScopes.Role))
-        {
-            list.Add(Scopes.Role);
-        }
+        if (scopes.HasFlag(DefaultScopes.Role)) list.Add(Scopes.Role);
 
-        if (scopes.HasFlag(DefaultScopes.OfflineAccess))
-        {
-            list.Add(Scopes.OfflineAccess);
-        }
+        if (scopes.HasFlag(DefaultScopes.OfflineAccess)) list.Add(Scopes.OfflineAccess);
 
         return list;
     }

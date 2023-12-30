@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <Description>Octo Mesh Runtime Engine for MongoDB.</Description>
+        <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+        <AssemblyName>Meshmakers.Octo.Runtime.Engine.MongoDb</AssemblyName>
+        <RootNamespace>Meshmakers.Octo.Runtime.Engine.MongoDb</RootNamespace>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+        <OutputPath>..\..\..\bin\Debug\MongoDb\</OutputPath>
+        <NoWarn>1701;1702;CS8002</NoWarn>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+        <OutputPath>..\..\..\bin\Release\MongoDb\</OutputPath>
+        <NoWarn>1701;1702;CS8002</NoWarn>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="MathParser.org-mXparser" Version="5.2.1"/>
+        <PackageReference Include="Meshmakers.Octo.Common.DistributionEventHub" Version="0.0.2312.29001" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Engine" Version="0.0.2312.25001" />
+        <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="0.0.2312.25001" />
+        <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="8.0.0" />
+        <PackageReference Include="MongoDB.Driver.GridFS" Version="2.23.1" />
+        <PackageReference Include="NLog" Version="5.2.8" />
+        <PackageReference Include="System.Reactive" Version="6.0.0"/>
+        <PackageReference Include="MongoDB.Bson" Version="2.23.1" />
+        <PackageReference Include="MongoDB.Driver" Version="2.23.1" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\Common\Shared\Shared.csproj"/>
+        <ProjectReference Include="..\..\Common\Persistence.SystemCkModel\Persistence.SystemCkModel.csproj"/>
+        <ProjectReference Include="..\Runtime.Contracts.MongoDb\Runtime.Contracts.MongoDb.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="..\..\..\assets\meshmakers64.png">
+            <Pack>True</Pack>
+            <PackagePath/>
+            <Link>meshmakers64.png</Link>
+        </None>
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="..\..\..\LICENSE">
+            <Pack>True</Pack>
+            <PackagePath/>
+            <Link>LICENSE</Link>
+        </None>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Compile Remove="MongoDb\ListRtRecord.cs"/>
+    </ItemGroup>
+
+
+</Project>

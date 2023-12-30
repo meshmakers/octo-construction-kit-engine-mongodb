@@ -1,6 +1,4 @@
-﻿using System.Collections.Generic;
-
-namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
+﻿namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 /// <summary>
 ///     Information about all available identity providers.
@@ -10,5 +8,5 @@ public class IdentityProvidersResult
     /// <summary>
     ///     The available identity providers.
     /// </summary>
-    public IEnumerable<IdentityProviderDto>? IdentityProviders { get; set; }
+    public IEnumerable<IdentityProviderDto>? IdentityProviders { get; init; }
 }

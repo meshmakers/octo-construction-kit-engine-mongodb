@@ -1,17 +1,18 @@
-using System;
-using Newtonsoft.Json;
+using System.Text.Json.Serialization;
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
 
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 public class LargeBinaryInfoDto
 {
-    [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
-    [JsonConverter(typeof(NewtonOctoObjectIdConverter))]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    [JsonConverter(typeof(OctoObjectIdConverter))]
     public OctoObjectId? BinaryId { get; set; }
 
-    public string? ContentType { get; set; }
-    public string? Filename { get; set; }
-    public DateTime UploadDateTime { get; set; }
-    public long Length { get; set; }
-    public Uri? DownloadUri { get; set; }
+    public string? ContentType { get; init; }
+    public string? Filename { get; init; }
+    public DateTime UploadDateTime { get; init; }
+    public long Length { get; init; }
+    public Uri? DownloadUri { get; init; }
 }

@@ -1,4 +1,6 @@
-using Meshmakers.Octo.Common.Shared;
+using Meshmakers.Octo.ConstructionKit.Contracts;
+
+
 // ReSharper disable UnusedType.Global
 // ReSharper disable UnusedMember.Global
 

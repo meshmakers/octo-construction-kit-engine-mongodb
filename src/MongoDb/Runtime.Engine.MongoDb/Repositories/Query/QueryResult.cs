@@ -1,0 +1,11 @@
+// ReSharper disable PropertyCanBeMadeInitOnly.Global
+
+namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
+
+// ReSharper disable once ClassNeverInstantiated.Global
+// ReSharper disable once MemberCanBePrivate.Global
+public class QueryResult<TEntity>
+{
+    public IEnumerable<QueryTotalCount> TotalCount { get; set; } = null!;
+    public IEnumerable<TEntity> Result { get; set; } = null!;
+}

@@ -20,7 +20,7 @@ public static class StringExtensions
     }
 
     /// <summary>
-    /// Deserializes a string into a given type
+    ///     Deserializes a string into a given type
     /// </summary>
     /// <param name="s"></param>
     /// <typeparam name="T"></typeparam>
@@ -35,6 +35,4 @@ public static class StringExtensions
         };
         return JsonSerializer.Deserialize<T>(s, serializerOptions)!;
     }
-    
-
 }

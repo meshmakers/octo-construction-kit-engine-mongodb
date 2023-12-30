@@ -1,5 +1,4 @@
-﻿using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
+﻿
 
 // ReSharper disable MemberCanBePrivate.Global
 // ReSharper disable AutoPropertyCanBeMadeGetOnly.Global
@@ -14,17 +13,17 @@ public class ClientDto
     /// <summary>
     ///     Specifies if client is enabled
     /// </summary>
-    public bool? IsEnabled { get; set; }
+    public bool? IsEnabled { get; init; }
 
     /// <summary>
     ///     Unique ID of the client
     /// </summary>
-    public string? ClientId { get; set; }
+    public string? ClientId { get; init; }
 
     /// <summary>
     ///     Optional client secret
     /// </summary>
-    public string? ClientSecret { get; set; }
+    public string? ClientSecret { get; init; }
 
     /// <summary>
     ///     Client display name (used for logging and consent screen)
@@ -40,7 +39,7 @@ public class ClientDto
     ///     Specifies the allowed grant types (legal combinations of AuthorizationCode, Implicit, Hybrid, ResourceOwner,
     ///     ClientCredentials).
     /// </summary>
-    public IEnumerable<string>? AllowedGrantTypes { get; set; }
+    public IEnumerable<string>? AllowedGrantTypes { get; init; }
 
     /// <summary>
     ///     Specifies allowed URIs to return tokens or authorization codes to
@@ -60,10 +59,10 @@ public class ClientDto
     /// <summary>
     ///     Specifies the api scopes that the client is allowed to request
     /// </summary>
-    public IEnumerable<string>? AllowedScopes { get; set; }
+    public IEnumerable<string>? AllowedScopes { get; init; }
 
     /// <summary>
     ///     Specifies if offline access to use code_authorization is enabled
     /// </summary>
-    public bool? IsOfflineAccessEnabled { get; set; }
+    public bool? IsOfflineAccessEnabled { get; init; }
 }

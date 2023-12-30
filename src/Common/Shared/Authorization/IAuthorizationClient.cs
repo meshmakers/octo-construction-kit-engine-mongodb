@@ -1,5 +1,3 @@
-using System.Threading.Tasks;
-
 namespace Meshmakers.Octo.Common.Shared.Authorization;
 
 public interface IAuthorizationClient

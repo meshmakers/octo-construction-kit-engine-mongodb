@@ -1,24 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <AssemblyName>Meshmakers.Octo.Backend.Persistence.SystemTests</AssemblyName>
-        <IsPackable>false</IsPackable>
-        <PackageIcon>meshmakers64.png</PackageIcon>
-        <PackageLicenseFile>LICENSE</PackageLicenseFile>
-        <PackageProjectUrl>https://www.meshmakers.io</PackageProjectUrl>
-        <RepositoryUrl>https://github.com/meshmakers/octomesh</RepositoryUrl>
-        <RootNamespace>Meshmakers.Octo.Backend.Persistence.SystemTests</RootNamespace>
-        <TargetFramework>net7.0</TargetFramework>
+        <AssemblyName>Meshmakers.Octo.SystematizedData.Persistence.SystemTests</AssemblyName>
+        <RootNamespace>Meshmakers.Octo.SystematizedData.Persistence.SystemTests</RootNamespace>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="FakeItEasy" Version="7.4.0" />
-        <PackageReference Include="Microsoft.Extensions.Configuration" Version="7.0.0" />
-        <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="7.0.4" />
-        <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="7.0.0" />
-        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.7.0" />
-        <PackageReference Include="xunit" Version="2.5.0" />
-        <PackageReference Include="xunit.runner.visualstudio" Version="2.5.0">
+        <PackageReference Include="FakeItEasy" Version="8.0.1" />
+        <PackageReference Include="Microsoft.Extensions.Configuration" Version="8.0.0" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="8.0.0" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
+        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0"/>
+        <PackageReference Include="xunit" Version="2.6.4" />
+        <PackageReference Include="xunit.runner.visualstudio" Version="2.5.6">
             <PrivateAssets>all</PrivateAssets>
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
@@ -26,6 +20,7 @@
             <PrivateAssets>all</PrivateAssets>
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" GeneratePathProperty="true" ReferenceOutputAssembly="false" Version="0.0.2312.25001" />
     </ItemGroup>
 
     <ItemGroup>
@@ -35,7 +30,22 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\..\src\SystematizedData\Persistence\Persistence.csproj" />
+        <ConstructionKitFolder Include="CkTest\ConstructionKit"/>
     </ItemGroup>
+
+    <ItemGroup>
+        <None Remove="**\ConstructionKit\ck-*.yaml"/>
+        <EmbeddedResource Include="**\ConstructionKit\ck-*.yaml">
+            <GenerateCkModelServiceClass>true</GenerateCkModelServiceClass>
+        </EmbeddedResource>
+        <None Remove="**\ConstructionKit\ck-*.cache.json"/>
+        <AdditionalFiles Include="**\ConstructionKit\ck-*.cache.json"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\src\Common\Persistence.Commands\Persistence.Commands.csproj"/>
+        <ProjectReference Include="..\..\src\MongoDb\Runtime.Engine.MongoDb\Runtime.Engine.MongoDb.csproj"/>
+    </ItemGroup>
+
 
 </Project>

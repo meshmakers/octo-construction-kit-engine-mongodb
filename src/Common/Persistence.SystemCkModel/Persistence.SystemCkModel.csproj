@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OctoSkipCkCompile Condition="'$(Configuration)'=='Release'">true</OctoSkipCkCompile>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <None Remove="ConstructionKit\ck-*.yaml"/>
+        <EmbeddedResource Include="ConstructionKit\ck-*.yaml">
+            <GenerateCkModelServiceClass>true</GenerateCkModelServiceClass>
+        </EmbeddedResource>
+        <None Remove="ConstructionKit\ck-*.cache.json"/>
+        <AdditionalFiles Include="ConstructionKit\ck-*.cache.json"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="0.0.2312.25001" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" 
+                          ReferenceOutputAssembly="false" Version="0.0.2312.25001" PrivateAssets="all" />
+    </ItemGroup>
+
+</Project>

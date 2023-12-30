@@ -1,4 +1,6 @@
-using Newtonsoft.Json;
+using System.Text.Json.Serialization;
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
 
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
@@ -10,7 +12,7 @@ public class RtServiceHookDto
     /// <summary>
     ///     Returns the unique key of the service hook
     /// </summary>
-    [JsonConverter(typeof(NewtonOctoObjectIdConverter))]
+    [JsonConverter(typeof(OctoObjectIdConverter))]
     public OctoObjectId RtId { get; set; }
 
     /// <summary>
@@ -26,7 +28,7 @@ public class RtServiceHookDto
     /// <summary>
     ///     The CK model entity id
     /// </summary>
-    public string? QueryCkId { get; set; }
+    public string? QueryCkTypeId { get; set; }
 
     /// <summary>
     ///     Field filters

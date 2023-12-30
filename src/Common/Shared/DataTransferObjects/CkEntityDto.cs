@@ -1,11 +1,12 @@
 using Meshmakers.Octo.Common.Shared.GraphQL;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 public class CkEntityDto
 {
-    public string? CkId { get; set; }
-    public string? TypeName { get; set; }
+    public CkId<CkTypeId> CkTypeId { get; set; }
+    public string TypeName { get; set; } = null!;
 
     public ScopeIdsDto ScopeId { get; set; }
     public bool IsFinal { get; set; }

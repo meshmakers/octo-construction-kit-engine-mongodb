@@ -1,9 +1,8 @@
-using Newtonsoft.Json;
+using System.Text.Json.Serialization;
 
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 public class GraphQlDto
 {
-    [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
-    public object? UserContext { get; set; }
+    [JsonIgnore] public object? UserContext { get; set; }
 }

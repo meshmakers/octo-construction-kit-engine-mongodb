@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 public class DynamicUpdateMessageDto<TItem> where TItem : GraphQlDto

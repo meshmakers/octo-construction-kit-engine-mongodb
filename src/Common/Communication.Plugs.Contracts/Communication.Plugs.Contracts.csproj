@@ -4,14 +4,9 @@
         <AssemblyName>Meshmakers.Octo.Communication.Plugs.Contracts</AssemblyName>
         <Description>General interfaces for implementation of Octo Plugs</Description>
         <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-        <PackageIcon>meshmakers64.png</PackageIcon>
         <PackageId>Meshmakers.Octo.Communication.Plugs.Contracts</PackageId>
-        <PackageLicenseFile>LICENSE</PackageLicenseFile>
-        <PackageProjectUrl>https://www.meshmakers.io</PackageProjectUrl>
-        <RepositoryUrl>https://github.com/meshmakers/octomesh</RepositoryUrl>
+        <PackageIcon>meshmakers64.png</PackageIcon>
         <RootNamespace>Meshmakers.Octo.Communication.Plugs.Contracts</RootNamespace>
-        <ImplicitUsings>true</ImplicitUsings>
-        <TargetFrameworks>net7.0;netstandard2.0</TargetFrameworks>
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">

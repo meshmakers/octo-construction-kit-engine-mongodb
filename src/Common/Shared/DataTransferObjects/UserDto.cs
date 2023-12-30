@@ -1,5 +1,5 @@
-﻿using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
+
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 // ReSharper disable PropertyCanBeMadeInitOnly.Global
 
@@ -49,7 +49,7 @@ public class UserDto
 public class RegisterUserDto : UserDto
 {
     /// <summary>
-    /// The user password. This is only transferred when creating a new user.
+    ///     The user password. This is only transferred when creating a new user.
     /// </summary>
     public string? Password { get; set; }
 }

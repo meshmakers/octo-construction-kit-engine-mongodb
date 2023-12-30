@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-
 namespace Meshmakers.Octo.Common.Shared.DataTransferObjects;
 
 public class ApiResourceDto
@@ -11,6 +9,6 @@ public class ApiResourceDto
     public bool ShowInDiscoveryDocument { get; set; }
     public ICollection<string>? UserClaims { get; set; }
     public bool RequireResourceIndicator { get; set; }
-    public ICollection<string>?  Scopes { get; set; }
+    public ICollection<string>? Scopes { get; set; }
     public ICollection<string>? AllowedAccessTokenSigningAlgorithms { get; set; }
 }
