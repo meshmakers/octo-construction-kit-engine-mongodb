@@ -3,6 +3,8 @@
     <PropertyGroup>
         <AssemblyName>Meshmakers.Octo.SystematizedData.Persistence.SystemTests</AssemblyName>
         <RootNamespace>Meshmakers.Octo.SystematizedData.Persistence.SystemTests</RootNamespace>
+        <Configurations>Debug;Release;DebugL</Configurations>
+        <Platforms>AnyCPU</Platforms>
     </PropertyGroup>
 
     <ItemGroup>
@@ -20,7 +22,14 @@
             <PrivateAssets>all</PrivateAssets>
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" GeneratePathProperty="true" ReferenceOutputAssembly="false" Version="3.0.3" />
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(Configuration)'!='DebugL'">
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" ReferenceOutputAssembly="false" Version="3.0.3" PrivateAssets="all" />
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(Configuration)'=='DebugL'">
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" ReferenceOutputAssembly="false" Version="999.0.0" PrivateAssets="all" />
     </ItemGroup>
 
     <ItemGroup>

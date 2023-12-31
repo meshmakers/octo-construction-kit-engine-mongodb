@@ -2,6 +2,8 @@
 
     <PropertyGroup>
         <OctoSkipCkCompile Condition="'$(Configuration)'=='Release'">true</OctoSkipCkCompile>
+        <Configurations>Debug;Release;DebugL</Configurations>
+        <Platforms>AnyCPU</Platforms>
     </PropertyGroup>
 
     <ItemGroup>
@@ -13,9 +15,14 @@
         <AdditionalFiles Include="ConstructionKit\ck-*.cache.json" />
     </ItemGroup>
 
-    <ItemGroup>
+    <ItemGroup Condition="'$(Configuration)'!='DebugL'">
         <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="3.0.3" />
         <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" ReferenceOutputAssembly="false" Version="3.0.3" PrivateAssets="all" />
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(Configuration)'=='DebugL'">
+        <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="999.0.0" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" ReferenceOutputAssembly="false" Version="999.0.0" PrivateAssets="all" />
     </ItemGroup>
 
 </Project>
