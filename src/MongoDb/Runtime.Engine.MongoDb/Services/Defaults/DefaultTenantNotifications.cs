@@ -1,6 +1,6 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 
-namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
+namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Defaults;
 
 public class DefaultTenantNotifications : ITenantNotifications
 {
