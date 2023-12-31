@@ -14,7 +14,7 @@ variables:
   buildConfiguration: 'Release'
   buildPlatform: 'any cpu'
   solutionFile: "Octo.Core.sln"
-  isRelease: true #$[startsWith(variables['Build.SourceBranch'], 'refs/tags/r')]
+  isRelease: $[startsWith(variables['Build.SourceBranch'], 'refs/tags/r')]
   MajorVersion: 0
   MinorVersion: 0
 
