@@ -1,12 +1,12 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.ConstructionKit.System.ConstructionKit.Generated.System.v1;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
-using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.InsertModifiers;
 

@@ -34,7 +34,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\Common\Persistence.SystemCkModel\Persistence.SystemCkModel.csproj" />
+        <ProjectReference Include="..\..\Common\SystemCkModel\SystemCkModel.csproj" />
         <ProjectReference Include="..\Runtime.Contracts.MongoDb\Runtime.Contracts.MongoDb.csproj" />
     </ItemGroup>
 

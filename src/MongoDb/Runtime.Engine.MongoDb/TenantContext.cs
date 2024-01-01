@@ -3,6 +3,7 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.ConstructionKit.System.ConstructionKit.Generated.System.v1;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
@@ -17,7 +18,6 @@ using Meshmakers.Octo.Runtime.Engine.Repositories;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Persistence.SystemCkModel.ConstructionKit.Generated.System.v1;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 

@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
+        <Description>Octo Mesh System contruction kit.</Description>
+        <AssemblyName>Meshmakers.Octo.ConstructionKit.System</AssemblyName>
+        <RootNamespace>Meshmakers.Octo.ConstructionKit.System</RootNamespace>
         <OctoSkipCkCompile Condition="'$(Configuration)'=='Release'">true</OctoSkipCkCompile>
         <Configurations>Debug;Release;DebugL</Configurations>
         <Platforms>AnyCPU</Platforms>
