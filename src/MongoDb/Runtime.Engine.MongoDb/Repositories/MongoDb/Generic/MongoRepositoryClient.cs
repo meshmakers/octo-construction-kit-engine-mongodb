@@ -154,17 +154,13 @@ public class MongoRepositoryClient : IRepositoryClient
 
     private static void RegisterClassMaps()
     {
-        if (_isRegistered) return;
+        if (_isRegistered)
+        {
+            return;
+        }
 
         _isRegistered = true;
-
-        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
-        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>());
-        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());
-        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkRecordId, OctoRecordIdSerializer>());
-        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkEnumId, OctoEnumIdSerializer>());
-        BsonSerializer.TryRegisterSerializer(new OctoObjectIdSerializer());
-        BsonSerializer.TryRegisterSerializer(new ModelIdSerializer());
+        
         BsonClassMap.TryRegisterClassMap<CkModel>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
@@ -348,6 +344,16 @@ public class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.TargetCkTypeId).SetIsRequired(true);
             cm.GetMemberMap(c => c.TargetRtId).SetIsRequired(true);
         });
+        
+        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
+        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>());
+        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());
+        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkRecordId, OctoRecordIdSerializer>());
+        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkEnumId, OctoEnumIdSerializer>());
+        BsonSerializer.TryRegisterSerializer(new OctoObjectIdSerializer());
+        BsonSerializer.TryRegisterSerializer(new ModelIdSerializer());
+        BsonSerializer.TryRegisterSerializer(new RtEntitySerializer());
+        BsonSerializer.TryRegisterSerializer(new RtRecordSerializer());
     }
 
     private void ConfigureMongoDriver()
