@@ -38,17 +38,17 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
 
     #region Helper
 
-    public async Task<CkTypeGraph> GetEntityCacheItemAsync(CkId<CkTypeId> ckTypeId)
+    public async Task<CkTypeGraph> GetCkTypeGraphAsync(CkId<CkTypeId> ckTypeId)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
 
-        var entityCacheItem = ckCacheService.GetCkType(TenantId, ckTypeId);
-        if (entityCacheItem == null)
+        var ckTypeGraph = ckCacheService.GetCkType(TenantId, ckTypeId);
+        if (ckTypeGraph == null)
         {
-            throw new OperationFailedException($"Type '{ckTypeId}' does not exist.");
+            throw InvalidCkTypeIdException.CkTypeIdNotFound(TenantId, ckTypeId);
         }
 
-        return entityCacheItem;
+        return ckTypeGraph;
     }
 
     #endregion Helper
@@ -64,7 +64,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         }
 
         var ckCacheService = await GetCkCacheServiceAsync();
-        var entityCacheItem = await GetEntityCacheItemAsync(ckTypeId);
+        var entityCacheItem = await GetCkTypeGraphAsync(ckTypeId);
 
         var query =
             new SingleOriginRtQuery<TEntity>(_metricsContext, ckCacheService, TenantId, entityCacheItem, _mongoDbRepositoryDataSource,
@@ -232,7 +232,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         int? take = null)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
-        var entityCacheItem = await GetEntityCacheItemAsync(targetCkTypeId);
+        var entityCacheItem = await GetCkTypeGraphAsync(targetCkTypeId);
 
         var hierarchicalRtQuery =
             new MultipleOriginHierarchicalRtQuery(ckCacheService, TenantId, entityCacheItem, _mongoDbRepositoryDataSource,
@@ -262,7 +262,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var targetCkTypeId = RtEntityExtensions.GetCkTypeId<TTargetEntity>();
 
         var ckCacheService = await GetCkCacheServiceAsync();
-        var entityCacheItem = await GetEntityCacheItemAsync(targetCkTypeId);
+        var entityCacheItem = await GetCkTypeGraphAsync(targetCkTypeId);
 
         var originHierarchicalRtQuery =
             new MultipleOriginHierarchicalRtQuery<TTargetEntity>(ckCacheService, TenantId, entityCacheItem, _mongoDbRepositoryDataSource,
@@ -302,7 +302,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var targetCkTypeId = RtEntityExtensions.GetCkTypeId<TTargetEntity>();
 
         var ckCacheService = await GetCkCacheServiceAsync();
-        var entityCacheItem = await GetEntityCacheItemAsync(targetCkTypeId);
+        var entityCacheItem = await GetCkTypeGraphAsync(targetCkTypeId);
 
         var hierarchicalRtQuery =
             new MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity>(ckCacheService, TenantId, entityCacheItem,
@@ -326,7 +326,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         int? take = null)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
-        var entityCacheItem = await GetEntityCacheItemAsync(ckTypeId);
+        var entityCacheItem = await GetCkTypeGraphAsync(ckTypeId);
         var query =
             new SingleOriginRtQuery<TEntity>(_metricsContext, ckCacheService, TenantId, entityCacheItem, _mongoDbRepositoryDataSource,
                 dataQueryOperation.Language);
@@ -507,16 +507,15 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         ArgumentValidation.ValidateString(nameof(attributeName), attributeName);
         ArgumentValidation.ValidateString(nameof(regexFilterValue), regexFilterValue);
 
-        var entityCacheItem = await GetEntityCacheItemAsync(ckTypeId);
-        if (entityCacheItem == null)
+        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
+        if (ckTypeGraph == null)
         {
             throw InvalidCkTypeIdException.CkTypeIdNotFound(TenantId, ckTypeId);
         }
 
-        if (entityCacheItem.AllAttributes.All(x => x.Value.AttributeName != attributeName))
+        if (ckTypeGraph.AllAttributes.All(x => x.Value.AttributeName != attributeName))
         {
-            throw new InvalidAttributeException(
-                $"Attribute '{attributeName}' does not exist at type '{ckTypeId}'");
+            throw InvalidAttributeException.AttributeNotFound(ckTypeId, attributeName);
         }
 
         var match = new BsonDocument
@@ -550,7 +549,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
             }
         };
 
-        var collection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(entityCacheItem.CkTypeId);
+        var collection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(ckTypeGraph.CkTypeId);
         var result = collection.Aggregate(session,
             PipelineDefinition<RtEntity, AutoCompleteText>.Create(match, sortByCount, limit));
         return await result.ToListAsync();
@@ -562,29 +561,28 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     {
         ArgumentValidation.ValidateString(nameof(attributeName), attributeName);
 
-        var ckEntity =
+        var ckType =
             await _mongoDbRepositoryDataSource.CkTypes.FindSingleOrDefaultAsync(session, x => x.CkTypeId == ckTypeId);
-        if (ckEntity == null)
+        if (ckType == null)
         {
             throw new EntityNotFoundException($"'{ckTypeId}' does not exist in database.");
         }
 
-        var attribute = ckEntity.Attributes.FirstOrDefault(x => x.AttributeName == attributeName);
+        var attribute = ckType.Attributes.FirstOrDefault(x => x.AttributeName == attributeName);
         if (attribute == null)
         {
-            throw new InvalidAttributeException(
-                $"Attribute with name '{attributeName}' does not exist on type '{ckTypeId}'");
+            throw InvalidAttributeException.AttributeNotFound(ckTypeId, attributeName);
         }
 
         attribute.AutoCompleteValues = autoCompleteValues.ToList();
 
         try
         {
-            await _mongoDbRepositoryDataSource.CkTypes.ReplaceByIdAsync(session, ckEntity.CkTypeId, ckEntity);
+            await _mongoDbRepositoryDataSource.CkTypes.ReplaceByIdAsync(session, ckType.CkTypeId, ckType);
         }
         catch (Exception e)
         {
-            throw new OperationFailedException("An error occurred during import: " + e.Message, e);
+            throw OperationFailedException.UpdateAutoCompleteTextsFailed(ckTypeId, attributeName, e);
         }
     }
 

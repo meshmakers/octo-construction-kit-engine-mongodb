@@ -140,8 +140,7 @@ public abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, ne
         {
             if (!IsAttributeNameValid(item.AttributeName) && item.AttributeName != Constants.IdField)
             {
-                throw new OperationFailedException(
-                    $"Sort definition contains attribute '{item.AttributeName}', but attribute does not exist on type '{GetEntityName()}'");
+                throw InvalidAttributeException.SortDefinitionContainsInvalidAttribute(item.AttributeName, GetEntityName());
             }
 
             var resolvedAttributeName = ResolveAttributeName(item.AttributeName);

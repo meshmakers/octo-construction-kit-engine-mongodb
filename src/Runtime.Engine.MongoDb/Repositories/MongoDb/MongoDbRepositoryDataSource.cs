@@ -247,7 +247,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                         await collection.CreateTextIndexAsync(newName, index.Language ?? "en", index.Fields);
                         break;
                     default:
-                        throw new NotImplementedException($"Index type {index.IndexType} is not implemented.");
+                        throw OperationFailedException.IndexTypeNotImplemented(index.IndexType);
                 }
             }
         }

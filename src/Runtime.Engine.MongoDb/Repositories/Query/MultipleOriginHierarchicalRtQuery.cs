@@ -14,7 +14,6 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 using MongoDB.Bson;
 using MongoDB.Driver;
-using PersistenceException = Meshmakers.Octo.Runtime.Contracts.MongoDb.PersistenceException;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
@@ -65,7 +64,7 @@ internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetE
     {
         if (skip.HasValue && !take.HasValue)
         {
-            throw new PersistenceException("'skip' without 'take' is not possible.");
+            throw OperationFailedException.PagingNeeded();
         }
 
         var innerLocalField = (FieldDefinition<RtAssociation>)"targetRtId";
@@ -80,7 +79,7 @@ internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetE
             case GraphDirections.Outbound:
                 break;
             default:
-                throw new PersistenceException($"'{_graphDirection}' is not supported.");
+                throw OperationFailedException.GraphDirectionUnsupported(_graphDirection);
         }
 
         var connectFromField = (FieldDefinition<RtEntity, string[]>)"_id";

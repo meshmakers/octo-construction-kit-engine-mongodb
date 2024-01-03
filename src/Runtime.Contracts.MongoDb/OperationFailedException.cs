@@ -1,26 +1,23 @@
 ﻿using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository.Entities;
 
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 
+/// <summary>
+/// Used to indicate that an operation failed.
+/// </summary>
 [Serializable]
 public class OperationFailedException : PersistenceException
 {
-    //
-    // For guidelines regarding the creation of new exception types, see
-    //    http://msdn.microsoft.com/library/default.asp?url=/library/en-us/cpgenref/html/cpconerrorraisinghandlingguidelines.asp
-    // and
-    //    http://msdn.microsoft.com/library/default.asp?url=/library/en-us/dncscol/html/csharp07192001.asp
-    //
-
-    public OperationFailedException()
+    protected OperationFailedException()
     {
     }
 
-    public OperationFailedException(string message) : base(message)
+    protected OperationFailedException(string message) : base(message)
     {
     }
 
-    public OperationFailedException(string message, Exception inner) : base(message, inner)
+    protected OperationFailedException(string message, Exception inner) : base(message, inner)
     {
     }
 
@@ -64,9 +61,43 @@ public class OperationFailedException : PersistenceException
     {
         return new OperationFailedException("Bulk import error.");
     }
+    
+    public static Exception BulkImportError(Exception innerException)
+    {
+        return new OperationFailedException($"Bulk import failed: {innerException.Message}", innerException);
+    }
 
     public static Exception CkTypeHasNoDefiningCollectionRoot(CkId<CkTypeId> ckTypeId)
     {
         return new OperationFailedException($"CkType '{ckTypeId}' has no defining collection root.");
+    }
+
+    public static Exception IndexTypeNotImplemented(IndexTypes indexIndexType)
+    {
+        return new OperationFailedException($"Index type '{indexIndexType}' not implemented.");
+    }
+
+    public static Exception UpdateAutoCompleteTextsFailed(CkId<CkTypeId> ckTypeId, string attributeName, Exception exception)
+    {
+        return new OperationFailedException(
+            $"Update of autocomplete texts for attribute '{attributeName}' of CkType '{ckTypeId}' failed: {exception.Message}",
+            exception);
+    }
+
+    public static Exception DatabaseOperationFailed(string operationName, Exception exception)
+    {
+        return new OperationFailedException(
+            $"Database operation '{operationName}' failed: {exception.Message}",
+            exception);
+    }
+
+    public static Exception PagingNeeded()
+    {
+        return new OperationFailedException("'skip' without 'take' is not possible.");
+    }
+
+    public static Exception GraphDirectionUnsupported(GraphDirections graphDirection)
+    {
+        return new OperationFailedException($"Graph direction '{graphDirection}' is not supported.");
     }
 }

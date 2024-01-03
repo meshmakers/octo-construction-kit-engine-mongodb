@@ -146,8 +146,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoException e)
         {
-            Logger.Error(e);
-            throw new OperationFailedException(e.Message, e);
+            throw OperationFailedException.DatabaseOperationFailed(nameof(FindManyAsync), e);
         }
     }
 
@@ -189,8 +188,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoException e)
         {
-            Logger.Error(e);
-            throw new OperationFailedException(e.Message, e);
+            throw OperationFailedException.DatabaseOperationFailed(nameof(FindSingleOrDefaultAsync), e);
         }
     }
 
@@ -308,8 +306,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoException e)
         {
-            Logger.Error(e);
-            throw new OperationFailedException(e.Message, e);
+            throw OperationFailedException.DatabaseOperationFailed(nameof(DocumentAsync), e);
         }
     }
 
@@ -332,8 +329,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoException e)
         {
-            Logger.Error(e);
-            throw new OperationFailedException(e.Message, e);
+            throw OperationFailedException.DatabaseOperationFailed(nameof(DocumentAsync), e);
         }
     }
 
@@ -347,8 +343,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoException e)
         {
-            Logger.Error(e);
-            throw new OperationFailedException(e.Message, e);
+            throw OperationFailedException.DatabaseOperationFailed(nameof(GetAsync), e);
         }
     }
 
@@ -363,8 +358,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoException e)
         {
-            Logger.Error(e);
-            throw new OperationFailedException(e.Message, e);
+            throw OperationFailedException.DatabaseOperationFailed(nameof(TryDeleteOneAsync), e);
         }
     }
 
@@ -379,8 +373,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoException e)
         {
-            Logger.Error(e);
-            throw new OperationFailedException(e.Message, e);
+            throw OperationFailedException.DatabaseOperationFailed(nameof(DeleteOneAsync), e);
         }
     }
 
@@ -395,8 +388,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoException e)
         {
-            Logger.Error(e);
-            throw new OperationFailedException(e.Message, e);
+            throw OperationFailedException.DatabaseOperationFailed(nameof(DeleteOneAsync), e);
         }
     }
 
@@ -413,8 +405,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoException e)
         {
-            Logger.Error(e);
-            throw new OperationFailedException(e.Message, e);
+            throw OperationFailedException.DatabaseOperationFailed(nameof(DeleteManyAsync), e);
         }
     }
 
@@ -429,8 +420,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoException e)
         {
-            Logger.Error(e);
-            throw new OperationFailedException(e.Message, e);
+            throw OperationFailedException.DatabaseOperationFailed(nameof(DeleteManyAsync), e);
         }
     }
 
@@ -450,7 +440,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoBulkWriteException e)
         {
-            throw new OperationFailedException($"Bulk import failed: {e.Message}", e);
+            throw OperationFailedException.BulkImportError(e);
         }
     }
 
@@ -520,8 +510,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoException e)
         {
-            Logger.Error(e);
-            throw new OperationFailedException(e.Message, e);
+            throw OperationFailedException.DatabaseOperationFailed(nameof(DeleteOneAsync), e);
         }
     }
 
@@ -537,8 +526,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoException e)
         {
-            Logger.Error(e);
-            throw new OperationFailedException(e.Message, e);
+            throw OperationFailedException.DatabaseOperationFailed(nameof(DeleteManyAsync), e);
         }
     }
 
@@ -558,8 +546,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoException e)
         {
-            Logger.Error(e);
-            throw new OperationFailedException(e.Message, e);
+            throw OperationFailedException.DatabaseOperationFailed(nameof(InsertManyAsync), e);
         }
     }
 
@@ -576,8 +563,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoException e)
         {
-            Logger.Error(e);
-            throw new OperationFailedException(e.Message, e);
+            throw OperationFailedException.DatabaseOperationFailed(nameof(InsertOneAsync), e);
         }
     }
 
@@ -592,7 +578,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             throw new DuplicateKeyException($"Error adding item of type {nameof(T)}", typeof(T), ex);
         }
 
-        throw new OperationFailedException("Operation was not completed.", ex);
+        throw OperationFailedException.DatabaseOperationFailed(nameof(HandleWriteException), ex);
     }
 
     // ReSharper disable once ParameterOnlyUsedForPreconditionCheck.Local

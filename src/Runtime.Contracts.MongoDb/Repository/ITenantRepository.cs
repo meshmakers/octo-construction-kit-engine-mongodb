@@ -9,7 +9,7 @@ namespace Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
 
 public interface ITenantRepository : IRuntimeRepository
 {
-    Task<CkTypeGraph> GetEntityCacheItemAsync(CkId<CkTypeId> ckTypeId);
+    Task<CkTypeGraph> GetCkTypeGraphAsync(CkId<CkTypeId> ckTypeId);
 
     #region Data query
 

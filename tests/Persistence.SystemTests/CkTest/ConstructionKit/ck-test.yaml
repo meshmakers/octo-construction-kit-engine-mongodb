@@ -1,34 +1,34 @@
 $schema: https://schemas.meshmakers.cloud/construction-kit-compiled.schema.json
 types:
-  - isCollectionRoot: true
-    typeId: Location
-    derivedFromCkTypeId: System/Entity
-    isAbstract: true
-    attributes:
-      - id: Test/Designation
-        name: Designation
-  - typeId: Planet
-    derivedFromCkTypeId: Test/Location
-    isFinal: true
-  - typeId: City
-    derivedFromCkTypeId: Test/Location
-    isFinal: true
-  - isCollectionRoot: true
-    typeId: PoliticalOrganization
-    derivedFromCkTypeId: System/Entity
-    isFinal: true
-    attributes:
-      - id: Test/Designation
-        name: Designation
-    associations:
-      - id: System/Related
-        targetCkTypeId: Test/City
-associationRoles: [ ]
+- isCollectionRoot: true
+  typeId: Location
+  derivedFromCkTypeId: System/Entity
+  isAbstract: true
+  attributes:
+  - id: Test/Designation
+    name: Designation
+- typeId: Planet
+  derivedFromCkTypeId: Test/Location
+  isFinal: true
+- typeId: City
+  derivedFromCkTypeId: Test/Location
+  isFinal: true
+- isCollectionRoot: true
+  typeId: PoliticalOrganization
+  derivedFromCkTypeId: System/Entity
+  isFinal: true
+  attributes:
+  - id: Test/Designation
+    name: Designation
+  associations:
+  - id: System/Related
+    targetCkTypeId: Test/City
+associationRoles: []
 attributes:
-  - id: Designation
-    valueType: String
-records: [ ]
-enums: [ ]
+- id: Designation
+  valueType: String
+records: []
+enums: []
 modelId: Test
 dependencies:
-  - System
+- System

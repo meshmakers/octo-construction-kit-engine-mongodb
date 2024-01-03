@@ -58,8 +58,6 @@ public class MongoRepositoryClient : IRepositoryClient
         urlBuilder.ApplicationName = $"{_instanceId}-{urlBuilder.Username}";
         urlBuilder.UseTls = mongoConnectionOptions.UseTls;
         urlBuilder.AllowInsecureTls = mongoConnectionOptions.AllowInsecureTls;
-        // TODO: It seams that secondary servers do not have any work. This seems not be possibly. Other solution?
-        // urlBuilder.ReadPreference = ReadPreference.SecondaryPreferred; 
 
         var objectSerializer = new ObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
                                                             type.FullName?.StartsWith(typeof(RtEntity).Namespace!) == true);

@@ -122,7 +122,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                     }
                     else
                     {
-                        throw new OperationFailedException($"Term '{searchTerm}' cannot be evaluated by formula.");
+                        throw OperationFailedException.FormulaEvaluationFailed(searchTerm);
                     }
                 }
             }

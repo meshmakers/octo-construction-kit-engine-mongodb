@@ -51,16 +51,15 @@ public class AutoIncrementModifier : IAutoIncrementModifier
             var attributeCacheItem = entityCacheItem.AllAttributes[autoIncrementReference.AttributeName];
             if (attributeCacheItem == null)
             {
-                throw new InvalidAttributeException(
-                    $"Attribute with name '{autoIncrementReference.AttributeName}' does not exist at Ck-Id {ckTypeId}");
+                throw InvalidAttributeException.AttributeNotFound(ckTypeId, autoIncrementReference.AttributeName);
             }
 
             var autoIncrement = autoIncrementerSet.Items.FirstOrDefault(x =>
                 x.RtWellKnownName == autoIncrementReference.AutoIncrementReference);
             if (autoIncrement == null)
             {
-                throw new InvalidAttributeException(
-                    $"Autoincrement reference '{autoIncrementReference.AutoIncrementReference}' does not exist at Ck-Id {ckTypeId}");
+                throw InvalidAttributeException.AutoIncrementReferenceNotFound(ckTypeId,
+                    autoIncrementReference.AutoIncrementReference);
             }
 
             rtEntity.SetAttributeValue(autoIncrementReference.AttributeName,
