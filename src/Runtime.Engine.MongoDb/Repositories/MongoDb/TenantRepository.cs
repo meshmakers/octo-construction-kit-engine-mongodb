@@ -565,7 +565,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
             await _mongoDbRepositoryDataSource.CkTypes.FindSingleOrDefaultAsync(session, x => x.CkTypeId == ckTypeId);
         if (ckType == null)
         {
-            throw new EntityNotFoundException($"'{ckTypeId}' does not exist in database.");
+            throw InvalidCkTypeIdException.CkTypeIdNotFound(TenantId, ckTypeId);
         }
 
         var attribute = ckType.Attributes.FirstOrDefault(x => x.AttributeName == attributeName);

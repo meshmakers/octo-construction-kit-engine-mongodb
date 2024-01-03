@@ -283,7 +283,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var ckEntity = await CkTypes.DocumentAsync(session, ckTypeId);
         if (ckEntity == null)
         {
-            throw new EntityNotFoundException($"'{ckTypeId}' does not exist in database.");
+            throw InvalidCkTypeIdException.CkTypeIdNotFound(TenantId, ckTypeId);
         }
 
         return ckEntity;

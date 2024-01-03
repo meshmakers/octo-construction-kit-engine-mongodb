@@ -1,24 +1,31 @@
+using Meshmakers.Octo.ConstructionKit.Contracts;
+
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 
 [Serializable]
 public class AutoIncrementFailedException : OperationFailedException
 {
-    //
-    // For guidelines regarding the creation of new exception types, see
-    //    http://msdn.microsoft.com/library/default.asp?url=/library/en-us/cpgenref/html/cpconerrorraisinghandlingguidelines.asp
-    // and
-    //    http://msdn.microsoft.com/library/default.asp?url=/library/en-us/dncscol/html/csharp07192001.asp
-    //
-
-    public AutoIncrementFailedException()
+    private AutoIncrementFailedException()
     {
     }
 
-    public AutoIncrementFailedException(string message) : base(message)
+    private AutoIncrementFailedException(string message) : base(message)
     {
     }
 
-    public AutoIncrementFailedException(string message, Exception inner) : base(message, inner)
+    private AutoIncrementFailedException(string message, Exception inner) : base(message, inner)
     {
+    }
+
+    public static Exception InvalidNullCurrentValue(OctoObjectId autoIncrementRtId)
+    {
+        return new AutoIncrementFailedException(
+            $"Invalid null current value for autoincrement attribute '{autoIncrementRtId}'");
+    }
+
+    public static Exception AutoIncrementEndReached(OctoObjectId autoIncrementRtId)
+    {
+        return new AutoIncrementFailedException(
+            $"Autoincrement end reached for attribute '{autoIncrementRtId}'");
     }
 }

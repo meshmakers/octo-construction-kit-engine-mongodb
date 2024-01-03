@@ -34,4 +34,9 @@ public class DuplicateKeyException : Exception
     ///     The properties involved in the unique constraint violation
     /// </summary>
     public IEnumerable<string> Properties { get; }
+
+    public static Exception DuplicateKeyError(Type type, Exception exception)
+    {
+        throw new DuplicateKeyException($"Error adding item of type {type.FullName}", type, exception);
+    }
 }

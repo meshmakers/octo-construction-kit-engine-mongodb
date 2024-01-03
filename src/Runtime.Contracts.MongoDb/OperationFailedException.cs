@@ -77,13 +77,6 @@ public class OperationFailedException : PersistenceException
         return new OperationFailedException($"Index type '{indexIndexType}' not implemented.");
     }
 
-    public static Exception UpdateAutoCompleteTextsFailed(CkId<CkTypeId> ckTypeId, string attributeName, Exception exception)
-    {
-        return new OperationFailedException(
-            $"Update of autocomplete texts for attribute '{attributeName}' of CkType '{ckTypeId}' failed: {exception.Message}",
-            exception);
-    }
-
     public static Exception DatabaseOperationFailed(string operationName, Exception exception)
     {
         return new OperationFailedException(
@@ -99,5 +92,12 @@ public class OperationFailedException : PersistenceException
     public static Exception GraphDirectionUnsupported(GraphDirections graphDirection)
     {
         return new OperationFailedException($"Graph direction '{graphDirection}' is not supported.");
+    }
+    
+    public static Exception UpdateAutoCompleteTextsFailed(CkId<CkTypeId> ckTypeId, string attributeName, Exception exception)
+    {
+        return new OperationFailedException(
+            $"Update of autocomplete texts for attribute '{attributeName}' of CkType '{ckTypeId}' failed: {exception.Message}",
+            exception);
     }
 }

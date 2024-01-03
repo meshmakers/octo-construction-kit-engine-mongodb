@@ -1,24 +1,34 @@
-﻿namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
+﻿using System.Linq.Expressions;
+
+namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 
 [Serializable]
 public class EntityNotFoundException : OperationFailedException
 {
-    //
-    // For guidelines regarding the creation of new exception types, see
-    //    http://msdn.microsoft.com/library/default.asp?url=/library/en-us/cpgenref/html/cpconerrorraisinghandlingguidelines.asp
-    // and
-    //    http://msdn.microsoft.com/library/default.asp?url=/library/en-us/dncscol/html/csharp07192001.asp
-    //
-
-    public EntityNotFoundException()
+    private EntityNotFoundException()
     {
     }
 
-    public EntityNotFoundException(string message) : base(message)
+    private EntityNotFoundException(string message) : base(message)
     {
     }
 
-    public EntityNotFoundException(string message, Exception inner) : base(message, inner)
+    private EntityNotFoundException(string message, Exception inner) : base(message, inner)
     {
+    }
+
+    public static Exception FilterNotMatching<TDocument>(string filter) where TDocument : class, new()
+    {
+        return new EntityNotFoundException( $"Operation failed because filter '{filter}' did not match any documents for type {nameof(TDocument)}.");
+    }
+
+    public static Exception NoDataMatched()
+    {
+        return new EntityNotFoundException("Operation failed because no data matched.");
+    }
+
+    public static Exception IdNotFound(string typeName, string id)
+    {
+        return new EntityNotFoundException($"Operation failed because ID '{id}' is not existing for document type {typeName}.");
     }
 }

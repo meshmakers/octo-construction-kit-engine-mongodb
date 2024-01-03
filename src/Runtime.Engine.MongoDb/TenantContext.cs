@@ -234,7 +234,7 @@ public class TenantContext : ITenantContext
         var octoTenant = await GetRtTenantAsync(systemSession, tenantId);
         if (octoTenant == null)
         {
-            throw new TenantException($"Tenant '{tenantId}' does not exists.");
+            throw TenantException.TenantDoesNotExist(tenantId);
         }
 
         try
@@ -291,7 +291,7 @@ public class TenantContext : ITenantContext
         var octoTenant = await GetRtTenantAsync(systemSession, tenantId);
         if (octoTenant == null)
         {
-            throw new TenantException($"Tenant '{tenantId}' does not exist.");
+            throw TenantException.TenantDoesNotExist(tenantId);
         }
 
         try
@@ -363,7 +363,7 @@ public class TenantContext : ITenantContext
         var rtSystemTenant = await GetRtTenantAsync(systemSession, normalizedTenantId);
         if (rtSystemTenant == null)
         {
-            throw new TenantException($"Tenant '{tenantId}' not found.");
+            throw TenantException.TenantDoesNotExist(tenantId);
         }
 
         return new OctoTenant(rtSystemTenant.TenantId, rtSystemTenant.DatabaseName);

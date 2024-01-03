@@ -261,7 +261,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             var result = await _documentCollection.ReplaceOneAsync(((IOctoSessionInternal)session).SessionHandle,
                 filterDefinition, entity);
             ThrowIfNotAcknowledged(result.IsAcknowledged);
-            ThrowIfMatchedCountZero<TDocument>(result.MatchedCount, filterDefinition);
+            ThrowIfMatchedCountZero(result.MatchedCount, filterDefinition);
         }
         catch (MongoWriteException ex)
         {
@@ -384,7 +384,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             var deleteResult =
                 await _documentCollection.DeleteOneAsync(((IOctoSessionInternal)session).SessionHandle, filter);
             ThrowIfNotAcknowledged(deleteResult.IsAcknowledged);
-            ThrowIfMatchedCountZero<TDocument>(deleteResult.DeletedCount, filter);
+            ThrowIfMatchedCountZero(deleteResult.DeletedCount, filter);
         }
         catch (MongoException e)
         {
@@ -506,7 +506,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             var deleteResult =
                 await _documentCollection.DeleteOneAsync(((IOctoSessionInternal)session).SessionHandle, expression);
             ThrowIfNotAcknowledged(deleteResult.IsAcknowledged);
-            ThrowIfMatchedCountZero<TDocument>(deleteResult.DeletedCount, expression);
+            ThrowIfMatchedCountZero(deleteResult.DeletedCount, expression);
         }
         catch (MongoException e)
         {
@@ -522,7 +522,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 await _documentCollection.DeleteManyAsync(((IOctoSessionInternal)session).SessionHandle,
                     expression);
             ThrowIfNotAcknowledged(deleteResult.IsAcknowledged);
-            ThrowIfMatchedCountZero<TDocument>(deleteResult.DeletedCount, expression);
+            ThrowIfMatchedCountZero(deleteResult.DeletedCount, expression);
         }
         catch (MongoException e)
         {
@@ -575,7 +575,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     {
         if (ex.WriteError.Category == ServerErrorCategory.DuplicateKey)
         {
-            throw new DuplicateKeyException($"Error adding item of type {nameof(T)}", typeof(T), ex);
+            throw DuplicateKeyException.DuplicateKeyError(typeof(T), ex);
         }
 
         throw OperationFailedException.DatabaseOperationFailed(nameof(HandleWriteException), ex);
@@ -596,28 +596,24 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         if (matchedCount == 0)
         {
             var message = $"Operation failed because ID '{id}' is not existing for document type {nameof(T)}.";
-            throw new EntityNotFoundException(message);
+            throw EntityNotFoundException.IdNotFound(nameof(T), message);
         }
     }
 
     // ReSharper disable once ParameterOnlyUsedForPreconditionCheck.Local
-    private void ThrowIfMatchedCountZero<T>(long matchedCount, Expression<Func<TDocument, bool>> expression)
+    private void ThrowIfMatchedCountZero(long matchedCount, Expression<Func<TDocument, bool>> expression)
     {
         if (matchedCount == 0)
         {
-            var message =
-                $"Operation failed because filter '{expression}' did not match any documents for type {nameof(T)}.";
-            throw new EntityNotFoundException(message);
+            throw EntityNotFoundException.FilterNotMatching<TDocument>(expression.ToString());
         }
     }
 
-    private void ThrowIfMatchedCountZero<T>(long matchedCount, FilterDefinition<TDocument> filter)
+    private void ThrowIfMatchedCountZero(long matchedCount, FilterDefinition<TDocument> filter)
     {
         if (matchedCount == 0)
         {
-            var message =
-                $"Operation failed because filter '{filter}' did not match any documents for type {nameof(T)}.";
-            throw new EntityNotFoundException(message);
+            throw EntityNotFoundException.FilterNotMatching<TDocument>(filter.ToString() ?? "");
         }
     }
 
@@ -625,9 +621,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     {
         if (matchedCount == 0)
         {
-            var message =
-                $"Operation failed because filter '{idField}' did not match any documents for type {nameof(TDocument)}.";
-            throw new EntityNotFoundException(message);
+            throw EntityNotFoundException.FilterNotMatching<TDocument>(idField?.ToString() ?? "");
         }
     }
 
@@ -636,8 +630,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     {
         if (matchedCount == 0)
         {
-            var message = "Operation may failed because no data matched.";
-            throw new EntityNotFoundException(message);
+            throw EntityNotFoundException.NoDataMatched();
         }
     }
 

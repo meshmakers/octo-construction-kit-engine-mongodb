@@ -73,8 +73,7 @@ public class AutoIncrementModifier : IAutoIncrementModifier
         var end = autoIncrement.End;
         if (!autoIncrement.CurrentValue.HasValue)
         {
-            throw new AutoIncrementFailedException(
-                $"'{autoIncrement.RtId}' cannot be incremented because current value was null.");
+            throw AutoIncrementFailedException.InvalidNullCurrentValue(autoIncrement.RtId);
         }
 
         var currentValue = autoIncrement.CurrentValue.Value;
@@ -83,8 +82,7 @@ public class AutoIncrementModifier : IAutoIncrementModifier
 
         if (currentValue > end)
         {
-            throw new AutoIncrementFailedException(
-                $"'{autoIncrement.RtId}' cannot be incremented because end value is reached.");
+            throw AutoIncrementFailedException.AutoIncrementEndReached(autoIncrement.RtId);
         }
 
         autoIncrement.CurrentValue = currentValue;
