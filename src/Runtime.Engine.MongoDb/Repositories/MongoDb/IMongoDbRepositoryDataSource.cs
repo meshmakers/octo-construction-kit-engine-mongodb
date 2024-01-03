@@ -33,7 +33,7 @@ public interface IMongoDbRepositoryDataSource : ICkMongoDbRepositoryDataSource, 
 
 
     Task<ICollection<CkTypeInfo>> GetCkTypeInfoAsync(IOctoSession session);
-    Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, string ckTypeId);
+    Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, CkId<CkTypeId> ckTypeId);
     Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, CkType ckType);
 
 

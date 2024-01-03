@@ -1,26 +1,24 @@
-using System.Runtime.Serialization;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 
 [Serializable]
 public class InvalidCkTypeIdException : OperationFailedException
 {
-    //
-    // For guidelines regarding the creation of new exception types, see
-    //    http://msdn.microsoft.com/library/default.asp?url=/library/en-us/cpgenref/html/cpconerrorraisinghandlingguidelines.asp
-    // and
-    //    http://msdn.microsoft.com/library/default.asp?url=/library/en-us/dncscol/html/csharp07192001.asp
-    //
-
-    public InvalidCkTypeIdException()
+    private InvalidCkTypeIdException()
     {
     }
 
-    public InvalidCkTypeIdException(string message) : base(message)
+    private InvalidCkTypeIdException(string message) : base(message)
     {
     }
 
-    public InvalidCkTypeIdException(string message, Exception inner) : base(message, inner)
+    private InvalidCkTypeIdException(string message, Exception inner) : base(message, inner)
     {
+    }
+
+    public static Exception CkTypeIdNotFound(string tenantId, CkId<CkTypeId> ckTypeId)
+    {
+        return new InvalidCkTypeIdException($"Construction Kit Type Id '{ckTypeId}' is invalid for tenant '{tenantId}'.");
     }
 }

@@ -1,5 +1,6 @@
 ﻿using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
@@ -16,6 +17,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongoDbRepositoryDataSource
 {
+    private readonly ICkCacheService _ckCacheService;
     private readonly IMongoDbDataSourceCollection<OctoObjectId, CkTypeInheritance> _ckTypeInheritances;
     private readonly IMongoDbDataSourceCollection<CkId<CkTypeId>, CkType> _ckTypes;
     private readonly IRepositoryInternal _repository;
@@ -23,7 +25,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     // ReSharper disable once PrivateFieldCanBeConvertedToLocalVariable
     private readonly IRepositoryClient _repositoryClient;
 
-    public MongoDbRepositoryDataSource(ILoggerFactory loggerFactory, string tenantId, string dataSourceHost, string databaseName,
+    public MongoDbRepositoryDataSource(ILoggerFactory loggerFactory, ICkCacheService ckCacheService, string tenantId, string dataSourceHost, string databaseName,
         string databaseUser, string? databasePassword,
         string authenticationDatabaseName, bool useTls, bool allowInsecureTls)
         : this(new MongoRepositoryClient(loggerFactory.CreateLogger<MongoRepositoryClient>(), new MongoConnectionOptions
@@ -35,17 +37,18 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             AuthenticationSource = authenticationDatabaseName,
             UseTls = useTls,
             AllowInsecureTls = allowInsecureTls
-        }), databaseName, tenantId)
+        }), ckCacheService, databaseName, tenantId)
     {
     }
 
-    public MongoDbRepositoryDataSource(IRepositoryClient repositoryClient, string databaseName, string tenantId)
+    public MongoDbRepositoryDataSource(IRepositoryClient repositoryClient, ICkCacheService ckCacheService, string databaseName, string tenantId)
         : base(tenantId)
     {
         ArgumentValidation.ValidateString(databaseName, nameof(databaseName));
 
         _repositoryClient = repositoryClient;
         _repository = (IRepositoryInternal)_repositoryClient.GetRepository(databaseName);
+        _ckCacheService = ckCacheService;
 
         CkModels = _repository.GetCollection(new CkModelMongoDataSourceMapper());
 
@@ -89,7 +92,17 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     public IMongoDbDataSourceCollection<OctoObjectId, TEntity> GetRtDatabaseCollection<TEntity>(CkId<CkTypeId> ckTypeId)
         where TEntity : RtEntity, new()
     {
-        var suffix = ckTypeId.SemanticVersionedFullName.Replace("/", "_");
+        if (!_ckCacheService.TryGetCkType(TenantId, ckTypeId, out var ckTypeGraph))
+        {
+            throw InvalidCkTypeIdException.CkTypeIdNotFound(TenantId, ckTypeId);
+        }
+
+        if (ckTypeGraph.DefiningCollectionRootCkTypeId == null)
+        {
+            throw OperationFailedException.CkTypeHasNoDefiningCollectionRoot(ckTypeId);
+        }
+
+        var suffix = ckTypeGraph.DefiningCollectionRootCkTypeId.Value.GetCkTypeCollectionName();
         var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
         return _repository.GetCollection(mapper, suffix);
     }
@@ -144,9 +157,9 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return await AggregateCkTypeInfo(aggregate).ToListAsync();
     }
 
-    public async Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, string ckTypeId)
+    public async Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, CkId<CkTypeId> ckTypeId)
     {
-        var ckEntity = await GetCkEntityAsync(session, ckTypeId);
+        var ckEntity = await GetCkTypeAsync(session, ckTypeId);
         return await GetCkTypeInfoAsync(session, ckEntity);
     }
 
@@ -178,7 +191,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var ckTypes = (await CkTypes.FindManyAsync(session, t => t.IsCollectionRoot)).ToList();
         foreach (var ckType in ckTypes)
         {
-            var suffix = ckType.CkTypeId.SemanticVersionedFullName.Replace("/", "_");
+            var suffix = ckType.CkTypeId.GetCkTypeCollectionName();
             await _repository.CreateCollectionIfNotExistsAsync(new RtEntityMongoDataSourceMapper<RtEntity>(),
                 ckType.EnableChangeStreamPreAndPostImages, suffix);
         }
@@ -186,41 +199,50 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
     public async Task UpdateIndexAsync(IOctoSession session)
     {
-        var ckEntities = (await CkTypes.GetAsync(session)).ToList();
+        var ckTypes = (await CkTypes.FindManyAsync(session, t => t.IsCollectionRoot)).ToList();
 
-        foreach (var ckEntity in ckEntities)
+        foreach (var ckType in ckTypes)
         {
-            var name = ckEntity.CkTypeId.SemanticVersionedFullName.Replace(".", "_");
+            var name = ckType.CkTypeId.GetCkTypeCollectionName();
 
-            var collection = GetRtDatabaseCollection<RtEntity>(ckEntity.CkTypeId);
+            var mapper = new RtEntityMongoDataSourceMapper<RtEntity>();
+            var collection = _repository.GetCollection(mapper, name);
             await collection.DropIndexAsync(name);
-            // TODO: Hard coded database name not possible. Use from configuration
-            await collection.DropIndexAsync("OctoSystem");
         }
 
-        foreach (var ckEntity in ckEntities)
-            if (ckEntity.Indexes != null)
-                foreach (var index in ckEntity.Indexes)
+        foreach (var ckType in ckTypes)
+        {
+            if (ckType.Indexes == null)
+            {
+                continue;
+            }
+
+            foreach (var index in ckType.Indexes)
+            {
+                if (index.IndexType == IndexTypes.None)
                 {
-                    if (index.IndexType == IndexTypes.None) continue;
-
-                    var collection = GetRtDatabaseCollection<RtEntity>(ckEntity.CkTypeId);
-
-                    var newName = ckEntity.CkTypeId.SemanticVersionedFullName.Replace(".", "_") + "_" + ObjectId.GenerateNewId();
-
-                    switch (index.IndexType)
-                    {
-                        case IndexTypes.Ascending:
-                            await collection.CreateAscendingIndexAsync(newName,
-                                index.Fields.SelectMany(x => x.AttributeNames));
-                            break;
-                        case IndexTypes.Text:
-                            await collection.CreateTextIndexAsync(newName, index.Language ?? "en", index.Fields);
-                            break;
-                        default:
-                            throw new NotImplementedException($"Index type {index.IndexType} is not implemented.");
-                    }
+                    continue;
                 }
+
+                var mapper = new RtEntityMongoDataSourceMapper<RtEntity>();
+                var collection = _repository.GetCollection(mapper, ckType.CkTypeId.GetCkTypeCollectionName());
+
+                var newName = ckType.CkTypeId.GetCkTypeCollectionName();
+
+                switch (index.IndexType)
+                {
+                    case IndexTypes.Ascending:
+                        await collection.CreateAscendingIndexAsync(newName,
+                            index.Fields.SelectMany(x => x.AttributeNames));
+                        break;
+                    case IndexTypes.Text:
+                        await collection.CreateTextIndexAsync(newName, index.Language ?? "en", index.Fields);
+                        break;
+                    default:
+                        throw new NotImplementedException($"Index type {index.IndexType} is not implemented.");
+                }
+            }
+        }
     }
 
     private IAggregateFluent<CkTypeInfo> AggregateCkTypeInfo(IAggregateFluent<CkType> aggregate)
@@ -248,10 +270,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 "associations.in.owned");
     }
 
-    private async Task<CkType> GetCkEntityAsync(IOctoSession session, string ckTypeId)
+    private async Task<CkType> GetCkTypeAsync(IOctoSession session, CkId<CkTypeId> ckTypeId)
     {
         var ckEntity = await CkTypes.DocumentAsync(session, ckTypeId);
-        if (ckEntity == null) throw new EntityNotFoundException($"'{ckTypeId}' does not exist in database.");
+        if (ckEntity == null)
+        {
+            throw new EntityNotFoundException($"'{ckTypeId}' does not exist in database.");
+        }
 
         return ckEntity;
     }

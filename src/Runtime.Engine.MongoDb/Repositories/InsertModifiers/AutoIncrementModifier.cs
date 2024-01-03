@@ -27,7 +27,10 @@ public class AutoIncrementModifier : IAutoIncrementModifier
     public async Task RunAutoIncrementAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, IEnumerable<RtEntity> rtEntities)
     {
         var entityCacheItem = _ckCache.GetCkType(_tenantRepository.TenantId, ckTypeId);
-        if (entityCacheItem == null) throw new InvalidCkTypeIdException($"Construction Kit Type Id '{ckTypeId}' is invalid.");
+        if (entityCacheItem == null)
+        {
+            throw InvalidCkTypeIdException.CkTypeIdNotFound(_tenantRepository.TenantId, ckTypeId);
+        }
 
         var autoIncrementReferences = entityCacheItem.AllAttributes.Values
             .Where(a => !string.IsNullOrEmpty(a.AutoIncrementReference)).ToList();

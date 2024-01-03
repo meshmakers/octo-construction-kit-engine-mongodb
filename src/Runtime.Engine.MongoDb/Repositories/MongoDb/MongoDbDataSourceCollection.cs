@@ -100,7 +100,10 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         foreach (var i in await r.ToListAsync())
         {
             var indexName = i["name"].ToString();
-            if (!string.IsNullOrEmpty(indexName) && indexName.StartsWith(name)) await _documentCollection.Indexes.DropOneAsync(indexName);
+            if (!string.IsNullOrEmpty(indexName) && indexName.StartsWith(name))
+            {
+                await _documentCollection.Indexes.DropOneAsync(indexName);
+            }
         }
     }
 

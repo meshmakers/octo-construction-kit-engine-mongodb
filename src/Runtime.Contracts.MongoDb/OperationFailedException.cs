@@ -1,4 +1,5 @@
 ﻿using System.Runtime.Serialization;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 
@@ -63,5 +64,10 @@ public class OperationFailedException : PersistenceException
     public static Exception BulkImportError()
     {
         return new OperationFailedException("Bulk import error.");
+    }
+
+    public static Exception CkTypeHasNoDefiningCollectionRoot(CkId<CkTypeId> ckTypeId)
+    {
+        return new OperationFailedException($"CkType '{ckTypeId}' has no defining collection root.");
     }
 }

@@ -25,7 +25,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     private readonly IModelLoaderService _modelLoaderService;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
 
-    public TenantRepository(string tenantId, IMetricsContext metricsContext,  ICkCacheService ckCache, IModelLoaderService modelLoaderService,
+    public TenantRepository(string tenantId, IMetricsContext metricsContext, ICkCacheService ckCache, IModelLoaderService modelLoaderService,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource, IBulkRtMutation bulkRtMutation)
         : base(tenantId, ckCache, mongoDbRepositoryDataSource, bulkRtMutation)
     {
@@ -485,7 +485,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var entityCacheItem = await GetEntityCacheItemAsync(ckTypeId);
         if (entityCacheItem == null)
         {
-            throw new InvalidCkTypeIdException($"Construction Kit Id '{ckTypeId}' is invalid.");
+            throw InvalidCkTypeIdException.CkTypeIdNotFound(TenantId, ckTypeId);
         }
 
         if (entityCacheItem.AllAttributes.All(x => x.Value.AttributeName != attributeName))

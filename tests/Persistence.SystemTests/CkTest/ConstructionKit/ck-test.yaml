@@ -1,6 +1,7 @@
 $schema: https://schemas.meshmakers.cloud/construction-kit-compiled.schema.json
 types:
-- typeId: Location
+- isCollectionRoot: true
+  typeId: Location
   derivedFromCkTypeId: System/Entity
   isAbstract: true
   attributes:
@@ -12,7 +13,8 @@ types:
 - typeId: City
   derivedFromCkTypeId: Test/Location
   isFinal: true
-- typeId: PoliticalOrganization
+- isCollectionRoot: true
+  typeId: PoliticalOrganization
   derivedFromCkTypeId: System/Entity
   isFinal: true
   attributes:
