@@ -31,9 +31,13 @@ public abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, ne
         if (_attributeSearchFilter.Any())
         {
             if (_attributeSearchFilter.Count > 1)
+            {
                 filters.Add(Builders<TEntity>.Filter.Or(_attributeSearchFilter));
+            }
             else
+            {
                 filters.Add(_attributeSearchFilter.First());
+            }
         }
     }
 
@@ -55,7 +59,7 @@ public abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, ne
             pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Sort(sortDefinition));
         }
     }
-    
+
     protected virtual IEnumerable<GroupingResult>? CalculateGrouping(IEnumerable<TEntity> resultList)
     {
         return null;
@@ -64,7 +68,10 @@ public abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, ne
 
     internal void AddTextSearchFilter(TextSearchFilter? textSearchFilter)
     {
-        if (textSearchFilter?.SearchTerm == null) return;
+        if (textSearchFilter?.SearchTerm == null)
+        {
+            return;
+        }
 
         _textFilter = Builders<TEntity>.Filter.Text(textSearchFilter.SearchTerm.ToString(), new TextSearchOptions
         {
@@ -78,13 +85,16 @@ public abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, ne
     {
         if (attributeSearchFilter?.SearchTerm == null ||
             !attributeSearchFilter.AttributeNames.Any())
+        {
             return;
+        }
 
 
         // ReSharper disable once PossibleMultipleEnumeration
         var attributeNameList = attributeSearchFilter.AttributeNames.ToList();
 
         foreach (var attributeName in attributeNameList)
+        {
             if (IsAttributeNameValid(attributeName))
             {
                 var resolvedAttributeName = ResolveAttributeName(attributeName);
@@ -92,32 +102,47 @@ public abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, ne
                     attributeSearchFilter.SearchTerm, out var isEnum);
 
                 if (isEnum)
+                {
                     _attributeSearchFilter.Add(Builders<TEntity>.Filter.AnyIn(resolvedAttributeName,
                         resolvedValue != null ? (IEnumerable<object>)resolvedValue : Array.Empty<object>()));
+                }
                 else if (!string.IsNullOrWhiteSpace(resolvedAttributeName))
+                {
                     _attributeSearchFilter.Add(CreateFilter(resolvedAttributeName, FieldFilterOperator.Like,
                         resolvedValue));
+                }
                 else
+                {
                     throw OperationFailedException.AttributeNameResolutionFailed(attributeName);
+                }
             }
             else
             {
                 throw OperationFailedException.AttributeDoesNotExist(attributeName, GetEntityName());
             }
+        }
     }
 
     internal void AddSortConstraintsToPipeline(IEnumerable<SortOrderItem>? sortOrders)
     {
-        if (sortOrders == null) return;
+        if (sortOrders == null)
+        {
+            return;
+        }
 
         var sortOrderList = sortOrders.ToList();
-        if (!sortOrderList.Any()) return;
+        if (!sortOrderList.Any())
+        {
+            return;
+        }
 
         foreach (var item in sortOrderList)
         {
             if (!IsAttributeNameValid(item.AttributeName) && item.AttributeName != Constants.IdField)
+            {
                 throw new OperationFailedException(
                     $"Sort definition contains attribute '{item.AttributeName}', but attribute does not exist on type '{GetEntityName()}'");
+            }
 
             var resolvedAttributeName = ResolveAttributeName(item.AttributeName);
 
@@ -134,7 +159,7 @@ public abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, ne
             }
         }
     }
-    
+
     internal void AddGrouping(FieldGroupBy? groupByDto)
     {
         if (groupByDto == null)
@@ -144,6 +169,4 @@ public abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, ne
 
         GroupBy = groupByDto;
     }
-    
-    
 }

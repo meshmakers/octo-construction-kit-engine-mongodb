@@ -23,12 +23,18 @@ public class NowFunction : FunctionExtension
 
     public void setParameterValue(int parameterIndex, double parameterValue)
     {
-        if (parameterIndex == 0) _minutesCount = parameterValue;
+        if (parameterIndex == 0)
+        {
+            _minutesCount = parameterValue;
+        }
     }
 
     public string getParameterName(int parameterIndex)
     {
-        if (parameterIndex == 0) return "addMinutes";
+        if (parameterIndex == 0)
+        {
+            return "addMinutes";
+        }
 
         return "";
     }

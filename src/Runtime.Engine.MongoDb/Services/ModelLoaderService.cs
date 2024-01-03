@@ -24,6 +24,7 @@ internal class ModelLoaderService : IModelLoaderService
         {
             return;
         }
+
         OperationResult operationResult = new();
         var ckModels = await mongoDbRepositoryDataSource.CkModels.GetAsync(session);
         var modelGraph = await _modelResolver.ResolveAsync(ckModels.Select(x => x.Id).ToList(), operationResult);

@@ -37,10 +37,14 @@ public class MongoRepositoryClient : IRepositoryClient
         var urlBuilder = new MongoUrlBuilder();
 
         if (mongoConnectionOptions.MongoDbHost.Contains(","))
+        {
             urlBuilder.Servers =
                 mongoConnectionOptions.MongoDbHost.Split(",").Select(x => new MongoServerAddress(x));
+        }
         else
+        {
             urlBuilder.Server = new MongoServerAddress(mongoConnectionOptions.MongoDbHost);
+        }
 
         if (!string.IsNullOrWhiteSpace(mongoConnectionOptions.MongoDbUsername)
             && !string.IsNullOrWhiteSpace(mongoConnectionOptions.MongoDbPassword))
@@ -135,7 +139,10 @@ public class MongoRepositoryClient : IRepositoryClient
         var database = _client.GetDatabase(authenticationDatabaseName);
 
         var result = await database.RunCommandAsync<BsonDocument>("{usersInfo: '" + user + "'}");
-        if (result.GetValue("ok").AsDouble > 0 && result.GetValue("users").AsBsonArray.Count > 0) return;
+        if (result.GetValue("ok").AsDouble > 0 && result.GetValue("users").AsBsonArray.Count > 0)
+        {
+            return;
+        }
 
         var createUserCommand = new BsonDocument
         {
@@ -160,7 +167,7 @@ public class MongoRepositoryClient : IRepositoryClient
         }
 
         _isRegistered = true;
-        
+
         BsonClassMap.TryRegisterClassMap<CkModel>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
@@ -344,7 +351,7 @@ public class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.TargetCkTypeId).SetIsRequired(true);
             cm.GetMemberMap(c => c.TargetRtId).SetIsRequired(true);
         });
-        
+
         BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
         BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>());
         BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());

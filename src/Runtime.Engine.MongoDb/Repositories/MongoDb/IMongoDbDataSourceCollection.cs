@@ -11,7 +11,7 @@ public interface IMongoDbDataSourceCollection<in TKey, TDocument> : IDataSourceC
     where TKey : notnull
 {
     string CollectionName { get; }
-    
+
     Task CreateAscendingIndexAsync(string name, IEnumerable<string> fields);
     Task CreateTextIndexAsync(string name, string language, IEnumerable<CkIndexFields> fields);
     Task DropIndexAsync(string name);

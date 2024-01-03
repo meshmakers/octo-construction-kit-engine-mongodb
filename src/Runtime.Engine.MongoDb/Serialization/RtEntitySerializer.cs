@@ -9,7 +9,7 @@ internal class RtEntitySerializer : BsonClassMapSerializer<RtEntity>
         : base(BsonClassMap.LookupClassMap(typeof(RtEntity)))
     {
     }
-    
+
     public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args, RtEntity value)
     {
         var tmpEntity = new RtEntity(value.CkTypeId, value.RtId, value.Attributes);

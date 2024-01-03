@@ -34,7 +34,10 @@ public class AutoIncrementModifier : IAutoIncrementModifier
 
         var autoIncrementReferences = entityCacheItem.AllAttributes.Values
             .Where(a => !string.IsNullOrEmpty(a.AutoIncrementReference)).ToList();
-        if (!autoIncrementReferences.Any()) return;
+        if (!autoIncrementReferences.Any())
+        {
+            return;
+        }
 
         var dataQueryOperation = DataQueryOperation.Create()
             .FieldFilter(nameof(RtEntity.RtWellKnownName), FieldFilterOperator.In,
@@ -47,14 +50,19 @@ public class AutoIncrementModifier : IAutoIncrementModifier
         {
             var attributeCacheItem = entityCacheItem.AllAttributes[autoIncrementReference.AttributeName];
             if (attributeCacheItem == null)
+            {
                 throw new InvalidAttributeException(
                     $"Attribute with name '{autoIncrementReference.AttributeName}' does not exist at Ck-Id {ckTypeId}");
+            }
 
             var autoIncrement = autoIncrementerSet.Items.FirstOrDefault(x =>
                 x.RtWellKnownName == autoIncrementReference.AutoIncrementReference);
             if (autoIncrement == null)
+            {
                 throw new InvalidAttributeException(
                     $"Autoincrement reference '{autoIncrementReference.AutoIncrementReference}' does not exist at Ck-Id {ckTypeId}");
+            }
+
             rtEntity.SetAttributeValue(autoIncrementReference.AttributeName,
                 attributeCacheItem.ValueType,
                 await ExecuteAutoIncrementAsync(session, autoIncrement));
@@ -65,16 +73,20 @@ public class AutoIncrementModifier : IAutoIncrementModifier
     {
         var end = autoIncrement.End;
         if (!autoIncrement.CurrentValue.HasValue)
+        {
             throw new AutoIncrementFailedException(
                 $"'{autoIncrement.RtId}' cannot be incremented because current value was null.");
+        }
 
         var currentValue = autoIncrement.CurrentValue.Value;
 
         currentValue++;
 
         if (currentValue > end)
+        {
             throw new AutoIncrementFailedException(
                 $"'{autoIncrement.RtId}' cannot be incremented because end value is reached.");
+        }
 
         autoIncrement.CurrentValue = currentValue;
         await _mongoDbRepositoryDataSource.GetRtCollection<RtEntity>(autoIncrement.CkTypeId)

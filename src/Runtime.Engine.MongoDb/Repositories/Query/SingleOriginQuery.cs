@@ -14,7 +14,8 @@ public abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
     private readonly IMetricsContext _metricsContext;
     private readonly IMongoDbDataSourceCollection<TKey, TEntity> _mongoDbDataSourceCollection;
 
-    protected internal SingleOriginQuery(IMetricsContext metricsContext, IMongoDbDataSourceCollection<TKey, TEntity> mongoDbDataSourceCollection,
+    protected internal SingleOriginQuery(IMetricsContext metricsContext,
+        IMongoDbDataSourceCollection<TKey, TEntity> mongoDbDataSourceCollection,
         string language = "en")
         : base(language)
     {
@@ -31,7 +32,10 @@ public abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
         AddTextFilterConstraintsToPipeline(pipelineStageDefinitions);
         // Filter for fields
         var filterDefinitions = CreateFilterDefinitions();
-        if (filterDefinitions != null) pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(filterDefinitions));
+        if (filterDefinitions != null)
+        {
+            pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(filterDefinitions));
+        }
 
         AddSortConstraintsToPipeline(pipelineStageDefinitions);
 
@@ -42,9 +46,15 @@ public abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
             var pagingPipelineStageDefinitions = new List<IPipelineStageDefinition>();
             var countPipelineStageDefinitions = new List<IPipelineStageDefinition>();
 
-            if (skip.HasValue) pagingPipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Skip<TEntity>(skip.Value));
+            if (skip.HasValue)
+            {
+                pagingPipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Skip<TEntity>(skip.Value));
+            }
 
-            if (take.HasValue) pagingPipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Limit<TEntity>(take.Value));
+            if (take.HasValue)
+            {
+                pagingPipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Limit<TEntity>(take.Value));
+            }
 
             countPipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Count<TEntity>());
 

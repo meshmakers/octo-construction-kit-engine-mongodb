@@ -8,15 +8,18 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 /// </summary>
 public interface IRepository
 {
-    Task CreateCollectionIfNotExistsAsync<TKey, TDocument>(IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper, 
+    Task CreateCollectionIfNotExistsAsync<TKey, TDocument>(IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
         bool enableChangeStreamPreAndPostImages, string? suffix = null)
-        where TDocument : class, 
-        new() where TKey : notnull;
+        where TDocument : class,
+        new()
+        where TKey : notnull;
 
-    IMongoDbDataSourceCollection<TKey, TDocument> GetCollection<TKey, TDocument>(IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
+    IMongoDbDataSourceCollection<TKey, TDocument> GetCollection<TKey, TDocument>(
+        IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
         string? suffix = null)
-        where TDocument : class, 
-        new() where TKey : notnull;
+        where TDocument : class,
+        new()
+        where TKey : notnull;
 
     Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,
         CancellationToken cancellationToken = default);

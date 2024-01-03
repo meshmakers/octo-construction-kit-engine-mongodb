@@ -23,11 +23,17 @@ public class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new()
     public async Task ReplaceOneAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, TEntity rtEntity)
     {
         var filterDefinitions = CreateFilterDefinitions();
-        if (filterDefinitions == null) throw TenantRepositoryException.NoFilterDefinitions();
+        if (filterDefinitions == null)
+        {
+            throw TenantRepositoryException.NoFilterDefinitions();
+        }
 
         var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeId);
         var entities = await rtCollection.FindManyAsync(session, filterDefinitions);
-        if (entities.Count != 1) throw TenantRepositoryException.EntityFilterReturnNotExactlyOne();
+        if (entities.Count != 1)
+        {
+            throw TenantRepositoryException.EntityFilterReturnNotExactlyOne();
+        }
 
         var entityUpdateInfoList = entities.Select(entityToUpdate =>
             EntityUpdateInfo<TEntity>.CreateReplace(entityToUpdate.ToRtEntityId(), rtEntity)).ToList();
@@ -39,11 +45,17 @@ public class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new()
     public async Task UpdateOneAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, TEntity rtEntity)
     {
         var filterDefinitions = CreateFilterDefinitions();
-        if (filterDefinitions == null) throw TenantRepositoryException.NoFilterDefinitions();
+        if (filterDefinitions == null)
+        {
+            throw TenantRepositoryException.NoFilterDefinitions();
+        }
 
         var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeId);
         var entities = await rtCollection.FindManyAsync(session, filterDefinitions);
-        if (entities.Count != 1) throw TenantRepositoryException.EntityFilterReturnNotExactlyOne();
+        if (entities.Count != 1)
+        {
+            throw TenantRepositoryException.EntityFilterReturnNotExactlyOne();
+        }
 
         var entityUpdateInfoList = entities.Select(entityToUpdate =>
             EntityUpdateInfo<TEntity>.CreateUpdate(entityToUpdate.ToRtEntityId(), rtEntity)).ToList();
@@ -55,11 +67,17 @@ public class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new()
     public async Task DeleteOneAsync(IOctoSession session, CkId<CkTypeId> ckTypeId)
     {
         var filterDefinitions = CreateFilterDefinitions();
-        if (filterDefinitions == null) throw TenantRepositoryException.NoFilterDefinitions();
+        if (filterDefinitions == null)
+        {
+            throw TenantRepositoryException.NoFilterDefinitions();
+        }
 
         var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeId);
         var entities = await rtCollection.FindManyAsync(session, filterDefinitions);
-        if (entities.Count != 1) throw TenantRepositoryException.EntityFilterReturnNotExactlyOne();
+        if (entities.Count != 1)
+        {
+            throw TenantRepositoryException.EntityFilterReturnNotExactlyOne();
+        }
 
         var entityUpdateInfoList = entities.Select(entityToUpdate =>
             EntityUpdateInfo<TEntity>.CreateDelete(entityToUpdate.ToRtEntityId())).ToList();
@@ -71,7 +89,10 @@ public class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new()
     public async Task DeleteManyAsync(IOctoSession session, CkId<CkTypeId> ckTypeId)
     {
         var filterDefinitions = CreateFilterDefinitions();
-        if (filterDefinitions == null) throw TenantRepositoryException.NoFilterDefinitions();
+        if (filterDefinitions == null)
+        {
+            throw TenantRepositoryException.NoFilterDefinitions();
+        }
 
         var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeId);
         var entities = await rtCollection.FindManyAsync(session, filterDefinitions);
@@ -86,7 +107,10 @@ public class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new()
     public async Task UpdateManyAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, TEntity rtEntity)
     {
         var filterDefinitions = CreateFilterDefinitions();
-        if (filterDefinitions == null) throw TenantRepositoryException.NoFilterDefinitions();
+        if (filterDefinitions == null)
+        {
+            throw TenantRepositoryException.NoFilterDefinitions();
+        }
 
         var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeId);
         var entities = await rtCollection.FindManyAsync(session, filterDefinitions);
@@ -101,9 +125,15 @@ public class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new()
     protected override string ResolveAttributeName(string attributeName)
     {
         var baseResolve = base.ResolveAttributeName(attributeName);
-        if (!string.IsNullOrEmpty(baseResolve)) return baseResolve;
+        if (!string.IsNullOrEmpty(baseResolve))
+        {
+            return baseResolve;
+        }
 
-        if (typeof(RtEntity).GetProperty(attributeName) != null) return attributeName.ToCamelCase();
+        if (typeof(RtEntity).GetProperty(attributeName) != null)
+        {
+            return attributeName.ToCamelCase();
+        }
 
         return $"{Constants.AttributesName}.{attributeName.ToCamelCase()}";
     }

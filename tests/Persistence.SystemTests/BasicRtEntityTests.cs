@@ -37,14 +37,14 @@ public class BasicRtEntityTests : IClassFixture<SystemFixture>
 
         try
         {
-            for (int i = 0; i < 5; i++)
+            for (var i = 0; i < 5; i++)
             {
                 var rtPlanet = await tenantRepository.CreateTransientRtEntityAsync<RtPlanet>();
                 rtPlanet.Designation = "test" + i;
                 await tenantRepository.InsertOneRtEntityAsync(session, rtPlanet);
             }
-          
-            for (int i = 0; i < 5; i++)
+
+            for (var i = 0; i < 5; i++)
             {
                 var rtCity = await tenantRepository.CreateTransientRtEntityAsync<RtCity>();
                 rtCity.Designation = "test" + i;
@@ -52,7 +52,7 @@ public class BasicRtEntityTests : IClassFixture<SystemFixture>
             }
 
             await session.CommitTransactionAsync();
-            
+
             session.StartTransaction();
             var y = await tenantRepository.GetRtEntitiesByTypeAsync<RtCity>(session, DataQueryOperation.Create());
 

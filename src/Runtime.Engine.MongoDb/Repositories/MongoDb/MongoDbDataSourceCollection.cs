@@ -44,6 +44,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     {
         return _documentCollection.Aggregate(((IOctoSessionInternal)session).SessionHandle, pipelineDefinition);
     }
+
     public string CollectionName => _documentCollection.CollectionNamespace.CollectionName;
 
     public async Task CreateAscendingIndexAsync(string name, IEnumerable<string> fields)
@@ -78,8 +79,10 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
         foreach (var field in fieldList)
         foreach (var attributeName in field.AttributeNames)
+        {
             weights.Add(Constants.AttributesName + "." + attributeName.ToCamelCase(),
                 field.Weight.GetValueOrDefault(1));
+        }
 
         await _documentCollection.Indexes.CreateOneAsync(new CreateIndexModel<TDocument>(
             Builders<TDocument>.IndexKeys.Combine(
@@ -296,7 +299,10 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 ((IOctoSessionInternal)session).SessionHandle, filter);
 
             var document = await result.SingleOrDefaultAsync();
-            if (document == null) return default;
+            if (document == null)
+            {
+                return default;
+            }
 
             return document;
         }
@@ -317,7 +323,10 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 ((IOctoSessionInternal)session).SessionHandle, filter);
 
             var document = await result.SingleOrDefaultAsync();
-            if (document == null) return default;
+            if (document == null)
+            {
+                return default;
+            }
 
             return (TDerived)document;
         }
@@ -430,7 +439,10 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         try
         {
             var listWrites = new List<WriteModel<TDocument>>();
-            foreach (var v in documents) listWrites.Add(new InsertOneModel<TDocument>(v));
+            foreach (var v in documents)
+            {
+                listWrites.Add(new InsertOneModel<TDocument>(v));
+            }
 
             var result =
                 await _documentCollection.BulkWriteAsync(((IOctoSessionInternal)session).SessionHandle, listWrites);
@@ -468,15 +480,29 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         FilterDefinition<ChangeStreamDocument<TDocument>>? documentFilter = null;
         FilterDefinition<ChangeStreamDocument<TDocument>>? documentBeforeFilter = null;
 
-        if (documentFilterFunc != null) documentFilter = documentFilterFunc();
-        if (documentBeforeFilterFunc != null) documentBeforeFilter = documentBeforeFilterFunc();
+        if (documentFilterFunc != null)
+        {
+            documentFilter = documentFilterFunc();
+        }
+
+        if (documentBeforeFilterFunc != null)
+        {
+            documentBeforeFilter = documentBeforeFilterFunc();
+        }
 
         if (documentFilter != null && documentBeforeFilter != null)
+        {
             pipeline = pipeline.Match(Builders<ChangeStreamDocument<TDocument>>
                 .Filter.Or(documentFilter, documentBeforeFilter));
+        }
         else if (documentFilter != null)
+        {
             pipeline = pipeline.Match(documentFilter);
-        else if (documentBeforeFilter != null) pipeline = pipeline.Match(documentBeforeFilter);
+        }
+        else if (documentBeforeFilter != null)
+        {
+            pipeline = pipeline.Match(documentBeforeFilter);
+        }
 
         updateStream.Watch(_documentCollection, pipeline, cancellationToken);
 
@@ -562,7 +588,9 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     private void HandleWriteException<T>(MongoWriteException ex)
     {
         if (ex.WriteError.Category == ServerErrorCategory.DuplicateKey)
+        {
             throw new DuplicateKeyException($"Error adding item of type {nameof(T)}", typeof(T), ex);
+        }
 
         throw new OperationFailedException("Operation was not completed.", ex);
     }
@@ -570,7 +598,10 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     // ReSharper disable once ParameterOnlyUsedForPreconditionCheck.Local
     private void ThrowIfNotAcknowledged(bool acknowledged)
     {
-        if (!acknowledged) throw new MongoException("The action was not acknowledged.");
+        if (!acknowledged)
+        {
+            throw new MongoException("The action was not acknowledged.");
+        }
     }
 
     // ReSharper disable once ParameterOnlyUsedForPreconditionCheck.Local

@@ -1,6 +1,4 @@
-﻿using System.Runtime.Serialization;
-
-namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
+﻿namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 
 [Serializable]
 public class EntityNotFoundException : OperationFailedException

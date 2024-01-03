@@ -33,7 +33,9 @@ public class OctoSystemConfiguration
         set
         {
             if (value == null || !Regex.IsMatch(value, ContractConstants.RegexWithoutWhitespaces))
+            {
                 throw ConfigurationErrorException.InvalidConfigurationValue("SystemTenantId", value);
+            }
 
             _systemTenantId = value;
         }
@@ -45,7 +47,9 @@ public class OctoSystemConfiguration
         set
         {
             if (value == null || !Regex.IsMatch(value, ContractConstants.RegexWithoutWhitespaces))
+            {
                 throw ConfigurationErrorException.InvalidConfigurationValue("SystemDatabaseName", value);
+            }
 
             _systemDatabaseName = value;
         }

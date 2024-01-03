@@ -14,12 +14,12 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// Service collection extensions for the MongoDb runtime repository
+///     Service collection extensions for the MongoDb runtime repository
 /// </summary>
 public static class RuntimeEngineBuilderExtensions
 {
     /// <summary>
-    /// Add the MongoDb runtime repository to the runtime engine builder
+    ///     Add the MongoDb runtime repository to the runtime engine builder
     /// </summary>
     /// <param name="builder"></param>
     /// <param name="setupSystemConfigurationAction"></param>
@@ -32,9 +32,9 @@ public static class RuntimeEngineBuilderExtensions
         {
             builder.Services.Configure(setupSystemConfigurationAction);
         }
-        
+
         builder.Services.AddRuntimeEngine();
-        
+
         // Add basic construction kits. Hopefully we can leave it at one.
         builder.Services.AddCkModelSystem();
 
@@ -44,7 +44,7 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services.AddSingleton<IModelLoaderService, ModelLoaderService>();
         builder.Services.AddSingleton<IMetricsContext, MetricsContext>();
         builder.Services.TryAddSingleton<ITenantNotifications, DefaultTenantNotifications>();
-        
+
         return builder;
     }
 }

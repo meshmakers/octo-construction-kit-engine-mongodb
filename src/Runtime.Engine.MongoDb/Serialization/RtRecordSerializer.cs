@@ -9,7 +9,7 @@ internal class RtRecordSerializer : BsonClassMapSerializer<RtRecord>
         : base(BsonClassMap.LookupClassMap(typeof(RtRecord)))
     {
     }
-    
+
     public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args, RtRecord value)
     {
         var tmpEntity = new RtRecord(value.CkRecordId, value.Attributes);

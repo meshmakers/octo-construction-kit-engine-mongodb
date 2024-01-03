@@ -62,7 +62,10 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
     internal async Task<MultipleOriginResultSet<TTargetEntity>> ExecuteQuery(IOctoSession session, int? skip,
         int? take)
     {
-        if (skip.HasValue && !take.HasValue) throw new PersistenceException("'skip' without 'take' is not possible.");
+        if (skip.HasValue && !take.HasValue)
+        {
+            throw new PersistenceException("'skip' without 'take' is not possible.");
+        }
 
         var connectFromRtIdField = "targetRtId";
         var connectToRtIdField = "originRtId";
@@ -92,7 +95,10 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
 
         AddTextFilterConstraintsToPipeline(pipelineStageDefinitions);
         var filterDefinitions = CreateFilterDefinitions();
-        if (filterDefinitions != null) pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(filterDefinitions));
+        if (filterDefinitions != null)
+        {
+            pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(filterDefinitions));
+        }
 
         AddSortConstraintsToPipeline(pipelineStageDefinitions);
 
@@ -179,12 +185,12 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
         }
 
         var result = await aggregate2.ToListAsync();
-        
+
         foreach (var multipleResult in result)
         {
             multipleResult.Grouping = CalculateGrouping(multipleResult.Targets);
         }
-        
+
         return new MultipleOriginResultSet<TTargetEntity>(result);
     }
 
@@ -200,9 +206,15 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
     protected override string ResolveAttributeName(string attributeName)
     {
         var baseResolve = base.ResolveAttributeName(attributeName);
-        if (!string.IsNullOrEmpty(baseResolve)) return baseResolve;
+        if (!string.IsNullOrEmpty(baseResolve))
+        {
+            return baseResolve;
+        }
 
-        if (typeof(RtEntity).GetProperty(attributeName) != null) return attributeName.ToCamelCase();
+        if (typeof(RtEntity).GetProperty(attributeName) != null)
+        {
+            return attributeName.ToCamelCase();
+        }
 
         return $"{Constants.AttributesName}.{attributeName.ToCamelCase()}";
     }
@@ -248,14 +260,18 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
                 }
 
                 if (!double.IsNaN(result))
+                {
                     switch (attributeCacheItem.ValueType)
                     {
                         case AttributeValueTypesDto.DateTime:
                             isEnum = false;
                             return new DateTime((long)result);
                     }
+                }
                 else
+                {
                     throw new OperationFailedException($"Term '{searchTerm}' cannot be evaluated by formula.");
+                }
             }
 
             // Change to the type of attribute

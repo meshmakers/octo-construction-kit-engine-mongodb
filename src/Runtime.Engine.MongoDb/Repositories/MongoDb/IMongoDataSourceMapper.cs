@@ -10,10 +10,10 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 public interface IMongoDataSourceMapper<out TKey, TDocument> where TKey : notnull
 {
     /// <summary>
-    /// Returns the collection name prefix
+    ///     Returns the collection name prefix
     /// </summary>
     string CollectionNamePrefix { get; }
-    
+
     /// <summary>
     ///     Returns the id of an object
     /// </summary>

@@ -35,10 +35,16 @@ public class Engine<TEntity> where TEntity : class, new()
 
     protected virtual string? ResolveAttributeName(string attributeName)
     {
-        if (_bsonClassMap.IdMemberMap?.MemberName == attributeName) return Constants.IdField;
+        if (_bsonClassMap.IdMemberMap?.MemberName == attributeName)
+        {
+            return Constants.IdField;
+        }
 
         var memberMap = _bsonClassMap.GetMemberMap(attributeName);
-        if (memberMap == null || !memberMap.ShouldSerializeMethod.Invoke(null)) return null;
+        if (memberMap == null || !memberMap.ShouldSerializeMethod.Invoke(null))
+        {
+            return null;
+        }
 
         return memberMap.ElementName;
     }
@@ -58,7 +64,10 @@ public class Engine<TEntity> where TEntity : class, new()
                 .Where(x => x.ToLower().Contains(searchTerm.ToString()?.ToLower() ?? string.Empty));
 
             var values = new List<object>();
-            foreach (var nameCandidate in nameCandidates) values.Add(Enum.Parse(propertyType, nameCandidate));
+            foreach (var nameCandidate in nameCandidates)
+            {
+                values.Add(Enum.Parse(propertyType, nameCandidate));
+            }
 
             isEnum = true;
             return values.ToArray();
@@ -95,9 +104,15 @@ public class Engine<TEntity> where TEntity : class, new()
         {
             isEnum = false;
 
-            if (propertyType == typeof(ObjectId)) return ObjectId.Parse(term);
+            if (propertyType == typeof(ObjectId))
+            {
+                return ObjectId.Parse(term);
+            }
 
-            if (propertyType == typeof(DateTime) || propertyType == typeof(DateTime?)) return DateTime.Parse(term);
+            if (propertyType == typeof(DateTime) || propertyType == typeof(DateTime?))
+            {
+                return DateTime.Parse(term);
+            }
 
             try
             {
@@ -143,9 +158,13 @@ public class Engine<TEntity> where TEntity : class, new()
             if (filters.Any())
             {
                 if (filters.Count == 1)
+                {
                     filterDefinition = filters.First();
+                }
                 else
+                {
                     filterDefinition = Builders<TEntity>.Filter.And(filters);
+                }
             }
 
             return filterDefinition;
@@ -156,21 +175,33 @@ public class Engine<TEntity> where TEntity : class, new()
 
     internal void AddIdFilter<TField>(IReadOnlyList<TField>? ids)
     {
-        if (ids == null || !ids.Any()) return;
+        if (ids == null || !ids.Any())
+        {
+            return;
+        }
 
         _idFilters.Add(Builders<TEntity>.Filter.In(Constants.IdField, ids));
     }
 
     internal void AddFieldFilters(IEnumerable<FieldFilter>? fieldFilters)
     {
-        if (fieldFilters == null) return;
+        if (fieldFilters == null)
+        {
+            return;
+        }
 
-        foreach (var fieldFilter in fieldFilters) AddFieldFilter(fieldFilter);
+        foreach (var fieldFilter in fieldFilters)
+        {
+            AddFieldFilter(fieldFilter);
+        }
     }
 
     private void AddFieldFilter(FieldFilter fieldFilter)
     {
-        if (string.IsNullOrWhiteSpace(fieldFilter.AttributeName)) return;
+        if (string.IsNullOrWhiteSpace(fieldFilter.AttributeName))
+        {
+            return;
+        }
 
         if (IsAttributeNameValid(fieldFilter.AttributeName))
         {

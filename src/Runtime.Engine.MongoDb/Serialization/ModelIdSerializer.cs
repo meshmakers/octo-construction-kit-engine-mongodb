@@ -44,7 +44,10 @@ public class ModelIdSerializer : StructSerializerBase<CkModelId>, IBsonDocumentS
 
     public ModelIdSerializer WithRepresentation(BsonType representation)
     {
-        if (representation == Representation) return this;
+        if (representation == Representation)
+        {
+            return this;
+        }
 
         return new ModelIdSerializer(representation);
     }

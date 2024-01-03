@@ -31,7 +31,10 @@ public class OctoAttributeIdSerializer : StructSerializerBase<CkAttributeId>, IR
 
     public OctoAttributeIdSerializer WithRepresentation(BsonType representation)
     {
-        if (representation == Representation) return this;
+        if (representation == Representation)
+        {
+            return this;
+        }
 
         return new OctoAttributeIdSerializer(representation);
     }

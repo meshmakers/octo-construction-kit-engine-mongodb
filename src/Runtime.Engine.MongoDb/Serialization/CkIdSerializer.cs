@@ -32,7 +32,10 @@ public class CkIdSerializer<TKey, TKeySerializer> : StructSerializerBase<CkId<TK
 
     public CkIdSerializer<TKey, TKeySerializer> WithRepresentation(BsonType representation)
     {
-        if (representation == Representation) return this;
+        if (representation == Representation)
+        {
+            return this;
+        }
 
         return new CkIdSerializer<TKey, TKeySerializer>(representation);
     }

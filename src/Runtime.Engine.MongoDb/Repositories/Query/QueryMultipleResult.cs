@@ -11,7 +11,6 @@ internal class QueryMultipleResult<TEntity>
     public OctoObjectId Id { get; set; }
     public long TotalCount { get; set; }
     public IEnumerable<TEntity> Targets { get; set; } = null!;
-    
-    public IEnumerable<GroupingResult>? Grouping { get; set; }
 
+    public IEnumerable<GroupingResult>? Grouping { get; set; }
 }

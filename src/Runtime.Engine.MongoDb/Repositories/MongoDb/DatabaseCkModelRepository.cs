@@ -59,7 +59,10 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
         var ckModel = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels
             .FindSingleOrDefaultAsync(sourceIdentifierObject.Session, e => e.Id == modelId);
-        if (ckModel == null) throw ModelRepositoryException.ModelNotFound(modelId, RepositoryName);
+        if (ckModel == null)
+        {
+            throw ModelRepositoryException.ModelNotFound(modelId, RepositoryName);
+        }
 
         var ckEnums = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkEnums
             .FindManyAsync(sourceIdentifierObject.Session, e => e.CkModelId == modelId.ModelId);
@@ -303,6 +306,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     private void ProcessCkEnums(CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel)
     {
         if (compiledModel.Enums != null)
+        {
             foreach (var ckEnumDto in compiledModel.Enums)
             {
                 var ckEnumValues = new List<CkEnumValue>();
@@ -326,11 +330,13 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 };
                 transientCkModel.CkEnums.Add(ckEnum);
             }
+        }
     }
 
     private void ProcessCkRecords(CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel)
     {
         if (compiledModel.Records != null)
+        {
             foreach (var ckRecordDto in compiledModel.Records)
             {
                 var ckTypeAttributes = ProcessCkTypeAttributes(ckRecordDto.Attributes);
@@ -356,11 +362,13 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 };
                 transientCkModel.CkRecords.Add(recordDto);
             }
+        }
     }
 
     private void ProcessCkAssociationRoles(CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel)
     {
         if (compiledModel.AssociationRoles != null)
+        {
             foreach (var modelAssociationRole in compiledModel.AssociationRoles)
             {
                 var ckTypeAttributes = ProcessCkTypeAttributes(modelAssociationRole.Attributes);
@@ -377,12 +385,14 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 };
                 transientCkModel.CkAssociationRoles.Add(associationRole);
             }
+        }
     }
 
     private static List<CkTypeAttribute> ProcessCkTypeAttributes(List<CkTypeAttributeDto>? typeAttributes)
     {
         var ckTypeAttributes = new List<CkTypeAttribute>();
         if (typeAttributes != null)
+        {
             foreach (var attribute in typeAttributes)
             {
                 var ckTypeAttribute = new CkTypeAttribute
@@ -395,6 +405,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
                 ckTypeAttributes.Add(ckTypeAttribute);
             }
+        }
 
         return ckTypeAttributes;
     }
@@ -405,7 +416,10 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     {
         var existingModelId =
             await mongoDbRepositoryDataSource.CkModels.FindSingleOrDefaultAsync(session, model => model.Id.ModelId == ckModelId.ModelId);
-        if (existingModelId == null) return;
+        if (existingModelId == null)
+        {
+            return;
+        }
 
         foreach (var ckRecord in await mongoDbRepositoryDataSource.CkRecords.FindManyAsync(session,
                      x => x.CkRecordId.ModelId == ckModelId.ModelId))
@@ -481,12 +495,15 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     private static void CheckCancellation(CancellationToken? cancellationToken)
     {
         if (cancellationToken != null && cancellationToken.Value.IsCancellationRequested)
+        {
             cancellationToken.Value.ThrowIfCancellationRequested();
+        }
     }
 
     private void ProcessCkAttributes(CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel)
     {
         if (compiledModel.Attributes != null)
+        {
             foreach (var ckAttributeDto in compiledModel.Attributes)
             {
                 var ckAttribute = new CkAttribute
@@ -502,6 +519,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 };
                 transientCkModel.CkAttributes.Add(ckAttribute);
             }
+        }
     }
 
     private void ProcessCkTypesAndAssociations(CkCompiledModelRoot compiledModel,
@@ -559,6 +577,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             }
 
             if (ckTypeDto.Associations != null)
+            {
                 foreach (var association in ckTypeDto.Associations)
                 {
                     var ckTypeAssociation = new CkTypeAssociation
@@ -571,6 +590,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     };
                     transientCkModel.CkTypeAssociations.Add(ckTypeAssociation);
                 }
+            }
 
             transientCkModel.CkTypes.Add(ckType);
         }
@@ -578,6 +598,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
     private void ValidateAndThrow(IBulkImportResult bulkImportResult)
     {
-        if (bulkImportResult.HasError()) throw OperationFailedException.BulkImportError();
+        if (bulkImportResult.HasError())
+        {
+            throw OperationFailedException.BulkImportError();
+        }
     }
 }

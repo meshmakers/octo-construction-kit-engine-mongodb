@@ -25,7 +25,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     // ReSharper disable once PrivateFieldCanBeConvertedToLocalVariable
     private readonly IRepositoryClient _repositoryClient;
 
-    public MongoDbRepositoryDataSource(ILoggerFactory loggerFactory, ICkCacheService ckCacheService, string tenantId, string dataSourceHost, string databaseName,
+    public MongoDbRepositoryDataSource(ILoggerFactory loggerFactory, ICkCacheService ckCacheService, string tenantId, string dataSourceHost,
+        string databaseName,
         string databaseUser, string? databasePassword,
         string authenticationDatabaseName, bool useTls, bool allowInsecureTls)
         : this(new MongoRepositoryClient(loggerFactory.CreateLogger<MongoRepositoryClient>(), new MongoConnectionOptions
@@ -41,7 +42,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     {
     }
 
-    public MongoDbRepositoryDataSource(IRepositoryClient repositoryClient, ICkCacheService ckCacheService, string databaseName, string tenantId)
+    public MongoDbRepositoryDataSource(IRepositoryClient repositoryClient, ICkCacheService ckCacheService, string databaseName,
+        string tenantId)
         : base(tenantId)
     {
         ArgumentValidation.ValidateString(databaseName, nameof(databaseName));
@@ -142,9 +144,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             counter = Math.Max(r, counter);
         }
 
-        if (counter >= 2) return CurrentMultiplicity.Many;
+        if (counter >= 2)
+        {
+            return CurrentMultiplicity.Many;
+        }
 
-        if (counter == 1) return CurrentMultiplicity.One;
+        if (counter == 1)
+        {
+            return CurrentMultiplicity.One;
+        }
 
         return CurrentMultiplicity.Zero;
     }

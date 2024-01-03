@@ -38,7 +38,10 @@ internal class UpdateStream<TDocument> : IUpdateStream<TDocument>
                 await cursor.ForEachAsync(change =>
                 {
                     _messageStream.OnNext(new UpdateInfo<TDocument>(change));
-                    if (!_messageStream.HasObservers) _cancellationTokenSource.Cancel();
+                    if (!_messageStream.HasObservers)
+                    {
+                        _cancellationTokenSource.Cancel();
+                    }
                 }, _cancellationTokenSource.Token);
             }
         }, _cancellationTokenSource.Token);

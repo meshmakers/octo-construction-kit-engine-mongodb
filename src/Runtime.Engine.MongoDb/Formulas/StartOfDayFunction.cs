@@ -23,12 +23,18 @@ public class StartOfDayFunction : FunctionExtension
 
     public void setParameterValue(int parameterIndex, double parameterValue)
     {
-        if (parameterIndex == 0) _dayCount = parameterValue;
+        if (parameterIndex == 0)
+        {
+            _dayCount = parameterValue;
+        }
     }
 
     public string getParameterName(int parameterIndex)
     {
-        if (parameterIndex == 0) return "dayCount";
+        if (parameterIndex == 0)
+        {
+            return "dayCount";
+        }
 
         return "";
     }

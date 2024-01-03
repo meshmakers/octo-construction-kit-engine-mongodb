@@ -17,7 +17,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
 internal class SingleOriginRtQuery : SingleOriginRtQuery<RtEntity>
 {
-    internal SingleOriginRtQuery(IMetricsContext metricsContext, ICkCacheService ckCacheService, string tenantId, CkTypeGraph entityCacheItem,
+    internal SingleOriginRtQuery(IMetricsContext metricsContext, ICkCacheService ckCacheService, string tenantId,
+        CkTypeGraph entityCacheItem,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource, string language)
         : base(metricsContext, ckCacheService, tenantId, entityCacheItem, mongoDbRepositoryDataSource, language)
     {
@@ -30,7 +31,8 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
     private readonly CkTypeGraph _entityCacheItem;
     private readonly string _tenantId;
 
-    internal SingleOriginRtQuery(IMetricsContext metricsContext, ICkCacheService ckCacheService, string tenantId, CkTypeGraph entityCacheItem,
+    internal SingleOriginRtQuery(IMetricsContext metricsContext, ICkCacheService ckCacheService, string tenantId,
+        CkTypeGraph entityCacheItem,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource, string language)
         : base(metricsContext, mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(entityCacheItem.CkTypeId), language)
     {
@@ -51,9 +53,15 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
     protected override string ResolveAttributeName(string attributeName)
     {
         var baseResolve = base.ResolveAttributeName(attributeName);
-        if (!string.IsNullOrEmpty(baseResolve)) return baseResolve;
+        if (!string.IsNullOrEmpty(baseResolve))
+        {
+            return baseResolve;
+        }
 
-        if (typeof(RtEntity).GetProperty(attributeName) != null) return attributeName.ToCamelCase();
+        if (typeof(RtEntity).GetProperty(attributeName) != null)
+        {
+            return attributeName.ToCamelCase();
+        }
 
         return $"{Constants.AttributesName}.{attributeName.ToCamelCase()}";
     }
@@ -104,14 +112,18 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                     }
 
                     if (!double.IsNaN(result))
+                    {
                         switch (attributeCacheItem.ValueType)
                         {
                             case AttributeValueTypesDto.DateTime:
                                 isEnum = false;
                                 return new DateTime((long)result);
                         }
+                    }
                     else
+                    {
                         throw new OperationFailedException($"Term '{searchTerm}' cannot be evaluated by formula.");
+                    }
                 }
             }
 
@@ -122,7 +134,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
 
         return base.ResolveSearchAttributeValue(attributeName, searchTerm, out isEnum);
     }
-    
+
     protected override IEnumerable<GroupingResult>? CalculateGrouping(IEnumerable<TEntity> resultList)
     {
         if (GroupBy == null)

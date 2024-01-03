@@ -1,6 +1,4 @@
-﻿using Meshmakers.Octo.ConstructionKit.Contracts;
-
-namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
+﻿namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 
 public static class Constants
 {

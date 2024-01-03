@@ -52,10 +52,10 @@ public class CkType
     ///     Gets or sets if the change stream should include pre and post images
     /// </summary>
     public bool EnableChangeStreamPreAndPostImages { get; set; }
-    
+
     /// <summary>
-    /// Gets or sets a value indicating whether this type is a collection root. When
-    /// true this type creates a collection in the database.
+    ///     Gets or sets a value indicating whether this type is a collection root. When
+    ///     true this type creates a collection in the database.
     /// </summary>
     public bool IsCollectionRoot { get; set; }
 }

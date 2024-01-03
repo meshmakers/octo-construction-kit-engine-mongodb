@@ -30,7 +30,10 @@ public class OctoObjectIdSerializer : StructSerializerBase<OctoObjectId>, IRepre
 
     public OctoObjectIdSerializer WithRepresentation(BsonType representation)
     {
-        if (representation == Representation) return this;
+        if (representation == Representation)
+        {
+            return this;
+        }
 
         return new OctoObjectIdSerializer(representation);
     }

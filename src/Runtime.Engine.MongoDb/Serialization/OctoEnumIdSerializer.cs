@@ -30,7 +30,10 @@ public class OctoEnumIdSerializer : StructSerializerBase<CkEnumId>, IRepresentat
 
     public OctoEnumIdSerializer WithRepresentation(BsonType representation)
     {
-        if (representation == Representation) return this;
+        if (representation == Representation)
+        {
+            return this;
+        }
 
         return new OctoEnumIdSerializer(representation);
     }

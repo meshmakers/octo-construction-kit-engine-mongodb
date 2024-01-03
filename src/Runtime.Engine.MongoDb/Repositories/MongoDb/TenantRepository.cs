@@ -25,7 +25,8 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     private readonly IModelLoaderService _modelLoaderService;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
 
-    public TenantRepository(string tenantId, IMetricsContext metricsContext, ICkCacheService ckCache, IModelLoaderService modelLoaderService,
+    public TenantRepository(string tenantId, IMetricsContext metricsContext, ICkCacheService ckCache,
+        IModelLoaderService modelLoaderService,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource, IBulkRtMutation bulkRtMutation)
         : base(tenantId, ckCache, mongoDbRepositoryDataSource, bulkRtMutation)
     {
@@ -42,7 +43,10 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var ckCacheService = await GetCkCacheServiceAsync();
 
         var entityCacheItem = ckCacheService.GetCkType(TenantId, ckTypeId);
-        if (entityCacheItem == null) throw new OperationFailedException($"Type '{ckTypeId}' does not exist.");
+        if (entityCacheItem == null)
+        {
+            throw new OperationFailedException($"Type '{ckTypeId}' does not exist.");
+        }
 
         return entityCacheItem;
     }
@@ -54,7 +58,10 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         IReadOnlyList<OctoObjectId> rtIds, DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null)
     {
-        if (!rtIds.Any()) return new ResultSet<TEntity>(new List<TEntity>(), 0, null);
+        if (!rtIds.Any())
+        {
+            return new ResultSet<TEntity>(new List<TEntity>(), 0, null);
+        }
 
         var ckCacheService = await GetCkCacheServiceAsync();
         var entityCacheItem = await GetEntityCacheItemAsync(ckTypeId);
@@ -100,8 +107,10 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         foreach (var groupedEntities in rtEntityList.GroupBy(x => x.CkTypeId))
         {
             if (string.IsNullOrWhiteSpace(groupedEntities.Key.FullName))
+            {
                 throw OperationFailedException.CreateWithMessage(
                     "Cannot update RtEntity without CkTypeId. Please provide a CkTypeId.");
+            }
 
             results.Add(await _mongoDbRepositoryDataSource.GetRtCollection<RtEntity>(groupedEntities.Key)
                 .BulkImportAsync(session, groupedEntities));
@@ -385,9 +394,11 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         return collection.Subscribe(updateStreamFilter.UpdateTypes, () =>
         {
             if (updateStreamFilter.RtId.HasValue)
+            {
                 return Builders<ChangeStreamDocument<RtEntity>>.Filter.Eq(
                     "fullDocument." + Constants.IdField,
                     updateStreamFilter.RtId.Value.ToObjectId());
+            }
 
             return default;
         }, () => null, cancellationToken);
@@ -404,9 +415,11 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         return collection.Subscribe(updateStreamFilter.UpdateTypes, () =>
         {
             if (updateStreamFilter.RtId.HasValue)
+            {
                 return Builders<ChangeStreamDocument<TEntity>>.Filter.Eq(
                     "fullDocument." + Constants.IdField,
                     updateStreamFilter.RtId.Value.ToObjectId());
+            }
 
             return default;
         }, () => null, cancellationToken);
@@ -427,16 +440,22 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
             };
 
             if (!string.IsNullOrWhiteSpace(updateStreamFilter.RoleId))
+            {
                 filterList.Add(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
                     "fullDocument." + nameof(RtAssociation.AssociationRoleId).ToCamelCase(), updateStreamFilter.RoleId));
+            }
 
             if (updateStreamFilter.OriginRtId.HasValue)
+            {
                 filterList.Add(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
                     "fullDocument." + nameof(RtAssociation.OriginRtId).ToCamelCase(), updateStreamFilter.OriginRtId));
+            }
 
             if (updateStreamFilter.TargetRtId.HasValue)
+            {
                 filterList.Add(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
                     "fullDocument." + nameof(RtAssociation.TargetRtId).ToCamelCase(), updateStreamFilter.TargetRtId));
+            }
 
             return Builders<ChangeStreamDocument<RtAssociation>>.Filter.And(filterList);
         }, () =>
@@ -450,16 +469,22 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
             };
 
             if (!string.IsNullOrWhiteSpace(updateStreamFilter.RoleId))
+            {
                 filterList.Add(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
                     "fullDocumentBeforeChange." + nameof(RtAssociation.AssociationRoleId).ToCamelCase(), updateStreamFilter.RoleId));
+            }
 
             if (updateStreamFilter.OriginRtId.HasValue)
+            {
                 filterList.Add(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
                     "fullDocumentBeforeChange." + nameof(RtAssociation.OriginRtId).ToCamelCase(), updateStreamFilter.OriginRtId));
+            }
 
             if (updateStreamFilter.TargetRtId.HasValue)
+            {
                 filterList.Add(Builders<ChangeStreamDocument<RtAssociation>>.Filter.Eq(
                     "fullDocumentBeforeChange." + nameof(RtAssociation.TargetRtId).ToCamelCase(), updateStreamFilter.TargetRtId));
+            }
 
             return Builders<ChangeStreamDocument<RtAssociation>>.Filter.And(filterList);
         }, cancellationToken);
@@ -489,8 +514,10 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         }
 
         if (entityCacheItem.AllAttributes.All(x => x.Value.AttributeName != attributeName))
+        {
             throw new InvalidAttributeException(
                 $"Attribute '{attributeName}' does not exist at type '{ckTypeId}'");
+        }
 
         var match = new BsonDocument
         {
@@ -537,12 +564,17 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
 
         var ckEntity =
             await _mongoDbRepositoryDataSource.CkTypes.FindSingleOrDefaultAsync(session, x => x.CkTypeId == ckTypeId);
-        if (ckEntity == null) throw new EntityNotFoundException($"'{ckTypeId}' does not exist in database.");
+        if (ckEntity == null)
+        {
+            throw new EntityNotFoundException($"'{ckTypeId}' does not exist in database.");
+        }
 
         var attribute = ckEntity.Attributes.FirstOrDefault(x => x.AttributeName == attributeName);
         if (attribute == null)
+        {
             throw new InvalidAttributeException(
                 $"Attribute with name '{attributeName}' does not exist on type '{ckTypeId}'");
+        }
 
         attribute.AutoCompleteValues = autoCompleteValues.ToList();
 

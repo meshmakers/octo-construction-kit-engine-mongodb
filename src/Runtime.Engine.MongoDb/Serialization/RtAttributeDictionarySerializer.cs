@@ -37,13 +37,21 @@ internal class RtAttributeDictionarySerializer : DictionaryInterfaceImplementerS
                 {
                     case IEnumerable<string> enumerable:
                         bsonWriter.WriteStartArray();
-                        foreach (var item in enumerable) bsonWriter.WriteString(item);
+                        foreach (var item in enumerable)
+                        {
+                            bsonWriter.WriteString(item);
+                        }
+
                         bsonWriter.WriteEndArray();
                         break;
                     case IEnumerable<RtRecord> enumerable:
                         bsonWriter.WriteStartArray();
                         var recordSerializer = BsonSerializer.LookupSerializer(typeof(RtRecord));
-                        foreach (var item in enumerable) recordSerializer.Serialize(context, args, item);
+                        foreach (var item in enumerable)
+                        {
+                            recordSerializer.Serialize(context, args, item);
+                        }
+
                         bsonWriter.WriteEndArray();
                         break;
                     default:
@@ -67,10 +75,16 @@ internal class RtAttributeDictionarySerializer : DictionaryInterfaceImplementerS
         BsonDeserializationArgs args)
     {
         var dic = base.Deserialize(context, args);
-        if (dic == null) return null!;
+        if (dic == null)
+        {
+            return null!;
+        }
 
         var ret = new Dictionary<string, object?>();
-        foreach (var pair in dic) ret[pair.Key.ToPascalCase()] = pair.Value;
+        foreach (var pair in dic)
+        {
+            ret[pair.Key.ToPascalCase()] = pair.Value;
+        }
 
         return ret;
     }

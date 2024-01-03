@@ -17,7 +17,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 public class SystemContext : TenantContext, ISystemContext
 {
     /// <summary>
-    /// Initializes a new instance of the <see cref="SystemContext"/> class.
+    ///     Initializes a new instance of the <see cref="SystemContext" /> class.
     /// </summary>
     /// <param name="metricsContext"></param>
     /// <param name="loggerFactory"></param>
@@ -27,7 +27,8 @@ public class SystemContext : TenantContext, ISystemContext
     /// <param name="ckModelRepositoryService"></param>
     /// <param name="modelLoaderService"></param>
     /// <param name="bulkRtMutation"></param>
-    public SystemContext(IMetricsContext metricsContext, ILoggerFactory loggerFactory, IOptions<OctoSystemConfiguration> systemConfiguration,
+    public SystemContext(IMetricsContext metricsContext, ILoggerFactory loggerFactory,
+        IOptions<OctoSystemConfiguration> systemConfiguration,
         ITenantNotifications tenantNotifications,
         ICkCacheService ckCacheService, ICkModelRepositoryService ckModelRepositoryService, IModelLoaderService modelLoaderService,
         IBulkRtMutation bulkRtMutation)
@@ -65,16 +66,19 @@ public class SystemContext : TenantContext, ISystemContext
             var ckModelRepository = CreateDatabaseContext(normalizedDatabaseName);
             OperationResult operationResult = new();
             var ckCompiledModelRoot = await _ckModelRepositoryService.LookupCkModelAsync(SystemCkIds.ModelId, operationResult);
-            if (ckCompiledModelRoot == null) throw TenantException.SystemModelNotFound();
+            if (ckCompiledModelRoot == null)
+            {
+                throw TenantException.SystemModelNotFound();
+            }
 
             if (operationResult.HasErrors || operationResult.HasFatalErrors)
+            {
                 throw TenantException.ErrorDuringSystemModelLoad(operationResult);
+            }
 
             await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, true,
                 new TenantDatabaseSourceIdentifier(ckModelRepository, systemSession));
             await systemSession.CommitTransactionAsync();
-
-           
         }
         catch (Exception)
         {

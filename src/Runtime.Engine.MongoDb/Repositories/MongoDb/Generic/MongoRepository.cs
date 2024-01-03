@@ -46,8 +46,9 @@ public class MongoRepository : IRepositoryInternal
         }
     }
 
-    public IMongoDbDataSourceCollection<TKey, TDocument> GetCollection<TKey, TDocument>(IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
-        string? suffix = null) 
+    public IMongoDbDataSourceCollection<TKey, TDocument> GetCollection<TKey, TDocument>(
+        IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
+        string? suffix = null)
         where TKey : notnull
         where TDocument : class, new()
     {
@@ -56,7 +57,7 @@ public class MongoRepository : IRepositoryInternal
         return new MongoDbDataSourceCollection<TKey, TDocument>(_database.GetCollection<TDocument>(name), mongoDataSourceMapper);
     }
 
-    public string GetCollectionName<TKey, TDocument>(IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper, string? suffix = null) 
+    public string GetCollectionName<TKey, TDocument>(IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper, string? suffix = null)
         where TKey : notnull
         where TDocument : class, new()
     {

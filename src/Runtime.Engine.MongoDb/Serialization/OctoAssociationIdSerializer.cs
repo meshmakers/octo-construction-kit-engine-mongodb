@@ -32,7 +32,10 @@ public class OctoAssociationIdSerializer : StructSerializerBase<CkAssociationRol
 
     public OctoAssociationIdSerializer WithRepresentation(BsonType representation)
     {
-        if (representation == Representation) return this;
+        if (representation == Representation)
+        {
+            return this;
+        }
 
         return new OctoAssociationIdSerializer(representation);
     }
