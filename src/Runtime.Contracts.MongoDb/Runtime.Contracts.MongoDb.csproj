@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <Description>Octo Mesh Runtime Contracts for MongoDB.</Description>
+        <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+        <AssemblyName>Meshmakers.Octo.Runtime.Contracts.MongoDb</AssemblyName>
+        <RootNamespace>Meshmakers.Octo.Runtime.Contracts.MongoDb</RootNamespace>
+        <Configurations>Debug;Release;DebugL</Configurations>
+        <Platforms>AnyCPU</Platforms>
+        <OutputPath>..\..\bin\$(Configuration)\</OutputPath>
+    </PropertyGroup>
+
+    <ItemGroup Condition="'$(Configuration)'!='DebugL'">
+        <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="3.0.3" />
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(Configuration)'=='DebugL'">
+        <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="999.0.0" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="..\..\assets\meshmakers64.png">
+            <Pack>True</Pack>
+            <PackagePath />
+            <Link>meshmakers64.png</Link>
+        </None>
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="..\..\LICENSE">
+            <Pack>True</Pack>
+            <PackagePath />
+            <Link>LICENSE</Link>
+        </None>
+    </ItemGroup>
+</Project>

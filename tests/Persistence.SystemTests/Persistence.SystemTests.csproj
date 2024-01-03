@@ -52,7 +52,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\src\MongoDb\Runtime.Engine.MongoDb\Runtime.Engine.MongoDb.csproj" />
+        <ProjectReference Include="..\..\src\Runtime.Engine.MongoDb\Runtime.Engine.MongoDb.csproj" />
     </ItemGroup>
 
 
