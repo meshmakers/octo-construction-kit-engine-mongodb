@@ -198,6 +198,34 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         return await query.ExecuteQuery(session, skip, take);
     }
 
+    public async Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session, List<CkId<CkRecordId>> ckRecordIds, 
+        DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
+    {
+        var query = new CkRecordQuery(_metricsContext, _mongoDbRepositoryDataSource);
+        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddIdFilter(ckRecordIds);
+        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
+        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
+        query.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        query.AddGrouping(dataQueryOperation.FieldGroupBy);
+
+        return await query.ExecuteQuery(session, skip, take);
+    }
+
+    public async Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, List<CkId<CkEnumId>> ckEnumIds, 
+        DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
+    {
+        var query = new CkEnumQuery(_metricsContext, _mongoDbRepositoryDataSource);
+        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddIdFilter(ckEnumIds);
+        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
+        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
+        query.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        query.AddGrouping(dataQueryOperation.FieldGroupBy);
+
+        return await query.ExecuteQuery(session, skip, take);
+    }
+
     public async Task<IResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session, OctoObjectId originRtId,
         CkId<CkTypeId> originCkTypeId,
         CkId<CkAssociationRoleId> roleId,

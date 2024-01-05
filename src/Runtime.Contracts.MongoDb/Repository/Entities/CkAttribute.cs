@@ -7,7 +7,7 @@ namespace Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository.Entities;
 /// <summary>
 ///     Represents a construction kit attribute in database
 /// </summary>
-[DebuggerDisplay("{" + nameof(AttributeId) + "}")]
+[DebuggerDisplay("{" + nameof(CkAttributeId) + "}")]
 public class CkAttribute
 {
     /// <summary>
@@ -18,7 +18,7 @@ public class CkAttribute
     /// <summary>
     ///     The id of the attribute
     /// </summary>
-    public CkId<CkAttributeId> AttributeId { get; set; }
+    public CkId<CkAttributeId> CkAttributeId { get; set; }
 
     /// <summary>
     ///     Value type of the attribute

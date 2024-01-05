@@ -184,8 +184,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     public IMongoDbDataSourceCollection<OctoObjectId, RtAssociation> RtMongoDbDataSourceAssociations { get; }
     public override IDataSourceCollection<OctoObjectId, RtAssociation> RtAssociations => RtMongoDbDataSourceAssociations;
     public IMongoDbDataSourceCollection<CkId<CkTypeId>, CkType> CkTypes { get; }
-    public IDataSourceCollection<CkId<CkRecordId>, CkRecord> CkRecords { get; }
-    public IDataSourceCollection<CkId<CkEnumId>, CkEnum> CkEnums { get; }
+    public IMongoDbDataSourceCollection<CkId<CkRecordId>, CkRecord> CkRecords { get; }
+    public IMongoDbDataSourceCollection<CkId<CkEnumId>, CkEnum> CkEnums { get; }
     public IMongoDbDataSourceCollection<CkId<CkAttributeId>, CkAttribute> CkAttributes { get; }
     public IDataSourceCollection<CkId<CkAssociationRoleId>, CkAssociationRole> CkAssociationRoles { get; }
     public IMongoDbDataSourceCollection<OctoObjectId, CkTypeAssociation> CkTypeAssociations { get; }

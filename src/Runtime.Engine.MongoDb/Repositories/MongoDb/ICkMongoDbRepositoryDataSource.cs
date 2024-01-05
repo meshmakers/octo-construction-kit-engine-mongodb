@@ -10,8 +10,8 @@ public interface ICkMongoDbRepositoryDataSource
     IDataSourceCollection<CkModelId, CkModel> CkModels { get; }
     IMongoDbDataSourceCollection<CkId<CkTypeId>, CkType> CkTypes { get; }
     IMongoDbDataSourceCollection<CkId<CkAttributeId>, CkAttribute> CkAttributes { get; }
-    IDataSourceCollection<CkId<CkEnumId>, CkEnum> CkEnums { get; }
-    IDataSourceCollection<CkId<CkRecordId>, CkRecord> CkRecords { get; }
+    IMongoDbDataSourceCollection<CkId<CkEnumId>, CkEnum> CkEnums { get; }
+    IMongoDbDataSourceCollection<CkId<CkRecordId>, CkRecord> CkRecords { get; }
     IDataSourceCollection<CkId<CkAssociationRoleId>, CkAssociationRole> CkAssociationRoles { get; }
     IMongoDbDataSourceCollection<OctoObjectId, CkTypeAssociation> CkTypeAssociations { get; }
     IDataSourceCollection<OctoObjectId, CkTypeInheritance> CkTypeInheritances { get; }

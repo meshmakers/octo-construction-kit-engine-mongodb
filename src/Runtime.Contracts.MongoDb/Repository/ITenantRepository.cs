@@ -19,6 +19,14 @@ public interface ITenantRepository : IRuntimeRepository
     Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkId<CkTypeId>> ckTypeIds,
         DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null);
+    
+    Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session, List<CkId<CkRecordId>> ckRecordIds,
+        DataQueryOperation dataQueryOperation,
+        int? skip = null, int? take = null);
+
+    Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, List<CkId<CkEnumId>> ckEnumIds,
+        DataQueryOperation dataQueryOperation, 
+        int? skip = null, int? take = null);
 
     Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,

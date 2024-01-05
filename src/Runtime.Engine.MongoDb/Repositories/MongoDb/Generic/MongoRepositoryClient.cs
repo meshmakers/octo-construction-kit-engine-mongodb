@@ -209,7 +209,7 @@ public class MongoRepositoryClient : IRepositoryClient
         BsonClassMap.TryRegisterClassMap<CkAttribute>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
-            cm.MapIdMember(c => c.AttributeId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
+            cm.MapIdMember(c => c.CkAttributeId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
             cm.GetMemberMap(c => c.AttributeValueType).SetIsRequired(true);
