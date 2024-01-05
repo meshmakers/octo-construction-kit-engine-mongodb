@@ -462,7 +462,6 @@ public class TenantContext : ITenantContext
             configuration = new RtConfiguration { RtWellKnownName = key, ConfigurationValue = value.Serialize() };
             await tenantRepository.InsertOneRtEntityAsync(systemSession, configuration);
         }
-
         else
         {
             configuration.ConfigurationValue = value.Serialize();
