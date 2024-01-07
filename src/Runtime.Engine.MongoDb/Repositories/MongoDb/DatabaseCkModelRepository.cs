@@ -125,6 +125,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 TypeId = t.CkTypeId.Key,
                 IsAbstract = t.IsAbstract,
                 IsFinal = t.IsFinal,
+                IsCollectionRoot = t.IsCollectionRoot,
                 EnableChangeStreamPreAndPostImages = t.EnableChangeStreamPreAndPostImages,
                 Attributes = t.Attributes.Select(a => new CkTypeAttributeDto
                 {
