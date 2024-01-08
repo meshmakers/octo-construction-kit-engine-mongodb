@@ -614,5 +614,10 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         }
     }
 
+    public async Task LoadCacheForTenantAsync(ICkCacheService cacheService)
+    {
+        await RefreshCkCacheServiceAsync(cacheService);
+    }
+
     #endregion Advanced functionality
 }

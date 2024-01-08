@@ -50,6 +50,12 @@ public interface ITenantContext
     /// <returns></returns>
     ITenantRepository GetTenantRepository();
 
+    /// <summary>
+    /// Loads the cache for the tenant.
+    /// </summary>
+    /// <returns></returns>
+    Task LoadCacheForTenantAsync();
+
     #endregion Access Management
 
     #region Tenant Management

@@ -1,5 +1,6 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
@@ -103,4 +104,10 @@ public interface ITenantRepository : IRuntimeRepository
         IEnumerable<object> autoCompleteValues);
 
     #endregion Advanced functionality
+
+    /// <summary>
+    /// Loads the cache for the tenant.
+    /// </summary>
+    /// <returns></returns>
+    Task LoadCacheForTenantAsync(ICkCacheService cacheService);
 }

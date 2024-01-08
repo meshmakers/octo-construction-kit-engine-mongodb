@@ -84,6 +84,15 @@ public class TenantContext : ITenantContext
 
     // ReSharper disable once UnusedMember.Global
     // ReSharper disable once MemberCanBePrivate.Global
+    public async Task LoadCacheForTenantAsync()
+    {
+        if (!_cacheService.IsTenantLoaded(TenantId))
+        {
+            var tenantRepository = GetTenantRepository();
+            await tenantRepository.LoadCacheForTenantAsync(_cacheService);
+        }
+    }
+
     public async Task CreateChildTenantAsync(IOctoSystemSession systemSession, string databaseName, string tenantId)
     {
         ArgumentValidation.ValidateString(nameof(databaseName), databaseName);
