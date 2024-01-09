@@ -5,6 +5,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Models.System.ConstructionKit.Generated.System.v1;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
@@ -125,6 +126,23 @@ public class SystemContext : TenantContext, ISystemContext
         {
             await _tenantNotifications.NotifyPosTenantDeleteAsync(normalizedTenantId);
         }
+    }
+
+    public async Task<ITenantContext> FindTenantContextAsync(string tenantId)
+    {
+        ITenantContext tenantContext = this;
+        if (tenantId.NormalizeString() != TenantId)
+        {
+            tenantContext = await GetChildTenantContextAsync(tenantId);
+        }
+
+        return tenantContext;
+    }
+
+    public async Task<ITenantRepository> FindTenantRepositoryAsync(string tenantId)
+    {
+        var tenantContext = await FindTenantContextAsync(tenantId);
+        return tenantContext.GetTenantRepository();
     }
 
     // ReSharper disable once MemberCanBePrivate.Global
