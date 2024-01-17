@@ -221,15 +221,17 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         ProcessCkAttributes(compiledModel, transientCkModel);
         ProcessCkAssociationRoles(compiledModel, transientCkModel);
         ProcessCkTypesAndAssociations(compiledModel, transientCkModel);
-
-
+        
+              
         // ValidateAsync
         Debug.Assert(_ckValidationService != null, nameof(_ckValidationService) + " != null");
-
-
+                
+        // Create basic collections first (latter this method is called again to create CkType document collections)
+        await CreateCollections(session, mongoDbRepositoryDataSource);
+        CheckCancellation(cancellationToken);
+        
         // Delete the old version
         await DeletePreviousVersion(session, compiledModel.ModelId, mongoDbRepositoryDataSource, cancellationToken);
-
         CheckCancellation(cancellationToken);
 
         if (transientCkModel.CkEnums.Any())
