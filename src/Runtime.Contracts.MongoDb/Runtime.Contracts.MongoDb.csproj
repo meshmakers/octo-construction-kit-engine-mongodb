@@ -11,11 +11,11 @@
     </PropertyGroup>
 
     <ItemGroup Condition="'$(Configuration)'!='DebugL'">
-        <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="3.0.28" />
+        <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="3.0.29" />
     </ItemGroup>
 
     <ItemGroup Condition="'$(Configuration)'=='DebugL'">
-        <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="999.0.0" />
+        <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="3.0.29" />
     </ItemGroup>
 
     <ItemGroup>
