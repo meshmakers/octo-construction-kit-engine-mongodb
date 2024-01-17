@@ -33,8 +33,6 @@ public static class RuntimeEngineBuilderExtensions
             builder.Services.Configure(setupSystemConfigurationAction);
         }
 
-        builder.Services.AddRuntimeEngine();
-
         // Add basic construction kits. Hopefully we can leave it at one.
         builder.Services.AddCkModelSystem();
 

@@ -28,6 +28,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         _documentCollection = documentCollection;
     }
 
+    public IMongoDataSourceMapper<TKey, TDocument> MongoDataSourceMapper => _mongoDataSourceMapper;
+
     public IMongoCollection<TDocument> GetMongoCollection()
     {
         return _documentCollection;

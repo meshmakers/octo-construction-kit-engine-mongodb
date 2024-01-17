@@ -113,7 +113,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             }).ToList(),
             Attributes = ckAttributes.Select(a => new CkAttributeDto
             {
-                AttributeId = a.AttributeId.Key,
+                AttributeId = a.CkAttributeId.Key,
                 ValueType = a.AttributeValueType,
                 ValueCkEnumId = a.ValueCkEnumId,
                 ValueCkRecordId = a.ValueCkRecordId,
@@ -125,6 +125,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 TypeId = t.CkTypeId.Key,
                 IsAbstract = t.IsAbstract,
                 IsFinal = t.IsFinal,
+                IsCollectionRoot = t.IsCollectionRoot,
                 EnableChangeStreamPreAndPostImages = t.EnableChangeStreamPreAndPostImages,
                 Attributes = t.Attributes.Select(a => new CkTypeAttributeDto
                 {
@@ -220,15 +221,17 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         ProcessCkAttributes(compiledModel, transientCkModel);
         ProcessCkAssociationRoles(compiledModel, transientCkModel);
         ProcessCkTypesAndAssociations(compiledModel, transientCkModel);
-
-
+        
+              
         // ValidateAsync
         Debug.Assert(_ckValidationService != null, nameof(_ckValidationService) + " != null");
-
-
+                
+        // Create basic collections first (latter this method is called again to create CkType document collections)
+        await CreateCollections(session, mongoDbRepositoryDataSource);
+        CheckCancellation(cancellationToken);
+        
         // Delete the old version
         await DeletePreviousVersion(session, compiledModel.ModelId, mongoDbRepositoryDataSource, cancellationToken);
-
         CheckCancellation(cancellationToken);
 
         if (transientCkModel.CkEnums.Any())
@@ -434,9 +437,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         }
 
         foreach (var ckAttribute in await mongoDbRepositoryDataSource.CkAttributes.FindManyAsync(session,
-                     x => x.AttributeId.ModelId == ckModelId.ModelId))
+                     x => x.CkAttributeId.ModelId == ckModelId.ModelId))
         {
-            await mongoDbRepositoryDataSource.CkAttributes.DeleteOneAsync(session, ckAttribute.AttributeId);
+            await mongoDbRepositoryDataSource.CkAttributes.DeleteOneAsync(session, ckAttribute.CkAttributeId);
         }
 
         CheckCancellation(cancellationToken);
@@ -509,7 +512,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 var ckAttribute = new CkAttribute
                 {
                     CkModelId = compiledModel.ModelId,
-                    AttributeId = new CkId<CkAttributeId>(compiledModel.ModelId, ckAttributeDto.AttributeId),
+                    CkAttributeId = new CkId<CkAttributeId>(compiledModel.ModelId, ckAttributeDto.AttributeId),
                     AttributeValueType = ckAttributeDto.ValueType,
                     ValueCkEnumId = ckAttributeDto.ValueCkEnumId,
                     ValueCkRecordId = ckAttributeDto.ValueCkRecordId,

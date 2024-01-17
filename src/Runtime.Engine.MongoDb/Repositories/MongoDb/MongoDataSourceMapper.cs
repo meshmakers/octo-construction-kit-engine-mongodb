@@ -127,7 +127,7 @@ public class CkAttributeMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkAt
 
     public CkId<CkAttributeId> GetId(CkAttribute document)
     {
-        return document.AttributeId;
+        return document.CkAttributeId;
     }
 
     public UpdateDefinition<CkAttribute> ApplyUpdate(CkAttribute document)

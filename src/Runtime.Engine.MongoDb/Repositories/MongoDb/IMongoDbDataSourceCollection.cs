@@ -6,11 +6,13 @@ using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
-public interface IMongoDbDataSourceCollection<in TKey, TDocument> : IDataSourceCollection<TKey, TDocument>
+public interface IMongoDbDataSourceCollection<TKey, TDocument> : IDataSourceCollection<TKey, TDocument>
     where TDocument : class, new()
     where TKey : notnull
 {
     string CollectionName { get; }
+    
+    IMongoDataSourceMapper<TKey, TDocument> MongoDataSourceMapper { get; }
 
     Task CreateAscendingIndexAsync(string name, IEnumerable<string> fields);
     Task CreateTextIndexAsync(string name, string language, IEnumerable<CkIndexFields> fields);

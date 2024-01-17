@@ -1,5 +1,6 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
@@ -18,6 +19,14 @@ public interface ITenantRepository : IRuntimeRepository
 
     Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkId<CkTypeId>> ckTypeIds,
         DataQueryOperation dataQueryOperation,
+        int? skip = null, int? take = null);
+    
+    Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session, List<CkId<CkRecordId>> ckRecordIds,
+        DataQueryOperation dataQueryOperation,
+        int? skip = null, int? take = null);
+
+    Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, List<CkId<CkEnumId>> ckEnumIds,
+        DataQueryOperation dataQueryOperation, 
         int? skip = null, int? take = null);
 
     Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
@@ -95,4 +104,10 @@ public interface ITenantRepository : IRuntimeRepository
         IEnumerable<object> autoCompleteValues);
 
     #endregion Advanced functionality
+
+    /// <summary>
+    /// Loads the cache for the tenant.
+    /// </summary>
+    /// <returns></returns>
+    Task LoadCacheForTenantAsync(ICkCacheService cacheService);
 }

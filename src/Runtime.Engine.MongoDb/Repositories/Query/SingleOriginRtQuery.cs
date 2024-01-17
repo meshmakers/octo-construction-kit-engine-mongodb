@@ -12,38 +12,29 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Formulas;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
+using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
-
-internal class SingleOriginRtQuery : SingleOriginRtQuery<RtEntity>
-{
-    internal SingleOriginRtQuery(IMetricsContext metricsContext, ICkCacheService ckCacheService, string tenantId,
-        CkTypeGraph entityCacheItem,
-        IMongoDbRepositoryDataSource mongoDbRepositoryDataSource, string language)
-        : base(metricsContext, ckCacheService, tenantId, entityCacheItem, mongoDbRepositoryDataSource, language)
-    {
-    }
-}
 
 internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TEntity> where TEntity : RtEntity, new()
 {
     private readonly ICkCacheService _ckCacheService;
-    private readonly CkTypeGraph _entityCacheItem;
+    private readonly CkTypeGraph _ckTypeGraph;
     private readonly string _tenantId;
 
     internal SingleOriginRtQuery(IMetricsContext metricsContext, ICkCacheService ckCacheService, string tenantId,
-        CkTypeGraph entityCacheItem,
+        CkTypeGraph ckTypeGraph,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource, string language)
-        : base(metricsContext, mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(entityCacheItem.CkTypeId), language)
+        : base(metricsContext, mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeGraph.CkTypeId), language)
     {
         _ckCacheService = ckCacheService;
         _tenantId = tenantId;
-        _entityCacheItem = entityCacheItem;
+        _ckTypeGraph = ckTypeGraph;
     }
 
     protected override bool IsAttributeNameValid(string attributeName)
     {
-        return _entityCacheItem.AllAttributesByName.ContainsKey(attributeName) ||
+        return _ckTypeGraph.AllAttributesByName.ContainsKey(attributeName) ||
                attributeName == nameof(RtEntity.RtId) ||
                attributeName == nameof(RtEntity.RtCreationDateTime) ||
                attributeName == nameof(RtEntity.RtChangedDateTime) ||
@@ -66,15 +57,24 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         return $"{Constants.AttributesName}.{attributeName.ToCamelCase()}";
     }
 
+    protected override void AddPreFieldFilters(List<FilterDefinition<TEntity>> filters)
+    {
+        base.AddPreFieldFilters(filters);
+        
+        // Add filter for ck type and derived ones
+        var ckTypeIds =_ckTypeGraph.GetAllDerivedTypes(true);
+        filters.Add(Builders<TEntity>.Filter.In(f=> f.CkTypeId, ckTypeIds));
+    }
+
     protected override string GetEntityName()
     {
-        return _entityCacheItem.CkTypeId.FullName;
+        return _ckTypeGraph.CkTypeId.FullName;
     }
 
     protected override object? ResolveSearchAttributeValue(string attributeName, object? searchTerm, out bool isEnum)
     {
         if (searchTerm != null &&
-            _entityCacheItem.AllAttributesByName.TryGetValue(attributeName, out var attributeCacheItem))
+            _ckTypeGraph.AllAttributesByName.TryGetValue(attributeName, out var attributeCacheItem))
         {
             if (attributeCacheItem.ValueType == AttributeValueTypesDto.Enum && attributeCacheItem.ValueCkEnumId != null)
             {
@@ -142,7 +142,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
             return null;
         }
 
-        var statisticFunctions = new RtStatisticFunctions<TEntity>(_entityCacheItem, GroupBy);
+        var statisticFunctions = new RtStatisticFunctions<TEntity>(_ckTypeGraph, GroupBy);
         return statisticFunctions.Calculate(resultList);
     }
 }

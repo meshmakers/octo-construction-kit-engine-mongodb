@@ -180,21 +180,31 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return await AggregateCkTypeInfo(aggregate).SingleOrDefaultAsync();
     }
 
-    public IDataSourceCollection<CkModelId, CkModel> CkModels { get; }
+    public IMongoDbDataSourceCollection<CkModelId, CkModel> CkModels { get; }
     public IMongoDbDataSourceCollection<OctoObjectId, RtAssociation> RtMongoDbDataSourceAssociations { get; }
     public override IDataSourceCollection<OctoObjectId, RtAssociation> RtAssociations => RtMongoDbDataSourceAssociations;
     public IMongoDbDataSourceCollection<CkId<CkTypeId>, CkType> CkTypes { get; }
-    public IDataSourceCollection<CkId<CkRecordId>, CkRecord> CkRecords { get; }
-    public IDataSourceCollection<CkId<CkEnumId>, CkEnum> CkEnums { get; }
+    public IMongoDbDataSourceCollection<CkId<CkRecordId>, CkRecord> CkRecords { get; }
+    public IMongoDbDataSourceCollection<CkId<CkEnumId>, CkEnum> CkEnums { get; }
     public IMongoDbDataSourceCollection<CkId<CkAttributeId>, CkAttribute> CkAttributes { get; }
-    public IDataSourceCollection<CkId<CkAssociationRoleId>, CkAssociationRole> CkAssociationRoles { get; }
+    public IMongoDbDataSourceCollection<CkId<CkAssociationRoleId>, CkAssociationRole> CkAssociationRoles { get; }
     public IMongoDbDataSourceCollection<OctoObjectId, CkTypeAssociation> CkTypeAssociations { get; }
-    public IDataSourceCollection<OctoObjectId, CkTypeInheritance> CkTypeInheritances { get; }
-    public IDataSourceCollection<OctoObjectId, CkRecordInheritance> CkRecordInheritances { get; }
+    public IMongoDbDataSourceCollection<OctoObjectId, CkTypeInheritance> CkTypeInheritances { get; }
+    public IMongoDbDataSourceCollection<OctoObjectId, CkRecordInheritance> CkRecordInheritances { get; }
 
     public async Task UpdateCollectionsAsync(IOctoSession session)
     {
-        await _repository.CreateCollectionIfNotExistsAsync(new RtAssociationMongoDataSourceMapper(), true);
+        await _repository.CreateCollectionIfNotExistsAsync(CkModels.MongoDataSourceMapper, false);
+        await _repository.CreateCollectionIfNotExistsAsync(CkTypes.MongoDataSourceMapper, false);
+        await _repository.CreateCollectionIfNotExistsAsync(CkRecords.MongoDataSourceMapper, false);
+        await _repository.CreateCollectionIfNotExistsAsync(CkEnums.MongoDataSourceMapper, false);
+        await _repository.CreateCollectionIfNotExistsAsync(CkAttributes.MongoDataSourceMapper, false);
+        await _repository.CreateCollectionIfNotExistsAsync(CkTypeAssociations.MongoDataSourceMapper, false);
+        await _repository.CreateCollectionIfNotExistsAsync(CkAssociationRoles.MongoDataSourceMapper, false);
+        await _repository.CreateCollectionIfNotExistsAsync(CkTypeAssociations.MongoDataSourceMapper, false);
+        await _repository.CreateCollectionIfNotExistsAsync(CkTypeInheritances.MongoDataSourceMapper, false);
+        await _repository.CreateCollectionIfNotExistsAsync(CkRecordInheritances.MongoDataSourceMapper, false);
+        await _repository.CreateCollectionIfNotExistsAsync(RtMongoDbDataSourceAssociations.MongoDataSourceMapper, true);
 
         var ckTypes = (await CkTypes.FindManyAsync(session, t => t.IsCollectionRoot)).ToList();
         foreach (var ckType in ckTypes)
