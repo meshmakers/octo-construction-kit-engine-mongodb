@@ -20,9 +20,9 @@
 
     <ItemGroup Condition="'$(Configuration)'=='DebugL'">
         <PackageReference Include="Meshmakers.Common.Metrics" Version="999.0.0" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Engine" Version="3.0.29" />
-        <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="3.0.29" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Models.System" Version="3.0.29" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Engine" Version="999.0.0" />
+        <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="999.0.0" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Models.System" Version="999.0.0" />
     </ItemGroup>
 
     <ItemGroup>
