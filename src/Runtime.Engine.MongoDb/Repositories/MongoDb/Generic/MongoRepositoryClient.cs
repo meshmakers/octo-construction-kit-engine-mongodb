@@ -58,7 +58,9 @@ public class MongoRepositoryClient : IRepositoryClient
         urlBuilder.ApplicationName = $"{_instanceId}-{urlBuilder.Username}";
         urlBuilder.UseTls = mongoConnectionOptions.UseTls;
         urlBuilder.AllowInsecureTls = mongoConnectionOptions.AllowInsecureTls;
-
+        urlBuilder.RetryReads = true;
+        urlBuilder.RetryWrites = true;
+        
         var objectSerializer = new ObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
                                                             type.FullName?.StartsWith(typeof(RtEntity).Namespace!) == true);
 
