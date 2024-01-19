@@ -61,6 +61,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         await _documentCollection.Indexes.CreateOneAsync(new CreateIndexModel<TDocument>(
             Builders<TDocument>.IndexKeys.Combine(indexKeys), new CreateIndexOptions
             {
+                Background = true,
                 Name = name
             }
         ));

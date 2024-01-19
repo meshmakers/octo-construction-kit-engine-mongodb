@@ -316,13 +316,18 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session);
         CheckCancellation(cancellationToken);
 
-        await mongoDbRepositoryDataSource.UpdateIndexAsync(session);
+        await session.CommitTransactionAsync();
+        
+        using var sessionComplete = await mongoDbRepositoryDataSource.CreateSessionAsync();
+        sessionComplete.StartTransaction();
+        
+        await mongoDbRepositoryDataSource.UpdateIndexAsync(sessionComplete);
         CheckCancellation(cancellationToken);
 
         var updateDefinition = Builders<CkModel>.Update.Set(x => x.ModelState, ModelState.Available);
-        await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(session,  compiledModel.ModelId, updateDefinition);
-
-        await session.CommitTransactionAsync();
+        await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(sessionComplete,  compiledModel.ModelId, updateDefinition);
+        
+        await sessionComplete.CommitTransactionAsync();
     }
 
     private async Task CheckParallelModelImport(CkCompiledModelRoot compiledModel,
@@ -339,7 +344,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             var r = queryable.Where(m => m.ModelState == ModelState.Importing && m.Id == compiledModel.ModelId);
             if (r.Any())
             {
-                _logger.LogInformation("CK model is importing, waiting for 1 second (retries left: {retries})", retries);
+                _logger.LogInformation("CK model is importing, waiting for 1 second (retries left: {Retries})", retries);
                 Interlocked.Decrement(ref retries);
                 if (retries <= 0)
                 {

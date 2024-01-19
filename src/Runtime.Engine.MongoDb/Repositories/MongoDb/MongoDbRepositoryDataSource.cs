@@ -222,16 +222,12 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         foreach (var ckType in ckTypes)
         {
             var name = ckType.CkTypeId.GetCkTypeCollectionName();
-
             var mapper = new RtEntityMongoDataSourceMapper<RtEntity>();
             var collection = _repository.GetCollection(mapper, name);
-            await collection.DropIndexAsync(name);
-        }
 
-        foreach (var ckType in ckTypes)
-        {
             if (ckType.Indexes == null)
             {
+                await collection.DropIndexAsync(name);
                 continue;
             }
 
@@ -241,9 +237,6 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 {
                     continue;
                 }
-
-                var mapper = new RtEntityMongoDataSourceMapper<RtEntity>();
-                var collection = _repository.GetCollection(mapper, ckType.CkTypeId.GetCkTypeCollectionName());
 
                 var newName = ckType.CkTypeId.GetCkTypeCollectionName();
 
