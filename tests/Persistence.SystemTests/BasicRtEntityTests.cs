@@ -23,12 +23,8 @@ public class BasicRtEntityTests : IClassFixture<SystemFixture>
     {
         var systemContext = _systemFixture.GetSystemContext();
 
-        using var systemSession = await systemContext.GetSystemSessionAsync();
-        systemSession.StartTransaction();
-
         OperationResult operationResult = new();
-        await systemContext.ImportCkModelAsync(systemSession, new CkModelId("Test"), operationResult);
-        await systemSession.CommitTransactionAsync();
+        await systemContext.ImportCkModelAsync(new CkModelId("Test"), operationResult);
 
         var tenantRepository = systemContext.GetTenantRepository();
 

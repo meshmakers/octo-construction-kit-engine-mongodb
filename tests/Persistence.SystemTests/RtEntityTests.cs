@@ -38,12 +38,9 @@ public class RtEntityTests : IClassFixture<SystemFixture>
     public async void Test1()
     {
         var systemContext = _systemFixture.GetSystemContext();
-        using var systemSession = await systemContext.GetSystemSessionAsync();
-        systemSession.StartTransaction();
 
         OperationResult operationResult = new();
-        await systemContext.ImportCkModelAsync(systemSession, new CkModelId("System.Identity-1.0.0"), operationResult);
-        await systemSession.CommitTransactionAsync();
+        await systemContext.ImportCkModelAsync(new CkModelId("System.Identity-1.0.0"), operationResult);
 
         var tenantRepository = systemContext.GetTenantRepository();
 
@@ -87,13 +84,9 @@ public class RtEntityTests : IClassFixture<SystemFixture>
     {
         var planetDesignation = Guid.NewGuid().ToString();
         var systemContext = _systemFixture.GetSystemContext();
-        using var systemSession = await systemContext.GetSystemSessionAsync();
-        systemSession.StartTransaction();
 
         OperationResult operationResult = new();
-        await systemContext.ImportCkModelAsync(systemSession, new CkModelId("Test-1.0.0"), operationResult);
-        await systemSession.CommitTransactionAsync();
-
+        await systemContext.ImportCkModelAsync(new CkModelId("Test-1.0.0"), operationResult);
         var tenantRepository = systemContext.GetTenantRepository();
 
         using (var session = await tenantRepository.GetSessionAsync())
