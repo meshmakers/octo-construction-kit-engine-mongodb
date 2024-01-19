@@ -40,7 +40,7 @@ public class CkModelMongoDataSourceMapper : IMongoDataSourceMapper<CkModelId, Ck
         var update = Builders<CkModel>.Update;
         List<UpdateDefinition<CkModel>> list =
         [
-            update.Set(p => p.ScopeId, document.ScopeId),
+            update.Set(p => p.ModelState, document.ModelState),
             update.Set(p => p.Dependencies, document.Dependencies)
         ];
 

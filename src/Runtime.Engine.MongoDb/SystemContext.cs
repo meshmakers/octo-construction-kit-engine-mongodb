@@ -57,9 +57,6 @@ public class SystemContext : TenantContext, ISystemContext
             // Distribute updates (pre) to inform other services.
             await _tenantNotifications.NotifyPreTenantCreateAsync(normalizedTenantId);
 
-            using var systemSession = await GetSystemSessionAsync();
-            systemSession.StartTransaction();
-
             // Create database
             await CreateTenantInternalAsync(normalizedDatabaseName);
 
@@ -78,8 +75,7 @@ public class SystemContext : TenantContext, ISystemContext
             }
 
             await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, true,
-                new TenantDatabaseSourceIdentifier(ckModelRepository, systemSession));
-            await systemSession.CommitTransactionAsync();
+                new TenantDatabaseSourceIdentifier(ckModelRepository));
         }
         catch (Exception)
         {

@@ -263,6 +263,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
     }
 
+    public async Task<IOctoSystemSession> CreateSessionAsync()
+    {
+        return await _repositoryClient.GetSessionAsync();
+    }
+
     private IAggregateFluent<CkTypeInfo> AggregateCkTypeInfo(IAggregateFluent<CkType> aggregate)
     {
         return aggregate.GraphLookup(_ckTypeInheritances.GetMongoCollection(),

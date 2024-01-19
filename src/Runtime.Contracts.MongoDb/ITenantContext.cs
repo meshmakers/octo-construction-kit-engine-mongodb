@@ -107,27 +107,24 @@ public interface ITenantContext
     /// <summary>
     ///     Imports a construction kit model into the tenant.
     /// </summary>
-    /// <param name="systemSession"></param>
     /// <param name="ckCompiledModelRoot"></param>
     /// <returns></returns>
-    Task ImportCkModelAsync(IOctoSystemSession systemSession, CkCompiledModelRoot ckCompiledModelRoot);
+    Task ImportCkModelAsync(CkCompiledModelRoot ckCompiledModelRoot);
 
     /// <summary>
     ///     Imports a construction kit model into the tenant.
     /// </summary>
-    /// <param name="systemSession">The system session object</param>
     /// <param name="ckModelId">The construction kit model id to load</param>
     /// <param name="operationResult">Object that contains validation messages during load of construction kits</param>
     /// <returns></returns>
-    Task ImportCkModelAsync(IOctoSystemSession systemSession, CkModelId ckModelId, OperationResult operationResult);
+    Task ImportCkModelAsync(CkModelId ckModelId, OperationResult operationResult);
 
     /// <summary>
     ///     Returns true if a construction kit model with the given id exists.
     /// </summary>
-    /// <param name="systemSession">The system session object</param>
     /// <param name="ckModelId">The construction kit model id to check</param>
     /// <returns>True, if the construction kit model exists</returns>
-    Task<bool> IsCkModelExistingAsync(IOctoSystemSession systemSession, CkModelId ckModelId);
+    Task<bool> IsCkModelExistingAsync(CkModelId ckModelId);
 
     #endregion
 }

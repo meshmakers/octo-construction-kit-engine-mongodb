@@ -100,4 +100,9 @@ public class OperationFailedException : PersistenceException
             $"Update of autocomplete texts for attribute '{attributeName}' of CkType '{ckTypeId}' failed: {exception.Message}",
             exception);
     }
+
+    public static Exception ModelImportingWaitTimeout()
+    {
+        return new OperationFailedException("Model importing wait timeout.");
+    }
 }

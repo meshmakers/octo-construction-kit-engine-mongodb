@@ -128,7 +128,7 @@ public class TenantContext : ITenantContext
             }
 
             await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, true,
-                new TenantDatabaseSourceIdentifier(databaseContext, systemSession));
+                new TenantDatabaseSourceIdentifier(databaseContext));
 
             // Add the new tenant as child tenant of the current one
             if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
@@ -482,14 +482,14 @@ public class TenantContext : ITenantContext
 
     #region Construction Kits
 
-    public async Task ImportCkModelAsync(IOctoSystemSession systemSession, CkCompiledModelRoot ckCompiledModelRoot)
+    public async Task ImportCkModelAsync(CkCompiledModelRoot ckCompiledModelRoot)
     {
         try
         {
             await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId);
             var databaseContext = CreateDatabaseContext(_databaseName);
             await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, false,
-                new TenantDatabaseSourceIdentifier(databaseContext, systemSession));
+                new TenantDatabaseSourceIdentifier(databaseContext));
         }
         finally
         {
@@ -497,7 +497,7 @@ public class TenantContext : ITenantContext
         }
     }
 
-    public async Task ImportCkModelAsync(IOctoSystemSession systemSession, CkModelId ckModelId, OperationResult operationResult)
+    public async Task ImportCkModelAsync(CkModelId ckModelId, OperationResult operationResult)
     {
         var ckCompiledModelRoot = await _ckModelRepositoryService.LookupCkModelAsync(ckModelId, operationResult);
         if (ckCompiledModelRoot == null)
@@ -515,7 +515,7 @@ public class TenantContext : ITenantContext
             await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId);
             var databaseContext = CreateDatabaseContext(_databaseName);
             await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, false,
-                new TenantDatabaseSourceIdentifier(databaseContext, systemSession));
+                new TenantDatabaseSourceIdentifier(databaseContext));
         }
         finally
         {
@@ -523,12 +523,12 @@ public class TenantContext : ITenantContext
         }
     }
 
-    public async Task<bool> IsCkModelExistingAsync(IOctoSystemSession systemSession, CkModelId ckModelId)
+    public async Task<bool> IsCkModelExistingAsync(CkModelId ckModelId)
     {
         var databaseContext = CreateDatabaseContext(_databaseName);
 
         return await _ckModelRepositoryService.IsCkModelExistingAsync(InternalConstants.CkModelRepositoryName, ckModelId,
-            new TenantDatabaseSourceIdentifier(databaseContext, systemSession));
+            new TenantDatabaseSourceIdentifier(databaseContext));
     }
 
     #endregion

@@ -20,9 +20,9 @@ public class CkModel
     public CkModelId Id { get; set; }
 
     /// <summary>
-    ///     Defines the scope the type is created by
+    ///     Defines the state of the construction kit model
     /// </summary>
-    public ScopeIds ScopeId { get; set; }
+    public ModelState ModelState { get; set; }
 
     /// <summary>
     ///     Defines the dependencies of the construction kit

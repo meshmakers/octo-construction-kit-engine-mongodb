@@ -9,6 +9,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.CkCache;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Microsoft.Extensions.Logging;
+using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
@@ -42,9 +43,13 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     {
         var sourceIdentifierObject =
             ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier), sourceIdentifier);
+        
+        using var session = await sourceIdentifierObject.MongoDbRepositoryDataSource.CreateSessionAsync();
+        session.StartTransaction();
 
         var ckModel = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels
-            .FindSingleOrDefaultAsync(sourceIdentifierObject.Session, e => e.Id == modelId);
+            .FindSingleOrDefaultAsync(session, e => e.Id == modelId);
+        await session.CommitTransactionAsync();
 
         return ckModel != null;
     }
@@ -57,30 +62,35 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         var sourceIdentifierObject =
             ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier), sourceIdentifier);
 
+        using var session = await sourceIdentifierObject.MongoDbRepositoryDataSource.CreateSessionAsync();
+        session.StartTransaction();
+        
         var ckModel = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels
-            .FindSingleOrDefaultAsync(sourceIdentifierObject.Session, e => e.Id == modelId);
+            .FindSingleOrDefaultAsync(session, e => e.Id == modelId);
         if (ckModel == null)
         {
             throw ModelRepositoryException.ModelNotFound(modelId, RepositoryName);
         }
 
         var ckEnums = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkEnums
-            .FindManyAsync(sourceIdentifierObject.Session, e => e.CkModelId == modelId.ModelId);
+            .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
         var ckRecords = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkRecords
-            .FindManyAsync(sourceIdentifierObject.Session, e => e.CkModelId == modelId.ModelId);
+            .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
         var ckRecordInheritances = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkRecordInheritances
-            .FindManyAsync(sourceIdentifierObject.Session, e => e.CkModelId == modelId.ModelId);
+            .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
         var ckAttributes = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkAttributes
-            .FindManyAsync(sourceIdentifierObject.Session, e => e.CkModelId == modelId.ModelId);
+            .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
         var ckTypes = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkTypes
-            .FindManyAsync(sourceIdentifierObject.Session, e => e.CkModelId == modelId.ModelId);
+            .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
         var ckTypeInheritances = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkTypeInheritances
-            .FindManyAsync(sourceIdentifierObject.Session, e => e.CkModelId == modelId.ModelId);
+            .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
         var ckTypeAssociations = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkTypeAssociations
-            .FindManyAsync(sourceIdentifierObject.Session, e => e.CkModelId == modelId.ModelId);
+            .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
         var ckAssociationRoles = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkAssociationRoles
-            .FindManyAsync(sourceIdentifierObject.Session, e => e.CkModelId == modelId.ModelId);
+            .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
 
+        await session.CommitTransactionAsync();
+        
         var ckCompiledModelRoot = new CkCompiledModelRoot
         {
             ModelId = ckModel.Id,
@@ -177,7 +187,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             Id = ckCompiledModel.ModelId,
             Dependencies = ckCompiledModel.Dependencies?.ToArray()
         });
-        await ExecuteImport(sourceIdentifierObject.Session, ckCompiledModel, transientCkModel,
+        await ExecuteImport(ckCompiledModel, transientCkModel,
             sourceIdentifierObject.MongoDbRepositoryDataSource,
             operationResult, cancellationToken);
     }
@@ -201,10 +211,13 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     /// <inheritdoc />
     public bool CanWrite => true;
 
-    private async Task ExecuteImport(IOctoSession session, CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel,
+    private async Task ExecuteImport(CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel,
         ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource, OperationResult operationResult,
         CancellationToken? cancellationToken)
     {
+        _logger.LogInformation("Executing import of CK model");
+        await CheckParallelModelImport(compiledModel, mongoDbRepositoryDataSource);
+
         _logger.LogInformation("Validating of CK model");
         await _ckValidationService.ValidateAsync(compiledModel, operationResult);
         if (operationResult.HasErrors)
@@ -226,8 +239,11 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         // ValidateAsync
         Debug.Assert(_ckValidationService != null, nameof(_ckValidationService) + " != null");
                 
+        using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
+        session.StartTransaction();
+        
         // Create basic collections first (latter this method is called again to create CkType document collections)
-        await CreateCollections(session, mongoDbRepositoryDataSource);
+        await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session);
         CheckCancellation(cancellationToken);
         
         // Delete the old version
@@ -296,14 +312,58 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     transientCkModel.CkRecordInheritances));
             CheckCancellation(cancellationToken);
         }
-
-        await mongoDbRepositoryDataSource.CkModels.InsertOneAsync(session, transientCkModel.CkModel);
-
-        await CreateCollections(session, mongoDbRepositoryDataSource);
+        
+        await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session);
         CheckCancellation(cancellationToken);
 
+        await mongoDbRepositoryDataSource.UpdateIndexAsync(session);
+        CheckCancellation(cancellationToken);
 
-        await CreateIndex(session, mongoDbRepositoryDataSource);
+        var updateDefinition = Builders<CkModel>.Update.Set(x => x.ModelState, ModelState.Available);
+        await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(session,  compiledModel.ModelId, updateDefinition);
+
+        await session.CommitTransactionAsync();
+    }
+
+    private async Task CheckParallelModelImport(CkCompiledModelRoot compiledModel,
+        ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
+    {
+        using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
+        session.StartTransaction();
+        var queryable = await mongoDbRepositoryDataSource.CkModels.AsQueryableAsync(session);
+
+        int retries = 5;
+        while (true)
+        {
+            _logger.LogInformation("Checking if CK model is importing");
+            var r = queryable.Where(m => m.ModelState == ModelState.Importing && m.Id == compiledModel.ModelId);
+            if (r.Any())
+            {
+                _logger.LogInformation("CK model is importing, waiting for 1 second (retries left: {retries})", retries);
+                Interlocked.Decrement(ref retries);
+                if (retries <= 0)
+                {
+                    _logger.LogInformation("Current CK model is importing, tried 5 times to wait for the import to finish");
+                    throw OperationFailedException.ModelImportingWaitTimeout();
+                }
+                
+                await Task.Delay(1000);
+            }
+            else
+            {
+                _logger.LogInformation("No CK model is importing, continuing");
+                await mongoDbRepositoryDataSource.CkModels.TryDeleteOneAsync(session, compiledModel.ModelId);
+                await mongoDbRepositoryDataSource.CkModels.InsertOneAsync(session, new CkModel()
+                {
+                    Id = compiledModel.ModelId,
+                    ModelState = ModelState.Importing
+                });
+
+                break;
+            }  
+        }
+
+        await session.CommitTransactionAsync();
     }
 
     private void ProcessCkEnums(CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel)
@@ -482,22 +542,12 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
         CheckCancellation(cancellationToken);
 
-        await mongoDbRepositoryDataSource.CkModels.DeleteOneAsync(session, ckModelId);
     }
-
-    private async Task CreateCollections(IOctoSession session, ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
-    {
-        await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session);
-    }
-
-    private async Task CreateIndex(IOctoSession session, ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
-    {
-        await mongoDbRepositoryDataSource.UpdateIndexAsync(session);
-    }
+    
 
     private static void CheckCancellation(CancellationToken? cancellationToken)
     {
-        if (cancellationToken != null && cancellationToken.Value.IsCancellationRequested)
+        if (cancellationToken is { IsCancellationRequested: true })
         {
             cancellationToken.Value.ThrowIfCancellationRequested();
         }

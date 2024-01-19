@@ -1,5 +1,6 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 
@@ -19,4 +20,6 @@ public interface ICkMongoDbRepositoryDataSource
 
     Task UpdateCollectionsAsync(IOctoSession session);
     Task UpdateIndexAsync(IOctoSession session);
+    
+    Task<IOctoSystemSession> CreateSessionAsync();
 }
