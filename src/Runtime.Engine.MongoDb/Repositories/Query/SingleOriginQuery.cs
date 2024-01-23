@@ -7,7 +7,7 @@ using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
-public abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
+internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
     where TEntity : class, new()
     where TKey : notnull
 {
@@ -16,8 +16,8 @@ public abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
 
     protected internal SingleOriginQuery(IMetricsContext metricsContext,
         IMongoDbDataSourceCollection<TKey, TEntity> mongoDbDataSourceCollection,
-        string language = "en")
-        : base(language)
+        FieldFilterResolver<TEntity> fieldFilterResolver, string language = "en")
+        : base(fieldFilterResolver, language)
     {
         _metricsContext = metricsContext;
         _mongoDbDataSourceCollection = mongoDbDataSourceCollection;

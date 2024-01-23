@@ -15,6 +15,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -32,28 +33,25 @@ public class TenantContext : ITenantContext
     private readonly IModelLoaderService _modelLoaderService;
     private readonly SemaphoreSlim _semaphoreSlim = new(1, 1);
     protected readonly IOptions<OctoSystemConfiguration> _systemConfiguration;
+    private readonly IServiceProvider _serviceProvider;
 
     protected readonly IRepositoryClient _systemRepositoryClient;
     protected readonly ITenantNotifications _tenantNotifications;
 
-    protected TenantContext(IMetricsContext metricsContext, ILoggerFactory loggerFactory,
-        IOptions<OctoSystemConfiguration> systemConfiguration,
-        string tenantId,
-        string databaseName,
-        ITenantNotifications tenantNotifications,
-        ICkModelRepositoryService ckModelRepositoryService,
-        ICkCacheService cacheService, IModelLoaderService modelLoaderService, IBulkRtMutation bulkRtMutation)
+    protected TenantContext(ILoggerFactory loggerFactory, IOptions<OctoSystemConfiguration> systemConfiguration,
+        IServiceProvider serviceProvider, string tenantId, string databaseName)
     {
         TenantId = tenantId;
-        _metricsContext = metricsContext;
+        _metricsContext = serviceProvider.GetRequiredService<IMetricsContext>();
         _loggerFactory = loggerFactory;
         _systemConfiguration = systemConfiguration;
+        _serviceProvider = serviceProvider;
         _databaseName = databaseName;
-        _tenantNotifications = tenantNotifications;
-        _ckModelRepositoryService = ckModelRepositoryService;
-        _cacheService = cacheService;
-        _modelLoaderService = modelLoaderService;
-        _bulkRtMutation = bulkRtMutation;
+        _tenantNotifications = serviceProvider.GetRequiredService<ITenantNotifications>();
+        _ckModelRepositoryService = serviceProvider.GetRequiredService<ICkModelRepositoryService>();
+        _cacheService = serviceProvider.GetRequiredService<ICkCacheService>();
+        _modelLoaderService = serviceProvider.GetRequiredService<IModelLoaderService>();
+        _bulkRtMutation = serviceProvider.GetRequiredService<IBulkRtMutation>();
 
         var systemConnectionOptions = new MongoConnectionOptions
         {
@@ -65,7 +63,8 @@ public class TenantContext : ITenantContext
             AllowInsecureTls = _systemConfiguration.Value.AllowInsecureTls
         };
 
-        _systemRepositoryClient = new MongoRepositoryClient(loggerFactory.CreateLogger<MongoRepositoryClient>(), systemConnectionOptions);
+        _systemRepositoryClient = new MongoRepositoryClient(loggerFactory.CreateLogger<MongoRepositoryClient>(), systemConnectionOptions, 
+            serviceProvider);
     }
 
     public string TenantId { get; }
@@ -399,9 +398,7 @@ public class TenantContext : ITenantContext
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
         var tenant = await GetChildTenantAsync(systemSession, tenantId);
-        var context = new TenantContext(_metricsContext, _loggerFactory, _systemConfiguration, tenantId, tenant.DatabaseName,
-            _tenantNotifications,
-            _ckModelRepositoryService, _cacheService, _modelLoaderService, _bulkRtMutation);
+        var context = new TenantContext(_loggerFactory, _systemConfiguration, _serviceProvider, tenantId, tenant.DatabaseName);
 
         return context;
     }
@@ -556,7 +553,7 @@ public class TenantContext : ITenantContext
 
     protected IMongoDbRepositoryDataSource CreateDatabaseContext(string databaseName)
     {
-        return new MongoDbRepositoryDataSource(_systemRepositoryClient, _cacheService, databaseName, TenantId);
+        return new MongoDbRepositoryDataSource(_systemRepositoryClient, _serviceProvider, databaseName, TenantId);
     }
 
     private async Task<RtTenant?> GetRtTenantAsync(IOctoSession systemSession,

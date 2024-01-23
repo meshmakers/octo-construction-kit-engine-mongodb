@@ -5,10 +5,10 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
-public class CkTypeQuery : SingleOriginQuery<CkId<CkTypeId>, CkType>
+internal class CkTypeQuery : SingleOriginQuery<CkId<CkTypeId>, CkType>
 {
     public CkTypeQuery(IMetricsContext metricsContext, IMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
-        : base(metricsContext, mongoDbRepositoryDataSource.CkTypes)
+        : base(metricsContext, mongoDbRepositoryDataSource.CkTypes, new FieldFilterResolver<CkType>())
     {
     }
 }

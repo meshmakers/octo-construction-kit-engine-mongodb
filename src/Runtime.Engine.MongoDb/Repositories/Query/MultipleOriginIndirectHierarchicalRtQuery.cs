@@ -1,12 +1,9 @@
-using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
-using Meshmakers.Octo.Runtime.Engine.MongoDb.Formulas;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using MongoDB.Bson;
@@ -17,11 +14,11 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 // ReSharper disable once UnusedType.Global
 internal class MultipleOriginIndirectHierarchicalRtQuery : MultipleOriginIndirectHierarchicalRtQuery<RtEntity>
 {
-    internal MultipleOriginIndirectHierarchicalRtQuery(ICkCacheService ckCacheService, string tenantId, CkTypeGraph targetEntityCacheItem,
+    internal MultipleOriginIndirectHierarchicalRtQuery(ICkCacheService ckCacheService, string tenantId, CkTypeGraph targetCkTypeGraph,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
         string language, IEnumerable<OctoObjectId> rtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkId<CkTypeId> targetCkTypeId)
-        : base(ckCacheService, tenantId, targetEntityCacheItem, mongoDbRepositoryDataSource, language, rtIds, originCkTypeId, roleId,
+        : base(ckCacheService, tenantId, targetCkTypeGraph, mongoDbRepositoryDataSource, language, rtIds, originCkTypeId, roleId,
             graphDirection,
             targetCkTypeId)
     {
@@ -30,25 +27,19 @@ internal class MultipleOriginIndirectHierarchicalRtQuery : MultipleOriginIndirec
 
 internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<TTargetEntity> where TTargetEntity : RtEntity, new()
 {
-    private readonly ICkCacheService _ckCacheService;
     private readonly GraphDirections _graphDirection;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
     private readonly CkId<CkTypeId> _originCkTypeId;
     private readonly CkId<CkAssociationRoleId> _roleId;
     private readonly IEnumerable<OctoObjectId> _rtIds;
     private readonly CkId<CkTypeId> _targetCkTypeId;
-    private readonly CkTypeGraph _targetEntityCacheItem;
-    private readonly string _tenantId;
 
-    internal MultipleOriginIndirectHierarchicalRtQuery(ICkCacheService ckCacheService, string tenantId, CkTypeGraph targetEntityCacheItem,
+    internal MultipleOriginIndirectHierarchicalRtQuery(ICkCacheService ckCacheService, string tenantId, CkTypeGraph targetCkTypeGraph,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
         string language, IEnumerable<OctoObjectId> rtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkId<CkTypeId> targetCkTypeId)
-        : base(language)
+        : base(new RtEntityFieldFilterResolver<TTargetEntity>(ckCacheService, tenantId, targetCkTypeGraph), language)
     {
-        _ckCacheService = ckCacheService;
-        _tenantId = tenantId;
-        _targetEntityCacheItem = targetEntityCacheItem;
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
         _rtIds = rtIds;
         _originCkTypeId = originCkTypeId;
@@ -190,93 +181,5 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
         }
 
         return new MultipleOriginResultSet<TTargetEntity>(result);
-    }
-
-    protected override bool IsAttributeNameValid(string attributeName)
-    {
-        return _targetEntityCacheItem.AllAttributes.TryGetValue(attributeName, out var _) ||
-               attributeName == nameof(RtEntity.RtId) ||
-               attributeName == nameof(RtEntity.RtCreationDateTime) ||
-               attributeName == nameof(RtEntity.RtChangedDateTime) ||
-               attributeName == nameof(RtEntity.RtWellKnownName);
-    }
-
-    protected override string ResolveAttributeName(string attributeName)
-    {
-        var baseResolve = base.ResolveAttributeName(attributeName);
-        if (!string.IsNullOrEmpty(baseResolve))
-        {
-            return baseResolve;
-        }
-
-        if (typeof(RtEntity).GetProperty(attributeName) != null)
-        {
-            return attributeName.ToCamelCase();
-        }
-
-        return $"{Constants.AttributesName}.{attributeName.ToCamelCase()}";
-    }
-
-    protected override object? ResolveSearchAttributeValue(string attributeName, object? searchTerm, out bool isEnum)
-    {
-        if (searchTerm != null &&
-            _targetEntityCacheItem.AllAttributes.TryGetValue(attributeName, out var attributeCacheItem))
-        {
-            var searchTermString = searchTerm.ToString();
-
-            if (string.IsNullOrWhiteSpace(searchTermString))
-            {
-                isEnum = false;
-                return null;
-            }
-
-            if (attributeCacheItem.ValueType == AttributeValueTypesDto.Enum && attributeCacheItem.ValueCkEnumId != null)
-            {
-                var ckEnumGraph = _ckCacheService.GetCkEnum(_tenantId, attributeCacheItem.ValueCkEnumId.Value);
-                var searchTermStringEnum = searchTermString.Replace("_", "");
-
-                // Search for match in selection value
-                var result = ckEnumGraph.Values.FirstOrDefault(x =>
-                    string.Equals(x.Name, searchTermStringEnum, StringComparison.OrdinalIgnoreCase));
-                if (result != null)
-                {
-                    isEnum = false;
-                    return result.Key;
-                }
-            }
-
-            var searchTermFormula = searchTerm.ToString()?.StartsWith("@") ?? false ? searchTermString.Substring(1) : null;
-            if (!string.IsNullOrWhiteSpace(searchTermFormula))
-            {
-                var expression = new OctoExpression(searchTermFormula);
-                var result = expression.calculate();
-
-                if (double.IsNegativeInfinity(result))
-                {
-                    isEnum = false;
-                    return null;
-                }
-
-                if (!double.IsNaN(result))
-                {
-                    switch (attributeCacheItem.ValueType)
-                    {
-                        case AttributeValueTypesDto.DateTime:
-                            isEnum = false;
-                            return new DateTime((long)result);
-                    }
-                }
-                else
-                {
-                    throw OperationFailedException.FormulaEvaluationFailed(searchTerm);
-                }
-            }
-
-            // Change to the type of attribute
-            isEnum = false;
-            return AttributeValueConverter.ConvertAttributeValue(attributeCacheItem.ValueType, searchTerm);
-        }
-
-        return base.ResolveSearchAttributeValue(attributeName, searchTerm, out isEnum);
     }
 }

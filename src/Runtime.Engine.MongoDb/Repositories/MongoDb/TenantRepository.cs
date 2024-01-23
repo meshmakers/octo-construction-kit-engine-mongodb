@@ -122,7 +122,9 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     protected override async Task DeleteManyRtEntitiesAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
         ICollection<FieldFilter> fieldFilters)
     {
-        var mutation = new Mutation<TEntity>(BulkRtMutation, _mongoDbRepositoryDataSource);
+        var ckCacheService = await GetCkCacheServiceAsync();
+        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
+        var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, _mongoDbRepositoryDataSource);
         mutation.AddFieldFilters(fieldFilters);
         await mutation.DeleteManyAsync(session, ckTypeId).ConfigureAwait(false);
     }
@@ -130,7 +132,9 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     protected override async Task DeleteOneRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
         ICollection<FieldFilter> fieldFilters)
     {
-        var mutation = new Mutation<TEntity>(BulkRtMutation, _mongoDbRepositoryDataSource);
+        var ckCacheService = await GetCkCacheServiceAsync();
+        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
+        var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, _mongoDbRepositoryDataSource);
         mutation.AddFieldFilters(fieldFilters);
         await mutation.DeleteOneAsync(session, ckTypeId).ConfigureAwait(false);
     }
@@ -138,7 +142,9 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     protected override async Task UpdateOneRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
         ICollection<FieldFilter> fieldFilters, TEntity rtEntity)
     {
-        var mutation = new Mutation<TEntity>(BulkRtMutation, _mongoDbRepositoryDataSource);
+        var ckCacheService = await GetCkCacheServiceAsync();
+        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
+        var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, _mongoDbRepositoryDataSource);
         mutation.AddFieldFilters(fieldFilters);
         await mutation.UpdateOneAsync(session, ckTypeId, rtEntity).ConfigureAwait(false);
     }
@@ -146,7 +152,9 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     protected override async Task UpdateManyRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
         ICollection<FieldFilter> fieldFilters, TEntity rtEntity)
     {
-        var mutation = new Mutation<TEntity>(BulkRtMutation, _mongoDbRepositoryDataSource);
+        var ckCacheService = await GetCkCacheServiceAsync();
+        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
+        var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, _mongoDbRepositoryDataSource);
         mutation.AddFieldFilters(fieldFilters);
         await mutation.UpdateManyAsync(session, ckTypeId, rtEntity).ConfigureAwait(false);
     }
@@ -154,7 +162,9 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     protected override async Task ReplaceOneRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
         ICollection<FieldFilter> fieldFilters, TEntity rtEntity)
     {
-        var mutation = new Mutation<TEntity>(BulkRtMutation, _mongoDbRepositoryDataSource);
+        var ckCacheService = await GetCkCacheServiceAsync();
+        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
+        var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, _mongoDbRepositoryDataSource);
         mutation.AddFieldFilters(fieldFilters);
         await mutation.ReplaceOneAsync(session, ckTypeId, rtEntity).ConfigureAwait(false);
     }
@@ -354,9 +364,9 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         int? take = null)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
-        var entityCacheItem = await GetCkTypeGraphAsync(ckTypeId);
+        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var query =
-            new SingleOriginRtQuery<TEntity>(_metricsContext, ckCacheService, TenantId, entityCacheItem, _mongoDbRepositoryDataSource,
+            new SingleOriginRtQuery<TEntity>(_metricsContext, ckCacheService, TenantId, ckTypeGraph, _mongoDbRepositoryDataSource,
                 dataQueryOperation.Language);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);

@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository.Entities;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -20,16 +22,20 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 [DebuggerDisplay("{" + nameof(_instanceId) + "}")]
 public class MongoRepositoryClient : IRepositoryClient
 {
+    private readonly IServiceProvider _serviceProvider;
     private const string OctoConventionCamelCase = "octo-convention-camelCase";
-    private const string OctoConventionSerialization = "octo-convention-serialization";
+    private const string OctoRtEntityConvention = "octo-convention-rtEntity";
+    private const string OctoRtRecordConvention = "octo-convention-rtRecord";
 
     private static bool _isRegistered;
     private readonly MongoClient _client;
 
     private readonly Guid _instanceId = Guid.NewGuid();
 
-    public MongoRepositoryClient(ILogger<MongoRepositoryClient> logger, MongoConnectionOptions mongoConnectionOptions)
+    public MongoRepositoryClient(ILogger<MongoRepositoryClient> logger, MongoConnectionOptions mongoConnectionOptions, 
+        IServiceProvider serviceProvider)
     {
+        _serviceProvider = serviceProvider;
         ArgumentValidation.ValidateString(nameof(mongoConnectionOptions.MongoDbHost),
             mongoConnectionOptions.MongoDbHost);
 
@@ -323,6 +329,7 @@ public class MongoRepositoryClient : IRepositoryClient
         {
             cm.SetIsRootClass(true);
             cm.SetIgnoreExtraElements(true);
+            cm.MapCreator(p => new RtEntity());
 
             cm.MapIdMember(c => c.RtId).SetIdGenerator(new OctoObjectIdGenerator());
             cm.MapMember(c => c.RtCreationDateTime).SetElementName(nameof(RtEntity.RtCreationDateTime).ToCamelCase()).SetIsRequired(true);
@@ -368,7 +375,8 @@ public class MongoRepositoryClient : IRepositoryClient
         // Remove convention first to avoid duplications
         // this call of Remove method makes no errors if occurs before any Register method call
         ConventionRegistry.Remove(OctoConventionCamelCase);
-        ConventionRegistry.Remove(OctoConventionSerialization);
+        ConventionRegistry.Remove(OctoRtEntityConvention);
+        ConventionRegistry.Remove(OctoRtRecordConvention);
 
         // Register convention
         ConventionRegistry.Register(OctoConventionCamelCase, new ConventionPack
@@ -377,10 +385,17 @@ public class MongoRepositoryClient : IRepositoryClient
         }, _ => true);
 
         // This convention is needed to ensure that properties of a derived class of RtEntity
-        // are not serialized.
-        ConventionRegistry.Register(OctoConventionSerialization, new ConventionPack
+        // are not serialized and the correct polymorphic type is used.
+        ConventionRegistry.Register(OctoRtEntityConvention, new ConventionPack
         {
-            new RtEntitySerializationConvention()
-        }, t => typeof(RtEntity).IsAssignableFrom(t) || typeof(RtRecord).IsAssignableFrom(t));
+            new RtEntityMapConvention(_serviceProvider.GetRequiredService<ICkClassMappingService>())
+        }, t => typeof(RtEntity).IsAssignableFrom(t));
+        
+        // This convention is needed to ensure that properties of a derived class of RtRecord
+        // are not serialized and the correct polymorphic type is used.
+        ConventionRegistry.Register(OctoRtRecordConvention, new ConventionPack
+        {
+            new RtRecordMapConvention(_serviceProvider.GetRequiredService<ICkClassMappingService>())
+        }, t => typeof(RtRecord).IsAssignableFrom(t));
     }
 }

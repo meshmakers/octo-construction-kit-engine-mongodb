@@ -9,6 +9,7 @@ using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -25,7 +26,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     // ReSharper disable once PrivateFieldCanBeConvertedToLocalVariable
     private readonly IRepositoryClient _repositoryClient;
 
-    public MongoDbRepositoryDataSource(ILoggerFactory loggerFactory, ICkCacheService ckCacheService, string tenantId, string dataSourceHost,
+    private MongoDbRepositoryDataSource(ILoggerFactory loggerFactory, IServiceProvider serviceProvider, string tenantId, string dataSourceHost,
         string databaseName,
         string databaseUser, string? databasePassword,
         string authenticationDatabaseName, bool useTls, bool allowInsecureTls)
@@ -38,11 +39,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             AuthenticationSource = authenticationDatabaseName,
             UseTls = useTls,
             AllowInsecureTls = allowInsecureTls
-        }), ckCacheService, databaseName, tenantId)
+        }, serviceProvider), serviceProvider, databaseName, tenantId)
     {
     }
 
-    public MongoDbRepositoryDataSource(IRepositoryClient repositoryClient, ICkCacheService ckCacheService, string databaseName,
+    public MongoDbRepositoryDataSource(IRepositoryClient repositoryClient, IServiceProvider serviceProvider, string databaseName,
         string tenantId)
         : base(tenantId)
     {
@@ -50,7 +51,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         _repositoryClient = repositoryClient;
         _repository = (IRepositoryInternal)_repositoryClient.GetRepository(databaseName);
-        _ckCacheService = ckCacheService;
+        _ckCacheService = serviceProvider.GetRequiredService<ICkCacheService>();
 
         CkModels = _repository.GetCollection(new CkModelMongoDataSourceMapper());
 

@@ -1,14 +1,9 @@
-using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Models.System.ConstructionKit.Generated.System.v1;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
-using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
-using Meshmakers.Octo.Runtime.Engine.Repositories;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -20,22 +15,14 @@ public class SystemContext : TenantContext, ISystemContext
     /// <summary>
     ///     Initializes a new instance of the <see cref="SystemContext" /> class.
     /// </summary>
-    /// <param name="metricsContext"></param>
     /// <param name="loggerFactory"></param>
     /// <param name="systemConfiguration"></param>
-    /// <param name="tenantNotifications"></param>
-    /// <param name="ckCacheService"></param>
-    /// <param name="ckModelRepositoryService"></param>
-    /// <param name="modelLoaderService"></param>
-    /// <param name="bulkRtMutation"></param>
-    public SystemContext(IMetricsContext metricsContext, ILoggerFactory loggerFactory,
+    /// <param name="serviceProvider"></param>
+    public SystemContext(ILoggerFactory loggerFactory,
         IOptions<OctoSystemConfiguration> systemConfiguration,
-        ITenantNotifications tenantNotifications,
-        ICkCacheService ckCacheService, ICkModelRepositoryService ckModelRepositoryService, IModelLoaderService modelLoaderService,
-        IBulkRtMutation bulkRtMutation)
-        : base(metricsContext, loggerFactory, systemConfiguration, systemConfiguration.Value.SystemTenantId.NormalizeString(),
-            systemConfiguration.Value.SystemDatabaseName.ToLower(),
-            tenantNotifications, ckModelRepositoryService, ckCacheService, modelLoaderService, bulkRtMutation)
+        IServiceProvider serviceProvider)
+        : base(loggerFactory, systemConfiguration, serviceProvider, systemConfiguration.Value.SystemTenantId.NormalizeString(),
+            systemConfiguration.Value.SystemDatabaseName.ToLower())
     {
     }
 

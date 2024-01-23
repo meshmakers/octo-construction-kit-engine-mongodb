@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
-using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
@@ -9,12 +10,14 @@ using Meshmakers.Octo.Runtime.Engine.Repositories;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
-public class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new()
+internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new()
 {
     private readonly IBulkRtMutation _bulkRtMutation;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
 
-    public Mutation(IBulkRtMutation bulkRtMutation, IMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
+    public Mutation(ICkCacheService ckCacheService, string tenantId, CkTypeGraph ckTypeGraph, IBulkRtMutation bulkRtMutation,
+        IMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
+        : base(new RtEntityFieldFilterResolver<TEntity>(ckCacheService, tenantId, ckTypeGraph))
     {
         _bulkRtMutation = bulkRtMutation;
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
@@ -120,21 +123,5 @@ public class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new()
 
         await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, entityUpdateInfoList,
             new Collection<AssociationUpdateInfo>());
-    }
-
-    protected override string ResolveAttributeName(string attributeName)
-    {
-        var baseResolve = base.ResolveAttributeName(attributeName);
-        if (!string.IsNullOrEmpty(baseResolve))
-        {
-            return baseResolve;
-        }
-
-        if (typeof(RtEntity).GetProperty(attributeName) != null)
-        {
-            return attributeName.ToCamelCase();
-        }
-
-        return $"{Constants.AttributesName}.{attributeName.ToCamelCase()}";
     }
 }

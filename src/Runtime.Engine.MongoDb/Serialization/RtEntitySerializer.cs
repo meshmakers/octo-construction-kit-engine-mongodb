@@ -20,4 +20,11 @@ internal class RtEntitySerializer : BsonClassMapSerializer<RtEntity>
         };
         base.Serialize(context, args, tmpEntity);
     }
+
+    public override RtEntity Deserialize(BsonDeserializationContext context, BsonDeserializationArgs args)
+    {
+        var o =  base.Deserialize(context, args);
+
+        return o;
+    }
 }
