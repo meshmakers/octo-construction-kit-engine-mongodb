@@ -15,17 +15,22 @@ public class CkModel
     }
 
     /// <summary>
-    ///     Defines the name of the construction kit
+    ///     Defines the id of the construction kit model
     /// </summary>
-    public CkModelId Id { get; set; }
+    public CkModelId Id { get; init; }
 
+    /// <summary>
+    /// Defines the name of construction kit model without version
+    /// </summary>
+    public string ModelId { get; init; } = null!;
+    
     /// <summary>
     ///     Defines the state of the construction kit model
     /// </summary>
-    public ModelState ModelState { get; set; }
+    public ModelState ModelState { get; init; }
 
     /// <summary>
     ///     Defines the dependencies of the construction kit
     /// </summary>
-    public CkModelId[]? Dependencies { get; set; }
+    public CkModelId[]? Dependencies { get; init; }
 }

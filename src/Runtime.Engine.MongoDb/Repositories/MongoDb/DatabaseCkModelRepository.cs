@@ -341,7 +341,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         while (true)
         {
             _logger.LogInformation("Checking if CK model is importing");
-            var r = queryable.Where(m => m.ModelState == ModelState.Importing && m.Id == compiledModel.ModelId);
+            var r = queryable.Where(m => m.ModelState == ModelState.Importing && m.Id != compiledModel.ModelId);
             if (r.Any())
             {
                 _logger.LogInformation("CK model is importing, waiting for 1 second (retries left: {Retries})", retries);
@@ -361,6 +361,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 await mongoDbRepositoryDataSource.CkModels.InsertOneAsync(session, new CkModel()
                 {
                     Id = compiledModel.ModelId,
+                    ModelId = compiledModel.ModelId.ModelId,
                     ModelState = ModelState.Importing
                 });
 
@@ -483,7 +484,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         CancellationToken? cancellationToken)
     {
         var existingModelId =
-            await mongoDbRepositoryDataSource.CkModels.FindSingleOrDefaultAsync(session, model => model.Id.ModelId == ckModelId.ModelId);
+            await mongoDbRepositoryDataSource.CkModels.FindSingleOrDefaultAsync(session, model => model.ModelId == ckModelId.ModelId);
         if (existingModelId == null)
         {
             return;
