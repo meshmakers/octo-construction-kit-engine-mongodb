@@ -479,75 +479,61 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         return ckTypeAttributes;
     }
 
+    /// <summary>
+    /// This method deletes the previous version of the model.
+    /// </summary>
+    /// <remarks>
+    /// We want to check if there is a ck model of ANY version is existing here. We retrieve the model version
+    /// and delete everything that belongs to this model. This is necessary because we want to be able to
+    /// import a model with a different version. 
+    /// </remarks>
+    /// <param name="session"></param>
+    /// <param name="ckModelId"></param>
+    /// <param name="mongoDbRepositoryDataSource"></param>
+    /// <param name="cancellationToken"></param>
     private async Task DeletePreviousVersion(IOctoSession session, CkModelId ckModelId,
         ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
         CancellationToken? cancellationToken)
     {
         var existingModelId =
-            await mongoDbRepositoryDataSource.CkModels.FindSingleOrDefaultAsync(session, model => model.ModelId == ckModelId.ModelId);
+            await mongoDbRepositoryDataSource.CkModels.FindSingleOrDefaultAsync(session, model =>
+                model.ModelId == ckModelId.ModelId);
         if (existingModelId == null)
         {
             return;
         }
-
-        foreach (var ckRecord in await mongoDbRepositoryDataSource.CkRecords.FindManyAsync(session,
-                     x => x.CkRecordId.ModelId == ckModelId.ModelId))
-        {
-            await mongoDbRepositoryDataSource.CkRecords.DeleteOneAsync(session, ckRecord.CkRecordId);
-        }
-
-        foreach (var ckEnum in await mongoDbRepositoryDataSource.CkEnums.FindManyAsync(session,
-                     x => x.CkEnumId.ModelId == ckModelId.ModelId))
-        {
-            await mongoDbRepositoryDataSource.CkEnums.DeleteOneAsync(session, ckEnum.CkEnumId);
-        }
-
-        foreach (var ckAttribute in await mongoDbRepositoryDataSource.CkAttributes.FindManyAsync(session,
-                     x => x.CkAttributeId.ModelId == ckModelId.ModelId))
-        {
-            await mongoDbRepositoryDataSource.CkAttributes.DeleteOneAsync(session, ckAttribute.CkAttributeId);
-        }
-
+        
+        await mongoDbRepositoryDataSource.CkRecords.DeleteManyAsync(session,
+                Builders<CkRecord>.Filter.Eq(nameof(CkRecord.CkModelId).ToCamelCase(), existingModelId.ModelId));
         CheckCancellation(cancellationToken);
 
-        foreach (var ckAssociationRole in
-                 await mongoDbRepositoryDataSource.CkAssociationRoles.FindManyAsync(session, x => x.RoleId.ModelId == ckModelId.ModelId))
-        {
-            await mongoDbRepositoryDataSource.CkAssociationRoles.DeleteOneAsync(session, ckAssociationRole.RoleId);
-        }
-
+        await mongoDbRepositoryDataSource.CkEnums.DeleteManyAsync(session,
+            Builders<CkEnum>.Filter.Eq(nameof(CkEnum.CkModelId).ToCamelCase(), existingModelId.ModelId));
         CheckCancellation(cancellationToken);
 
-        foreach (var ckType in await mongoDbRepositoryDataSource.CkTypes.FindManyAsync(session,
-                     x => x.CkTypeId.ModelId == ckModelId.ModelId))
-        {
-            await mongoDbRepositoryDataSource.CkTypes.DeleteOneAsync(session, ckType.CkTypeId);
-        }
-
+        await mongoDbRepositoryDataSource.CkAttributes.DeleteManyAsync(session,
+            Builders<CkAttribute>.Filter.Eq(nameof(CkAttribute.CkModelId).ToCamelCase(), existingModelId.ModelId));
         CheckCancellation(cancellationToken);
 
-        foreach (var ckTypeAssociation in
-                 await mongoDbRepositoryDataSource.CkTypeAssociations.FindManyAsync(session, x => x.RoleId.ModelId == ckModelId.ModelId))
-        {
-            await mongoDbRepositoryDataSource.CkTypeAssociations.DeleteOneAsync(session, ckTypeAssociation.AssociationId);
-        }
-
+        await mongoDbRepositoryDataSource.CkAssociationRoles.DeleteManyAsync(session,
+            Builders<CkAssociationRole>.Filter.Eq(nameof(CkAssociationRole.CkModelId).ToCamelCase(), existingModelId.ModelId));
+        CheckCancellation(cancellationToken);
+        
+        await mongoDbRepositoryDataSource.CkTypes.DeleteManyAsync(session,
+            Builders<CkType>.Filter.Eq(nameof(CkType.CkModelId).ToCamelCase(), existingModelId.ModelId));
+        CheckCancellation(cancellationToken);
+        
+        await mongoDbRepositoryDataSource.CkTypeAssociations.DeleteManyAsync(session,
+            Builders<CkTypeAssociation>.Filter.Eq(nameof(CkTypeAssociation.CkModelId).ToCamelCase(), existingModelId.ModelId));
+        CheckCancellation(cancellationToken);
+        
+        await mongoDbRepositoryDataSource.CkTypeInheritances.DeleteManyAsync(session,
+            Builders<CkTypeInheritance>.Filter.Eq(nameof(CkTypeInheritance.CkModelId).ToCamelCase(), existingModelId.ModelId));
         CheckCancellation(cancellationToken);
 
-        foreach (var ckTypeInheritance in await mongoDbRepositoryDataSource.CkTypeInheritances.FindManyAsync(session,
-                     x => x.InheritorCkTypeId.ModelId == ckModelId.ModelId))
-        {
-            await mongoDbRepositoryDataSource.CkTypeInheritances.DeleteOneAsync(session, ckTypeInheritance.InheritanceId);
-        }
-
-        foreach (var ckRecordInheritance in await mongoDbRepositoryDataSource.CkRecordInheritances.FindManyAsync(session,
-                     x => x.InheritorCkRecordId.ModelId == ckModelId.ModelId))
-        {
-            await mongoDbRepositoryDataSource.CkRecordInheritances.DeleteOneAsync(session, ckRecordInheritance.InheritanceId);
-        }
-
+        await mongoDbRepositoryDataSource.CkRecordInheritances.DeleteManyAsync(session,
+            Builders<CkRecordInheritance>.Filter.Eq(nameof(CkRecordInheritance.CkModelId).ToCamelCase(), existingModelId.ModelId));
         CheckCancellation(cancellationToken);
-
     }
     
 
