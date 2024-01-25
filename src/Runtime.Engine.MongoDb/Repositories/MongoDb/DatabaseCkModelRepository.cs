@@ -495,44 +495,44 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
         CancellationToken? cancellationToken)
     {
-        var existingModelId =
+        var ckModel =
             await mongoDbRepositoryDataSource.CkModels.FindSingleOrDefaultAsync(session, model =>
                 model.ModelId == ckModelId.ModelId);
-        if (existingModelId == null)
+        if (ckModel == null)
         {
             return;
         }
         
         await mongoDbRepositoryDataSource.CkRecords.DeleteManyAsync(session,
-                Builders<CkRecord>.Filter.Eq(nameof(CkRecord.CkModelId).ToCamelCase(), existingModelId.ModelId));
+                Builders<CkRecord>.Filter.Eq(nameof(CkRecord.CkModelId).ToCamelCase(), ckModel.Id));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkEnums.DeleteManyAsync(session,
-            Builders<CkEnum>.Filter.Eq(nameof(CkEnum.CkModelId).ToCamelCase(), existingModelId.ModelId));
+            Builders<CkEnum>.Filter.Eq(nameof(CkEnum.CkModelId).ToCamelCase(), ckModel.Id));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkAttributes.DeleteManyAsync(session,
-            Builders<CkAttribute>.Filter.Eq(nameof(CkAttribute.CkModelId).ToCamelCase(), existingModelId.ModelId));
+            Builders<CkAttribute>.Filter.Eq(nameof(CkAttribute.CkModelId).ToCamelCase(), ckModel.Id));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkAssociationRoles.DeleteManyAsync(session,
-            Builders<CkAssociationRole>.Filter.Eq(nameof(CkAssociationRole.CkModelId).ToCamelCase(), existingModelId.ModelId));
+            Builders<CkAssociationRole>.Filter.Eq(nameof(CkAssociationRole.CkModelId).ToCamelCase(), ckModel.Id));
         CheckCancellation(cancellationToken);
         
         await mongoDbRepositoryDataSource.CkTypes.DeleteManyAsync(session,
-            Builders<CkType>.Filter.Eq(nameof(CkType.CkModelId).ToCamelCase(), existingModelId.ModelId));
+            Builders<CkType>.Filter.Eq(nameof(CkType.CkModelId).ToCamelCase(), ckModel.Id));
         CheckCancellation(cancellationToken);
         
         await mongoDbRepositoryDataSource.CkTypeAssociations.DeleteManyAsync(session,
-            Builders<CkTypeAssociation>.Filter.Eq(nameof(CkTypeAssociation.CkModelId).ToCamelCase(), existingModelId.ModelId));
+            Builders<CkTypeAssociation>.Filter.Eq(nameof(CkTypeAssociation.CkModelId).ToCamelCase(), ckModel.Id));
         CheckCancellation(cancellationToken);
         
         await mongoDbRepositoryDataSource.CkTypeInheritances.DeleteManyAsync(session,
-            Builders<CkTypeInheritance>.Filter.Eq(nameof(CkTypeInheritance.CkModelId).ToCamelCase(), existingModelId.ModelId));
+            Builders<CkTypeInheritance>.Filter.Eq(nameof(CkTypeInheritance.CkModelId).ToCamelCase(), ckModel.Id));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkRecordInheritances.DeleteManyAsync(session,
-            Builders<CkRecordInheritance>.Filter.Eq(nameof(CkRecordInheritance.CkModelId).ToCamelCase(), existingModelId.ModelId));
+            Builders<CkRecordInheritance>.Filter.Eq(nameof(CkRecordInheritance.CkModelId).ToCamelCase(), ckModel.Id));
         CheckCancellation(cancellationToken);
     }
     
