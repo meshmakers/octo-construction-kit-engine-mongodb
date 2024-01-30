@@ -43,7 +43,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     {
         var sourceIdentifierObject =
             ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier), sourceIdentifier);
-        
+
         using var session = await sourceIdentifierObject.MongoDbRepositoryDataSource.CreateSessionAsync();
         session.StartTransaction();
 
@@ -64,7 +64,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
         using var session = await sourceIdentifierObject.MongoDbRepositoryDataSource.CreateSessionAsync();
         session.StartTransaction();
-        
+
         var ckModel = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels
             .FindSingleOrDefaultAsync(session, e => e.Id == modelId);
         if (ckModel == null)
@@ -90,7 +90,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
 
         await session.CommitTransactionAsync();
-        
+
         var ckCompiledModelRoot = new CkCompiledModelRoot
         {
             ModelId = ckModel.Id,
@@ -234,18 +234,18 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         ProcessCkAttributes(compiledModel, transientCkModel);
         ProcessCkAssociationRoles(compiledModel, transientCkModel);
         ProcessCkTypesAndAssociations(compiledModel, transientCkModel);
-        
-              
+
+
         // ValidateAsync
         Debug.Assert(_ckValidationService != null, nameof(_ckValidationService) + " != null");
-                
+
         using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
         session.StartTransaction();
-        
+
         // Create basic collections first (latter this method is called again to create CkType document collections)
         await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session);
         CheckCancellation(cancellationToken);
-        
+
         // Delete the old version
         await DeletePreviousVersion(session, compiledModel.ModelId, mongoDbRepositoryDataSource, cancellationToken);
         CheckCancellation(cancellationToken);
@@ -312,21 +312,21 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     transientCkModel.CkRecordInheritances));
             CheckCancellation(cancellationToken);
         }
-        
+
         await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session);
         CheckCancellation(cancellationToken);
 
         await session.CommitTransactionAsync();
-        
+
         using var sessionComplete = await mongoDbRepositoryDataSource.CreateSessionAsync();
         sessionComplete.StartTransaction();
-        
+
         await mongoDbRepositoryDataSource.UpdateIndexAsync(sessionComplete);
         CheckCancellation(cancellationToken);
 
         var updateDefinition = Builders<CkModel>.Update.Set(x => x.ModelState, ModelState.Available);
-        await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(sessionComplete,  compiledModel.ModelId, updateDefinition);
-        
+        await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(sessionComplete, compiledModel.ModelId, updateDefinition);
+
         await sessionComplete.CommitTransactionAsync();
     }
 
@@ -340,7 +340,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         int retries = 5;
         while (true)
         {
-            _logger.LogInformation("Checking if CK model is importing");
+            _logger.LogInformation("Checking if CK model '{ModelId}' is currently importing", compiledModel.ModelId);
             var r = queryable.Where(m => m.ModelState == ModelState.Importing && m.Id != compiledModel.ModelId);
             if (r.Any())
             {
@@ -351,7 +351,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     _logger.LogInformation("Current CK model is importing, tried 5 times to wait for the import to finish");
                     throw OperationFailedException.ModelImportingWaitTimeout();
                 }
-                
+
                 await Task.Delay(1000);
             }
             else
@@ -366,7 +366,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 });
 
                 break;
-            }  
+            }
         }
 
         await session.CommitTransactionAsync();
@@ -502,7 +502,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         {
             return;
         }
-        
+
         await mongoDbRepositoryDataSource.CkRecords.DeleteManyAsync(session,
                 Builders<CkRecord>.Filter.Eq(nameof(CkRecord.CkModelId).ToCamelCase(), ckModel.Id));
         CheckCancellation(cancellationToken);
@@ -518,15 +518,15 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         await mongoDbRepositoryDataSource.CkAssociationRoles.DeleteManyAsync(session,
             Builders<CkAssociationRole>.Filter.Eq(nameof(CkAssociationRole.CkModelId).ToCamelCase(), ckModel.Id));
         CheckCancellation(cancellationToken);
-        
+
         await mongoDbRepositoryDataSource.CkTypes.DeleteManyAsync(session,
             Builders<CkType>.Filter.Eq(nameof(CkType.CkModelId).ToCamelCase(), ckModel.Id));
         CheckCancellation(cancellationToken);
-        
+
         await mongoDbRepositoryDataSource.CkTypeAssociations.DeleteManyAsync(session,
             Builders<CkTypeAssociation>.Filter.Eq(nameof(CkTypeAssociation.CkModelId).ToCamelCase(), ckModel.Id));
         CheckCancellation(cancellationToken);
-        
+
         await mongoDbRepositoryDataSource.CkTypeInheritances.DeleteManyAsync(session,
             Builders<CkTypeInheritance>.Filter.Eq(nameof(CkTypeInheritance.CkModelId).ToCamelCase(), ckModel.Id));
         CheckCancellation(cancellationToken);
@@ -535,7 +535,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             Builders<CkRecordInheritance>.Filter.Eq(nameof(CkRecordInheritance.CkModelId).ToCamelCase(), ckModel.Id));
         CheckCancellation(cancellationToken);
     }
-    
+
 
     private static void CheckCancellation(CancellationToken? cancellationToken)
     {
