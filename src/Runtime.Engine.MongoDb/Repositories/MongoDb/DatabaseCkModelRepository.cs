@@ -333,18 +333,20 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     private async Task CheckParallelModelImport(CkCompiledModelRoot compiledModel,
         ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
     {
-        using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
-        session.StartTransaction();
-        var queryable = await mongoDbRepositoryDataSource.CkModels.AsQueryableAsync(session);
+        var queryable = await mongoDbRepositoryDataSource.CkModels.AsQueryableAsync();
 
         int retries = 5;
         while (true)
         {
-            _logger.LogInformation("Checking if CK model '{ModelId}' is currently importing", compiledModel.ModelId);
-            var r = queryable.Where(m => m.ModelState == ModelState.Importing && m.Id != compiledModel.ModelId);
-            if (r.Any())
+
+            _logger.LogInformation("Checking if CK model '{ModelId}' can be imported", compiledModel.ModelId);
+            var currentlyImportingCkModels = queryable.Where(m => m.ModelState == ModelState.Importing && m.Id != compiledModel.ModelId);
+            if (currentlyImportingCkModels.Any())
             {
-                _logger.LogInformation("CK model is importing, waiting for 1 second (retries left: {Retries})", retries);
+                Debug.Assert(currentlyImportingCkModels.Count() == 1, "currentlyImportingCkModels == 1");
+
+                var importingModels = currentlyImportingCkModels.Select(x => x.ModelId).ToList();
+                _logger.LogInformation("CK model(s) '{Models}' are importing, waiting for 1 second (retries left: {Retries})", string.Join(", ", importingModels), retries);
                 Interlocked.Decrement(ref retries);
                 if (retries <= 0)
                 {
@@ -357,6 +359,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             else
             {
                 _logger.LogInformation("No CK model is importing, continuing");
+                using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
+                session.StartTransaction();
+                
                 await mongoDbRepositoryDataSource.CkModels.TryDeleteOneAsync(session, compiledModel.ModelId);
                 await mongoDbRepositoryDataSource.CkModels.InsertOneAsync(session, new CkModel()
                 {
@@ -364,12 +369,11 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     ModelId = compiledModel.ModelId.ModelId,
                     ModelState = ModelState.Importing
                 });
-
+                
+                await session.CommitTransactionAsync();
                 break;
             }
         }
-
-        await session.CommitTransactionAsync();
     }
 
     private void ProcessCkEnums(CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel)
