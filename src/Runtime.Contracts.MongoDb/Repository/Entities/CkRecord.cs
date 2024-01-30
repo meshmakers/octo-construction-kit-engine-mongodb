@@ -20,12 +20,12 @@ public class CkRecord
     /// <summary>
     ///     Gets or sets the construction kit model id
     /// </summary>
-    public CkModelId CkModelId { get; set; }
+    public CkModelId CkModelId { get; set; } = null!;
 
     /// <summary>
     ///     Gets or sets the construction kit id
     /// </summary>
-    public CkId<CkRecordId> CkRecordId { get; set; }
+    public CkId<CkRecordId> CkRecordId { get; set; } = null!;
 
     /// <summary>
     ///     If true, the type cannot be inherited again

@@ -18,12 +18,12 @@ public class CkAssociationRole
     /// <summary>
     ///     Gets or sets the construction kit model id
     /// </summary>
-    public CkModelId CkModelId { get; set; }
+    public CkModelId CkModelId { get; set; } = null!;
 
     /// <summary>
     ///     Returns the mongodb ID
     /// </summary>
-    public CkId<CkAssociationRoleId> RoleId { get; set; }
+    public CkId<CkAssociationRoleId> RoleId { get; set; } = null!;
 
     /// <summary>
     ///     Name of the association for inbound references (e. g. Parent)

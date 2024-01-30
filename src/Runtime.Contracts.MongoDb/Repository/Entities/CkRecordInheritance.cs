@@ -12,9 +12,9 @@ public class CkRecordInheritance
     /// <summary>
     ///     Gets or sets the construction kit model id
     /// </summary>
-    public CkModelId CkModelId { get; set; }
+    public CkModelId CkModelId { get; set; } = null!;
 
-    public CkId<CkRecordId> BaseCkRecordId { get; set; }
+    public CkId<CkRecordId> BaseCkRecordId { get; set; } = null!;
 
-    public CkId<CkRecordId> InheritorCkRecordId { get; set; }
+    public CkId<CkRecordId> InheritorCkRecordId { get; set; } = null!;
 }

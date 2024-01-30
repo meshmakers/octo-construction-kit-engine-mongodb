@@ -6,7 +6,7 @@ using MongoDB.Bson.Serialization.Serializers;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 
-public class OctoEnumIdSerializer : StructSerializerBase<CkEnumId>, IRepresentationConfigurable<OctoEnumIdSerializer>
+public class OctoEnumIdSerializer : SerializerBase<CkEnumId>, IRepresentationConfigurable<OctoEnumIdSerializer>
 {
     public OctoEnumIdSerializer()
         : this(BsonType.String)

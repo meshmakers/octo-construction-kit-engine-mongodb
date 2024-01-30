@@ -419,7 +419,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     var ckTypeInheritance = new CkRecordInheritance
                     {
                         CkModelId = compiledModel.ModelId,
-                        BaseCkRecordId = ckRecordDto.DerivedFromCkRecordId.Value,
+                        BaseCkRecordId = ckRecordDto.DerivedFromCkRecordId,
                         InheritorCkRecordId = new CkId<CkRecordId>(compiledModel.ModelId, ckRecordDto.RecordId)
                     };
                     transientCkModel.CkRecordInheritances.Add(ckTypeInheritance);
@@ -619,7 +619,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 var ckTypeInheritance = new CkTypeInheritance
                 {
                     CkModelId = compiledModel.ModelId,
-                    BaseCkTypeId = ckTypeDto.DerivedFromCkTypeId.Value,
+                    BaseCkTypeId = ckTypeDto.DerivedFromCkTypeId,
                     InheritorCkTypeId = new CkId<CkTypeId>(compiledModel.ModelId, ckTypeDto.TypeId)
                 };
                 transientCkModel.CkTypeInheritances.Add(ckTypeInheritance);

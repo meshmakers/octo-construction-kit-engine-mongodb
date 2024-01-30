@@ -14,16 +14,16 @@ public class CkTypeAssociation
     /// <summary>
     ///     Gets or sets the construction kit model id
     /// </summary>
-    public CkModelId CkModelId { get; set; }
+    public CkModelId CkModelId { get; set; } = null!;
 
     /// <summary>
     ///     Returns the corresponding role Id
     /// </summary>
-    public CkId<CkAssociationRoleId> RoleId { get; set; }
+    public CkId<CkAssociationRoleId> RoleId { get; set; } = null!;
 
-    public CkId<CkTypeId> OriginCkTypeId { get; set; }
+    public CkId<CkTypeId> OriginCkTypeId { get; set; } = null!;
 
-    public CkId<CkTypeId> TargetCkTypeId { get; set; }
+    public CkId<CkTypeId> TargetCkTypeId { get; set; } = null!;
 
     public ICollection<CkId<CkAttributeId>>? TargetAttributes { get; set; }
 }

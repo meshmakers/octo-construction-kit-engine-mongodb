@@ -13,12 +13,12 @@ public class CkAttribute
     /// <summary>
     ///     Gets or sets the construction kit model id
     /// </summary>
-    public CkModelId CkModelId { get; set; }
+    public CkModelId CkModelId { get; set; } = null!;
 
     /// <summary>
     ///     The id of the attribute
     /// </summary>
-    public CkId<CkAttributeId> CkAttributeId { get; set; }
+    public CkId<CkAttributeId> CkAttributeId { get; set; } = null!;
 
     /// <summary>
     ///     Value type of the attribute

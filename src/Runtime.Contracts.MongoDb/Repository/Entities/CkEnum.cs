@@ -20,12 +20,12 @@ public class CkEnum
     /// <summary>
     ///     Gets or sets the construction kit model id
     /// </summary>
-    public CkModelId CkModelId { get; set; }
+    public CkModelId CkModelId { get; set; } = null!;
 
     /// <summary>
     ///     Gets or sets the construction kit id
     /// </summary>
-    public CkId<CkEnumId> CkEnumId { get; set; }
+    public CkId<CkEnumId> CkEnumId { get; set; } = null!;
 
     /// <summary>
     ///     When true the enum is handles as flags enum

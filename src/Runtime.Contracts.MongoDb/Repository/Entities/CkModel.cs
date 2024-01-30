@@ -17,7 +17,7 @@ public class CkModel
     /// <summary>
     ///     Defines the id of the construction kit model
     /// </summary>
-    public CkModelId Id { get; init; }
+    public CkModelId Id { get; init; } = null!;
 
     /// <summary>
     /// Defines the name of construction kit model without version

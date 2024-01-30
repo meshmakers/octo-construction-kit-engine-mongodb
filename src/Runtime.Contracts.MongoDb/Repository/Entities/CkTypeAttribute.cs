@@ -6,7 +6,7 @@ namespace Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository.Entities;
 [DebuggerDisplay("{" + nameof(AttributeId) + "}")]
 public class CkTypeAttribute
 {
-    public CkId<CkAttributeId> AttributeId { get; set; }
+    public CkId<CkAttributeId> AttributeId { get; set; } = null!;
 
     public string AttributeName { get; set; } = null!;
 

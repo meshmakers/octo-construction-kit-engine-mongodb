@@ -49,7 +49,7 @@ internal abstract class RtFieldFilterResolver<TEntity> : FieldFilterResolver<TEn
         {
             if (ckTypeAttributeGraph.ValueType == AttributeValueTypesDto.Enum && ckTypeAttributeGraph.ValueCkEnumId != null)
             {
-                var ckEnumGraph = _ckCacheService.GetCkEnum(_tenantId, ckTypeAttributeGraph.ValueCkEnumId.Value);
+                var ckEnumGraph = _ckCacheService.GetCkEnum(_tenantId, ckTypeAttributeGraph.ValueCkEnumId);
                 var searchTermString = searchTerm.ToString()?.Replace("_", "");
 
                 // Search for match in selection value
@@ -66,7 +66,7 @@ internal abstract class RtFieldFilterResolver<TEntity> : FieldFilterResolver<TEn
             {
                 if (searchTerm is FieldFilterCriteria fieldFilterCriteria)
                 {
-                    var ckRecordGraph = _ckCacheService.GetCkRecord(_tenantId, ckTypeAttributeGraph.ValueCkRecordId.Value);
+                    var ckRecordGraph = _ckCacheService.GetCkRecord(_tenantId, ckTypeAttributeGraph.ValueCkRecordId);
                     var rtRecordFieldFilterResolver = new RtRecordFieldFilterResolver<RtRecord>(_ckCacheService, _tenantId, ckRecordGraph);
                     rtRecordFieldFilterResolver.AddFieldFilters(fieldFilterCriteria.FieldFilters);
 

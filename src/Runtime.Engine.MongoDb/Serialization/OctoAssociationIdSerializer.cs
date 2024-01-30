@@ -6,7 +6,7 @@ using MongoDB.Bson.Serialization.Serializers;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 
-public class OctoAssociationIdSerializer : StructSerializerBase<CkAssociationRoleId>,
+public class OctoAssociationIdSerializer : SerializerBase<CkAssociationRoleId>,
     IRepresentationConfigurable<OctoAssociationIdSerializer>
 {
     public OctoAssociationIdSerializer()

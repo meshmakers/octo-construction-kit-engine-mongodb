@@ -105,7 +105,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             throw OperationFailedException.CkTypeHasNoDefiningCollectionRoot(ckTypeId);
         }
 
-        var suffix = ckTypeGraph.DefiningCollectionRootCkTypeId.Value.GetCkTypeCollectionName();
+        var suffix = ckTypeGraph.DefiningCollectionRootCkTypeId.GetCkTypeCollectionName();
         var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
         return _repository.GetCollection(mapper, suffix);
     }

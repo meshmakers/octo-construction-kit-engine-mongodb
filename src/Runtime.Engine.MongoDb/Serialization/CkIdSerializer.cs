@@ -5,9 +5,9 @@ using MongoDB.Bson.Serialization.Serializers;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 
-public class CkIdSerializer<TKey, TKeySerializer> : StructSerializerBase<CkId<TKey>>,
-    IRepresentationConfigurable<CkIdSerializer<TKey, TKeySerializer>> where TKey : struct, IComparable<TKey>, ICkKey
-    where TKeySerializer : StructSerializerBase<TKey>
+public class CkIdSerializer<TKey, TKeySerializer> : SerializerBase<CkId<TKey>>,
+    IRepresentationConfigurable<CkIdSerializer<TKey, TKeySerializer>> where TKey : IComparable<TKey>, ICkKey
+    where TKeySerializer : SerializerBase<TKey>
 {
     public CkIdSerializer()
         : this(BsonType.String)
