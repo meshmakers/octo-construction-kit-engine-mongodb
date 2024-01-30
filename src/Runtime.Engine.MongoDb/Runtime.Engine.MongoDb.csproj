@@ -11,21 +11,11 @@
         <NoWarn>1701;1702;CS8002</NoWarn>
     </PropertyGroup>
 
-    <ItemGroup Condition="'$(Configuration)'!='DebugL'">
-        <PackageReference Include="Meshmakers.Common.Metrics" Version="4.0.2401.17001" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Engine" Version="3.0.36" />
-        <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="3.0.36" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Models.System" Version="3.0.36" />
-    </ItemGroup>
-
-    <ItemGroup Condition="'$(Configuration)'=='DebugL'">
-        <PackageReference Include="Meshmakers.Common.Metrics" Version="999.0.0" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Engine" Version="999.0.0" />
-        <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="999.0.0" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Models.System" Version="999.0.0" />
-    </ItemGroup>
-
     <ItemGroup>
+        <PackageReference Include="Meshmakers.Common.Metrics" Version="$(MeshmakerVersion)" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Engine" Version="$(OctoVersion" />
+        <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="$(OctoVersion" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Models.System" Version="$(OctoVersion" />
         <PackageReference Include="MathParser.org-mXparser" Version="5.2.1" />
         <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="8.0.0" />
         <PackageReference Include="MongoDB.Driver.GridFS" Version="2.23.1" />
