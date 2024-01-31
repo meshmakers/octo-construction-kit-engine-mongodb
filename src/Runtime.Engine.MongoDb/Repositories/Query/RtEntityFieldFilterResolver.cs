@@ -32,15 +32,15 @@ internal class RtEntityFieldFilterResolver<TEntity> : RtFieldFilterResolver<TEnt
     
     internal override string ResolveAttributeName(string attributeName)
     {
+        if (typeof(RtEntity).GetProperty(attributeName) != null)
+        {
+            return attributeName.ToCamelCase();
+        }
+        
         var baseResolve = base.ResolveAttributeName(attributeName);
         if (!string.IsNullOrEmpty(baseResolve))
         {
             return baseResolve;
-        }
-
-        if (typeof(RtEntity).GetProperty(attributeName) != null)
-        {
-            return attributeName.ToCamelCase();
         }
 
         return $"{Constants.AttributesName}.{attributeName.ToCamelCase()}";
