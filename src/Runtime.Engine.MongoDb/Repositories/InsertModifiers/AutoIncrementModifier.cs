@@ -86,7 +86,7 @@ public class AutoIncrementModifier : IAutoIncrementModifier
         }
 
         autoIncrement.CurrentValue = currentValue;
-        await _mongoDbRepositoryDataSource.GetRtCollection<RtEntity>(autoIncrement.CkTypeId)
+        await _mongoDbRepositoryDataSource.GetRtCollection<RtEntity>(autoIncrement.CkTypeId ?? throw OperationFailedException.CkTypeIdUndefined())
             .ReplaceByIdAsync(session, autoIncrement.RtId, autoIncrement);
 
         return currentValue;

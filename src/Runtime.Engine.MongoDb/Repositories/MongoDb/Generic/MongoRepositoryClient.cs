@@ -220,8 +220,12 @@ public class MongoRepositoryClient : IRepositoryClient
             cm.MapIdMember(c => c.CkAttributeId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
+            cm.GetMemberMap(c => c.CkModelId).SetIsRequired(true);
             cm.GetMemberMap(c => c.AttributeValueType).SetIsRequired(true);
             cm.GetMemberMap(c => c.DefaultValues).SetIgnoreIfDefault(true);
+            cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
+            cm.GetMemberMap(c => c.ValueCkEnumId).SetIgnoreIfDefault(true);
+            cm.GetMemberMap(c => c.ValueCkRecordId).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.TryRegisterClassMap<CkAssociationRole>(cm =>

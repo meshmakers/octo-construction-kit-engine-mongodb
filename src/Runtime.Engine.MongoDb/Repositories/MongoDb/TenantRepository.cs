@@ -106,7 +106,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var results = new List<IBulkImportResult>();
         foreach (var groupedEntities in rtEntityList.GroupBy(x => x.CkTypeId))
         {
-            if (string.IsNullOrWhiteSpace(groupedEntities.Key.FullName))
+            if (groupedEntities.Key == null)
             {
                 throw OperationFailedException.CreateWithMessage(
                     "Cannot update RtEntity without CkTypeId. Please provide a CkTypeId.");

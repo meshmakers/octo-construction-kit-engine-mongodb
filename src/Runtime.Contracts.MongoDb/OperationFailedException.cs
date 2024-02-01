@@ -105,4 +105,9 @@ public class OperationFailedException : PersistenceException
     {
         return new OperationFailedException("Model importing wait timeout.");
     }
+
+    public static Exception CkTypeIdUndefined()
+    {
+        return new OperationFailedException("CkTypeId is undefined.");
+    }
 }

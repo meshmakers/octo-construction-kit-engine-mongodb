@@ -1,3 +1,5 @@
+using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using MongoDB.Bson.Serialization;
 
@@ -12,7 +14,7 @@ internal class RtEntitySerializer : BsonClassMapSerializer<RtEntity>
 
     public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args, RtEntity value)
     {
-        var tmpEntity = new RtEntity(value.CkTypeId, value.RtId, value.Attributes)
+        var tmpEntity = new RtEntity(value.CkTypeId ?? throw OperationFailedException.CkTypeIdUndefined(), value.RtId, value.Attributes)
         {
             RtChangedDateTime = value.RtChangedDateTime,
             RtCreationDateTime = value.RtCreationDateTime,
