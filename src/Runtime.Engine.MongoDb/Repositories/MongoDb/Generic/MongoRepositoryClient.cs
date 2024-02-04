@@ -67,6 +67,7 @@ public class MongoRepositoryClient : IRepositoryClient
         urlBuilder.RetryReads = true;
         urlBuilder.RetryWrites = true;
         
+        BsonSerializer.RegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
         var objectSerializer = new ObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
                                                             type.FullName?.StartsWith(typeof(RtEntity).Namespace!) == true);
 
@@ -333,7 +334,6 @@ public class MongoRepositoryClient : IRepositoryClient
         {
             cm.SetIsRootClass(true);
             cm.SetIgnoreExtraElements(true);
-            cm.MapCreator(p => new RtEntity());
 
             cm.MapIdMember(c => c.RtId).SetIdGenerator(new OctoObjectIdGenerator());
             cm.MapMember(c => c.RtCreationDateTime).SetElementName(nameof(RtEntity.RtCreationDateTime).ToCamelCase()).SetIsRequired(true);
