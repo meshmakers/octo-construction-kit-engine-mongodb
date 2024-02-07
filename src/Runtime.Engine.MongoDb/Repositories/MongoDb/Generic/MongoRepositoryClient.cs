@@ -67,7 +67,6 @@ public class MongoRepositoryClient : IRepositoryClient
         urlBuilder.RetryReads = true;
         urlBuilder.RetryWrites = true;
         
-        BsonSerializer.RegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
         var objectSerializer = new ObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
                                                             type.FullName?.StartsWith(typeof(RtEntity).Namespace!) == true);
 
@@ -402,4 +401,11 @@ public class MongoRepositoryClient : IRepositoryClient
             new RtRecordMapConvention(_serviceProvider.GetRequiredService<ICkClassMappingService>())
         }, t => typeof(RtRecord).IsAssignableFrom(t));
     }
+
+    static MongoRepositoryClient()
+    {
+        BsonSerializer.RegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
+
+    }
+    
 }
