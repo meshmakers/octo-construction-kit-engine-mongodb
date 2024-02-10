@@ -63,7 +63,7 @@ public class TenantContext : ITenantContext
             AllowInsecureTls = _systemConfiguration.Value.AllowInsecureTls
         };
 
-        _systemRepositoryClient = new MongoRepositoryClient(loggerFactory.CreateLogger<MongoRepositoryClient>(), systemConnectionOptions, 
+        _systemRepositoryClient = new MongoRepositoryClient(loggerFactory.CreateLogger<MongoRepositoryClient>(), systemConnectionOptions,
             serviceProvider);
     }
 
@@ -456,6 +456,8 @@ public class TenantContext : ITenantContext
 
     public async Task SetConfigurationAsync(IOctoSystemSession systemSession, string key, object value)
     {
+        ArgumentValidation.ValidateString(nameof(key), key);
+
         var tenantRepository = GetTenantRepository();
 
         var dataQueryOperation = DataQueryOperation.Create()
@@ -473,6 +475,18 @@ public class TenantContext : ITenantContext
             configuration.ConfigurationValue = value.Serialize();
             await tenantRepository.ReplaceOneRtEntityByIdAsync(systemSession, configuration.RtId, configuration);
         }
+    }
+
+    public async Task DeleteConfigurationAsync(IOctoSystemSession systemSession, string key)
+    {
+        ArgumentValidation.ValidateString(nameof(key), key);
+
+        var tenantRepository = GetTenantRepository();
+
+        var fieldFilters = new List<FieldFilter>
+            { new(nameof(RtConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key) };
+
+        await tenantRepository.DeleteOneRtEntityAsync<RtConfiguration>(systemSession, fieldFilters);
     }
 
     #endregion Configuration

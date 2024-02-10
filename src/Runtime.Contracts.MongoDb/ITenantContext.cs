@@ -99,6 +99,7 @@ public interface ITenantContext
     Task SetConfigurationAsync(IOctoSystemSession systemSession, string key, string value);
 
     Task SetConfigurationAsync(IOctoSystemSession systemSession, string key, object value);
+    Task DeleteConfigurationAsync(IOctoSystemSession systemSession, string key);
 
     #endregion Configuration
 
