@@ -145,7 +145,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     AutoIncrementReference = a.AutoIncrementReference,
                     IsOptional = a.IsOptional
                 }).ToList(),
-                Associations = ckTypeAssociations.Select(a => new CkTypeAssociationDto
+                Associations = ckTypeAssociations.Where(x=> x.OriginCkTypeId == t.CkTypeId).Select(a => new CkTypeAssociationDto
                 {
                     CkRoleId = a.RoleId,
                     TargetCkTypeId = a.TargetCkTypeId,
