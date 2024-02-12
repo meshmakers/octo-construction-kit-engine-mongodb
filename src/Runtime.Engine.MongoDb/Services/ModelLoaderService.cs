@@ -25,9 +25,10 @@ internal class ModelLoaderService : IModelLoaderService
             return;
         }
 
+        var sourceIdentifier = new TenantDatabaseSourceIdentifier(mongoDbRepositoryDataSource);
         OperationResult operationResult = new();
         var ckModels = await mongoDbRepositoryDataSource.CkModels.GetAsync(session);
-        var modelGraph = await _modelResolver.ResolveAsync(ckModels.Select(x => x.Id).ToList(), operationResult);
+        var modelGraph = await _modelResolver.ResolveAsync(ckModels.Select(x => x.Id).ToList(), operationResult, sourceIdentifier);
         _cacheService.CreateTenant(tenantId);
         _cacheService.LoadCkModelGraph(tenantId, modelGraph);
     }
