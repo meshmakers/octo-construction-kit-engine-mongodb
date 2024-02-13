@@ -473,7 +473,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     AttributeId = attribute.CkAttributeId,
                     AttributeName = attribute.AttributeName,
                     AutoCompleteValues = attribute.AutoCompleteValues,
-                    AutoIncrementReference = attribute.AutoIncrementReference
+                    AutoIncrementReference = attribute.AutoIncrementReference,
+                    IsOptional = attribute.IsOptional
                 };
 
                 ckTypeAttributes.Add(ckTypeAttribute);
