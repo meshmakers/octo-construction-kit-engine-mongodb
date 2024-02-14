@@ -360,6 +360,7 @@ public class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.OriginRtId).SetIsRequired(true);
             cm.GetMemberMap(c => c.TargetCkTypeId).SetIsRequired(true);
             cm.GetMemberMap(c => c.TargetRtId).SetIsRequired(true);
+            cm.GetMemberMap(c => c.TargetCkAttributeIds).SetIgnoreIfDefault(true);
         });
 
         BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkTypeId, OctoTypeIdSerializer>());

@@ -149,7 +149,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 {
                     CkRoleId = a.RoleId,
                     TargetCkTypeId = a.TargetCkTypeId,
-                    TargetAttributes = a.TargetAttributes?.ToList()
+                    TargetCkAttributeIds = a.TargetCkAttributeIds?.ToList()
                 }).ToList(),
                 DerivedFromCkTypeId = ckTypeInheritances.FirstOrDefault(x => x.InheritorCkTypeId == t.CkTypeId)?.BaseCkTypeId
             }).ToList(),
@@ -636,7 +636,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                         RoleId = association.CkRoleId,
                         OriginCkTypeId = new CkId<CkTypeId>(compiledModel.ModelId, ckType.CkTypeId.Key),
                         TargetCkTypeId = association.TargetCkTypeId,
-                        TargetAttributes = association.TargetAttributes
+                        TargetCkAttributeIds = association.TargetCkAttributeIds
                     };
                     transientCkModel.CkTypeAssociations.Add(ckTypeAssociation);
                 }

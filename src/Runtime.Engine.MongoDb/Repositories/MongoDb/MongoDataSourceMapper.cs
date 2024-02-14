@@ -191,7 +191,7 @@ public class CkTypeAssociationMongoDataSourceMapper : IMongoDataSourceMapper<Oct
             update.Set(p => p.RoleId, document.RoleId),
             update.Set(p => p.OriginCkTypeId, document.OriginCkTypeId),
             update.Set(p => p.TargetCkTypeId, document.TargetCkTypeId),
-            update.Set(p => p.TargetAttributes, document.TargetAttributes)
+            update.Set(p => p.TargetCkAttributeIds, document.TargetCkAttributeIds)
         ];
 
         return update.Combine(list);

@@ -21,9 +21,18 @@ public class CkTypeAssociation
     /// </summary>
     public CkId<CkAssociationRoleId> RoleId { get; set; } = null!;
 
+    /// <summary>
+    /// Gets or sets the object id of the origin ck type id.
+    /// </summary>
     public CkId<CkTypeId> OriginCkTypeId { get; set; } = null!;
 
+    /// <summary>
+    /// Gets or sets the target ck type id.
+    /// </summary>
     public CkId<CkTypeId> TargetCkTypeId { get; set; } = null!;
 
-    public ICollection<CkId<CkAttributeId>>? TargetAttributes { get; set; }
+    /// <summary>
+    /// Gets or sets a list of attributes of the target ck type id, that are referential integrity attributes
+    /// </summary>
+    public ICollection<CkId<CkAttributeId>>? TargetCkAttributeIds { get; set; }
 }
