@@ -26,6 +26,7 @@
 
     <ItemGroup>
         <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" ReferenceOutputAssembly="false" Version="$(OctoVersion)" PrivateAssets="all" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.MsBuildTasks" Version="$(OctoVersion)" PrivateAssets="all" />
     </ItemGroup>
 
     <ItemGroup>
@@ -35,21 +36,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ConstructionKitFolder Include="CkTest\ConstructionKit" />
-    </ItemGroup>
-
-    <ItemGroup>
-        <None Remove="**\ConstructionKit\ck-*.yaml" />
-        <EmbeddedResource Include="**\ConstructionKit\ck-*.yaml">
-            <GenerateCkModelServiceClass>true</GenerateCkModelServiceClass>
-        </EmbeddedResource>
-        <None Remove="**\ConstructionKit\ck-*.cache.json" />
-        <AdditionalFiles Include="**\ConstructionKit\ck-*.cache.json" />
-    </ItemGroup>
-
-    <ItemGroup>
         <ProjectReference Include="..\..\src\Runtime.Engine.MongoDb\Runtime.Engine.MongoDb.csproj" />
     </ItemGroup>
-
 
 </Project>
