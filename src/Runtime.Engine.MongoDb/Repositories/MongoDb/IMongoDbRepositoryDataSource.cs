@@ -1,4 +1,5 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository.Entities;
@@ -15,18 +16,11 @@ public interface IMongoDbRepositoryDataSource : ICkMongoDbRepositoryDataSource, 
     /// <summary>
     ///     Returns the data source access object for the given entity type
     /// </summary>
-    /// <param name="ckTypeId">Construction kit type id</param>
+    /// <param name="ckTypeGraph">Construction kit type graph</param>
     /// <typeparam name="TEntity">The type of entity derived from &lt;see cref="RtEntity"/&gt;</typeparam>
     /// <returns></returns>
-    IMongoDbDataSourceCollection<OctoObjectId, TEntity> GetRtDatabaseCollection<TEntity>(CkId<CkTypeId> ckTypeId)
+    IMongoDbDataSourceCollection<OctoObjectId, TEntity> GetRtDatabaseCollection<TEntity>(CkTypeGraph ckTypeGraph)
         where TEntity : RtEntity, new();
-
-    /// <summary>
-    ///     Returns the data source access object for the given entity type
-    /// </summary>
-    /// <typeparam name="TEntity">The type of entity derived from &lt;see cref="RtEntity"/&gt;</typeparam>
-    /// <returns></returns>
-    IMongoDbDataSourceCollection<OctoObjectId, TEntity> GetRtDatabaseCollection<TEntity>() where TEntity : RtEntity, new();
 
     Task<IOctoSession> GetSessionAsync();
     IOctoSession StartSession();

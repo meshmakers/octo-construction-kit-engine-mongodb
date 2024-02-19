@@ -17,7 +17,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
     internal SingleOriginRtQuery(IMetricsContext metricsContext, ICkCacheService ckCacheService, string tenantId,
         CkTypeGraph ckTypeGraph,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource, string language)
-        : base(metricsContext, mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeGraph.CkTypeId),
+        : base(metricsContext, mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeGraph),
             new RtEntityFieldFilterResolver<TEntity>(ckCacheService, tenantId, ckTypeGraph), language)
     {
         _ckTypeGraph = ckTypeGraph;

@@ -1,6 +1,6 @@
 ﻿using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
@@ -9,7 +9,6 @@ using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -18,7 +17,6 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongoDbRepositoryDataSource
 {
-    private readonly ICkCacheService _ckCacheService;
     private readonly IMongoDbDataSourceCollection<OctoObjectId, CkTypeInheritance> _ckTypeInheritances;
     private readonly IMongoDbDataSourceCollection<CkId<CkTypeId>, CkType> _ckTypes;
     private readonly IRepositoryInternal _repository;
@@ -39,11 +37,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             AuthenticationSource = authenticationDatabaseName,
             UseTls = useTls,
             AllowInsecureTls = allowInsecureTls
-        }, serviceProvider), serviceProvider, databaseName, tenantId)
+        }, serviceProvider), databaseName, tenantId)
     {
     }
 
-    public MongoDbRepositoryDataSource(IRepositoryClient repositoryClient, IServiceProvider serviceProvider, string databaseName,
+    public MongoDbRepositoryDataSource(IRepositoryClient repositoryClient, string databaseName,
         string tenantId)
         : base(tenantId)
     {
@@ -51,7 +49,6 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         _repositoryClient = repositoryClient;
         _repository = (IRepositoryInternal)_repositoryClient.GetRepository(databaseName);
-        _ckCacheService = serviceProvider.GetRequiredService<ICkCacheService>();
 
         CkModels = _repository.GetCollection(new CkModelMongoDataSourceMapper());
 
@@ -87,33 +84,27 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return session;
     }
 
-    public override IDataSourceCollection<OctoObjectId, TEntity> GetRtCollection<TEntity>(CkId<CkTypeId> ckTypeId)
+    public override IDataSourceCollection<OctoObjectId, TEntity> GetRtCollection<TEntity>(CkTypeGraph ckTypeGraph)
     {
-        return GetRtDatabaseCollection<TEntity>(ckTypeId);
+        // if (!_ckCacheService.TryGetCkType(TenantId, ckTypeId, out var ckTypeGraph))
+        // {
+        //     throw InvalidCkTypeIdException.CkTypeIdNotFound(TenantId, ckTypeId);
+        // }
+
+        return GetRtDatabaseCollection<TEntity>(ckTypeGraph);
     }
 
-    public IMongoDbDataSourceCollection<OctoObjectId, TEntity> GetRtDatabaseCollection<TEntity>(CkId<CkTypeId> ckTypeId)
+    public IMongoDbDataSourceCollection<OctoObjectId, TEntity> GetRtDatabaseCollection<TEntity>(CkTypeGraph ckTypeGraph)
         where TEntity : RtEntity, new()
     {
-        if (!_ckCacheService.TryGetCkType(TenantId, ckTypeId, out var ckTypeGraph))
-        {
-            throw InvalidCkTypeIdException.CkTypeIdNotFound(TenantId, ckTypeId);
-        }
-
         if (ckTypeGraph.DefiningCollectionRootCkTypeId == null)
         {
-            throw OperationFailedException.CkTypeHasNoDefiningCollectionRoot(ckTypeId);
+            throw OperationFailedException.CkTypeHasNoDefiningCollectionRoot(ckTypeGraph.CkTypeId);
         }
 
         var suffix = ckTypeGraph.DefiningCollectionRootCkTypeId.GetCkTypeCollectionName();
         var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
         return _repository.GetCollection(mapper, suffix);
-    }
-
-    public IMongoDbDataSourceCollection<OctoObjectId, TEntity> GetRtDatabaseCollection<TEntity>() where TEntity : RtEntity, new()
-    {
-        var ckTypeId = RtEntityExtensions.GetCkTypeId<TEntity>();
-        return GetRtDatabaseCollection<TEntity>(ckTypeId);
     }
 
     public override async Task<CurrentMultiplicity> GetCurrentRtAssociationMultiplicityAsync(

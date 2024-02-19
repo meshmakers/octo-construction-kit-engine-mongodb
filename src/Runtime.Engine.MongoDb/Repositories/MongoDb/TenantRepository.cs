@@ -1,7 +1,6 @@
 using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -34,25 +33,6 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         _modelLoaderService = modelLoaderService;
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
     }
-
-
-    #region Helper
-
-    public async Task<CkTypeGraph> GetCkTypeGraphAsync(CkId<CkTypeId> ckTypeId)
-    {
-        var ckCacheService = await GetCkCacheServiceAsync();
-
-        var ckTypeGraph = ckCacheService.GetCkType(TenantId, ckTypeId);
-        if (ckTypeGraph == null)
-        {
-            throw InvalidCkTypeIdException.CkTypeIdNotFound(TenantId, ckTypeId);
-        }
-
-        return ckTypeGraph;
-    }
-
-    #endregion Helper
-
 
     protected override async Task<IResultSet<TEntity>> GetRtEntitiesByIdAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
         IReadOnlyList<OctoObjectId> rtIds, DataQueryOperation dataQueryOperation,
@@ -111,8 +91,10 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
                 throw OperationFailedException.CreateWithMessage(
                     "Cannot update RtEntity without CkTypeId. Please provide a CkTypeId.");
             }
+            
+            var ckTypeGraph = await GetCkTypeGraphAsync(groupedEntities.Key);
 
-            results.Add(await _mongoDbRepositoryDataSource.GetRtCollection<RtEntity>(groupedEntities.Key)
+            results.Add(await _mongoDbRepositoryDataSource.GetRtCollection<RtEntity>(ckTypeGraph)
                 .BulkImportAsync(session, groupedEntities));
         }
 
@@ -126,7 +108,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, _mongoDbRepositoryDataSource);
         mutation.AddFieldFilters(fieldFilters);
-        await mutation.DeleteManyAsync(session, ckTypeId).ConfigureAwait(false);
+        await mutation.DeleteManyAsync(session).ConfigureAwait(false);
     }
 
     protected override async Task DeleteOneRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
@@ -136,7 +118,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, _mongoDbRepositoryDataSource);
         mutation.AddFieldFilters(fieldFilters);
-        await mutation.DeleteOneAsync(session, ckTypeId).ConfigureAwait(false);
+        await mutation.DeleteOneAsync(session).ConfigureAwait(false);
     }
 
     protected override async Task UpdateOneRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
@@ -156,7 +138,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, _mongoDbRepositoryDataSource);
         mutation.AddFieldFilters(fieldFilters);
-        await mutation.UpdateManyAsync(session, ckTypeId, rtEntity).ConfigureAwait(false);
+        await mutation.UpdateManyAsync(session, rtEntity).ConfigureAwait(false);
     }
 
     protected override async Task ReplaceOneRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
@@ -208,7 +190,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session, List<CkId<CkRecordId>> ckRecordIds, 
+    public async Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session, List<CkId<CkRecordId>> ckRecordIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var query = new CkRecordQuery(_metricsContext, _mongoDbRepositoryDataSource);
@@ -222,7 +204,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, List<CkId<CkEnumId>> ckEnumIds, 
+    public async Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, List<CkId<CkEnumId>> ckEnumIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var query = new CkEnumQuery(_metricsContext, _mongoDbRepositoryDataSource);
@@ -270,13 +252,14 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         int? take = null)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
-        var entityCacheItem = await GetCkTypeGraphAsync(targetCkTypeId);
+        var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
+        var targetTypeGraph = await GetCkTypeGraphAsync(targetCkTypeId);
 
         var hierarchicalRtQuery =
-            new MultipleOriginHierarchicalRtQuery(ckCacheService, TenantId, entityCacheItem, _mongoDbRepositoryDataSource,
+            new MultipleOriginHierarchicalRtQuery(ckCacheService, TenantId, _mongoDbRepositoryDataSource,
                 dataQueryOperation.Language,
                 originRtIds,
-                originCkTypeId, roleId, graphDirection, targetCkTypeId);
+                originTypeGraph, roleId, graphDirection, targetTypeGraph);
 
         hierarchicalRtQuery.AddFieldFilters(dataQueryOperation.FieldFilters);
         hierarchicalRtQuery.AddIdFilter(rtIds);
@@ -300,13 +283,14 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var targetCkTypeId = RtEntityExtensions.GetCkTypeId<TTargetEntity>();
 
         var ckCacheService = await GetCkCacheServiceAsync();
-        var entityCacheItem = await GetCkTypeGraphAsync(targetCkTypeId);
+        var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
+        var targetTypeGraph = await GetCkTypeGraphAsync(targetCkTypeId);
 
         var originHierarchicalRtQuery =
-            new MultipleOriginHierarchicalRtQuery<TTargetEntity>(ckCacheService, TenantId, entityCacheItem, _mongoDbRepositoryDataSource,
+            new MultipleOriginHierarchicalRtQuery<TTargetEntity>(ckCacheService, TenantId, _mongoDbRepositoryDataSource,
                 dataQueryOperation.Language,
                 originRtIds,
-                originCkTypeId, roleId, graphDirection, targetCkTypeId);
+                originTypeGraph, roleId, graphDirection, targetTypeGraph);
 
         originHierarchicalRtQuery.AddFieldFilters(dataQueryOperation.FieldFilters);
         originHierarchicalRtQuery.AddIdFilter(rtIds);
@@ -340,14 +324,15 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var targetCkTypeId = RtEntityExtensions.GetCkTypeId<TTargetEntity>();
 
         var ckCacheService = await GetCkCacheServiceAsync();
-        var entityCacheItem = await GetCkTypeGraphAsync(targetCkTypeId);
-
+        var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
+        var targetTypeGraph = await GetCkTypeGraphAsync(targetCkTypeId);
+        
         var hierarchicalRtQuery =
-            new MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity>(ckCacheService, TenantId, entityCacheItem,
+            new MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity>(ckCacheService, TenantId,
                 _mongoDbRepositoryDataSource,
                 dataQueryOperation.Language,
                 originRtIds,
-                originCkTypeId, roleId, graphDirection, targetCkTypeId);
+                originTypeGraph, roleId, graphDirection, targetTypeGraph);
 
         hierarchicalRtQuery.AddFieldFilters(dataQueryOperation.FieldFilters);
         hierarchicalRtQuery.AddIdFilter(rtIds);
@@ -424,10 +409,11 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
 
     #region Advanced functionality
 
-    public IUpdateStream<RtEntity> SubscribeToRtEntities(CkId<CkTypeId> ckTypeId, UpdateStreamFilter updateStreamFilter,
+    public async Task<IUpdateStream<RtEntity>> SubscribeToRtEntities(CkId<CkTypeId> ckTypeId, UpdateStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default)
     {
-        var collection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(ckTypeId);
+        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
+        var collection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(ckTypeGraph);
 
         return collection.Subscribe(updateStreamFilter.UpdateTypes, () =>
         {
@@ -442,13 +428,14 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         }, () => null, cancellationToken);
     }
 
-    public IUpdateStream<TEntity> SubscribeToRtEntities<TEntity>(UpdateStreamFilter updateStreamFilter,
+    public async Task<IUpdateStream<TEntity>> SubscribeToRtEntities<TEntity>(UpdateStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default)
         where TEntity : RtEntity, new()
     {
         var ckTypeId = RtEntityExtensions.GetCkTypeId<TEntity>();
+        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
 
-        var collection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeId);
+        var collection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeGraph);
 
         return collection.Subscribe(updateStreamFilter.UpdateTypes, () =>
         {
@@ -587,7 +574,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
             }
         };
 
-        var collection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(ckTypeGraph.CkTypeId);
+        var collection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(ckTypeGraph);
         var result = collection.Aggregate(session,
             PipelineDefinition<RtEntity, AutoCompleteText>.Create(match, sortByCount, limit));
         return await result.ToListAsync();

@@ -12,6 +12,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
 internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new()
 {
+    private readonly ICkCacheService _ckCacheService;
+    private readonly CkTypeGraph _ckTypeGraph;
     private readonly IBulkRtMutation _bulkRtMutation;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
 
@@ -19,6 +21,8 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
         : base(new RtEntityFieldFilterResolver<TEntity>(ckCacheService, tenantId, ckTypeGraph))
     {
+        _ckCacheService = ckCacheService;
+        _ckTypeGraph = ckTypeGraph;
         _bulkRtMutation = bulkRtMutation;
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
     }
@@ -31,7 +35,7 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
             throw TenantRepositoryException.NoFilterDefinitions();
         }
 
-        var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeId);
+        var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(_ckTypeGraph);
         var entities = await rtCollection.FindManyAsync(session, filterDefinitions);
         if (entities.Count != 1)
         {
@@ -41,7 +45,7 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
         var entityUpdateInfoList = entities.Select(entityToUpdate =>
             EntityUpdateInfo<TEntity>.CreateReplace(entityToUpdate.ToRtEntityId(), rtEntity)).ToList();
 
-        await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, entityUpdateInfoList,
+        await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, _ckCacheService, entityUpdateInfoList,
             new Collection<AssociationUpdateInfo>());
     }
 
@@ -53,7 +57,7 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
             throw TenantRepositoryException.NoFilterDefinitions();
         }
 
-        var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeId);
+        var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(_ckTypeGraph);
         var entities = await rtCollection.FindManyAsync(session, filterDefinitions);
         if (entities.Count != 1)
         {
@@ -63,11 +67,11 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
         var entityUpdateInfoList = entities.Select(entityToUpdate =>
             EntityUpdateInfo<TEntity>.CreateUpdate(entityToUpdate.ToRtEntityId(), rtEntity)).ToList();
 
-        await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, entityUpdateInfoList,
+        await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, _ckCacheService, entityUpdateInfoList,
             new Collection<AssociationUpdateInfo>());
     }
 
-    public async Task DeleteOneAsync(IOctoSession session, CkId<CkTypeId> ckTypeId)
+    public async Task DeleteOneAsync(IOctoSession session)
     {
         var filterDefinitions = CreateFilterDefinitions();
         if (filterDefinitions == null)
@@ -75,7 +79,7 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
             throw TenantRepositoryException.NoFilterDefinitions();
         }
 
-        var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeId);
+        var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(_ckTypeGraph);
         var entities = await rtCollection.FindManyAsync(session, filterDefinitions);
         if (entities.Count != 1)
         {
@@ -85,11 +89,11 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
         var entityUpdateInfoList = entities.Select(entityToUpdate =>
             EntityUpdateInfo<TEntity>.CreateDelete(entityToUpdate.ToRtEntityId())).ToList();
 
-        await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, entityUpdateInfoList,
+        await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, _ckCacheService, entityUpdateInfoList,
             new Collection<AssociationUpdateInfo>());
     }
 
-    public async Task DeleteManyAsync(IOctoSession session, CkId<CkTypeId> ckTypeId)
+    public async Task DeleteManyAsync(IOctoSession session)
     {
         var filterDefinitions = CreateFilterDefinitions();
         if (filterDefinitions == null)
@@ -97,17 +101,17 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
             throw TenantRepositoryException.NoFilterDefinitions();
         }
 
-        var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeId);
+        var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(_ckTypeGraph);
         var entities = await rtCollection.FindManyAsync(session, filterDefinitions);
 
         var entityUpdateInfoList = entities.Select(entityToUpdate =>
             EntityUpdateInfo<TEntity>.CreateDelete(entityToUpdate.ToRtEntityId())).ToList();
 
-        await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, entityUpdateInfoList,
+        await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, _ckCacheService, entityUpdateInfoList,
             new Collection<AssociationUpdateInfo>());
     }
 
-    public async Task UpdateManyAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, TEntity rtEntity)
+    public async Task UpdateManyAsync(IOctoSession session, TEntity rtEntity)
     {
         var filterDefinitions = CreateFilterDefinitions();
         if (filterDefinitions == null)
@@ -115,13 +119,13 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
             throw TenantRepositoryException.NoFilterDefinitions();
         }
 
-        var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeId);
+        var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(_ckTypeGraph);
         var entities = await rtCollection.FindManyAsync(session, filterDefinitions);
 
         var entityUpdateInfoList = entities.Select(entityToUpdate =>
             EntityUpdateInfo<TEntity>.CreateUpdate(entityToUpdate.ToRtEntityId(), rtEntity)).ToList();
 
-        await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, entityUpdateInfoList,
+        await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, _ckCacheService, entityUpdateInfoList,
             new Collection<AssociationUpdateInfo>());
     }
 }

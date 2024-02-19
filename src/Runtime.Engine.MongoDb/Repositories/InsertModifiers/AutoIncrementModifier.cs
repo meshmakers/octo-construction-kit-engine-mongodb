@@ -12,21 +12,21 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.InsertModifiers;
 
 public class AutoIncrementModifier : IAutoIncrementModifier
 {
-    private readonly ICkCacheService _ckCache;
+    private readonly ICkCacheService _ckCacheService;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
     private readonly ITenantRepository _tenantRepository;
 
-    public AutoIncrementModifier(IMongoDbRepositoryDataSource mongoDbRepositoryDataSource, ICkCacheService ckCache,
+    public AutoIncrementModifier(IMongoDbRepositoryDataSource mongoDbRepositoryDataSource, ICkCacheService ckCacheService,
         ITenantRepository tenantRepository)
     {
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
-        _ckCache = ckCache;
+        _ckCacheService = ckCacheService;
         _tenantRepository = tenantRepository;
     }
 
     public async Task RunAutoIncrementAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, IEnumerable<RtEntity> rtEntities)
     {
-        var entityCacheItem = _ckCache.GetCkType(_tenantRepository.TenantId, ckTypeId);
+        var entityCacheItem = _ckCacheService.GetCkType(_tenantRepository.TenantId, ckTypeId);
         if (entityCacheItem == null)
         {
             throw InvalidCkTypeIdException.CkTypeIdNotFound(_tenantRepository.TenantId, ckTypeId);
@@ -84,9 +84,11 @@ public class AutoIncrementModifier : IAutoIncrementModifier
         {
             throw AutoIncrementFailedException.AutoIncrementEndReached(autoIncrement.RtId);
         }
+        
+        var ckTypeGraph = _ckCacheService.GetCkType(_tenantRepository.TenantId, autoIncrement.CkTypeId ?? throw OperationFailedException.CkTypeIdUndefined());
 
         autoIncrement.CurrentValue = currentValue;
-        await _mongoDbRepositoryDataSource.GetRtCollection<RtEntity>(autoIncrement.CkTypeId ?? throw OperationFailedException.CkTypeIdUndefined())
+        await _mongoDbRepositoryDataSource.GetRtCollection<RtEntity>(ckTypeGraph)
             .ReplaceByIdAsync(session, autoIncrement.RtId, autoIncrement);
 
         return currentValue;

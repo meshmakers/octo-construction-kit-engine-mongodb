@@ -16,13 +16,13 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
 internal class MultipleOriginHierarchicalRtQuery : MultipleOriginHierarchicalRtQuery<RtEntity>
 {
-    internal MultipleOriginHierarchicalRtQuery(ICkCacheService ckCacheService, string tenantId, CkTypeGraph targetCkTypeGraph,
+    internal MultipleOriginHierarchicalRtQuery(ICkCacheService ckCacheService, string tenantId, 
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
-        string language, IEnumerable<OctoObjectId> rtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, CkId<CkTypeId> targetCkTypeId)
-        : base(ckCacheService, tenantId, targetCkTypeGraph, mongoDbRepositoryDataSource, language, rtIds, originCkTypeId, roleId,
+        string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph, CkId<CkAssociationRoleId> roleId,
+        GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
+        : base(ckCacheService, tenantId, mongoDbRepositoryDataSource, language, rtIds, originCkTypeGraph, roleId,
             graphDirection,
-            targetCkTypeId)
+            targetCkTypeGraph)
     {
     }
 }
@@ -31,25 +31,23 @@ internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetE
 {
     private readonly GraphDirections _graphDirection;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
-    private readonly CkId<CkTypeId> _originCkTypeId;
+    private readonly CkTypeGraph _originCkTypeGraph;
     private readonly CkId<CkAssociationRoleId> _roleId;
     private readonly IEnumerable<OctoObjectId> _rtIds;
-    private readonly CkId<CkTypeId> _targetCkTypeId;
     private readonly CkTypeGraph _targetCkTypeGraph;
 
-    internal MultipleOriginHierarchicalRtQuery(ICkCacheService ckCacheService, string tenantId, CkTypeGraph targetCkTypeGraph,
+    internal MultipleOriginHierarchicalRtQuery(ICkCacheService ckCacheService, string tenantId, 
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
-        string language, IEnumerable<OctoObjectId> rtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, CkId<CkTypeId> targetCkTypeId)
+        string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph, CkId<CkAssociationRoleId> roleId,
+        GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
         : base(new RtEntityFieldFilterResolver<TTargetEntity>(ckCacheService, tenantId, targetCkTypeGraph), language)
     {
-        _targetCkTypeGraph = targetCkTypeGraph;
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
         _rtIds = rtIds;
-        _originCkTypeId = originCkTypeId;
+        _originCkTypeGraph = originCkTypeGraph;
         _roleId = roleId;
         _graphDirection = graphDirection;
-        _targetCkTypeId = targetCkTypeId;
+        _targetCkTypeGraph = targetCkTypeGraph;
     }
 
     internal async Task<IMultipleOriginResultSet<TTargetEntity>> ExecuteQuery(IOctoSession session, int? skip,
@@ -83,7 +81,7 @@ internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetE
             PipelineStageDefinitionBuilder.Match(
                 Builders<RtAssociation>.Filter.Eq("associationRoleId", _roleId)),
             PipelineStageDefinitionBuilder.Lookup(
-                _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TTargetEntity>(_targetCkTypeId).GetMongoCollection(),
+                _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TTargetEntity>(_targetCkTypeGraph).GetMongoCollection(),
                 innerLocalField,
                 "_id",
                 (FieldDefinition<BsonDocument>)"target"),
@@ -102,7 +100,7 @@ internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetE
         AddSortConstraintsToPipeline(pipelineStageDefinitions);
 
 
-        var aggregate = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(_originCkTypeId).Aggregate(session)
+        var aggregate = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph).Aggregate(session)
             .Match(
                 Builders<RtEntity>.Filter.And(Builders<RtEntity>.Filter.In(x => x.RtId, _rtIds)))
             .Lookup(

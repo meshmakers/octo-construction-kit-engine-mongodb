@@ -31,7 +31,6 @@ public class TenantContext : ITenantContext
 
     private readonly IMetricsContext _metricsContext;
     private readonly IModelLoaderService _modelLoaderService;
-    private readonly SemaphoreSlim _semaphoreSlim = new(1, 1);
     protected readonly IOptions<OctoSystemConfiguration> _systemConfiguration;
     private readonly IServiceProvider _serviceProvider;
 
@@ -548,26 +547,17 @@ public class TenantContext : ITenantContext
 
     private ITenantRepository GetTenantRepository(string tenantId, string databaseName)
     {
-        try
-        {
-            _semaphoreSlim.Wait();
+        var databaseContext = CreateDatabaseContext(databaseName);
 
-            var databaseContext = CreateDatabaseContext(databaseName);
-
-            var tenantRepository = new TenantRepository(tenantId, _metricsContext, _cacheService, _modelLoaderService, databaseContext,
-                _bulkRtMutation);
-            return tenantRepository;
-        }
-        finally
-        {
-            _semaphoreSlim.Release();
-        }
+        var tenantRepository = new TenantRepository(tenantId, _metricsContext, _cacheService, _modelLoaderService, databaseContext,
+            _bulkRtMutation);
+        return tenantRepository;
     }
 
 
     protected IMongoDbRepositoryDataSource CreateDatabaseContext(string databaseName)
     {
-        return new MongoDbRepositoryDataSource(_systemRepositoryClient, _serviceProvider, databaseName, TenantId);
+        return new MongoDbRepositoryDataSource(_systemRepositoryClient, databaseName, TenantId);
     }
 
     private async Task<RtTenant?> GetRtTenantAsync(IOctoSession systemSession,

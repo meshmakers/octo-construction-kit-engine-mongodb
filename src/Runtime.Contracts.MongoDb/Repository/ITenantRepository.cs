@@ -1,5 +1,4 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
@@ -10,7 +9,6 @@ namespace Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
 
 public interface ITenantRepository : IRuntimeRepository
 {
-    Task<CkTypeGraph> GetCkTypeGraphAsync(CkId<CkTypeId> ckTypeId);
 
     #region Data query
 
@@ -81,10 +79,10 @@ public interface ITenantRepository : IRuntimeRepository
 
     Task<IBulkImportResult> BulkRtAssociationsAsync(IOctoSession session, IEnumerable<RtAssociation> rtAssociations);
 
-    IUpdateStream<RtEntity> SubscribeToRtEntities(CkId<CkTypeId> ckTypeId, UpdateStreamFilter updateStreamFilter,
+    Task<IUpdateStream<RtEntity>> SubscribeToRtEntities(CkId<CkTypeId> ckTypeId, UpdateStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default);
 
-    IUpdateStream<TEntity> SubscribeToRtEntities<TEntity>(UpdateStreamFilter updateStreamFilter,
+    Task<IUpdateStream<TEntity>> SubscribeToRtEntities<TEntity>(UpdateStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default)
         where TEntity : RtEntity, new();
 
