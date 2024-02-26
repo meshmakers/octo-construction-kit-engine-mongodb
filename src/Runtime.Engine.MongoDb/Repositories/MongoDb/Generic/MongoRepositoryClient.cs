@@ -80,7 +80,7 @@ public class MongoRepositoryClient : IRepositoryClient
         {
             cb.Subscribe<CommandStartedEvent>(e =>
             {
-                logger.LogInformation("{ObjCommandName} - {Json}", e.CommandName, e.Command.ToJson());
+                logger.LogDebug("{ObjCommandName} - {Json}", e.CommandName, e.Command.ToJson());
             });
         };
         _client = new MongoClient(settings);
