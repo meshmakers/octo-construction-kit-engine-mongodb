@@ -21,10 +21,13 @@ public interface IRepository
         new()
         where TKey : notnull;
 
-    Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,
+    Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default);
 
-    Task ReplaceLargeBinaryAsync(ObjectId largeBinaryId, string filename, string contentType, Stream stream,
+    Task ReplaceLargeBinaryAsync(ObjectId largeBinaryId, string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
+        CancellationToken cancellationToken = default);
+    
+    Task<ObjectId> ReplaceLargeBinaryAsync(string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default);
 
     Task DeleteLargeBinaryAsync(ObjectId largeBinaryId, CancellationToken cancellationToken = default);
@@ -32,5 +35,6 @@ public interface IRepository
     Task<IDownloadStreamHandler> DownloadLargeBinaryAsync(ObjectId largeBinaryId,
         CancellationToken cancellationToken = default);
 
-    Task<IDownloadInfo> GetLargeBinaryAsync(ObjectId largeBinaryId, CancellationToken cancellationToken = default);
+    Task<IDownloadInfo?> GetLargeBinaryAsync(ObjectId largeBinaryId, CancellationToken cancellationToken = default);
+    Task<IDownloadInfo?> GetLargeBinaryAsync(string fileName, CancellationToken cancellationToken = default);
 }

@@ -75,22 +75,8 @@ public class MongoRepository : IRepositoryInternal
         return name;
     }
 
-    public async Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,
+    public async Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default)
-    {
-        var options = new GridFSUploadOptions
-        {
-            Metadata = new BsonDocument
-            {
-                { "contentType", contentType }
-            }
-        };
-
-        return await _bucket.UploadFromStreamAsync(filename, stream, options, cancellationToken);
-    }
-
-    public async Task ReplaceLargeBinaryAsync(ObjectId largeBinaryId, string filename, string contentType,
-        Stream stream, CancellationToken cancellationToken = default)
     {
         var options = new GridFSUploadOptions
         {
@@ -99,8 +85,50 @@ public class MongoRepository : IRepositoryInternal
                 { Constants.ContentType, contentType }
             }
         };
+        options.Metadata.AddRange(metadata);
+
+        return await _bucket.UploadFromStreamAsync(filename, stream, options, cancellationToken);
+    }
+
+    public async Task ReplaceLargeBinaryAsync(ObjectId largeBinaryId, string filename, string contentType,
+        Stream stream, Dictionary<string, object> metadata, CancellationToken cancellationToken = default)
+    {
+        var options = new GridFSUploadOptions
+        {
+            Metadata = new BsonDocument
+            {
+                { Constants.ContentType, contentType }
+            }
+        };
+        options.Metadata.AddRange(metadata);
 
         await _bucket.UploadFromStreamAsync(largeBinaryId, filename, stream, options, cancellationToken);
+    }
+    
+    public async Task<ObjectId> ReplaceLargeBinaryAsync(string filename, string contentType,
+        Stream stream, Dictionary<string, object> metadata, CancellationToken cancellationToken = default)
+    {
+        var filter = Builders<GridFSFileInfo>.Filter.Eq("Filename", filename);
+        var asyncCursor = await _bucket.FindAsync(filter, cancellationToken: cancellationToken);
+        var gridFsFileInfo = await asyncCursor.FirstOrDefaultAsync(cancellationToken);
+        if (gridFsFileInfo != null)
+        {
+            await _bucket.DeleteAsync(gridFsFileInfo.Id, cancellationToken);
+        }
+        var largeBinaryId = ObjectId.GenerateNewId(); 
+        
+        var options = new GridFSUploadOptions
+        {
+            Metadata = new BsonDocument
+            {
+                { Constants.ContentType, contentType }
+            }
+        };
+        options.Metadata.AddRange(metadata);
+
+        await _bucket.UploadFromStreamAsync(largeBinaryId, filename, stream, options, cancellationToken);
+
+        return largeBinaryId;
     }
 
     public async Task DeleteLargeBinaryAsync(ObjectId largeBinaryId, CancellationToken cancellationToken = default)
@@ -116,12 +144,29 @@ public class MongoRepository : IRepositoryInternal
         return new DownloadStreamHandler(gridFsDownloadStream);
     }
 
-    public async Task<IDownloadInfo> GetLargeBinaryAsync(ObjectId largeBinaryId,
+    public async Task<IDownloadInfo?> GetLargeBinaryAsync(ObjectId largeBinaryId,
         CancellationToken cancellationToken = default)
     {
         var filter = Builders<GridFSFileInfo>.Filter.Eq("_id", largeBinaryId);
         var asyncCursor = await _bucket.FindAsync(filter, cancellationToken: cancellationToken);
         var gridFsFileInfo = await asyncCursor.FirstOrDefaultAsync(cancellationToken);
+        if (gridFsFileInfo == null)
+        {
+            return null;
+        }
+        return new DownloadInfo(gridFsFileInfo);
+    }
+    
+    public async Task<IDownloadInfo?> GetLargeBinaryAsync(string fileName,
+        CancellationToken cancellationToken = default)
+    {
+        var filter = Builders<GridFSFileInfo>.Filter.Eq("Filename", fileName);
+        var asyncCursor = await _bucket.FindAsync(filter, cancellationToken: cancellationToken);
+        var gridFsFileInfo = await asyncCursor.FirstOrDefaultAsync(cancellationToken);
+        if (gridFsFileInfo == null)
+        {
+            return null;
+        }
         return new DownloadInfo(gridFsFileInfo);
     }
 

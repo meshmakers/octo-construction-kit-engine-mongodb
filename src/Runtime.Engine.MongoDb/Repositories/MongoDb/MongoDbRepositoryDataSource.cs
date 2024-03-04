@@ -291,17 +291,24 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
     #region Large Binaries
 
-    public async Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,
+    public async Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default)
     {
-        return await _repository.UploadLargeBinaryAsync(filename, contentType, stream, cancellationToken);
+        return await _repository.UploadLargeBinaryAsync(filename, contentType, stream, metadata, cancellationToken);
     }
 
-    public async Task ReplaceLargeBinaryAsync(ObjectId largeBinaryId, string filename, string contentType,
-        Stream stream,
+    public async Task ReplaceLargeBinaryAsync(ObjectId largeBinaryId, string filename, string contentType, 
+        Stream stream, Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default)
     {
-        await _repository.ReplaceLargeBinaryAsync(largeBinaryId, filename, contentType, stream, cancellationToken);
+        await _repository.ReplaceLargeBinaryAsync(largeBinaryId, filename, contentType, stream, metadata, cancellationToken);
+    }
+    
+    public async Task<ObjectId> ReplaceLargeBinaryAsync(string filename, string contentType, 
+        Stream stream, Dictionary<string, object> metadata,
+        CancellationToken cancellationToken = default)
+    {
+        return await _repository.ReplaceLargeBinaryAsync(filename, contentType, stream, metadata, cancellationToken);
     }
 
     public async Task DeleteLargeBinaryAsync(ObjectId largeBinaryId, CancellationToken cancellationToken = default)
@@ -315,10 +322,16 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return await _repository.DownloadLargeBinaryAsync(largeBinaryId, cancellationToken);
     }
 
-    public async Task<IDownloadInfo> GetLargeBinaryAsync(ObjectId largeBinaryId,
+    public async Task<IDownloadInfo?> GetLargeBinaryAsync(ObjectId largeBinaryId,
         CancellationToken cancellationToken = default)
     {
         return await _repository.GetLargeBinaryAsync(largeBinaryId, cancellationToken);
+    }
+    
+    public async Task<IDownloadInfo?> GetLargeBinaryAsync(string fileName,
+        CancellationToken cancellationToken = default)
+    {
+        return await _repository.GetLargeBinaryAsync(fileName, cancellationToken);
     }
 
     #endregion Large Binaries

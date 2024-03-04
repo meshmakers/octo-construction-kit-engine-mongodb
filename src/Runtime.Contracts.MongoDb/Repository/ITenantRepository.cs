@@ -57,10 +57,13 @@ public interface ITenantRepository : IRuntimeRepository
 
     #region Large Binaries
 
-    Task<OctoObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,
+    Task<OctoObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default);
 
-    Task ReplaceLargeBinaryAsync(OctoObjectId largeBinaryId, string filename, string contentType, Stream stream,
+    Task ReplaceLargeBinaryAsync(OctoObjectId largeBinaryId, string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
+        CancellationToken cancellationToken = default);
+    
+    Task<OctoObjectId> ReplaceLargeBinaryAsync(string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default);
 
     Task DeleteLargeBinaryAsync(OctoObjectId largeBinaryId, CancellationToken cancellationToken = default);
@@ -68,7 +71,8 @@ public interface ITenantRepository : IRuntimeRepository
     Task<IDownloadStreamHandler> DownloadLargeBinaryAsync(OctoObjectId largeBinaryId,
         CancellationToken cancellationToken = default);
 
-    Task<IDownloadInfo> GetLargeBinaryAsync(OctoObjectId largeBinaryId, CancellationToken cancellationToken = default);
+    Task<IDownloadInfo?> GetLargeBinaryAsync(OctoObjectId largeBinaryId, CancellationToken cancellationToken = default);
+    Task<IDownloadInfo?> GetLargeBinaryAsync(string fileName, CancellationToken cancellationToken = default);
 
     #endregion Large Binaries
 

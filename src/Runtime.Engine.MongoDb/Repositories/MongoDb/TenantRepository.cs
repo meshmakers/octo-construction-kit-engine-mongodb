@@ -367,25 +367,36 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
 
     #region Large binaries
 
-    public async Task<OctoObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,
+    public async Task<OctoObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default)
     {
         ArgumentValidation.ValidateString(nameof(filename), filename);
         ArgumentValidation.ValidateString(nameof(contentType), contentType);
 
-        var objectId = await _mongoDbRepositoryDataSource.UploadLargeBinaryAsync(filename, contentType, stream, cancellationToken);
+        var objectId = await _mongoDbRepositoryDataSource.UploadLargeBinaryAsync(filename, contentType, stream, metadata, cancellationToken);
         return objectId.ToOctoObjectId();
     }
 
-    public async Task ReplaceLargeBinaryAsync(OctoObjectId largeBinaryId, string filename, string contentType,
-        Stream stream,
+    public async Task ReplaceLargeBinaryAsync(OctoObjectId largeBinaryId, string filename, string contentType, 
+        Stream stream, Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default)
     {
         ArgumentValidation.ValidateString(nameof(filename), filename);
         ArgumentValidation.ValidateString(nameof(contentType), contentType);
 
-        await _mongoDbRepositoryDataSource.ReplaceLargeBinaryAsync(largeBinaryId.ToObjectId(), filename, contentType, stream,
+        await _mongoDbRepositoryDataSource.ReplaceLargeBinaryAsync(largeBinaryId.ToObjectId(), filename, contentType, stream, metadata,
             cancellationToken);
+    }
+    
+    public async Task<OctoObjectId> ReplaceLargeBinaryAsync(string filename, string contentType, 
+        Stream stream, Dictionary<string, object> metadata,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentValidation.ValidateString(nameof(filename), filename);
+        ArgumentValidation.ValidateString(nameof(contentType), contentType);
+
+        return (await _mongoDbRepositoryDataSource.ReplaceLargeBinaryAsync(filename, contentType, stream, metadata,
+            cancellationToken)).ToOctoObjectId();
     }
 
     public async Task DeleteLargeBinaryAsync(OctoObjectId largeBinaryId, CancellationToken cancellationToken = default)
@@ -399,10 +410,16 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         return await _mongoDbRepositoryDataSource.DownloadLargeBinaryAsync(largeBinaryId.ToObjectId(), cancellationToken);
     }
 
-    public async Task<IDownloadInfo> GetLargeBinaryAsync(OctoObjectId largeBinaryId,
+    public async Task<IDownloadInfo?> GetLargeBinaryAsync(OctoObjectId largeBinaryId,
         CancellationToken cancellationToken = default)
     {
         return await _mongoDbRepositoryDataSource.GetLargeBinaryAsync(largeBinaryId.ToObjectId(), cancellationToken);
+    }
+    
+    public async Task<IDownloadInfo?> GetLargeBinaryAsync(string fileName,
+        CancellationToken cancellationToken = default)
+    {
+        return await _mongoDbRepositoryDataSource.GetLargeBinaryAsync(fileName, cancellationToken);
     }
 
     #endregion Large binaries
