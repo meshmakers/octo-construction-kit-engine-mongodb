@@ -1,3 +1,4 @@
+using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository.Entities;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
@@ -19,7 +20,7 @@ public class RtEntityMongoDataSourceMapper<TEntity> : IMongoDataSourceMapper<Oct
         List<UpdateDefinition<TEntity>> list = [];
         foreach (var attributeToApply in document.Attributes)
         {
-            list.Add(Builders<TEntity>.Update.Set("attributes." + attributeToApply.Key, attributeToApply.Value));
+            list.Add(Builders<TEntity>.Update.Set("attributes." + attributeToApply.Key.ToCamelCase(), attributeToApply.Value));
         }
 
         return Builders<TEntity>.Update.Combine(list);
