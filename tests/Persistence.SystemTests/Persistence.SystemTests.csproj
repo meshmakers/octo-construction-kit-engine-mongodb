@@ -40,7 +40,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ConstructionKitFolder Include="$(MSBuildProjectDirectory)\ConstructionKit"/>
+        <ConstructionKitFolder Visible="false" Include="$(MSBuildProjectDirectory)\ConstructionKit"/>
     </ItemGroup>
 
 </Project>
