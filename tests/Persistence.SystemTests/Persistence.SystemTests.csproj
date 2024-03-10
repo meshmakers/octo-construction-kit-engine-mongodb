@@ -24,10 +24,6 @@
         </PackageReference>
     </ItemGroup>
 
-    <ItemGroup>
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" ReferenceOutputAssembly="false" Version="$(OctoVersion)" PrivateAssets="all" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.MsBuildTasks" Version="$(OctoVersion)" PrivateAssets="all" />
-    </ItemGroup>
 
     <ItemGroup>
         <None Update="appsettings.test.json">
@@ -37,10 +33,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\..\src\Runtime.Engine.MongoDb\Runtime.Engine.MongoDb.csproj" />
-    </ItemGroup>
-
-    <ItemGroup>
-        <ConstructionKitFolder Visible="false" Include="$(MSBuildProjectDirectory)\ConstructionKit"/>
+        <ProjectReference Include="..\TestCkModel\TestCkModel.csproj" />
     </ItemGroup>
 
 </Project>

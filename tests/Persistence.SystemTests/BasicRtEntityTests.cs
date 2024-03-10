@@ -1,7 +1,7 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
-using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Generated.Test.v1;
+using TestCkModel.Generated.Test.v1;
 using Xunit;
 using Xunit.Abstractions;
 
