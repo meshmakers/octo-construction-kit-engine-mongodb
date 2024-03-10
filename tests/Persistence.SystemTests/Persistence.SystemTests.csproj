@@ -39,4 +39,8 @@
         <ProjectReference Include="..\..\src\Runtime.Engine.MongoDb\Runtime.Engine.MongoDb.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+        <ConstructionKitFolder Include="$(MSBuildProjectDirectory)\ConstructionKit"/>
+    </ItemGroup>
+
 </Project>
