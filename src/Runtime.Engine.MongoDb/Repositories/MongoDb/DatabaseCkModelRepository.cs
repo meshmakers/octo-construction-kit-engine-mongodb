@@ -226,6 +226,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             operationResult.WriteMessagesToLogger(_logger);
             throw OperationFailedException.ValidationErrors();
         }
+        _logger.LogDebug("Starting import of CK model");
 
         CheckCancellation(cancellationToken);
 
@@ -242,14 +243,19 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
         session.StartTransaction();
 
+        _logger.LogDebug("Preparing import of CK model to database");
+
         // Create basic collections first (latter this method is called again to create CkType document collections)
         await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session);
         CheckCancellation(cancellationToken);
+
+        _logger.LogDebug("Deleting previous version of CK model");
 
         // Delete the old version
         await DeletePreviousVersion(session, compiledModel.ModelId, mongoDbRepositoryDataSource, cancellationToken);
         CheckCancellation(cancellationToken);
 
+        _logger.LogDebug("Importing CK model to database");
         if (transientCkModel.CkEnums.Any())
         {
             ValidateAndThrow(
@@ -313,21 +319,29 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             CheckCancellation(cancellationToken);
         }
 
+        _logger.LogDebug("Updating collections");
+        // This operation is critical. It force an exclusive write lock on the database.
         await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session);
         CheckCancellation(cancellationToken);
 
+        _logger.LogDebug("Committing model import transaction");
         await session.CommitTransactionAsync();
-
+        
+        _logger.LogDebug("Pos-work of CK model import");
         using var sessionComplete = await mongoDbRepositoryDataSource.CreateSessionAsync();
         sessionComplete.StartTransaction();
 
+        _logger.LogDebug("Updating index");
         await mongoDbRepositoryDataSource.UpdateIndexAsync(sessionComplete);
         CheckCancellation(cancellationToken);
 
+        _logger.LogDebug("Updating model state");
         var updateDefinition = Builders<CkModel>.Update.Set(x => x.ModelState, ModelState.Available);
         await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(sessionComplete, compiledModel.ModelId, updateDefinition);
 
         await sessionComplete.CommitTransactionAsync();
+        
+        _logger.LogDebug("Import of CK model to database completed");
     }
 
     private async Task CheckParallelModelImport(CkCompiledModelRoot compiledModel,

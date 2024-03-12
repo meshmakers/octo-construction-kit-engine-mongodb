@@ -557,7 +557,8 @@ public class TenantContext : ITenantContext
 
     protected IMongoDbRepositoryDataSource CreateDatabaseContext(string databaseName)
     {
-        return new MongoDbRepositoryDataSource(_systemRepositoryClient, databaseName, TenantId);
+        return new MongoDbRepositoryDataSource(_loggerFactory.CreateLogger<MongoDbRepositoryDataSource>(), 
+            _systemRepositoryClient, databaseName, TenantId);
     }
 
     private async Task<RtTenant?> GetRtTenantAsync(IOctoSession systemSession,

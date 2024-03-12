@@ -23,12 +23,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
     // ReSharper disable once PrivateFieldCanBeConvertedToLocalVariable
     private readonly IRepositoryClient _repositoryClient;
+    private readonly ILogger<MongoDbRepositoryDataSource> _logger;
 
     private MongoDbRepositoryDataSource(ILoggerFactory loggerFactory, IServiceProvider serviceProvider, string tenantId, string dataSourceHost,
         string databaseName,
         string databaseUser, string? databasePassword,
         string authenticationDatabaseName, bool useTls, bool allowInsecureTls)
-        : this(new MongoRepositoryClient(loggerFactory.CreateLogger<MongoRepositoryClient>(), new MongoConnectionOptions
+        : this(loggerFactory.CreateLogger<MongoDbRepositoryDataSource>(), 
+            new MongoRepositoryClient(loggerFactory.CreateLogger<MongoRepositoryClient>(),
+                new MongoConnectionOptions
         {
             MongoDbHost = dataSourceHost,
             MongoDbUsername = databaseUser,
@@ -41,10 +44,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     {
     }
 
-    public MongoDbRepositoryDataSource(IRepositoryClient repositoryClient, string databaseName,
+    public MongoDbRepositoryDataSource(ILogger<MongoDbRepositoryDataSource> logger, IRepositoryClient repositoryClient, string databaseName,
         string tenantId)
         : base(tenantId)
     {
+        _logger = logger;
         ArgumentValidation.ValidateString(databaseName, nameof(databaseName));
 
         _repositoryClient = repositoryClient;
@@ -86,11 +90,6 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
     public override IDataSourceCollection<OctoObjectId, TEntity> GetRtCollection<TEntity>(CkTypeGraph ckTypeGraph)
     {
-        // if (!_ckCacheService.TryGetCkType(TenantId, ckTypeId, out var ckTypeGraph))
-        // {
-        //     throw InvalidCkTypeIdException.CkTypeIdNotFound(TenantId, ckTypeId);
-        // }
-
         return GetRtDatabaseCollection<TEntity>(ckTypeGraph);
     }
 
@@ -186,6 +185,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
     public async Task UpdateCollectionsAsync(IOctoSession session)
     {
+        _logger.LogDebug("Creating collections for tenant '{TenantId}'", TenantId);
         await _repository.CreateCollectionIfNotExistsAsync(CkModels.MongoDataSourceMapper, false);
         await _repository.CreateCollectionIfNotExistsAsync(CkTypes.MongoDataSourceMapper, false);
         await _repository.CreateCollectionIfNotExistsAsync(CkRecords.MongoDataSourceMapper, false);
@@ -198,13 +198,16 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         await _repository.CreateCollectionIfNotExistsAsync(CkRecordInheritances.MongoDataSourceMapper, false);
         await _repository.CreateCollectionIfNotExistsAsync(RtMongoDbDataSourceAssociations.MongoDataSourceMapper, true);
 
+        _logger.LogDebug("Creating type root collections for tenant '{TenantId}'", TenantId);
         var ckTypes = (await CkTypes.FindManyAsync(session, t => t.IsCollectionRoot)).ToList();
         foreach (var ckType in ckTypes)
         {
+            _logger.LogDebug("Creating type root collection for '{CkTypeId}'", ckType.CkTypeId);
             var suffix = ckType.CkTypeId.GetCkTypeCollectionName();
             await _repository.CreateCollectionIfNotExistsAsync(new RtEntityMongoDataSourceMapper<RtEntity>(),
                 ckType.EnableChangeStreamPreAndPostImages, suffix);
         }
+        _logger.LogDebug("Type root collections created for tenant '{TenantId}'", TenantId);
     }
 
     public async Task UpdateIndexAsync(IOctoSession session)
