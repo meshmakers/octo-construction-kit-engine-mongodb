@@ -32,7 +32,7 @@ public class MongoRepositoryClient : IRepositoryClient
 
     private readonly Guid _instanceId = Guid.NewGuid();
 
-    public MongoRepositoryClient(ILogger<MongoRepositoryClient> logger, MongoConnectionOptions mongoConnectionOptions, 
+    public MongoRepositoryClient(ILogger<MongoRepositoryClient> logger, MongoConnectionOptions mongoConnectionOptions,
         IServiceProvider serviceProvider)
     {
         _serviceProvider = serviceProvider;
@@ -66,21 +66,30 @@ public class MongoRepositoryClient : IRepositoryClient
         urlBuilder.AllowInsecureTls = mongoConnectionOptions.AllowInsecureTls;
         urlBuilder.RetryReads = true;
         urlBuilder.RetryWrites = true;
-        
+
         var objectSerializer = new ObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
-                                                            type.FullName?.StartsWith(typeof(RtEntity).Namespace!) == true);
+                                                            type.FullName?.StartsWith(typeof(RtEntity).Namespace!) ==
+                                                            true);
 
         BsonSerializer.TryRegisterSerializer(objectSerializer);
 
         ConfigureMongoDriver();
         var settings = MongoClientSettings.FromUrl(urlBuilder.ToMongoUrl());
         settings.ReadConcern = ReadConcern.Majority;
-        settings.WriteConcern = new WriteConcern(WriteConcern.WMode.Majority, TimeSpan.FromSeconds(2));
+        settings.WriteConcern = new WriteConcern(WriteConcern.WMode.Majority, TimeSpan.FromSeconds(30));
         settings.ClusterConfigurator = cb =>
         {
             cb.Subscribe<CommandStartedEvent>(e =>
             {
                 logger.LogDebug("{ObjCommandName} - {Json}", e.CommandName, e.Command.ToJson());
+            });
+            cb.Subscribe<ConnectionOpenedEvent>(e =>
+            {
+                logger.LogDebug("Connection opened: {ConnectionId}", e.ConnectionId);
+            });
+            cb.Subscribe<ConnectionClosedEvent>(e =>
+            {
+                logger.LogDebug("Connection closed: {ConnectionId}", e.ConnectionId);
             });
         };
         _client = new MongoClient(settings);
@@ -327,7 +336,8 @@ public class MongoRepositoryClient : IRepositoryClient
         BsonClassMap.TryRegisterClassMap<RtTypeWithAttributes>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
-            cm.MapField("_attributes").SetElementName(Constants.AttributesName).SetSerializer(new RtAttributeDictionarySerializer());
+            cm.MapField("_attributes").SetElementName(Constants.AttributesName)
+                .SetSerializer(new RtAttributeDictionarySerializer());
         });
 
         BsonClassMap.TryRegisterClassMap<RtEntity>(cm =>
@@ -336,10 +346,13 @@ public class MongoRepositoryClient : IRepositoryClient
             cm.SetIgnoreExtraElements(true);
 
             cm.MapIdMember(c => c.RtId).SetIdGenerator(new OctoObjectIdGenerator());
-            cm.MapMember(c => c.RtCreationDateTime).SetElementName(nameof(RtEntity.RtCreationDateTime).ToCamelCase()).SetIsRequired(true);
-            cm.MapMember(c => c.RtChangedDateTime).SetElementName(nameof(RtEntity.RtChangedDateTime).ToCamelCase()).SetIsRequired(true);
+            cm.MapMember(c => c.RtCreationDateTime).SetElementName(nameof(RtEntity.RtCreationDateTime).ToCamelCase())
+                .SetIsRequired(true);
+            cm.MapMember(c => c.RtChangedDateTime).SetElementName(nameof(RtEntity.RtChangedDateTime).ToCamelCase())
+                .SetIsRequired(true);
             cm.MapMember(c => c.CkTypeId).SetElementName(nameof(RtEntity.CkTypeId).ToCamelCase()).SetIsRequired(true);
-            cm.MapMember(c => c.RtWellKnownName).SetElementName(nameof(RtEntity.RtWellKnownName).ToCamelCase()).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.RtWellKnownName).SetElementName(nameof(RtEntity.RtWellKnownName).ToCamelCase())
+                .SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.TryRegisterClassMap<RtRecord>(cm =>
@@ -347,7 +360,8 @@ public class MongoRepositoryClient : IRepositoryClient
             cm.SetIsRootClass(true);
             cm.SetIgnoreExtraElements(true);
 
-            cm.MapMember(c => c.CkRecordId).SetElementName(nameof(RtRecord.CkRecordId).ToCamelCase()).SetIsRequired(true);
+            cm.MapMember(c => c.CkRecordId).SetElementName(nameof(RtRecord.CkRecordId).ToCamelCase())
+                .SetIsRequired(true);
         });
 
         BsonClassMap.TryRegisterClassMap<RtAssociation>(cm =>
@@ -395,7 +409,7 @@ public class MongoRepositoryClient : IRepositoryClient
         {
             new RtEntityMapConvention(_serviceProvider.GetRequiredService<ICkClassMappingService>())
         }, t => typeof(RtEntity).IsAssignableFrom(t));
-        
+
         // This convention is needed to ensure that properties of a derived class of RtRecord
         // are not serialized and the correct polymorphic type is used.
         ConventionRegistry.Register(OctoRtRecordConvention, new ConventionPack
@@ -407,7 +421,5 @@ public class MongoRepositoryClient : IRepositoryClient
     static MongoRepositoryClient()
     {
         BsonSerializer.RegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
-
     }
-    
 }
