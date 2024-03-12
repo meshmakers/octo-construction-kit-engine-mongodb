@@ -66,7 +66,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         session.StartTransaction();
 
         var ckModel = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels
-            .FindSingleOrDefaultAsync(session, e => e.Id == modelId);
+            .FindSingleOrDefaultAsync(session, e => e.Id == modelId && e.ModelState == ModelState.Available);
         if (ckModel == null)
         {
             throw ModelRepositoryException.ModelNotFound(modelId, RepositoryName);
