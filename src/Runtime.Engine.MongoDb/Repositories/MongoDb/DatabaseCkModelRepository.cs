@@ -363,7 +363,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 session.StartTransaction();
                 
                 await mongoDbRepositoryDataSource.CkModels.TryDeleteOneAsync(session, compiledModel.ModelId);
-                await mongoDbRepositoryDataSource.CkModels.InsertOneAsync(session, new CkModel()
+                await mongoDbRepositoryDataSource.CkModels.InsertOneAsync(session, new CkModel
                 {
                     Id = compiledModel.ModelId,
                     ModelId = compiledModel.ModelId.ModelId,
@@ -474,7 +474,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     AttributeName = attribute.AttributeName,
                     AutoCompleteValues = attribute.AutoCompleteValues,
                     AutoIncrementReference = attribute.AutoIncrementReference,
-                    IsOptional = attribute.IsOptional
+                    IsOptional = attribute.IsOptional,
                 };
 
                 ckTypeAttributes.Add(ckTypeAttribute);
@@ -565,7 +565,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     ValueCkRecordId = ckAttributeDto.ValueCkRecordId,
                     DefaultValues = ckAttributeDto.DefaultValues?.Select(dv =>
                         AttributeValueConverter.ConvertAttributeValue(ckAttributeDto.ValueType, dv)!).ToList(),
-                    Description = ckAttributeDto.Description
+                    Description = ckAttributeDto.Description,
+                    IsDataStream = ckAttributeDto.IsDataStream
                 };
                 transientCkModel.CkAttributes.Add(ckAttribute);
             }

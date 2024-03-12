@@ -226,6 +226,7 @@ public class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.ValueCkEnumId).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.ValueCkRecordId).SetIgnoreIfDefault(true);
+            cm.GetMemberMap(c => c.IsDataStream).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.TryRegisterClassMap<CkAssociationRole>(cm =>
