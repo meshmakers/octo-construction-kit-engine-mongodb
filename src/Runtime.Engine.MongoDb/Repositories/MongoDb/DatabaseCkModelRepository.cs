@@ -128,7 +128,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 ValueCkEnumId = a.ValueCkEnumId,
                 ValueCkRecordId = a.ValueCkRecordId,
                 DefaultValues = a.DefaultValues?.ToList(),
-                Description = a.Description
+                Description = a.Description,
+                IsDataStream = a.IsDataStream,
             }).ToList(),
             Types = ckTypes.Select(t => new CkCompiledTypeDto
             {
