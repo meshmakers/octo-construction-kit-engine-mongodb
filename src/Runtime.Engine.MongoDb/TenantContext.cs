@@ -170,7 +170,7 @@ public class TenantContext : ITenantContext
 
         var normalizedDatabaseName = databaseName.ToLower();
 
-        if (await IsDatabaseAlreadyExistingAsync(normalizedDatabaseName))
+        if (await IsDatabaseExistingAsync(normalizedDatabaseName))
         {
             throw TenantException.TenantDatabaseDoesAlreadyExist(normalizedDatabaseName);
         }
@@ -195,7 +195,7 @@ public class TenantContext : ITenantContext
             throw TenantException.TenantDoesAlreadyExist(tenantId);
         }
 
-        if (!await IsDatabaseAlreadyExistingAsync(databaseName))
+        if (!await IsDatabaseExistingAsync(databaseName))
         {
             throw TenantException.TenantDatabaseDoesNotExist(databaseName);
         }
@@ -585,7 +585,7 @@ public class TenantContext : ITenantContext
         return resultSet.Items.FirstOrDefault();
     }
 
-    protected async Task<bool> IsDatabaseAlreadyExistingAsync(string databaseName)
+    protected async Task<bool> IsDatabaseExistingAsync(string databaseName)
     {
         return await _systemRepositoryClient.IsRepositoryExistingAsync(databaseName);
     }

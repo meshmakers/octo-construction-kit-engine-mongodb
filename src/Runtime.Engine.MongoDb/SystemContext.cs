@@ -133,7 +133,15 @@ public class SystemContext : TenantContext, ISystemContext
     {
         var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
 
-        return await IsDatabaseAlreadyExistingAsync(normalizedDatabaseName);
+        if (await IsDatabaseExistingAsync(normalizedDatabaseName))
+        {
+            if (await IsCkModelExistingAsync(SystemCkIds.ModelId))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     #endregion TenantId Context Handling

@@ -7,6 +7,9 @@ public interface ISystemContext : ITenantContext
     /// <summary>
     /// Returns true if the system tenant exists.
     /// </summary>
+    /// <remarks>
+    /// This method checks if the database exists and the system model is available.
+    /// </remarks>
     /// <returns></returns>
     Task<bool> IsSystemTenantExistingAsync();
 
