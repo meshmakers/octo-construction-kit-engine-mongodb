@@ -16,9 +16,10 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
 internal class MultipleOriginHierarchicalRtQuery : MultipleOriginHierarchicalRtQuery<RtEntity>
 {
-    internal MultipleOriginHierarchicalRtQuery(ICkCacheService ckCacheService, string tenantId, 
+    internal MultipleOriginHierarchicalRtQuery(ICkCacheService ckCacheService, string tenantId,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
-        string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph, CkId<CkAssociationRoleId> roleId,
+        string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
+        CkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
         : base(ckCacheService, tenantId, mongoDbRepositoryDataSource, language, rtIds, originCkTypeGraph, roleId,
             graphDirection,
@@ -27,7 +28,8 @@ internal class MultipleOriginHierarchicalRtQuery : MultipleOriginHierarchicalRtQ
     }
 }
 
-internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetEntity> where TTargetEntity : RtEntity, new()
+internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetEntity>
+    where TTargetEntity : RtEntity, new()
 {
     private readonly GraphDirections _graphDirection;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
@@ -36,9 +38,10 @@ internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetE
     private readonly IEnumerable<OctoObjectId> _rtIds;
     private readonly CkTypeGraph _targetCkTypeGraph;
 
-    internal MultipleOriginHierarchicalRtQuery(ICkCacheService ckCacheService, string tenantId, 
+    internal MultipleOriginHierarchicalRtQuery(ICkCacheService ckCacheService, string tenantId,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
-        string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph, CkId<CkAssociationRoleId> roleId,
+        string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
+        CkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
         : base(new RtEntityFieldFilterResolver<TTargetEntity>(ckCacheService, tenantId, targetCkTypeGraph), language)
     {
@@ -58,13 +61,15 @@ internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetE
             throw OperationFailedException.PagingNeeded();
         }
 
-        var innerLocalField = (FieldDefinition<RtAssociation>)"targetRtId";
+        var innerLocalFieldRtId = (FieldDefinition<RtAssociation>)"targetRtId";
+        var innerLocalFieldCkId = "targetCkTypeId";
         var connectToField = (FieldDefinition<RtAssociation, string>)"originRtId";
 
         switch (_graphDirection)
         {
             case GraphDirections.Inbound:
-                innerLocalField = "originRtId";
+                innerLocalFieldRtId = "originRtId";
+                innerLocalFieldCkId = "originCkTypeId";
                 connectToField = "targetRtId";
                 break;
             case GraphDirections.Outbound:
@@ -76,17 +81,22 @@ internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetE
         var connectFromField = (FieldDefinition<RtEntity, string[]>)"_id";
         var @as = (FieldDefinition<BsonDocument, TTargetEntity[]>)"_associations";
 
+        var targetCkIds = _targetCkTypeGraph.GetAllDerivedTypes(true);
         var pipelineStageDefinitions = new List<IPipelineStageDefinition>(new IPipelineStageDefinition[]
         {
             PipelineStageDefinitionBuilder.Match(
-                Builders<RtAssociation>.Filter.Eq("associationRoleId", _roleId)),
+                Builders<RtAssociation>.Filter.And(
+                    Builders<RtAssociation>.Filter.Eq("associationRoleId", _roleId),
+                    Builders<RtAssociation>.Filter.In(innerLocalFieldCkId, targetCkIds)
+                )),
             PipelineStageDefinitionBuilder.Lookup(
-                _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TTargetEntity>(_targetCkTypeGraph).GetMongoCollection(),
-                innerLocalField,
+                _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TTargetEntity>(_targetCkTypeGraph)
+                    .GetMongoCollection(),
+                innerLocalFieldRtId,
                 "_id",
                 (FieldDefinition<BsonDocument>)"target"),
             PipelineStageDefinitionBuilder.Unwind((FieldDefinition<BsonDocument>)"target"),
-            PipelineStageDefinitionBuilder.ReplaceRoot<BsonDocument, TTargetEntity>("$target")
+            PipelineStageDefinitionBuilder.ReplaceRoot<BsonDocument, TTargetEntity>("$target"),
         });
 
 
@@ -100,7 +110,8 @@ internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetE
         AddSortConstraintsToPipeline(pipelineStageDefinitions);
 
 
-        var aggregate = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph).Aggregate(session)
+        var aggregate = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph)
+            .Aggregate(session)
             .Match(
                 Builders<RtEntity>.Filter.And(Builders<RtEntity>.Filter.In(x => x.RtId, _rtIds)))
             .Lookup(
