@@ -75,6 +75,11 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     {
         return await _mongoDbRepositoryDataSource.GetSessionAsync();
     }
+    
+    public IOctoSession GetSession()
+    {
+        return _mongoDbRepositoryDataSource.GetSession();
+    }
 
     #endregion Transaction Handling
 

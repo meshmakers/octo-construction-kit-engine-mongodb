@@ -9,6 +9,11 @@ namespace Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
 
 public interface ITenantRepository : IRuntimeRepository
 {
+    /// <summary>
+    /// Gets the session for the tenant.
+    /// </summary>
+    /// <returns></returns>
+    IOctoSession GetSession();
 
     #region Data query
 

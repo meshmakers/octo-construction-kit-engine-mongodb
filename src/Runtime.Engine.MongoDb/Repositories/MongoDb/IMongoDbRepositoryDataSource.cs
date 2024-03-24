@@ -23,7 +23,7 @@ public interface IMongoDbRepositoryDataSource : ICkMongoDbRepositoryDataSource, 
         where TEntity : RtEntity, new();
 
     Task<IOctoSession> GetSessionAsync();
-    IOctoSession StartSession();
+    IOctoSession GetSession();
 
 
     Task<ICollection<CkTypeInfo>> GetCkTypeInfoAsync(IOctoSession session);

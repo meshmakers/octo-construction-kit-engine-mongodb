@@ -26,4 +26,9 @@ public class SessionOperationException : OperationFailedException
     {
         return new SessionOperationException("Session not active.");
     }
+
+    internal static Exception SessionDisposed()
+    {
+        return new SessionOperationException("Session disposed.");
+    }
 }

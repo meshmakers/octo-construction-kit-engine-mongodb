@@ -7,7 +7,7 @@ public interface IRepositoryClient
 {
     Task<IOctoSystemSession> GetSessionAsync();
 
-    IOctoSession StartSession();
+    IOctoSession GetSession();
 
     Task CreateRepositoryAsync(string name);
 

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Microsoft.Extensions.Logging;
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
@@ -7,13 +8,18 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 [DebuggerDisplay("{" + nameof(ApplicationName) + "}")]
 internal class OctoSession : IOctoSessionInternal
 {
+    private readonly ILogger<OctoSession> _logger;
     private bool _isSessionActive;
     private bool _isSessionStarted;
+    private bool _isDisposed;
 
-    internal OctoSession(IClientSessionHandle clientSessionHandle, string applicationName)
+    internal OctoSession(ILogger<OctoSession> logger, IClientSessionHandle clientSessionHandle, string applicationName)
     {
+        _logger = logger;
+        _logger.LogDebug("[{Id}] Create session", clientSessionHandle.ServerSession.Id);
         _isSessionActive = false;
         _isSessionStarted = false;
+        _isDisposed = false;
         SessionHandle = clientSessionHandle;
         ApplicationName = applicationName;
     }
@@ -22,16 +28,26 @@ internal class OctoSession : IOctoSessionInternal
 
     public void Dispose()
     {
-        if (_isSessionActive)
+        if (!_isDisposed)
         {
-            SessionHandle.AbortTransaction();
-        }
+            if (_isSessionActive)
+            {
+                SessionHandle.AbortTransaction();
+            }
 
-        SessionHandle.Dispose();
+            SessionHandle.Dispose();
+            _isDisposed = true;
+        }
     }
 
     public void StartTransaction()
     {
+        _logger.LogDebug("[{Id}] Start transaction", SessionHandle.ServerSession.Id);
+
+        if (_isDisposed)
+        {
+            throw SessionOperationException.SessionDisposed();
+        }
         if (_isSessionStarted)
         {
             throw SessionOperationException.SessionAlreadyStarted();
@@ -44,6 +60,8 @@ internal class OctoSession : IOctoSessionInternal
 
     public async Task CommitTransactionAsync()
     {
+        _logger.LogDebug("[{Id}] Commit transaction", SessionHandle.ServerSession.Id);
+
         if (!_isSessionActive)
         {
             throw SessionOperationException.SessionNotActive();
@@ -55,6 +73,8 @@ internal class OctoSession : IOctoSessionInternal
 
     public async Task AbortTransactionAsync()
     {
+        _logger.LogDebug("[{Id}] Abort transaction", SessionHandle.ServerSession.Id);
+
         if (!_isSessionActive)
         {
             throw SessionOperationException.SessionNotActive();

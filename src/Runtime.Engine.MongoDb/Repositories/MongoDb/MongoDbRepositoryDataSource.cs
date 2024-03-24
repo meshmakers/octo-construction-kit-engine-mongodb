@@ -82,9 +82,9 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     }
 
 
-    public IOctoSession StartSession()
+    public IOctoSession GetSession()
     {
-        var session = _repositoryClient.StartSession();
+        var session = _repositoryClient.GetSession();
         return session;
     }
 
