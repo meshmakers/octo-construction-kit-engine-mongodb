@@ -119,7 +119,7 @@ internal class RtEntityDiscriminatorConvention : IDiscriminatorConvention
 
     public BsonValue GetDiscriminator(Type nominalType, Type actualType)
     {
-        return TypeNameDiscriminator.GetDiscriminator(actualType);
+        return "RtEntity";
     }
 
     public string ElementName { get; }
