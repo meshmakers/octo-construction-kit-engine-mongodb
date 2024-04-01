@@ -423,5 +423,6 @@ public class MongoRepositoryClient : IRepositoryClient
     static MongoRepositoryClient()
     {
         BsonSerializer.RegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
+        BsonSerializer.RegisterDiscriminatorConvention(typeof(RtEntity), new RtEntityDiscriminatorConvention("_t"));
     }
 }

@@ -1,4 +1,5 @@
 using System.Reflection;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using MongoDB.Bson;
 using MongoDB.Bson.IO;
 using MongoDB.Bson.Serialization;
@@ -93,9 +94,15 @@ internal class RtEntityDiscriminatorConvention : IDiscriminatorConvention
                     discriminator = discriminator.AsBsonArray.Last(); // last item is leaf class discriminator
                 }
                 
+                // We ignore the discriminator for List`1 - we handle that on our side.
                 if (discriminator.AsString == "List`1")
                 {
                     actualType =  typeof(List<object>);
+                }
+                // We ignore the discriminator "RtEntity" - we handle that on our side.
+                else if (discriminator.AsString == "RtEntity" && nominalType.IsAssignableTo(typeof(RtEntity)))
+                {
+                    actualType = nominalType;
                 }
                 else
                 {
