@@ -1,0 +1,1 @@
+GET {{baseUrl}}/api/WeatherForecast/GetRestaurants

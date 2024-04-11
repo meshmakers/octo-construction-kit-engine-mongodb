@@ -29,7 +29,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
         var pipelineStageDefinitions = new List<IPipelineStageDefinition>();
 
         // In documentation, text search must be at first place
-        AddTextFilterConstraintsToPipeline(pipelineStageDefinitions);
+        AddPreStagesToPipelines(pipelineStageDefinitions);
         // Filter for fields
         var filterDefinitions = CreateFilterDefinitions();
         if (filterDefinitions != null)
@@ -37,7 +37,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
             pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(filterDefinitions));
         }
 
-        AddSortConstraintsToPipeline(pipelineStageDefinitions);
+        AddPostStagesToPipeline(pipelineStageDefinitions);
 
         meter.SetCheckpoint("definitions created");
 

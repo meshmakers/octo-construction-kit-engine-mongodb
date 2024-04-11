@@ -42,7 +42,7 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
         }
     }
 
-    protected void AddTextFilterConstraintsToPipeline(IList<IPipelineStageDefinition> pipelineStageDefinitions)
+    protected virtual void AddPreStagesToPipelines(IList<IPipelineStageDefinition> pipelineStageDefinitions)
     {
         if (_textFilter != null)
         {
@@ -52,7 +52,7 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
         }
     }
 
-    protected void AddSortConstraintsToPipeline(IList<IPipelineStageDefinition> pipelineStageDefinitions)
+    protected virtual void AddPostStagesToPipeline(IList<IPipelineStageDefinition> pipelineStageDefinitions)
     {
         if (_sortDefinitions.Any())
         {
@@ -60,7 +60,7 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
             pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Sort(sortDefinition));
         }
     }
-
+    
     protected virtual IEnumerable<GroupingResult>? CalculateGrouping(IEnumerable<TEntity> resultList)
     {
         return null;
@@ -123,7 +123,7 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
         }
     }
 
-    internal void AddSortConstraintsToPipeline(IEnumerable<SortOrderItem>? sortOrders)
+    internal void AddPostStagesToPipeline(IEnumerable<SortOrderItem>? sortOrders)
     {
         if (sortOrders == null)
         {

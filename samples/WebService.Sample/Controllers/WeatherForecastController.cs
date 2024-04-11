@@ -1,37 +1,39 @@
+using Meshmakers.Octo.Runtime.Contracts.Geospatial.Geometry;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Microsoft.AspNetCore.Mvc;
+using MongoDB.Driver.GeoJsonObjectModel;
 
 namespace WebService.Sample.Controllers;
 
 [ApiController]
-[Route("[controller]")]
-public class WeatherForecastController : ControllerBase
+[Route("api/[controller]")]
+public class WeatherForecastController(ILogger<WeatherForecastController> logger, ISystemContext systemContext)
+    : ControllerBase
 {
-    private static readonly string[] Summaries =
+    [HttpGet("GetRestaurants")]
+    public async Task<IEnumerable<RtEntity>> Get()
     {
-        "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-    };
+        var tenantRepository = await systemContext.FindTenantRepositoryAsync("meshTest");
 
-    private readonly ILogger<WeatherForecastController> _logger;
-    private readonly ISystemContext _systemContext;
+        var session = tenantRepository.GetSession();
+        try
+        {
+            session.StartTransaction();
 
-    public WeatherForecastController(ILogger<WeatherForecastController> logger, ISystemContext systemContext)
-    {
-        _logger = logger;
-        _systemContext = systemContext;
-    }
+            var point = new Point(new Position(40.7358879, -74.005));
+            var dataQueryOperation = DataQueryOperation.Create();
+            dataQueryOperation.NearGeospatialFilter("Location", point, 2000, 2100);
 
-    [HttpGet(Name = "GetWeatherForecast")]
-    public async Task<IEnumerable<WeatherForecast>> Get()
-    {
-        var value = await _systemContext.IsSystemTenantExistingAsync();
-
-        return Enumerable.Range(1, 5).Select(index => new WeatherForecast
-            {
-                Date = DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-                TemperatureC = Random.Shared.Next(-20, 55),
-                Summary = Summaries[Random.Shared.Next(Summaries.Length)]
-            })
-            .ToArray();
+            var r = await tenantRepository.GetRtEntitiesByTypeAsync(session, "FireGuardians/Restaurant", dataQueryOperation);
+            return r.Items;
+        }
+        catch (Exception e)
+        {
+            logger.LogError(e.Message);
+            throw;
+        }
     }
 }

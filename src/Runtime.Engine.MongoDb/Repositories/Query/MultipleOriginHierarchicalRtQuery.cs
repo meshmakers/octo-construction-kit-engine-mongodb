@@ -11,6 +11,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using MongoDB.Driver.GeoJsonObjectModel;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
@@ -37,6 +38,7 @@ internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetE
     private readonly CkId<CkAssociationRoleId> _roleId;
     private readonly IEnumerable<OctoObjectId> _rtIds;
     private readonly CkTypeGraph _targetCkTypeGraph;
+    private readonly List<IPipelineStageDefinition> _geospatialFilters;
 
     internal MultipleOriginHierarchicalRtQuery(ICkCacheService ckCacheService, string tenantId,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
@@ -51,6 +53,41 @@ internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetE
         _roleId = roleId;
         _graphDirection = graphDirection;
         _targetCkTypeGraph = targetCkTypeGraph;
+        _geospatialFilters = new List<IPipelineStageDefinition>();
+    }
+    
+    protected override void AddPreStagesToPipelines(IList<IPipelineStageDefinition> pipelineStageDefinitions)
+    {
+        _geospatialFilters.ForEach(pipelineStageDefinitions.Add);
+        
+        base.AddPostStagesToPipeline(pipelineStageDefinitions);
+    }
+    
+    /// <summary>
+    /// Add a geospatial filters to the query
+    /// </summary>
+    /// <param name="geospatialFilters">Filters to add</param>
+    public void AddGeospatialFilters(ICollection<GeospatialFilter>? geospatialFilters)
+    {
+        if (geospatialFilters == null)
+        {
+            return;
+        }
+        
+        foreach (var geospatialFilter in geospatialFilters)
+        {
+            var resolvedAttributeName = _fieldFilterResolver.ResolveAttributeName(geospatialFilter.AttributeName);
+            if (string.IsNullOrWhiteSpace(resolvedAttributeName))
+            {
+                throw OperationFailedException.AttributeNameResolutionFailed(geospatialFilter.AttributeName);
+            }
+            if (geospatialFilter is NearGeospatialFilter nearGeospatialFilter)
+            {
+                GeoJsonPoint<GeoJsonCoordinates> point = nearGeospatialFilter.Point.ToGeoJsonPoint();
+                
+                _geospatialFilters.Add(OctoPipelineStageDefinition.GeoNear<RtEntity, GeoJsonCoordinates>(resolvedAttributeName, point, nearGeospatialFilter.MinDistance, nearGeospatialFilter.MaxDistance));
+            }
+        }
     }
 
     internal async Task<IMultipleOriginResultSet<TTargetEntity>> ExecuteQuery(IOctoSession session, int? skip,
@@ -100,14 +137,14 @@ internal class MultipleOriginHierarchicalRtQuery<TTargetEntity> : Query<TTargetE
         });
 
 
-        AddTextFilterConstraintsToPipeline(pipelineStageDefinitions);
+        AddPreStagesToPipelines(pipelineStageDefinitions);
         var filterDefinitions = CreateFilterDefinitions();
         if (filterDefinitions != null)
         {
             pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(filterDefinitions));
         }
 
-        AddSortConstraintsToPipeline(pipelineStageDefinitions);
+        AddPostStagesToPipeline(pipelineStageDefinitions);
 
 
         var aggregate = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph)

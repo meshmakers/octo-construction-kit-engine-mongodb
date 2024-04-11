@@ -53,8 +53,9 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         query.AddIdFilter(rtIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        query.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
         query.AddGrouping(dataQueryOperation.FieldGroupBy);
+        query.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
 
         return await query.ExecuteQuery(session, skip, take);
     }
@@ -175,7 +176,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         query.AddIdFilter(attributeIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        query.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
         query.AddGrouping(dataQueryOperation.FieldGroupBy);
 
         return await query.ExecuteQuery(session, skip, take);
@@ -189,7 +190,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         query.AddIdFilter(ckTypeIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        query.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
         query.AddGrouping(dataQueryOperation.FieldGroupBy);
 
         return await query.ExecuteQuery(session, skip, take);
@@ -203,7 +204,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         query.AddIdFilter(ckRecordIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        query.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
         query.AddGrouping(dataQueryOperation.FieldGroupBy);
 
         return await query.ExecuteQuery(session, skip, take);
@@ -217,7 +218,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         query.AddIdFilter(ckEnumIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        query.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
         query.AddGrouping(dataQueryOperation.FieldGroupBy);
 
         return await query.ExecuteQuery(session, skip, take);
@@ -270,8 +271,9 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         hierarchicalRtQuery.AddIdFilter(rtIds);
         hierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         hierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        hierarchicalRtQuery.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        hierarchicalRtQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
         hierarchicalRtQuery.AddGrouping(dataQueryOperation.FieldGroupBy);
+        hierarchicalRtQuery.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
 
         return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
     }
@@ -301,8 +303,9 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         originHierarchicalRtQuery.AddIdFilter(rtIds);
         originHierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         originHierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        originHierarchicalRtQuery.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        originHierarchicalRtQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
         originHierarchicalRtQuery.AddGrouping(dataQueryOperation.FieldGroupBy);
+        originHierarchicalRtQuery.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
 
         return await originHierarchicalRtQuery.ExecuteQuery(session, skip, take);
     }
@@ -343,8 +346,9 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         hierarchicalRtQuery.AddIdFilter(rtIds);
         hierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         hierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        hierarchicalRtQuery.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        hierarchicalRtQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
         hierarchicalRtQuery.AddGrouping(dataQueryOperation.FieldGroupBy);
+        hierarchicalRtQuery.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
 
         return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
     }
@@ -361,8 +365,9 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        query.AddSortConstraintsToPipeline(dataQueryOperation.SortOrders);
+        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
         query.AddGrouping(dataQueryOperation.FieldGroupBy);
+        query.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
 
         return await query.ExecuteQuery(session, skip, take);
     }
