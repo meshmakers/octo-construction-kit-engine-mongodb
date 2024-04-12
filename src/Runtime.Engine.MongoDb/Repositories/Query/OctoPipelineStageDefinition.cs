@@ -27,7 +27,7 @@ public static class OctoPipelineStageDefinition
                     bsonWriter.WriteName("spherical");
                     bsonWriter.WriteBoolean(true);
                     bsonWriter.WriteName("distanceField");
-                    bsonWriter.WriteString(attributeName);
+                    bsonWriter.WriteString(attributeName + "_distance");
                     bsonWriter.WriteName("near");
                     sr.GetSerializer<GeoJsonPoint<TCoordinates>>().Serialize(context, point);
                     if (maxDistance.HasValue)

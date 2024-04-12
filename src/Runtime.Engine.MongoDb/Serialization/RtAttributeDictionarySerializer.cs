@@ -1,5 +1,8 @@
+using System.Dynamic;
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.Runtime.Contracts.Geospatial.Geometry;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Options;
 using MongoDB.Bson.Serialization.Serializers;
@@ -55,9 +58,19 @@ internal class RtAttributeDictionarySerializer : DictionaryInterfaceImplementerS
                         bsonWriter.WriteEndArray();
                         break;
                     default:
-                        var actualType = keyValuePair.Value.GetType();
-                        var serializer = BsonSerializer.LookupSerializer(actualType);
-                        serializer.Serialize(context, args, keyValuePair.Value);
+                        if (keyValuePair.Value is Point p)
+                        {
+                            var jsonPoint = p.ToGeoJsonPoint();
+                            var pointSerializer = BsonSerializer.LookupSerializer(jsonPoint.GetType());
+                            pointSerializer.Serialize(context, args, jsonPoint);
+                        }
+                        else
+                        {
+                            var actualType = keyValuePair.Value.GetType();
+                            var serializer = BsonSerializer.LookupSerializer(actualType);
+                            serializer.Serialize(context, args, keyValuePair.Value);
+                        }
+                     
                         break;
                 }
             }
@@ -83,6 +96,29 @@ internal class RtAttributeDictionarySerializer : DictionaryInterfaceImplementerS
         var ret = new Dictionary<string, object?>();
         foreach (var pair in dic)
         {
+            if (pair.Value is ExpandoObject expando)
+            {
+                var expandoDic = expando.ToDictionary();
+
+                if (expandoDic.TryGetValue("type", out var v))
+                {
+                    if (v is "Point")
+                    {
+                        if (expandoDic["coordinates"] is List<object> coordinates)
+                        {
+                            var longitude = Convert.ToDouble(coordinates[0]);
+                            var latitude = Convert.ToDouble(coordinates[1]);
+                            double? altitude = coordinates.Count > 2 ? Convert.ToDouble(coordinates[2]) : null;
+                            ret[pair.Key.ToPascalCase()] = new Point(new Position(latitude, longitude, altitude));
+                            continue;
+                        }
+                    }
+                    
+                    throw new NotSupportedException($"Unsupported GeoJson type: {v}");
+                }
+                
+            }
+            
             ret[pair.Key.ToPascalCase()] = pair.Value;
         }
 
