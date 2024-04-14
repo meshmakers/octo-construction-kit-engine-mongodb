@@ -1,8 +1,11 @@
+
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.Geospatial.Geometry;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository.Entities;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using MongoDB.Driver;
+using MongoDB.Driver.GeoJsonObjectModel;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
@@ -20,7 +23,13 @@ public class RtEntityMongoDataSourceMapper<TEntity> : IMongoDataSourceMapper<Oct
         List<UpdateDefinition<TEntity>> list = [];
         foreach (var attributeToApply in document.Attributes)
         {
-            list.Add(Builders<TEntity>.Update.Set("attributes." + attributeToApply.Key.ToCamelCase(), attributeToApply.Value));
+            var value = attributeToApply.Value;
+            if (value is Point p)
+            {
+               value = GeoJson.Point(GeoJson.Position(p.Coordinates.Latitude, p.Coordinates.Longitude));
+            }
+
+            list.Add(Builders<TEntity>.Update.Set("attributes." + attributeToApply.Key.ToCamelCase(), value));
         }
 
         return Builders<TEntity>.Update.Combine(list);

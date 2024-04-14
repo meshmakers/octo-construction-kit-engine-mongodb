@@ -16,6 +16,7 @@ using MongoDB.Bson.Serialization.IdGenerators;
 using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
 using MongoDB.Driver.Core.Events;
+using MongoDB.Driver.GeoJsonObjectModel;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
@@ -67,9 +68,9 @@ public class MongoRepositoryClient : IRepositoryClient
         urlBuilder.RetryReads = true;
         urlBuilder.RetryWrites = true;
 
-        var objectSerializer = new ObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
-                                                            type.FullName?.StartsWith(typeof(RtEntity).Namespace!) ==
-                                                            true);
+        var objectSerializer = new OctoObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
+                                                                type.FullName?.StartsWith(typeof(RtEntity).Namespace!) ==
+                                                                true || type.Namespace!.StartsWith(typeof(GeoJson).Namespace!));
 
         BsonSerializer.TryRegisterSerializer(objectSerializer);
 

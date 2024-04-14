@@ -6,17 +6,13 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Options;
 using MongoDB.Bson.Serialization.Serializers;
+using MongoDB.Driver.GeoJsonObjectModel;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 
-internal class RtAttributeDictionarySerializer : DictionaryInterfaceImplementerSerializer<Dictionary<string, object?>>
+internal class RtAttributeDictionarySerializer()
+    : DictionaryInterfaceImplementerSerializer<Dictionary<string, object?>>(DictionaryRepresentation.Document)
 {
-    public RtAttributeDictionarySerializer() :
-        base(DictionaryRepresentation.Document)
-    {
-    }
-
-
     public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args,
         Dictionary<string, object?>? value)
     {
@@ -96,6 +92,11 @@ internal class RtAttributeDictionarySerializer : DictionaryInterfaceImplementerS
         var ret = new Dictionary<string, object?>();
         foreach (var pair in dic)
         {
+            if (pair.Value is GeoJsonPoint<GeoJson2DCoordinates> p)
+            {
+                ret[pair.Key.ToPascalCase()] = new Point(new Position(p.Coordinates.X, p.Coordinates.Y));
+                continue;
+            }
             if (pair.Value is ExpandoObject expando)
             {
                 var expandoDic = expando.ToDictionary();
