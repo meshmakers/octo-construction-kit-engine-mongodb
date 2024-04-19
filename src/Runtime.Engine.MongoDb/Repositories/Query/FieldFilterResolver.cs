@@ -77,7 +77,7 @@ internal class FieldFilterResolver<TEntity>
         if (searchTerm.ToString()!.StartsWith("@"))
         {
             var expressionString = searchTerm.ToString()?.Substring(1);
-            if (string.IsNullOrWhiteSpace(expressionString) && expressionString != null)
+            if (!string.IsNullOrWhiteSpace(expressionString))
             {
                 var expression = new OctoExpression(expressionString);
                 var result = expression.calculate();
