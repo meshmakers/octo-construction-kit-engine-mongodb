@@ -83,13 +83,7 @@ internal abstract class RtFieldFilterResolver<TEntity> : FieldFilterResolver<TEn
                     }
                 }
             }
-
-            if (searchTerm is IEnumerable e)
-            {
-                isEnum = false;
-                return e;
-            }
-
+            
             if (searchTerm.ToString()?.StartsWith("@") == true)
             {
                 var expressionString = searchTerm.ToString()?.Substring(1);
@@ -118,6 +112,12 @@ internal abstract class RtFieldFilterResolver<TEntity> : FieldFilterResolver<TEn
                         throw OperationFailedException.FormulaEvaluationFailed(searchTerm);
                     }
                 }
+            }
+
+            if (searchTerm is IEnumerable e)
+            {
+                isEnum = false;
+                return e;
             }
 
             // Change to the type of attribute
