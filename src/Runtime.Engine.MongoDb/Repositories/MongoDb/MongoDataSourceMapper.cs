@@ -26,10 +26,20 @@ public class RtEntityMongoDataSourceMapper<TEntity> : IMongoDataSourceMapper<Oct
             var value = attributeToApply.Value;
             if (value is Point p)
             {
-               value = GeoJson.Point(GeoJson.Position(p.Coordinates.Latitude, p.Coordinates.Longitude));
+               value = GeoJson.Point(GeoJson.Position(p.Coordinates.Longitude, p.Coordinates.Latitude));
             }
 
             list.Add(Builders<TEntity>.Update.Set("attributes." + attributeToApply.Key.ToCamelCase(), value));
+        }
+
+        if (document.RtChangedDateTime.HasValue)
+        {
+            list.Add(Builders<TEntity>.Update.Set("rtChangedDateTime", document.RtChangedDateTime.Value));
+        }
+        
+        if (!string.IsNullOrWhiteSpace(document.RtWellKnownName))
+        {
+            list.Add(Builders<TEntity>.Update.Set("rtWellKnownName", document.RtWellKnownName));
         }
 
         return Builders<TEntity>.Update.Combine(list);
