@@ -226,6 +226,13 @@ public class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.Values).SetIsRequired(true);
         });
 
+        BsonClassMap.TryRegisterClassMap<CkAttributeMetaData>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.AutoMap();
+            cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
+        });
+
         BsonClassMap.TryRegisterClassMap<CkAttribute>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
