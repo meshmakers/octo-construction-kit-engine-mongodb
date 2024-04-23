@@ -130,6 +130,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 DefaultValues = a.DefaultValues?.ToList(),
                 Description = a.Description,
                 IsDataStream = a.IsDataStream,
+                MetaData = a.MetaData?.Select(m=> 
+                    new CkAttributeMetaDataDto {Key = m.Key, Value = m.Value, Description = m.Description }).ToList()
             }).ToList(),
             Types = ckTypes.Select(t => new CkCompiledTypeDto
             {
@@ -581,7 +583,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     DefaultValues = ckAttributeDto.DefaultValues?.Select(dv =>
                         AttributeValueConverter.ConvertAttributeValue(ckAttributeDto.ValueType, dv)!).ToList(),
                     Description = ckAttributeDto.Description,
-                    IsDataStream = ckAttributeDto.IsDataStream
+                    IsDataStream = ckAttributeDto.IsDataStream,
+                    MetaData = ckAttributeDto.MetaData?.Select(m=> 
+                        new CkAttributeMetaData{Key = m.Key, Value = m.Value, Description = m.Description }).ToList()
                 };
                 transientCkModel.CkAttributes.Add(ckAttribute);
             }
