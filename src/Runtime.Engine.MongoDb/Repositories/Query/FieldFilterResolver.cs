@@ -42,7 +42,7 @@ internal class FieldFilterResolver<TEntity>
         }
 
         var memberMap = _bsonClassMap.GetMemberMap(attributeName);
-        if (memberMap == null || !memberMap.ShouldSerializeMethod.Invoke(null))
+        if (memberMap == null || (!memberMap.ShouldSerializeMethod?.Invoke(null) ?? false))
         {
             return null;
         }
