@@ -205,7 +205,7 @@ public class TenantContext : ITenantContext
                     DatabaseName = databaseName
                 };
 
-                var tenantRepository = GetTenantRepository();
+                var tenantRepository = GetTenantRepositoryAsAdmin();
                 await tenantRepository.InsertOneRtEntityAsync(adminSession, octoTenant);
             }
 
@@ -216,7 +216,7 @@ public class TenantContext : ITenantContext
                 ParentTenantId = TenantId,
                 DatabaseName = normalizedDatabaseName
             };
-            var systemTenantRepository = GetSystemTenantRepository();
+            var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
             await systemTenantRepository.InsertOneRtEntityAsync(adminSession, rtSystemTenant);
         }
         finally
@@ -240,7 +240,7 @@ public class TenantContext : ITenantContext
             // Distribute updates (pre) to inform other services.
             await TenantNotifications.NotifyPreTenantDeleteAsync(tenantId);
 
-            var tenantRepository = GetTenantRepository();
+            var tenantRepository = GetTenantRepositoryAsAdmin();
             await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
                 new List<FieldFilter>
                 {
@@ -284,7 +284,7 @@ public class TenantContext : ITenantContext
     {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
-        var tenantRepository = GetTenantRepository();
+        var tenantRepository = GetTenantRepositoryAsAdmin();
 
         var octoTenant = await GetRtTenantAsync(adminSession, tenantId);
         if (octoTenant == null)
@@ -345,7 +345,7 @@ public class TenantContext : ITenantContext
     public async Task<IResultSet<OctoTenant>> GetChildTenantsAsync(IOctoAdminSession adminSession, int? skip = null,
         int? take = null)
     {
-        var tenantRepository = GetTenantRepository();
+        var tenantRepository = GetTenantRepositoryAsAdmin();
 
         var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, DataQueryOperation.Create(), skip, take);
         return new ResultSet<OctoTenant>(result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName)),
@@ -401,6 +401,16 @@ public class TenantContext : ITenantContext
         var result = GetTenantRepository(normalizedTenantId, normalizedDatabaseName);
         return result;
     }
+    
+    public ITenantRepository GetSystemTenantRepositoryAsAdmin()
+    {
+        var normalizedDatabaseName = SystemConfiguration.Value.SystemDatabaseName.ToLower();
+        var normalizedTenantId = SystemConfiguration.Value.SystemTenantId.NormalizeString();
+
+        var result = GetTenantRepositoryAsAdmin(normalizedTenantId, normalizedDatabaseName);
+        return result;
+    }
+
 
     public ITenantRepository GetTenantRepository()
     {
@@ -573,27 +583,27 @@ public class TenantContext : ITenantContext
             AdminRepositoryClient, databaseName, TenantId);
     }
 
-    private async Task<RtTenant?> GetRtTenantAsync(IOctoSession systemSession,
+    private async Task<RtTenant?> GetRtTenantAsync(IOctoAdminSession adminSession,
         string tenantId)
     {
-        var tenantRepository = GetTenantRepository();
+        var tenantRepository = GetTenantRepositoryAsAdmin();
 
         var dataQueryOperation = DataQueryOperation.Create()
             .FieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.NormalizeString());
 
-        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(systemSession, dataQueryOperation);
+        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, dataQueryOperation);
         return resultSet.Items.FirstOrDefault();
     }
 
-    private async Task<RtTenant?> GetRtSystemTenantAsync(IOctoSession systemSession,
+    private async Task<RtTenant?> GetRtSystemTenantAsync(IOctoAdminSession adminSession,
         string tenantId)
     {
-        var tenantRepository = GetSystemTenantRepository();
+        var tenantRepository = GetTenantRepositoryAsAdmin();
 
         var dataQueryOperation = DataQueryOperation.Create()
             .FieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.NormalizeString());
 
-        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(systemSession, dataQueryOperation);
+        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, dataQueryOperation);
         return resultSet.Items.FirstOrDefault();
     }
 
