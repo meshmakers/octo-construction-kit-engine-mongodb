@@ -25,25 +25,6 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     private readonly IRepositoryClient _repositoryClient;
     private readonly ILogger<MongoDbRepositoryDataSource> _logger;
 
-    private MongoDbRepositoryDataSource(ILoggerFactory loggerFactory, IServiceProvider serviceProvider, string tenantId, string dataSourceHost,
-        string databaseName,
-        string databaseUser, string? databasePassword,
-        string authenticationDatabaseName, bool useTls, bool allowInsecureTls)
-        : this(loggerFactory.CreateLogger<MongoDbRepositoryDataSource>(), 
-            new MongoRepositoryClient(loggerFactory.CreateLogger<MongoRepositoryClient>(),
-                new MongoConnectionOptions
-        {
-            MongoDbHost = dataSourceHost,
-            MongoDbUsername = databaseUser,
-            MongoDbPassword = databasePassword,
-            DatabaseName = databaseName,
-            AuthenticationSource = authenticationDatabaseName,
-            UseTls = useTls,
-            AllowInsecureTls = allowInsecureTls
-        }, serviceProvider), databaseName, tenantId)
-    {
-    }
-
     public MongoDbRepositoryDataSource(ILogger<MongoDbRepositoryDataSource> logger, IRepositoryClient repositoryClient, string databaseName,
         string tenantId)
         : base(tenantId)
@@ -251,7 +232,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
     }
 
-    public async Task<IOctoSystemSession> CreateSessionAsync()
+    public async Task<IOctoSession> CreateSessionAsync()
     {
         return await _repositoryClient.GetSessionAsync();
     }

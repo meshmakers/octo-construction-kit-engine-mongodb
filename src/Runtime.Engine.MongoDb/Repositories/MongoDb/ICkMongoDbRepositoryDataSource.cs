@@ -21,5 +21,5 @@ public interface ICkMongoDbRepositoryDataSource
     Task UpdateCollectionsAsync(IOctoSession session);
     Task UpdateIndexAsync(IOctoSession session);
     
-    Task<IOctoSystemSession> CreateSessionAsync();
+    Task<IOctoSession> CreateSessionAsync();
 }

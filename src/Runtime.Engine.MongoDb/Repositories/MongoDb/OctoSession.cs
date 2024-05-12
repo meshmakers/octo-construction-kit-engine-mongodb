@@ -6,7 +6,7 @@ using MongoDB.Driver;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 [DebuggerDisplay("{" + nameof(ApplicationName) + "}")]
-internal class OctoSession : IOctoSessionInternal
+internal abstract class OctoSession : IOctoSessionInternal
 {
     private readonly ILogger<OctoSession> _logger;
     private bool _isSessionActive;

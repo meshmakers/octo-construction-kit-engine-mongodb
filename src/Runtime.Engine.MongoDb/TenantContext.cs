@@ -25,17 +25,18 @@ public class TenantContext : ITenantContext
 {
     private readonly IBulkRtMutation _bulkRtMutation;
     private readonly ICkCacheService _cacheService;
-    protected readonly ICkModelRepositoryService _ckModelRepositoryService;
+
     private readonly string _databaseName;
     private readonly ILoggerFactory _loggerFactory;
 
     private readonly IMetricsContext _metricsContext;
     private readonly IModelLoaderService _modelLoaderService;
-    protected readonly IOptions<OctoSystemConfiguration> _systemConfiguration;
     private readonly IServiceProvider _serviceProvider;
 
-    protected readonly IRepositoryClient _systemRepositoryClient;
-    protected readonly ITenantNotifications _tenantNotifications;
+    protected readonly ICkModelRepositoryService CkModelRepositoryService;
+    protected readonly IAdminRepositoryClient AdminRepositoryClient;
+    protected readonly IOptions<OctoSystemConfiguration> SystemConfiguration;
+    protected readonly ITenantNotifications TenantNotifications;
 
     protected TenantContext(ILoggerFactory loggerFactory, IOptions<OctoSystemConfiguration> systemConfiguration,
         IServiceProvider serviceProvider, string tenantId, string databaseName)
@@ -43,27 +44,15 @@ public class TenantContext : ITenantContext
         TenantId = tenantId;
         _metricsContext = serviceProvider.GetRequiredService<IMetricsContext>();
         _loggerFactory = loggerFactory;
-        _systemConfiguration = systemConfiguration;
+        SystemConfiguration = systemConfiguration;
         _serviceProvider = serviceProvider;
         _databaseName = databaseName;
-        _tenantNotifications = serviceProvider.GetRequiredService<ITenantNotifications>();
-        _ckModelRepositoryService = serviceProvider.GetRequiredService<ICkModelRepositoryService>();
+        TenantNotifications = serviceProvider.GetRequiredService<ITenantNotifications>();
+        CkModelRepositoryService = serviceProvider.GetRequiredService<ICkModelRepositoryService>();
         _cacheService = serviceProvider.GetRequiredService<ICkCacheService>();
         _modelLoaderService = serviceProvider.GetRequiredService<IModelLoaderService>();
         _bulkRtMutation = serviceProvider.GetRequiredService<IBulkRtMutation>();
-
-        var systemConnectionOptions = new MongoConnectionOptions
-        {
-            MongoDbHost = _systemConfiguration.Value.DatabaseHost,
-            MongoDbUsername = _systemConfiguration.Value.AdminUser,
-            MongoDbPassword = _systemConfiguration.Value.AdminUserPassword,
-            AuthenticationSource = _systemConfiguration.Value.AuthenticationDatabaseName,
-            UseTls = _systemConfiguration.Value.UseTls,
-            AllowInsecureTls = _systemConfiguration.Value.AllowInsecureTls
-        };
-
-        _systemRepositoryClient = new MongoRepositoryClient(loggerFactory.CreateLogger<MongoRepositoryClient>(), systemConnectionOptions,
-            serviceProvider);
+        AdminRepositoryClient = serviceProvider.GetRequiredService<IAdminRepositoryClient>();
     }
 
     public string TenantId { get; }
@@ -72,7 +61,7 @@ public class TenantContext : ITenantContext
 
     public async Task<IOctoSystemSession> GetSystemSessionAsync()
     {
-        var systemSession = await _systemRepositoryClient.GetSessionAsync();
+        var systemSession = await AdminRepositoryClient.GetSystemSessionAsync();
         return systemSession;
     }
 
@@ -106,15 +95,15 @@ public class TenantContext : ITenantContext
         try
         {
             // Distribute updates (pre) to inform other services.
-            await _tenantNotifications.NotifyPreTenantCreateAsync(tenantId);
+            await TenantNotifications.NotifyPreTenantCreateAsync(tenantId);
 
             // Create database
             await CreateTenantInternalAsync(databaseName);
 
             // Restore the tenant system model on the newly created repository
-            var databaseContext = CreateDatabaseContext(normalizedDatabaseName);
+            var databaseContext = CreateRepositoryDataSource(normalizedDatabaseName);
             OperationResult operationResult = new();
-            var ckCompiledModelRoot = await _ckModelRepositoryService.LookupCkModelAsync(SystemCkIds.ModelId, operationResult);
+            var ckCompiledModelRoot = await CkModelRepositoryService.LookupCkModelAsync(SystemCkIds.ModelId, operationResult);
             if (ckCompiledModelRoot == null)
             {
                 throw TenantException.SystemModelNotFound();
@@ -125,11 +114,11 @@ public class TenantContext : ITenantContext
                 throw TenantException.ErrorDuringSystemModelLoad(operationResult);
             }
 
-            await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, true,
+            await CkModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, true,
                 new TenantDatabaseSourceIdentifier(databaseContext));
 
             // Add the new tenant as child tenant of the current one
-            if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
+            if (TenantId != SystemConfiguration.Value.SystemTenantId.NormalizeString())
             {
                 var rtTenant = new RtTenant
                 {
@@ -153,13 +142,13 @@ public class TenantContext : ITenantContext
         }
         catch (Exception)
         {
-            await _systemRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
+            await AdminRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
             throw;
         }
         finally
         {
             // Distribute updates (post) to inform other services.
-            await _tenantNotifications.NotifyPosTenantCreateAsync(tenantId);
+            await TenantNotifications.NotifyPosTenantCreateAsync(tenantId);
         }
     }
 
@@ -175,10 +164,10 @@ public class TenantContext : ITenantContext
             throw TenantException.TenantDatabaseDoesAlreadyExist(normalizedDatabaseName);
         }
 
-        await _systemRepositoryClient.CreateRepositoryAsync(normalizedDatabaseName);
-        await _systemRepositoryClient.CreateUser(_systemConfiguration.Value.AuthenticationDatabaseName,
-            normalizedDatabaseName, string.Format(_systemConfiguration.Value.DatabaseUser, normalizedDatabaseName),
-            _systemConfiguration.Value.DatabaseUserPassword);
+        await AdminRepositoryClient.CreateRepositoryAsync(normalizedDatabaseName);
+        await AdminRepositoryClient.CreateUser(SystemConfiguration.Value.AuthenticationDatabaseName,
+            normalizedDatabaseName, SystemConfiguration.Value.DatabaseUser,
+            SystemConfiguration.Value.DatabaseUserPassword);
     }
 
     // ReSharper disable once UnusedMember.Global
@@ -203,10 +192,10 @@ public class TenantContext : ITenantContext
         try
         {
             // Distribute updates (pre) to inform other services.
-            await _tenantNotifications.NotifyPreTenantCreateAsync(tenantId);
+            await TenantNotifications.NotifyPreTenantCreateAsync(tenantId);
 
             // Add the new tenant as child tenant of the current one
-            if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
+            if (TenantId != SystemConfiguration.Value.SystemTenantId.NormalizeString())
             {
                 var octoTenant = new RtTenant
                 {
@@ -231,7 +220,7 @@ public class TenantContext : ITenantContext
         finally
         {
             // Distribute updates (post) to inform other services.
-            await _tenantNotifications.NotifyPosTenantCreateAsync(tenantId);
+            await TenantNotifications.NotifyPosTenantCreateAsync(tenantId);
         }
     }
 
@@ -247,7 +236,7 @@ public class TenantContext : ITenantContext
         try
         {
             // Distribute updates (pre) to inform other services.
-            await _tenantNotifications.NotifyPreTenantDeleteAsync(tenantId);
+            await TenantNotifications.NotifyPreTenantDeleteAsync(tenantId);
 
             var tenantRepository = GetTenantRepository();
             await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
@@ -260,7 +249,7 @@ public class TenantContext : ITenantContext
         finally
         {
             // Distribute updates (post) to inform other services.
-            await _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId);
+            await TenantNotifications.NotifyPosTenantDeleteAsync(tenantId);
         }
     }
 
@@ -277,14 +266,14 @@ public class TenantContext : ITenantContext
 
         try
         {
-            await _tenantNotifications.NotifyPreTenantUpdateAsync(tenantId);
+            await TenantNotifications.NotifyPreTenantUpdateAsync(tenantId);
 
             await DropChildTenantAsync(systemSession, tenantId);
             await CreateChildTenantAsync(systemSession, octoTenant.DatabaseName, tenantId);
         }
         finally
         {
-            await _tenantNotifications.NotifyPosTenantUpdateAsync(tenantId);
+            await TenantNotifications.NotifyPosTenantUpdateAsync(tenantId);
         }
     }
 
@@ -303,9 +292,9 @@ public class TenantContext : ITenantContext
 
         try
         {
-            await _tenantNotifications.NotifyPreTenantDeleteAsync(tenantId);
+            await TenantNotifications.NotifyPreTenantDeleteAsync(tenantId);
 
-            await _systemRepositoryClient.DropRepositoryAsync(octoTenant.DatabaseName);
+            await AdminRepositoryClient.DropRepositoryAsync(octoTenant.DatabaseName);
 
             // Deletes the tenant entry from the current tenant
             await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
@@ -317,7 +306,7 @@ public class TenantContext : ITenantContext
 
             // If the current tenant is not the system tenant, we need to delete the tenant entry in system tenant too.
             // Add the new tenant as child tenant of the current one
-            if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
+            if (TenantId != SystemConfiguration.Value.SystemTenantId.NormalizeString())
             {
                 var systemTenantRepository = GetSystemTenantRepository();
                 await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(systemSession,
@@ -330,7 +319,7 @@ public class TenantContext : ITenantContext
         }
         finally
         {
-            await _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId);
+            await TenantNotifications.NotifyPosTenantDeleteAsync(tenantId);
         }
     }
 
@@ -397,15 +386,15 @@ public class TenantContext : ITenantContext
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
         var tenant = await GetChildTenantAsync(systemSession, tenantId);
-        var context = new TenantContext(_loggerFactory, _systemConfiguration, _serviceProvider, tenantId, tenant.DatabaseName);
+        var context = new TenantContext(_loggerFactory, SystemConfiguration, _serviceProvider, tenantId, tenant.DatabaseName);
 
         return context;
     }
 
     public ITenantRepository GetSystemTenantRepository()
     {
-        var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
-        var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.NormalizeString();
+        var normalizedDatabaseName = SystemConfiguration.Value.SystemDatabaseName.ToLower();
+        var normalizedTenantId = SystemConfiguration.Value.SystemTenantId.NormalizeString();
 
         var result = GetTenantRepository(normalizedTenantId, normalizedDatabaseName);
         return result;
@@ -496,20 +485,20 @@ public class TenantContext : ITenantContext
     {
         try
         {
-            await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId);
-            var databaseContext = CreateDatabaseContext(_databaseName);
-            await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, false,
+            await TenantNotifications.NotifyPreTenantUpdateAsync(TenantId);
+            var databaseContext = CreateRepositoryDataSource(_databaseName);
+            await CkModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, false,
                 new TenantDatabaseSourceIdentifier(databaseContext));
         }
         finally
         {
-            await _tenantNotifications.NotifyPosTenantUpdateAsync(TenantId);
+            await TenantNotifications.NotifyPosTenantUpdateAsync(TenantId);
         }
     }
 
     public async Task ImportCkModelAsync(CkModelId ckModelId, OperationResult operationResult)
     {
-        var ckCompiledModelRoot = await _ckModelRepositoryService.LookupCkModelAsync(ckModelId, operationResult);
+        var ckCompiledModelRoot = await CkModelRepositoryService.LookupCkModelAsync(ckModelId, operationResult);
         if (ckCompiledModelRoot == null)
         {
             throw TenantException.ModelNotFound(ckModelId);
@@ -522,22 +511,22 @@ public class TenantContext : ITenantContext
 
         try
         {
-            await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId);
-            var databaseContext = CreateDatabaseContext(_databaseName);
-            await _ckModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, false,
+            await TenantNotifications.NotifyPreTenantUpdateAsync(TenantId);
+            var databaseContext = CreateRepositoryDataSource(_databaseName);
+            await CkModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, false,
                 new TenantDatabaseSourceIdentifier(databaseContext));
         }
         finally
         {
-            await _tenantNotifications.NotifyPosTenantUpdateAsync(TenantId);
+            await TenantNotifications.NotifyPosTenantUpdateAsync(TenantId);
         }
     }
 
     public async Task<bool> IsCkModelExistingAsync(CkModelId ckModelId)
     {
-        var databaseContext = CreateDatabaseContext(_databaseName);
+        var databaseContext = CreateRepositoryDataSource(_databaseName);
 
-        return await _ckModelRepositoryService.IsCkModelExistingAsync(InternalConstants.CkModelRepositoryName, ckModelId,
+        return await CkModelRepositoryService.IsCkModelExistingAsync(InternalConstants.CkModelRepositoryName, ckModelId,
             new TenantDatabaseSourceIdentifier(databaseContext));
     }
 
@@ -547,7 +536,7 @@ public class TenantContext : ITenantContext
 
     private ITenantRepository GetTenantRepository(string tenantId, string databaseName)
     {
-        var databaseContext = CreateDatabaseContext(databaseName);
+        var databaseContext = CreateRepositoryDataSource(databaseName);
 
         var tenantRepository = new TenantRepository(tenantId, _metricsContext, _cacheService, _modelLoaderService, databaseContext,
             _bulkRtMutation);
@@ -555,10 +544,10 @@ public class TenantContext : ITenantContext
     }
 
 
-    protected IMongoDbRepositoryDataSource CreateDatabaseContext(string databaseName)
+    protected IMongoDbRepositoryDataSource CreateRepositoryDataSource(string databaseName)
     {
         return new MongoDbRepositoryDataSource(_loggerFactory.CreateLogger<MongoDbRepositoryDataSource>(), 
-            _systemRepositoryClient, databaseName, TenantId);
+            _serviceProvider.GetRequiredService<IRepositoryClient>(), databaseName, TenantId);
     }
 
     private async Task<RtTenant?> GetRtTenantAsync(IOctoSession systemSession,
@@ -587,7 +576,7 @@ public class TenantContext : ITenantContext
 
     protected async Task<bool> IsDatabaseExistingAsync(string databaseName)
     {
-        return await _systemRepositoryClient.IsRepositoryExistingAsync(databaseName);
+        return await AdminRepositoryClient.IsRepositoryExistingAsync(databaseName);
     }
 
     private async Task<TType?> GetConfigAsync<TType>(IOctoSession systemSession, string key, TType? defaultValue)

@@ -3,12 +3,13 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository.Entities;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Conventions;
@@ -20,53 +21,29 @@ using MongoDB.Driver.GeoJsonObjectModel;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
-[DebuggerDisplay("{" + nameof(_instanceId) + "}")]
+[DebuggerDisplay("{" + nameof(InstanceId) + "}")]
 public class MongoRepositoryClient : IRepositoryClient
 {
-    private readonly IServiceProvider _serviceProvider;
+    private readonly ILogger<MongoRepositoryClient> _logger;
+    protected readonly IOptions<OctoSystemConfiguration> SystemConfiguration;
+    protected readonly Guid InstanceId = Guid.NewGuid();
+    protected readonly IServiceProvider ServiceProvider;
     private const string OctoConventionCamelCase = "octo-convention-camelCase";
     private const string OctoRtEntityConvention = "octo-convention-rtEntity";
     private const string OctoRtRecordConvention = "octo-convention-rtRecord";
 
     private static bool _isRegistered;
-    private readonly MongoClient _client;
+    private MongoClient? _client;
 
-    private readonly Guid _instanceId = Guid.NewGuid();
 
-    public MongoRepositoryClient(ILogger<MongoRepositoryClient> logger, MongoConnectionOptions mongoConnectionOptions,
+    public MongoRepositoryClient(ILogger<MongoRepositoryClient> logger, IOptions<OctoSystemConfiguration> systemConfiguration,
         IServiceProvider serviceProvider)
     {
-        _serviceProvider = serviceProvider;
-        ArgumentValidation.ValidateString(nameof(mongoConnectionOptions.MongoDbHost),
-            mongoConnectionOptions.MongoDbHost);
-
-
-        var urlBuilder = new MongoUrlBuilder();
-
-        if (mongoConnectionOptions.MongoDbHost.Contains(","))
-        {
-            urlBuilder.Servers =
-                mongoConnectionOptions.MongoDbHost.Split(",").Select(x => new MongoServerAddress(x));
-        }
-        else
-        {
-            urlBuilder.Server = new MongoServerAddress(mongoConnectionOptions.MongoDbHost);
-        }
-
-        if (!string.IsNullOrWhiteSpace(mongoConnectionOptions.MongoDbUsername)
-            && !string.IsNullOrWhiteSpace(mongoConnectionOptions.MongoDbPassword))
-        {
-            urlBuilder.Username = mongoConnectionOptions.MongoDbUsername;
-            urlBuilder.Password = mongoConnectionOptions.MongoDbPassword;
-            urlBuilder.DatabaseName = mongoConnectionOptions.DatabaseName;
-            urlBuilder.AuthenticationSource = mongoConnectionOptions.AuthenticationSource;
-        }
-
-        urlBuilder.ApplicationName = $"{_instanceId}-{urlBuilder.Username}";
-        urlBuilder.UseTls = mongoConnectionOptions.UseTls;
-        urlBuilder.AllowInsecureTls = mongoConnectionOptions.AllowInsecureTls;
-        urlBuilder.RetryReads = true;
-        urlBuilder.RetryWrites = true;
+        _logger = logger;
+        SystemConfiguration = systemConfiguration;
+        ServiceProvider = serviceProvider;
+        ArgumentValidation.ValidateString(nameof(systemConfiguration.Value.DatabaseHost),
+            systemConfiguration.Value.DatabaseHost);
 
         var objectSerializer = new OctoObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
                                                                 type.FullName?.StartsWith(typeof(RtEntity).Namespace!) ==
@@ -75,106 +52,101 @@ public class MongoRepositoryClient : IRepositoryClient
         BsonSerializer.TryRegisterSerializer(objectSerializer);
 
         ConfigureMongoDriver();
-        var settings = MongoClientSettings.FromUrl(urlBuilder.ToMongoUrl());
-        settings.ReadConcern = ReadConcern.Majority;
-        settings.WriteConcern = new WriteConcern(WriteConcern.WMode.Majority, TimeSpan.FromSeconds(30));
-        settings.ClusterConfigurator = cb =>
-        {
-            cb.Subscribe<CommandStartedEvent>(e =>
-            {
-                logger.LogDebug("{ObjCommandName} - {Json}", e.CommandName, e.Command.ToJson());
-            });
-            cb.Subscribe<ConnectionOpenedEvent>(e =>
-            {
-                logger.LogDebug("Connection opened: {ConnectionId}", e.ConnectionId);
-            });
-            cb.Subscribe<ConnectionClosedEvent>(e =>
-            {
-                logger.LogDebug("Connection closed: {ConnectionId}", e.ConnectionId);
-            });
-        };
-        _client = new MongoClient(settings);
-
         RegisterClassMaps();
     }
 
-    public async Task<bool> IsRepositoryExistingAsync(string name)
+    /// <summary>
+    /// Returns the mongodb client
+    /// </summary>
+    protected MongoClient Client
     {
-        var databaseNames = await _client.ListDatabaseNamesAsync();
+        get
+        {
+            if (_client == null)
+            {
+                var mongoUrl = CreateConnectionUri();
+                var settings = MongoClientSettings.FromUrl(mongoUrl);
+                settings.ReadConcern = ReadConcern.Majority;
+                settings.WriteConcern = new WriteConcern(WriteConcern.WMode.Majority, TimeSpan.FromSeconds(30));
+                settings.ClusterConfigurator = cb =>
+                {
+                    cb.Subscribe<CommandStartedEvent>(e =>
+                    {
+                        _logger.LogDebug("{ObjCommandName} - {Json}", e.CommandName, e.Command.ToJson());
+                    });
+                    cb.Subscribe<ConnectionOpenedEvent>(e =>
+                    {
+                        _logger.LogDebug("Connection opened: {ConnectionId}", e.ConnectionId);
+                    });
+                    cb.Subscribe<ConnectionClosedEvent>(e =>
+                    {
+                        _logger.LogDebug("Connection closed: {ConnectionId}", e.ConnectionId);
+                    });
+                };
+                _client = new MongoClient(settings);
+            }
 
-        return databaseNames.ToList().Any(x => string.Compare(x, name,
-            StringComparison.InvariantCultureIgnoreCase) == 0);
+            return _client;
+        }
     }
 
-
-    public async Task<IOctoSystemSession> GetSessionAsync()
+    /// <summary>
+    /// Creates a connection uri for the mongodb client
+    /// </summary>
+    /// <returns></returns>
+    protected virtual MongoUrl CreateConnectionUri()
     {
-        var session = await _client.StartSessionAsync();
-        var logger = _serviceProvider.GetRequiredService<ILogger<OctoSession>>();
-        return new OctoSession(logger, session, _client.Settings.ApplicationName);
+        var urlBuilder = new MongoUrlBuilder();
+
+        var systemConfiguration = SystemConfiguration.Value;
+        
+        if (systemConfiguration.DatabaseHost.Contains(","))
+        {
+            urlBuilder.Servers =
+                systemConfiguration.DatabaseHost.Split(",").Select(x => new MongoServerAddress(x));
+        }
+        else
+        {
+            urlBuilder.Server = new MongoServerAddress(systemConfiguration.DatabaseHost);
+        }
+
+        if (!string.IsNullOrWhiteSpace(systemConfiguration.DatabaseUser)
+            && !string.IsNullOrWhiteSpace(systemConfiguration.DatabaseUserPassword))
+        {
+            urlBuilder.Username = systemConfiguration.DatabaseUser;
+            urlBuilder.Password = systemConfiguration.DatabaseUserPassword;
+            urlBuilder.DatabaseName = systemConfiguration.SystemDatabaseName;
+            urlBuilder.AuthenticationSource = systemConfiguration.AuthenticationDatabaseName;
+        }
+
+        urlBuilder.ApplicationName = $"OctoMesh-{InstanceId}-{urlBuilder.Username}";
+        urlBuilder.UseTls = systemConfiguration.UseTls;
+        urlBuilder.AllowInsecureTls = systemConfiguration.AllowInsecureTls;
+        urlBuilder.RetryReads = true;
+        urlBuilder.RetryWrites = true;
+
+        return urlBuilder.ToMongoUrl();
+    }
+
+    public async Task<IOctoSession> GetSessionAsync()
+    {
+        var session = await Client.StartSessionAsync();
+        var logger = ServiceProvider.GetRequiredService<ILogger<OctoUserSession>>();
+        return new OctoUserSession(logger, session, Client.Settings.ApplicationName);
     }
 
     public IOctoSession GetSession()
     {
-        var session = _client.StartSession();
-        var logger = _serviceProvider.GetRequiredService<ILogger<OctoSession>>();
-        return new OctoSession(logger, session, _client.Settings.ApplicationName);
-    }
-
-
-    public Task CreateRepositoryAsync(string name)
-    {
-        ArgumentValidation.ValidateString(nameof(name), name);
-
-        // MongoDB creates automatically databases. This method is
-        // existing to keep that in mind for other dbms
-        return Task.CompletedTask;
-    }
-
-    public async Task DropRepositoryAsync(string name)
-    {
-        ArgumentValidation.ValidateString(nameof(name), name);
-
-        await _client.DropDatabaseAsync(name);
+        var session = Client.StartSession();
+        var logger = ServiceProvider.GetRequiredService<ILogger<OctoUserSession>>();
+        return new OctoUserSession(logger, session, Client.Settings.ApplicationName);
     }
 
     public IRepository GetRepository(string name)
     {
         ArgumentValidation.ValidateString(nameof(name), name);
 
-        return new MongoRepository(_client.GetDatabase(name));
-    }
-
-    public async Task CreateUser(string authenticationDatabaseName, string databaseName,
-        string user,
-        string? password)
-    {
-        ArgumentValidation.ValidateString(nameof(authenticationDatabaseName), authenticationDatabaseName);
-        ArgumentValidation.ValidateString(nameof(databaseName), databaseName);
-        ArgumentValidation.ValidateString(nameof(user), user);
-        ArgumentValidation.ValidateString(nameof(password), password);
-
-        var database = _client.GetDatabase(authenticationDatabaseName);
-
-        var result = await database.RunCommandAsync<BsonDocument>("{usersInfo: '" + user + "'}");
-        if (result.GetValue("ok").AsDouble > 0 && result.GetValue("users").AsBsonArray.Count > 0)
-        {
-            return;
-        }
-
-        var createUserCommand = new BsonDocument
-        {
-            { "createUser", user },
-            { "pwd", password },
-            {
-                "roles", new BsonArray
-                {
-                    new BsonDocument { { "role", "readWrite" }, { "db", databaseName } }
-                }
-            }
-        };
-
-        await database.RunCommandAsync(new BsonDocumentCommand<BsonDocument>(createUserCommand));
+        return new MongoRepository(Client.GetDatabase(name));
     }
 
     private static void RegisterClassMaps()
@@ -418,14 +390,14 @@ public class MongoRepositoryClient : IRepositoryClient
         // are not serialized and the correct polymorphic type is used.
         ConventionRegistry.Register(OctoRtEntityConvention, new ConventionPack
         {
-            new RtEntityMapConvention(_serviceProvider.GetRequiredService<ICkClassMappingService>())
+            new RtEntityMapConvention(ServiceProvider.GetRequiredService<ICkClassMappingService>())
         }, t => typeof(RtEntity).IsAssignableFrom(t));
 
         // This convention is needed to ensure that properties of a derived class of RtRecord
         // are not serialized and the correct polymorphic type is used.
         ConventionRegistry.Register(OctoRtRecordConvention, new ConventionPack
         {
-            new RtRecordMapConvention(_serviceProvider.GetRequiredService<ICkClassMappingService>())
+            new RtRecordMapConvention(ServiceProvider.GetRequiredService<ICkClassMappingService>())
         }, t => typeof(RtRecord).IsAssignableFrom(t));
     }
 
@@ -433,5 +405,10 @@ public class MongoRepositoryClient : IRepositoryClient
     {
         BsonSerializer.RegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
         BsonSerializer.RegisterDiscriminatorConvention(typeof(RtEntity), new RtEntityDiscriminatorConvention("_t"));
+    }
+
+    public void Dispose()
+    {
+        Client.Cluster.Dispose();
     }
 }
