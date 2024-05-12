@@ -7,9 +7,9 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 /// </summary>
 public interface IAdminRepositoryClient : IRepositoryClient
 {
-    Task<IOctoSystemSession> GetSystemSessionAsync();
+    Task<IOctoAdminSession> GetAdminSessionAsync();
 
-    IOctoSystemSession GetSystemSession();
+    IOctoAdminSession GetSystemSession();
     
     Task CreateRepositoryAsync(string name);
 

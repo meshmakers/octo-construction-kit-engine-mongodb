@@ -18,7 +18,7 @@ public class OctoSystemConfiguration
         DatabaseHost = "localhost:27017";
         _systemTenantId = "OctoSystem";
         _systemDatabaseName = "OctoSystem";
-        DatabaseUser = "octo-system-ds-user";
+        DatabaseUser = "octo-system-ds-user-{0}";
         AdminUser = "octo-system-admin";
         AuthenticationDatabaseName = "admin";
         UseTls = false;

@@ -15,7 +15,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 public class AdminMongoRepositoryClient(
     ILogger<AdminMongoRepositoryClient> logger,
     IOptions<OctoSystemConfiguration> systemConfiguration,
-    IServiceProvider serviceProvider)
+    IServiceProvider serviceProvider, string databaseName)
     : MongoRepositoryClient(logger, systemConfiguration, serviceProvider), IAdminRepositoryClient
 {
     protected override MongoUrl CreateConnectionUri()
@@ -38,11 +38,11 @@ public class AdminMongoRepositoryClient(
         {
             urlBuilder.Username = systemConfiguration.AdminUser;
             urlBuilder.Password = systemConfiguration.AdminUserPassword;
-            urlBuilder.DatabaseName = systemConfiguration.SystemDatabaseName;
+            urlBuilder.DatabaseName = databaseName;
             urlBuilder.AuthenticationSource = systemConfiguration.AuthenticationDatabaseName;
         }
 
-        urlBuilder.ApplicationName = $"OctoMesh-{InstanceId}-{urlBuilder.Username}";
+        urlBuilder.ApplicationName = $"OctoMesh-{databaseName}-{InstanceId}-{urlBuilder.Username}";
         urlBuilder.UseTls = systemConfiguration.UseTls;
         urlBuilder.AllowInsecureTls = systemConfiguration.AllowInsecureTls;
         urlBuilder.RetryReads = true;
@@ -51,18 +51,18 @@ public class AdminMongoRepositoryClient(
         return urlBuilder.ToMongoUrl();
     }
     
-    public async Task<IOctoSystemSession> GetSystemSessionAsync()
+    public async Task<IOctoAdminSession> GetAdminSessionAsync()
     {
         var session = await Client.StartSessionAsync();
-        var logger = ServiceProvider.GetRequiredService<ILogger<OctoSystemSession>>();
-        return new OctoSystemSession(logger, session, Client.Settings.ApplicationName);
+        var logger = ServiceProvider.GetRequiredService<ILogger<OctoAdminSession>>();
+        return new OctoAdminSession(logger, session, Client.Settings.ApplicationName);
     }
 
-    public IOctoSystemSession GetSystemSession()
+    public IOctoAdminSession GetSystemSession()
     {
         var session = Client.StartSession();
-        var logger = ServiceProvider.GetRequiredService<ILogger<OctoSystemSession>>();
-        return new OctoSystemSession(logger, session, Client.Settings.ApplicationName);
+        var logger = ServiceProvider.GetRequiredService<ILogger<OctoAdminSession>>();
+        return new OctoAdminSession(logger, session, Client.Settings.ApplicationName);
     }
     
     public Task CreateRepositoryAsync(string name)

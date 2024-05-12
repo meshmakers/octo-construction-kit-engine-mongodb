@@ -66,4 +66,9 @@ public class TenantException : PersistenceException
     {
         return new TenantException("System tenant database does not exist.");
     }
+
+    public static Exception CannotCreateMongoDbRepositoryClient(string databaseName)
+    {
+        return new TenantException($"Cannot create MongoDB repository client for database '{databaseName}'.");
+    }
 }

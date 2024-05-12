@@ -44,8 +44,8 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services.AddSingleton<IMetricsContext, MetricsContext>();
         builder.Services.TryAddSingleton<ITenantNotifications, DefaultTenantNotifications>();
 
-        builder.Services.AddSingleton<IRepositoryClient, MongoRepositoryClient>();
-        builder.Services.AddSingleton<IAdminRepositoryClient, AdminMongoRepositoryClient>();
+        builder.Services.AddSingleton<IUserRepositoryAccess, UserRepositoryAccess>();
+        builder.Services.AddSingleton<IAdminRepositoryAccess, AdminRepositoryAccess>();
         
         return builder;
     }

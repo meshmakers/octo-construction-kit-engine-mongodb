@@ -5,13 +5,13 @@ using MongoDB.Driver;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 /// <summary>
-/// Implementation of <see cref="IOctoSystemSession"/>.
+/// Implementation of <see cref="IOctoAdminSession"/>.
 /// </summary>
 /// <param name="logger"></param>
 /// <param name="clientSessionHandle"></param>
 /// <param name="applicationName"></param>
-internal class OctoSystemSession(
-    ILogger<OctoSystemSession> logger,
+internal class OctoAdminSession(
+    ILogger<OctoAdminSession> logger,
     IClientSessionHandle clientSessionHandle,
     string applicationName)
-    : OctoSession(logger, clientSessionHandle, applicationName), IOctoSystemSession;
+    : OctoSession(logger, clientSessionHandle, applicationName), IOctoAdminSession;

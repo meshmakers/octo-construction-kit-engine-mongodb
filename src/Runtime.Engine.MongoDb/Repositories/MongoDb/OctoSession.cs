@@ -67,8 +67,8 @@ internal abstract class OctoSession : IOctoSessionInternal
             throw SessionOperationException.SessionNotActive();
         }
 
-        await SessionHandle.CommitTransactionAsync();
         _isSessionActive = false;
+        await SessionHandle.CommitTransactionAsync();
     }
 
     public async Task AbortTransactionAsync()
@@ -80,8 +80,8 @@ internal abstract class OctoSession : IOctoSessionInternal
             throw SessionOperationException.SessionNotActive();
         }
 
-        await SessionHandle.AbortTransactionAsync();
         _isSessionActive = false;
+        await SessionHandle.AbortTransactionAsync();
     }
 
     public IClientSessionHandle SessionHandle { get; }

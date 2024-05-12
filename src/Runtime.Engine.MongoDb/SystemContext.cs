@@ -48,7 +48,7 @@ public class SystemContext : TenantContext, ISystemContext
             await CreateTenantInternalAsync(normalizedDatabaseName);
 
             // Restore the tenant system model on the newly created repository
-            var ckModelRepository = CreateRepositoryDataSource(normalizedDatabaseName);
+            var ckModelRepository = CreateRepositoryDataSourceAsAdmin(normalizedDatabaseName);
             OperationResult operationResult = new();
             var ckCompiledModelRoot = await CkModelRepositoryService.LookupCkModelAsync(SystemCkIds.ModelId, operationResult);
             if (ckCompiledModelRoot == null)

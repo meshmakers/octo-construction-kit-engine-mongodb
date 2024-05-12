@@ -25,7 +25,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     private readonly IRepositoryClient _repositoryClient;
     private readonly ILogger<MongoDbRepositoryDataSource> _logger;
 
-    public MongoDbRepositoryDataSource(ILogger<MongoDbRepositoryDataSource> logger, IRepositoryClient repositoryClient, string databaseName,
+    public MongoDbRepositoryDataSource(ILogger<MongoDbRepositoryDataSource> logger, IUserRepositoryAccess repositoryAccess, string databaseName,
+        string tenantId)
+        : this(logger,repositoryAccess.GetRepositoryClient(databaseName), databaseName, tenantId)
+    {
+    }
+    
+    internal MongoDbRepositoryDataSource(ILogger<MongoDbRepositoryDataSource> logger, IRepositoryClient repositoryClient, string databaseName,
         string tenantId)
         : base(tenantId)
     {

@@ -22,7 +22,7 @@ using MongoDB.Driver.GeoJsonObjectModel;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
 [DebuggerDisplay("{" + nameof(InstanceId) + "}")]
-public class MongoRepositoryClient : IRepositoryClient
+public abstract class MongoRepositoryClient : IRepositoryClient
 {
     private readonly ILogger<MongoRepositoryClient> _logger;
     protected readonly IOptions<OctoSystemConfiguration> SystemConfiguration;
@@ -36,7 +36,7 @@ public class MongoRepositoryClient : IRepositoryClient
     private MongoClient? _client;
 
 
-    public MongoRepositoryClient(ILogger<MongoRepositoryClient> logger, IOptions<OctoSystemConfiguration> systemConfiguration,
+    protected MongoRepositoryClient(ILogger<MongoRepositoryClient> logger, IOptions<OctoSystemConfiguration> systemConfiguration,
         IServiceProvider serviceProvider)
     {
         _logger = logger;
@@ -94,39 +94,7 @@ public class MongoRepositoryClient : IRepositoryClient
     /// Creates a connection uri for the mongodb client
     /// </summary>
     /// <returns></returns>
-    protected virtual MongoUrl CreateConnectionUri()
-    {
-        var urlBuilder = new MongoUrlBuilder();
-
-        var systemConfiguration = SystemConfiguration.Value;
-        
-        if (systemConfiguration.DatabaseHost.Contains(","))
-        {
-            urlBuilder.Servers =
-                systemConfiguration.DatabaseHost.Split(",").Select(x => new MongoServerAddress(x));
-        }
-        else
-        {
-            urlBuilder.Server = new MongoServerAddress(systemConfiguration.DatabaseHost);
-        }
-
-        if (!string.IsNullOrWhiteSpace(systemConfiguration.DatabaseUser)
-            && !string.IsNullOrWhiteSpace(systemConfiguration.DatabaseUserPassword))
-        {
-            urlBuilder.Username = systemConfiguration.DatabaseUser;
-            urlBuilder.Password = systemConfiguration.DatabaseUserPassword;
-            urlBuilder.DatabaseName = systemConfiguration.SystemDatabaseName;
-            urlBuilder.AuthenticationSource = systemConfiguration.AuthenticationDatabaseName;
-        }
-
-        urlBuilder.ApplicationName = $"OctoMesh-{InstanceId}-{urlBuilder.Username}";
-        urlBuilder.UseTls = systemConfiguration.UseTls;
-        urlBuilder.AllowInsecureTls = systemConfiguration.AllowInsecureTls;
-        urlBuilder.RetryReads = true;
-        urlBuilder.RetryWrites = true;
-
-        return urlBuilder.ToMongoUrl();
-    }
+    protected abstract MongoUrl CreateConnectionUri();
 
     public async Task<IOctoSession> GetSessionAsync()
     {
