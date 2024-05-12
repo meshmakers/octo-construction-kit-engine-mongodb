@@ -139,7 +139,7 @@ public class TenantContext : ITenantContext
                 ParentTenantId = TenantId,
                 DatabaseName = normalizedDatabaseName
             };
-            var systemTenantRepository = GetSystemTenantRepository();
+            var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
             await systemTenantRepository.InsertOneRtEntityAsync(adminSession, rtSystemTenant);
         }
         catch (Exception)
