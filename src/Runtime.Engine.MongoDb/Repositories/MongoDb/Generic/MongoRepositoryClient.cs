@@ -47,7 +47,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
 
         var objectSerializer = new OctoObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
                                                                 type.FullName?.StartsWith(typeof(RtEntity).Namespace!) ==
-                                                                true || type.Namespace!.StartsWith(typeof(GeoJson).Namespace!));
+                                                                true || type.Namespace!.StartsWith(typeof(GeoJson).Namespace!)
+                                                                || type.Namespace!.StartsWith(typeof(CkModelId).Namespace!));
 
         BsonSerializer.TryRegisterSerializer(objectSerializer);
 

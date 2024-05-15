@@ -74,7 +74,7 @@ internal class TenantRepository(
     {
         return mongoDbRepositoryDataSource.GetSession();
     }
-
+    
     #endregion Transaction Handling
 
     #region Data manipulation
@@ -159,9 +159,23 @@ internal class TenantRepository(
     #endregion Data manipulation
 
     #region Data query
+    
+    public async Task<IResultSet<CkModel>> GetCkModelsAsync(IOctoSession session, List<CkModelId>? ckModelIds, DataQueryOperation dataQueryOperation, int? skip = null,
+        int? take = null)
+    {
+        var query = new CkModelQuery(metricsContext, mongoDbRepositoryDataSource);
+        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddIdFilter(ckModelIds);
+        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
+        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
+        query.AddGrouping(dataQueryOperation.FieldGroupBy);
+
+        return await query.ExecuteQuery(session, skip, take);
+    }
 
     public async Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session,
-        IReadOnlyList<CkId<CkAttributeId>> attributeIds,
+        IReadOnlyList<CkId<CkAttributeId>>? attributeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var query = new CkAttributeQuery(metricsContext, mongoDbRepositoryDataSource);
@@ -175,7 +189,7 @@ internal class TenantRepository(
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkId<CkTypeId>> ckTypeIds,
+    public async Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkId<CkTypeId>>? ckTypeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var query = new CkTypeQuery(metricsContext, mongoDbRepositoryDataSource);
@@ -189,7 +203,7 @@ internal class TenantRepository(
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session, List<CkId<CkRecordId>> ckRecordIds,
+    public async Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session, List<CkId<CkRecordId>>? ckRecordIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var query = new CkRecordQuery(metricsContext, mongoDbRepositoryDataSource);
@@ -203,7 +217,7 @@ internal class TenantRepository(
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, List<CkId<CkEnumId>> ckEnumIds,
+    public async Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, List<CkId<CkEnumId>>? ckEnumIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var query = new CkEnumQuery(metricsContext, mongoDbRepositoryDataSource);
