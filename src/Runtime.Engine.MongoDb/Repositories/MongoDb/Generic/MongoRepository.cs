@@ -12,7 +12,6 @@ public class MongoRepository : IRepositoryInternal
 {
     private readonly IGridFSBucket _bucket;
     private readonly Dictionary<Type, string> _collectionNameMapping = new();
-    private readonly string _version;
 
     private readonly IMongoDatabase _database;
 
@@ -20,10 +19,8 @@ public class MongoRepository : IRepositoryInternal
     {
         _database = mongoDatabase;
         
-        var command = new BsonDocument("buildInfo", 1);
-        var result = _database.RunCommand<BsonDocument>(command);
-        _version = result["version"].AsString;
-        
+        // Do not do here any commands that access the database. At initial 
+        // setups the user might not have been already created.
 
         _bucket = new GridFSBucket(_database, new GridFSBucketOptions
         {
@@ -194,7 +191,11 @@ public class MongoRepository : IRepositoryInternal
     
     private bool IsVersionGreaterOrEqual(int majorVersion)
     {
-        var majorVersionString = _version.Split('.')[0];
+        var command = new BsonDocument("buildInfo", 1);
+        var result = _database.RunCommand<BsonDocument>(command);
+        var version = result["version"].AsString;
+        
+        var majorVersionString = version.Split('.')[0];
         if (int.TryParse(majorVersionString, out var tmp))
         {
             return tmp >= majorVersion;
