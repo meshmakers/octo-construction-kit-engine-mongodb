@@ -41,4 +41,9 @@ public class CkRecord
     ///     Gets or sets a list of attributes
     /// </summary>
     public ICollection<CkTypeAttribute> Attributes { get; set; }
+    
+    /// <summary>
+    ///     An optional description of the record
+    /// </summary>
+    public string? Description { get; set; }
 }

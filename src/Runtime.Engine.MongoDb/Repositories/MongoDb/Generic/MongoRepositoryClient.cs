@@ -132,6 +132,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.Id).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
+            
+            cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.TryRegisterClassMap<CkType>(cm =>
@@ -140,6 +142,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapIdMember(c => c.CkTypeId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
+            cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.IsFinal).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.IsAbstract).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.Attributes).SetIsRequired(true);
@@ -153,6 +156,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapIdMember(c => c.CkRecordId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
+            cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.IsFinal).SetIsRequired(true);
             cm.GetMemberMap(c => c.IsAbstract).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.Attributes).SetIgnoreIfDefault(true);
@@ -164,6 +168,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapIdMember(c => c.CkEnumId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
+            cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.Values).SetIsRequired(true);
         });
 
@@ -196,6 +201,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapIdMember(c => c.RoleId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
+            cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.InboundMultiplicity).SetIsRequired(true);
             cm.GetMemberMap(c => c.InboundName).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.OutboundMultiplicity).SetIgnoreIfDefault(true);

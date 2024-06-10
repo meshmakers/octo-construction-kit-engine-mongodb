@@ -36,4 +36,9 @@ public class CkEnum
     ///     Gets or sets a list of enum values
     /// </summary>
     public ICollection<CkEnumValue> Values { get; set; }
+        
+    /// <summary>
+    ///     An optional description of the enum
+    /// </summary>
+    public string? Description { get; set; }
 }

@@ -37,6 +37,11 @@ public class CkType
     ///     If true, the type cannot be instantiated by a runtime entity
     /// </summary>
     public bool IsAbstract { get; set; }
+        
+    /// <summary>
+    ///     An optional description of the type
+    /// </summary>
+    public string? Description { get; set; }
 
     /// <summary>
     ///     Gets or sets a list of attributes

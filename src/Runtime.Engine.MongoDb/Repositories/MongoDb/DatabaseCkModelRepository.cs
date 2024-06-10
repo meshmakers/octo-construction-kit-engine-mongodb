@@ -94,10 +94,12 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         var ckCompiledModelRoot = new CkCompiledModelRoot
         {
             ModelId = ckModel.Id,
+            Description = ckModel.Description,
             Dependencies = ckModel.Dependencies?.ToList(),
             Enums = ckEnums.Select(e => new CkEnumDto
             {
                 EnumId = e.CkEnumId.Key,
+                Description = e.Description,
                 UseFlags = e.UseFlags,
                 Values = e.Values.Select(v => new CkEnumValueDto
                 {
@@ -109,6 +111,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             Records = ckRecords.Select(r => new CkRecordDto
             {
                 RecordId = r.CkRecordId.Key,
+                Description = r.Description,
                 IsAbstract = r.IsAbstract,
                 IsFinal = r.IsFinal,
                 Attributes = r.Attributes.Select(a => new CkTypeAttributeDto
@@ -136,6 +139,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             Types = ckTypes.Select(t => new CkCompiledTypeDto
             {
                 TypeId = t.CkTypeId.Key,
+                Description = t.Description,
                 IsAbstract = t.IsAbstract,
                 IsFinal = t.IsFinal,
                 IsCollectionRoot = t.IsCollectionRoot,
@@ -159,6 +163,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             AssociationRoles = ckAssociationRoles.Select(ar => new CkAssociationRoleDto
             {
                 AssociationRoleId = ar.RoleId.Key,
+                Description = ar.Description,
                 InboundMultiplicity = ar.InboundMultiplicity,
                 OutboundMultiplicity = ar.OutboundMultiplicity,
                 InboundName = ar.InboundName,
@@ -188,6 +193,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         var transientCkModel = new TransientCkModel(new CkModel
         {
             Id = ckCompiledModel.ModelId,
+            Description = ckCompiledModel.Description,
             Dependencies = ckCompiledModel.Dependencies?.ToArray()
         });
         await ExecuteImport(ckCompiledModel, transientCkModel,
@@ -384,6 +390,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 {
                     Id = compiledModel.ModelId,
                     ModelId = compiledModel.ModelId.ModelId,
+                    Description = compiledModel.Description,
                     ModelState = ModelState.Importing
                 });
                 
@@ -416,6 +423,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 {
                     CkModelId = compiledModel.ModelId,
                     CkEnumId = new CkId<CkEnumId>(compiledModel.ModelId, ckEnumDto.EnumId),
+                    Description = compiledModel.Description,
                     Values = ckEnumValues
                 };
                 transientCkModel.CkEnums.Add(ckEnum);
@@ -446,6 +454,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 {
                     CkModelId = compiledModel.ModelId,
                     CkRecordId = new CkId<CkRecordId>(compiledModel.ModelId, ckRecordDto.RecordId),
+                    Description = ckRecordDto.Description,
                     IsFinal = ckRecordDto.IsFinal,
                     IsAbstract = ckRecordDto.IsAbstract,
                     Attributes = ckTypeAttributes
@@ -467,6 +476,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 {
                     CkModelId = compiledModel.ModelId,
                     RoleId = new CkId<CkAssociationRoleId>(compiledModel.ModelId, modelAssociationRole.AssociationRoleId),
+                    Description = modelAssociationRole.Description,
                     InboundName = modelAssociationRole.InboundName,
                     OutboundName = modelAssociationRole.OutboundName,
                     InboundMultiplicity = modelAssociationRole.InboundMultiplicity,
@@ -627,6 +637,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             {
                 CkModelId = compiledModel.ModelId,
                 CkTypeId = new CkId<CkTypeId>(compiledModel.ModelId, ckTypeDto.TypeId),
+                Description = ckTypeDto.Description,
                 IsFinal = ckTypeDto.IsFinal,
                 IsAbstract = ckTypeDto.IsAbstract,
                 IsCollectionRoot = ckTypeDto.IsCollectionRoot,
