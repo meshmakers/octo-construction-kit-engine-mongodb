@@ -18,12 +18,15 @@
         <TargetFramework>net8.0</TargetFramework>
         <PackageVersion Condition="'$(Configuration)'=='DebugL'">999.0.0</PackageVersion>
         <RestoreSources Condition="'$(Configuration)'=='DebugL'">$(SolutionDir)../nuget</RestoreSources>
-        <OctoVersion>3.1.91</OctoVersion>
+        <OctoVersion>[0.0.*,)</OctoVersion>
         <MeshmakerVersion>4.0.2401.17001</MeshmakerVersion>
         <Version Condition="'$(Configuration)'=='DebugL'">999.0.0</Version>
         <OctoVersion Condition="'$(Configuration)'=='DebugL'">999.0.0</OctoVersion>
         <MeshmakerVersion Condition="'$(Configuration)'=='DebugL'">999.0.0</MeshmakerVersion>
+        <BaseDirectoryBuildPath>$([MSBuild]::GetPathOfFileAbove('Octo.User.props', '$(MSBuildThisFileDirectory)../'))</BaseDirectoryBuildPath>
     </PropertyGroup>
+    <!-- Import an custom file to overwrite versions etc -->
+    <Import Condition="Exists($(BaseDirectoryBuildPath))" Project="$(BaseDirectoryBuildPath)"/>
 </Project>
 
 
