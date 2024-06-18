@@ -5,10 +5,8 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
-internal class CkAttributeQuery : SingleOriginQuery<CkId<CkAttributeId>, CkAttribute>
-{
-    public CkAttributeQuery(IMetricsContext metricsContext, IMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
-        : base(metricsContext, mongoDbRepositoryDataSource.CkAttributes, new FieldFilterResolver<CkAttribute>())
-    {
-    }
-}
+internal class CkAttributeQuery(
+    IMetricsContext metricsContext,
+    IMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
+    : SingleOriginQuery<CkId<CkAttributeId>, CkAttribute>(metricsContext, mongoDbRepositoryDataSource.CkAttributes,
+        new FieldFilterResolver<CkAttribute>());

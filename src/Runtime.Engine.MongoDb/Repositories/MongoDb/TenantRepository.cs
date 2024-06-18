@@ -18,22 +18,15 @@ using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
-internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
+internal class TenantRepository(
+    string tenantId,
+    IMetricsContext metricsContext,
+    ICkCacheService ckCache,
+    IModelLoaderService modelLoaderService,
+    IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
+    IBulkRtMutation bulkRtMutation)
+    : RuntimeRepositoryBase(tenantId, ckCache, mongoDbRepositoryDataSource, bulkRtMutation), ITenantRepository
 {
-    private readonly IMetricsContext _metricsContext;
-    private readonly IModelLoaderService _modelLoaderService;
-    private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
-
-    public TenantRepository(string tenantId, IMetricsContext metricsContext, ICkCacheService ckCache,
-        IModelLoaderService modelLoaderService,
-        IMongoDbRepositoryDataSource mongoDbRepositoryDataSource, IBulkRtMutation bulkRtMutation)
-        : base(tenantId, ckCache, mongoDbRepositoryDataSource, bulkRtMutation)
-    {
-        _metricsContext = metricsContext;
-        _modelLoaderService = modelLoaderService;
-        _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
-    }
-
     protected override async Task<IResultSet<TEntity>> GetRtEntitiesByIdAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
         IReadOnlyList<OctoObjectId> rtIds, DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null)
@@ -47,7 +40,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var entityCacheItem = await GetCkTypeGraphAsync(ckTypeId);
 
         var query =
-            new SingleOriginRtQuery<TEntity>(_metricsContext, ckCacheService, TenantId, entityCacheItem, _mongoDbRepositoryDataSource,
+            new SingleOriginRtQuery<TEntity>(metricsContext, ckCacheService, TenantId, entityCacheItem, mongoDbRepositoryDataSource,
                 dataQueryOperation.Language);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddIdFilter(rtIds);
@@ -64,24 +57,24 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
 
     protected override async Task RefreshCkCacheServiceAsync(ICkCacheService ckCacheService)
     {
-        var session = await _mongoDbRepositoryDataSource.GetSessionAsync();
+        var session = await mongoDbRepositoryDataSource.GetSessionAsync();
         session.StartTransaction();
 
-        await _modelLoaderService.LoadAsync(TenantId, session, _mongoDbRepositoryDataSource);
+        await modelLoaderService.LoadAsync(TenantId, session, mongoDbRepositoryDataSource);
 
         await session.CommitTransactionAsync();
     }
 
     public override async Task<IOctoSession> GetSessionAsync()
     {
-        return await _mongoDbRepositoryDataSource.GetSessionAsync();
+        return await mongoDbRepositoryDataSource.GetSessionAsync();
     }
     
     public IOctoSession GetSession()
     {
-        return _mongoDbRepositoryDataSource.GetSession();
+        return mongoDbRepositoryDataSource.GetSession();
     }
-
+    
     #endregion Transaction Handling
 
     #region Data manipulation
@@ -100,7 +93,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
             
             var ckTypeGraph = await GetCkTypeGraphAsync(groupedEntities.Key);
 
-            results.Add(await _mongoDbRepositoryDataSource.GetRtCollection<RtEntity>(ckTypeGraph)
+            results.Add(await mongoDbRepositoryDataSource.GetRtCollection<RtEntity>(ckTypeGraph)
                 .BulkImportAsync(session, groupedEntities));
         }
 
@@ -112,7 +105,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     {
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
-        var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, _mongoDbRepositoryDataSource);
+        var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, mongoDbRepositoryDataSource);
         mutation.AddFieldFilters(fieldFilters);
         await mutation.DeleteManyAsync(session).ConfigureAwait(false);
     }
@@ -122,7 +115,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     {
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
-        var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, _mongoDbRepositoryDataSource);
+        var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, mongoDbRepositoryDataSource);
         mutation.AddFieldFilters(fieldFilters);
         await mutation.DeleteOneAsync(session).ConfigureAwait(false);
     }
@@ -132,7 +125,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     {
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
-        var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, _mongoDbRepositoryDataSource);
+        var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, mongoDbRepositoryDataSource);
         mutation.AddFieldFilters(fieldFilters);
         await mutation.UpdateOneAsync(session, ckTypeId, rtEntity).ConfigureAwait(false);
     }
@@ -142,7 +135,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     {
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
-        var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, _mongoDbRepositoryDataSource);
+        var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, mongoDbRepositoryDataSource);
         mutation.AddFieldFilters(fieldFilters);
         await mutation.UpdateManyAsync(session, rtEntity).ConfigureAwait(false);
     }
@@ -152,7 +145,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     {
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
-        var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, _mongoDbRepositoryDataSource);
+        var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation, mongoDbRepositoryDataSource);
         mutation.AddFieldFilters(fieldFilters);
         await mutation.ReplaceOneAsync(session, ckTypeId, rtEntity).ConfigureAwait(false);
     }
@@ -160,18 +153,32 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
     public async Task<IBulkImportResult> BulkRtAssociationsAsync(IOctoSession session,
         IEnumerable<RtAssociation> rtAssociations)
     {
-        return await _mongoDbRepositoryDataSource.RtAssociations.BulkImportAsync(session, rtAssociations);
+        return await mongoDbRepositoryDataSource.RtAssociations.BulkImportAsync(session, rtAssociations);
     }
 
     #endregion Data manipulation
 
     #region Data query
+    
+    public async Task<IResultSet<CkModel>> GetCkModelsAsync(IOctoSession session, List<CkModelId>? ckModelIds, DataQueryOperation dataQueryOperation, int? skip = null,
+        int? take = null)
+    {
+        var query = new CkModelQuery(metricsContext, mongoDbRepositoryDataSource);
+        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddIdFilter(ckModelIds);
+        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
+        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
+        query.AddGrouping(dataQueryOperation.FieldGroupBy);
+
+        return await query.ExecuteQuery(session, skip, take);
+    }
 
     public async Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session,
-        IReadOnlyList<CkId<CkAttributeId>> attributeIds,
+        IReadOnlyList<CkId<CkAttributeId>>? attributeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
-        var query = new CkAttributeQuery(_metricsContext, _mongoDbRepositoryDataSource);
+        var query = new CkAttributeQuery(metricsContext, mongoDbRepositoryDataSource);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddIdFilter(attributeIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
@@ -182,10 +189,10 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkId<CkTypeId>> ckTypeIds,
+    public async Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkId<CkTypeId>>? ckTypeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
-        var query = new CkTypeQuery(_metricsContext, _mongoDbRepositoryDataSource);
+        var query = new CkTypeQuery(metricsContext, mongoDbRepositoryDataSource);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddIdFilter(ckTypeIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
@@ -196,10 +203,10 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session, List<CkId<CkRecordId>> ckRecordIds,
+    public async Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session, List<CkId<CkRecordId>>? ckRecordIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
-        var query = new CkRecordQuery(_metricsContext, _mongoDbRepositoryDataSource);
+        var query = new CkRecordQuery(metricsContext, mongoDbRepositoryDataSource);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddIdFilter(ckRecordIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
@@ -210,10 +217,10 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, List<CkId<CkEnumId>> ckEnumIds,
+    public async Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, List<CkId<CkEnumId>>? ckEnumIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
-        var query = new CkEnumQuery(_metricsContext, _mongoDbRepositoryDataSource);
+        var query = new CkEnumQuery(metricsContext, mongoDbRepositoryDataSource);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddIdFilter(ckEnumIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
@@ -262,7 +269,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var targetTypeGraph = await GetCkTypeGraphAsync(targetCkTypeId);
 
         var hierarchicalRtQuery =
-            new MultipleOriginHierarchicalRtQuery(ckCacheService, TenantId, _mongoDbRepositoryDataSource,
+            new MultipleOriginHierarchicalRtQuery(ckCacheService, TenantId, mongoDbRepositoryDataSource,
                 dataQueryOperation.Language,
                 originRtIds,
                 originTypeGraph, roleId, graphDirection, targetTypeGraph);
@@ -294,7 +301,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var targetTypeGraph = await GetCkTypeGraphAsync(targetCkTypeId);
 
         var originHierarchicalRtQuery =
-            new MultipleOriginHierarchicalRtQuery<TTargetEntity>(ckCacheService, TenantId, _mongoDbRepositoryDataSource,
+            new MultipleOriginHierarchicalRtQuery<TTargetEntity>(ckCacheService, TenantId, mongoDbRepositoryDataSource,
                 dataQueryOperation.Language,
                 originRtIds,
                 originTypeGraph, roleId, graphDirection, targetTypeGraph);
@@ -337,7 +344,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         
         var hierarchicalRtQuery =
             new MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity>(ckCacheService, TenantId,
-                _mongoDbRepositoryDataSource,
+                mongoDbRepositoryDataSource,
                 dataQueryOperation.Language,
                 originRtIds,
                 originTypeGraph, roleId, graphDirection, targetTypeGraph);
@@ -360,7 +367,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var query =
-            new SingleOriginRtQuery<TEntity>(_metricsContext, ckCacheService, TenantId, ckTypeGraph, _mongoDbRepositoryDataSource,
+            new SingleOriginRtQuery<TEntity>(metricsContext, ckCacheService, TenantId, ckTypeGraph, mongoDbRepositoryDataSource,
                 dataQueryOperation.Language);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
@@ -383,7 +390,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         ArgumentValidation.ValidateString(nameof(filename), filename);
         ArgumentValidation.ValidateString(nameof(contentType), contentType);
 
-        var objectId = await _mongoDbRepositoryDataSource.UploadLargeBinaryAsync(filename, contentType, stream, metadata, cancellationToken);
+        var objectId = await mongoDbRepositoryDataSource.UploadLargeBinaryAsync(filename, contentType, stream, metadata, cancellationToken);
         return objectId.ToOctoObjectId();
     }
 
@@ -394,7 +401,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         ArgumentValidation.ValidateString(nameof(filename), filename);
         ArgumentValidation.ValidateString(nameof(contentType), contentType);
 
-        await _mongoDbRepositoryDataSource.ReplaceLargeBinaryAsync(largeBinaryId.ToObjectId(), filename, contentType, stream, metadata,
+        await mongoDbRepositoryDataSource.ReplaceLargeBinaryAsync(largeBinaryId.ToObjectId(), filename, contentType, stream, metadata,
             cancellationToken);
     }
     
@@ -405,31 +412,31 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         ArgumentValidation.ValidateString(nameof(filename), filename);
         ArgumentValidation.ValidateString(nameof(contentType), contentType);
 
-        return (await _mongoDbRepositoryDataSource.ReplaceLargeBinaryAsync(filename, contentType, stream, metadata,
+        return (await mongoDbRepositoryDataSource.ReplaceLargeBinaryAsync(filename, contentType, stream, metadata,
             cancellationToken)).ToOctoObjectId();
     }
 
     public async Task DeleteLargeBinaryAsync(OctoObjectId largeBinaryId, CancellationToken cancellationToken = default)
     {
-        await _mongoDbRepositoryDataSource.DeleteLargeBinaryAsync(largeBinaryId.ToObjectId(), cancellationToken);
+        await mongoDbRepositoryDataSource.DeleteLargeBinaryAsync(largeBinaryId.ToObjectId(), cancellationToken);
     }
 
     public async Task<IDownloadStreamHandler> DownloadLargeBinaryAsync(OctoObjectId largeBinaryId,
         CancellationToken cancellationToken = default)
     {
-        return await _mongoDbRepositoryDataSource.DownloadLargeBinaryAsync(largeBinaryId.ToObjectId(), cancellationToken);
+        return await mongoDbRepositoryDataSource.DownloadLargeBinaryAsync(largeBinaryId.ToObjectId(), cancellationToken);
     }
 
     public async Task<IDownloadInfo?> GetLargeBinaryAsync(OctoObjectId largeBinaryId,
         CancellationToken cancellationToken = default)
     {
-        return await _mongoDbRepositoryDataSource.GetLargeBinaryAsync(largeBinaryId.ToObjectId(), cancellationToken);
+        return await mongoDbRepositoryDataSource.GetLargeBinaryAsync(largeBinaryId.ToObjectId(), cancellationToken);
     }
     
     public async Task<IDownloadInfo?> GetLargeBinaryAsync(string fileName,
         CancellationToken cancellationToken = default)
     {
-        return await _mongoDbRepositoryDataSource.GetLargeBinaryAsync(fileName, cancellationToken);
+        return await mongoDbRepositoryDataSource.GetLargeBinaryAsync(fileName, cancellationToken);
     }
 
     #endregion Large binaries
@@ -440,7 +447,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         CancellationToken cancellationToken = default)
     {
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
-        var collection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(ckTypeGraph);
+        var collection = mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(ckTypeGraph);
 
         return collection.Subscribe(updateStreamFilter.UpdateTypes, () =>
         {
@@ -462,7 +469,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         var ckTypeId = RtEntityExtensions.GetCkTypeId<TEntity>();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
 
-        var collection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeGraph);
+        var collection = mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeGraph);
 
         return collection.Subscribe(updateStreamFilter.UpdateTypes, () =>
         {
@@ -481,7 +488,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         UpdateAssociationStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default)
     {
-        return _mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations.Subscribe(updateStreamFilter.UpdateTypes, () =>
+        return mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations.Subscribe(updateStreamFilter.UpdateTypes, () =>
         {
             var filterList = new List<FilterDefinition<ChangeStreamDocument<RtAssociation>>>
             {
@@ -601,7 +608,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
             }
         };
 
-        var collection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(ckTypeGraph);
+        var collection = mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(ckTypeGraph);
         var result = collection.Aggregate(session,
             PipelineDefinition<RtEntity, AutoCompleteText>.Create(match, sortByCount, limit));
         return await result.ToListAsync();
@@ -614,7 +621,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
         ArgumentValidation.ValidateString(nameof(attributeName), attributeName);
 
         var ckType =
-            await _mongoDbRepositoryDataSource.CkTypes.FindSingleOrDefaultAsync(session, x => x.CkTypeId == ckTypeId);
+            await mongoDbRepositoryDataSource.CkTypes.FindSingleOrDefaultAsync(session, x => x.CkTypeId == ckTypeId);
         if (ckType == null)
         {
             throw InvalidCkTypeIdException.CkTypeIdNotFound(TenantId, ckTypeId);
@@ -630,7 +637,7 @@ internal class TenantRepository : RuntimeRepositoryBase, ITenantRepository
 
         try
         {
-            await _mongoDbRepositoryDataSource.CkTypes.ReplaceByIdAsync(session, ckType.CkTypeId, ckType);
+            await mongoDbRepositoryDataSource.CkTypes.ReplaceByIdAsync(session, ckType.CkTypeId, ckType);
         }
         catch (Exception e)
         {

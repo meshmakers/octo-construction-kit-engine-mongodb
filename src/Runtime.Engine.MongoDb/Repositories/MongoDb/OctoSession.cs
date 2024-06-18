@@ -6,7 +6,7 @@ using MongoDB.Driver;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 [DebuggerDisplay("{" + nameof(ApplicationName) + "}")]
-internal class OctoSession : IOctoSessionInternal
+internal abstract class OctoSession : IOctoSessionInternal
 {
     private readonly ILogger<OctoSession> _logger;
     private bool _isSessionActive;
@@ -67,8 +67,8 @@ internal class OctoSession : IOctoSessionInternal
             throw SessionOperationException.SessionNotActive();
         }
 
-        await SessionHandle.CommitTransactionAsync();
         _isSessionActive = false;
+        await SessionHandle.CommitTransactionAsync();
     }
 
     public async Task AbortTransactionAsync()
@@ -80,8 +80,8 @@ internal class OctoSession : IOctoSessionInternal
             throw SessionOperationException.SessionNotActive();
         }
 
-        await SessionHandle.AbortTransactionAsync();
         _isSessionActive = false;
+        await SessionHandle.AbortTransactionAsync();
     }
 
     public IClientSessionHandle SessionHandle { get; }

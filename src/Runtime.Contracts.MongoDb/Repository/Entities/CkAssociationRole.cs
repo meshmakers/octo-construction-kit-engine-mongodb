@@ -49,4 +49,9 @@ public class CkAssociationRole
     ///     Gets or sets a list of attributes
     /// </summary>
     public ICollection<CkTypeAttribute> Attributes { get; set; }
+    
+    /// <summary>
+    ///     An optional description of the association role
+    /// </summary>
+    public string? Description { get; set; }
 }

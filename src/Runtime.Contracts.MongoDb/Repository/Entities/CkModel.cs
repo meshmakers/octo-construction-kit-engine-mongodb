@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository.Entities;
 
@@ -11,7 +12,7 @@ public class CkModel
     /// </summary>
     public CkModel()
     {
-        Dependencies = Array.Empty<CkModelId>();
+        Dependencies = [];
     }
 
     /// <summary>
@@ -33,4 +34,9 @@ public class CkModel
     ///     Defines the dependencies of the construction kit
     /// </summary>
     public CkModelId[]? Dependencies { get; init; }
+    
+    /// <summary>
+    ///     An optional description of the model
+    /// </summary>
+    public string? Description { get; set; }
 }

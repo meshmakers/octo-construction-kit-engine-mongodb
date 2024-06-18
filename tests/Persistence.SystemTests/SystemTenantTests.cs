@@ -27,13 +27,13 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
     public async void CreateChildTenantAndDeleteAsync()
     {
         var systemContext = _systemFixture.GetSystemContext();
-        using var session = await systemContext.GetSystemSessionAsync();
+        using var session = await systemContext.GetAdminSessionAsync();
         session.StartTransaction();
         await systemContext.CreateChildTenantAsync(session, "TestTenant", "TestTenant");
 
         await session.CommitTransactionAsync();
 
-        using var session2 = await systemContext.GetSystemSessionAsync();
+        using var session2 = await systemContext.GetAdminSessionAsync();
         session2.StartTransaction();
         var r = await systemContext.GetChildTenantAsync(session2, "TestTenant");
         await session2.CommitTransactionAsync();
@@ -41,14 +41,14 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
         Assert.Equal("testtenant", r.TenantId);
         Assert.Equal("testtenant", r.DatabaseName);
 
-        using var session3 = await systemContext.GetSystemSessionAsync();
+        using var session3 = await systemContext.GetAdminSessionAsync();
         session3.StartTransaction();
 
         await systemContext.DropChildTenantAsync(session3, "TestTenant");
 
         await session3.CommitTransactionAsync();
 
-        using var session4 = await systemContext.GetSystemSessionAsync();
+        using var session4 = await systemContext.GetAdminSessionAsync();
         session4.StartTransaction();
         var r2 = await systemContext.IsChildTenantExistingAsync(session4, "TestTenant");
         await session4.CommitTransactionAsync();
@@ -61,7 +61,7 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
     {
         // Create child tenant "Father" form octo system
         var systemContext = _systemFixture.GetSystemContext();
-        using (var session = await systemContext.GetSystemSessionAsync())
+        using (var session = await systemContext.GetAdminSessionAsync())
         {
             session.StartTransaction();
 
@@ -72,7 +72,7 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
         var fatherTenantContext = await systemContext.GetChildTenantContextAsync("Father");
 
         // Create child tenant "Girl" from child tenant "Father"
-        using (var session = await systemContext.GetSystemSessionAsync())
+        using (var session = await systemContext.GetAdminSessionAsync())
         {
             session.StartTransaction();
 
@@ -81,7 +81,7 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
         }
 
         // Check if tenant Girl Exists
-        using (var session = await systemContext.GetSystemSessionAsync())
+        using (var session = await systemContext.GetAdminSessionAsync())
         {
             session.StartTransaction();
 
@@ -93,7 +93,7 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
         }
 
         // Drop childs
-        using (var session = await systemContext.GetSystemSessionAsync())
+        using (var session = await systemContext.GetAdminSessionAsync())
         {
             session.StartTransaction();
 
@@ -102,7 +102,7 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
             await session.CommitTransactionAsync();
         }
 
-        using (var session = await systemContext.GetSystemSessionAsync())
+        using (var session = await systemContext.GetAdminSessionAsync())
         {
             session.StartTransaction();
 
@@ -118,7 +118,7 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
     {
         // Create child tenant "Father" form octo system
         var systemContext = _systemFixture.GetSystemContext();
-        using (var session = await systemContext.GetSystemSessionAsync())
+        using (var session = await systemContext.GetAdminSessionAsync())
         {
             session.StartTransaction();
 
@@ -127,7 +127,7 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
         }
 
         // Detach Father
-        using (var session = await systemContext.GetSystemSessionAsync())
+        using (var session = await systemContext.GetAdminSessionAsync())
         {
             session.StartTransaction();
 
@@ -136,7 +136,7 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
         }
 
         // Attach Father
-        using (var session = await systemContext.GetSystemSessionAsync())
+        using (var session = await systemContext.GetAdminSessionAsync())
         {
             session.StartTransaction();
 
@@ -145,7 +145,7 @@ public class SystemTenantTests : IClassFixture<SystemFixture>
         }
 
         // Drop
-        using (var session = await systemContext.GetSystemSessionAsync())
+        using (var session = await systemContext.GetAdminSessionAsync())
         {
             session.StartTransaction();
 

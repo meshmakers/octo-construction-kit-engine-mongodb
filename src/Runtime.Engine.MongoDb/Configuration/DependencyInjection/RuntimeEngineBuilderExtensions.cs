@@ -6,6 +6,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.Configuration.DependencyInjection;
 using Meshmakers.Octo.Runtime.Engine.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Defaults;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -43,6 +44,9 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services.AddSingleton<IMetricsContext, MetricsContext>();
         builder.Services.TryAddSingleton<ITenantNotifications, DefaultTenantNotifications>();
 
+        builder.Services.AddSingleton<IUserRepositoryAccess, UserRepositoryAccess>();
+        builder.Services.AddSingleton<IAdminRepositoryAccess, AdminRepositoryAccess>();
+        
         return builder;
     }
 }

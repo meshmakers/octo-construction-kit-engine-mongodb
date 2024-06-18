@@ -19,7 +19,7 @@ public interface ITenantContext
     ///     Gets the system session object
     /// </summary>
     /// <returns></returns>
-    Task<IOctoSystemSession> GetSystemSessionAsync();
+    Task<IOctoAdminSession> GetAdminSessionAsync();
 
     #region Access Management
 
@@ -33,10 +33,10 @@ public interface ITenantContext
     /// <summary>
     ///     Gets a child tenant context.
     /// </summary>
-    /// <param name="systemSession"></param>
+    /// <param name="adminSession"></param>
     /// <param name="tenantId"></param>
     /// <returns></returns>
-    Task<ITenantContext> GetChildTenantContextAsync(IOctoSystemSession systemSession, string tenantId);
+    Task<ITenantContext> GetChildTenantContextAsync(IOctoAdminSession adminSession, string tenantId);
 
     /// <summary>
     ///     Returns an object that allows access to the system tenant repository.
@@ -60,46 +60,46 @@ public interface ITenantContext
 
     #region Tenant Management
 
-    Task CreateChildTenantAsync(IOctoSystemSession systemSession, string databaseName, string tenantId);
+    Task CreateChildTenantAsync(IOctoAdminSession adminSession, string databaseName, string tenantId);
 
-    Task AttachChildTenantAsync(IOctoSystemSession systemSession, string databaseName, string tenantId);
+    Task AttachChildTenantAsync(IOctoAdminSession adminSession, string databaseName, string tenantId);
 
-    Task DetachChildTenantAsync(IOctoSystemSession systemSession, string tenantId);
+    Task DetachChildTenantAsync(IOctoAdminSession adminSession, string tenantId);
 
-    Task ClearChildTenantAsync(IOctoSystemSession systemSession, string tenantId);
+    Task ClearChildTenantAsync(IOctoAdminSession adminSession, string tenantId);
 
-    Task DropChildTenantAsync(IOctoSystemSession systemSession, string tenantId);
+    Task DropChildTenantAsync(IOctoAdminSession adminSession, string tenantId);
 
     /// <summary>
     ///     Returns true if a child tenant with the given name exists.
     /// </summary>
-    /// <param name="systemSession"></param>
+    /// <param name="adminSession"></param>
     /// <param name="tenantId"></param>
     /// <returns></returns>
-    Task<bool> IsChildTenantExistingAsync(IOctoSystemSession systemSession, string tenantId);
+    Task<bool> IsChildTenantExistingAsync(IOctoAdminSession adminSession, string tenantId);
 
-    Task<IResultSet<OctoTenant>> GetChildTenantsAsync(IOctoSystemSession systemSession, int? skip = null,
+    Task<IResultSet<OctoTenant>> GetChildTenantsAsync(IOctoAdminSession adminSession, int? skip = null,
         int? take = null);
 
-    Task<OctoTenant> GetChildTenantAsync(IOctoSystemSession systemSession, string tenantId);
+    Task<OctoTenant> GetChildTenantAsync(IOctoAdminSession adminSession, string tenantId);
 
     #endregion Tenant Management
 
     #region Configuration
 
-    Task<TValueType?> GetConfigurationAsync<TValueType>(IOctoSystemSession systemSession, string key,
+    Task<TValueType?> GetConfigurationAsync<TValueType>(IOctoAdminSession adminSession, string key,
         TValueType? defaultValue) where
         TValueType : class;
 
-    Task<string?> GetConfigurationAsync(IOctoSystemSession systemSession, string key, string? defaultValue = null);
+    Task<string?> GetConfigurationAsync(IOctoAdminSession adminSession, string key, string? defaultValue = null);
 
-    Task SetConfigurationAsync<TValueType>(IOctoSystemSession systemSession, string key, TValueType value)
+    Task SetConfigurationAsync<TValueType>(IOctoAdminSession adminSession, string key, TValueType value)
         where TValueType : struct;
 
-    Task SetConfigurationAsync(IOctoSystemSession systemSession, string key, string value);
+    Task SetConfigurationAsync(IOctoAdminSession adminSession, string key, string value);
 
-    Task SetConfigurationAsync(IOctoSystemSession systemSession, string key, object value);
-    Task DeleteConfigurationAsync(IOctoSystemSession systemSession, string key);
+    Task SetConfigurationAsync(IOctoAdminSession adminSession, string key, object value);
+    Task DeleteConfigurationAsync(IOctoAdminSession adminSession, string key);
 
     #endregion Configuration
 

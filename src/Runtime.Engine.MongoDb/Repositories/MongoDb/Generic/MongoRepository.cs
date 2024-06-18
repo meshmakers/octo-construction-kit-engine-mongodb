@@ -18,6 +18,9 @@ public class MongoRepository : IRepositoryInternal
     public MongoRepository(IMongoDatabase mongoDatabase)
     {
         _database = mongoDatabase;
+        
+        // Do not do here any commands that access the database. At initial 
+        // setups the user might not have been already created.
 
         _bucket = new GridFSBucket(_database, new GridFSBucketOptions
         {
@@ -35,13 +38,15 @@ public class MongoRepository : IRepositoryInternal
         if (!await CollectionExistsAsync(mongoDataSourceMapper, suffix))
         {
             var name = GetCollectionName(mongoDataSourceMapper, suffix);
-            var options = new CreateCollectionOptions
+            var options = new CreateCollectionOptions();
+            if (IsVersionGreaterOrEqual(5))
             {
-                ChangeStreamPreAndPostImagesOptions = new ChangeStreamPreAndPostImagesOptions
+                options.ChangeStreamPreAndPostImagesOptions = new ChangeStreamPreAndPostImagesOptions
                 {
                     Enabled = enableChangeStreamPreAndPostImages
-                }
-            };
+                };
+            }
+           
             await _database.CreateCollectionAsync(name, options);
         }
     }
@@ -182,5 +187,20 @@ public class MongoRepository : IRepositoryInternal
         var collections = await _database.ListCollectionsAsync(new ListCollectionsOptions { Filter = filter });
         //check for existence
         return await collections.AnyAsync();
+    }
+    
+    private bool IsVersionGreaterOrEqual(int majorVersion)
+    {
+        var command = new BsonDocument("buildInfo", 1);
+        var result = _database.RunCommand<BsonDocument>(command);
+        var version = result["version"].AsString;
+        
+        var majorVersionString = version.Split('.')[0];
+        if (int.TryParse(majorVersionString, out var tmp))
+        {
+            return tmp >= majorVersion;
+        }
+
+        return false;
     }
 }
