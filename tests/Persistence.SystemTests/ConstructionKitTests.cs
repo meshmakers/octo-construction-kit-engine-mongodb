@@ -14,7 +14,7 @@ public class ConstructionKitTests : IClassFixture<SystemFixture>
     }
 
     [Fact]
-    public async void ImportConstructionKit()
+    public async Task ImportConstructionKit()
     {
         var systemContext = _systemFixture.GetSystemContext();
 

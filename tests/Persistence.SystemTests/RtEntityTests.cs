@@ -17,7 +17,7 @@ public class RtEntityTests : IClassFixture<SystemFixture>
     }
 
     [Fact]
-    public async void TestGetIndirectRtAssociationTargets()
+    public async Task TestGetIndirectRtAssociationTargets()
     {
         var systemContext = _systemFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();
@@ -36,7 +36,7 @@ public class RtEntityTests : IClassFixture<SystemFixture>
     }
 
     [Fact]
-    public async void Test1()
+    public async Task Test1()
     {
         var systemContext = _systemFixture.GetSystemContext();
 
@@ -81,7 +81,7 @@ public class RtEntityTests : IClassFixture<SystemFixture>
     }
 
     [Fact]
-    public async void Test1_1()
+    public async Task Test1_1()
     {
         var planetDesignation = Guid.NewGuid().ToString();
         var systemContext = _systemFixture.GetSystemContext();
@@ -104,7 +104,7 @@ public class RtEntityTests : IClassFixture<SystemFixture>
     }
 
     [Fact]
-    public async void Test1_2()
+    public async Task Test1_2()
     {
         var planetDesignation = "da1d0128-635f-46b3-8071-bf2a4d271c07";
 
@@ -129,7 +129,7 @@ public class RtEntityTests : IClassFixture<SystemFixture>
 
 
     [Fact]
-    public async void Test2()
+    public async Task Test2()
     {
         var systemContext = _systemFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();

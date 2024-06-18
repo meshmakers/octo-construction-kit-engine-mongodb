@@ -13,7 +13,7 @@ public class TenantConfigurationTests : IClassFixture<SystemFixture>
     }
 
     [Fact]
-    public async void SetGetConfigurationAsString()
+    public async Task SetGetConfigurationAsString()
     {
         var systemContext = _systemFixture.GetSystemContext();
         using var session = await systemContext.GetAdminSessionAsync();
@@ -33,7 +33,7 @@ public class TenantConfigurationTests : IClassFixture<SystemFixture>
     }
 
     [Fact]
-    public async void SetGetConfigurationAsObject()
+    public async Task SetGetConfigurationAsObject()
     {
         var systemContext = _systemFixture.GetSystemContext();
         using var session = await systemContext.GetAdminSessionAsync();
@@ -53,7 +53,7 @@ public class TenantConfigurationTests : IClassFixture<SystemFixture>
     }
 
     [Fact]
-    public async void GetConfigurationObject_NoKey()
+    public async Task GetConfigurationObject_NoKey()
     {
         var systemContext = _systemFixture.GetSystemContext();
         using var session2 = await systemContext.GetAdminSessionAsync();
@@ -67,7 +67,7 @@ public class TenantConfigurationTests : IClassFixture<SystemFixture>
     }
 
     [Fact]
-    public async void GetConfigurationString_NoKey()
+    public async Task GetConfigurationString_NoKey()
     {
         var systemContext = _systemFixture.GetSystemContext();
         using var session2 = await systemContext.GetAdminSessionAsync();

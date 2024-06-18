@@ -19,7 +19,7 @@ public class BasicRtEntityTests : IClassFixture<SystemFixture>
     }
 
     [Fact]
-    public async void CreateRtEntity()
+    public async Task CreateRtEntity()
     {
         var systemContext = _systemFixture.GetSystemContext();
 
