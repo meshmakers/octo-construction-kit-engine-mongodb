@@ -329,7 +329,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         }
 
         _logger.LogDebug("Updating collections");
-        // This operation is critical. It force an exclusive write lock on the database.
+        // This operation is critical. It forces an exclusive write lock on the database.
         await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session);
         CheckCancellation(cancellationToken);
 
@@ -390,6 +390,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 {
                     Id = compiledModel.ModelId,
                     ModelId = compiledModel.ModelId.ModelId,
+                    Dependencies = compiledModel.Dependencies?.ToArray(),
                     Description = compiledModel.Description,
                     ModelState = ModelState.Importing
                 });
