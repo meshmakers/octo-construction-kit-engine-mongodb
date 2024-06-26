@@ -96,15 +96,15 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
 
         var connectFromRtIdField = "targetRtId";
         var connectToRtIdField = "originRtId";
-        var connectToCkTypeIdField = "originCkTypeId";
+        var connectToCkTypeIdField = "targetCkTypeId";
         var @as = "_associations";
 
         switch (_graphDirection)
         {
             case GraphDirections.Inbound:
                 connectFromRtIdField = "originRtId";
-                connectToRtIdField = "originCkTypeId";
-                connectToCkTypeIdField = "targetCkTypeId";
+                connectToRtIdField = "targetRtId";
+                connectToCkTypeIdField = "originCkTypeId";
                 break;
             case GraphDirections.Outbound:
                 break;
@@ -118,7 +118,7 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
         var associationFilter = new FilterDefinitionBuilder<RtAssociation>().Eq(x => x.AssociationRoleId, _roleId);
 
         var startWith =
-            new ExpressionAggregateExpressionDefinition<RtEntity, BsonValue>(x => x.RtId.ToObjectId(), new ExpressionTranslationOptions());
+            (AggregateExpressionDefinition<RtEntity, BsonValue>)"$_id";
 
         AddPreStagesToPipelines(pipelineStageDefinitions);
         var filterDefinitions = CreateFilterDefinitions();
@@ -146,7 +146,7 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
                                             new BsonArray
                                             {
                                                 "$$this." + connectToCkTypeIdField,
-                                                _targetCkTypeGraph.CkTypeId.FullName
+                                                _targetCkTypeGraph.CkTypeId.SemanticVersionedFullName
                                             })
                                     }
                                 })
@@ -176,7 +176,7 @@ internal class MultipleOriginIndirectHierarchicalRtQuery<TTargetEntity> : Query<
             .Unwind(@as, new AggregateUnwindOptions<BsonDocument> { PreserveNullAndEmptyArrays = true })
             .Lookup<BsonDocument, TTargetEntity, TTargetEntity, IEnumerable<TTargetEntity>, BsonDocument>(
                 _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TTargetEntity>(_targetCkTypeGraph).GetMongoCollection(),
-                @as + "." + connectToRtIdField,
+                @as + "." + connectFromRtIdField,
                 "_id",
                 pipelineStageDefinitions.Any()
                     ? PipelineDefinition<TTargetEntity, TTargetEntity>.Create(pipelineStageDefinitions)

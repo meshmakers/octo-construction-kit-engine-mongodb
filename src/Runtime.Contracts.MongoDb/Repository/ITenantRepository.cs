@@ -16,7 +16,7 @@ public interface ITenantRepository : IRuntimeRepository
     IOctoSession GetSession();
 
     #region Data query
-    
+
     /// <summary>
     /// Gets the construction kit models.
     /// </summary>
@@ -26,7 +26,8 @@ public interface ITenantRepository : IRuntimeRepository
     /// <param name="skip">Skips the defined amount of items, when null no items are skipped</param>
     /// <param name="take">Takes the defined amount of items, when null all items are taken</param>
     /// <returns>Result set object that contains the results based on filter options</returns>
-    Task<IResultSet<CkModel>> GetCkModelsAsync(IOctoSession session, List<CkModelId>? ckModelIds, DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
+    Task<IResultSet<CkModel>> GetCkModelsAsync(IOctoSession session, List<CkModelId>? ckModelIds,
+        DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
 
     /// <summary>
     /// Gets the construction kit attributes.
@@ -37,7 +38,8 @@ public interface ITenantRepository : IRuntimeRepository
     /// <param name="skip">Skips the defined amount of items, when null no items are skipped</param>
     /// <param name="take">Takes the defined amount of items, when null all items are taken</param>
     /// <returns>Result set object that contains the results based on filter options</returns>
-    Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session, IReadOnlyList<CkId<CkAttributeId>>? attributeIds,
+    Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session,
+        IReadOnlyList<CkId<CkAttributeId>>? attributeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
 
     /// <summary>
@@ -52,7 +54,7 @@ public interface ITenantRepository : IRuntimeRepository
     Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkId<CkTypeId>>? ckTypeIds,
         DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null);
-    
+
     /// <summary>
     /// Gets the construction kit records.
     /// </summary>
@@ -76,46 +78,63 @@ public interface ITenantRepository : IRuntimeRepository
     /// <param name="take">Takes the defined amount of items, when null all items are taken</param>
     /// <returns>Result set object that contains the results based on filter options</returns>
     Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, List<CkId<CkEnumId>>? ckEnumIds,
-        DataQueryOperation dataQueryOperation, 
+        DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null);
 
     Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
         CkId<CkTypeId> targetCkTypeId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation,
+        int? skip = null,
         int? take = null);
 
     Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
         IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds, CkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, DataQueryOperation dataQueryOperation,
+        int? skip = null,
         int? take = null)
         where TOriginEntity : RtEntity
         where TTargetEntity : RtEntity, new();
 
-    Task<IResultSet<TTargetEntity>?> GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
+    Task<IResultSet<TTargetEntity>> GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
         IOctoSession session, OctoObjectId originRtId, CkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection)
         where TOriginEntity : RtEntity
         where TTargetEntity : RtEntity, new();
 
-    Task<IMultipleOriginResultSet<TTargetEntity>> GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(IOctoSession session,
+    Task<IResultSet<RtEntity>> GetIndirectRtAssociationTargetsAsync(
+        IOctoSession session, OctoObjectId originRtId, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
+        CkId<CkTypeId> targetCkTypeId, GraphDirections graphDirection);
+
+    Task<IMultipleOriginResultSet<TTargetEntity>> GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
+        IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds,
         CkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation,
+        int? skip = null,
         int? take = null) where TOriginEntity : RtEntity where TTargetEntity : RtEntity, new();
+
+    Task<IMultipleOriginResultSet<RtEntity>> GetIndirectRtAssociationTargetsAsync(IOctoSession session,
+        IEnumerable<OctoObjectId> originRtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, CkId<CkTypeId> targetCkTypeId,
+        DataQueryOperation dataQueryOperation, int? skip = null,
+        int? take = null);
 
     #endregion Data query
 
     #region Large Binaries
 
-    Task<OctoObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
+    Task<OctoObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,
+        Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default);
 
-    Task ReplaceLargeBinaryAsync(OctoObjectId largeBinaryId, string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
+    Task ReplaceLargeBinaryAsync(OctoObjectId largeBinaryId, string filename, string contentType, Stream stream,
+        Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default);
-    
-    Task<OctoObjectId> ReplaceLargeBinaryAsync(string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
+
+    Task<OctoObjectId> ReplaceLargeBinaryAsync(string filename, string contentType, Stream stream,
+        Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default);
 
     Task DeleteLargeBinaryAsync(OctoObjectId largeBinaryId, CancellationToken cancellationToken = default);
@@ -146,7 +165,8 @@ public interface ITenantRepository : IRuntimeRepository
         UpdateAssociationStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default);
 
-    IUpdateStream<RtAssociation> SubscribeToRtAssociations<TOriginEntity, TTargetEntity>(UpdateAssociationStreamFilter updateStreamFilter,
+    IUpdateStream<RtAssociation> SubscribeToRtAssociations<TOriginEntity, TTargetEntity>(
+        UpdateAssociationStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default)
         where TOriginEntity : RtEntity, new() where TTargetEntity : RtEntity, new();
 
@@ -164,5 +184,4 @@ public interface ITenantRepository : IRuntimeRepository
     /// </summary>
     /// <returns></returns>
     Task LoadCacheForTenantAsync(ICkCacheService cacheService);
-
 }

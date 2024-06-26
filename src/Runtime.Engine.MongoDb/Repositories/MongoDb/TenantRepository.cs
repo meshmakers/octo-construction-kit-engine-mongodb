@@ -247,13 +247,13 @@ internal class TenantRepository(
     public async Task<IResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(IOctoSession session,
         OctoObjectId originRtId,
         CkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, DataQueryOperation dataQueryOperation, int? skip = null,
         int? take = null)
         where TOriginEntity : RtEntity
         where TTargetEntity : RtEntity, new()
     {
         var result = await GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(session, new[] { originRtId }, roleId,
-            graphDirection, rtIds, dataQueryOperation, skip, take);
+            graphDirection, targetRtIds, dataQueryOperation, skip, take);
 
         return result.First().Value;
     }
@@ -288,7 +288,7 @@ internal class TenantRepository(
     public async Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
         IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds, CkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation, int? skip = null,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, DataQueryOperation dataQueryOperation, int? skip = null,
         int? take = null)
         where TOriginEntity : RtEntity
         where TTargetEntity : RtEntity, new()
@@ -307,7 +307,7 @@ internal class TenantRepository(
                 originTypeGraph, roleId, graphDirection, targetTypeGraph);
 
         originHierarchicalRtQuery.AddFieldFilters(dataQueryOperation.FieldFilters);
-        originHierarchicalRtQuery.AddIdFilter(rtIds);
+        originHierarchicalRtQuery.AddIdFilter(targetRtIds);
         originHierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         originHierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         originHierarchicalRtQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
@@ -317,7 +317,7 @@ internal class TenantRepository(
         return await originHierarchicalRtQuery.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<TTargetEntity>?> GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(IOctoSession session,
+    public async Task<IResultSet<TTargetEntity>> GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(IOctoSession session,
         OctoObjectId originRtId,
         CkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection) where TOriginEntity : RtEntity where TTargetEntity : RtEntity, new()
@@ -326,6 +326,16 @@ internal class TenantRepository(
 
         var resultSets = await GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(session, new[] { originRtId }, roleId,
             graphDirection, null, dataQueryOperation);
+        return resultSets[originRtId];
+    }
+
+    public async Task<IResultSet<RtEntity>> GetIndirectRtAssociationTargetsAsync(IOctoSession session, OctoObjectId originRtId, CkId<CkTypeId> originCkTypeId,
+        CkId<CkAssociationRoleId> roleId, CkId<CkTypeId> targetCkTypeId, GraphDirections graphDirection)
+    {
+        var dataQueryOperation = DataQueryOperation.Create();
+
+        var resultSets = await GetIndirectRtAssociationTargetsAsync(session, new[] { originRtId }, originCkTypeId, roleId,
+            graphDirection, null, targetCkTypeId, dataQueryOperation);
         return resultSets[originRtId];
     }
 
@@ -351,6 +361,32 @@ internal class TenantRepository(
 
         hierarchicalRtQuery.AddFieldFilters(dataQueryOperation.FieldFilters);
         hierarchicalRtQuery.AddIdFilter(rtIds);
+        hierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
+        hierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
+        hierarchicalRtQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
+        hierarchicalRtQuery.AddGrouping(dataQueryOperation.FieldGroupBy);
+        hierarchicalRtQuery.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
+
+        return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
+    }
+
+    public async Task<IMultipleOriginResultSet<RtEntity>> GetIndirectRtAssociationTargetsAsync(IOctoSession session, IEnumerable<OctoObjectId> originRtIds, CkId<CkTypeId> originCkTypeId,
+        CkId<CkAssociationRoleId> roleId, GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, CkId<CkTypeId> targetCkTypeId,
+        DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
+    {
+        var ckCacheService = await GetCkCacheServiceAsync();
+        var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
+        var targetTypeGraph = await GetCkTypeGraphAsync(targetCkTypeId);
+        
+        var hierarchicalRtQuery =
+            new MultipleOriginIndirectHierarchicalRtQuery<RtEntity>(ckCacheService, TenantId,
+                mongoDbRepositoryDataSource,
+                dataQueryOperation.Language,
+                originRtIds,
+                originTypeGraph, roleId, graphDirection, targetTypeGraph);
+
+        hierarchicalRtQuery.AddFieldFilters(dataQueryOperation.FieldFilters);
+        hierarchicalRtQuery.AddIdFilter(targetRtIds);
         hierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         hierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         hierarchicalRtQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
