@@ -8,5 +8,4 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 internal class CkAttributeQuery(
     IMetricsContext metricsContext,
     IMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
-    : SingleOriginQuery<CkId<CkAttributeId>, CkAttribute>(metricsContext, mongoDbRepositoryDataSource.CkAttributes,
-        new FieldFilterResolver<CkAttribute>());
+    : SingleOriginCkQuery<CkId<CkAttributeId>, CkAttribute>(metricsContext, mongoDbRepositoryDataSource.CkAttributes);

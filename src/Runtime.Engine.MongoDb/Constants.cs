@@ -8,6 +8,7 @@ public static class Constants
     internal const string AttributesName = "attributes";
 
     public const string IdField = "_id";
+    public const string ModelIdField = "ckModelId";
 
     internal const string OctoTextAnalyzer = "text_octo_";
     internal const string OctoTextAnalyzerEn = "text_octo_en";

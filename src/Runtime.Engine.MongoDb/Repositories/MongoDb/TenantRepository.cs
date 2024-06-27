@@ -174,12 +174,13 @@ internal class TenantRepository(
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session,
+    public async Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session, IReadOnlyList<CkModelId>? ckModelIds,
         IReadOnlyList<CkId<CkAttributeId>>? attributeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var query = new CkAttributeQuery(metricsContext, mongoDbRepositoryDataSource);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddModelIdFilter(ckModelIds);
         query.AddIdFilter(attributeIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
@@ -189,11 +190,12 @@ internal class TenantRepository(
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkId<CkTypeId>>? ckTypeIds,
+    public async Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkModelId>? ckModelIds, IReadOnlyList<CkId<CkTypeId>>? ckTypeIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var query = new CkTypeQuery(metricsContext, mongoDbRepositoryDataSource);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddModelIdFilter(ckModelIds);
         query.AddIdFilter(ckTypeIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
@@ -203,11 +205,12 @@ internal class TenantRepository(
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session, List<CkId<CkRecordId>>? ckRecordIds,
+    public async Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session, IReadOnlyList<CkModelId>? ckModelIds, List<CkId<CkRecordId>>? ckRecordIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var query = new CkRecordQuery(metricsContext, mongoDbRepositoryDataSource);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddModelIdFilter(ckModelIds);
         query.AddIdFilter(ckRecordIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
@@ -217,11 +220,12 @@ internal class TenantRepository(
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, List<CkId<CkEnumId>>? ckEnumIds,
+    public async Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, IReadOnlyList<CkModelId>? ckModelIds, List<CkId<CkEnumId>>? ckEnumIds,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var query = new CkEnumQuery(metricsContext, mongoDbRepositoryDataSource);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddModelIdFilter(ckModelIds);
         query.AddIdFilter(ckEnumIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);

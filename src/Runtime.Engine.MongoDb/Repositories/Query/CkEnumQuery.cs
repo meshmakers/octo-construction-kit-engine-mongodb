@@ -6,5 +6,4 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
 internal class CkEnumQuery(IMetricsContext metricsContext, IMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
-    : SingleOriginQuery<CkId<CkEnumId>, CkEnum>(metricsContext, mongoDbRepositoryDataSource.CkEnums,
-        new FieldFilterResolver<CkEnum>());
+    : SingleOriginCkQuery<CkId<CkEnumId>, CkEnum>(metricsContext, mongoDbRepositoryDataSource.CkEnums);
