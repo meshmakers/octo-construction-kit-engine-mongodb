@@ -29,4 +29,13 @@
             <Link>LICENSE</Link>
         </None>
     </ItemGroup>
+
+    <ItemGroup>
+      <Reference Include="Microsoft.Extensions.Diagnostics.HealthChecks">
+        <HintPath>C:\Program Files\dotnet\shared\Microsoft.AspNetCore.App\8.0.6\Microsoft.Extensions.Diagnostics.HealthChecks.dll</HintPath>
+      </Reference>
+      <Reference Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions">
+        <HintPath>C:\Program Files\dotnet\shared\Microsoft.AspNetCore.App\8.0.6\Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions.dll</HintPath>
+      </Reference>
+    </ItemGroup>
 </Project>
