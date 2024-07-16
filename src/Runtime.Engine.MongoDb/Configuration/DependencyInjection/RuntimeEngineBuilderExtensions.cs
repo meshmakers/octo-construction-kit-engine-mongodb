@@ -2,9 +2,11 @@ using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Exchange;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.Configuration.DependencyInjection;
 using Meshmakers.Octo.Runtime.Engine.MongoDb;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Exchange;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
@@ -38,6 +40,7 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services.AddCkModelSystem();
 
         // Add services of Persistence module
+        builder.Services.AddTransient<IImportRtModelCommand, ImportRtModelCommand>();
         builder.Services.AddTransient<ICkModelRepository, DatabaseCkModelRepository>();
         builder.Services.AddSingleton<ISystemContext, SystemContext>();
         builder.Services.AddSingleton<IModelLoaderService, ModelLoaderService>();

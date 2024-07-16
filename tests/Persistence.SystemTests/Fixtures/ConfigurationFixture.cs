@@ -8,7 +8,7 @@ public class ConfigurationFixture : ServiceCollectionFixture
 {
     private readonly SystemTestConfiguration _configuration;
 
-    public ConfigurationFixture()
+    protected ConfigurationFixture()
     {
         _configuration = new SystemTestConfiguration();
 
@@ -16,7 +16,7 @@ public class ConfigurationFixture : ServiceCollectionFixture
             _configuration.GetSection("systemTest").Bind(options));
     }
 
-    public T GetOptions<T>(string sectionName)
+    protected T GetOptions<T>(string sectionName)
     {
         var option = Activator.CreateInstance<T>();
         _configuration.GetSection(sectionName).Bind(option);

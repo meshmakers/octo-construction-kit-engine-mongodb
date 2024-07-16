@@ -4,8 +4,11 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository.Entities;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -36,7 +39,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
     private MongoClient? _client;
 
 
-    protected MongoRepositoryClient(ILogger<MongoRepositoryClient> logger, IOptions<OctoSystemConfiguration> systemConfiguration,
+    protected MongoRepositoryClient(ILogger<MongoRepositoryClient> logger,
+        IOptions<OctoSystemConfiguration> systemConfiguration,
         IServiceProvider serviceProvider)
     {
         _logger = logger;
@@ -45,15 +49,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         ArgumentValidation.ValidateString(nameof(systemConfiguration.Value.DatabaseHost),
             systemConfiguration.Value.DatabaseHost);
 
-        var objectSerializer = new OctoObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
-                                                                type.FullName?.StartsWith(typeof(RtEntity).Namespace!) ==
-                                                                true || type.Namespace!.StartsWith(typeof(GeoJson).Namespace!)
-                                                                || type.Namespace!.StartsWith(typeof(CkModelId).Namespace!));
-
-        BsonSerializer.TryRegisterSerializer(objectSerializer);
-
-        ConfigureMongoDriver();
-        RegisterClassMaps();
+        ConfigureMongoDriver(ServiceProvider);
     }
 
     /// <summary>
@@ -118,25 +114,82 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         return new MongoRepository(Client.GetDatabase(name));
     }
 
-    private static void RegisterClassMaps()
+    private static readonly object ObjectIdLock = new();
+
+
+
+    private static void ConfigureMongoDriver(IServiceProvider serviceProvider)
     {
         if (_isRegistered)
         {
             return;
         }
 
-        _isRegistered = true;
+        lock (ObjectIdLock)
+        {
+            if (_isRegistered)
+            {
+                return;
+            }
 
-        BsonClassMap.TryRegisterClassMap<CkModel>(cm =>
+            // Remove convention first to avoid duplications
+            // this call of Remove method makes no errors if occurs before any Register method call
+            ConventionRegistry.Remove(OctoConventionCamelCase);
+            ConventionRegistry.Remove(OctoRtEntityConvention);
+            ConventionRegistry.Remove(OctoRtRecordConvention);
+
+            // Register convention
+            ConventionRegistry.Register(OctoConventionCamelCase, new ConventionPack
+            {
+                new CamelCaseElementNameConvention()
+            }, _ => true);
+            
+            RegisterClassMaps();
+
+            // This convention is needed to ensure that properties of a derived class of RtEntity
+            // are not serialized and the correct polymorphic type is used.
+            ConventionRegistry.Register(OctoRtEntityConvention, new ConventionPack
+            {
+                new RtEntityMapConvention(serviceProvider.GetRequiredService<ICkClassMappingService>())
+            }, t => typeof(RtEntity).IsAssignableFrom(t));
+
+            // This convention is needed to ensure that properties of a derived class of RtRecord
+            // are not serialized and the correct polymorphic type is used.
+            ConventionRegistry.Register(OctoRtRecordConvention, new ConventionPack
+            {
+                new RtRecordMapConvention(serviceProvider.GetRequiredService<ICkClassMappingService>())
+            }, t => typeof(RtRecord).IsAssignableFrom(t));
+
+            _isRegistered = true;
+        }
+    }
+
+    private static void RegisterClassMaps()
+    {
+        BsonSerializer.RegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
+        BsonSerializer.RegisterDiscriminatorConvention(typeof(RtEntity), new RtEntityDiscriminatorConvention("_t"));
+        
+        var objectSerializer = new OctoObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
+                                                                type.FullName?.StartsWith(typeof(RtEntity)
+                                                                    .Namespace!) ==
+                                                                true || type.Namespace!.StartsWith(typeof(GeoJson)
+                                                                    .Namespace!)
+                                                                || type.Namespace!.StartsWith(typeof(CkModelId)
+                                                                    .Namespace!));
+        BsonSerializer.RegisterSerializer(objectSerializer);
+        
+        BsonSerializer.RegisterSerializer(new OctoObjectIdSerializer());
+
+        BsonClassMap.RegisterClassMap<CkModel>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.Id).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
-            
+
             cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
         });
 
-        BsonClassMap.TryRegisterClassMap<CkType>(cm =>
+        BsonClassMap.RegisterClassMap<CkType>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.CkTypeId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
@@ -150,7 +203,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.EnableChangeStreamPreAndPostImages).SetIgnoreIfDefault(true);
         });
 
-        BsonClassMap.TryRegisterClassMap<CkRecord>(cm =>
+        BsonClassMap.RegisterClassMap<CkRecord>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.CkRecordId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
@@ -162,7 +215,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.Attributes).SetIgnoreIfDefault(true);
         });
 
-        BsonClassMap.TryRegisterClassMap<CkEnum>(cm =>
+        BsonClassMap.RegisterClassMap<CkEnum>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.CkEnumId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
@@ -172,14 +225,14 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.Values).SetIsRequired(true);
         });
 
-        BsonClassMap.TryRegisterClassMap<CkAttributeMetaData>(cm =>
+        BsonClassMap.RegisterClassMap<CkAttributeMetaData>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.AutoMap();
             cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
         });
 
-        BsonClassMap.TryRegisterClassMap<CkAttribute>(cm =>
+        BsonClassMap.RegisterClassMap<CkAttribute>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.CkAttributeId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
@@ -195,7 +248,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.IsDataStream).SetIgnoreIfDefault(true);
         });
 
-        BsonClassMap.TryRegisterClassMap<CkAssociationRole>(cm =>
+        BsonClassMap.RegisterClassMap<CkAssociationRole>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.RoleId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
@@ -208,7 +261,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.OutboundName).SetIgnoreIfDefault(true);
         });
 
-        BsonClassMap.TryRegisterClassMap<CkTypeAssociation>(cm =>
+        BsonClassMap.RegisterClassMap<CkTypeAssociation>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.AssociationId).SetIdGenerator(new OctoObjectIdGenerator());
@@ -219,7 +272,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.TargetCkTypeId).SetIsRequired(true);
         });
 
-        BsonClassMap.TryRegisterClassMap<CkTypeAttribute>(cm =>
+        BsonClassMap.RegisterClassMap<CkTypeAttribute>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.AttributeId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
@@ -230,7 +283,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.AutoCompleteValues).SetIgnoreIfDefault(true);
         });
 
-        BsonClassMap.TryRegisterClassMap<CkTypeInheritance>(cm =>
+        BsonClassMap.RegisterClassMap<CkTypeInheritance>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.InheritanceId).SetIdGenerator(new OctoObjectIdGenerator());
@@ -240,7 +293,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.InheritorCkTypeId).SetIsRequired(true);
         });
 
-        BsonClassMap.TryRegisterClassMap<CkTypeIndex>(cm =>
+        BsonClassMap.RegisterClassMap<CkTypeIndex>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.AutoMap();
@@ -250,7 +303,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.Language).SetIgnoreIfDefault(true);
         });
 
-        BsonClassMap.TryRegisterClassMap<CkIndexFields>(cm =>
+        BsonClassMap.RegisterClassMap<CkIndexFields>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.AutoMap();
@@ -259,7 +312,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.AttributeNames).SetIsRequired(true);
         });
 
-        BsonClassMap.TryRegisterClassMap<CkTypeInfo>(cm =>
+        BsonClassMap.RegisterClassMap<CkTypeInfo>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.CkTypeId).SetIdGenerator(new NullIdChecker()).SetIsRequired(true);
@@ -271,7 +324,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.Attributes).SetIsRequired(true);
         });
 
-        BsonClassMap.TryRegisterClassMap<CkBaseTypeInfo>(cm =>
+        BsonClassMap.RegisterClassMap<CkBaseTypeInfo>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.InheritanceId).SetIdGenerator(new OctoObjectIdGenerator());
@@ -282,7 +335,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.BaseTypeDepthIndex).SetIsRequired(true);
         });
 
-        BsonClassMap.TryRegisterClassMap<AutoCompleteText>(cm =>
+        BsonClassMap.RegisterClassMap<AutoCompleteText>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.AutoMap();
@@ -291,29 +344,27 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.Text);
         });
 
-        BsonClassMap.TryRegisterClassMap<RtTypeWithAttributes>(cm =>
+        BsonClassMap.RegisterClassMap<RtTypeWithAttributes>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapField("_attributes").SetElementName(Constants.AttributesName)
                 .SetSerializer(new RtAttributeDictionarySerializer());
         });
 
-        BsonClassMap.TryRegisterClassMap<RtEntity>(cm =>
+        BsonClassMap.RegisterClassMap<RtEntity>(cm =>
         {
             cm.SetIsRootClass(true);
             cm.SetIgnoreExtraElements(true);
-
             cm.MapIdMember(c => c.RtId).SetIdGenerator(new OctoObjectIdGenerator());
-            cm.MapMember(c => c.RtCreationDateTime).SetElementName(nameof(RtEntity.RtCreationDateTime).ToCamelCase())
-                .SetIsRequired(true);
-            cm.MapMember(c => c.RtChangedDateTime).SetElementName(nameof(RtEntity.RtChangedDateTime).ToCamelCase())
-                .SetIsRequired(true);
-            cm.MapMember(c => c.CkTypeId).SetElementName(nameof(RtEntity.CkTypeId).ToCamelCase()).SetIsRequired(true);
-            cm.MapMember(c => c.RtWellKnownName).SetElementName(nameof(RtEntity.RtWellKnownName).ToCamelCase())
-                .SetIgnoreIfDefault(true);
+            cm.AutoMap();
+
+            cm.MapMember(c => c.RtCreationDateTime).SetIsRequired(true);
+            cm.MapMember(c => c.RtChangedDateTime).SetIsRequired(true);
+            cm.MapMember(c => c.CkTypeId).SetIsRequired(true);
+            cm.MapMember(c => c.RtWellKnownName).SetIgnoreIfDefault(true);
         });
 
-        BsonClassMap.TryRegisterClassMap<RtRecord>(cm =>
+        BsonClassMap.RegisterClassMap<RtRecord>(cm =>
         {
             cm.SetIsRootClass(true);
             cm.SetIgnoreExtraElements(true);
@@ -322,7 +373,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 .SetIsRequired(true);
         });
 
-        BsonClassMap.TryRegisterClassMap<RtAssociation>(cm =>
+        BsonClassMap.RegisterClassMap<RtAssociation>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.AssociationId).SetIdGenerator(new OctoObjectIdGenerator());
@@ -336,50 +387,36 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.TargetCkAttributeIds).SetIgnoreIfDefault(true);
         });
 
-        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
-        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>());
-        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());
-        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkRecordId, OctoRecordIdSerializer>());
-        BsonSerializer.TryRegisterSerializer(new CkIdSerializer<CkEnumId, OctoEnumIdSerializer>());
-        BsonSerializer.TryRegisterSerializer(new OctoObjectIdSerializer());
-        BsonSerializer.TryRegisterSerializer(new ModelIdSerializer());
-        BsonSerializer.TryRegisterSerializer(new RtEntitySerializer());
-        BsonSerializer.TryRegisterSerializer(new RtRecordSerializer());
-    }
-
-    private void ConfigureMongoDriver()
-    {
-        // Remove convention first to avoid duplications
-        // this call of Remove method makes no errors if occurs before any Register method call
-        ConventionRegistry.Remove(OctoConventionCamelCase);
-        ConventionRegistry.Remove(OctoRtEntityConvention);
-        ConventionRegistry.Remove(OctoRtRecordConvention);
-
-        // Register convention
-        ConventionRegistry.Register(OctoConventionCamelCase, new ConventionPack
+        BsonClassMap.RegisterClassMap<RtDeepGraphQueryResult>(cm =>
         {
-            new CamelCaseElementNameConvention()
-        }, _ => true);
+            cm.SetIgnoreExtraElements(true);
+            cm.MapIdMember(c => c.Id).SetElementName("_id");
+            cm.AutoMap();
+            cm.GetMemberMap(c => c.Associations);
+        });
 
-        // This convention is needed to ensure that properties of a derived class of RtEntity
-        // are not serialized and the correct polymorphic type is used.
-        ConventionRegistry.Register(OctoRtEntityConvention, new ConventionPack
+        BsonClassMap.RegisterClassMap<RtDeepGraphAssociationQueryResult>(cm =>
         {
-            new RtEntityMapConvention(ServiceProvider.GetRequiredService<ICkClassMappingService>())
-        }, t => typeof(RtEntity).IsAssignableFrom(t));
+            cm.SetIgnoreExtraElements(true);
+            cm.AutoMap();
 
-        // This convention is needed to ensure that properties of a derived class of RtRecord
-        // are not serialized and the correct polymorphic type is used.
-        ConventionRegistry.Register(OctoRtRecordConvention, new ConventionPack
-        {
-            new RtRecordMapConvention(ServiceProvider.GetRequiredService<ICkClassMappingService>())
-        }, t => typeof(RtRecord).IsAssignableFrom(t));
-    }
+            cm.GetMemberMap(c => c.AssociationId);
+            cm.GetMemberMap(c => c.AssociationRoleId);
+            cm.GetMemberMap(c => c.TargetRtId);
+            cm.GetMemberMap(c => c.TargetCkTypeId);
+        });
+        
 
-    static MongoRepositoryClient()
-    {
-        BsonSerializer.RegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
-        BsonSerializer.RegisterDiscriminatorConvention(typeof(RtEntity), new RtEntityDiscriminatorConvention("_t"));
+
+        BsonSerializer.RegisterSerializer(new CkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
+        BsonSerializer.RegisterSerializer(new CkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>());
+        BsonSerializer.RegisterSerializer(
+            new CkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());
+        BsonSerializer.RegisterSerializer(new CkIdSerializer<CkRecordId, OctoRecordIdSerializer>());
+        BsonSerializer.RegisterSerializer(new CkIdSerializer<CkEnumId, OctoEnumIdSerializer>());
+        BsonSerializer.RegisterSerializer(new ModelIdSerializer());
+        BsonSerializer.RegisterSerializer(new RtEntitySerializer());
+        BsonSerializer.RegisterSerializer(new RtRecordSerializer());
     }
 
     public void Dispose()

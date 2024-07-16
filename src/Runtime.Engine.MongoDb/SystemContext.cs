@@ -3,9 +3,10 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v1;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 
@@ -63,16 +64,11 @@ public class SystemContext : TenantContext, ISystemContext
 
             await CkModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, true,
                 new TenantDatabaseSourceIdentifier(ckModelRepository));
-        }
+            // Distribute updates (post) to inform other services.
+            await TenantNotifications.NotifyPosTenantCreateAsync(normalizedTenantId);  }
         catch (Exception)
         {
-            await AdminRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
-            throw;
-        }
-        finally
-        {
-            // Distribute updates (post) to inform other services.
-            await TenantNotifications.NotifyPosTenantCreateAsync(normalizedTenantId);
+            throw TenantException.CreateSystemTenantFailed();
         }
     }
 
@@ -104,6 +100,10 @@ public class SystemContext : TenantContext, ISystemContext
         {
             await TenantNotifications.NotifyPreTenantDeleteAsync(normalizedTenantId);
             await AdminRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
+        }
+        catch (MongoCommandException)
+        {
+            throw TenantException.DeleteSystemTenantFailed();
         }
         finally
         {

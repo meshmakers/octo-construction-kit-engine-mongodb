@@ -3,19 +3,12 @@ using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
-public class TenantConfigurationTests : IClassFixture<SystemFixture>
+public class TenantConfigurationTests(SystemFixture systemFixture) : IClassFixture<SystemFixture>
 {
-    private readonly SystemFixture _systemFixture;
-
-    public TenantConfigurationTests(SystemFixture systemFixture)
-    {
-        _systemFixture = systemFixture;
-    }
-
     [Fact]
     public async void SetGetConfigurationAsString()
     {
-        var systemContext = _systemFixture.GetSystemContext();
+        var systemContext = systemFixture.GetSystemContext();
         using var session = await systemContext.GetAdminSessionAsync();
         session.StartTransaction();
         await systemContext.SetConfigurationAsync(session, "test", "398FE06C-4E21-433F-A8EA-1BDD74E1B167");
@@ -35,7 +28,7 @@ public class TenantConfigurationTests : IClassFixture<SystemFixture>
     [Fact]
     public async void SetGetConfigurationAsObject()
     {
-        var systemContext = _systemFixture.GetSystemContext();
+        var systemContext = systemFixture.GetSystemContext();
         using var session = await systemContext.GetAdminSessionAsync();
         session.StartTransaction();
         await systemContext.SetConfigurationAsync(session, "test", new TestClass { TestProperty = "398FE06C-4E21-433F-A8EA-1BDD74E1B168" });
@@ -55,7 +48,7 @@ public class TenantConfigurationTests : IClassFixture<SystemFixture>
     [Fact]
     public async void GetConfigurationObject_NoKey()
     {
-        var systemContext = _systemFixture.GetSystemContext();
+        var systemContext = systemFixture.GetSystemContext();
         using var session2 = await systemContext.GetAdminSessionAsync();
         session2.StartTransaction();
 
@@ -69,7 +62,7 @@ public class TenantConfigurationTests : IClassFixture<SystemFixture>
     [Fact]
     public async void GetConfigurationString_NoKey()
     {
-        var systemContext = _systemFixture.GetSystemContext();
+        var systemContext = systemFixture.GetSystemContext();
         using var session2 = await systemContext.GetAdminSessionAsync();
         session2.StartTransaction();
 

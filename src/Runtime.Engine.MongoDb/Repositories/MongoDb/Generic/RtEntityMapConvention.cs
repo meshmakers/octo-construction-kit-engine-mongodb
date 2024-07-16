@@ -17,15 +17,9 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 ///     The class map is used to register a custom creator delegate for the RtEntity class to
 ///     enable polymorphic deserialization.
 /// </remarks>
-internal class RtEntityMapConvention : IMemberMapConvention, IClassMapConvention
+internal class RtEntityMapConvention(ICkClassMappingService ckClassMappingService)
+    : IMemberMapConvention, IClassMapConvention
 {
-    private readonly ICkClassMappingService _ckClassMappingService;
-
-    public RtEntityMapConvention(ICkClassMappingService ckClassMappingService)
-    {
-        _ckClassMappingService = ckClassMappingService;
-    }
-    
     public void Apply(BsonMemberMap memberMap)
     {
         memberMap.SetShouldSerializeMethod(_ => false);
@@ -42,7 +36,7 @@ internal class RtEntityMapConvention : IMemberMapConvention, IClassMapConvention
 
     private RtEntity CreateInstance(CkId<CkTypeId> ckTypeId, OctoObjectId rtId)
     {
-        var type = _ckClassMappingService.GetCkTypeClass(ckTypeId);
+        var type = ckClassMappingService.GetCkTypeClass(ckTypeId);
 
         var rtEntity = (type == null ? new RtEntity() : (RtEntity?)Activator.CreateInstance(type)) ?? new RtEntity();
         rtEntity.CkTypeId = ckTypeId;

@@ -5,25 +5,22 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
-internal class RtEntityFieldFilterResolver<TEntity> : RtFieldFilterResolver<TEntity>
+
+internal class RtEntityFieldFilterResolver<TEntity>(
+    ICkCacheService ckCacheService,
+    string tenantId,
+    CkTypeGraph ckTypeGraph)
+    : RtFieldFilterResolver<TEntity>(ckCacheService, tenantId, ckTypeGraph)
     where TEntity : RtEntity, new()
 {
-    private readonly CkTypeGraph _ckTypeGraph;
-
-    public RtEntityFieldFilterResolver(ICkCacheService ckCacheService, string tenantId, CkTypeGraph ckTypeGraph)
-        : base(ckCacheService, tenantId, ckTypeGraph)
-    {
-        _ckTypeGraph = ckTypeGraph;
-    }
-    
     internal override string GetEntityName()
     {
-        return _ckTypeGraph.CkTypeId.FullName;
+        return ckTypeGraph.CkTypeId.FullName;
     }
     
     internal override bool IsAttributeNameValid(string attributeName)
     {
-        return _ckTypeGraph.AllAttributesByName.ContainsKey(attributeName) ||
+        return ckTypeGraph.AllAttributesByName.ContainsKey(attributeName) ||
                attributeName == nameof(RtEntity.RtId) ||
                attributeName == nameof(RtEntity.RtCreationDateTime) ||
                attributeName == nameof(RtEntity.RtChangedDateTime) ||

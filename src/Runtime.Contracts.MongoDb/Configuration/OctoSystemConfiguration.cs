@@ -2,10 +2,10 @@ using System.Text.RegularExpressions;
 
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 
-public class OctoSystemConfiguration
+public class OctoSystemConfiguration()
 {
-    private string _systemDatabaseName;
-    private string _systemTenantId;
+    private string _systemDatabaseName = "OctoSystem";
+    private string _systemTenantId = "OctoSystem";
 
     public OctoSystemConfiguration(string databaseHost)
         : this()
@@ -13,19 +13,7 @@ public class OctoSystemConfiguration
         DatabaseHost = databaseHost;
     }
 
-    public OctoSystemConfiguration()
-    {
-        DatabaseHost = "localhost:27017";
-        _systemTenantId = "OctoSystem";
-        _systemDatabaseName = "OctoSystem";
-        DatabaseUser = "octo-system-ds-user-{0}";
-        AdminUser = "octo-system-admin";
-        AuthenticationDatabaseName = "admin";
-        UseTls = false;
-        AllowInsecureTls = true;
-    }
-
-    public string DatabaseHost { get; set; }
+    public string DatabaseHost { get; set; } = "localhost:27017";
 
     public string SystemTenantId
     {
@@ -55,14 +43,14 @@ public class OctoSystemConfiguration
         }
     }
 
-    public string DatabaseUser { get; set; }
+    public string DatabaseUser { get; set; } = "octo-system-ds-user-{0}";
     public string? DatabaseUserPassword { get; set; }
-    public string AdminUser { get; set; }
+    public string AdminUser { get; set; } = "octo-system-admin";
     public string? AdminUserPassword { get; set; }
 
-    public string AuthenticationDatabaseName { get; set; }
+    public string AuthenticationDatabaseName { get; set; } = "admin";
 
-    public bool UseTls { get; set; }
+    public bool UseTls { get; set; } = false;
 
-    public bool AllowInsecureTls { get; set; }
+    public bool AllowInsecureTls { get; set; } = true;
 }

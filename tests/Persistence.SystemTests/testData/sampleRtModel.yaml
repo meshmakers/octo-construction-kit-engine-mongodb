@@ -1,0 +1,171 @@
+$schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+dependencies:
+  - Test-1.0.0
+entities:
+  - rtId: 66803ecf4aa85720dda96a97
+    ckTypeId: Test/Continent
+    attributes:
+      - id: Test/Name
+        value: Europe
+  - rtId: 66803ecf4aa85720dda96a98
+    ckTypeId: Test/Country
+    attributes:
+      - id: Test/Name
+        value: Österreich    
+      - id: Test/ISOCode
+        value: AT
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96a97
+        targetCkTypeId: Test/Continent
+  - rtId: 66803ecf4aa85720dda96a99
+    ckTypeId: Test/StateOrProvince
+    attributes:
+      - id: Test/Name
+        value: Salzburg
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96a98
+        targetCkTypeId: Test/Country
+  - rtId: 66803ecf4aa85720dda96b01
+    ckTypeId: Test/District
+    attributes:
+      - id: Test/Name
+        value: Pinzgau / Zell am See
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96a99
+        targetCkTypeId: Test/StateOrProvince
+  - rtId: 66803ecf4aa85720dda96b02
+    ckTypeId: Test/District
+    attributes:
+      - id: Test/Name
+        value: Tennengau / Hallein
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96a99
+        targetCkTypeId: Test/StateOrProvince
+  - rtId: 66803ecf4aa85720dda96b03
+    ckTypeId: Test/District
+    attributes:
+      - id: Test/Name
+        value: Pongau / St. Johann
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96a99
+        targetCkTypeId: Test/StateOrProvince       
+  - rtId: 66803ecf4aa85720dda96b04
+    ckTypeId: Test/District
+    attributes:
+      - id: Test/Name
+        value: Lungau / Tamsweg
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96a99
+        targetCkTypeId: Test/StateOrProvince        
+  - rtId: 66803ecf4aa85720dda96b05
+    ckTypeId: Test/District
+    attributes:
+      - id: Test/Name
+        value: Flachgau / Seekirchen
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96a99
+        targetCkTypeId: Test/StateOrProvince            
+  - rtId: 66803ecf4aa85720dda96b06
+    ckTypeId: Test/District
+    attributes:
+      - id: Test/Name
+        value: Salzburg Stadt
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96a99
+        targetCkTypeId: Test/StateOrProvince      
+        
+  - rtId: 66803ecf4aa85720dda96b07
+    ckTypeId: Test/Municipality
+    attributes:
+      - id: Test/Name
+        value: Fusch
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96b01
+        targetCkTypeId: Test/District
+  - rtId: 66803ecf4aa85720dda96b08
+    ckTypeId: Test/Municipality
+    attributes:
+      - id: Test/Name
+        value: Leopoldskron-Moos
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96b06
+        targetCkTypeId: Test/District             
+          
+  - rtId: 66803ecf4aa85720dda96b09
+    ckTypeId: Test/HouseHold
+    attributes:
+      - id: Test/Name
+        value: Zeller Fusch 153
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96b07
+        targetCkTypeId: Test/Municipality  
+  - rtId: 66803ecf4aa85720dda96b10
+    ckTypeId: Test/HouseHold
+    attributes:
+      - id: Test/Name
+        value: Firmianstaße 31A
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96b08
+        targetCkTypeId: Test/Municipality
+          
+  - rtId: 66803ecf4aa85720dda96b11
+    ckTypeId: Test/MeasuringPoint
+    attributes:
+      - id: Test/Name
+        value: Hauptzähler
+      - id: Test/CounterNumber
+        value: AT123       
+      - id: Test/CounterReading
+        value: 14567
+      - id: Test/Tags
+        value: [
+          "Electricity",
+        ]        
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96b09
+        targetCkTypeId: Test/HouseHold   
+      - roleId: System/Related
+        targetRtId: 66803ecf4aa85720dda96b13
+        targetCkTypeId: Test/Customer
+        
+  - rtId: 66803ecf4aa85720dda96b12
+    ckTypeId: Test/MeasuringPoint
+    attributes:
+      - id: Test/Name
+        value: Hauptzähler
+      - id: Test/CounterNumber
+        value: AT125
+      - id: Test/CounterReading
+        value: 14564
+      - id: Test/Tags
+        value: [
+          "Water",
+          "Electricity",            
+        ]
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96b10
+        targetCkTypeId: Test/HouseHold 
+      - roleId: System/Related
+        targetRtId: 66803ecf4aa85720dda96b13
+        targetCkTypeId: Test/Customer
+  
+  - rtId: 66803ecf4aa85720dda96b13
+    ckTypeId: Test/Customer
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96b08
+        targetCkTypeId: Test/Municipality        

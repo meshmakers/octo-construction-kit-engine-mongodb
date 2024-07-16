@@ -4,24 +4,19 @@ using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
-public class ConstructionKitTests : IClassFixture<SystemFixture>
+public class ConstructionKitTests(SystemFixture systemFixture) : IClassFixture<SystemFixture>
 {
-    private readonly SystemFixture _systemFixture;
-
-    public ConstructionKitTests(SystemFixture systemFixture)
-    {
-        _systemFixture = systemFixture;
-    }
-
     [Fact]
     public async void ImportConstructionKit()
     {
-        var systemContext = _systemFixture.GetSystemContext();
+        var systemContext = systemFixture.GetSystemContext();
 
         var operationResult = new OperationResult();
         await systemContext.ImportCkModelAsync(new CkModelId("Test-1.0.0"), operationResult);
-        //    await systemContext.ImportCkModelAsync(session, new CkModelId("System.Identity-1.0.0"), operationResult);
 
+        var r = await systemContext.IsCkModelExistingAsync(new CkModelId("Test-1.0.0"));
+
+        Assert.True(r);
         Assert.False(operationResult.HasErrors);
         Assert.False(operationResult.HasFatalErrors);
     }

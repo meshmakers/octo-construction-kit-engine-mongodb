@@ -16,7 +16,7 @@ internal class RtAttributeDictionarySerializer()
     public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args,
         Dictionary<string, object?>? value)
     {
-        if (value != null && value.Count > 0)
+        if (value is { Count: > 0 })
         {
             var dic = value.ToDictionary(d => d.Key.ToCamelCase(), d => d.Value);
 

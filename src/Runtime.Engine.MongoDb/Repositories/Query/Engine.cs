@@ -6,17 +6,17 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 internal class Engine<TEntity> where TEntity : class, new()
 {
     private readonly List<FilterDefinition<TEntity>> _idFilters;
-    protected readonly FieldFilterResolver<TEntity> _fieldFilterResolver;
+    protected readonly FieldFilterResolver<TEntity> FieldFilterResolver;
 
     protected Engine(FieldFilterResolver<TEntity> fieldFilterResolver)
     {
         _idFilters = new List<FilterDefinition<TEntity>>();
-        _fieldFilterResolver = fieldFilterResolver;
+        FieldFilterResolver = fieldFilterResolver;
     }
 
     internal void AddFieldFilters(ICollection<FieldFilter>? fieldFilters)
     {
-        _fieldFilterResolver.AddFieldFilters(fieldFilters);
+        FieldFilterResolver.AddFieldFilters(fieldFilters);
     }
 
     protected virtual void AddPreFieldFilters(List<FilterDefinition<TEntity>> filters)
@@ -37,7 +37,7 @@ internal class Engine<TEntity> where TEntity : class, new()
         AddPreFieldFilters(filters);
 
         // Add filter for id and fields here
-        filters.AddRange(_idFilters.Concat(_fieldFilterResolver.FilterDefinitions));
+        filters.AddRange(_idFilters.Concat(FieldFilterResolver.FilterDefinitions));
 
         // Allow to add filter definitions after field filters are applied
         AddPostFieldFilters(filters);

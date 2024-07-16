@@ -12,23 +12,16 @@ using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
-internal abstract class RtFieldFilterResolver<TEntity> : FieldFilterResolver<TEntity>
+internal abstract class RtFieldFilterResolver<TEntity>(
+    ICkCacheService ckCacheService,
+    string tenantId,
+    CkTypeWithAttributesGraph ckTypeWithAttributesGraph)
+    : FieldFilterResolver<TEntity>
     where TEntity : RtTypeWithAttributes, new()
 {
-    private readonly ICkCacheService _ckCacheService;
-    private readonly string _tenantId;
-    private readonly CkTypeWithAttributesGraph _ckTypeWithAttributesGraph;
-
-    public RtFieldFilterResolver(ICkCacheService ckCacheService, string tenantId, CkTypeWithAttributesGraph ckTypeWithAttributesGraph)
-    {
-        _ckCacheService = ckCacheService;
-        _tenantId = tenantId;
-        _ckTypeWithAttributesGraph = ckTypeWithAttributesGraph;
-    }
-    
     internal override bool IsAttributeNameValid(string attributeName)
     {
-        return _ckTypeWithAttributesGraph.AllAttributesByName.ContainsKey(attributeName);
+        return ckTypeWithAttributesGraph.AllAttributesByName.ContainsKey(attributeName);
     }
 
     internal override string ResolveAttributeName(string attributeName)
@@ -45,11 +38,11 @@ internal abstract class RtFieldFilterResolver<TEntity> : FieldFilterResolver<TEn
     internal override object? ResolveSearchAttributeValue(string attributeName, object? searchTerm, out bool isEnum)
     {
         if (searchTerm != null &&
-            _ckTypeWithAttributesGraph.AllAttributesByName.TryGetValue(attributeName, out var ckTypeAttributeGraph))
+            ckTypeWithAttributesGraph.AllAttributesByName.TryGetValue(attributeName, out var ckTypeAttributeGraph))
         {
             if (ckTypeAttributeGraph.ValueType == AttributeValueTypesDto.Enum && ckTypeAttributeGraph.ValueCkEnumId != null)
             {
-                var ckEnumGraph = _ckCacheService.GetCkEnum(_tenantId, ckTypeAttributeGraph.ValueCkEnumId);
+                var ckEnumGraph = ckCacheService.GetCkEnum(tenantId, ckTypeAttributeGraph.ValueCkEnumId);
                 var searchTermString = searchTerm.ToString()?.Replace("_", "");
 
                 // Search for match in selection value
@@ -66,8 +59,8 @@ internal abstract class RtFieldFilterResolver<TEntity> : FieldFilterResolver<TEn
             {
                 if (searchTerm is FieldFilterCriteria fieldFilterCriteria)
                 {
-                    var ckRecordGraph = _ckCacheService.GetCkRecord(_tenantId, ckTypeAttributeGraph.ValueCkRecordId);
-                    var rtRecordFieldFilterResolver = new RtRecordFieldFilterResolver<RtRecord>(_ckCacheService, _tenantId, ckRecordGraph);
+                    var ckRecordGraph = ckCacheService.GetCkRecord(tenantId, ckTypeAttributeGraph.ValueCkRecordId);
+                    var rtRecordFieldFilterResolver = new RtRecordFieldFilterResolver<RtRecord>(ckCacheService, tenantId, ckRecordGraph);
                     rtRecordFieldFilterResolver.AddFieldFilters(fieldFilterCriteria.FieldFilters);
 
                     if (rtRecordFieldFilterResolver.FilterDefinitions.Any())

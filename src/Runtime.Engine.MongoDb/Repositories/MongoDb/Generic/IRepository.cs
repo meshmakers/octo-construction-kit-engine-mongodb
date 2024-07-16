@@ -1,4 +1,4 @@
-﻿using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
+﻿using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using MongoDB.Bson;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;

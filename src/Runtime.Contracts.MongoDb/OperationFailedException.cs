@@ -1,5 +1,6 @@
-﻿using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository.Entities;
+﻿using System.Globalization;
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 
@@ -109,5 +110,22 @@ public class OperationFailedException : PersistenceException
     public static Exception CkTypeIdUndefined()
     {
         return new OperationFailedException("CkTypeId is undefined.");
+    }
+
+    public static Exception AttributeNotFound<TKey>(CkId<CkAttributeId> modelAttributeId, string elementType, CkId<TKey> ckId)
+        where TKey : IComparable<TKey>, ICkKey
+    {
+        return new OperationFailedException($"Attribute '{modelAttributeId}' does not exist at {elementType} '{ckId}'.");
+    }
+
+    public static Exception RecordNotFound<TKey>(CkId<CkRecordId> ckRecordId, string elementType,  CkId<TKey> ckId)
+        where TKey : IComparable<TKey>, ICkKey
+    {
+        return new OperationFailedException($"Record '{ckRecordId}' does not exist at {elementType} '{ckId}'.");
+    }
+
+    public static Exception CkModelsMissing(string tenantId, ICollection<CkModelId> ckModelIds)
+    {
+        return new OperationFailedException($"Models '{string.Join(", ", ckModelIds)}' are missing in tenant '{tenantId}'.");
     }
 }

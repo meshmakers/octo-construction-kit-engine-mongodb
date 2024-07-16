@@ -21,7 +21,7 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
         _sortDefinitions = new List<SortDefinition<TEntity>>();
     }
 
-    public string Language { get; }
+    private string Language { get; }
 
     protected FieldGroupBy? GroupBy { get; private set; }
 
@@ -95,10 +95,10 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
 
         foreach (var attributeName in attributeNameList)
         {
-            if (_fieldFilterResolver.IsAttributeNameValid(attributeName))
+            if (FieldFilterResolver.IsAttributeNameValid(attributeName))
             {
-                var resolvedAttributeName = _fieldFilterResolver.ResolveAttributeName(attributeName);
-                var resolvedValue = _fieldFilterResolver.ResolveSearchAttributeValue(attributeName,
+                var resolvedAttributeName = FieldFilterResolver.ResolveAttributeName(attributeName);
+                var resolvedValue = FieldFilterResolver.ResolveSearchAttributeValue(attributeName,
                     attributeSearchFilter.SearchTerm, out var isEnum);
 
                 if (isEnum)
@@ -108,7 +108,7 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
                 }
                 else if (!string.IsNullOrWhiteSpace(resolvedAttributeName))
                 {
-                    _attributeSearchFilter.Add(_fieldFilterResolver.CreateScalarFilter(resolvedAttributeName, FieldFilterOperator.Like,
+                    _attributeSearchFilter.Add(FieldFilterResolver.CreateScalarFilter(resolvedAttributeName, FieldFilterOperator.Like,
                         resolvedValue));
                 }
                 else
@@ -118,7 +118,7 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
             }
             else
             {
-                throw OperationFailedException.AttributeDoesNotExist(attributeName, _fieldFilterResolver.GetEntityName());
+                throw OperationFailedException.AttributeDoesNotExist(attributeName, FieldFilterResolver.GetEntityName());
             }
         }
     }
@@ -138,12 +138,12 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
 
         foreach (var item in sortOrderList)
         {
-            if (!_fieldFilterResolver.IsAttributeNameValid(item.AttributeName) && item.AttributeName != Constants.IdField)
+            if (!FieldFilterResolver.IsAttributeNameValid(item.AttributeName) && item.AttributeName != Constants.IdField)
             {
-                throw InvalidAttributeException.SortDefinitionContainsInvalidAttribute(item.AttributeName, _fieldFilterResolver.GetEntityName());
+                throw InvalidAttributeException.SortDefinitionContainsInvalidAttribute(item.AttributeName, FieldFilterResolver.GetEntityName());
             }
 
-            var resolvedAttributeName = _fieldFilterResolver.ResolveAttributeName(item.AttributeName);
+            var resolvedAttributeName = FieldFilterResolver.ResolveAttributeName(item.AttributeName);
 
             switch (item.SortOrder)
             {

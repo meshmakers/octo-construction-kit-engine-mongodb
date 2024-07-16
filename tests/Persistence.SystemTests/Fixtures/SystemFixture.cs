@@ -7,11 +7,13 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
 public class SystemFixture : ConfigurationFixture, IDisposable
 {
+    // ReSharper disable once MemberCanBeProtected.Global
     public SystemFixture()
     {
         Services.Configure<OctoSystemConfiguration>(t =>
         {
             var options = GetOptions<SystemTestOptions>("systemTest");
+            t.SystemDatabaseName = "PersistenceSystemTests";
             t.AdminUserPassword = options.AdminUserPassword;
             t.DatabaseUserPassword = options.DatabaseUserPassword;
         });
@@ -21,9 +23,27 @@ public class SystemFixture : ConfigurationFixture, IDisposable
         Task.WaitAll(Task.Run(async () =>
         {
             var systemContext = GetSystemContext();
-            if (await systemContext.IsSystemTenantExistingAsync())
+            for (int i = 0; i < 10; i++)
             {
-                await systemContext.DeleteSystemTenantAsync();
+                try
+                {
+                    if (i == 0 && await systemContext.IsSystemTenantExistingAsync())
+                    {
+                        await systemContext.DeleteSystemTenantAsync();
+                    }
+                    
+                    if (await systemContext.IsSystemTenantExistingAsync())
+                    {
+                        Thread.Sleep(1000);
+                        continue;
+                    }
+
+                    break;
+                }
+                catch (TenantException)
+                {
+                    // do nothing here
+                }
             }
 
             await systemContext.CreateSystemTenantAsync();

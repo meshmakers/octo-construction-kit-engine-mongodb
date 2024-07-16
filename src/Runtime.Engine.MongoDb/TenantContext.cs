@@ -7,7 +7,7 @@ using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v1;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repository;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
@@ -128,7 +128,7 @@ public class TenantContext : ITenantContext
                     DatabaseName = normalizedDatabaseName
                 };
 
-                var tenantRepository = GetTenantRepository();
+                var tenantRepository = GetTenantRepositoryAsAdmin();
                 await tenantRepository.InsertOneRtEntityAsync(adminSession, rtTenant);
             }
 
@@ -310,7 +310,7 @@ public class TenantContext : ITenantContext
             // Add the new tenant as child tenant of the current one
             if (TenantId != SystemConfiguration.Value.SystemTenantId.NormalizeString())
             {
-                var systemTenantRepository = GetSystemTenantRepository();
+                var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
                 await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
                     new List<FieldFilter>
                     {
@@ -334,7 +334,7 @@ public class TenantContext : ITenantContext
         return octoTenant != null;
     }
 
-    public async Task<bool> IsTenantExistingAsync(IOctoAdminSession adminSession, string tenantId)
+    private async Task<bool> IsTenantExistingAsync(IOctoAdminSession adminSession, string tenantId)
     {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
@@ -401,8 +401,8 @@ public class TenantContext : ITenantContext
         var result = GetTenantRepository(normalizedTenantId, normalizedDatabaseName);
         return result;
     }
-    
-    public ITenantRepository GetSystemTenantRepositoryAsAdmin()
+
+    private ITenantRepository GetSystemTenantRepositoryAsAdmin()
     {
         var normalizedDatabaseName = SystemConfiguration.Value.SystemDatabaseName.ToLower();
         var normalizedTenantId = SystemConfiguration.Value.SystemTenantId.NormalizeString();
@@ -417,8 +417,8 @@ public class TenantContext : ITenantContext
         var result = GetTenantRepository(TenantId, _databaseName);
         return result;
     }
-    
-    public ITenantRepository GetTenantRepositoryAsAdmin()
+
+    private ITenantRepository GetTenantRepositoryAsAdmin()
     {
         var result = GetTenantRepositoryAsAdmin(TenantId, _databaseName);
         return result;
@@ -571,7 +571,7 @@ public class TenantContext : ITenantContext
         return tenantRepository;
     }
 
-    protected IMongoDbRepositoryDataSource CreateRepositoryDataSource(string databaseName)
+    private IMongoDbRepositoryDataSource CreateRepositoryDataSource(string databaseName)
     {
         return new MongoDbRepositoryDataSource(_loggerFactory.CreateLogger<MongoDbRepositoryDataSource>(), 
             _serviceProvider.GetRequiredService<IUserRepositoryAccess>(), databaseName, TenantId);

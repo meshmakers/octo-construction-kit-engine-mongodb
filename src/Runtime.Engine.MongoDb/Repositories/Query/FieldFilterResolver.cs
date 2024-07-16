@@ -10,15 +10,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
 internal class FieldFilterResolver<TEntity>
 {
-    private readonly List<FilterDefinition<TEntity>> _fieldFilters;
-    private readonly BsonClassMap _bsonClassMap;
-
-    public FieldFilterResolver()
-    {
-        _fieldFilters = new List<FilterDefinition<TEntity>>();
-        
-        _bsonClassMap = BsonClassMap.LookupClassMap(typeof(TEntity));
-    }
+    private readonly List<FilterDefinition<TEntity>> _fieldFilters = new();
+    private readonly BsonClassMap _bsonClassMap = BsonClassMap.LookupClassMap(typeof(TEntity));
 
     public IReadOnlyList<FilterDefinition<TEntity>> FilterDefinitions => _fieldFilters;
     

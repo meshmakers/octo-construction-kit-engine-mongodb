@@ -6,6 +6,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic.Builders;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 using MongoDB.Driver;
 using MongoDB.Driver.GeoJsonObjectModel;
@@ -40,7 +41,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         
         foreach (var geospatialFilter in geospatialFilters)
         {
-            var resolvedAttributeName = _fieldFilterResolver.ResolveAttributeName(geospatialFilter.AttributeName);
+            var resolvedAttributeName = FieldFilterResolver.ResolveAttributeName(geospatialFilter.AttributeName);
             if (string.IsNullOrWhiteSpace(resolvedAttributeName))
             {
                 throw OperationFailedException.AttributeNameResolutionFailed(geospatialFilter.AttributeName);
@@ -49,7 +50,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
             {
                 GeoJsonPoint<GeoJsonCoordinates> point = nearGeospatialFilter.Point.ToGeoJsonPoint();
                 
-                _geospatialFilters.Add(OctoPipelineStageDefinition.GeoNear<TEntity, GeoJsonCoordinates>(resolvedAttributeName, point, nearGeospatialFilter.MinDistance, nearGeospatialFilter.MaxDistance));
+                _geospatialFilters.Add(OctoPipelineStageBuilder.GeoNear<TEntity, GeoJsonCoordinates>(resolvedAttributeName, point, nearGeospatialFilter.MinDistance, nearGeospatialFilter.MaxDistance));
             }
         }
     }

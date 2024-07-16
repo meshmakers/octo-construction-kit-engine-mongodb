@@ -71,4 +71,14 @@ public class TenantException : PersistenceException
     {
         return new TenantException($"Cannot create MongoDB repository client for database '{databaseName}'.");
     }
+
+    public static Exception DeleteSystemTenantFailed()
+    {
+       return new TenantException("Deleting system tenant failed.");
+    }
+
+    public static Exception CreateSystemTenantFailed()
+    {
+        return new TenantException("Creating system tenant failed.");
+    }
 }

@@ -1,4 +1,69 @@
 "$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
 attributes:
-  - id: Designation
+  - id: Name
+    description: Designation of an entity.
     valueType: String
+  - id: ISOCode
+    description: ISO code of a country.
+    valueType: String
+  - id: "Contacts.Salutation"
+    description: Salutation of a contact.
+    valueType: "String"
+  - id: "Contacts.Title"
+    description: Title of a contact.
+    valueType: "String"
+  - id: "Contacts.FirstName"
+    description: First name of a contact.
+    valueType: "String"
+  - id: "Contacts.LastName"
+    description: Last name of a contact.
+    valueType: "String"
+  - id: "Contacts.CompanyName"
+    description: Company name of a contact.
+    valueType: "String"
+  - id: "Contacts.AdditionalLine"
+    description: Additional line of a contact.
+    valueType: "String"
+  - id: "Contacts.Street"
+    description: Street of a contact.
+    valueType: "String"
+  - id: "Contacts.PostalCode"
+    description: Postal code of a contact.  
+    valueType: "Int"
+  - id: "Contacts.City"
+    description: City of a contact.
+    valueType: "String"
+  - id: "Contacts.District"
+    description: District of a contact.
+    valueType: "String"
+  - id: "Contacts.Country"
+    description: Country of a contact.
+    valueType: "String"
+  - id: "Contacts.DateOfBirth"
+    description: Date of birth of a contact.
+    valueType: "DateTime"
+  - id: "Contacts.EMailAddress"
+    description: E-mail address of a contact.
+    valueType: "String"
+  - id: "Contacts.PhoneNumberMobile"
+    description: Mobile phone number of a contact.
+    valueType: "String"
+  - id: "Contacts.PhoneNumberFax"
+    description: Fax number of a contact.
+    valueType: "String"
+  - id: "Contacts.PhoneNumberLandLine"
+    description: Landline phone number of a contact.
+    valueType: "String"
+  - id: "Contacts.Name"
+    description: Name of a contact.
+    valueType: "Record"
+    valueCkRecordId: ${thisModel}/ContactName
+  - id: "CounterNumber"
+    description: Counter number of a measuring point.
+    valueType: "String"
+  - id: "CounterReading"
+    description: Counter reading of a measuring point.
+    valueType: "Double"
+  - id: "Tags"
+    valueType: StringArray
+    description: Tags of an entity.
