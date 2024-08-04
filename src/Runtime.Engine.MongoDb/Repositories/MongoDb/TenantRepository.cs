@@ -437,7 +437,8 @@ internal class TenantRepository(
         var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
 
         var hierarchicalDeepRtGraphQuery = new MultipleOriginHierarchicalDeepRtGraphQuery(mongoDbRepositoryDataSource,
-            dataQueryOperation.Language, originRtIds, originTypeGraph, SystemCkIds.ParentChild);
+            dataQueryOperation.Language, originRtIds, originTypeGraph, 
+            new CkId<CkAssociationRoleId>(SystemCkIds.ModelId, SystemCkIds.ParentChild));
         hierarchicalDeepRtGraphQuery.AddFieldFilters(dataQueryOperation.FieldFilters);
         hierarchicalDeepRtGraphQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         hierarchicalDeepRtGraphQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
