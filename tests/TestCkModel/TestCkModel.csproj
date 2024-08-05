@@ -9,9 +9,9 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" ReferenceOutputAssembly="false" Version="3.1.145" PrivateAssets="all" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.MsBuildTasks" Version="3.1.145" PrivateAssets="all" />
-        <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="3.1.145" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.SourceGeneration" OutputItemType="Analyzer" ReferenceOutputAssembly="false" Version="$(OctoVersion)" PrivateAssets="all" />
+        <PackageReference Include="Meshmakers.Octo.ConstructionKit.MsBuildTasks" Version="$(OctoVersion)" PrivateAssets="all" />
+        <PackageReference Include="Meshmakers.Octo.Runtime.Contracts" Version="$(OctoVersion)" />
     </ItemGroup>
 
     <ItemGroup>
