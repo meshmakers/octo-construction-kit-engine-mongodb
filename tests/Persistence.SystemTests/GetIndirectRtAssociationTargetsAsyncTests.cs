@@ -9,7 +9,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 public class GetIndirectRtAssociationTargetsAsyncTests(GenerateSampleDataFixture generateSampleDataFixture) : IClassFixture<GenerateSampleDataFixture>
 {
     [Fact]
-    public async void GetIndirectRtAssociationTargetsAsync_OK()
+    public async Task GetIndirectRtAssociationTargetsAsync_OK()
     {
         var systemContext = generateSampleDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();

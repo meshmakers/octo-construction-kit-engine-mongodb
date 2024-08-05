@@ -9,7 +9,7 @@ public class GetRtDeepGraphAsyncTests(GenerateSampleDataFixture generateSampleDa
     : IClassFixture<GenerateSampleDataFixture>
 {
     [Fact]
-    public async void GetSubgraphAsync_Default_OK()
+    public async Task GetSubgraphAsync_Default_OK()
     {
         var systemContext = generateSampleDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();
@@ -27,7 +27,7 @@ public class GetRtDeepGraphAsyncTests(GenerateSampleDataFixture generateSampleDa
     }
     
     [Fact]
-    public async void GetSubgraphAsync_NoRelationships_OK()
+    public async Task GetSubgraphAsync_NoRelationships_OK()
     {
         var systemContext = generateSampleDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();
@@ -47,7 +47,7 @@ public class GetRtDeepGraphAsyncTests(GenerateSampleDataFixture generateSampleDa
     }
     
     [Fact]
-    public async void GetSubgraphAsync_Paging_OK()
+    public async Task GetSubgraphAsync_Paging_OK()
     {
         var systemContext = generateSampleDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();
@@ -67,7 +67,7 @@ public class GetRtDeepGraphAsyncTests(GenerateSampleDataFixture generateSampleDa
     }
     
     [Fact]
-    public async void GetSubgraphAsync_MultipleOriginRtIds_OK()
+    public async Task GetSubgraphAsync_MultipleOriginRtIds_OK()
     {
         var systemContext = generateSampleDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();

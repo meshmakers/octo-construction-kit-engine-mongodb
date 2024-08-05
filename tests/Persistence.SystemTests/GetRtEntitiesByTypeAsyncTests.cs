@@ -10,7 +10,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 public class GetRtEntitiesByTypeAsyncTests(GenerateSampleDataFixture generateSampleDataFixture) : IClassFixture<GenerateSampleDataFixture>
 {
     [Fact]
-    public async void GetRtEntitiesByTypeAsync_Filter_In_StringArray_OK()
+    public async Task GetRtEntitiesByTypeAsync_Filter_In_StringArray_OK()
     {
         var systemContext = generateSampleDataFixture.GetSystemContext();
 
@@ -35,7 +35,7 @@ public class GetRtEntitiesByTypeAsyncTests(GenerateSampleDataFixture generateSam
    
 
     [Fact]
-    public async void GetRtEntitiesByTypeAsync_Filter_Equal_String_OK()
+    public async Task GetRtEntitiesByTypeAsync_Filter_Equal_String_OK()
     {
         var designation = "Pinzgau / Zell am See";
 
@@ -57,7 +57,7 @@ public class GetRtEntitiesByTypeAsyncTests(GenerateSampleDataFixture generateSam
 
 
     [Fact]
-    public async void GetRtEntitiesByTypeAsync_Filter_Like_OK()
+    public async Task GetRtEntitiesByTypeAsync_Filter_Like_OK()
     {
         var systemContext = generateSampleDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();

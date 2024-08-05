@@ -11,7 +11,7 @@ public class GetRtAssociationTargetsAsyncTests(GenerateSampleDataFixture generat
     : IClassFixture<GenerateSampleDataFixture>
 {
     [Fact]
-    public async void GetRtAssociationTargetsAsync_OK()
+    public async Task GetRtAssociationTargetsAsync_OK()
     {
         var systemContext = generateSampleDataFixture.GetSystemContext();
 

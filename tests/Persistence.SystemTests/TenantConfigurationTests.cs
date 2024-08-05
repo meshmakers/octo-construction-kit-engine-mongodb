@@ -6,7 +6,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 public class TenantConfigurationTests(SystemFixture systemFixture) : IClassFixture<SystemFixture>
 {
     [Fact]
-    public async void SetGetConfigurationAsString()
+    public async Task SetGetConfigurationAsString()
     {
         var systemContext = systemFixture.GetSystemContext();
         using var session = await systemContext.GetAdminSessionAsync();
@@ -26,7 +26,7 @@ public class TenantConfigurationTests(SystemFixture systemFixture) : IClassFixtu
     }
 
     [Fact]
-    public async void SetGetConfigurationAsObject()
+    public async Task SetGetConfigurationAsObject()
     {
         var systemContext = systemFixture.GetSystemContext();
         using var session = await systemContext.GetAdminSessionAsync();
@@ -46,7 +46,7 @@ public class TenantConfigurationTests(SystemFixture systemFixture) : IClassFixtu
     }
 
     [Fact]
-    public async void GetConfigurationObject_NoKey()
+    public async Task GetConfigurationObject_NoKey()
     {
         var systemContext = systemFixture.GetSystemContext();
         using var session2 = await systemContext.GetAdminSessionAsync();
@@ -60,7 +60,7 @@ public class TenantConfigurationTests(SystemFixture systemFixture) : IClassFixtu
     }
 
     [Fact]
-    public async void GetConfigurationString_NoKey()
+    public async Task GetConfigurationString_NoKey()
     {
         var systemContext = systemFixture.GetSystemContext();
         using var session2 = await systemContext.GetAdminSessionAsync();

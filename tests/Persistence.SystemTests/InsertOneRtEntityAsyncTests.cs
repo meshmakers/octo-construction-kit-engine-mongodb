@@ -9,7 +9,7 @@ public class InsertOneRtEntityAsyncTests(ImportTestCkModelFixture systemFixture)
     : IClassFixture<ImportTestCkModelFixture>
 {
     [Fact]
-    public async void CreateRtEntity()
+    public async Task CreateRtEntity()
     {
         var systemContext = systemFixture.GetSystemContext();
 

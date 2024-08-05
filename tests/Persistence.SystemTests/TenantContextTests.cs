@@ -7,7 +7,7 @@ public class TenantContextTests(SystemFixture systemFixture)
     : IClassFixture<SystemFixture>
 {
     [Fact]
-    public async void IsSystemTenantExisting()
+    public async Task IsSystemTenantExisting()
     {
         var systemContext = systemFixture.GetSystemContext();
         var result = await systemContext.IsSystemTenantExistingAsync();
@@ -15,7 +15,7 @@ public class TenantContextTests(SystemFixture systemFixture)
     }
 
     [Fact]
-    public async void CreateChildTenantAndDeleteAsync()
+    public async Task CreateChildTenantAndDeleteAsync()
     {
         var systemContext = systemFixture.GetSystemContext();
         using var session = await systemContext.GetAdminSessionAsync();
@@ -48,7 +48,7 @@ public class TenantContextTests(SystemFixture systemFixture)
     }
 
     [Fact]
-    public async void CreateTwoChildTenantsAndDeleteAsync()
+    public async Task CreateTwoChildTenantsAndDeleteAsync()
     {
         // Create child tenant "Father" form octo system
         var systemContext = systemFixture.GetSystemContext();
@@ -105,7 +105,7 @@ public class TenantContextTests(SystemFixture systemFixture)
 
 
     [Fact]
-    public async void AttachAndDetachTenant()
+    public async Task AttachAndDetachTenant()
     {
         // Create child tenant "Father" form octo system
         var systemContext = systemFixture.GetSystemContext();

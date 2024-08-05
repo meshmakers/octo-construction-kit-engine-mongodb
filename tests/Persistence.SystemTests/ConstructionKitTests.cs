@@ -7,7 +7,7 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 public class ConstructionKitTests(SystemFixture systemFixture) : IClassFixture<SystemFixture>
 {
     [Fact]
-    public async void ImportConstructionKit()
+    public async Task ImportConstructionKit()
     {
         var systemContext = systemFixture.GetSystemContext();
 
