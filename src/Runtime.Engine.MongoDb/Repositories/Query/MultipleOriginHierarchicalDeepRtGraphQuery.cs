@@ -74,7 +74,8 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
         }
     }
 
-    internal async Task<ResultSet<RtDeepGraphQueryResult>> ExecuteQuery(IOctoSession session, int? skip = null, int? take = null)
+    internal async Task<ResultSet<RtDeepGraphQueryResult>> ExecuteQuery(IOctoSession session, int? skip = null,
+        int? take = null)
     {
         var pipelineStageDefinitions = new List<IPipelineStageDefinition>();
 
@@ -224,33 +225,100 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
                     )
                 ))));
 
+        pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Project(
+            OctoBuilder<BsonDocument, BsonDocument>.Projection.SingleField(
+                "associations",
+                OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.ConcatArrays("$associations",
+                    OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Map(
+                        OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Filter(
+                            "$uniqueEntities",
+                            "uniqueEntity",
+                            OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Not(
+                                OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.In(
+                                    OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.MergeObjects(
+                                        OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Document(
+                                            new BsonDocument
+                                            {
+                                                { "originRtId", "$$uniqueEntity.rtId" },
+                                            }),
+                                        OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Document(
+                                            new BsonDocument
+                                            {
+                                                { "originCkTypeId", "$$uniqueEntity.ckTypeId" }
+                                            })
+                                    ),
+                                    OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Map("$associations",
+                                        "association",
+                                        OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.MergeObjects(
+                                            OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Document(
+                                                new BsonDocument
+                                                {
+                                                    { "originRtId", "$$association.originRtId" },
+                                                }),
+                                            OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Document(
+                                                new BsonDocument
+                                                {
+                                                    { "originCkTypeId", "$$association.originCkTypeId" }
+                                                })))
+                                )
+                            )
+                        ),
+                        "uniqueEntity",
+                        new BsonDocument
+                        {
+                            { "originRtId", "$$uniqueEntity.rtId" },
+                            { "originCkTypeId", "$$uniqueEntity.ckTypeId" }
+                        })
+                ))));
+
         pipelineStageDefinitions.Add(
             PipelineStageDefinitionBuilder.Unwind<BsonDocument, BsonDocument>("associations"));
-        pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Group<BsonDocument, RtDeepGraphQueryResult>(new BsonDocument
-        {
+        pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Group<BsonDocument, RtDeepGraphQueryResult>(
+            new BsonDocument
             {
-                "_id", new BsonDocument
                 {
-                    { "rtId", "$associations.originRtId" },
-                    { "ckTypeId", "$associations.originCkTypeId" }
-                }
-            },
-            {
-                "associations", new BsonDocument
-                {
+                    "_id", new BsonDocument
                     {
-                        "$push", new BsonDocument
+                        { "rtId", "$associations.originRtId" },
+                        { "ckTypeId", "$associations.originCkTypeId" }
+                    }
+                },
+                {
+                    "associations", new BsonDocument
+                    {
                         {
-                            { "associationId", "$associations._id" },
-                            { "associationRoleId", "$associations.associationRoleId" },
-                            { "attributes", "$associations.attributes" },
-                            { "targetRtId", "$associations.targetRtId" },
-                            { "targetCkTypeId", "$associations.targetCkTypeId" }
+                            "$push", new BsonDocument
+                            {
+                                {
+                                    "$cond", new BsonDocument
+                                    {
+                                        {
+                                            "if", new BsonDocument
+                                            {
+                                                { "$gte", new BsonArray { "$associations.targetRtId",  BsonNull.Value } }
+                                            }
+                                        },
+                                        {
+                                            "then", new BsonDocument
+                                            {
+                                                { "associationId", "$associations._id" },
+                                                { "associationRoleId", "$associations.associationRoleId" },
+                                                { "attributes", "$associations.attributes" },
+                                                { "targetRtId", "$associations.targetRtId" },
+                                                { "targetCkTypeId", "$associations.targetCkTypeId" },
+                                                { "targetCkAttributeIds", "$associations.targetCkAttributeIds" }
+                                            }
+                                        },
+                                        {
+                                            "else", "$$REMOVE"
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
-            }
-        }));
+            }));
 
         if (skip.HasValue || take.HasValue)
         {
@@ -259,38 +327,45 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
 
             if (skip.HasValue)
             {
-                pagingPipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Skip<RtDeepGraphQueryResult>(skip.Value));
+                pagingPipelineStageDefinitions.Add(
+                    PipelineStageDefinitionBuilder.Skip<RtDeepGraphQueryResult>(skip.Value));
             }
 
             if (take.HasValue)
             {
-                pagingPipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Limit<RtDeepGraphQueryResult>(take.Value));
+                pagingPipelineStageDefinitions.Add(
+                    PipelineStageDefinitionBuilder.Limit<RtDeepGraphQueryResult>(take.Value));
             }
 
             countPipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Count<RtDeepGraphQueryResult>());
-            
-            pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Facet<RtDeepGraphQueryResult, QueryResult<RtDeepGraphQueryResult>>(
-                new List<AggregateFacet<RtDeepGraphQueryResult>>(new AggregateFacet<RtDeepGraphQueryResult>[]
-                {
-                    new AggregateFacet<RtDeepGraphQueryResult, RtDeepGraphQueryResult>(nameof(QueryResult<RtDeepGraphQueryResult>.Result).ToCamelCase(),
-                        PipelineDefinition<RtDeepGraphQueryResult, RtDeepGraphQueryResult>.Create(
-                            pagingPipelineStageDefinitions)),
-                    new AggregateFacet<RtDeepGraphQueryResult, AggregateCountResult>(
-                        nameof(QueryResult<RtDeepGraphQueryResult>.TotalCount).ToCamelCase(),
-                        PipelineDefinition<RtDeepGraphQueryResult, AggregateCountResult>
-                            .Create(countPipelineStageDefinitions))
-                })));
 
-            var pipelineDefinition = PipelineDefinition<RtEntity, QueryResult<RtDeepGraphQueryResult>>.Create(pipelineStageDefinitions);
+            pipelineStageDefinitions.Add(
+                PipelineStageDefinitionBuilder.Facet<RtDeepGraphQueryResult, QueryResult<RtDeepGraphQueryResult>>(
+                    new List<AggregateFacet<RtDeepGraphQueryResult>>(new AggregateFacet<RtDeepGraphQueryResult>[]
+                    {
+                        new AggregateFacet<RtDeepGraphQueryResult, RtDeepGraphQueryResult>(
+                            nameof(QueryResult<RtDeepGraphQueryResult>.Result).ToCamelCase(),
+                            PipelineDefinition<RtDeepGraphQueryResult, RtDeepGraphQueryResult>.Create(
+                                pagingPipelineStageDefinitions)),
+                        new AggregateFacet<RtDeepGraphQueryResult, AggregateCountResult>(
+                            nameof(QueryResult<RtDeepGraphQueryResult>.TotalCount).ToCamelCase(),
+                            PipelineDefinition<RtDeepGraphQueryResult, AggregateCountResult>
+                                .Create(countPipelineStageDefinitions))
+                    })));
+
+            var pipelineDefinition =
+                PipelineDefinition<RtEntity, QueryResult<RtDeepGraphQueryResult>>.Create(pipelineStageDefinitions);
             var resultAggregate = _mongoDbRepositoryDataSource
                 .GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph).Aggregate(session, pipelineDefinition);
             QueryResult<RtDeepGraphQueryResult>? result = await resultAggregate.SingleOrDefaultAsync();
             var grouping = CalculateGrouping(result.Result);
-            return new ResultSet<RtDeepGraphQueryResult>(result.Result, result.TotalCount.FirstOrDefault()?.Count ?? 0, grouping);
+            return new ResultSet<RtDeepGraphQueryResult>(result.Result, result.TotalCount.FirstOrDefault()?.Count ?? 0,
+                grouping);
         }
         else // Return result directly if there is no paging enabled
         {
-            var pipelineDefinition = PipelineDefinition<RtEntity, RtDeepGraphQueryResult>.Create(pipelineStageDefinitions);
+            var pipelineDefinition =
+                PipelineDefinition<RtEntity, RtDeepGraphQueryResult>.Create(pipelineStageDefinitions);
 
             var aggregate = _mongoDbRepositoryDataSource
                 .GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph).Aggregate(session, pipelineDefinition);

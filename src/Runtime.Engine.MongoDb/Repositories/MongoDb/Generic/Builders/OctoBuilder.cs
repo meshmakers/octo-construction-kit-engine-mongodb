@@ -83,14 +83,19 @@ internal class AggregationOperatorsBuilder<TSource, TResult>
         return new InFilterDefinition<TSource,TResult>(filters);
     }
     
+    public AggregateExpressionDefinition<TSource, TResult> Not(params AggregateExpressionDefinition<TSource, TResult>[] filters)
+    {
+        return new NotFilterDefinition<TSource,TResult>(filters);
+    }
+    
     public AggregateExpressionDefinition<TSource, TResult> SortArray(FieldDefinition<TSource> input, BsonDocument sort)
     {
         return new SortArrayDefinition<TSource, TResult>(input, sort);
     }
     
-    public AggregateExpressionDefinition<TSource, TResult> ConcatArrays(BsonArray values)
+    public AggregateExpressionDefinition<TSource, TResult> ConcatArrays(params AggregateExpressionDefinition<TSource, TResult>[] arrays)
     {
-        return new ConcatArrayDefinition<TSource, TResult>(values);
+        return new ConcatArrayDefinition<TSource, TResult>(arrays);
     }
     
     public AggregateExpressionDefinition<TSource, TResult> Reduce(AggregateExpressionDefinition<TSource, TResult> input,
@@ -110,6 +115,16 @@ internal class AggregationOperatorsBuilder<TSource, TResult>
         AggregateExpressionDefinition<TSource, TResult> falseDefinition)
     {
         return new ConditionDefinition<TSource, TResult>(condition, trueDefinition, falseDefinition);
+    }
+
+    public AggregateExpressionDefinition<TSource, TResult> Map(AggregateExpressionDefinition<TSource, TResult> input, string @as, AggregateExpressionDefinition<TSource, TResult> @in)
+    {
+        return new MapDefinition<TSource, TResult>(input, @as, @in);
+    }
+
+    public AggregateExpressionDefinition<TSource, TResult> MergeObjects(params AggregateExpressionDefinition<TSource, TResult>[] documents)
+    {
+        return new MergeObjectsDefinition<TSource, TResult>(documents);
     }
 }
 

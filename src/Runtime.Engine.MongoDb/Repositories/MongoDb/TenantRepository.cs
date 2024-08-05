@@ -39,10 +39,10 @@ internal class TenantRepository(
         }
 
         var ckCacheService = await GetCkCacheServiceAsync();
-        var entityCacheItem = await GetCkTypeGraphAsync(ckTypeId);
+        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
 
         var query =
-            new SingleOriginRtQuery<TEntity>(metricsContext, ckCacheService, TenantId, entityCacheItem,
+            new SingleOriginRtQuery<TEntity>(metricsContext, ckCacheService, TenantId, ckTypeGraph,
                 mongoDbRepositoryDataSource,
                 dataQueryOperation.Language);
         query.AddFieldFilters(dataQueryOperation.FieldFilters);

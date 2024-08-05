@@ -128,4 +128,9 @@ public class OperationFailedException : PersistenceException
     {
         return new OperationFailedException($"Models '{string.Join(", ", ckModelIds)}' are missing in tenant '{tenantId}'.");
     }
+
+    public static Exception AssociationRoleIdUndefined()
+    {
+        return new OperationFailedException("AssociationRoleId is undefined.");
+    }
 }

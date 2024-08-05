@@ -28,6 +28,11 @@ public class RtDeepGraphAssociationQueryResult : RtTypeWithAttributes
     ///     Gets or sets the target ck type id.
     /// </summary>
     public CkId<CkTypeId>? TargetCkTypeId { get; init; } 
+    
+    /// <summary>
+    ///     Gets or sets the target ck attribute ids to the associated relates to 
+    /// </summary>
+    public List<CkId<CkAttributeId>>? TargetCkAttributeIds { get; set; }
 
     /// <inheritdoc />
     protected override string GetLocation()

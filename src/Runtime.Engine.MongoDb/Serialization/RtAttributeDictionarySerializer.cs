@@ -86,7 +86,7 @@ internal class RtAttributeDictionarySerializer()
         var dic = base.Deserialize(context, args);
         if (dic == null)
         {
-            return null!;
+            return new Dictionary<string, object?>();
         }
 
         var ret = new Dictionary<string, object?>();
