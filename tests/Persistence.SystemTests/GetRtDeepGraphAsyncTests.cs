@@ -87,4 +87,25 @@ public class GetRtDeepGraphAsyncTests(GenerateSampleDataFixture generateSampleDa
         
         Assert.Equal(7, resultSet.TotalCount);
     }
+        
+    [Fact]
+    public async Task GetSubgraphAsync_SingleEntity_OK()
+    {
+        var systemContext = generateSampleDataFixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+        
+        var dataOperation = DataQueryOperation.Create();
+        
+        var resultSet = await tenantRepository.GetRtDeepGraphAsync(session, new []
+            {
+                new OctoObjectId("66803ecf4aa85720dda96b11")
+            }, 
+            new CkId<CkTypeId>("Test/MeasuringPoint"), dataOperation);
+
+        await session.CommitTransactionAsync();
+        
+        Assert.Equal(1, resultSet.TotalCount);
+    }
 }

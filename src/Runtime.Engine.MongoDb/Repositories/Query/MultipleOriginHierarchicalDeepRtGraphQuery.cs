@@ -107,12 +107,29 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
                             new FilterDefinitionBuilder<RtAssociation>().Eq(x => x.AssociationRoleId, _roleId)
                     }
                 ));
+
         pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Project(
             OctoBuilder<BsonDocument, BsonDocument>.Projection.SingleField(
                 "_associations",
-                OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.SortArray("$_associations",
-                    new BsonDocument("depth", 1))
-            )));
+                OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Condition(
+                    OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Gt(
+                        OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Size("$_associations"),
+                        OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Int32(0)),
+                    OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.SortArray("$_associations",
+                        new BsonDocument("depth", 1)),
+                    OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Array([
+                        new BsonDocument
+                        {
+                            { "originRtId", "$_id" },
+                            { "originCkTypeId", "$ckTypeId" },
+                            { "targetRtId", BsonNull.Value },
+                            { "targetCkTypeId", BsonNull.Value },
+                            { "depth", 0 }
+                        }
+                    ])
+                ))
+        ));
+
         pipelineStageDefinitions.Add(OctoPipelineStageBuilder.AddFields(
             OctoBuilder<BsonDocument, BsonDocument>.Fields.Set("entities",
                 OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Reduce("$_associations", new BsonArray(),
@@ -295,7 +312,7 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
                                         {
                                             "if", new BsonDocument
                                             {
-                                                { "$gte", new BsonArray { "$associations.targetRtId",  BsonNull.Value } }
+                                                { "$gte", new BsonArray { "$associations.targetRtId", BsonNull.Value } }
                                             }
                                         },
                                         {

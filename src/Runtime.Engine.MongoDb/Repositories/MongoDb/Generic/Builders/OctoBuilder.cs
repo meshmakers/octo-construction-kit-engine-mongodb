@@ -25,6 +25,10 @@ internal class AggregationOperatorsBuilder<TSource, TResult>
     {
         return new DocumentDefinition<TSource, TResult>(document);
     }
+    public AggregateExpressionDefinition<TSource, TResult> Array(BsonArray array)
+    {
+        return new ArrayDefinition<TSource, TResult>(array);
+    }
     
     public AggregateExpressionDefinition<TSource, TResult> Null()
     {
@@ -32,13 +36,33 @@ internal class AggregationOperatorsBuilder<TSource, TResult>
     }
     
     /// <summary>
-    /// Creates an and filter.
+    /// Creates not equal filter.
     /// </summary>
     /// <param name="fields">Filter expressions.</param>
     /// <returns>An and filter.</returns>
     public AggregateExpressionDefinition<TSource, TResult> Neq(params AggregateExpressionDefinition<TSource, TResult>[] fields)
     {
         return new NeqDefinition<TSource,TResult>(fields);
+    }
+    
+    /// <summary>
+    /// Creates greater than filter.
+    /// </summary>
+    /// <param name="fields">Filter expressions.</param>
+    /// <returns>An and filter.</returns>
+    public AggregateExpressionDefinition<TSource, TResult> Gt(params AggregateExpressionDefinition<TSource, TResult>[] fields)
+    {
+        return new GtDefinition<TSource,TResult>(fields);
+    }
+    
+    /// <summary>
+    /// Creates size operator.
+    /// </summary>
+    /// <param name="field">Filter expression to an array.</param>
+    /// <returns>An and filter.</returns>
+    public AggregateExpressionDefinition<TSource, TResult> Size(AggregateExpressionDefinition<TSource, TResult> field)
+    {
+        return new SizeDefinition<TSource, TResult>(field);
     }
     
     /// <summary>
@@ -125,6 +149,11 @@ internal class AggregationOperatorsBuilder<TSource, TResult>
     public AggregateExpressionDefinition<TSource, TResult> MergeObjects(params AggregateExpressionDefinition<TSource, TResult>[] documents)
     {
         return new MergeObjectsDefinition<TSource, TResult>(documents);
+    }
+
+    public AggregateExpressionDefinition<BsonDocument, BsonDocument> Int32(int i)
+    {
+        return new ConstantDefinition<BsonDocument, BsonDocument>(i);
     }
 }
 
