@@ -77,7 +77,7 @@ internal class ImportRtModelCommand(
             session.StartTransaction();
             await using (var stream = File.OpenRead(filePath))
             {
-                if (contentType.ToLower() == "text/yaml")
+                if (contentType.ToLower() == Constants.MimeTypeYaml)
                 {
                     OperationResult operationResult = new();
                     var rtModelRootDto = await _rtYamlSerializer.DeserializeAsync(stream, filePath, operationResult);
