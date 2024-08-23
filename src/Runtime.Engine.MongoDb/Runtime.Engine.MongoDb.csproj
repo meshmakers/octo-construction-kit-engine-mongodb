@@ -12,7 +12,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Meshmakers.Common.Metrics" Version="4.0.2408.8001" />
+        <PackageReference Include="Meshmakers.Common.Metrics" Version="4.0.2408.21007" />
         <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="$(OctoVersion)" />
         <PackageReference Include="Meshmakers.Octo.ConstructionKit.Models.System" Version="$(OctoVersion)" />
         <PackageReference Include="MathParser.org-mXparser" Version="6.0.0" />
