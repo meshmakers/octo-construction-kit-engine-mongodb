@@ -12,16 +12,16 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Meshmakers.Common.Metrics" Version="4.0.2408.21007" />
+        <PackageReference Include="Meshmakers.Common.Metrics" Version="4.0.2408.26002" />
         <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="$(OctoVersion)" />
         <PackageReference Include="Meshmakers.Octo.ConstructionKit.Models.System" Version="$(OctoVersion)" />
         <PackageReference Include="MathParser.org-mXparser" Version="6.0.0" />
         <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="8.0.0" />
-        <PackageReference Include="MongoDB.Driver.GridFS" Version="2.26.0" />
-        <PackageReference Include="NLog" Version="5.3.2" />
+        <PackageReference Include="MongoDB.Driver.GridFS" Version="2.28.0" />
+        <PackageReference Include="NLog" Version="5.3.3" />
         <PackageReference Include="System.Reactive" Version="6.0.1" />
-        <PackageReference Include="MongoDB.Bson" Version="2.26.0" />
-        <PackageReference Include="MongoDB.Driver" Version="2.26.0" />
+        <PackageReference Include="MongoDB.Bson" Version="2.28.0" />
+        <PackageReference Include="MongoDB.Driver" Version="2.28.0" />
     </ItemGroup>
 
     <ItemGroup>
