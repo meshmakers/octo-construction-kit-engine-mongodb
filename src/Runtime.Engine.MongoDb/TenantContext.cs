@@ -534,19 +534,7 @@ public class TenantContext : ITenantContext
         {
             throw TenantException.ErrorDuringModelLoad(ckModelId, operationResult);
         }
-        Guid correlationId = Guid.NewGuid();
-
-        try
-        {
-            await TenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
-            var repositoryDataSource = CreateRepositoryDataSource(_databaseName);
-            await CkModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, false,
-                new TenantDatabaseSourceIdentifier(repositoryDataSource));
-        }
-        finally
-        {
-            await TenantNotifications.NotifyPosTenantUpdateAsync(TenantId, correlationId);
-        }
+        await ImportCkModelAsync(ckCompiledModelRoot);
     }
 
     public async Task<bool> IsCkModelExistingAsync(CkModelId ckModelId)
