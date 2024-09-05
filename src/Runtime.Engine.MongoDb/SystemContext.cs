@@ -6,6 +6,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
@@ -22,7 +23,8 @@ public class SystemContext : TenantContext, ISystemContext
     public SystemContext(ILoggerFactory loggerFactory,
         IOptions<OctoSystemConfiguration> systemConfiguration,
         IServiceProvider serviceProvider)
-        : base(loggerFactory, systemConfiguration, serviceProvider, systemConfiguration.Value.SystemTenantId.NormalizeString(),
+        : base(loggerFactory, systemConfiguration, serviceProvider,
+            systemConfiguration.Value.SystemTenantId.NormalizeString(),
             systemConfiguration.Value.SystemDatabaseName.ToLower())
     {
     }
@@ -42,8 +44,9 @@ public class SystemContext : TenantContext, ISystemContext
 
         try
         {
+            Guid correlationId = Guid.NewGuid();
             // Distribute updates (pre) to inform other services.
-            await TenantNotifications.NotifyPreTenantCreateAsync(normalizedTenantId);
+            await TenantNotifications.NotifyPreTenantCreateAsync(normalizedTenantId, correlationId);
 
             // Create database
             await CreateTenantInternalAsync(normalizedDatabaseName);
@@ -51,7 +54,8 @@ public class SystemContext : TenantContext, ISystemContext
             // Restore the tenant system model on the newly created repository
             var ckModelRepository = CreateRepositoryDataSourceAsAdmin(normalizedDatabaseName);
             OperationResult operationResult = new();
-            var ckCompiledModelRoot = await CkModelRepositoryService.LookupCkModelAsync(SystemCkIds.ModelId, operationResult);
+            var ckCompiledModelRoot =
+                await CkModelRepositoryService.LookupCkModelAsync(SystemCkIds.ModelId, operationResult);
             if (ckCompiledModelRoot == null)
             {
                 throw TenantException.SystemModelNotFound();
@@ -62,10 +66,12 @@ public class SystemContext : TenantContext, ISystemContext
                 throw TenantException.ErrorDuringSystemModelLoad(operationResult);
             }
 
-            await CkModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, true,
+            await CkModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName,
+                ckCompiledModelRoot, true,
                 new TenantDatabaseSourceIdentifier(ckModelRepository));
             // Distribute updates (post) to inform other services.
-            await TenantNotifications.NotifyPosTenantCreateAsync(normalizedTenantId);  }
+            await TenantNotifications.NotifyPosTenantCreateAsync(normalizedTenantId, correlationId);
+        }
         catch (Exception)
         {
             throw TenantException.CreateSystemTenantFailed();
@@ -95,10 +101,11 @@ public class SystemContext : TenantContext, ISystemContext
 
         var normalizedDatabaseName = SystemConfiguration.Value.SystemDatabaseName.ToLower();
         var normalizedTenantId = SystemConfiguration.Value.SystemTenantId.NormalizeString();
+        Guid correlationId = Guid.NewGuid();
 
         try
         {
-            await TenantNotifications.NotifyPreTenantDeleteAsync(normalizedTenantId);
+            await TenantNotifications.NotifyPreTenantDeleteAsync(normalizedTenantId, correlationId);
             await AdminRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
         }
         catch (MongoCommandException)
@@ -107,7 +114,7 @@ public class SystemContext : TenantContext, ISystemContext
         }
         finally
         {
-            await TenantNotifications.NotifyPosTenantDeleteAsync(normalizedTenantId);
+            await TenantNotifications.NotifyPosTenantDeleteAsync(normalizedTenantId, correlationId);
         }
     }
 

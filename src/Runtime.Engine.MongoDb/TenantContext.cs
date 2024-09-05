@@ -93,11 +93,12 @@ public class TenantContext : ITenantContext
         {
             throw TenantException.TenantDoesAlreadyExist(tenantId);
         }
+        Guid correlationId = Guid.NewGuid();
 
         try
         {
             // Distribute updates (pre) to inform other services.
-            await TenantNotifications.NotifyPreTenantCreateAsync(tenantId);
+            await TenantNotifications.NotifyPreTenantCreateAsync(tenantId, correlationId);
 
             // Create database
             await CreateTenantInternalAsync(databaseName);
@@ -150,7 +151,7 @@ public class TenantContext : ITenantContext
         finally
         {
             // Distribute updates (post) to inform other services.
-            await TenantNotifications.NotifyPosTenantCreateAsync(tenantId);
+            await TenantNotifications.NotifyPosTenantCreateAsync(tenantId, correlationId);
         }
     }
 
@@ -190,11 +191,12 @@ public class TenantContext : ITenantContext
         {
             throw TenantException.TenantDatabaseDoesNotExist(databaseName);
         }
+        Guid correlationId = Guid.NewGuid();
 
         try
         {
             // Distribute updates (pre) to inform other services.
-            await TenantNotifications.NotifyPreTenantCreateAsync(tenantId);
+            await TenantNotifications.NotifyPreTenantCreateAsync(tenantId, correlationId);
 
             // Add the new tenant as child tenant of the current one
             if (TenantId != SystemConfiguration.Value.SystemTenantId.NormalizeString())
@@ -222,7 +224,7 @@ public class TenantContext : ITenantContext
         finally
         {
             // Distribute updates (post) to inform other services.
-            await TenantNotifications.NotifyPosTenantCreateAsync(tenantId);
+            await TenantNotifications.NotifyPosTenantCreateAsync(tenantId, correlationId);
         }
     }
 
@@ -234,11 +236,12 @@ public class TenantContext : ITenantContext
         {
             throw TenantException.TenantDoesNotExist(tenantId);
         }
+        Guid correlationId = Guid.NewGuid();
 
         try
         {
             // Distribute updates (pre) to inform other services.
-            await TenantNotifications.NotifyPreTenantDeleteAsync(tenantId);
+            await TenantNotifications.NotifyPreTenantDeleteAsync(tenantId, correlationId);
 
             var tenantRepository = GetTenantRepositoryAsAdmin();
             await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
@@ -251,7 +254,7 @@ public class TenantContext : ITenantContext
         finally
         {
             // Distribute updates (post) to inform other services.
-            await TenantNotifications.NotifyPosTenantDeleteAsync(tenantId);
+            await TenantNotifications.NotifyPosTenantDeleteAsync(tenantId, correlationId);
         }
     }
 
@@ -265,17 +268,18 @@ public class TenantContext : ITenantContext
         {
             throw TenantException.TenantDoesNotExist(tenantId);
         }
+        Guid correlationId = Guid.NewGuid();
 
         try
         {
-            await TenantNotifications.NotifyPreTenantUpdateAsync(tenantId);
+            await TenantNotifications.NotifyPreTenantUpdateAsync(tenantId, correlationId);
 
             await DropChildTenantAsync(adminSession, tenantId);
             await CreateChildTenantAsync(adminSession, octoTenant.DatabaseName, tenantId);
         }
         finally
         {
-            await TenantNotifications.NotifyPosTenantUpdateAsync(tenantId);
+            await TenantNotifications.NotifyPosTenantUpdateAsync(tenantId, correlationId);
         }
     }
 
@@ -291,10 +295,11 @@ public class TenantContext : ITenantContext
         {
             throw TenantException.TenantDoesNotExist(tenantId);
         }
+        Guid correlationId = Guid.NewGuid();
 
         try
         {
-            await TenantNotifications.NotifyPreTenantDeleteAsync(tenantId);
+            await TenantNotifications.NotifyPreTenantDeleteAsync(tenantId, correlationId);
 
             await AdminRepositoryClient.DropRepositoryAsync(octoTenant.DatabaseName);
 
@@ -321,7 +326,7 @@ public class TenantContext : ITenantContext
         }
         finally
         {
-            await TenantNotifications.NotifyPosTenantDeleteAsync(tenantId);
+            await TenantNotifications.NotifyPosTenantDeleteAsync(tenantId, correlationId);
         }
     }
 
@@ -502,16 +507,18 @@ public class TenantContext : ITenantContext
 
     public async Task ImportCkModelAsync(CkCompiledModelRoot ckCompiledModelRoot)
     {
+        Guid correlationId = Guid.NewGuid();
+
         try
         {
-            await TenantNotifications.NotifyPreTenantUpdateAsync(TenantId);
+            await TenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
             var repositoryDataSource = CreateRepositoryDataSource(_databaseName);
             await CkModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, false,
                 new TenantDatabaseSourceIdentifier(repositoryDataSource));
         }
         finally
         {
-            await TenantNotifications.NotifyPosTenantUpdateAsync(TenantId);
+            await TenantNotifications.NotifyPosTenantUpdateAsync(TenantId, correlationId);
         }
     }
 
@@ -527,17 +534,18 @@ public class TenantContext : ITenantContext
         {
             throw TenantException.ErrorDuringModelLoad(ckModelId, operationResult);
         }
+        Guid correlationId = Guid.NewGuid();
 
         try
         {
-            await TenantNotifications.NotifyPreTenantUpdateAsync(TenantId);
+            await TenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
             var repositoryDataSource = CreateRepositoryDataSource(_databaseName);
             await CkModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, false,
                 new TenantDatabaseSourceIdentifier(repositoryDataSource));
         }
         finally
         {
-            await TenantNotifications.NotifyPosTenantUpdateAsync(TenantId);
+            await TenantNotifications.NotifyPosTenantUpdateAsync(TenantId, correlationId);
         }
     }
 
