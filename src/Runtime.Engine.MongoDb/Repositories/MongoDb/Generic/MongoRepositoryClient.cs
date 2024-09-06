@@ -65,6 +65,10 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 var settings = MongoClientSettings.FromUrl(mongoUrl);
                 settings.ReadConcern = ReadConcern.Majority;
                 settings.WriteConcern = new WriteConcern(WriteConcern.WMode.Majority, TimeSpan.FromSeconds(30));
+                
+                // Always retry writes to prevent 
+                // Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction. 
+                settings.RetryWrites = true; 
                 settings.ClusterConfigurator = cb =>
                 {
                     cb.Subscribe<CommandStartedEvent>(e =>

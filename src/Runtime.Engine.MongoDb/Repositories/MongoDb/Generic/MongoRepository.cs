@@ -6,7 +6,7 @@ using MongoDB.Driver.GridFS;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
 /// <summary>
-///     MongoDB CRUD operations implementation.
+///     MongoDB CRUD operations' implementation.
 /// </summary>
 public class MongoRepository : IRepositoryInternal
 {
