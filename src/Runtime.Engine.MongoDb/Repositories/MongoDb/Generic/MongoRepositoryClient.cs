@@ -226,7 +226,19 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.AutoMap();
 
             cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
+            cm.GetMemberMap(c => c.IsExtensible).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.Values).SetIsRequired(true);
+        });
+        
+        BsonClassMap.RegisterClassMap<CkEnumValue>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.AutoMap();
+
+            cm.GetMemberMap(c => c.Key).SetIsRequired(true);
+            cm.GetMemberMap(c => c.Name).SetIsRequired(true);
+            cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
+            cm.GetMemberMap(c => c.IsExtension).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkAttributeMetaData>(cm =>
