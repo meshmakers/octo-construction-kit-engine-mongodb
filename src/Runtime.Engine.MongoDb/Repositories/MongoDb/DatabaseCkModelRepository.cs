@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
@@ -246,32 +247,48 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             {
                 throw DatabaseCkModelRepositoryException.CkEnumNotExtensible(ckEnumId);
             }
+            
+            Regex nameRegex = new(@"^[_a-zA-Z][_a-zA-Z0-9]*$");
 
-            // System enum values cannot be customized
-            List<CkEnumValue> enumValues = dbCkEnum.Values.Where(x => !x.IsExtension).ToList();
+            // System enum values cannot be customized, we store it in a separate list to know them
+            var systemValues = dbCkEnum.Values.Where(x => !x.IsExtension).ToList();
+            
+            // Let's build a new list of enum values
+            var newEnumValueList = dbCkEnum.Values.ToList();
 
             // Remove all enums that are marked for deletion, except system defined.
             foreach (var enumValueToRemove in ckEnumUpdates.Where(
                          x => x.Operation == CkExtensionUpdateOperations.Delete))
             {
-                if (enumValues.Any(x => x.Key == enumValueToRemove.Value.Key))
+                if (systemValues.Any(x => x.Key == enumValueToRemove.Value.Key))
                 {
                     throw DatabaseCkModelRepositoryException.CkEnumValueIsSystem(ckEnumId, enumValueToRemove.Value.Key);
                 }
 
-                enumValues.RemoveAll(x => x.Key == enumValueToRemove.Value.Key);
+                newEnumValueList.RemoveAll(x => x.Key == enumValueToRemove.Value.Key);
             }
 
             // Add all new enums
             foreach (var enumValueToAdd in ckEnumUpdates.Where(x => x.Operation == CkExtensionUpdateOperations.Insert))
             {
-                if (enumValues.Any(x => x.Key == enumValueToAdd.Value.Key))
+                if (newEnumValueList.Any(x => x.Key == enumValueToAdd.Value.Key))
                 {
                     throw DatabaseCkModelRepositoryException.CkEnumValueAlreadyExists(ckEnumId,
                         enumValueToAdd.Value.Key);
                 }
+                
+                if (nameRegex.Match(enumValueToAdd.Value.Name).Success == false)
+                {
+                    throw DatabaseCkModelRepositoryException.CkEnumValueNameInvalid(ckEnumId, enumValueToAdd.Value.Key);
+                }
+                
+                if (newEnumValueList.Any(x => x.Name == enumValueToAdd.Value.Name))
+                {
+                    throw DatabaseCkModelRepositoryException.CkEnumNameAlreadyExists(ckEnumId,
+                        enumValueToAdd.Value.Key, enumValueToAdd.Value.Name);
+                }
 
-                enumValues.Add(new CkEnumValue
+                newEnumValueList.Add(new CkEnumValue
                 {
                     Key = enumValueToAdd.Value.Key,
                     Name = enumValueToAdd.Value.Name,
@@ -280,7 +297,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 });
             }
 
-            var updateDefinition = Builders<CkEnum>.Update.Set(x => x.Values, enumValues);
+            var updateDefinition = Builders<CkEnum>.Update.Set(x => x.Values, newEnumValueList);
             await sourceIdentifierObject.MongoDbRepositoryDataSource.CkEnums.UpdateOneAsync(session, ckEnumId,
                 updateDefinition);
 

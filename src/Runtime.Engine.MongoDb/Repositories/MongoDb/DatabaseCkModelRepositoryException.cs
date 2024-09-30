@@ -44,4 +44,14 @@ public class DatabaseCkModelRepositoryException : CkModelException
     {
         return new DatabaseCkModelRepositoryException($"Enum '{ckEnumId}' is not extensible.");
     }
+
+    public static Exception CkEnumValueNameInvalid(CkId<CkEnumId> ckEnumId, int valueKey)
+    {
+        return new DatabaseCkModelRepositoryException($"Enum '{ckEnumId}' value '{valueKey}' name is invalid. Enum value names must not have whitespaces or special characters.");
+    }
+
+    public static Exception CkEnumNameAlreadyExists(CkId<CkEnumId> ckEnumId, int valueKey, string valueName)
+    {
+        return new DatabaseCkModelRepositoryException($"Enum '{ckEnumId}' with key '{valueKey}': Name '{valueName}' already exists, but names must be unique.");
+    }
 }
