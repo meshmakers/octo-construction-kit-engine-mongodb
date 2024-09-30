@@ -28,34 +28,6 @@ internal class TenantRepository(
     IBulkRtMutation bulkRtMutation)
     : RuntimeRepositoryBase(tenantId, ckCache, mongoDbRepositoryDataSource, bulkRtMutation), ITenantRepository
 {
-    protected override async Task<IResultSet<TEntity>> GetRtEntitiesByIdAsync<TEntity>(IOctoSession session,
-        CkId<CkTypeId> ckTypeId,
-        IReadOnlyList<OctoObjectId> rtIds, DataQueryOperation dataQueryOperation,
-        int? skip = null, int? take = null)
-    {
-        if (!rtIds.Any())
-        {
-            return new ResultSet<TEntity>(new List<TEntity>(), 0, null);
-        }
-
-        var ckCacheService = await GetCkCacheServiceAsync();
-        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
-
-        var query =
-            new SingleOriginRtQuery<TEntity>(metricsContext, ckCacheService, TenantId, ckTypeGraph,
-                mongoDbRepositoryDataSource,
-                dataQueryOperation.Language);
-        query.AddFieldFilters(dataQueryOperation.FieldFilters);
-        query.AddIdFilter(rtIds);
-        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddGrouping(dataQueryOperation.FieldGroupBy);
-        query.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
-
-        return await query.ExecuteQuery(session, skip, take);
-    }
-
     #region Transaction Handling
 
     protected override async Task RefreshCkCacheServiceAsync(ICkCacheService ckCacheService)
@@ -469,9 +441,36 @@ internal class TenantRepository(
 
         return await query.ExecuteQuery(session, skip, take);
     }
+    
+    protected override async Task<IResultSet<TEntity>> GetRtEntitiesByIdAsync<TEntity>(IOctoSession session,
+        CkId<CkTypeId> ckTypeId,
+        IReadOnlyList<OctoObjectId> rtIds, DataQueryOperation dataQueryOperation,
+        int? skip = null, int? take = null)
+    {
+        if (!rtIds.Any())
+        {
+            return new ResultSet<TEntity>(new List<TEntity>(), 0, null);
+        }
+
+        var ckCacheService = await GetCkCacheServiceAsync();
+        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
+
+        var query =
+            new SingleOriginRtQuery<TEntity>(metricsContext, ckCacheService, TenantId, ckTypeGraph,
+                mongoDbRepositoryDataSource,
+                dataQueryOperation.Language);
+        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddIdFilter(rtIds);
+        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
+        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
+        query.AddGrouping(dataQueryOperation.FieldGroupBy);
+        query.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
+
+        return await query.ExecuteQuery(session, skip, take);
+    }
 
     #endregion Data query
-
 
     #region Large binaries
 

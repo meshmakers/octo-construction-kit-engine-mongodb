@@ -93,6 +93,7 @@ public class TenantContext : ITenantContext
         {
             throw TenantException.TenantDoesAlreadyExist(tenantId);
         }
+
         Guid correlationId = Guid.NewGuid();
 
         try
@@ -106,7 +107,8 @@ public class TenantContext : ITenantContext
             // Restore the tenant system model on the newly created repository
             var databaseContext = CreateRepositoryDataSourceAsAdmin(normalizedDatabaseName);
             OperationResult operationResult = new();
-            var ckCompiledModelRoot = await CkModelRepositoryService.LookupCkModelAsync(SystemCkIds.ModelId, operationResult);
+            var ckCompiledModelRoot =
+                await CkModelRepositoryService.LookupCkModelAsync(SystemCkIds.ModelId, operationResult);
             if (ckCompiledModelRoot == null)
             {
                 throw TenantException.SystemModelNotFound();
@@ -117,7 +119,8 @@ public class TenantContext : ITenantContext
                 throw TenantException.ErrorDuringSystemModelLoad(operationResult);
             }
 
-            await CkModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, true,
+            await CkModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName,
+                ckCompiledModelRoot, true, false,
                 new TenantDatabaseSourceIdentifier(databaseContext));
 
             // Add the new tenant as child tenant of the current one
@@ -191,6 +194,7 @@ public class TenantContext : ITenantContext
         {
             throw TenantException.TenantDatabaseDoesNotExist(databaseName);
         }
+
         Guid correlationId = Guid.NewGuid();
 
         try
@@ -236,6 +240,7 @@ public class TenantContext : ITenantContext
         {
             throw TenantException.TenantDoesNotExist(tenantId);
         }
+
         Guid correlationId = Guid.NewGuid();
 
         try
@@ -268,6 +273,7 @@ public class TenantContext : ITenantContext
         {
             throw TenantException.TenantDoesNotExist(tenantId);
         }
+
         Guid correlationId = Guid.NewGuid();
 
         try
@@ -295,6 +301,7 @@ public class TenantContext : ITenantContext
         {
             throw TenantException.TenantDoesNotExist(tenantId);
         }
+
         Guid correlationId = Guid.NewGuid();
 
         try
@@ -352,7 +359,9 @@ public class TenantContext : ITenantContext
     {
         var tenantRepository = GetTenantRepositoryAsAdmin();
 
-        var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, DataQueryOperation.Create(), skip, take);
+        var result =
+            await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, DataQueryOperation.Create(), skip,
+                take);
         return new ResultSet<OctoTenant>(result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName)),
             result.TotalCount, null);
     }
@@ -393,7 +402,8 @@ public class TenantContext : ITenantContext
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
         var tenant = await GetChildTenantAsync(adminSession, tenantId);
-        var context = new TenantContext(_loggerFactory, SystemConfiguration, _serviceProvider, tenantId, tenant.DatabaseName);
+        var context = new TenantContext(_loggerFactory, SystemConfiguration, _serviceProvider, tenantId,
+            tenant.DatabaseName);
 
         return context;
     }
@@ -429,7 +439,6 @@ public class TenantContext : ITenantContext
         return result;
     }
 
-
     #endregion Access management
 
     #region Configuration
@@ -445,7 +454,8 @@ public class TenantContext : ITenantContext
         return o;
     }
 
-    public async Task<string?> GetConfigurationAsync(IOctoAdminSession adminSession, string key, string? defaultValue = null)
+    public async Task<string?> GetConfigurationAsync(IOctoAdminSession adminSession, string key,
+        string? defaultValue = null)
     {
         ArgumentValidation.ValidateString(nameof(key), key);
         return await GetConfigAsync(adminSession, key, defaultValue);
@@ -475,7 +485,8 @@ public class TenantContext : ITenantContext
         var dataQueryOperation = DataQueryOperation.Create()
             .FieldFilter(nameof(RtConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);
 
-        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtConfiguration>(adminSession, dataQueryOperation);
+        var resultSet =
+            await tenantRepository.GetRtEntitiesByTypeAsync<RtConfiguration>(adminSession, dataQueryOperation);
         var configuration = resultSet.Items.FirstOrDefault();
         if (configuration == null)
         {
@@ -513,7 +524,8 @@ public class TenantContext : ITenantContext
         {
             await TenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
             var repositoryDataSource = CreateRepositoryDataSource(_databaseName);
-            await CkModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName, ckCompiledModelRoot, false,
+            await CkModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName,
+                ckCompiledModelRoot, false, true,
                 new TenantDatabaseSourceIdentifier(repositoryDataSource));
         }
         finally
@@ -534,6 +546,7 @@ public class TenantContext : ITenantContext
         {
             throw TenantException.ErrorDuringModelLoad(ckModelId, operationResult);
         }
+
         await ImportCkModelAsync(ckCompiledModelRoot);
     }
 
@@ -553,29 +566,31 @@ public class TenantContext : ITenantContext
     {
         var repositoryDataSource = CreateRepositoryDataSource(databaseName);
 
-        var tenantRepository = new TenantRepository(tenantId, _metricsContext, _cacheService, _modelLoaderService, repositoryDataSource,
+        var tenantRepository = new TenantRepository(tenantId, _metricsContext, _cacheService, _modelLoaderService,
+            repositoryDataSource,
             _bulkRtMutation);
         return tenantRepository;
     }
-    
+
     private ITenantRepository GetTenantRepositoryAsAdmin(string tenantId, string databaseName)
     {
         var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(databaseName);
 
-        var tenantRepository = new TenantRepository(tenantId, _metricsContext, _cacheService, _modelLoaderService, repositoryDataSource,
+        var tenantRepository = new TenantRepository(tenantId, _metricsContext, _cacheService, _modelLoaderService,
+            repositoryDataSource,
             _bulkRtMutation);
         return tenantRepository;
     }
 
     private IMongoDbRepositoryDataSource CreateRepositoryDataSource(string databaseName)
     {
-        return new MongoDbRepositoryDataSource(_loggerFactory.CreateLogger<MongoDbRepositoryDataSource>(), 
+        return new MongoDbRepositoryDataSource(_loggerFactory.CreateLogger<MongoDbRepositoryDataSource>(),
             _serviceProvider.GetRequiredService<IUserRepositoryAccess>(), databaseName, TenantId);
     }
-    
+
     protected IMongoDbRepositoryDataSource CreateRepositoryDataSourceAsAdmin(string databaseName)
     {
-        return new MongoDbRepositoryDataSource(_loggerFactory.CreateLogger<MongoDbRepositoryDataSource>(), 
+        return new MongoDbRepositoryDataSource(_loggerFactory.CreateLogger<MongoDbRepositoryDataSource>(),
             AdminRepositoryClient, databaseName, TenantId);
     }
 
@@ -615,7 +630,8 @@ public class TenantContext : ITenantContext
         var dataQueryOperation = DataQueryOperation.Create()
             .FieldFilter(nameof(RtConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);
 
-        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtConfiguration>(systemSession, dataQueryOperation);
+        var resultSet =
+            await tenantRepository.GetRtEntitiesByTypeAsync<RtConfiguration>(systemSession, dataQueryOperation);
         var configuration = resultSet.Items.FirstOrDefault();
         if (configuration == null || configuration.ConfigurationValue == null)
         {

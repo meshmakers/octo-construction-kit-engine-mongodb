@@ -184,7 +184,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     }
 
     /// <inheritdoc />
-    public async Task PublishModelAsync(CkCompiledModelRoot ckCompiledModel, bool force = false, object? sourceIdentifier = null,
+    public async Task PublishModelAsync(CkCompiledModelRoot ckCompiledModel, bool force = false, bool publishExtensions = false, object? sourceIdentifier = null,
         CancellationToken? cancellationToken = null)
     {
         var sourceIdentifierObject =
@@ -206,7 +206,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     public async Task UpdateModelAsync(CkCompiledModelRoot ckCompiledModel, object? sourceIdentifier = null,
         CancellationToken? cancellationToken = null)
     {
-        await PublishModelAsync(ckCompiledModel, false, sourceIdentifier, cancellationToken);
+        await PublishModelAsync(ckCompiledModel, false,  false, sourceIdentifier, cancellationToken);
     }
 
     /// <inheritdoc />
