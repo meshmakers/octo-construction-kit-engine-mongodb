@@ -221,10 +221,75 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     }
 
     /// <inheritdoc />
-    public Task CustomizeCkEnumAsync(CkId<CkEnumId> ckEnumId, ICollection<CkEnumUpdate> ckEnumUpdates,
+    public async Task CustomizeCkEnumAsync(CkId<CkEnumId> ckEnumId, ICollection<CkEnumUpdate> ckEnumUpdates,
         object? sourceIdentifier = null, CancellationToken? cancellationToken = null)
     {
-        return Task.CompletedTask;
+        var sourceIdentifierObject =
+            ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
+                sourceIdentifier);
+
+        using var session = await sourceIdentifierObject.MongoDbRepositoryDataSource.CreateSessionAsync();
+
+        try
+        {
+            session.StartTransaction();
+            var dbCkEnum = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkEnums.FindSingleOrDefaultAsync(
+                session,
+                @enum => @enum.CkEnumId == ckEnumId);
+
+            if (dbCkEnum == null)
+            {
+                throw DatabaseCkModelRepositoryException.CkEnumNotFound(ckEnumId);
+            }
+
+            if (!dbCkEnum.IsExtensible)
+            {
+                throw DatabaseCkModelRepositoryException.CkEnumNotExtensible(ckEnumId);
+            }
+
+            // System enum values cannot be customized
+            List<CkEnumValue> enumValues = dbCkEnum.Values.Where(x => !x.IsExtension).ToList();
+
+            // Remove all enums that are marked for deletion, except system defined.
+            foreach (var enumValueToRemove in ckEnumUpdates.Where(
+                         x => x.Operation == CkExtensionUpdateOperations.Delete))
+            {
+                if (enumValues.Any(x => x.Key == enumValueToRemove.Value.Key))
+                {
+                    throw DatabaseCkModelRepositoryException.CkEnumValueIsSystem(ckEnumId, enumValueToRemove.Value.Key);
+                }
+
+                enumValues.RemoveAll(x => x.Key == enumValueToRemove.Value.Key);
+            }
+
+            // Add all new enums
+            foreach (var enumValueToAdd in ckEnumUpdates.Where(x => x.Operation == CkExtensionUpdateOperations.Insert))
+            {
+                if (enumValues.Any(x => x.Key == enumValueToAdd.Value.Key))
+                {
+                    throw DatabaseCkModelRepositoryException.CkEnumValueAlreadyExists(ckEnumId,
+                        enumValueToAdd.Value.Key);
+                }
+
+                enumValues.Add(new CkEnumValue
+                {
+                    Key = enumValueToAdd.Value.Key,
+                    Name = enumValueToAdd.Value.Name,
+                    Description = enumValueToAdd.Value.Description,
+                    IsExtension = true
+                });
+            }
+
+            var updateDefinition = Builders<CkEnum>.Update.Set(x => x.Values, enumValues);
+            await sourceIdentifierObject.MongoDbRepositoryDataSource.CkEnums.UpdateOneAsync(session, ckEnumId,
+                updateDefinition);
+
+            await session.CommitTransactionAsync();
+        }
+        catch (Exception e)
+        {
+            throw DatabaseCkModelRepositoryException.ErrorDuringUpdateOfCkEnumExtensions(ckEnumId, e);
+        }
     }
 
     /// <inheritdoc />

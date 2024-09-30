@@ -2,6 +2,7 @@ using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v1;
 using Meshmakers.Octo.Runtime.Contracts;
@@ -556,6 +557,26 @@ public class TenantContext : ITenantContext
 
         return await CkModelRepositoryService.IsCkModelExistingAsync(InternalConstants.CkModelRepositoryName, ckModelId,
             new TenantDatabaseSourceIdentifier(repositoryDataSource));
+    }
+
+    public async Task CustomizeCkEnumAsync(CkId<CkEnumId> ckEnumId, ICollection<CkEnumUpdate> ckEnumUpdates,
+        CancellationToken? cancellationToken = null)
+    {
+        Guid correlationId = Guid.NewGuid();
+
+        try
+        {
+            var repositoryDataSource = CreateRepositoryDataSource(_databaseName);
+
+            await TenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
+            await CkModelRepositoryService.CustomizeCkEnumAsync(InternalConstants.CkModelRepositoryName,
+                ckEnumId,
+                ckEnumUpdates, new TenantDatabaseSourceIdentifier(repositoryDataSource), cancellationToken);
+        }
+        finally
+        {
+            await TenantNotifications.NotifyPosTenantUpdateAsync(TenantId, correlationId);
+        }
     }
 
     #endregion

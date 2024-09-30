@@ -1,5 +1,6 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 
@@ -126,6 +127,16 @@ public interface ITenantContext
     /// <param name="ckModelId">The construction kit model id to check</param>
     /// <returns>True, if the construction kit model exists</returns>
     Task<bool> IsCkModelExistingAsync(CkModelId ckModelId);
+
+    /// <summary>
+    ///     Customizes CkEnum values in the repository
+    /// </summary>
+    /// <param name="ckEnumId">Construction kit enum id</param>
+    /// <param name="ckEnumUpdates">Describes the updates to the enum</param>
+    /// <param name="cancellationToken">Optional cancellation token</param>
+    /// <returns></returns>
+    Task CustomizeCkEnumAsync(CkId<CkEnumId> ckEnumId, ICollection<CkEnumUpdate> ckEnumUpdates,
+        CancellationToken? cancellationToken = null);
 
     #endregion
 }
