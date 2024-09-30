@@ -13,7 +13,12 @@ public class CkEnumValue
     public string Name { get; set; } = null!;
 
     /// <summary>
-    ///     A optional description of the enum value
+    ///     An optional description of the enum value
     /// </summary>
     public string? Description { get; set; }
+    
+    /// <summary>
+    ///     Indicates that the current enum value is an extension to the original enum.
+    /// </summary>
+    public bool IsExtension { get; set; } = false;
 }

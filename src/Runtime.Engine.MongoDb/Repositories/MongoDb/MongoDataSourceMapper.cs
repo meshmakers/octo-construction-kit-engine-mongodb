@@ -135,6 +135,7 @@ public class CkEnumMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkEnumId>
         [
             update.Set(p => p.CkModelId, document.CkModelId),
             update.Set(p => p.UseFlags, document.UseFlags),
+            update.Set(p => p.IsExtensible, document.IsExtensible),
             update.Set(p => p.Values, document.Values)
         ];
 

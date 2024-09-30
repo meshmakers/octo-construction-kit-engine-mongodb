@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -27,7 +28,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     /// </summary>
     /// <param name="logger"></param>
     /// <param name="ckValidationService"></param>
-    public DatabaseCkModelRepository(ILogger<DatabaseCkModelRepository> logger, ICkValidationService ckValidationService)
+    public DatabaseCkModelRepository(ILogger<DatabaseCkModelRepository> logger,
+        ICkValidationService ckValidationService)
     {
         _logger = logger;
         _ckValidationService = ckValidationService;
@@ -43,7 +45,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     public async Task<bool> IsModelIdExistingAsync(CkModelId modelId, object? sourceIdentifier = null)
     {
         var sourceIdentifierObject =
-            ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier), sourceIdentifier);
+            ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
+                sourceIdentifier);
 
         using var session = await sourceIdentifierObject.MongoDbRepositoryDataSource.CreateSessionAsync();
         session.StartTransaction();
@@ -61,7 +64,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         CancellationToken? cancellationToken = null)
     {
         var sourceIdentifierObject =
-            ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier), sourceIdentifier);
+            ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
+                sourceIdentifier);
 
         using var session = await sourceIdentifierObject.MongoDbRepositoryDataSource.CreateSessionAsync();
         session.StartTransaction();
@@ -102,11 +106,13 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 EnumId = e.CkEnumId.Key,
                 Description = e.Description,
                 UseFlags = e.UseFlags,
+                IsExtensible = e.IsExtensible,
                 Values = e.Values.Select(v => new CkEnumValueDto
                 {
                     Key = v.Key,
                     Name = v.Name,
-                    Description = v.Description
+                    Description = v.Description,
+                    IsExtension = v.IsExtension
                 }).ToList()
             }).ToList(),
             Records = ckRecords.Select(r => new CkRecordDto
@@ -123,7 +129,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     AutoIncrementReference = a.AutoIncrementReference,
                     IsOptional = a.IsOptional
                 }).ToList(),
-                DerivedFromCkRecordId = ckRecordInheritances.FirstOrDefault(x => x.InheritorCkRecordId == r.CkRecordId)?.BaseCkRecordId
+                DerivedFromCkRecordId = ckRecordInheritances.FirstOrDefault(x => x.InheritorCkRecordId == r.CkRecordId)
+                    ?.BaseCkRecordId
             }).ToList(),
             Attributes = ckAttributes.Select(a => new CkAttributeDto
             {
@@ -134,8 +141,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 DefaultValues = a.DefaultValues?.ToList(),
                 Description = a.Description,
                 IsDataStream = a.IsDataStream,
-                MetaData = a.MetaData?.Select(m=> 
-                    new CkAttributeMetaDataDto {Key = m.Key, Value = m.Value, Description = m.Description }).ToList()
+                MetaData = a.MetaData?.Select(m =>
+                    new CkAttributeMetaDataDto { Key = m.Key, Value = m.Value, Description = m.Description }).ToList()
             }).ToList(),
             Types = ckTypes.Select(t => new CkCompiledTypeDto
             {
@@ -153,13 +160,15 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     AutoIncrementReference = a.AutoIncrementReference,
                     IsOptional = a.IsOptional
                 }).ToList(),
-                Associations = ckTypeAssociations.Where(x=> x.OriginCkTypeId == t.CkTypeId).Select(a => new CkTypeAssociationDto
-                {
-                    CkRoleId = a.RoleId,
-                    TargetCkTypeId = a.TargetCkTypeId,
-                    TargetCkAttributeIds = a.TargetCkAttributeIds?.ToList()
-                }).ToList(),
-                DerivedFromCkTypeId = ckTypeInheritances.FirstOrDefault(x => x.InheritorCkTypeId == t.CkTypeId)?.BaseCkTypeId
+                Associations = ckTypeAssociations.Where(x => x.OriginCkTypeId == t.CkTypeId).Select(a =>
+                    new CkTypeAssociationDto
+                    {
+                        CkRoleId = a.RoleId,
+                        TargetCkTypeId = a.TargetCkTypeId,
+                        TargetCkAttributeIds = a.TargetCkAttributeIds?.ToList()
+                    }).ToList(),
+                DerivedFromCkTypeId = ckTypeInheritances.FirstOrDefault(x => x.InheritorCkTypeId == t.CkTypeId)
+                    ?.BaseCkTypeId
             }).ToList(),
             AssociationRoles = ckAssociationRoles.Select(ar => new CkAssociationRoleDto
             {
@@ -184,11 +193,13 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     }
 
     /// <inheritdoc />
-    public async Task PublishModelAsync(CkCompiledModelRoot ckCompiledModel, bool force = false, bool publishExtensions = false, object? sourceIdentifier = null,
+    public async Task PublishModelAsync(CkCompiledModelRoot ckCompiledModel, bool force = false,
+        bool publishExtensions = false, object? sourceIdentifier = null,
         CancellationToken? cancellationToken = null)
     {
         var sourceIdentifierObject =
-            ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier), sourceIdentifier);
+            ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
+                sourceIdentifier);
 
         OperationResult operationResult = new();
         var transientCkModel = new TransientCkModel(new CkModel
@@ -203,10 +214,17 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     }
 
     /// <inheritdoc />
-    public async Task UpdateModelAsync(CkCompiledModelRoot ckCompiledModel, object? sourceIdentifier = null,
-        CancellationToken? cancellationToken = null)
+    public async Task UpdateModelAsync(CkCompiledModelRoot ckCompiledModel, bool publishExtensions = false,
+        object? sourceIdentifier = null, CancellationToken? cancellationToken = null)
     {
-        await PublishModelAsync(ckCompiledModel, false,  false, sourceIdentifier, cancellationToken);
+        await PublishModelAsync(ckCompiledModel, false, publishExtensions, sourceIdentifier, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task CustomizeCkEnumAsync(CkId<CkEnumId> ckEnumId, ICollection<CkEnumUpdate> ckEnumUpdates,
+        object? sourceIdentifier = null, CancellationToken? cancellationToken = null)
+    {
+        return Task.CompletedTask;
     }
 
     /// <inheritdoc />
@@ -236,6 +254,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             operationResult.WriteMessagesToLogger(_logger);
             throw OperationFailedException.ValidationErrors();
         }
+
         _logger.LogDebug("Starting import of CK model");
 
         CheckCancellation(cancellationToken);
@@ -336,7 +355,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
         _logger.LogDebug("Committing model import transaction");
         await session.CommitTransactionAsync();
-        
+
         _logger.LogDebug("Pos-work of CK model import");
         using var sessionComplete = await mongoDbRepositoryDataSource.CreateSessionAsync();
         sessionComplete.StartTransaction();
@@ -347,10 +366,11 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
         _logger.LogDebug("Updating model state");
         var updateDefinition = Builders<CkModel>.Update.Set(x => x.ModelState, ModelState.Available);
-        await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(sessionComplete, compiledModel.ModelId, updateDefinition);
+        await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(sessionComplete, compiledModel.ModelId,
+            updateDefinition);
 
         await sessionComplete.CommitTransactionAsync();
-        
+
         _logger.LogDebug("Import of CK model to database completed");
     }
 
@@ -362,19 +382,22 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         int retries = 5;
         while (true)
         {
-
             _logger.LogInformation("Checking if CK model '{ModelId}' can be imported", compiledModel.ModelId);
-            var currentlyImportingCkModels = queryable.Where(m => m.ModelState == ModelState.Importing && m.Id != compiledModel.ModelId);
+            var currentlyImportingCkModels =
+                queryable.Where(m => m.ModelState == ModelState.Importing && m.Id != compiledModel.ModelId);
             if (currentlyImportingCkModels.Any())
             {
                 Debug.Assert(currentlyImportingCkModels.Count() == 1, "currentlyImportingCkModels == 1");
 
                 var importingModels = currentlyImportingCkModels.Select(x => x.ModelId).ToList();
-                _logger.LogInformation("CK model(s) '{Models}' are importing, waiting for 1 second (retries left: {Retries})", string.Join(", ", importingModels), retries);
+                _logger.LogInformation(
+                    "CK model(s) '{Models}' are importing, waiting for 1 second (retries left: {Retries})",
+                    string.Join(", ", importingModels), retries);
                 Interlocked.Decrement(ref retries);
                 if (retries <= 0)
                 {
-                    _logger.LogInformation("Current CK model is importing, tried 5 times to wait for the import to finish");
+                    _logger.LogInformation(
+                        "Current CK model is importing, tried 5 times to wait for the import to finish");
                     throw OperationFailedException.ModelImportingWaitTimeout();
                 }
 
@@ -385,7 +408,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 _logger.LogInformation("No CK model is importing, continuing");
                 using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
                 session.StartTransaction();
-                
+
                 await mongoDbRepositoryDataSource.CkModels.TryDeleteOneAsync(session, compiledModel.ModelId);
                 await mongoDbRepositoryDataSource.CkModels.InsertOneAsync(session, new CkModel
                 {
@@ -395,7 +418,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     Description = compiledModel.Description,
                     ModelState = ModelState.Importing
                 });
-                
+
                 await session.CommitTransactionAsync();
                 break;
             }
@@ -415,7 +438,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     {
                         Key = ckEnumValueDto.Key,
                         Name = ckEnumValueDto.Name,
-                        Description = ckEnumValueDto.Description
+                        Description = ckEnumValueDto.Description,
+                        IsExtension = ckEnumValueDto.IsExtension
                     };
 
                     ckEnumValues.Add(ckEnumValue);
@@ -425,7 +449,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 {
                     CkModelId = compiledModel.ModelId,
                     CkEnumId = new CkId<CkEnumId>(compiledModel.ModelId, ckEnumDto.EnumId),
-                    Description = compiledModel.Description,
+                    Description = ckEnumDto.Description,
+                    UseFlags = ckEnumDto.UseFlags,
+                    IsExtensible = ckEnumDto.IsExtensible,
                     Values = ckEnumValues
                 };
                 transientCkModel.CkEnums.Add(ckEnum);
@@ -477,7 +503,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 var associationRole = new CkAssociationRole
                 {
                     CkModelId = compiledModel.ModelId,
-                    RoleId = new CkId<CkAssociationRoleId>(compiledModel.ModelId, modelAssociationRole.AssociationRoleId),
+                    RoleId = new CkId<CkAssociationRoleId>(compiledModel.ModelId,
+                        modelAssociationRole.AssociationRoleId),
                     Description = modelAssociationRole.Description,
                     InboundName = modelAssociationRole.InboundName,
                     OutboundName = modelAssociationRole.OutboundName,
@@ -538,7 +565,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         }
 
         await mongoDbRepositoryDataSource.CkRecords.DeleteManyAsync(session,
-                Builders<CkRecord>.Filter.Eq(nameof(CkRecord.CkModelId).ToCamelCase(), ckModel.Id));
+            Builders<CkRecord>.Filter.Eq(nameof(CkRecord.CkModelId).ToCamelCase(), ckModel.Id));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkEnums.DeleteManyAsync(session,
@@ -596,8 +623,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                         AttributeValueConverter.ConvertAttributeValue(ckAttributeDto.ValueType, dv)!).ToList(),
                     Description = ckAttributeDto.Description,
                     IsDataStream = ckAttributeDto.IsDataStream,
-                    MetaData = ckAttributeDto.MetaData?.Select(m=> 
-                        new CkAttributeMetaData{Key = m.Key, Value = m.Value, Description = m.Description }).ToList()
+                    MetaData = ckAttributeDto.MetaData?.Select(m =>
+                        new CkAttributeMetaData { Key = m.Key, Value = m.Value, Description = m.Description }).ToList()
                 };
                 transientCkModel.CkAttributes.Add(ckAttribute);
             }

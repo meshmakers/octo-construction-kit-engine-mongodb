@@ -31,6 +31,11 @@ public class CkEnum
     ///     When true the enum is handles as flags enum
     /// </summary>
     public bool UseFlags { get; set; }
+    
+    /// <summary>
+    ///     When true the enum is extensible using the API
+    /// </summary>
+    public bool IsExtensible { get; set; }
 
     /// <summary>
     ///     Gets or sets a list of enum values
