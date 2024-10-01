@@ -248,7 +248,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 throw DatabaseCkModelRepositoryException.CkEnumNotExtensible(ckEnumId);
             }
             
-            Regex nameRegex = new(@"^[_a-zA-Z][_a-zA-Z0-9]*$");
+            Regex nameRegex = new("^[_a-zA-Z][_a-zA-Z0-9]*$");
 
             // System enum values cannot be customized, we store it in a separate list to know them
             var systemValues = dbCkEnum.Values.Where(x => !x.IsExtension).ToList();
@@ -271,13 +271,23 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             // Add all new enums
             foreach (var enumValueToAdd in ckEnumUpdates.Where(x => x.Operation == CkExtensionUpdateOperations.Insert))
             {
+                if (enumValueToAdd.Value.Key < 0)
+                {
+                    throw DatabaseCkModelRepositoryException.CkEnumValueKeyInvalid(ckEnumId, enumValueToAdd.Value.Key);
+                }
+                
                 if (newEnumValueList.Any(x => x.Key == enumValueToAdd.Value.Key))
                 {
                     throw DatabaseCkModelRepositoryException.CkEnumValueAlreadyExists(ckEnumId,
                         enumValueToAdd.Value.Key);
                 }
+
+                if (string.IsNullOrWhiteSpace(enumValueToAdd.Value.Name))
+                {
+                    throw DatabaseCkModelRepositoryException.CkEnumValueNameCannotBeEmpty(ckEnumId, enumValueToAdd.Value.Key);
+                }
                 
-                if (nameRegex.Match(enumValueToAdd.Value.Name).Success == false)
+                if (!Regex.IsMatch(enumValueToAdd.Value.Name, "^[_a-zA-Z][_a-zA-Z0-9]*$"))
                 {
                     throw DatabaseCkModelRepositoryException.CkEnumValueNameInvalid(ckEnumId, enumValueToAdd.Value.Key);
                 }

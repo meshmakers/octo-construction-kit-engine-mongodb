@@ -54,4 +54,14 @@ public class DatabaseCkModelRepositoryException : CkModelException
     {
         return new DatabaseCkModelRepositoryException($"Enum '{ckEnumId}' with key '{valueKey}': Name '{valueName}' already exists, but names must be unique.");
     }
+
+    public static Exception CkEnumValueKeyInvalid(CkId<CkEnumId> ckEnumId, int valueKey)
+    {
+        return new DatabaseCkModelRepositoryException($"Enum '{ckEnumId}' value '{valueKey}' key is invalid. Enum value keys must be positive.");
+    }
+
+    public static Exception CkEnumValueNameCannotBeEmpty(CkId<CkEnumId> ckEnumId, int valueKey)
+    {
+        return new DatabaseCkModelRepositoryException($"Enum '{ckEnumId}' value '{valueKey}' name cannot be empty.");
+    }
 }
