@@ -338,130 +338,147 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         _logger.LogInformation("Executing import of CK model");
         await CheckParallelModelImport(compiledModel, mongoDbRepositoryDataSource);
 
-        _logger.LogInformation("Validating of CK model");
-        await _ckValidationService.ValidateAsync(compiledModel, operationResult);
-        if (operationResult.HasErrors)
+        try
         {
-            _logger.LogInformation("Import of CK model failed, model is not valid");
-            operationResult.WriteMessagesToLogger(_logger);
-            throw OperationFailedException.ValidationErrors();
-        }
 
-        _logger.LogDebug("Starting import of CK model");
+            _logger.LogInformation("Validating of CK model");
+            await _ckValidationService.ValidateAsync(compiledModel, operationResult);
+            if (operationResult.HasErrors)
+            {
+                _logger.LogInformation("Import of CK model failed, model is not valid");
+                operationResult.WriteMessagesToLogger(_logger);
+                throw OperationFailedException.ValidationErrors();
+            }
 
-        CheckCancellation(cancellationToken);
+            _logger.LogDebug("Starting import of CK model");
 
-        ProcessCkRecords(compiledModel, transientCkModel);
-        ProcessCkEnums(compiledModel, transientCkModel);
-        ProcessCkAttributes(compiledModel, transientCkModel);
-        ProcessCkAssociationRoles(compiledModel, transientCkModel);
-        ProcessCkTypesAndAssociations(compiledModel, transientCkModel);
-
-
-        // ValidateAsync
-        Debug.Assert(_ckValidationService != null, nameof(_ckValidationService) + " != null");
-
-        using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
-        session.StartTransaction();
-
-        _logger.LogDebug("Preparing import of CK model to database");
-
-        // Create basic collections first (latter this method is called again to create CkType document collections)
-        await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session);
-        CheckCancellation(cancellationToken);
-
-        _logger.LogDebug("Deleting previous version of CK model");
-
-        // Delete the old version
-        await DeletePreviousVersion(session, compiledModel.ModelId, mongoDbRepositoryDataSource, cancellationToken);
-        CheckCancellation(cancellationToken);
-
-        _logger.LogDebug("Importing CK model to database");
-        if (transientCkModel.CkEnums.Any())
-        {
-            ValidateAndThrow(
-                await mongoDbRepositoryDataSource.CkEnums.BulkImportAsync(session,
-                    transientCkModel.CkEnums.ToArray()));
             CheckCancellation(cancellationToken);
-        }
 
-        if (transientCkModel.CkRecords.Any())
-        {
-            ValidateAndThrow(
-                await mongoDbRepositoryDataSource.CkRecords.BulkImportAsync(session,
-                    transientCkModel.CkRecords.ToArray()));
+            ProcessCkRecords(compiledModel, transientCkModel);
+            ProcessCkEnums(compiledModel, transientCkModel);
+            ProcessCkAttributes(compiledModel, transientCkModel);
+            ProcessCkAssociationRoles(compiledModel, transientCkModel);
+            ProcessCkTypesAndAssociations(compiledModel, transientCkModel);
+
+
+            // ValidateAsync
+            Debug.Assert(_ckValidationService != null, nameof(_ckValidationService) + " != null");
+
+            using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
+            session.StartTransaction();
+
+            _logger.LogDebug("Preparing import of CK model to database");
+
+            // Create basic collections first (latter this method is called again to create CkType document collections)
+            await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session);
             CheckCancellation(cancellationToken);
-        }
 
-        if (transientCkModel.CkAttributes.Any())
-        {
-            ValidateAndThrow(
-                await mongoDbRepositoryDataSource.CkAttributes.BulkImportAsync(session,
-                    transientCkModel.CkAttributes.ToArray()));
+            _logger.LogDebug("Deleting previous version of CK model");
+
+            // Delete the old version
+            await DeletePreviousVersion(session, compiledModel.ModelId, mongoDbRepositoryDataSource, cancellationToken);
             CheckCancellation(cancellationToken);
-        }
 
-        if (transientCkModel.CkAssociationRoles.Any())
-        {
-            ValidateAndThrow(
-                await mongoDbRepositoryDataSource.CkAssociationRoles.BulkImportAsync(session,
-                    transientCkModel.CkAssociationRoles.ToArray()));
+            _logger.LogDebug("Importing CK model to database");
+            if (transientCkModel.CkEnums.Any())
+            {
+                ValidateAndThrow(
+                    await mongoDbRepositoryDataSource.CkEnums.BulkImportAsync(session,
+                        transientCkModel.CkEnums.ToArray()));
+                CheckCancellation(cancellationToken);
+            }
+
+            if (transientCkModel.CkRecords.Any())
+            {
+                ValidateAndThrow(
+                    await mongoDbRepositoryDataSource.CkRecords.BulkImportAsync(session,
+                        transientCkModel.CkRecords.ToArray()));
+                CheckCancellation(cancellationToken);
+            }
+
+            if (transientCkModel.CkAttributes.Any())
+            {
+                ValidateAndThrow(
+                    await mongoDbRepositoryDataSource.CkAttributes.BulkImportAsync(session,
+                        transientCkModel.CkAttributes.ToArray()));
+                CheckCancellation(cancellationToken);
+            }
+
+            if (transientCkModel.CkAssociationRoles.Any())
+            {
+                ValidateAndThrow(
+                    await mongoDbRepositoryDataSource.CkAssociationRoles.BulkImportAsync(session,
+                        transientCkModel.CkAssociationRoles.ToArray()));
+                CheckCancellation(cancellationToken);
+            }
+
+            if (transientCkModel.CkTypes.Any())
+            {
+                ValidateAndThrow(
+                    await mongoDbRepositoryDataSource.CkTypes.BulkImportAsync(session,
+                        transientCkModel.CkTypes.ToArray()));
+                CheckCancellation(cancellationToken);
+            }
+
+            if (transientCkModel.CkTypeAssociations.Any())
+            {
+                ValidateAndThrow(
+                    await mongoDbRepositoryDataSource.CkTypeAssociations.BulkImportAsync(session,
+                        transientCkModel.CkTypeAssociations));
+                CheckCancellation(cancellationToken);
+            }
+
+            if (transientCkModel.CkTypeInheritances.Any())
+            {
+                ValidateAndThrow(
+                    await mongoDbRepositoryDataSource.CkTypeInheritances.BulkImportAsync(session,
+                        transientCkModel.CkTypeInheritances));
+                CheckCancellation(cancellationToken);
+            }
+
+            if (transientCkModel.CkRecordInheritances.Any())
+            {
+                ValidateAndThrow(
+                    await mongoDbRepositoryDataSource.CkRecordInheritances.BulkImportAsync(session,
+                        transientCkModel.CkRecordInheritances));
+                CheckCancellation(cancellationToken);
+            }
+
+            _logger.LogDebug("Updating collections");
+            // This operation is critical. It forces an exclusive write lock on the database.
+            await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session);
             CheckCancellation(cancellationToken);
-        }
 
-        if (transientCkModel.CkTypes.Any())
-        {
-            ValidateAndThrow(
-                await mongoDbRepositoryDataSource.CkTypes.BulkImportAsync(session, transientCkModel.CkTypes.ToArray()));
+            _logger.LogDebug("Committing model import transaction");
+            await session.CommitTransactionAsync();
+
+            _logger.LogDebug("Pos-work of CK model import");
+            using var sessionComplete = await mongoDbRepositoryDataSource.CreateSessionAsync();
+            sessionComplete.StartTransaction();
+
+            _logger.LogDebug("Updating index");
+            await mongoDbRepositoryDataSource.UpdateIndexAsync(sessionComplete);
             CheckCancellation(cancellationToken);
-        }
 
-        if (transientCkModel.CkTypeAssociations.Any())
+            _logger.LogDebug("Updating model state");
+            var updateDefinition = Builders<CkModel>.Update.Set(x => x.ModelState, ModelState.Available);
+            await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(sessionComplete, compiledModel.ModelId,
+                updateDefinition);
+
+            await sessionComplete.CommitTransactionAsync();
+        }
+        catch (Exception)
         {
-            ValidateAndThrow(
-                await mongoDbRepositoryDataSource.CkTypeAssociations.BulkImportAsync(session,
-                    transientCkModel.CkTypeAssociations));
-            CheckCancellation(cancellationToken);
+            using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
+            session.StartTransaction();
+            
+            _logger.LogDebug("Rolling back CK model import transaction");
+            await mongoDbRepositoryDataSource.CkModels.DeleteOneAsync(session, compiledModel.ModelId);
+
+            await session.CommitTransactionAsync();
+
+            throw;
         }
-
-        if (transientCkModel.CkTypeInheritances.Any())
-        {
-            ValidateAndThrow(
-                await mongoDbRepositoryDataSource.CkTypeInheritances.BulkImportAsync(session,
-                    transientCkModel.CkTypeInheritances));
-            CheckCancellation(cancellationToken);
-        }
-
-        if (transientCkModel.CkRecordInheritances.Any())
-        {
-            ValidateAndThrow(
-                await mongoDbRepositoryDataSource.CkRecordInheritances.BulkImportAsync(session,
-                    transientCkModel.CkRecordInheritances));
-            CheckCancellation(cancellationToken);
-        }
-
-        _logger.LogDebug("Updating collections");
-        // This operation is critical. It forces an exclusive write lock on the database.
-        await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session);
-        CheckCancellation(cancellationToken);
-
-        _logger.LogDebug("Committing model import transaction");
-        await session.CommitTransactionAsync();
-
-        _logger.LogDebug("Pos-work of CK model import");
-        using var sessionComplete = await mongoDbRepositoryDataSource.CreateSessionAsync();
-        sessionComplete.StartTransaction();
-
-        _logger.LogDebug("Updating index");
-        await mongoDbRepositoryDataSource.UpdateIndexAsync(sessionComplete);
-        CheckCancellation(cancellationToken);
-
-        _logger.LogDebug("Updating model state");
-        var updateDefinition = Builders<CkModel>.Update.Set(x => x.ModelState, ModelState.Available);
-        await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(sessionComplete, compiledModel.ModelId,
-            updateDefinition);
-
-        await sessionComplete.CommitTransactionAsync();
 
         _logger.LogDebug("Import of CK model to database completed");
     }
