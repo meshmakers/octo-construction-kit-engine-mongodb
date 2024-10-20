@@ -24,6 +24,7 @@ internal class RtEntityFieldFilterResolver<TEntity>(
                attributeName == nameof(RtEntity.RtId) ||
                attributeName == nameof(RtEntity.RtCreationDateTime) ||
                attributeName == nameof(RtEntity.RtChangedDateTime) ||
+               attributeName == nameof(RtEntity.RtVersion) ||
                attributeName == nameof(RtEntity.RtWellKnownName);
     }
     
