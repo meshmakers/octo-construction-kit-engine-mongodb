@@ -179,7 +179,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                                                                 true || type.Namespace!.StartsWith(typeof(GeoJson)
                                                                     .Namespace!)
                                                                 || type.Namespace!.StartsWith(typeof(CkModelId)
-                                                                    .Namespace!));
+                                                                    .Namespace!) || type == typeof(List<RtRecord>));
         BsonSerializer.RegisterSerializer(objectSerializer);
         
         BsonSerializer.RegisterSerializer(new OctoObjectIdSerializer());
