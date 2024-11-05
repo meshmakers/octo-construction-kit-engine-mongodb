@@ -1,4 +1,5 @@
-﻿using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
+﻿using System.Collections.Concurrent;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using MongoDB.Driver.GridFS;
@@ -11,7 +12,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 public class MongoRepository : IRepositoryInternal
 {
     private readonly IGridFSBucket _bucket;
-    private readonly Dictionary<Type, string> _collectionNameMapping = new();
+    private readonly ConcurrentDictionary<Type, string> _collectionNameMapping = new();
 
     private readonly IMongoDatabase _database;
 
@@ -69,7 +70,7 @@ public class MongoRepository : IRepositoryInternal
         if (!_collectionNameMapping.TryGetValue(typeof(TDocument), out var name))
         {
             name = mongoDataSourceMapper.CollectionNamePrefix;
-            _collectionNameMapping.Add(typeof(TDocument), name);
+            _collectionNameMapping.TryAdd(typeof(TDocument), name);
         }
 
         if (!string.IsNullOrEmpty(suffix))
