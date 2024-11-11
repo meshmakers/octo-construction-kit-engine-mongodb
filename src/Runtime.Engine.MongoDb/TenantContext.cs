@@ -484,14 +484,14 @@ public class TenantContext : ITenantContext
         var tenantRepository = GetTenantRepositoryAsAdmin();
 
         var dataQueryOperation = DataQueryOperation.Create()
-            .FieldFilter(nameof(RtConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);
+            .FieldFilter(nameof(RtTenantConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);
 
         var resultSet =
-            await tenantRepository.GetRtEntitiesByTypeAsync<RtConfiguration>(adminSession, dataQueryOperation);
+            await tenantRepository.GetRtEntitiesByTypeAsync<RtTenantConfiguration>(adminSession, dataQueryOperation);
         var configuration = resultSet.Items.FirstOrDefault();
         if (configuration == null)
         {
-            configuration = new RtConfiguration { RtWellKnownName = key, ConfigurationValue = value.Serialize() };
+            configuration = new RtTenantConfiguration { RtWellKnownName = key, ConfigurationValue = value.Serialize() };
             await tenantRepository.InsertOneRtEntityAsync(adminSession, configuration);
         }
         else
@@ -508,9 +508,9 @@ public class TenantContext : ITenantContext
         var tenantRepository = GetTenantRepositoryAsAdmin();
 
         var fieldFilters = new List<FieldFilter>
-            { new(nameof(RtConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key) };
+            { new(nameof(RtTenantConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key) };
 
-        await tenantRepository.DeleteOneRtEntityAsync<RtConfiguration>(adminSession, fieldFilters);
+        await tenantRepository.DeleteOneRtEntityAsync<RtTenantConfiguration>(adminSession, fieldFilters);
     }
 
     #endregion Configuration
@@ -649,10 +649,10 @@ public class TenantContext : ITenantContext
         var tenantRepository = GetTenantRepositoryAsAdmin();
 
         var dataQueryOperation = DataQueryOperation.Create()
-            .FieldFilter(nameof(RtConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);
+            .FieldFilter(nameof(RtTenantConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);
 
         var resultSet =
-            await tenantRepository.GetRtEntitiesByTypeAsync<RtConfiguration>(systemSession, dataQueryOperation);
+            await tenantRepository.GetRtEntitiesByTypeAsync<RtTenantConfiguration>(systemSession, dataQueryOperation);
         var configuration = resultSet.Items.FirstOrDefault();
         if (configuration == null || configuration.ConfigurationValue == null)
         {
