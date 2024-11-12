@@ -19,7 +19,7 @@ public class MongoRepository : IRepositoryInternal
     public MongoRepository(IMongoDatabase mongoDatabase)
     {
         _database = mongoDatabase;
-        
+
         // Do not do here any commands that access the database. At initial 
         // setups the user might not have been already created.
 
@@ -31,7 +31,8 @@ public class MongoRepository : IRepositoryInternal
     }
 
 
-    public async Task CreateCollectionIfNotExistsAsync<TKey, TDocument>(IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
+    public async Task CreateCollectionIfNotExistsAsync<TKey, TDocument>(
+        IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
         bool enableChangeStreamPreAndPostImages, string? suffix = null)
         where TKey : notnull
         where TDocument : class, new()
@@ -41,13 +42,11 @@ public class MongoRepository : IRepositoryInternal
             var name = GetCollectionName(mongoDataSourceMapper, suffix);
             var options = new CreateCollectionOptions();
             if (IsVersionGreaterOrEqual(5))
-            {
                 options.ChangeStreamPreAndPostImagesOptions = new ChangeStreamPreAndPostImagesOptions
                 {
                     Enabled = enableChangeStreamPreAndPostImages
                 };
-            }
-           
+
             await _database.CreateCollectionAsync(name, options);
         }
     }
@@ -60,10 +59,12 @@ public class MongoRepository : IRepositoryInternal
     {
         var name = GetCollectionName(mongoDataSourceMapper, suffix);
 
-        return new MongoDbDataSourceCollection<TKey, TDocument>(_database.GetCollection<TDocument>(name), mongoDataSourceMapper);
+        return new MongoDbDataSourceCollection<TKey, TDocument>(_database.GetCollection<TDocument>(name),
+            mongoDataSourceMapper);
     }
 
-    public string GetCollectionName<TKey, TDocument>(IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper, string? suffix = null)
+    public string GetCollectionName<TKey, TDocument>(IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
+        string? suffix = null)
         where TKey : notnull
         where TDocument : class, new()
     {
@@ -73,15 +74,13 @@ public class MongoRepository : IRepositoryInternal
             _collectionNameMapping.TryAdd(typeof(TDocument), name);
         }
 
-        if (!string.IsNullOrEmpty(suffix))
-        {
-            return name + "_" + suffix;
-        }
+        if (!string.IsNullOrEmpty(suffix)) return name + "_" + suffix;
 
         return name;
     }
 
-    public async Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
+    public async Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,
+        Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default)
     {
         var options = new GridFSUploadOptions
@@ -110,19 +109,16 @@ public class MongoRepository : IRepositoryInternal
 
         await _bucket.UploadFromStreamAsync(largeBinaryId, filename, stream, options, cancellationToken);
     }
-    
+
     public async Task<ObjectId> ReplaceLargeBinaryAsync(string filename, string contentType,
         Stream stream, Dictionary<string, object> metadata, CancellationToken cancellationToken = default)
     {
         var filter = Builders<GridFSFileInfo>.Filter.Eq("Filename", filename);
         var asyncCursor = await _bucket.FindAsync(filter, cancellationToken: cancellationToken);
         var gridFsFileInfo = await asyncCursor.FirstOrDefaultAsync(cancellationToken);
-        if (gridFsFileInfo != null)
-        {
-            await _bucket.DeleteAsync(gridFsFileInfo.Id, cancellationToken);
-        }
-        var largeBinaryId = ObjectId.GenerateNewId(); 
-        
+        if (gridFsFileInfo != null) await _bucket.DeleteAsync(gridFsFileInfo.Id, cancellationToken);
+        var largeBinaryId = ObjectId.GenerateNewId();
+
         var options = new GridFSUploadOptions
         {
             Metadata = new BsonDocument
@@ -156,27 +152,22 @@ public class MongoRepository : IRepositoryInternal
         var filter = Builders<GridFSFileInfo>.Filter.Eq("_id", largeBinaryId);
         var asyncCursor = await _bucket.FindAsync(filter, cancellationToken: cancellationToken);
         var gridFsFileInfo = await asyncCursor.FirstOrDefaultAsync(cancellationToken);
-        if (gridFsFileInfo == null)
-        {
-            return null;
-        }
+        if (gridFsFileInfo == null) return null;
         return new DownloadInfo(gridFsFileInfo);
     }
-    
+
     public async Task<IDownloadInfo?> GetLargeBinaryAsync(string fileName,
         CancellationToken cancellationToken = default)
     {
         var filter = Builders<GridFSFileInfo>.Filter.Eq("Filename", fileName);
         var asyncCursor = await _bucket.FindAsync(filter, cancellationToken: cancellationToken);
         var gridFsFileInfo = await asyncCursor.FirstOrDefaultAsync(cancellationToken);
-        if (gridFsFileInfo == null)
-        {
-            return null;
-        }
+        if (gridFsFileInfo == null) return null;
         return new DownloadInfo(gridFsFileInfo);
     }
 
-    private async Task<bool> CollectionExistsAsync<TKey, TDocument>(IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
+    private async Task<bool> CollectionExistsAsync<TKey, TDocument>(
+        IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
         string? suffix = null)
         where TKey : notnull
         where TDocument : class, new()
@@ -189,18 +180,15 @@ public class MongoRepository : IRepositoryInternal
         //check for existence
         return await collections.AnyAsync();
     }
-    
+
     private bool IsVersionGreaterOrEqual(int majorVersion)
     {
         var command = new BsonDocument("buildInfo", 1);
         var result = _database.RunCommand<BsonDocument>(command);
         var version = result["version"].AsString;
-        
+
         var majorVersionString = version.Split('.')[0];
-        if (int.TryParse(majorVersionString, out var tmp))
-        {
-            return tmp >= majorVersion;
-        }
+        if (int.TryParse(majorVersionString, out var tmp)) return tmp >= majorVersion;
 
         return false;
     }

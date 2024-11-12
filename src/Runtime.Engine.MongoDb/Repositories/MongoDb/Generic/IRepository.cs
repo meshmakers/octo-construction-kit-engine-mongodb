@@ -8,7 +8,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 /// </summary>
 public interface IRepository
 {
-    Task CreateCollectionIfNotExistsAsync<TKey, TDocument>(IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
+    Task CreateCollectionIfNotExistsAsync<TKey, TDocument>(
+        IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
         bool enableChangeStreamPreAndPostImages, string? suffix = null)
         where TDocument : class,
         new()
@@ -21,13 +22,16 @@ public interface IRepository
         new()
         where TKey : notnull;
 
-    Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
+    Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,
+        Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default);
 
-    Task ReplaceLargeBinaryAsync(ObjectId largeBinaryId, string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
+    Task ReplaceLargeBinaryAsync(ObjectId largeBinaryId, string filename, string contentType, Stream stream,
+        Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default);
-    
-    Task<ObjectId> ReplaceLargeBinaryAsync(string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
+
+    Task<ObjectId> ReplaceLargeBinaryAsync(string filename, string contentType, Stream stream,
+        Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default);
 
     Task DeleteLargeBinaryAsync(ObjectId largeBinaryId, CancellationToken cancellationToken = default);

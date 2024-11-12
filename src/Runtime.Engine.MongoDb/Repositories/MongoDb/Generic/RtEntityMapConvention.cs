@@ -20,16 +20,16 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 internal class RtEntityMapConvention(ICkClassMappingService ckClassMappingService)
     : IMemberMapConvention, IClassMapConvention
 {
-    public void Apply(BsonMemberMap memberMap)
-    {
-        memberMap.SetShouldSerializeMethod(_ => false);
-    }
-    
     public void Apply(BsonClassMap classMap)
     {
         Delegate @delegate = CreateInstance;
         var mapCreator = classMap.MapCreator(@delegate);
         mapCreator.SetArguments(new[] { nameof(RtEntity.CkTypeId), nameof(RtEntity.RtId) });
+    }
+
+    public void Apply(BsonMemberMap memberMap)
+    {
+        memberMap.SetShouldSerializeMethod(_ => false);
     }
 
     public string Name => "RtEntityMapConvention";
@@ -45,4 +45,3 @@ internal class RtEntityMapConvention(ICkClassMappingService ckClassMappingServic
         return rtEntity;
     }
 }
-

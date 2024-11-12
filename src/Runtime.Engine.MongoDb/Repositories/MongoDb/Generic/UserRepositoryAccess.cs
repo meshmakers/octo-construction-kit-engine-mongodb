@@ -18,15 +18,13 @@ internal class UserRepositoryAccess(IServiceProvider serviceProvider) : IUserRep
         {
             var loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
             var systemConfiguration = serviceProvider.GetRequiredService<IOptions<OctoSystemConfiguration>>();
-        
-            var newClient = new UserMongoRepositoryClient(loggerFactory.CreateLogger<UserMongoRepositoryClient>(), systemConfiguration, serviceProvider, databaseName);
+
+            var newClient = new UserMongoRepositoryClient(loggerFactory.CreateLogger<UserMongoRepositoryClient>(),
+                systemConfiguration, serviceProvider, databaseName);
             return newClient;
         });
 
-        if (client == null)
-        {
-            throw TenantException.CannotCreateMongoDbRepositoryClient(databaseName);
-        }
+        if (client == null) throw TenantException.CannotCreateMongoDbRepositoryClient(databaseName);
 
         return client;
     }

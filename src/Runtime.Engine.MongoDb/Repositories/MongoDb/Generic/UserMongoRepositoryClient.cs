@@ -6,12 +6,13 @@ using MongoDB.Driver;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
 /// <summary>
-/// Implementation of mongodb repository client for user (CRUD) operations.
+///     Implementation of mongodb repository client for user (CRUD) operations.
 /// </summary>
 internal class UserMongoRepositoryClient(
     ILogger<UserMongoRepositoryClient> logger,
     IOptions<OctoSystemConfiguration> systemConfiguration,
-    IServiceProvider serviceProvider, string databaseName)
+    IServiceProvider serviceProvider,
+    string databaseName)
     : MongoRepositoryClient(logger, systemConfiguration, serviceProvider)
 {
     protected override MongoUrl CreateConnectionUri()
@@ -19,16 +20,12 @@ internal class UserMongoRepositoryClient(
         var urlBuilder = new MongoUrlBuilder();
 
         var systemConfiguration = SystemConfiguration.Value;
-        
+
         if (systemConfiguration.DatabaseHost.Contains(","))
-        {
             urlBuilder.Servers =
                 systemConfiguration.DatabaseHost.Split(",").Select(x => new MongoServerAddress(x));
-        }
         else
-        {
             urlBuilder.Server = new MongoServerAddress(systemConfiguration.DatabaseHost);
-        }
 
         if (!string.IsNullOrWhiteSpace(systemConfiguration.DatabaseUser)
             && !string.IsNullOrWhiteSpace(systemConfiguration.DatabaseUserPassword))

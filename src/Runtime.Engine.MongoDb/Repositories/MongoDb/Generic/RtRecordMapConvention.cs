@@ -25,12 +25,7 @@ internal class RtRecordMapConvention : IMemberMapConvention, IClassMapConvention
     {
         _ckClassMappingService = ckClassMappingService;
     }
-    
-    public void Apply(BsonMemberMap memberMap)
-    {
-        memberMap.SetShouldSerializeMethod(o => false);
-    }
-    
+
     public void Apply(BsonClassMap classMap)
     {
         Delegate @delegate = CreateInstance;
@@ -38,8 +33,13 @@ internal class RtRecordMapConvention : IMemberMapConvention, IClassMapConvention
         creatorMap.SetArguments(new[] { nameof(RtRecord.CkRecordId) });
     }
 
+    public void Apply(BsonMemberMap memberMap)
+    {
+        memberMap.SetShouldSerializeMethod(o => false);
+    }
+
     public string Name => "RtRecordMapConvention";
-    
+
     private RtRecord CreateInstance(CkId<CkRecordId> ckRecordId)
     {
         var type = _ckClassMappingService.GetCkRecordClass(ckRecordId);
@@ -50,4 +50,3 @@ internal class RtRecordMapConvention : IMemberMapConvention, IClassMapConvention
         return rtRecord;
     }
 }
-

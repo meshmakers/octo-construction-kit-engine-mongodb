@@ -8,7 +8,6 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
-using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -27,15 +26,17 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 [DebuggerDisplay("{" + nameof(InstanceId) + "}")]
 public abstract class MongoRepositoryClient : IRepositoryClient
 {
-    private readonly ILogger<MongoRepositoryClient> _logger;
-    protected readonly IOptions<OctoSystemConfiguration> SystemConfiguration;
-    protected readonly Guid InstanceId = Guid.NewGuid();
-    protected readonly IServiceProvider ServiceProvider;
     private const string OctoConventionCamelCase = "octo-convention-camelCase";
     private const string OctoRtEntityConvention = "octo-convention-rtEntity";
     private const string OctoRtRecordConvention = "octo-convention-rtRecord";
 
     private static bool _isRegistered;
+
+    private static readonly object ObjectIdLock = new();
+    private readonly ILogger<MongoRepositoryClient> _logger;
+    protected readonly Guid InstanceId = Guid.NewGuid();
+    protected readonly IServiceProvider ServiceProvider;
+    protected readonly IOptions<OctoSystemConfiguration> SystemConfiguration;
     private MongoClient? _client;
 
 
@@ -53,7 +54,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
     }
 
     /// <summary>
-    /// Returns the mongodb client
+    ///     Returns the mongodb client
     /// </summary>
     protected MongoClient Client
     {
@@ -65,10 +66,10 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 var settings = MongoClientSettings.FromUrl(mongoUrl);
                 settings.ReadConcern = ReadConcern.Majority;
                 settings.WriteConcern = new WriteConcern(WriteConcern.WMode.Majority, TimeSpan.FromSeconds(30));
-                
+
                 // Always retry writes to prevent 
                 // Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction. 
-                settings.RetryWrites = true; 
+                settings.RetryWrites = true;
                 settings.ClusterConfigurator = cb =>
                 {
                     cb.Subscribe<CommandStartedEvent>(e =>
@@ -91,12 +92,6 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         }
     }
 
-    /// <summary>
-    /// Creates a connection uri for the mongodb client
-    /// </summary>
-    /// <returns></returns>
-    protected abstract MongoUrl CreateConnectionUri();
-
     public async Task<IOctoSession> GetSessionAsync()
     {
         var session = await Client.StartSessionAsync();
@@ -118,23 +113,25 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         return new MongoRepository(Client.GetDatabase(name));
     }
 
-    private static readonly object ObjectIdLock = new();
+    public void Dispose()
+    {
+        Client.Cluster.Dispose();
+    }
 
+    /// <summary>
+    ///     Creates a connection uri for the mongodb client
+    /// </summary>
+    /// <returns></returns>
+    protected abstract MongoUrl CreateConnectionUri();
 
 
     private static void ConfigureMongoDriver(IServiceProvider serviceProvider)
     {
-        if (_isRegistered)
-        {
-            return;
-        }
+        if (_isRegistered) return;
 
         lock (ObjectIdLock)
         {
-            if (_isRegistered)
-            {
-                return;
-            }
+            if (_isRegistered) return;
 
             // Remove convention first to avoid duplications
             // this call of Remove method makes no errors if occurs before any Register method call
@@ -147,7 +144,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             {
                 new CamelCaseElementNameConvention()
             }, _ => true);
-            
+
             RegisterClassMaps();
 
             // This convention is needed to ensure that properties of a derived class of RtEntity
@@ -172,7 +169,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
     {
         BsonSerializer.RegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
         BsonSerializer.RegisterDiscriminatorConvention(typeof(RtEntity), new RtEntityDiscriminatorConvention("_t"));
-        
+
         var objectSerializer = new OctoObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
                                                                 type.FullName?.StartsWith(typeof(RtEntity)
                                                                     .Namespace!) ==
@@ -181,7 +178,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                                                                 || type.Namespace!.StartsWith(typeof(CkModelId)
                                                                     .Namespace!) || type == typeof(List<RtRecord>));
         BsonSerializer.RegisterSerializer(objectSerializer);
-        
+
         BsonSerializer.RegisterSerializer(new OctoObjectIdSerializer());
 
         BsonClassMap.RegisterClassMap<CkModel>(cm =>
@@ -229,7 +226,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.IsExtensible).SetIgnoreIfDefault(true);
             cm.GetMemberMap(c => c.Values).SetIsRequired(true);
         });
-        
+
         BsonClassMap.RegisterClassMap<CkEnumValue>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
@@ -421,7 +418,6 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.TargetRtId);
             cm.GetMemberMap(c => c.TargetCkTypeId);
         });
-        
 
 
         BsonSerializer.RegisterSerializer(new CkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
@@ -433,10 +429,5 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         BsonSerializer.RegisterSerializer(new ModelIdSerializer());
         BsonSerializer.RegisterSerializer(new RtEntitySerializer());
         BsonSerializer.RegisterSerializer(new RtRecordSerializer());
-    }
-
-    public void Dispose()
-    {
-        Client.Cluster.Dispose();
     }
 }

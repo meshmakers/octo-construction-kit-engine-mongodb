@@ -1,19 +1,17 @@
-﻿using MongoDB.Bson.Serialization;
-using MongoDB.Driver;
-using MongoDB.Driver.Linq;
+﻿using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
 internal sealed class OctoDelegatedPipelineStageDefinition<TInput, TOutput>(
     string operatorName,
-    Func<IBsonSerializer<TInput>, IBsonSerializerRegistry, LinqProvider, RenderedPipelineStageDefinition<TOutput>>
+    Func<RenderArgs<TInput>, RenderedPipelineStageDefinition<TOutput>>
         renderer)
     : PipelineStageDefinition<TInput, TOutput>
 {
     public override string OperatorName { get; } = operatorName;
 
-    public override RenderedPipelineStageDefinition<TOutput> Render(IBsonSerializer<TInput> inputSerializer, IBsonSerializerRegistry serializerRegistry, LinqProvider linqProvider)
+    public override RenderedPipelineStageDefinition<TOutput> Render(RenderArgs<TInput> args)
     {
-        return renderer(inputSerializer, serializerRegistry, linqProvider);
+        return renderer(args);
     }
 }

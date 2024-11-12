@@ -18,15 +18,13 @@ internal class AdminRepositoryAccess(IServiceProvider serviceProvider) : IAdminR
         {
             var loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
             var systemConfiguration = serviceProvider.GetRequiredService<IOptions<OctoSystemConfiguration>>();
-        
-            var newClient = new AdminMongoRepositoryClient(loggerFactory.CreateLogger<AdminMongoRepositoryClient>(), systemConfiguration, serviceProvider, databaseName);
+
+            var newClient = new AdminMongoRepositoryClient(loggerFactory.CreateLogger<AdminMongoRepositoryClient>(),
+                systemConfiguration, serviceProvider, databaseName);
             return newClient;
         });
 
-        if (client == null)
-        {
-            throw TenantException.CannotCreateMongoDbRepositoryClient(databaseName);
-        }
+        if (client == null) throw TenantException.CannotCreateMongoDbRepositoryClient(databaseName);
 
         return client;
     }

@@ -1,8 +1,6 @@
 using MongoDB.Bson;
-using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using MongoDB.Driver.Core.Misc;
-using MongoDB.Driver.Linq;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic.Builders;
 
@@ -10,18 +8,19 @@ internal sealed class ConcatArrayDefinition<TSource, TResult>(
     AggregateExpressionDefinition<TSource, TResult>[] arrays)
     : AggregateExpressionDefinition<TSource, TResult>
 {
-    private readonly AggregateExpressionDefinition<TSource, TResult>[] _arrays = Ensure.IsNotNull(arrays, nameof(arrays));
+    private readonly AggregateExpressionDefinition<TSource, TResult>[] _arrays =
+        Ensure.IsNotNull(arrays, nameof(arrays));
 
 
-    public override BsonDocument Render(IBsonSerializer<TSource> sourceSerializer,
-        IBsonSerializerRegistry serializerRegistry, LinqProvider linqProvider)
+    public override BsonDocument Render(RenderArgs<TSource> args)
     {
         var array = new BsonArray();
         foreach (var filter in _arrays)
         {
-            var renderedFilter = filter.Render(sourceSerializer, serializerRegistry, linqProvider);
-            array.Add(renderedFilter); 
+            var renderedFilter = filter.Render(args);
+            array.Add(renderedFilter);
         }
-        return new BsonDocument( new BsonDocument("$concatArrays", array));
+
+        return new BsonDocument(new BsonDocument("$concatArrays", array));
     }
 }

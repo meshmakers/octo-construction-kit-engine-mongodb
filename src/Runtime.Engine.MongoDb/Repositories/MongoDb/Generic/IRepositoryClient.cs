@@ -9,5 +9,4 @@ public interface IRepositoryClient : IDisposable
     IOctoSession GetSession();
 
     IRepository GetRepository(string name);
-
 }

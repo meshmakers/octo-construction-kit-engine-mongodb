@@ -1,20 +1,17 @@
 using MongoDB.Bson;
-using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using MongoDB.Driver.Core.Misc;
-using MongoDB.Driver.Linq;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic.Builders;
 
-internal sealed class ExpressionFilterDefinition<TSource, TResult>(AggregateExpressionDefinition<TSource, TResult> filter) : AggregateExpressionDefinition<TSource, TResult>
+internal sealed class ExpressionFilterDefinition<TSource, TResult>(
+    AggregateExpressionDefinition<TSource, TResult> filter) : AggregateExpressionDefinition<TSource, TResult>
 {
     private readonly AggregateExpressionDefinition<TSource, TResult> _filter = Ensure.IsNotNull(filter, nameof(filter));
 
-    public override BsonDocument Render(IBsonSerializer<TSource> documentSerializer, IBsonSerializerRegistry serializerRegistry,
-        LinqProvider linqProvider)
+    public override BsonDocument Render(RenderArgs<TSource> args)
     {
-        var renderedFilter = _filter.Render(documentSerializer, serializerRegistry, linqProvider);
+        var renderedFilter = _filter.Render(args);
         return new BsonDocument("$expr", renderedFilter);
-
     }
 }

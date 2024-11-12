@@ -2,7 +2,6 @@ using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using MongoDB.Driver.Core.Misc;
-using MongoDB.Driver.Linq;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
@@ -27,25 +26,36 @@ internal static class CustomPipelineBuilder
         const string operatorName = "$lookup";
         var stage = new CustomDelegatedPipelineStageDefinition<TInput, TOutput>(
             operatorName,
-            (inputSerializer, sr, linqProvider) =>
+            args =>
             {
                 var foreignSerializer = options.ForeignSerializer ??
-                                        inputSerializer as IBsonSerializer<TForeignDocument> ??
-                                        sr.GetSerializer<TForeignDocument>();
+                                        args.DocumentSerializer as IBsonSerializer<TForeignDocument> ??
+                                        args.GetSerializer<TForeignDocument>();
                 var outputSerializer = options.ResultSerializer ??
-                                       inputSerializer as IBsonSerializer<TOutput> ?? sr.GetSerializer<TOutput>();
+                                       args.DocumentSerializer as IBsonSerializer<TOutput> ??
+                                       args.GetSerializer<TOutput>();
                 if (lookupPipeline != null)
                 {
-                    var lookupPipelineDocuments = new BsonArray(lookupPipeline.Render(foreignSerializer, sr, linqProvider).Documents);
+                    var lookupPipelineDocuments = new BsonArray(lookupPipeline
+                        .Render(new RenderArgs<TForeignDocument>(foreignSerializer, args.SerializerRegistry,
+                            args.LinqProvider)).Documents);
 
                     return new RenderedPipelineStageDefinition<TOutput>(
                         operatorName, new BsonDocument(operatorName, new BsonDocument
                         {
                             { "from", foreignCollection.CollectionNamespace.CollectionName },
-                            { "localField", localField.Render(inputSerializer, sr, linqProvider).FieldName },
-                            { "foreignField", foreignField.Render(foreignSerializer, sr, linqProvider).FieldName },
+                            { "localField", localField.Render(args).FieldName },
+                            {
+                                "foreignField",
+                                foreignField.Render(new RenderArgs<TForeignDocument>(foreignSerializer,
+                                    args.SerializerRegistry, args.LinqProvider)).FieldName
+                            },
                             { "pipeline", lookupPipelineDocuments },
-                            { "as", @as.Render(outputSerializer, sr, linqProvider).FieldName }
+                            {
+                                "as",
+                                @as.Render(new RenderArgs<TOutput>(outputSerializer, args.SerializerRegistry,
+                                    args.LinqProvider)).FieldName
+                            }
                         }),
                         outputSerializer);
                 }
@@ -54,9 +64,17 @@ internal static class CustomPipelineBuilder
                     operatorName, new BsonDocument(operatorName, new BsonDocument
                     {
                         { "from", foreignCollection.CollectionNamespace.CollectionName },
-                        { "localField", localField.Render(inputSerializer, sr, linqProvider).FieldName },
-                        { "foreignField", foreignField.Render(foreignSerializer, sr, linqProvider).FieldName },
-                        { "as", @as.Render(outputSerializer, sr, linqProvider).FieldName }
+                        { "localField", localField.Render(args).FieldName },
+                        {
+                            "foreignField",
+                            foreignField.Render(new RenderArgs<TForeignDocument>(foreignSerializer,
+                                args.SerializerRegistry, args.LinqProvider)).FieldName
+                        },
+                        {
+                            "as",
+                            @as.Render(new RenderArgs<TOutput>(outputSerializer, args.SerializerRegistry,
+                                args.LinqProvider)).FieldName
+                        }
                     }),
                     outputSerializer);
             });
@@ -65,25 +83,17 @@ internal static class CustomPipelineBuilder
     }
 
     private sealed class
-        CustomDelegatedPipelineStageDefinition<TInput, TOutput> : PipelineStageDefinition<TInput, TOutput>
-    {
-        private readonly Func<IBsonSerializer<TInput>, IBsonSerializerRegistry, LinqProvider,
-            RenderedPipelineStageDefinition<TOutput>> _renderer;
-
-        public CustomDelegatedPipelineStageDefinition(string operatorName,
-            Func<IBsonSerializer<TInput>, IBsonSerializerRegistry, LinqProvider,
+        CustomDelegatedPipelineStageDefinition<TInput, TOutput>(
+            string operatorName,
+            Func<RenderArgs<TInput>,
                 RenderedPipelineStageDefinition<TOutput>> renderer)
-        {
-            OperatorName = operatorName;
-            _renderer = renderer;
-        }
+        : PipelineStageDefinition<TInput, TOutput>
+    {
+        public override string OperatorName { get; } = operatorName;
 
-        public override string OperatorName { get; }
-
-        public override RenderedPipelineStageDefinition<TOutput> Render(IBsonSerializer<TInput> inputSerializer,
-            IBsonSerializerRegistry serializerRegistry, LinqProvider linqProvider)
+        public override RenderedPipelineStageDefinition<TOutput> Render(RenderArgs<TInput> args)
         {
-            return _renderer(inputSerializer, serializerRegistry, linqProvider);
+            return renderer(args);
         }
     }
 }
