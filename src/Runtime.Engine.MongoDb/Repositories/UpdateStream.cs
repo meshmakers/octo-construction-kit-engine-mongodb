@@ -27,23 +27,23 @@ internal class UpdateStream<TDocument> : IUpdateStream<TDocument>
     {
         Task.Run(async () =>
         {
-            using (var cursor = await documentCollection.WatchAsync(pipelineDefinition,
-                       new ChangeStreamOptions
-                       {
-                           FullDocument = ChangeStreamFullDocumentOption.UpdateLookup,
-                           FullDocumentBeforeChange = ChangeStreamFullDocumentBeforeChangeOption.WhenAvailable
-                       },
-                       requestCancellationToken))
-            {
-                await cursor.ForEachAsync(change =>
+            using var cursor = await documentCollection.WatchAsync(pipelineDefinition,
+                new ChangeStreamOptions
                 {
-                    _messageStream.OnNext(new UpdateInfo<TDocument>(change));
-                    if (!_messageStream.HasObservers)
-                    {
-                        _cancellationTokenSource.Cancel();
-                    }
-                }, _cancellationTokenSource.Token);
-            }
+                    FullDocument = ChangeStreamFullDocumentOption.UpdateLookup,
+                    FullDocumentBeforeChange = ChangeStreamFullDocumentBeforeChangeOption.WhenAvailable
+                },
+                requestCancellationToken);
+            
+            await cursor.ForEachAsync(change =>
+            {
+                _messageStream.OnNext(new UpdateInfo<TDocument>(change));
+                if (!_messageStream.HasObservers)
+                {
+                    _cancellationTokenSource.Cancel();
+                }
+            }, _cancellationTokenSource.Token);
+            
         }, _cancellationTokenSource.Token);
     }
 }

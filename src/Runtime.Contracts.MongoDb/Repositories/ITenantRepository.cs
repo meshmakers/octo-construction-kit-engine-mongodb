@@ -142,6 +142,56 @@ public interface ITenantRepository : IRuntimeRepository
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
 
     #endregion Data query
+    
+    #region Subscriptions / Watch
+    
+    /// <summary>
+    /// Creates a subscription to the update stream for the given construction kit type.
+    /// </summary>
+    /// <param name="ckTypeId">Construction kit type identifier</param>
+    /// <param name="watchStreamFilter">Filter for the update stream</param>
+    /// <param name="cancellationToken">A cancellation token that can be used to cancel the operation</param>
+    /// <returns>Update stream object that can be used to receive updates</returns>
+    Task<IUpdateStream<RtEntity>> WatchRtEntitiesAsync(CkId<CkTypeId> ckTypeId, WatchStreamFilter watchStreamFilter,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Creates a subscription to the update stream for the given construction kit type.
+    /// </summary>
+    /// <param name="watchStreamFilter">Filter for the update stream</param>
+    /// <param name="cancellationToken">A cancellation token that can be used to cancel the operation</param>
+    /// <typeparam name="TEntity">Type of the runtime entity</typeparam>
+    /// <returns>Update stream object that can be used to receive updates</returns>
+    Task<IUpdateStream<TEntity>> WatchRtEntitiesAsync<TEntity>(WatchStreamFilter watchStreamFilter,
+        CancellationToken cancellationToken = default)
+        where TEntity : RtEntity, new();
+
+    /// <summary>
+    /// Creates a subscription to the update stream for the given construction kit association.
+    /// </summary>
+    /// <param name="originCkTypeId">Construction kit type identifier of the origin</param>
+    /// <param name="targetCkTypeId">Construction kit type identifier of the target</param>
+    /// <param name="updateStreamFilter">Filter for the update stream</param>
+    /// <param name="cancellationToken">A cancellation token that can be used to cancel the operation</param>
+    /// <returns>Update stream object that can be used to receive updates</returns>
+    IUpdateStream<RtAssociation> WatchToRtAssociationsAsync(CkId<CkTypeId> originCkTypeId, CkId<CkTypeId> targetCkTypeId,
+        UpdateAssociationStreamFilter updateStreamFilter,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Creates a subscription to the update stream for the given construction kit association.
+    /// </summary>
+    /// <param name="updateStreamFilter">Filter for the update stream</param>
+    /// <param name="cancellationToken">A cancellation token that can be used to cancel the operation</param>
+    /// <typeparam name="TOriginEntity">Type of the origin runtime entity</typeparam>
+    /// <typeparam name="TTargetEntity">Type of the target runtime entity</typeparam>
+    /// <returns>Update stream object that can be used to receive updates</returns>
+    IUpdateStream<RtAssociation> WatchToRtAssociationsAsync<TOriginEntity, TTargetEntity>(
+        UpdateAssociationStreamFilter updateStreamFilter,
+        CancellationToken cancellationToken = default)
+        where TOriginEntity : RtEntity, new() where TTargetEntity : RtEntity, new();
+    
+    #endregion Subscriptions
 
     #region Large Binaries
 
@@ -173,22 +223,6 @@ public interface ITenantRepository : IRuntimeRepository
         BulkInsertRtEntitiesAsync(IOctoSession session, IEnumerable<RtEntity> rtEntityList);
 
     Task<IBulkImportResult> BulkRtAssociationsAsync(IOctoSession session, IEnumerable<RtAssociation> rtAssociations);
-
-    Task<IUpdateStream<RtEntity>> SubscribeToRtEntities(CkId<CkTypeId> ckTypeId, UpdateStreamFilter updateStreamFilter,
-        CancellationToken cancellationToken = default);
-
-    Task<IUpdateStream<TEntity>> SubscribeToRtEntities<TEntity>(UpdateStreamFilter updateStreamFilter,
-        CancellationToken cancellationToken = default)
-        where TEntity : RtEntity, new();
-
-    IUpdateStream<RtAssociation> SubscribeToRtAssociations(CkId<CkTypeId> originCkTypeId, CkId<CkTypeId> targetCkTypeId,
-        UpdateAssociationStreamFilter updateStreamFilter,
-        CancellationToken cancellationToken = default);
-
-    IUpdateStream<RtAssociation> SubscribeToRtAssociations<TOriginEntity, TTargetEntity>(
-        UpdateAssociationStreamFilter updateStreamFilter,
-        CancellationToken cancellationToken = default)
-        where TOriginEntity : RtEntity, new() where TTargetEntity : RtEntity, new();
 
     Task<IEnumerable<AutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session, CkId<CkTypeId> ckTypeId,
         string attributeName,

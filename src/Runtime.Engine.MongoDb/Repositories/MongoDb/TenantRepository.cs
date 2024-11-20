@@ -228,7 +228,7 @@ internal class TenantRepository(
         int? skip = null,
         int? take = null)
     {
-        var result = await GetRtAssociationTargetsAsync(session, new[] { originRtId }, originCkTypeId, roleId,
+        var result = await GetRtAssociationTargetsAsync(session, [originRtId], originCkTypeId, roleId,
             targetCkTypeId,
             graphDirection, rtIds, dataQueryOperation, skip, take);
 
@@ -245,7 +245,7 @@ internal class TenantRepository(
         where TOriginEntity : RtEntity
         where TTargetEntity : RtEntity, new()
     {
-        var result = await GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(session, new[] { originRtId },
+        var result = await GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(session, [originRtId],
             roleId,
             graphDirection, targetRtIds, dataQueryOperation, skip, take);
 
@@ -324,7 +324,7 @@ internal class TenantRepository(
         var dataQueryOperation = DataQueryOperation.Create();
 
         var resultSets = await GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(session,
-            new[] { originRtId }, roleId,
+            [originRtId], roleId,
             graphDirection, null, dataQueryOperation);
         return resultSets[originRtId];
     }
@@ -402,14 +402,15 @@ internal class TenantRepository(
         return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<RtDeepGraphQueryResult>> GetRtDeepGraphAsync(IOctoSession session, IEnumerable<OctoObjectId> originRtIds,
+    public async Task<IResultSet<RtDeepGraphQueryResult>> GetRtDeepGraphAsync(IOctoSession session,
+        IEnumerable<OctoObjectId> originRtIds,
         CkId<CkTypeId> originCkTypeId,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
 
         var hierarchicalDeepRtGraphQuery = new MultipleOriginHierarchicalDeepRtGraphQuery(mongoDbRepositoryDataSource,
-            dataQueryOperation.Language, originRtIds, originTypeGraph, 
+            dataQueryOperation.Language, originRtIds, originTypeGraph,
             new CkId<CkAssociationRoleId>(SystemCkIds.ModelId, SystemCkIds.ParentChild));
         hierarchicalDeepRtGraphQuery.AddFieldFilters(dataQueryOperation.FieldFilters);
         hierarchicalDeepRtGraphQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
@@ -417,7 +418,7 @@ internal class TenantRepository(
         hierarchicalDeepRtGraphQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
         hierarchicalDeepRtGraphQuery.AddGrouping(dataQueryOperation.FieldGroupBy);
         hierarchicalDeepRtGraphQuery.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
-        
+
         return await hierarchicalDeepRtGraphQuery.ExecuteQuery(session, skip, take);
     }
 
@@ -441,7 +442,7 @@ internal class TenantRepository(
 
         return await query.ExecuteQuery(session, skip, take);
     }
-    
+
     protected override async Task<IResultSet<TEntity>> GetRtEntitiesByIdAsync<TEntity>(IOctoSession session,
         CkId<CkTypeId> ckTypeId,
         IReadOnlyList<OctoObjectId> rtIds, DataQueryOperation dataQueryOperation,
@@ -472,120 +473,55 @@ internal class TenantRepository(
 
     #endregion Data query
 
-    #region Large binaries
+    #region Subscriptions
 
-    public async Task<OctoObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,
-        Dictionary<string, object> metadata,
+    public Task<IUpdateStream<RtEntity>> WatchRtEntitiesAsync(CkId<CkTypeId> ckTypeId,
+        WatchStreamFilter watchStreamFilter,
         CancellationToken cancellationToken = default)
     {
-        ArgumentValidation.ValidateString(nameof(filename), filename);
-        ArgumentValidation.ValidateString(nameof(contentType), contentType);
-
-        var objectId =
-            await mongoDbRepositoryDataSource.UploadLargeBinaryAsync(filename, contentType, stream, metadata,
-                cancellationToken);
-        return objectId.ToOctoObjectId();
+        return WatchRtEntitiesAsync<RtEntity>(ckTypeId, watchStreamFilter, cancellationToken);
     }
 
-    public async Task ReplaceLargeBinaryAsync(OctoObjectId largeBinaryId, string filename, string contentType,
-        Stream stream, Dictionary<string, object> metadata,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentValidation.ValidateString(nameof(filename), filename);
-        ArgumentValidation.ValidateString(nameof(contentType), contentType);
-
-        await mongoDbRepositoryDataSource.ReplaceLargeBinaryAsync(largeBinaryId.ToObjectId(), filename, contentType,
-            stream, metadata,
-            cancellationToken);
-    }
-
-    public async Task<OctoObjectId> ReplaceLargeBinaryAsync(string filename, string contentType,
-        Stream stream, Dictionary<string, object> metadata,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentValidation.ValidateString(nameof(filename), filename);
-        ArgumentValidation.ValidateString(nameof(contentType), contentType);
-
-        return (await mongoDbRepositoryDataSource.ReplaceLargeBinaryAsync(filename, contentType, stream, metadata,
-            cancellationToken)).ToOctoObjectId();
-    }
-
-    public async Task DeleteLargeBinaryAsync(OctoObjectId largeBinaryId, CancellationToken cancellationToken = default)
-    {
-        await mongoDbRepositoryDataSource.DeleteLargeBinaryAsync(largeBinaryId.ToObjectId(), cancellationToken);
-    }
-
-    public async Task<IDownloadStreamHandler> DownloadLargeBinaryAsync(OctoObjectId largeBinaryId,
-        CancellationToken cancellationToken = default)
-    {
-        return await mongoDbRepositoryDataSource.DownloadLargeBinaryAsync(largeBinaryId.ToObjectId(),
-            cancellationToken);
-    }
-
-    public async Task<IDownloadInfo?> GetLargeBinaryAsync(OctoObjectId largeBinaryId,
-        CancellationToken cancellationToken = default)
-    {
-        return await mongoDbRepositoryDataSource.GetLargeBinaryAsync(largeBinaryId.ToObjectId(), cancellationToken);
-    }
-
-    public async Task<IDownloadInfo?> GetLargeBinaryAsync(string fileName,
-        CancellationToken cancellationToken = default)
-    {
-        return await mongoDbRepositoryDataSource.GetLargeBinaryAsync(fileName, cancellationToken);
-    }
-
-    #endregion Large binaries
-
-    #region Advanced functionality
-
-    public async Task<IUpdateStream<RtEntity>> SubscribeToRtEntities(CkId<CkTypeId> ckTypeId,
-        UpdateStreamFilter updateStreamFilter,
-        CancellationToken cancellationToken = default)
-    {
-        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
-        var collection = mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(ckTypeGraph);
-
-        return collection.Subscribe(updateStreamFilter.UpdateTypes, () =>
-        {
-            if (updateStreamFilter.RtId.HasValue)
-            {
-                return Builders<ChangeStreamDocument<RtEntity>>.Filter.Eq(
-                    "fullDocument." + Constants.IdField,
-                    updateStreamFilter.RtId.Value.ToObjectId());
-            }
-
-            return default;
-        }, () => null, cancellationToken);
-    }
-
-    public async Task<IUpdateStream<TEntity>> SubscribeToRtEntities<TEntity>(UpdateStreamFilter updateStreamFilter,
+    public Task<IUpdateStream<TEntity>> WatchRtEntitiesAsync<TEntity>(WatchStreamFilter watchStreamFilter,
         CancellationToken cancellationToken = default)
         where TEntity : RtEntity, new()
     {
-        var ckTypeId = RtEntityExtensions.GetCkTypeId<TEntity>();
-        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
-
-        var collection = mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeGraph);
-
-        return collection.Subscribe(updateStreamFilter.UpdateTypes, () =>
-        {
-            if (updateStreamFilter.RtId.HasValue)
-            {
-                return Builders<ChangeStreamDocument<TEntity>>.Filter.Eq(
-                    "fullDocument." + Constants.IdField,
-                    updateStreamFilter.RtId.Value.ToObjectId());
-            }
-
-            return default;
-        }, () => null, cancellationToken);
+        CkId<CkTypeId> ckTypeId = RtEntityExtensions.GetCkTypeId<TEntity>();
+        return WatchRtEntitiesAsync<TEntity>(ckTypeId, watchStreamFilter, cancellationToken);
     }
-
-    public IUpdateStream<RtAssociation> SubscribeToRtAssociations(CkId<CkTypeId> originCkTypeId,
+    
+    private async Task<IUpdateStream<TEntity>> WatchRtEntitiesAsync<TEntity>(CkId<CkTypeId> ckTypeId,
+        WatchStreamFilter watchStreamFilter, CancellationToken cancellationToken = default)
+        where TEntity : RtEntity, new()
+    {
+        var ckCacheService = await GetCkCacheServiceAsync();
+        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
+        var subscription = new Subscription<TEntity>(ckCacheService, TenantId, ckTypeGraph, 
+            mongoDbRepositoryDataSource);
+        
+        if (watchStreamFilter.BeforeFieldFilters != null && watchStreamFilter.BeforeFieldFilters.Any())
+        {
+            subscription.AddBeforeFieldFilters(watchStreamFilter.BeforeFieldFilters);
+        }
+        
+        if (watchStreamFilter.FieldFilters != null && watchStreamFilter.FieldFilters.Any())
+        {
+            subscription.AddFieldFilters(watchStreamFilter.FieldFilters);
+        }
+        
+        if (watchStreamFilter.RtId.HasValue)
+        {
+            subscription.AddIdFilter(new List<OctoObjectId> { watchStreamFilter.RtId.Value });
+        }
+        
+        return subscription.WatchRtEntitiesAsync(watchStreamFilter.UpdateTypes, cancellationToken);
+    }
+    public IUpdateStream<RtAssociation> WatchToRtAssociationsAsync(CkId<CkTypeId> originCkTypeId,
         CkId<CkTypeId> targetCkTypeId,
         UpdateAssociationStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default)
     {
-        return mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations.Subscribe(updateStreamFilter.UpdateTypes,
+        return mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations.WatchAsync(updateStreamFilter.UpdateTypes,
             () =>
             {
                 var filterList = new List<FilterDefinition<ChangeStreamDocument<RtAssociation>>>
@@ -655,7 +591,7 @@ internal class TenantRepository(
             }, cancellationToken);
     }
 
-    public IUpdateStream<RtAssociation> SubscribeToRtAssociations<TOriginEntity, TTargetEntity>(
+    public IUpdateStream<RtAssociation> WatchToRtAssociationsAsync<TOriginEntity, TTargetEntity>(
         UpdateAssociationStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default) where TOriginEntity : RtEntity, new()
         where TTargetEntity : RtEntity, new()
@@ -663,8 +599,76 @@ internal class TenantRepository(
         var originCkTypeId = RtEntityExtensions.GetCkTypeId<TOriginEntity>();
         var targetCkTypeId = RtEntityExtensions.GetCkTypeId<TTargetEntity>();
 
-        return SubscribeToRtAssociations(originCkTypeId, targetCkTypeId, updateStreamFilter, cancellationToken);
+        return WatchToRtAssociationsAsync(originCkTypeId, targetCkTypeId, updateStreamFilter, cancellationToken);
     }
+
+    #endregion Subscriptions
+
+    #region Large binaries
+
+    public async Task<OctoObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,
+        Dictionary<string, object> metadata,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentValidation.ValidateString(nameof(filename), filename);
+        ArgumentValidation.ValidateString(nameof(contentType), contentType);
+
+        var objectId =
+            await mongoDbRepositoryDataSource.UploadLargeBinaryAsync(filename, contentType, stream, metadata,
+                cancellationToken);
+        return objectId.ToOctoObjectId();
+    }
+
+    public async Task ReplaceLargeBinaryAsync(OctoObjectId largeBinaryId, string filename, string contentType,
+        Stream stream, Dictionary<string, object> metadata,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentValidation.ValidateString(nameof(filename), filename);
+        ArgumentValidation.ValidateString(nameof(contentType), contentType);
+
+        await mongoDbRepositoryDataSource.ReplaceLargeBinaryAsync(largeBinaryId.ToObjectId(), filename, contentType,
+            stream, metadata,
+            cancellationToken);
+    }
+
+    public async Task<OctoObjectId> ReplaceLargeBinaryAsync(string filename, string contentType,
+        Stream stream, Dictionary<string, object> metadata,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentValidation.ValidateString(nameof(filename), filename);
+        ArgumentValidation.ValidateString(nameof(contentType), contentType);
+
+        return (await mongoDbRepositoryDataSource.ReplaceLargeBinaryAsync(filename, contentType, stream, metadata,
+            cancellationToken)).ToOctoObjectId();
+    }
+
+    public async Task DeleteLargeBinaryAsync(OctoObjectId largeBinaryId, CancellationToken cancellationToken = default)
+    {
+        await mongoDbRepositoryDataSource.DeleteLargeBinaryAsync(largeBinaryId.ToObjectId(), cancellationToken);
+    }
+
+    public async Task<IDownloadStreamHandler> DownloadLargeBinaryAsync(OctoObjectId largeBinaryId,
+        CancellationToken cancellationToken = default)
+    {
+        return await mongoDbRepositoryDataSource.DownloadLargeBinaryAsync(largeBinaryId.ToObjectId(),
+            cancellationToken);
+    }
+
+    public async Task<IDownloadInfo?> GetLargeBinaryAsync(OctoObjectId largeBinaryId,
+        CancellationToken cancellationToken = default)
+    {
+        return await mongoDbRepositoryDataSource.GetLargeBinaryAsync(largeBinaryId.ToObjectId(), cancellationToken);
+    }
+
+    public async Task<IDownloadInfo?> GetLargeBinaryAsync(string fileName,
+        CancellationToken cancellationToken = default)
+    {
+        return await mongoDbRepositoryDataSource.GetLargeBinaryAsync(fileName, cancellationToken);
+    }
+
+    #endregion Large binaries
+
+    #region Advanced functionality
 
     public async Task<IEnumerable<AutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session,
         CkId<CkTypeId> ckTypeId,

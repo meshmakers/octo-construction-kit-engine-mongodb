@@ -29,7 +29,7 @@ public interface IMongoDbDataSourceCollection<TKey, TDocument> : IDataSourceColl
 
     Task ReplaceOneAsync(IOctoSession session, FilterDefinition<TDocument> filter, TDocument entity);
 
-    IUpdateStream<TDocument> Subscribe(UpdateTypes updateTypes,
+    IUpdateStream<TDocument> WatchAsync(UpdateTypes updateTypes,
         Func<FilterDefinition<ChangeStreamDocument<TDocument>>?>? documentFilterFunc = null,
         Func<FilterDefinition<ChangeStreamDocument<TDocument>>?>? documentBeforeFilterFunc = null,
         CancellationToken cancellationToken = default);

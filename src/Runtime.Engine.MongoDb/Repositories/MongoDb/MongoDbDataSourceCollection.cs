@@ -448,7 +448,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     }
 
 
-    public IUpdateStream<TDocument> Subscribe(UpdateTypes updateTypes,
+    public IUpdateStream<TDocument> WatchAsync(UpdateTypes updateTypes,
         Func<FilterDefinition<ChangeStreamDocument<TDocument>>?>? documentFilterFunc = null,
         Func<FilterDefinition<ChangeStreamDocument<TDocument>>?>? documentBeforeFilterFunc = null,
         CancellationToken cancellationToken = default)
