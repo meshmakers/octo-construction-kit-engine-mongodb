@@ -1,0 +1,8 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+attributes:
+  - id: "CounterNumber"
+    description: Counter number of a measuring point.
+    valueType: "String"
+  - id: "CounterReading"
+    description: Counter reading of a measuring point.
+    valueType: "Double"

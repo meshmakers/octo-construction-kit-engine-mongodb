@@ -1,4 +1,7 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
@@ -15,5 +18,13 @@ public class ImportTestCkModelFixture: SystemFixture, IAsyncLifetime
     public virtual Task DisposeAsync()
     {
         return Task.CompletedTask;
+    }
+    
+    public async Task ClearCollectionAsync()
+    {
+        var systemContext = GetSystemContext();
+        await systemContext.ClearSystemTenantAsync();
+        OperationResult operationResult = new();
+        await systemContext.ImportCkModelAsync(new CkModelId("Test"), operationResult);
     }
 }

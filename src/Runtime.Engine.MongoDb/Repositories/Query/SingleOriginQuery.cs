@@ -60,8 +60,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
 
 
             pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Facet<TEntity, QueryResult<TEntity>>(
-                new List<AggregateFacet<TEntity>>(new AggregateFacet<TEntity>[]
-                {
+                new List<AggregateFacet<TEntity>>([
                     new AggregateFacet<TEntity, TEntity>(nameof(QueryResult<TEntity>.Result).ToCamelCase(),
                         PipelineDefinition<TEntity, TEntity>.Create(
                             pagingPipelineStageDefinitions)),
@@ -69,7 +68,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
                         nameof(QueryResult<TEntity>.TotalCount).ToCamelCase(),
                         PipelineDefinition<TEntity, AggregateCountResult>
                             .Create(countPipelineStageDefinitions))
-                })));
+                ])));
 
             var pipelineDefinition = PipelineDefinition<TEntity, QueryResult<TEntity>>.Create(pipelineStageDefinitions);
             var resultAggregate = _mongoDbDataSourceCollection.Aggregate(octoSession, pipelineDefinition);

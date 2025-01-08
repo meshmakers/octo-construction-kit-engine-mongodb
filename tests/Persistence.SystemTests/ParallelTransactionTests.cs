@@ -24,9 +24,9 @@ public class ParallelTransactionTests(GenerateSampleDataFixture generateSampleDa
         
         for (var i = 0; i < 5; i++)
         {
-            var rtPlanet = await tenantRepository.CreateTransientRtEntityAsync<RtStateOrProvince>();
-            rtPlanet.Name = "test" + i;
-            await tenantRepository.InsertOneRtEntityAsync(sessionA, rtPlanet);
+            var rtContinent = await tenantRepository.CreateTransientRtEntityAsync<RtContinent>();
+            rtContinent.Name = "test" + i;
+            await tenantRepository.InsertOneRtEntityAsync(sessionA, rtContinent);
         }
 
         await sessionA.CommitTransactionAsync();
@@ -34,9 +34,9 @@ public class ParallelTransactionTests(GenerateSampleDataFixture generateSampleDa
    
         for (var i = 0; i < 5; i++)
         {
-            var rtPlanet = await tenantRepository.CreateTransientRtEntityAsync<RtStateOrProvince>();
-            rtPlanet.Name = "test" + i;
-            await tenantRepository.InsertOneRtEntityAsync(sessionB, rtPlanet);
+            var rtContinent = await tenantRepository.CreateTransientRtEntityAsync<RtContinent>();
+            rtContinent.Name = "test" + i;
+            await tenantRepository.InsertOneRtEntityAsync(sessionB, rtContinent);
         }
         await sessionB.CommitTransactionAsync();
     }
@@ -47,15 +47,15 @@ public class ParallelTransactionTests(GenerateSampleDataFixture generateSampleDa
         session.StartTransaction();
         for (var i = 0; i < count; i++)
         {
-            var rtStateOrProvince = await tenantRepository.CreateTransientRtEntityAsync<RtStateOrProvince>();
-            rtStateOrProvince.Name = "test" + i;
-            rtStateOrProvince.RtWellKnownName = "test" + i;
-            await tenantRepository.InsertOneRtEntityAsync(session, rtStateOrProvince);
+            var rtContinent = await tenantRepository.CreateTransientRtEntityAsync<RtContinent>();
+            rtContinent.Name = "test" + i;
+            rtContinent.RtWellKnownName = "test" + i;
+            await tenantRepository.InsertOneRtEntityAsync(session, rtContinent);
         }
         await session.CommitTransactionAsync();
     }
     
-    private async Task<RtStateOrProvince> GetData(ITenantRepository tenantRepository, string prefix, int index)
+    private async Task<RtContinent> GetData(ITenantRepository tenantRepository, string prefix, int index)
     {
         var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
@@ -63,21 +63,21 @@ public class ParallelTransactionTests(GenerateSampleDataFixture generateSampleDa
         DataQueryOperation dataQueryOperation = DataQueryOperation.Create()
             .FieldFilter(nameof(RtStateOrProvince.RtWellKnownName), FieldFilterOperator.Equals, prefix + index);
 
-        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtStateOrProvince>(session, dataQueryOperation);
+        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtContinent>(session, dataQueryOperation);
 
-        var rtStateOrProvince = resultSet.Items.FirstOrDefault();
-        if (rtStateOrProvince == null)
+        var rtContinent = resultSet.Items.FirstOrDefault();
+        if (rtContinent == null)
         {
             throw new Exception("Entity not found");
         }
         await session.CommitTransactionAsync();
 
-        return rtStateOrProvince;
+        return rtContinent;
     }
     
-    private async Task UpdateData(ITenantRepository tenantRepository, IOctoSession session, RtStateOrProvince rtStateOrProvince)
+    private async Task UpdateData(ITenantRepository tenantRepository, IOctoSession session, RtContinent rtContinent)
     {
-        await tenantRepository.UpdateOneRtEntityByIdAsync(session, rtStateOrProvince.RtId, rtStateOrProvince);
+        await tenantRepository.UpdateOneRtEntityByIdAsync(session, rtContinent.RtId, rtContinent);
     }
     
     [Fact]
@@ -88,8 +88,8 @@ public class ParallelTransactionTests(GenerateSampleDataFixture generateSampleDa
         
         await PrepareData(tenantRepository, 5);
         
-        var rtStateOrProvinceA = await GetData(tenantRepository, "test", 0);
-        var rtStateOrProvinceB = await GetData(tenantRepository, "test", 0);
+        var rtContinentA = await GetData(tenantRepository, "test", 0);
+        var rtContinentB = await GetData(tenantRepository, "test", 0);
 
         var sessionA = await tenantRepository.GetSessionAsync();
         var sessionB = await tenantRepository.GetSessionAsync();
@@ -97,13 +97,13 @@ public class ParallelTransactionTests(GenerateSampleDataFixture generateSampleDa
         sessionA.StartTransaction();
         sessionB.StartTransaction();
         
-        rtStateOrProvinceA.Name = "updated0";
-        await UpdateData(tenantRepository, sessionA, rtStateOrProvinceA);
+        rtContinentA.Name = "updated0";
+        await UpdateData(tenantRepository, sessionA, rtContinentA);
 
         await sessionA.CommitTransactionAsync();
         
-        rtStateOrProvinceB.Name = "updated1";
-        await UpdateData(tenantRepository, sessionB, rtStateOrProvinceB);
+        rtContinentB.Name = "updated1";
+        await UpdateData(tenantRepository, sessionB, rtContinentB);
 
         await sessionB.CommitTransactionAsync();
     }

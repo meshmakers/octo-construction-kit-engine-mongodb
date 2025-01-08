@@ -213,6 +213,6 @@ internal class FieldFilterResolver<TEntity>
     
     private static string? GetRegex(string? value)
     {
-        return value?.Replace("*", "/");
+        return value?.Replace("*", ".*");
     }
 }

@@ -1,11 +1,5 @@
 "$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
 attributes:
-  - id: Name
-    description: Designation of an entity.
-    valueType: String
-  - id: ISOCode
-    description: ISO code of a country.
-    valueType: String
   - id: "Contacts.Salutation"
     description: Salutation of a contact.
     valueType: "String"
@@ -58,12 +52,7 @@ attributes:
     description: Name of a contact.
     valueType: "Record"
     valueCkRecordId: ${thisModel}/ContactName
-  - id: "CounterNumber"
-    description: Counter number of a measuring point.
-    valueType: "String"
-  - id: "CounterReading"
-    description: Counter reading of a measuring point.
-    valueType: "Double"
-  - id: "Tags"
-    valueType: StringArray
-    description: Tags of an entity.
+  - id: "Contacts.Address"
+    description: Address of a contact.
+    valueType: "Record"
+    valueCkRecordId: ${thisModel}/ContactAddress 

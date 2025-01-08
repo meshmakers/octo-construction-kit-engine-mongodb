@@ -361,7 +361,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapField("_attributes").SetElementName(Constants.AttributesName)
-                .SetSerializer(new RtAttributeDictionarySerializer());
+            .SetSerializer(new RtAttributeDictionarySerializer());
         });
 
         BsonClassMap.RegisterClassMap<RtEntity>(cm =>
@@ -427,7 +427,5 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         BsonSerializer.RegisterSerializer(new CkIdSerializer<CkRecordId, OctoRecordIdSerializer>());
         BsonSerializer.RegisterSerializer(new CkIdSerializer<CkEnumId, OctoEnumIdSerializer>());
         BsonSerializer.RegisterSerializer(new ModelIdSerializer());
-        BsonSerializer.RegisterSerializer(new RtEntitySerializer());
-        BsonSerializer.RegisterSerializer(new RtRecordSerializer());
     }
 }

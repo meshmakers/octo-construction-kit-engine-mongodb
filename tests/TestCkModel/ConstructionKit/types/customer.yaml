@@ -7,8 +7,12 @@ types:
     - id: ${thisModel}/Contacts.Name
       name: Name
       isOptional: true
+    - id: ${thisModel}/Contacts.Address
+      name: Address
+      isOptional: true
+    - id: ${thisModel}/Contacts.EMailAddress
+      name: EMailAddress
+      isOptional: true
     associations:
-    - id: System/ParentChild
-      targetCkTypeId: ${thisModel}/Municipality
     - id: System/Related
       targetCkTypeId: ${thisModel}/MeasuringPoint

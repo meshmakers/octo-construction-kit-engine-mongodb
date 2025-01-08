@@ -11,7 +11,7 @@ using MongoDB.Driver.GeoJsonObjectModel;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 
 internal class RtAttributeDictionarySerializer()
-    : DictionaryInterfaceImplementerSerializer<Dictionary<string, object?>>(DictionaryRepresentation.Document)
+    : DictionarySerializerBase<Dictionary<string, object?>>(DictionaryRepresentation.Document)
 {
     public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args,
         Dictionary<string, object?>? value)
@@ -124,5 +124,10 @@ internal class RtAttributeDictionarySerializer()
         }
 
         return ret;
+    }
+
+    protected override Dictionary<string, object?> CreateInstance()
+    {
+        return new Dictionary<string, object?>();
     }
 }

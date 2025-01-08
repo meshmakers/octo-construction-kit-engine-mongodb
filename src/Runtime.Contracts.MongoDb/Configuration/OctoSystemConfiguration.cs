@@ -53,4 +53,9 @@ public class OctoSystemConfiguration()
     public bool UseTls { get; set; } = false;
 
     public bool AllowInsecureTls { get; set; } = true;
+    
+    /// <summary>
+    /// When set to true, the MongoDB connection will be established directly to the database host, without using the other nodes in the replica set.
+    /// </summary>
+    public bool UseDirectConnection { get; set; } = false;
 }

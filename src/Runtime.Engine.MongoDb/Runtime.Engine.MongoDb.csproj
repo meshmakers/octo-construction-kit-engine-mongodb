@@ -9,19 +9,19 @@
         <Platforms>AnyCPU</Platforms>
         <OutputPath>..\..\bin\$(Configuration)\</OutputPath>
         <NoWarn>1701;1702;CS8002</NoWarn>
+        <UserSecretsId>70885029-9ede-466f-9f04-5edf2648ba2a</UserSecretsId>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Meshmakers.Common.Metrics" Version="4.0.2411.19002" />
+        <PackageReference Include="Meshmakers.Common.Metrics" Version="4.0.2412.18002" />
         <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="$(OctoVersion)" />
         <PackageReference Include="Meshmakers.Octo.ConstructionKit.Models.System" Version="$(OctoVersion)" />
         <PackageReference Include="MathParser.org-mXparser" Version="6.1.0" />
         <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="9.0.0" />
-        <PackageReference Include="MongoDB.Driver.GridFS" Version="2.30.0" />
         <PackageReference Include="NLog" Version="5.3.4" />
         <PackageReference Include="System.Reactive" Version="6.0.1" />
-        <PackageReference Include="MongoDB.Bson" Version="2.30.0" />
-        <PackageReference Include="MongoDB.Driver" Version="2.30.0" />
+        <PackageReference Include="MongoDB.Bson" Version="3.1.0" />
+        <PackageReference Include="MongoDB.Driver" Version="3.1.0" />
     </ItemGroup>
 
     <ItemGroup>

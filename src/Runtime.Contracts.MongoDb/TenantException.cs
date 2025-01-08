@@ -77,8 +77,8 @@ public class TenantException : PersistenceException
        return new TenantException("Deleting system tenant failed.");
     }
 
-    public static Exception CreateSystemTenantFailed()
+    public static Exception CreateSystemTenantFailed(Exception e)
     {
-        return new TenantException("Creating system tenant failed.");
+        return new TenantException("Creating system tenant failed.", e);
     }
 }

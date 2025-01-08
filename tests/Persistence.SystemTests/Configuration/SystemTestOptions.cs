@@ -8,4 +8,6 @@ public class SystemTestOptions
     public string TenantId { get; set; } = null!;
     public string AdminUserPassword { get; set; } = null!;
     public string DatabaseUserPassword { get; set; } = null!;
+    
+    public bool UseDirectConnection { get; set; }
 }

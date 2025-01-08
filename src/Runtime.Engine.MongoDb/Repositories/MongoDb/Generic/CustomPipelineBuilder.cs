@@ -37,8 +37,7 @@ internal static class CustomPipelineBuilder
                 if (lookupPipeline != null)
                 {
                     var lookupPipelineDocuments = new BsonArray(lookupPipeline
-                        .Render(new RenderArgs<TForeignDocument>(foreignSerializer, args.SerializerRegistry,
-                            args.LinqProvider)).Documents);
+                        .Render(new RenderArgs<TForeignDocument>(foreignSerializer, args.SerializerRegistry)).Documents);
 
                     return new RenderedPipelineStageDefinition<TOutput>(
                         operatorName, new BsonDocument(operatorName, new BsonDocument
@@ -48,13 +47,12 @@ internal static class CustomPipelineBuilder
                             {
                                 "foreignField",
                                 foreignField.Render(new RenderArgs<TForeignDocument>(foreignSerializer,
-                                    args.SerializerRegistry, args.LinqProvider)).FieldName
+                                    args.SerializerRegistry)).FieldName
                             },
                             { "pipeline", lookupPipelineDocuments },
                             {
                                 "as",
-                                @as.Render(new RenderArgs<TOutput>(outputSerializer, args.SerializerRegistry,
-                                    args.LinqProvider)).FieldName
+                                @as.Render(new RenderArgs<TOutput>(outputSerializer, args.SerializerRegistry)).FieldName
                             }
                         }),
                         outputSerializer);
@@ -68,12 +66,11 @@ internal static class CustomPipelineBuilder
                         {
                             "foreignField",
                             foreignField.Render(new RenderArgs<TForeignDocument>(foreignSerializer,
-                                args.SerializerRegistry, args.LinqProvider)).FieldName
+                                args.SerializerRegistry)).FieldName
                         },
                         {
                             "as",
-                            @as.Render(new RenderArgs<TOutput>(outputSerializer, args.SerializerRegistry,
-                                args.LinqProvider)).FieldName
+                            @as.Render(new RenderArgs<TOutput>(outputSerializer, args.SerializerRegistry)).FieldName
                         }
                     }),
                     outputSerializer);

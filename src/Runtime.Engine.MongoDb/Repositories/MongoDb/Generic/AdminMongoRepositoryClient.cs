@@ -111,7 +111,8 @@ public class AdminMongoRepositoryClient(
         urlBuilder.AllowInsecureTls = systemConfiguration.AllowInsecureTls;
         urlBuilder.RetryReads = true;
         urlBuilder.RetryWrites = true;
-
+        urlBuilder.DirectConnection = systemConfiguration.UseDirectConnection;
+        
         return urlBuilder.ToMongoUrl();
     }
 }

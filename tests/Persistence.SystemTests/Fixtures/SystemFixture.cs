@@ -17,6 +17,7 @@ public class SystemFixture : ConfigurationFixture, IDisposable
             t.SystemDatabaseName = "PersistenceSystemTests";
             t.AdminUserPassword = _options.AdminUserPassword;
             t.DatabaseUserPassword = _options.DatabaseUserPassword;
+            t.UseDirectConnection = _options.UseDirectConnection;
         });
 
         Provider = Services.BuildServiceProvider();

@@ -72,9 +72,9 @@ public class SystemContext : TenantContext, ISystemContext
             // Distribute updates (post) to inform other services.
             await TenantNotifications.NotifyPosTenantCreateAsync(normalizedTenantId, correlationId);
         }
-        catch (Exception)
+        catch (Exception e)
         {
-            throw TenantException.CreateSystemTenantFailed();
+            throw TenantException.CreateSystemTenantFailed(e);
         }
     }
 
