@@ -19,7 +19,7 @@ try
     builder.Services.AddControllers();
     // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
     builder.Services.AddEndpointsApiExplorer();
-    builder.Services.AddSwaggerGen();
+    builder.Services.AddOpenApi();
     builder.Services.AddRuntimeEngine()
         .AddMongoDbRuntimeRepository();
 
@@ -38,14 +38,17 @@ try
     // Configure the HTTP request pipeline.
     if (app.Environment.IsDevelopment())
     {
-        app.UseSwagger();
-        app.UseSwaggerUI();
+        app.UseSwaggerUI(options =>
+        {
+            options.SwaggerEndpoint("/openapi/v1.json", "v1");
+        });
     }
 
     app.UseHttpsRedirection();
 
     app.UseAuthorization();
 
+    app.MapOpenApi();
     app.MapControllers();
 
     app.Run();
