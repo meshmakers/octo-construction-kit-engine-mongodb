@@ -30,5 +30,10 @@ public class OctoSerializationException : Exception
     {
         return new OctoSerializationException($"Unsupported BSON type: {readerCurrentBsonType}");
     }
+
+    public static Exception UnsupportedType(Type type)
+    {
+        return new OctoSerializationException($"Unsupported type: {type}");
+    }
 }
 

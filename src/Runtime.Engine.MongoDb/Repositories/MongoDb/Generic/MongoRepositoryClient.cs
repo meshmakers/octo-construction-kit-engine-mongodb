@@ -170,6 +170,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         BsonSerializer.RegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
         BsonSerializer.RegisterDiscriminatorConvention(typeof(RtEntity), new RtEntityDiscriminatorConvention("_t"));
 
+        BsonSerializer.RegisterSerializer(new OctoObjectListSerializer());
         var objectSerializer = new OctoObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
                                                                 type.FullName?.StartsWith(typeof(RtEntity)
                                                                     .Namespace!) ==
