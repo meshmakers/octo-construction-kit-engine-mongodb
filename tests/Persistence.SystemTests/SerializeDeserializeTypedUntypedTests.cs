@@ -183,4 +183,34 @@ public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture syst
         Assert.Equal(2, y.Items.First().GeoPosition.Coordinates.Longitude);
         Assert.Equal(3, y.Items.First().GeoPosition.Coordinates.Altitude);
     }
+    
+    [Fact]
+    public async Task CreateAndQuery_EmbeddedBinary()
+    {
+        await systemFixture.ClearCollectionAsync();
+        var systemContext = systemFixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+        
+        var bytes = await File.ReadAllBytesAsync("testData/binary-test.png");
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var rtMenuItem = await tenantRepository.CreateTransientRtEntityAsync<RtMenuItem>();
+        rtMenuItem.Name = "test-embedded-binary";
+        rtMenuItem.Icon = bytes;
+        await tenantRepository.InsertOneRtEntityAsync(session, rtMenuItem);
+
+        await session.CommitTransactionAsync();
+
+        using var session2 = await tenantRepository.GetSessionAsync();
+        session2.StartTransaction();
+        var y = await tenantRepository.GetRtEntitiesByTypeAsync<RtMenuItem>(session2, 
+            DataQueryOperation.Create());
+        await session2.CommitTransactionAsync();
+
+        Assert.Single(y.Items);
+        Assert.Equal("test-embedded-binary", y.Items.First().Name);
+        Assert.Equal(bytes, y.Items.First().Icon);
+    }
 }

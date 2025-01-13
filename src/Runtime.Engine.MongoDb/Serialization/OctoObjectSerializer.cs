@@ -187,7 +187,8 @@ public class OctoObjectSerializer : ClassSerializerBase<object>
                     bsonReader.ReturnToBookmark(binaryDataBookmark);
                     return _guidSerializer.Deserialize(context);
                 }
-                goto default;
+
+                return binaryData.Bytes;
 
             case BsonType.Boolean:
                 return bsonReader.ReadBoolean();
