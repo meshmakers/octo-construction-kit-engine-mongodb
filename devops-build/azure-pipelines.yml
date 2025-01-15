@@ -52,8 +52,5 @@ stages:
             !'**/*SystemTests.csproj'
           testRunTitle: 'CI'
       - template: handle-artifacts.yml
-      - task: PublishBuildArtifacts@1
-        displayName: 'Publish Artifact: local'
-        inputs:
-          ArtifactName: local
+
         
