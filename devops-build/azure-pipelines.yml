@@ -51,28 +51,7 @@ stages:
             '**/*Tests.csproj'
             !'**/*SystemTests.csproj'
           testRunTitle: 'CI'
-      - task: PublishSymbols@2
-        displayName: Publish symbols path
-        continueOnError: True
-        inputs:
-          SearchPattern: '**\bin\**\*.pdb'
-          PublishSymbols: false
-          SymbolServerType: TeamServices
-      - task: CopyFiles@2
-        displayName: 'Copy Files from **/*.nupkg to $(build.artifactstagingdirectory)'
-        inputs:
-          SourceFolder: $(Build.SourcesDirectory)
-          Contents: |
-            **/*.nupkg
-          TargetFolder: $(build.artifactstagingdirectory)/nuget
-          flattenFolders: true
-      - task: PowerShell@2
-        displayName: 'Create versioninfo file'
-        inputs:
-          targetType: 'inline'
-          script: |
-              New-Item $(build.artifactstagingdirectory)/versioninfo.txt
-              Set-Content $(build.artifactstagingdirectory)/versioninfo.txt $(Build.BuildNumber)
+      - template: handle-artifacts.yml
       - task: PublishBuildArtifacts@1
         displayName: 'Publish Artifact: local'
         inputs:
