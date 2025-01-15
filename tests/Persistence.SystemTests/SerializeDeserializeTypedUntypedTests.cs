@@ -2,6 +2,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.Runtime.Contracts.Geospatial.Geometry;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 using TestCkModel.Generated.Test.v1;
 using Xunit;
@@ -212,5 +213,123 @@ public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture syst
         Assert.Single(y.Items);
         Assert.Equal("test-embedded-binary", y.Items.First().Name);
         Assert.Equal(bytes, y.Items.First().Icon);
+    }
+    
+    [Fact]
+    public async Task CreateAndQuery_StringArray()
+    {
+        await systemFixture.ClearCollectionAsync();
+        var systemContext = systemFixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+        
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var rtMenuItem = await tenantRepository.CreateTransientRtEntityAsync<RtTagsItem>();
+        rtMenuItem.Name = "test-stringarray";
+        rtMenuItem.Tags = new AttributeStringValueList(["tag1", "tag2"]);
+        await tenantRepository.InsertOneRtEntityAsync(session, rtMenuItem);
+
+        await session.CommitTransactionAsync();
+
+        using var session2 = await tenantRepository.GetSessionAsync();
+        session2.StartTransaction();
+        var y = await tenantRepository.GetRtEntitiesByTypeAsync<RtTagsItem>(session2, 
+            DataQueryOperation.Create());
+        await session2.CommitTransactionAsync();
+
+        Assert.Single(y.Items);
+        Assert.Equal("test-stringarray", y.Items.First().Name);
+        Assert.Equal("tag1", y.Items.First().Tags?.First());
+        Assert.Equal("tag2", y.Items.First().Tags?.ElementAt(1));
+    }
+    
+    [Fact]
+    public async Task CreateAndQuery_StringArray_Update()
+    {
+        await systemFixture.ClearCollectionAsync();
+        var systemContext = systemFixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+        
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var rtMenuItem = await tenantRepository.CreateTransientRtEntityAsync<RtTagsItem>();
+        rtMenuItem.Name = "test-stringarray";
+        rtMenuItem.Tags = new AttributeStringValueList(["tag1", "tag2"]);
+        await tenantRepository.InsertOneRtEntityAsync(session, rtMenuItem);
+
+        await session.CommitTransactionAsync();
+
+        using var session2 = await tenantRepository.GetSessionAsync();
+        session2.StartTransaction();
+        var y = await tenantRepository.GetRtEntitiesByTypeAsync<RtTagsItem>(session2, 
+            DataQueryOperation.Create());
+        await session2.CommitTransactionAsync();
+        
+        using var session3 = await tenantRepository.GetSessionAsync();
+        session3.StartTransaction();
+        var testItem = y.Items.First();
+        testItem.Tags?.Add("tag3");
+        testItem.Tags?.Add("tag4");
+        await tenantRepository.UpdateOneRtEntityByIdAsync(session3, testItem.RtId, testItem);
+        await session3.CommitTransactionAsync();
+        
+        using var session4 = await tenantRepository.GetSessionAsync();
+        session4.StartTransaction();
+        var z = await tenantRepository.GetRtEntitiesByTypeAsync<RtTagsItem>(session4, 
+            DataQueryOperation.Create());
+        await session4.CommitTransactionAsync();
+
+        Assert.Single(z.Items);
+        Assert.Equal("test-stringarray", z.Items.First().Name);
+        Assert.Equal("tag1", z.Items.First().Tags?.First());
+        Assert.Equal("tag2", z.Items.First().Tags?.ElementAt(1));
+        Assert.Equal("tag3", z.Items.First().Tags?.ElementAt(2));
+        Assert.Equal("tag4", z.Items.First().Tags?.ElementAt(3));
+    }
+    
+    [Fact]
+    public async Task CreateAndQuery_StringArray_Replace()
+    {
+        await systemFixture.ClearCollectionAsync();
+        var systemContext = systemFixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+        
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var rtMenuItem = await tenantRepository.CreateTransientRtEntityAsync<RtTagsItem>();
+        rtMenuItem.Name = "test-stringarray";
+        rtMenuItem.Tags = new AttributeStringValueList(["tag1", "tag2"]);
+        await tenantRepository.InsertOneRtEntityAsync(session, rtMenuItem);
+
+        await session.CommitTransactionAsync();
+
+        using var session2 = await tenantRepository.GetSessionAsync();
+        session2.StartTransaction();
+        var y = await tenantRepository.GetRtEntitiesByTypeAsync<RtTagsItem>(session2, 
+            DataQueryOperation.Create());
+        await session2.CommitTransactionAsync();
+        
+        using var session3 = await tenantRepository.GetSessionAsync();
+        session3.StartTransaction();
+        var testItem = y.Items.First();
+        testItem.Tags = new AttributeStringValueList(["tag1", "tag2", "tag3", "tag4"]);
+        await tenantRepository.ReplaceOneRtEntityByIdAsync(session3, testItem.RtId, testItem);
+        await session3.CommitTransactionAsync();
+        
+        using var session4 = await tenantRepository.GetSessionAsync();
+        session4.StartTransaction();
+        var z = await tenantRepository.GetRtEntitiesByTypeAsync<RtTagsItem>(session4, 
+            DataQueryOperation.Create());
+        await session4.CommitTransactionAsync();
+
+        Assert.Single(z.Items);
+        Assert.Equal("test-stringarray", z.Items.First().Name);
+        Assert.Equal("tag1", z.Items.First().Tags.First());
+        Assert.Equal("tag2", z.Items.First().Tags.ElementAt(1));
+        Assert.Equal("tag3", z.Items.First().Tags.ElementAt(2));
+        Assert.Equal("tag4", z.Items.First().Tags.ElementAt(3));
     }
 }

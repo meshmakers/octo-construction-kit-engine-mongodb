@@ -12,19 +12,17 @@ trigger:
 
 variables:
   - group: ApiKeys
+  - group: OctoDefault
   - name: solutionFile
     value: 'Octo.ConstructionKit.Engine.MongoDb.sln'
-  - name: isRelease
-    value: ${{ startsWith(variables['Build.SourceBranch'], 'refs/tags/r') }}
   - name: buildConfiguration
     value: 'Release'
   - name: buildPlatform
-    value: 'any cpu'
-  - name: MajorVersion
-    value: '0'
-  - name: MinorVersion
-    value: '1'
-
+    value: 'Any CPU'
+  - name: isRelease
+    value: ${{ startsWith(variables['Build.SourceBranch'], 'refs/tags/r') }}
+  - name: isMain
+    value: ${{ eq(variables['Build.SourceBranch'], 'refs/heads/main') }}    
 
 stages:
  - stage: Build
@@ -61,12 +59,13 @@ stages:
           PublishSymbols: false
           SymbolServerType: TeamServices
       - task: CopyFiles@2
-        displayName: 'Copy Files from $(Build.SourcesDirectory)/bin/$(BuildConfiguration)/**/*.nupkg to $(build.artifactstagingdirectory)'
+        displayName: 'Copy Files from **/*.nupkg to $(build.artifactstagingdirectory)'
         inputs:
           SourceFolder: $(Build.SourcesDirectory)
           Contents: |
-            bin/$(BuildConfiguration)/**/*.nupkg
-          TargetFolder: $(build.artifactstagingdirectory)
+            **/*.nupkg
+          TargetFolder: $(build.artifactstagingdirectory)/nuget
+          flattenFolders: true
       - task: PowerShell@2
         displayName: 'Create versioninfo file'
         inputs:
