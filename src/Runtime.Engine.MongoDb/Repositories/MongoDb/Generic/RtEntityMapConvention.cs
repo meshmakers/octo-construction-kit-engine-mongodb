@@ -24,7 +24,7 @@ internal class RtEntityMapConvention(ICkClassMappingService ckClassMappingServic
     {
         Delegate @delegate = CreateInstance;
         var mapCreator = classMap.MapCreator(@delegate);
-        mapCreator.SetArguments(new[] { nameof(RtEntity.CkTypeId), nameof(RtEntity.RtId) });
+        mapCreator.SetArguments([nameof(RtEntity.CkTypeId), nameof(RtEntity.RtId)]);
     }
 
     public void Apply(BsonMemberMap memberMap)

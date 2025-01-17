@@ -32,7 +32,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
 
     private static bool _isRegistered;
 
-    private static readonly object ObjectIdLock = new();
+    private static readonly Lock ObjectIdLock = new();
     private readonly ILogger<MongoRepositoryClient> _logger;
     protected readonly Guid InstanceId = Guid.NewGuid();
     protected readonly IServiceProvider ServiceProvider;
@@ -127,11 +127,17 @@ public abstract class MongoRepositoryClient : IRepositoryClient
 
     private static void ConfigureMongoDriver(IServiceProvider serviceProvider)
     {
-        if (_isRegistered) return;
+        if (_isRegistered)
+        {
+            return;
+        }
 
         lock (ObjectIdLock)
         {
-            if (_isRegistered) return;
+            if (_isRegistered)
+            {
+                return;
+            }
 
             // Remove convention first to avoid duplications
             // this call of Remove method makes no errors if occurs before any Register method call
@@ -159,11 +165,15 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 new RtRecordMapConvention(serviceProvider.GetRequiredService<ICkClassMappingService>())
             }, t => typeof(RtRecord).IsAssignableFrom(t));
 
+            // Ensure that class maps are registered after conventions! Otherwise, for example
+            // CamelCaseElementName ist not executed during mapping.
+            RegisterClassMaps();
+            
             _isRegistered = true;
         }
     }
 
-    internal static void RegisterClassMaps()
+    internal static void RegisterSerializers()
     {
         BsonSerializer.RegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
         BsonSerializer.RegisterDiscriminatorConvention(typeof(RtEntity), new RtEntityDiscriminatorConvention("_t"));
@@ -179,7 +189,18 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         BsonSerializer.RegisterSerializer(objectSerializer);
 
         BsonSerializer.RegisterSerializer(new OctoObjectIdSerializer());
-
+        
+        BsonSerializer.RegisterSerializer(new CkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
+        BsonSerializer.RegisterSerializer(new CkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>());
+        BsonSerializer.RegisterSerializer(
+            new CkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());
+        BsonSerializer.RegisterSerializer(new CkIdSerializer<CkRecordId, OctoRecordIdSerializer>());
+        BsonSerializer.RegisterSerializer(new CkIdSerializer<CkEnumId, OctoEnumIdSerializer>());
+        BsonSerializer.RegisterSerializer(new ModelIdSerializer());
+    }
+    
+    private static void RegisterClassMaps()
+    {
         BsonClassMap.RegisterClassMap<CkModel>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
@@ -419,12 +440,5 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         });
 
 
-        BsonSerializer.RegisterSerializer(new CkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
-        BsonSerializer.RegisterSerializer(new CkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>());
-        BsonSerializer.RegisterSerializer(
-            new CkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());
-        BsonSerializer.RegisterSerializer(new CkIdSerializer<CkRecordId, OctoRecordIdSerializer>());
-        BsonSerializer.RegisterSerializer(new CkIdSerializer<CkEnumId, OctoEnumIdSerializer>());
-        BsonSerializer.RegisterSerializer(new ModelIdSerializer());
     }
 }

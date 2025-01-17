@@ -50,7 +50,7 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services.AddSingleton<IUserRepositoryAccess, UserRepositoryAccess>();
         builder.Services.AddSingleton<IAdminRepositoryAccess, AdminRepositoryAccess>();
         
-        MongoRepositoryClient.RegisterClassMaps();
+        MongoRepositoryClient.RegisterSerializers();
         
         return builder;
     }
