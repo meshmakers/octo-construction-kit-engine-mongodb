@@ -145,8 +145,6 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 new CamelCaseElementNameConvention()
             }, _ => true);
 
-            RegisterClassMaps();
-
             // This convention is needed to ensure that properties of a derived class of RtEntity
             // are not serialized and the correct polymorphic type is used.
             ConventionRegistry.Register(OctoRtEntityConvention, new ConventionPack
@@ -165,7 +163,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         }
     }
 
-    private static void RegisterClassMaps()
+    internal static void RegisterClassMaps()
     {
         BsonSerializer.RegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
         BsonSerializer.RegisterDiscriminatorConvention(typeof(RtEntity), new RtEntityDiscriminatorConvention("_t"));
