@@ -150,6 +150,12 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             {
                 new CamelCaseElementNameConvention()
             }, _ => true);
+            
+            // Ensure that class maps are registered after generic conventions! Otherwise, for example
+            // CamelCaseElementName ist not executed during mapping.
+            // !!!! The position must be before the class further class mapping registrations using conventions
+            // here
+            RegisterClassMaps();
 
             // This convention is needed to ensure that properties of a derived class of RtEntity
             // are not serialized and the correct polymorphic type is used.
@@ -165,9 +171,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 new RtRecordMapConvention(serviceProvider.GetRequiredService<ICkClassMappingService>())
             }, t => typeof(RtRecord).IsAssignableFrom(t));
 
-            // Ensure that class maps are registered after conventions! Otherwise, for example
-            // CamelCaseElementName ist not executed during mapping.
-            RegisterClassMaps();
+
             
             _isRegistered = true;
         }
