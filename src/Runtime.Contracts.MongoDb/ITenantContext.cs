@@ -45,6 +45,13 @@ public interface ITenantContext
     /// <returns></returns>
     ITenantRepository GetSystemTenantRepository();
 
+
+    /// <summary>
+    ///     Returns an object that allows access to the system tenant repository as admin.
+    /// </summary>
+    /// <returns></returns>
+    ITenantRepository GetSystemTenantRepositoryAsAdmin();
+
     /// <summary>
     ///     Returns an object that allows access to the tenant repository.
     /// </summary>

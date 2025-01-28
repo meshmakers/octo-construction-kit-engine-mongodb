@@ -418,7 +418,7 @@ public class TenantContext : ITenantContext
         return result;
     }
 
-    private ITenantRepository GetSystemTenantRepositoryAsAdmin()
+    public ITenantRepository GetSystemTenantRepositoryAsAdmin()
     {
         var normalizedDatabaseName = SystemConfiguration.Value.SystemDatabaseName.ToLower();
         var normalizedTenantId = SystemConfiguration.Value.SystemTenantId.NormalizeString();
