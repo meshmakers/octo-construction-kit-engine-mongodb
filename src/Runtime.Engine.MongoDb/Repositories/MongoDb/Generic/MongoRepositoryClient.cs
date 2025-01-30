@@ -20,6 +20,7 @@ using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
 using MongoDB.Driver.Core.Events;
 using MongoDB.Driver.GeoJsonObjectModel;
+using DateTimeOffsetSerializer = Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization.DateTimeOffsetSerializer;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
@@ -193,7 +194,9 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         BsonSerializer.RegisterSerializer(objectSerializer);
 
         BsonSerializer.RegisterSerializer(new OctoObjectIdSerializer());
-        
+        BsonSerializer.RegisterDiscriminator(typeof(DateTimeOffset), "datetimeoffset");
+        BsonSerializer.RegisterSerializer(new DateTimeOffsetSerializer());
+
         BsonSerializer.RegisterSerializer(new CkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
         BsonSerializer.RegisterSerializer(new CkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>());
         BsonSerializer.RegisterSerializer(
