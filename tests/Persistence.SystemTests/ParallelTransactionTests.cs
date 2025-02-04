@@ -7,6 +7,7 @@ using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
+[Collection("Sequential")]
 public class ParallelTransactionTests(GenerateSampleDataFixture generateSampleDataFixture)
     : IClassFixture<GenerateSampleDataFixture>
 {

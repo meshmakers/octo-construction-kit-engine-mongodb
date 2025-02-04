@@ -6,6 +6,8 @@ public static class Constants
     public const string RegexWithoutWhitespaces = @"^[^\s]+$";
 
     internal const string AttributesName = "attributes";
+    internal const string PathSeparator = ".";
+    internal const string IndexAccessor = "[{0}]";
 
     public const string IdField = "_id";
     public const string ModelIdField = "ckModelId";

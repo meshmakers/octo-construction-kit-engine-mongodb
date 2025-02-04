@@ -81,4 +81,10 @@ public class TenantException : PersistenceException
     {
         return new TenantException("Creating system tenant failed.", e);
     }
+
+    public static Exception CannotRegisterBecauseAlreadyRegistered(Type type)
+    {
+        return new TenantException(
+            $"Cannot register type '{type}' because it is already registered. That indicates that BSON class maps where used before initialization of MongoDB client.");
+    }
 }

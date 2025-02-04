@@ -18,29 +18,27 @@ internal class RtEntityFieldFilterResolver<TEntity>(
         return ckTypeGraph.CkTypeId.FullName;
     }
     
-    internal override bool IsAttributeNameValid(string attributeName)
+    internal override bool IsAttributePathValid(string attributePath)
     {
-        return ckTypeGraph.AllAttributesByName.ContainsKey(attributeName) ||
-               attributeName == nameof(RtEntity.RtId) ||
-               attributeName == nameof(RtEntity.RtCreationDateTime) ||
-               attributeName == nameof(RtEntity.RtChangedDateTime) ||
-               attributeName == nameof(RtEntity.RtVersion) ||
-               attributeName == nameof(RtEntity.RtWellKnownName);
-    }
-    
-    internal override string ResolveAttributeName(string attributeName)
-    {
-        if (typeof(RtEntity).GetProperty(attributeName) != null)
+        if (base.IsAttributePathValid(attributePath))
         {
-            return attributeName.ToCamelCase();
-        }
-        
-        var baseResolve = base.ResolveAttributeName(attributeName);
-        if (!string.IsNullOrEmpty(baseResolve))
-        {
-            return baseResolve;
+            return true;
         }
 
-        return $"{Constants.AttributesName}.{attributeName.ToCamelCase()}";
+        return attributePath == nameof(RtEntity.RtId) ||
+               attributePath == nameof(RtEntity.RtCreationDateTime) ||
+               attributePath == nameof(RtEntity.RtChangedDateTime) ||
+               attributePath == nameof(RtEntity.RtVersion) ||
+               attributePath == nameof(RtEntity.RtWellKnownName);
+    }
+    
+    internal override string? ResolveAttributePath(string attributePath)
+    {
+        if (typeof(RtEntity).GetProperty(attributePath) != null)
+        {
+            return attributePath.ToCamelCase();
+        }
+        
+        return base.ResolveAttributePath(attributePath);
     }
 }

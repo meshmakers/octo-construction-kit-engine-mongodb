@@ -20,20 +20,20 @@ internal class FieldFilterResolver<TEntity>
         return typeof(TEntity).Name;
     }
     
-    internal virtual bool IsAttributeNameValid(string attributeName)
+    internal virtual bool IsAttributePathValid(string attributePath)
     {
-        var memberMap = _bsonClassMap.GetMemberMap(attributeName);
+        var memberMap = _bsonClassMap.GetMemberMap(attributePath);
         return memberMap != null;
     }
 
-    internal virtual string? ResolveAttributeName(string attributeName)
+    internal virtual string? ResolveAttributePath(string attributePath)
     {
-        if (_bsonClassMap.IdMemberMap?.MemberName == attributeName)
+        if (_bsonClassMap.IdMemberMap?.MemberName == attributePath)
         {
             return Constants.IdField;
         }
 
-        var memberMap = _bsonClassMap.GetMemberMap(attributeName);
+        var memberMap = _bsonClassMap.GetMemberMap(attributePath);
         if (memberMap == null || (!memberMap.ShouldSerializeMethod?.Invoke(null) ?? false))
         {
             return null;
@@ -142,15 +142,15 @@ internal class FieldFilterResolver<TEntity>
 
     private void AddFieldFilter(FieldFilter fieldFilter)
     {
-        if (string.IsNullOrWhiteSpace(fieldFilter.AttributeName))
+        if (string.IsNullOrWhiteSpace(fieldFilter.AttributePath))
         {
             return;
         }
 
-        if (IsAttributeNameValid(fieldFilter.AttributeName))
+        if (IsAttributePathValid(fieldFilter.AttributePath))
         {
-            var resolvedAttributeName = ResolveAttributeName(fieldFilter.AttributeName);
-            var resolvedValue = ResolveSearchAttributeValue(fieldFilter.AttributeName, fieldFilter.ComparisonValue,
+            var resolvedAttributeName = ResolveAttributePath(fieldFilter.AttributePath);
+            var resolvedValue = ResolveSearchAttributeValue(fieldFilter.AttributePath, fieldFilter.ComparisonValue,
                 out var isEnum);
 
             if (isEnum)
@@ -165,12 +165,12 @@ internal class FieldFilterResolver<TEntity>
             }
             else
             {
-                throw OperationFailedException.AttributeNameResolutionFailed(fieldFilter.AttributeName);
+                throw OperationFailedException.AttributeNameResolutionFailed(fieldFilter.AttributePath);
             }
         }
         else
         {
-            throw OperationFailedException.AttributeDoesNotExist(fieldFilter.AttributeName, GetEntityName());
+            throw OperationFailedException.AttributeDoesNotExist(fieldFilter.AttributePath, GetEntityName());
         }
     }
     

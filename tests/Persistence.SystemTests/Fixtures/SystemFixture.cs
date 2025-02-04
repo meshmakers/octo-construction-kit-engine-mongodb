@@ -7,17 +7,17 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
 public class SystemFixture : ConfigurationFixture, IDisposable
 {
-    private readonly SystemTestOptions _options;
+    protected readonly SystemTestOptions Options;
     // ReSharper disable once MemberCanBeProtected.Global
     public SystemFixture()
     {
-        _options ??= GetOptions<SystemTestOptions>("systemTest");
+        Options ??= GetOptions<SystemTestOptions>("systemTest");
         Services.Configure<OctoSystemConfiguration>(t =>
         {
             t.SystemDatabaseName = "PersistenceSystemTests";
-            t.AdminUserPassword = _options.AdminUserPassword;
-            t.DatabaseUserPassword = _options.DatabaseUserPassword;
-            t.UseDirectConnection = _options.UseDirectConnection;
+            t.AdminUserPassword = Options.AdminUserPassword;
+            t.DatabaseUserPassword = Options.DatabaseUserPassword;
+            t.UseDirectConnection = Options.UseDirectConnection;
         });
 
         Provider = Services.BuildServiceProvider();
@@ -52,7 +52,6 @@ public class SystemFixture : ConfigurationFixture, IDisposable
         }));
     }
 
-    public string TestTenantId => _options.TenantId;
 
     public ServiceProvider Provider { get; }
 
@@ -65,5 +64,10 @@ public class SystemFixture : ConfigurationFixture, IDisposable
     public ISystemContext GetSystemContext()
     {
         return Provider.GetRequiredService<ISystemContext>();
+    }
+
+    public T GetService<T>() where T: notnull
+    {
+        return Provider.GetRequiredService<T>();
     }
 }

@@ -9,6 +9,7 @@ using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
+[Collection("Sequential")]
 public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture systemFixture)
     : IClassFixture<ImportTestCkModelFixture>
 {

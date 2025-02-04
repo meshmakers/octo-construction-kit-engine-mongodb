@@ -85,19 +85,19 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
     internal void AddAttributeSearchFilter(AttributeSearchFilter? attributeSearchFilter)
     {
         if (attributeSearchFilter?.SearchTerm == null ||
-            !attributeSearchFilter.AttributeNames.Any())
+            !attributeSearchFilter.AttributePaths.Any())
         {
             return;
         }
 
         // ReSharper disable once PossibleMultipleEnumeration
-        var attributeNameList = attributeSearchFilter.AttributeNames.ToList();
+        var attributeNameList = attributeSearchFilter.AttributePaths.ToList();
 
         foreach (var attributeName in attributeNameList)
         {
-            if (FieldFilterResolver.IsAttributeNameValid(attributeName))
+            if (FieldFilterResolver.IsAttributePathValid(attributeName))
             {
-                var resolvedAttributeName = FieldFilterResolver.ResolveAttributeName(attributeName);
+                var resolvedAttributeName = FieldFilterResolver.ResolveAttributePath(attributeName);
                 var resolvedValue = FieldFilterResolver.ResolveSearchAttributeValue(attributeName,
                     attributeSearchFilter.SearchTerm, out var isEnum);
 
@@ -138,12 +138,12 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
 
         foreach (var item in sortOrderList)
         {
-            if (!FieldFilterResolver.IsAttributeNameValid(item.AttributeName) && item.AttributeName != Constants.IdField)
+            if (!FieldFilterResolver.IsAttributePathValid(item.AttributePath) && item.AttributePath != Constants.IdField)
             {
-                throw InvalidAttributeException.SortDefinitionContainsInvalidAttribute(item.AttributeName, FieldFilterResolver.GetEntityName());
+                throw InvalidAttributeException.SortDefinitionContainsInvalidAttribute(item.AttributePath, FieldFilterResolver.GetEntityName());
             }
 
-            var resolvedAttributeName = FieldFilterResolver.ResolveAttributeName(item.AttributeName);
+            var resolvedAttributeName = FieldFilterResolver.ResolveAttributePath(item.AttributePath);
 
             switch (item.SortOrder)
             {

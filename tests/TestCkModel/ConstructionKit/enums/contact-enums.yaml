@@ -1,0 +1,14 @@
+$schema: https://schemas.meshmakers.cloud/construction-kit-elements.schema.json
+enums:
+  - enumId: EMailAddressType
+    description: The sort order of a field.
+    values:
+      - key: 0
+        name: Office
+        description: Office e-mail address
+      - key: 1
+        name: Home
+        description: Private e-mail address
+      - key: 2
+        name: Accounting
+        description: E-Mail for accounting

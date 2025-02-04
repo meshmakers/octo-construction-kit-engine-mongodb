@@ -15,7 +15,7 @@ using MongoDB.Driver.GeoJsonObjectModel;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
-internal class RtFieldFilterResolve : FieldFilterResolver<RtDeepGraphQueryResult>;
+internal class RtFieldFilterResolver : FieldFilterResolver<RtDeepGraphQueryResult>;
 
 internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQueryResult>
 {
@@ -29,7 +29,7 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
         string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
         CkId<CkAssociationRoleId> roleId)
-        : base(new RtFieldFilterResolve(), language)
+        : base(new RtFieldFilterResolver(), language)
     {
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
         _rtIds = rtIds;
@@ -58,7 +58,7 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
 
         foreach (var geospatialFilter in geospatialFilters)
         {
-            var resolvedAttributeName = FieldFilterResolver.ResolveAttributeName(geospatialFilter.AttributeName);
+            var resolvedAttributeName = FieldFilterResolver.ResolveAttributePath(geospatialFilter.AttributeName);
             if (string.IsNullOrWhiteSpace(resolvedAttributeName))
             {
                 throw OperationFailedException.AttributeNameResolutionFailed(geospatialFilter.AttributeName);
