@@ -5,6 +5,7 @@ using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
+[Collection("Sequential")]
 public class GetRtDeepGraphAsyncTests(GenerateSampleDataFixture generateSampleDataFixture)
     : IClassFixture<GenerateSampleDataFixture>
 {

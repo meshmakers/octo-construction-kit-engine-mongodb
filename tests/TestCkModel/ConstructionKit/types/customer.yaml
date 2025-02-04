@@ -10,8 +10,8 @@ types:
     - id: ${thisModel}/Contacts.Address
       name: Address
       isOptional: true
-    - id: ${thisModel}/Contacts.EMailAddress
-      name: EMailAddress
+    - id: ${thisModel}/Contacts.EMailAddresses
+      name: EMailAddresses
       isOptional: true
     associations:
     - id: System/Related

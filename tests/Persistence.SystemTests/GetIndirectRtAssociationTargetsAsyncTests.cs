@@ -6,6 +6,7 @@ using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
+[Collection("Sequential")]
 public class GetIndirectRtAssociationTargetsAsyncTests(GenerateSampleDataFixture generateSampleDataFixture) : IClassFixture<GenerateSampleDataFixture>
 {
     [Fact]

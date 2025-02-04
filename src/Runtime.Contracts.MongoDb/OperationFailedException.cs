@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -132,5 +133,15 @@ public class OperationFailedException : PersistenceException
     public static Exception AssociationRoleIdUndefined()
     {
         return new OperationFailedException("AssociationRoleId is undefined.");
+    }
+
+    public static Exception CkRecordIdNotDefined(CkTypeAttributeGraph ckTypeAttributeGraph)
+    {
+        return new OperationFailedException($"CkRecordId is not defined for attribute '{ckTypeAttributeGraph.AttributeName}'.");
+    }
+
+    public static Exception PathTypeNotSupported(PathTerm pathTerm)
+    {
+        return new OperationFailedException($"Path type '{pathTerm.Type}' is not supported.");
     }
 }

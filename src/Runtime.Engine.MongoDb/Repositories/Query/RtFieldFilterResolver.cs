@@ -1,5 +1,7 @@
 using System.Collections;
+using System.Text;
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
@@ -19,20 +21,120 @@ internal abstract class RtFieldFilterResolver<TEntity>(
     : FieldFilterResolver<TEntity>
     where TEntity : RtTypeWithAttributes, new()
 {
-    internal override bool IsAttributeNameValid(string attributeName)
+    internal override bool IsAttributePathValid(string attributePath)
     {
-        return ckTypeWithAttributesGraph.AllAttributesByName.ContainsKey(attributeName);
-    }
+        var pathTerms = RtPathEvaluator.TokenizePath(attributePath);
 
-    internal override string ResolveAttributeName(string attributeName)
-    {
-        var baseResolve = base.ResolveAttributeName(attributeName);
-        if (!string.IsNullOrEmpty(baseResolve))
+        CkTypeWithAttributesGraph current = ckTypeWithAttributesGraph;
+        CkTypeAttributeGraph? ckTypeAttributeGraph = null;
+        foreach (var pathTerm in pathTerms)
         {
-            return baseResolve;
+            switch (pathTerm.Type)
+            {
+                case PathType.Attribute:
+                    if (current.AllAttributesByName.TryGetValue(pathTerm.Value, out ckTypeAttributeGraph))
+                    {
+                        switch (ckTypeAttributeGraph.ValueType)
+                        {
+                            case AttributeValueTypesDto.Record:
+                            case AttributeValueTypesDto.RecordArray:
+                                if (ckTypeAttributeGraph.ValueCkRecordId == null)
+                                {
+                                    throw OperationFailedException.CkRecordIdNotDefined(ckTypeAttributeGraph);
+                                }
+
+                                current = ckCacheService.GetCkRecord(tenantId, ckTypeAttributeGraph.ValueCkRecordId);
+                                continue;
+                            default:
+                                continue;
+                        }
+                    }
+
+                    return false;
+                case PathType.ArrayIndex:
+                    if (ckTypeAttributeGraph != null)
+                    {
+                        switch (ckTypeAttributeGraph.ValueType)
+                        {
+                            case AttributeValueTypesDto.StringArray:
+                            case AttributeValueTypesDto.IntArray:
+                            case AttributeValueTypesDto.RecordArray:
+                                continue;
+                            default:
+                                return false;
+                        }
+                    }
+
+                    return false;
+                default:
+                    throw OperationFailedException.PathTypeNotSupported(pathTerm);
+            }
         }
 
-        return $"{Constants.AttributesName}.{attributeName.ToCamelCase()}";
+
+        return true;
+    }
+
+    internal override string? ResolveAttributePath(string attributePath)
+    {
+        var pathTerms = RtPathEvaluator.TokenizePath(attributePath);
+
+        StringBuilder sb = new StringBuilder();
+        sb.Append(Constants.AttributesName);
+
+        CkTypeWithAttributesGraph current = ckTypeWithAttributesGraph;
+        CkTypeAttributeGraph? ckTypeAttributeGraph = null;
+        foreach (var pathTerm in pathTerms)
+        {
+            switch (pathTerm.Type)
+            {
+                case PathType.Attribute:
+
+                    if (current.AllAttributesByName.TryGetValue(pathTerm.Value, out ckTypeAttributeGraph))
+                    {
+                        switch (ckTypeAttributeGraph.ValueType)
+                        {
+                            case AttributeValueTypesDto.Record:
+                            case AttributeValueTypesDto.RecordArray:
+                                if (ckTypeAttributeGraph.ValueCkRecordId == null)
+                                {
+                                    throw OperationFailedException.CkRecordIdNotDefined(ckTypeAttributeGraph);
+                                }
+
+                                current = ckCacheService.GetCkRecord(tenantId, ckTypeAttributeGraph.ValueCkRecordId);
+                                sb.Append(Constants.PathSeparator);
+                                sb.Append(pathTerm.Value.ToCamelCase());
+                                continue;
+                            default:
+                                sb.Append(Constants.PathSeparator);
+                                sb.Append(pathTerm.Value.ToCamelCase());
+                                continue;
+                        }
+                    }
+
+                    return null;
+                case PathType.ArrayIndex:
+                    if (ckTypeAttributeGraph != null)
+                    {
+                        switch (ckTypeAttributeGraph.ValueType)
+                        {
+                            case AttributeValueTypesDto.StringArray:
+                            case AttributeValueTypesDto.IntArray:
+                            case AttributeValueTypesDto.RecordArray:
+                                sb.Append(string.Format(Constants.IndexAccessor, pathTerm.Value));
+                                continue;
+                            default:
+                                return null;
+                        }
+                    }
+
+                    return null;
+                default:
+                    throw OperationFailedException.PathTypeNotSupported(pathTerm);
+            }
+        }
+
+        return sb.ToString();
     }
 
     internal override object? ResolveSearchAttributeValue(string attributeName, object? searchTerm, out bool isEnum)
@@ -40,7 +142,8 @@ internal abstract class RtFieldFilterResolver<TEntity>(
         if (searchTerm != null &&
             ckTypeWithAttributesGraph.AllAttributesByName.TryGetValue(attributeName, out var ckTypeAttributeGraph))
         {
-            if (ckTypeAttributeGraph.ValueType == AttributeValueTypesDto.Enum && ckTypeAttributeGraph.ValueCkEnumId != null)
+            if (ckTypeAttributeGraph.ValueType == AttributeValueTypesDto.Enum &&
+                ckTypeAttributeGraph.ValueCkEnumId != null)
             {
                 var ckEnumGraph = ckCacheService.GetCkEnum(tenantId, ckTypeAttributeGraph.ValueCkEnumId);
                 var searchTermString = searchTerm.ToString()?.Replace("_", "");
@@ -55,12 +158,14 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                 }
             }
 
-            if (ckTypeAttributeGraph.ValueType == AttributeValueTypesDto.RecordArray && ckTypeAttributeGraph.ValueCkRecordId != null)
+            if (ckTypeAttributeGraph.ValueType == AttributeValueTypesDto.RecordArray &&
+                ckTypeAttributeGraph.ValueCkRecordId != null)
             {
                 if (searchTerm is FieldFilterCriteria fieldFilterCriteria)
                 {
                     var ckRecordGraph = ckCacheService.GetCkRecord(tenantId, ckTypeAttributeGraph.ValueCkRecordId);
-                    var rtRecordFieldFilterResolver = new RtRecordFieldFilterResolver<RtRecord>(ckCacheService, tenantId, ckRecordGraph);
+                    var rtRecordFieldFilterResolver =
+                        new RtRecordFieldFilterResolver<RtRecord>(ckCacheService, tenantId, ckRecordGraph);
                     rtRecordFieldFilterResolver.AddFieldFilters(fieldFilterCriteria.FieldFilters);
 
                     if (rtRecordFieldFilterResolver.FilterDefinitions.Any())
@@ -76,7 +181,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                     }
                 }
             }
-            
+
             if (searchTerm.ToString()?.StartsWith("@") == true)
             {
                 var expressionString = searchTerm.ToString()?.Substring(1);

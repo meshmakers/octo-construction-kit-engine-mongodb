@@ -3,6 +3,7 @@ using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
+[Collection("Sequential")]
 public class TenantContextTests(SystemFixture systemFixture)
     : IClassFixture<SystemFixture>
 {

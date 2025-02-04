@@ -41,7 +41,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         
         foreach (var geospatialFilter in geospatialFilters)
         {
-            var resolvedAttributeName = FieldFilterResolver.ResolveAttributeName(geospatialFilter.AttributeName);
+            var resolvedAttributeName = FieldFilterResolver.ResolveAttributePath(geospatialFilter.AttributeName);
             if (string.IsNullOrWhiteSpace(resolvedAttributeName))
             {
                 throw OperationFailedException.AttributeNameResolutionFailed(geospatialFilter.AttributeName);

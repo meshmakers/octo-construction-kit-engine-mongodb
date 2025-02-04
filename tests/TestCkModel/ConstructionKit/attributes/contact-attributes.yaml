@@ -55,4 +55,12 @@ attributes:
   - id: "Contacts.Address"
     description: Address of a contact.
     valueType: "Record"
-    valueCkRecordId: ${thisModel}/ContactAddress 
+    valueCkRecordId: ${thisModel}/ContactAddress
+  - id: "Contacts.EMailAddressType"
+    description: Type of an e-mail address of a contact.
+    valueType: Enum
+    valueCkEnumId: ${thisModel}/EMailAddressType
+  - id: "Contacts.EMailAddresses"
+    description: A list of e-mail addresses of a contact.
+    valueType: RecordArray
+    valueCkRecordId: ${thisModel}/EMailAddress

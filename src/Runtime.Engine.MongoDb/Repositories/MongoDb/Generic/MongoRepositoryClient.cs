@@ -3,6 +3,7 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
@@ -31,9 +32,10 @@ public abstract class MongoRepositoryClient : IRepositoryClient
     private const string OctoRtEntityConvention = "octo-convention-rtEntity";
     private const string OctoRtRecordConvention = "octo-convention-rtRecord";
 
-    private static bool _isRegistered;
-
+    private static volatile bool _isRegistered;
+    private static volatile bool _isSerializerRegistered;
     private static readonly Lock ObjectIdLock = new();
+
     private readonly ILogger<MongoRepositoryClient> _logger;
     protected readonly Guid InstanceId = Guid.NewGuid();
     protected readonly IServiceProvider ServiceProvider;
@@ -68,7 +70,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 settings.ReadConcern = ReadConcern.Majority;
                 settings.WriteConcern = new WriteConcern(WriteConcern.WMode.Majority, TimeSpan.FromSeconds(30));
 
-                // Always retry writes to prevent 
+                // Retry always writes to prevent
                 // Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction. 
                 settings.RetryWrites = true;
                 settings.ClusterConfigurator = cb =>
@@ -152,9 +154,9 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 new CamelCaseElementNameConvention()
             }, _ => true);
             
-            // Ensure that class maps are registered after generic conventions! Otherwise, for example
-            // CamelCaseElementName ist not executed during mapping.
-            // !!!! The position must be before the class further class mapping registrations using conventions
+            // Ensure that class maps are registered after generic conventions!
+            // Otherwise, for example, CamelCaseElementName is not executed during mapping.
+            // The position must be before class mapping registrations using conventions
             // here
             RegisterClassMaps();
 
@@ -172,38 +174,51 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 new RtRecordMapConvention(serviceProvider.GetRequiredService<ICkClassMappingService>())
             }, t => typeof(RtRecord).IsAssignableFrom(t));
 
-
-            
             _isRegistered = true;
         }
     }
 
     internal static void RegisterSerializers()
     {
-        BsonSerializer.RegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
-        BsonSerializer.RegisterDiscriminatorConvention(typeof(RtEntity), new RtEntityDiscriminatorConvention("_t"));
+        if (_isSerializerRegistered)
+        {
+            return;
+        }
 
-        BsonSerializer.RegisterSerializer(new OctoObjectListSerializer());
-        var objectSerializer = new OctoObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
-                                                                type.FullName?.StartsWith(typeof(RtEntity)
-                                                                    .Namespace!) ==
-                                                                true || type.Namespace!.StartsWith(typeof(GeoJson)
-                                                                    .Namespace!)
-                                                                || type.Namespace!.StartsWith(typeof(CkModelId)
-                                                                    .Namespace!) || type == typeof(List<RtRecord>));
-        BsonSerializer.RegisterSerializer(objectSerializer);
+        lock (ObjectIdLock)
+        {
+            if (_isSerializerRegistered)
+            {
+                return;
+            }
 
-        BsonSerializer.RegisterSerializer(new OctoObjectIdSerializer());
-        BsonSerializer.RegisterDiscriminator(typeof(DateTimeOffset), "datetimeoffset");
-        BsonSerializer.RegisterSerializer(new DateTimeOffsetSerializer());
+            BsonSerializer.RegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
+            BsonSerializer.RegisterDiscriminatorConvention(typeof(RtEntity), new RtEntityDiscriminatorConvention("_t"));
 
-        BsonSerializer.RegisterSerializer(new CkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
-        BsonSerializer.RegisterSerializer(new CkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>());
-        BsonSerializer.RegisterSerializer(
-            new CkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());
-        BsonSerializer.RegisterSerializer(new CkIdSerializer<CkRecordId, OctoRecordIdSerializer>());
-        BsonSerializer.RegisterSerializer(new CkIdSerializer<CkEnumId, OctoEnumIdSerializer>());
-        BsonSerializer.RegisterSerializer(new ModelIdSerializer());
+            BsonSerializer.RegisterSerializer(new OctoObjectListSerializer());
+            var objectSerializer = new OctoObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
+                                                                    type.FullName?.StartsWith(typeof(RtEntity)
+                                                                        .Namespace!) ==
+                                                                    true || type.Namespace!.StartsWith(typeof(GeoJson)
+                                                                        .Namespace!)
+                                                                    || type.Namespace!.StartsWith(typeof(CkModelId)
+                                                                        .Namespace!) || type == typeof(List<RtRecord>));
+            BsonSerializer.RegisterSerializer(objectSerializer);
+
+            BsonSerializer.RegisterSerializer(new OctoObjectIdSerializer());
+            BsonSerializer.RegisterDiscriminator(typeof(DateTimeOffset), "datetimeoffset");
+            BsonSerializer.RegisterSerializer(new DateTimeOffsetSerializer());
+
+            BsonSerializer.RegisterSerializer(new CkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
+            BsonSerializer.RegisterSerializer(new CkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>());
+            BsonSerializer.RegisterSerializer(
+                new CkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());
+            BsonSerializer.RegisterSerializer(new CkIdSerializer<CkRecordId, OctoRecordIdSerializer>());
+            BsonSerializer.RegisterSerializer(new CkIdSerializer<CkEnumId, OctoEnumIdSerializer>());
+            BsonSerializer.RegisterSerializer(new ModelIdSerializer());
+
+            _isSerializerRegistered = true;
+        }
     }
     
     private static void RegisterClassMaps()
@@ -384,12 +399,17 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.Text);
         });
 
-        BsonClassMap.RegisterClassMap<RtTypeWithAttributes>(cm =>
+        var isRegisterSuccessful = BsonClassMap.TryRegisterClassMap<RtTypeWithAttributes>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.MapField("_attributes").SetElementName(Constants.AttributesName)
             .SetSerializer(new RtAttributeDictionarySerializer());
         });
+
+        if (!isRegisterSuccessful)
+        {
+            throw TenantException.CannotRegisterBecauseAlreadyRegistered(typeof(RtTypeWithAttributes));
+        }
 
         BsonClassMap.RegisterClassMap<RtEntity>(cm =>
         {
@@ -445,7 +465,5 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.TargetRtId);
             cm.GetMemberMap(c => c.TargetCkTypeId);
         });
-
-
     }
 }

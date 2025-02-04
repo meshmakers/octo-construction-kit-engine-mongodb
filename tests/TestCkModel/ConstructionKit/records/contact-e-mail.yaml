@@ -1,0 +1,8 @@
+$schema: https://schemas.meshmakers.cloud/construction-kit-elements.schema.json
+records:
+  - recordId: EMailAddress
+    attributes:
+      - id: ${thisModel}/Contacts.EMailAddressType
+        name: EMailAddressType
+      - id: ${thisModel}/Contacts.EMailAddress
+        name: EMailAddress
