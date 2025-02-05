@@ -25,7 +25,7 @@ using DateTimeOffsetSerializer = Meshmakers.Octo.Runtime.Engine.MongoDb.Serializ
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
-[DebuggerDisplay("{" + nameof(InstanceId) + "}")]
+[DebuggerDisplay("{" + nameof(_instanceId) + "}")]
 public abstract class MongoRepositoryClient : IRepositoryClient
 {
     private const string OctoConventionCamelCase = "octo-convention-camelCase";
@@ -37,9 +37,9 @@ public abstract class MongoRepositoryClient : IRepositoryClient
     private static readonly Lock ObjectIdLock = new();
 
     private readonly ILogger<MongoRepositoryClient> _logger;
-    protected readonly Guid InstanceId = Guid.NewGuid();
-    protected readonly IServiceProvider ServiceProvider;
-    protected readonly IOptions<OctoSystemConfiguration> SystemConfiguration;
+    protected readonly Guid _instanceId = Guid.NewGuid();
+    protected readonly IServiceProvider _serviceProvider;
+    protected readonly IOptions<OctoSystemConfiguration> _systemConfiguration;
     private MongoClient? _client;
 
 
@@ -48,12 +48,12 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         IServiceProvider serviceProvider)
     {
         _logger = logger;
-        SystemConfiguration = systemConfiguration;
-        ServiceProvider = serviceProvider;
+        _systemConfiguration = systemConfiguration;
+        _serviceProvider = serviceProvider;
         ArgumentValidation.ValidateString(nameof(systemConfiguration.Value.DatabaseHost),
             systemConfiguration.Value.DatabaseHost);
 
-        ConfigureMongoDriver(ServiceProvider);
+        ConfigureMongoDriver(_serviceProvider);
     }
 
     /// <summary>
@@ -98,14 +98,14 @@ public abstract class MongoRepositoryClient : IRepositoryClient
     public async Task<IOctoSession> GetSessionAsync()
     {
         var session = await Client.StartSessionAsync();
-        var logger = ServiceProvider.GetRequiredService<ILogger<OctoUserSession>>();
+        var logger = _serviceProvider.GetRequiredService<ILogger<OctoUserSession>>();
         return new OctoUserSession(logger, session, Client.Settings.ApplicationName);
     }
 
     public IOctoSession GetSession()
     {
         var session = Client.StartSession();
-        var logger = ServiceProvider.GetRequiredService<ILogger<OctoUserSession>>();
+        var logger = _serviceProvider.GetRequiredService<ILogger<OctoUserSession>>();
         return new OctoUserSession(logger, session, Client.Settings.ApplicationName);
     }
 

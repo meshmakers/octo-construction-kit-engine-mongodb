@@ -34,11 +34,20 @@ internal class RtEntityFieldFilterResolver<TEntity>(
     
     internal override string? ResolveAttributePath(string attributePath)
     {
-        if (typeof(RtEntity).GetProperty(attributePath) != null)
+        var r = base.ResolveAttributePath(attributePath);
+        if (!string.IsNullOrWhiteSpace(r))
         {
-            return attributePath.ToCamelCase();
+            return r;
         }
-        
-        return base.ResolveAttributePath(attributePath);
+
+        return attributePath switch
+        {
+            nameof(RtEntity.RtId) => Constants.IdField,
+            nameof(RtEntity.RtCreationDateTime) => nameof(RtEntity.RtCreationDateTime).ToCamelCase(),
+            nameof(RtEntity.RtChangedDateTime) => nameof(RtEntity.RtChangedDateTime).ToCamelCase(),
+            nameof(RtEntity.RtVersion) => nameof(RtEntity.RtVersion).ToCamelCase(),
+            nameof(RtEntity.RtWellKnownName) => nameof(RtEntity.RtWellKnownName).ToCamelCase(),
+            _ => null
+        };
     }
 }

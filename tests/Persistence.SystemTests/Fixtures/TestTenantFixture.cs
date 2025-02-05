@@ -37,6 +37,6 @@ public class TestTenantFixture : SystemFixture
         }));
     }
 
-    public string TestTenantId => Options.TenantId;
+    public string TestTenantId => _options.TenantId;
 
 }

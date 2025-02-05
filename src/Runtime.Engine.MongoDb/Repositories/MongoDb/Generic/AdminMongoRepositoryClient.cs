@@ -22,14 +22,14 @@ public class AdminMongoRepositoryClient(
     public async Task<IOctoAdminSession> GetAdminSessionAsync()
     {
         var session = await Client.StartSessionAsync();
-        var logger = ServiceProvider.GetRequiredService<ILogger<OctoAdminSession>>();
+        var logger = _serviceProvider.GetRequiredService<ILogger<OctoAdminSession>>();
         return new OctoAdminSession(logger, session, Client.Settings.ApplicationName);
     }
 
     public IOctoAdminSession GetSystemSession()
     {
         var session = Client.StartSession();
-        var logger = ServiceProvider.GetRequiredService<ILogger<OctoAdminSession>>();
+        var logger = _serviceProvider.GetRequiredService<ILogger<OctoAdminSession>>();
         return new OctoAdminSession(logger, session, Client.Settings.ApplicationName);
     }
 
@@ -90,7 +90,7 @@ public class AdminMongoRepositoryClient(
     {
         var urlBuilder = new MongoUrlBuilder();
 
-        var systemConfiguration = SystemConfiguration.Value;
+        var systemConfiguration = _systemConfiguration.Value;
         if (systemConfiguration.DatabaseHost.Contains(","))
             urlBuilder.Servers =
                 systemConfiguration.DatabaseHost.Split(",").Select(x => new MongoServerAddress(x));
@@ -106,7 +106,7 @@ public class AdminMongoRepositoryClient(
             urlBuilder.AuthenticationSource = systemConfiguration.AuthenticationDatabaseName;
         }
 
-        urlBuilder.ApplicationName = $"OctoMesh-{databaseName}-{InstanceId}-{urlBuilder.Username}";
+        urlBuilder.ApplicationName = $"OctoMesh-{databaseName}-{_instanceId}-{urlBuilder.Username}";
         urlBuilder.UseTls = systemConfiguration.UseTls;
         urlBuilder.AllowInsecureTls = systemConfiguration.AllowInsecureTls;
         urlBuilder.RetryReads = true;

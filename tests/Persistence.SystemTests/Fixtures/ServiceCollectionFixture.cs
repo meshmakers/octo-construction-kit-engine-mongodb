@@ -1,9 +1,11 @@
+using MartinCostello.Logging.XUnit;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ITestOutputHelper = Xunit.ITestOutputHelper;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
-public class ServiceCollectionFixture
+public class ServiceCollectionFixture : ITestOutputHelperAccessor
 {
     public ServiceCollectionFixture()
     {
@@ -15,8 +17,13 @@ public class ServiceCollectionFixture
         {
             loggingBuilder.ClearProviders();
             loggingBuilder.SetMinimumLevel(LogLevel.Trace);
+            loggingBuilder.AddXUnit(this);
         });
     }
 
     public ServiceCollection Services { get; }
+
+    public ITestOutputHelper? OutputHelper { get; set; }
 }
+
+

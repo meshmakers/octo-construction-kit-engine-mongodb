@@ -193,7 +193,7 @@ public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture syst
         var systemContext = systemFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();
         
-        var bytes = await File.ReadAllBytesAsync("testData/binary-test.png");
+        var bytes = await File.ReadAllBytesAsync("testData/binary-test.png", TestContext.Current.CancellationToken);
 
         using var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();

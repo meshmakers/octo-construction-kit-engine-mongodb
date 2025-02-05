@@ -1,0 +1,136 @@
+using FakeItEasy;
+using Meshmakers.Common.Metrics.Context;
+using Meshmakers.Common.Metrics.Meters;
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
+using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
+using Microsoft.Extensions.Logging;
+using MongoDB.Bson;
+using TestCkModel.Generated.Test.v1;
+using Xunit;
+
+namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Repositories.Query;
+
+[Collection("Sequential")]
+public class SingleOriginRtQueryTests
+    : IClassFixture<GenerateSampleDataFixture>
+{
+    private readonly GenerateSampleDataFixture _systemFixture;
+    private readonly ILoggerFactory _loggerFactory;
+
+    public SingleOriginRtQueryTests(GenerateSampleDataFixture systemFixture, ITestOutputHelper output)
+    {
+        _systemFixture = systemFixture;
+        _systemFixture.OutputHelper = output;
+        _loggerFactory = systemFixture.GetService<ILoggerFactory>();
+    }
+
+    [Fact]
+    public async Task FieldFilter_SystemAttribute_RtWellKnownName_OK()
+    {
+        var systemContext = Prepare(TestCkIds.CustomerTypeId, out var query);
+
+        query.AddFieldFilters(new List<FieldFilter>
+        {
+            new("RtWellKnownName", FieldFilterOperator.Equals, "TestCustomer3")
+        });
+
+        var session = await systemContext.GetAdminSessionAsync();
+        session.StartTransaction();
+
+        var resultSet = await query.ExecuteQuery(session);
+        Assert.Equal(1, resultSet.TotalCount);
+        Assert.Equal("TestCustomer3", resultSet.Items.First().RtWellKnownName);
+        Assert.Equal(OctoObjectId.Parse("66803ecf4aa85720dda96b15"), resultSet.Items.First().RtId);
+    }
+
+    [Fact]
+    public async Task FieldFilter_SystemAttribute_RtId_OK()
+    {
+        var systemContext = Prepare(TestCkIds.CustomerTypeId, out var query);
+
+        query.AddFieldFilters(new List<FieldFilter>
+        {
+            new("RtId", FieldFilterOperator.Equals, ObjectId.Parse("66803ecf4aa85720dda96b15"))
+        });
+
+        var session = await systemContext.GetAdminSessionAsync();
+        session.StartTransaction();
+
+        var resultSet = await query.ExecuteQuery(session);
+        Assert.Equal(1, resultSet.TotalCount);
+        Assert.Equal("TestCustomer3", resultSet.Items.First().RtWellKnownName);
+        Assert.Equal(OctoObjectId.Parse("66803ecf4aa85720dda96b15"), resultSet.Items.First().RtId);
+    }
+
+    [Theory]
+    [InlineData(FieldFilterOperator.Equals, "Pinzgau / Zell am See")]
+    [InlineData(FieldFilterOperator.Like, "*Pinzgau*")]
+    [InlineData(FieldFilterOperator.MatchRegEx, "Zell")]
+    public async Task FieldFilter_Attribute_OK(FieldFilterOperator fieldFilterOperator, string comparisonValue)
+    {
+        var systemContext = Prepare(TestCkIds.DistrictTypeId, out var query);
+
+        query.AddFieldFilters(new List<FieldFilter>
+        {
+            new("Name", fieldFilterOperator, comparisonValue)
+        });
+
+        var session = await systemContext.GetAdminSessionAsync();
+        session.StartTransaction();
+
+        var resultSet = await query.ExecuteQuery(session);
+        Assert.Equal(1, resultSet.TotalCount);
+        Assert.Equal("Pinzgau / Zell am See", resultSet.Items.First().GetAttributeStringValue("Name"));
+        Assert.Equal(OctoObjectId.Parse("66803ecf4aa85720dda96b01"), resultSet.Items.First().RtId);
+    }
+
+    [Theory]
+    [InlineData("Address.Street", FieldFilterOperator.Equals, "Neutorstraße 25")]
+    [InlineData("Address.Street", FieldFilterOperator.Like, "*Neutorstraße*")]
+    [InlineData("Address.Street", FieldFilterOperator.MatchRegEx, "Neutorstraße")]
+    public async Task FieldFilter_Attribute_Embedded_OK(string attributePath, FieldFilterOperator fieldFilterOperator, string comparisonValue)
+    {
+        var systemContext = Prepare(TestCkIds.CustomerTypeId, out var query);
+
+        query.AddFieldFilters(new List<FieldFilter>
+        {
+            new(attributePath, fieldFilterOperator, comparisonValue)
+        });
+
+        var session = await systemContext.GetAdminSessionAsync();
+        session.StartTransaction();
+
+        var resultSet = await query.ExecuteQuery(session);
+        Assert.Equal(1, resultSet.TotalCount);
+        Assert.Equal("TestCustomer3", resultSet.Items.First().RtWellKnownName);
+        Assert.Equal(OctoObjectId.Parse("66803ecf4aa85720dda96b15"), resultSet.Items.First().RtId);
+    }
+
+    private ISystemContext Prepare(string typeId, out SingleOriginRtQuery<RtEntity> query)
+    {
+        var systemContext = _systemFixture.GetSystemContext();
+        var ckCacheService = _systemFixture.GetService<ICkCacheService>();
+        var ckTypeGraph = ckCacheService.GetCkType(systemContext.TenantId,
+            new CkId<CkTypeId>(TestCkIds.ModelId, typeId));
+
+        var metricsContext = A.Fake<IMetricsContext>();
+        A.CallTo(() => metricsContext.CreateRuntimeMeter(A<string>.Ignored))
+            .Returns(A.Fake<IRuntimeMeter>());
+
+        var mongoDbRepositoryDataSource = new MongoDbRepositoryDataSource(
+            _loggerFactory.CreateLogger<MongoDbRepositoryDataSource>(),
+            _systemFixture.GetService<IUserRepositoryAccess>(), _systemFixture.SystemDatabaseName,
+            systemContext.TenantId);
+
+        query = new(metricsContext, ckCacheService, systemContext.TenantId,
+            ckTypeGraph, mongoDbRepositoryDataSource, "en");
+        return systemContext;
+    }
+}

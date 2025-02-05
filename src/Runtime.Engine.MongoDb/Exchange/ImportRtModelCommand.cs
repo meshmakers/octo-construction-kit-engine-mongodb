@@ -1,4 +1,5 @@
-﻿using System.Collections.Concurrent;
+﻿using System.Collections;
+using System.Collections.Concurrent;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
@@ -29,10 +30,10 @@ internal class ImportRtModelCommand(
     private readonly IRtSerializer _rtYamlSerializer = rtYamlSerializer;
     private int _associationsCount;
 
-    public async Task ImportText(string tenantId, string jsonText, CancellationToken? cancellationToken = null)
+    public async Task ImportTextAsync(string tenantId, string jsonText, CancellationToken? cancellationToken = null)
     {
         logger.LogInformation("Importing RT entities using text started");
-        
+
         var tenantRepository = await systemContext.FindTenantRepositoryAsync(tenantId);
         if (!cacheService.IsTenantLoaded(tenantId))
         {
@@ -61,10 +62,42 @@ internal class ImportRtModelCommand(
         }
     }
 
-    public async Task Import(string tenantId, string filePath, string contentType, CancellationToken? cancellationToken = null)
+    public async Task ImportModelAsync(string tenantId, RtModelRootDto rtModelRoot,
+        CancellationToken? cancellationToken = null)
+    {
+        logger.LogInformation("Importing RT entities using text started");
+
+        var tenantRepository = await systemContext.FindTenantRepositoryAsync(tenantId);
+        if (!cacheService.IsTenantLoaded(tenantId))
+        {
+            await tenantRepository.LoadCacheForTenantAsync(cacheService);
+        }
+
+        var session = await tenantRepository.GetSessionAsync();
+        try
+        {
+            session.StartTransaction();
+
+            ValidateCkModels(tenantId, rtModelRoot.Dependencies);
+            await ImportEntityAsync(session, rtModelRoot.Entities, tenantRepository);
+
+            await session.CommitTransactionAsync();
+
+            logger.LogInformation("{Count} entities, {AssociationsCount} associations imported", _entityImportIds.Count,
+                _associationsCount);
+        }
+        catch (Exception e)
+        {
+            logger.LogError(e, "Import of RT model failed");
+            throw;
+        }
+    }
+
+    public async Task ImportAsync(string tenantId, string filePath, string contentType,
+        CancellationToken? cancellationToken = null)
     {
         logger.LogInformation("Importing RT entities using file started");
-        
+
         var tenantRepository = await systemContext.FindTenantRepositoryAsync(tenantId);
         if (!cacheService.IsTenantLoaded(tenantId))
         {
@@ -109,13 +142,13 @@ internal class ImportRtModelCommand(
             throw;
         }
     }
-    
+
     private void ValidateCkModels(string tenantId, ICollection<CkModelId> ckModelIds)
     {
         var missingCkModelIds = cacheService.EnsureModelIds(tenantId, ckModelIds);
         if (missingCkModelIds.Any())
         {
-            throw OperationFailedException.CkModelsMissing(tenantId, missingCkModelIds); 
+            throw OperationFailedException.CkModelsMissing(tenantId, missingCkModelIds);
         }
     }
 
@@ -126,7 +159,8 @@ internal class ImportRtModelCommand(
         {
             var ckTypeGraph = cacheService.GetCkType(tenantRepository.TenantId, modelRtEntity.CkTypeId);
 
-            var rtEntity = await tenantRepository.CreateTransientRtEntityAsync(modelRtEntity.CkTypeId).ConfigureAwait(false);
+            var rtEntity = await tenantRepository.CreateTransientRtEntityAsync(modelRtEntity.CkTypeId)
+                .ConfigureAwait(false);
             rtEntity.RtId = modelRtEntity.RtId;
             rtEntity.RtChangedDateTime = modelRtEntity.RtChangedDateTime;
             rtEntity.RtCreationDateTime = modelRtEntity.RtCreationDateTime;
@@ -150,10 +184,10 @@ internal class ImportRtModelCommand(
 
             if (modelRtEntity.Associations != null && modelRtEntity.Associations.Count > 0)
             {
-
                 foreach (var association in modelRtEntity.Associations)
                 {
-                    var ckAssociationRoleGraph = cacheService.GetCkAssociationRole(tenantRepository.TenantId, association.RoleId);
+                    var ckAssociationRoleGraph =
+                        cacheService.GetCkAssociationRole(tenantRepository.TenantId, association.RoleId);
 
                     var rtAssociation = new RtAssociation
                     {
@@ -164,8 +198,9 @@ internal class ImportRtModelCommand(
                         TargetCkTypeId = association.TargetCkTypeId,
                         TargetCkAttributeIds = association.TargetCkAttributeIds
                     };
-                    
-                    AssignAttributes(tenantRepository, association, ckAssociationRoleGraph, rtAssociation, "association", ckAssociationRoleGraph.CkRoleId);
+
+                    AssignAttributes(tenantRepository, association, ckAssociationRoleGraph, rtAssociation,
+                        "association", ckAssociationRoleGraph.CkRoleId);
 
                     _importAssociationQueue.Enqueue(rtAssociation);
                     Interlocked.Increment(ref _associationsCount);
@@ -178,14 +213,17 @@ internal class ImportRtModelCommand(
         await ImportToDatabase(session, tenantRepository);
     }
 
-    private void AssignAttributes<TKey>(ITenantRepository tenantRepository, RtTypeWithAttributesDto rtTypeWithAttributesDto,
-        CkTypeWithAttributesGraph ckTypeWithAttributesGraph, RtTypeWithAttributes rtTypeWithAttributes, string elementType, CkId<TKey> ckId)
+    private void AssignAttributes<TKey>(ITenantRepository tenantRepository,
+        RtTypeWithAttributesDto rtTypeWithAttributesDto,
+        CkTypeWithAttributesGraph ckTypeWithAttributesGraph, RtTypeWithAttributes rtTypeWithAttributes,
+        string elementType, CkId<TKey> ckId)
         where TKey : IComparable<TKey>, ICkKey
     {
         foreach (var modelAttribute in rtTypeWithAttributesDto.Attributes)
         {
             var typeAttributeGraph =
-                ckTypeWithAttributesGraph.AllAttributes.Values.FirstOrDefault(a => a.CkAttributeId.Equals(modelAttribute.Id));
+                ckTypeWithAttributesGraph.AllAttributes.Values.FirstOrDefault(a =>
+                    a.CkAttributeId.Equals(modelAttribute.Id));
             if (typeAttributeGraph == null)
             {
                 logger.LogError("'{ModelAttributeId}' does not exit on type '{CkTypeId}'", modelAttribute.Id,
@@ -200,7 +238,8 @@ internal class ImportRtModelCommand(
                     var ckRecordGraph = cacheService.GetCkRecord(tenantRepository.TenantId, rtRecordDto.CkRecordId);
                     if (ckRecordGraph == null)
                     {
-                        logger.LogError("'{ModelAttributeId}' defines unknown record '{CkRecordId}' at type '{CkTypeId}'",
+                        logger.LogError(
+                            "'{ModelAttributeId}' defines unknown record '{CkRecordId}' at type '{CkTypeId}'",
                             modelAttribute.Id,
                             rtRecordDto.CkRecordId, ckId);
                         throw OperationFailedException.RecordNotFound(rtRecordDto.CkRecordId, elementType, ckId);
@@ -212,9 +251,88 @@ internal class ImportRtModelCommand(
                     };
                     AssignAttributes(tenantRepository, rtRecordDto, ckRecordGraph, rtRecord, elementType, ckId);
 
-                    rtTypeWithAttributes.SetAttributeValue(typeAttributeGraph.AttributeName, typeAttributeGraph.ValueType, rtRecord);
+                    rtTypeWithAttributes.SetAttributeValue(typeAttributeGraph.AttributeName,
+                        typeAttributeGraph.ValueType, rtRecord);
                 }
 
+                continue;
+            }
+
+            if (typeAttributeGraph.ValueType == AttributeValueTypesDto.RecordArray)
+            {
+                var rtRecords = new List<RtRecord>();
+                if (modelAttribute.Value is IEnumerable rtRecordDtoList)
+                {
+                    foreach (RtRecordDto record in rtRecordDtoList)
+                    {
+                        var ckRecordGraph = cacheService.GetCkRecord(tenantRepository.TenantId, record.CkRecordId);
+                        if (ckRecordGraph == null)
+                        {
+                            logger.LogError(
+                                "'{ModelAttributeId}' defines unknown record '{CkRecordId}' at type '{CkTypeId}'",
+                                modelAttribute.Id,
+                                record.CkRecordId, ckId);
+                            throw OperationFailedException.RecordNotFound(record.CkRecordId, elementType, ckId);
+                        }
+
+                        var rtRecord = new RtRecord
+                        {
+                            CkRecordId = ckRecordGraph.CkRecordId
+                        };
+                        AssignAttributes(tenantRepository, record, ckRecordGraph, rtRecord, elementType, ckId);
+
+                        rtRecords.Add(rtRecord);
+                    }
+                }
+
+                rtTypeWithAttributes.SetAttributeValue(typeAttributeGraph.AttributeName, typeAttributeGraph.ValueType,
+                    rtRecords);
+                continue;
+            }
+
+            if (typeAttributeGraph.ValueType == AttributeValueTypesDto.Enum)
+            {
+                if (typeAttributeGraph.ValueCkEnumId == null)
+                {
+                    logger.LogError(
+                        "'{ModelAttributeId}' defines unknown enum '{CkEnumId}' at type '{CkTypeId}'",
+                        modelAttribute.Id,
+                        typeAttributeGraph.ValueCkEnumId, ckId);
+                    throw OperationFailedException.CkEnumIdNotDefined(typeAttributeGraph);
+                }
+
+                var ckEnumGraph = cacheService.GetCkEnum(tenantRepository.TenantId, typeAttributeGraph.ValueCkEnumId);
+
+                if (ckEnumGraph == null)
+                {
+                    logger.LogError(
+                        "'{ModelAttributeId}' defines unknown enum '{CkEnumId}' at type '{CkTypeId}'",
+                        modelAttribute.Id,
+                        typeAttributeGraph.ValueCkEnumId, ckId);
+                    throw OperationFailedException.CkEnumIdNotFound(typeAttributeGraph);
+                }
+
+                if (modelAttribute.Value == null)
+                {
+                    rtTypeWithAttributes.SetAttributeValue(typeAttributeGraph.AttributeName, typeAttributeGraph.ValueType,
+                        null);
+                    continue;
+                }
+                var value = ckEnumGraph.Values.FirstOrDefault(x => x.Key.Equals(modelAttribute.Value) ||
+                                                                   String.Compare(x.Name,
+                                                                       modelAttribute.Value?.ToString(),
+                                                                       StringComparison.OrdinalIgnoreCase) == 0);
+                if (value == null)
+                {
+                    logger.LogError(
+                        "'{ModelAttributeId}' defines unknown enum value '{EnumValue}' at type '{CkTypeId}'",
+                        modelAttribute.Id,
+                        modelAttribute.Value, ckId);
+                    throw OperationFailedException.CkEnumWithOutOfRange(typeAttributeGraph, modelAttribute.Value);
+                }
+
+                rtTypeWithAttributes.SetAttributeValue(typeAttributeGraph.AttributeName, typeAttributeGraph.ValueType,
+                    value.Key);
                 continue;
             }
 

@@ -79,7 +79,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
     {
         var pathTerms = RtPathEvaluator.TokenizePath(attributePath);
 
-        StringBuilder sb = new StringBuilder();
+        StringBuilder sb = new();
         sb.Append(Constants.AttributesName);
 
         CkTypeWithAttributesGraph current = ckTypeWithAttributesGraph;
@@ -106,6 +106,11 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                                 sb.Append(pathTerm.Value.ToCamelCase());
                                 continue;
                             default:
+                                if (current is CkRecordGraph)
+                                {
+                                    sb.Append(Constants.PathSeparator);
+                                    sb.Append(Constants.AttributesName);
+                                }
                                 sb.Append(Constants.PathSeparator);
                                 sb.Append(pathTerm.Value.ToCamelCase());
                                 continue;
