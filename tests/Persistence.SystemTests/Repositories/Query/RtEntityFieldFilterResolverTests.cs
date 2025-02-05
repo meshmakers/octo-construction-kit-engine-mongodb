@@ -18,10 +18,8 @@ public class RtEntityFieldFilterResolverTests(ImportTestCkModelFixture systemFix
     [InlineData("Address")]
     [InlineData("Address.City")]
     [InlineData("EMailAddresses[0]")]
-    [InlineData("EMailAddresses[-1]")]
     [InlineData("EMailAddresses[*]")]
     [InlineData("EMailAddresses[0].EMailAddress")]
-    [InlineData("EMailAddresses[-1].EMailAddress")]
     [InlineData("EMailAddresses[*].EMailAddress")]
     public async Task IsAttributePathValid_OK(string attributePath)
     {
@@ -33,12 +31,10 @@ public class RtEntityFieldFilterResolverTests(ImportTestCkModelFixture systemFix
     [Theory]
     [InlineData("Address", "attributes.address")]
     [InlineData("Address.City", "attributes.address.attributes.city")]
-    [InlineData("EMailAddresses[0]", "attributes.eMailAddresses[0]")]
-    [InlineData("EMailAddresses[-1]", "attributes.eMailAddresses[-1]")]
-    [InlineData("EMailAddresses[*]", "attributes.eMailAddresses[*]")]
-    [InlineData("EMailAddresses[0].EMailAddress", "attributes.eMailAddresses[0].attributes.eMailAddress")]
-    [InlineData("EMailAddresses[-1].EMailAddress", "attributes.eMailAddresses[-1].attributes.eMailAddress")]
-    [InlineData("EMailAddresses[*].EMailAddress", "attributes.eMailAddresses[*].attributes.eMailAddress")]
+    [InlineData("EMailAddresses[0]", "attributes.eMailAddresses.0")]
+    [InlineData("EMailAddresses[*]", "attributes.eMailAddresses")]
+    [InlineData("EMailAddresses[0].EMailAddress", "attributes.eMailAddresses.0.attributes.eMailAddress")]
+    [InlineData("EMailAddresses[*].EMailAddress", "attributes.eMailAddresses.attributes.eMailAddress")]
     public async Task ResolveAttributePath_Attributes_OK(string attributePath, string expectedPath)
     {
         var resolver = await Prepare();

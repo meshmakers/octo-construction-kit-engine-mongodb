@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Text;
+
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
@@ -10,6 +11,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Formulas;
+
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
@@ -111,6 +113,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                                     sb.Append(Constants.PathSeparator);
                                     sb.Append(Constants.AttributesName);
                                 }
+
                                 sb.Append(Constants.PathSeparator);
                                 sb.Append(pathTerm.Value.ToCamelCase());
                                 continue;
@@ -126,7 +129,10 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                             case AttributeValueTypesDto.StringArray:
                             case AttributeValueTypesDto.IntArray:
                             case AttributeValueTypesDto.RecordArray:
-                                sb.Append(string.Format(Constants.IndexAccessor, pathTerm.Value));
+                                if (pathTerm.Value != "*")
+                                {
+                                    sb.Append(string.Format(Constants.IndexAccessor, pathTerm.Value));
+                                }
                                 continue;
                             default:
                                 return null;

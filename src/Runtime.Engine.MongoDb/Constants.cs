@@ -7,7 +7,7 @@ public static class Constants
 
     internal const string AttributesName = "attributes";
     internal const string PathSeparator = ".";
-    internal const string IndexAccessor = "[{0}]";
+    internal const string IndexAccessor = ".{0}";
 
     public const string IdField = "_id";
     public const string ModelIdField = "ckModelId";
