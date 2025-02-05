@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices.JavaScript;
+
 using FakeItEasy;
 using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Metrics.Meters;
@@ -73,7 +75,7 @@ public class SingleOriginRtQueryTests
     [InlineData(FieldFilterOperator.Equals, "Pinzgau / Zell am See")]
     [InlineData(FieldFilterOperator.Like, "*Pinzgau*")]
     [InlineData(FieldFilterOperator.MatchRegEx, "Zell")]
-    public async Task FieldFilter_Attribute_OK(FieldFilterOperator fieldFilterOperator, string comparisonValue)
+    public async Task FieldFilter_Attribute_OK(FieldFilterOperator fieldFilterOperator, object comparisonValue)
     {
         var systemContext = Prepare(TestCkIds.DistrictTypeId, out var query);
 
@@ -95,7 +97,28 @@ public class SingleOriginRtQueryTests
     [InlineData("Address.Street", FieldFilterOperator.Equals, "Neutorstraße 25")]
     [InlineData("Address.Street", FieldFilterOperator.Like, "*Neutorstraße*")]
     [InlineData("Address.Street", FieldFilterOperator.MatchRegEx, "Neutorstraße")]
-    public async Task FieldFilter_Attribute_Embedded_OK(string attributePath, FieldFilterOperator fieldFilterOperator, string comparisonValue)
+    [InlineData("Address.Street", FieldFilterOperator.In, new object[] {"Neutorstraße 25", "Demo 25"})]
+    public async Task FieldFilter_Attribute_Scalar_Embedded_OK(string attributePath, FieldFilterOperator fieldFilterOperator, object comparisonValue)
+    {
+        var systemContext = Prepare(TestCkIds.CustomerTypeId, out var query);
+
+        query.AddFieldFilters(new List<FieldFilter>
+        {
+            new(attributePath, fieldFilterOperator, comparisonValue)
+        });
+
+        var session = await systemContext.GetAdminSessionAsync();
+        session.StartTransaction();
+
+        var resultSet = await query.ExecuteQuery(session);
+        Assert.Equal(1, resultSet.TotalCount);
+        Assert.Equal("TestCustomer3", resultSet.Items.First().RtWellKnownName);
+        Assert.Equal(OctoObjectId.Parse("66803ecf4aa85720dda96b15"), resultSet.Items.First().RtId);
+    }
+
+    [Theory]
+    [InlineData("EMailAddresses[*].EMailAddress", FieldFilterOperator.AnyEq, "jane.doe.office@demo.com")]
+    public async Task FieldFilter_Attribute_Array_Wildcard_Embedded_OK(string attributePath, FieldFilterOperator fieldFilterOperator, string comparisonValue)
     {
         var systemContext = Prepare(TestCkIds.CustomerTypeId, out var query);
 
