@@ -46,13 +46,13 @@ public class RtFieldFilterResolverTests(ImportTestCkModelFixture systemFixture)
 
     [Theory]
     [InlineData("Address", "attributes.address")]
-    [InlineData("Address.City", "attributes.address.city")]
+    [InlineData("Address.City", "attributes.address.attributes.city")]
     [InlineData("EMailAddresses[0]", "attributes.eMailAddresses[0]")]
     [InlineData("EMailAddresses[-1]", "attributes.eMailAddresses[-1]")]
     [InlineData("EMailAddresses[*]", "attributes.eMailAddresses[*]")]
-    [InlineData("EMailAddresses[0].EMailAddress", "attributes.eMailAddresses[0].eMailAddress")]
-    [InlineData("EMailAddresses[-1].EMailAddress", "attributes.eMailAddresses[-1].eMailAddress")]
-    [InlineData("EMailAddresses[*].EMailAddress", "attributes.eMailAddresses[*].eMailAddress")]
+    [InlineData("EMailAddresses[0].EMailAddress", "attributes.eMailAddresses[0].attributes.eMailAddress")]
+    [InlineData("EMailAddresses[-1].EMailAddress", "attributes.eMailAddresses[-1].attributes.eMailAddress")]
+    [InlineData("EMailAddresses[*].EMailAddress", "attributes.eMailAddresses[*].attributes.eMailAddress")]
     public async Task ResolveAttributePath_Attributes_OK(string attributePath, string expectedPath)
     {
         var resolver = await Prepare();

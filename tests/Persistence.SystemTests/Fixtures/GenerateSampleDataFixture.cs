@@ -6,15 +6,15 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
 public class GenerateSampleDataFixture: ImportTestCkModelFixture
 {
-    public override async Task InitializeAsync()
+    public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
         var importRtModelCommand = Provider.GetRequiredService<IImportRtModelCommand>();
-        await importRtModelCommand.Import("octosystem", "testData/sampleRtModel.yaml", Constants.MimeTypeYaml);
+        await importRtModelCommand.ImportAsync("octosystem", "testData/sampleRtModel.yaml", Constants.MimeTypeYaml);
     }
 
-    public override Task DisposeAsync()
+    public override ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

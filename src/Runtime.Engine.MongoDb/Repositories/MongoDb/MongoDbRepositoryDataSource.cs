@@ -26,13 +26,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     private readonly IRepositoryClient _repositoryClient;
     private readonly ILogger<MongoDbRepositoryDataSource> _logger;
 
-    public MongoDbRepositoryDataSource(ILogger<MongoDbRepositoryDataSource> logger, IUserRepositoryAccess repositoryAccess, string databaseName,
+    public MongoDbRepositoryDataSource(ILogger<MongoDbRepositoryDataSource> logger,
+        IUserRepositoryAccess repositoryAccess, string databaseName,
         string tenantId)
-        : this(logger,repositoryAccess.GetRepositoryClient(databaseName), databaseName, tenantId)
+        : this(logger, repositoryAccess.GetRepositoryClient(databaseName), databaseName, tenantId)
     {
     }
-    
-    internal MongoDbRepositoryDataSource(ILogger<MongoDbRepositoryDataSource> logger, IRepositoryClient repositoryClient, string databaseName,
+
+    internal MongoDbRepositoryDataSource(ILogger<MongoDbRepositoryDataSource> logger,
+        IRepositoryClient repositoryClient, string databaseName,
         string tenantId)
         : base(tenantId)
     {
@@ -161,7 +163,10 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
     public IMongoDbDataSourceCollection<CkModelId, CkModel> CkModels { get; }
     public IMongoDbDataSourceCollection<OctoObjectId, RtAssociation> RtMongoDbDataSourceAssociations { get; }
-    public override IDataSourceCollection<OctoObjectId, RtAssociation> RtAssociations => RtMongoDbDataSourceAssociations;
+
+    public override IDataSourceCollection<OctoObjectId, RtAssociation> RtAssociations =>
+        RtMongoDbDataSourceAssociations;
+
     public IMongoDbDataSourceCollection<CkId<CkTypeId>, CkType> CkTypes { get; }
     public IMongoDbDataSourceCollection<CkId<CkRecordId>, CkRecord> CkRecords { get; }
     public IMongoDbDataSourceCollection<CkId<CkEnumId>, CkEnum> CkEnums { get; }
@@ -195,6 +200,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             await _repository.CreateCollectionIfNotExistsAsync(new RtEntityMongoDataSourceMapper<RtEntity>(),
                 ckType.EnableChangeStreamPreAndPostImages, suffix);
         }
+
         _logger.LogDebug("Type root collections created for tenant '{TenantId}'", TenantId);
     }
 
@@ -282,20 +288,22 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
     #region Large Binaries
 
-    public async Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
+    public async Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,
+        Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default)
     {
         return await _repository.UploadLargeBinaryAsync(filename, contentType, stream, metadata, cancellationToken);
     }
 
-    public async Task ReplaceLargeBinaryAsync(ObjectId largeBinaryId, string filename, string contentType, 
+    public async Task ReplaceLargeBinaryAsync(ObjectId largeBinaryId, string filename, string contentType,
         Stream stream, Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default)
     {
-        await _repository.ReplaceLargeBinaryAsync(largeBinaryId, filename, contentType, stream, metadata, cancellationToken);
+        await _repository.ReplaceLargeBinaryAsync(largeBinaryId, filename, contentType, stream, metadata,
+            cancellationToken);
     }
-    
-    public async Task<ObjectId> ReplaceLargeBinaryAsync(string filename, string contentType, 
+
+    public async Task<ObjectId> ReplaceLargeBinaryAsync(string filename, string contentType,
         Stream stream, Dictionary<string, object> metadata,
         CancellationToken cancellationToken = default)
     {
@@ -318,7 +326,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     {
         return await _repository.GetLargeBinaryAsync(largeBinaryId, cancellationToken);
     }
-    
+
     public async Task<IDownloadInfo?> GetLargeBinaryAsync(string fileName,
         CancellationToken cancellationToken = default)
     {

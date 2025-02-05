@@ -24,7 +24,10 @@ internal class UserRepositoryAccess(IServiceProvider serviceProvider) : IUserRep
             return newClient;
         });
 
-        if (client == null) throw TenantException.CannotCreateMongoDbRepositoryClient(databaseName);
+        if (client == null)
+        {
+            throw TenantException.CannotCreateMongoDbRepositoryClient(databaseName);
+        }
 
         return client;
     }

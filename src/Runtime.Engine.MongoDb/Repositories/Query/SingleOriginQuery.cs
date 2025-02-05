@@ -28,7 +28,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
         using var meter = _metricsContext.CreateRuntimeMeter();
         var pipelineStageDefinitions = new List<IPipelineStageDefinition>();
 
-        // In documentation, text search must be at first place
+        // In documentation, text search must be the first place
         AddPreStagesToPipelines(pipelineStageDefinitions);
         // Filter for fields
         var filterDefinitions = CreateFilterDefinitions();
@@ -57,7 +57,6 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
             }
 
             countPipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Count<TEntity>());
-
 
             pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Facet<TEntity, QueryResult<TEntity>>(
                 new List<AggregateFacet<TEntity>>([

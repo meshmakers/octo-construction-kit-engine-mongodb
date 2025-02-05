@@ -165,7 +165,129 @@ entities:
   
   - rtId: 66803ecf4aa85720dda96b13
     ckTypeId: Test/Customer
+    rtWellKnownName: "TestCustomer1"
+    attributes:
+      - id: Test/Contacts.Name
+        value:
+          ckRecordId: Test/ContactName
+          attributes:
+            - id: Test/Contacts.FirstName
+              value: Max
+            - id: Test/Contacts.LastName
+              value: Mustermann
+      - id: Test/Contacts.Address
+        value:
+          ckRecordId: Test/ContactAddress
+          attributes:
+            - id: Test/Contacts.Street
+              value: Hauptstraße 1
+            - id: Test/Contacts.PostalCode
+              value: 5020
+            - id: Test/Contacts.City
+              value: Salzburg
+            - id: Test/Contacts.Country
+              value: Österreich
+      - id: Test/Contacts.EMailAddresses
+        value:
+          - ckRecordId: Test/EMailAddress
+            attributes:
+              - id: Test/Contacts.EMailAddressType
+                value: OFFICE
+              - id: Test/Contacts.EMailAddress
+                value: max.mustermann.office@demo.com
+          - ckRecordId: Test/EMailAddress
+            attributes:
+              - id: Test/Contacts.EMailAddressType
+                value: HOME
+              - id: Test/Contacts.EMailAddress
+                value: max.mustermann.private@demo.com
     associations:
       - roleId: System/ParentChild
         targetRtId: 66803ecf4aa85720dda96b08
-        targetCkTypeId: Test/Municipality        
+        targetCkTypeId: Test/Municipality
+
+  - rtId: 66803ecf4aa85720dda96b14
+    ckTypeId: Test/Customer
+    rtWellKnownName: "TestCustomer2"
+    attributes:
+      - id: Test/Contacts.Name
+        value:
+          ckRecordId: Test/ContactName
+          attributes:
+            - id: Test/Contacts.FirstName
+              value: John
+            - id: Test/Contacts.LastName
+              value: Doe
+      - id: Test/Contacts.Address
+        value:
+          ckRecordId: Test/ContactAddress
+          attributes:
+            - id: Test/Contacts.Street
+              value: Hauptstraße 2
+            - id: Test/Contacts.PostalCode
+              value: 5020
+            - id: Test/Contacts.City
+              value: Salzburg
+            - id: Test/Contacts.Country
+              value: Österreich
+      - id: Test/Contacts.EMailAddresses
+        value:
+          - ckRecordId: Test/EMailAddress
+            attributes:
+              - id: Test/Contacts.EMailAddressType
+                value: OFFICE
+              - id: Test/Contacts.EMailAddress
+                value: john.doe.office@demo.com
+          - ckRecordId: Test/EMailAddress
+            attributes:
+              - id: Test/Contacts.EMailAddressType
+                value: HOME
+              - id: Test/Contacts.EMailAddress
+                value: john.doe.private@demo.com
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96b08
+        targetCkTypeId: Test/Municipality
+
+  - rtId: 66803ecf4aa85720dda96b15
+    ckTypeId: Test/Customer
+    rtWellKnownName: "TestCustomer3"
+    attributes:
+      - id: Test/Contacts.Name
+        value:
+          ckRecordId: Test/ContactName
+          attributes:
+            - id: Test/Contacts.FirstName
+              value: Jane
+            - id: Test/Contacts.LastName
+              value: Doe
+      - id: Test/Contacts.Address
+        value:
+          ckRecordId: Test/ContactAddress
+          attributes:
+            - id: Test/Contacts.Street
+              value: Neutorstraße 25
+            - id: Test/Contacts.PostalCode
+              value: 5020
+            - id: Test/Contacts.City
+              value: Salzburg
+            - id: Test/Contacts.Country
+              value: Österreich
+      - id: Test/Contacts.EMailAddresses
+        value:
+          - ckRecordId: Test/EMailAddress
+            attributes:
+              - id: Test/Contacts.EMailAddressType
+                value: OFFICE
+              - id: Test/Contacts.EMailAddress
+                value: jane.doe.office@demo.com
+          - ckRecordId: Test/EMailAddress
+            attributes:
+              - id: Test/Contacts.EMailAddressType
+                value: HOME
+              - id: Test/Contacts.EMailAddress
+                value: jane.doe.private@demo.com
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96b07
+        targetCkTypeId: Test/Municipality

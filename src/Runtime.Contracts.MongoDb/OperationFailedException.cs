@@ -144,4 +144,19 @@ public class OperationFailedException : PersistenceException
     {
         return new OperationFailedException($"Path type '{pathTerm.Type}' is not supported.");
     }
+
+    public static Exception CkEnumIdNotDefined(CkTypeAttributeGraph ckTypeAttributeGraph)
+    {
+        return new OperationFailedException($"CkEnumId is not defined for attribute '{ckTypeAttributeGraph.AttributeName}'.");
+    }
+
+    public static Exception CkEnumIdNotFound(CkTypeAttributeGraph typeAttributeGraph)
+    {
+        return new OperationFailedException($"CkEnumId '{typeAttributeGraph.ValueCkEnumId}' not found.");
+    }
+
+    public static Exception CkEnumWithOutOfRange(CkTypeAttributeGraph typeAttributeGraph, object value)
+    {
+        return new OperationFailedException($"Value '{value}' is out of range for CkEnum '{typeAttributeGraph.ValueCkEnumId}'.");
+    }
 }
