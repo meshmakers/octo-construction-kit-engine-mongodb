@@ -2,6 +2,7 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 
@@ -158,5 +159,15 @@ public class OperationFailedException : PersistenceException
     public static Exception CkEnumWithOutOfRange(CkTypeAttributeGraph typeAttributeGraph, object value)
     {
         return new OperationFailedException($"Value '{value}' is out of range for CkEnum '{typeAttributeGraph.ValueCkEnumId}'.");
+    }
+
+    public static Exception OperatorNotSupported(FieldFilterOperator comparisonOperator)
+    {
+        return new OperationFailedException($"Operator '{comparisonOperator}' is not supported.");
+    }
+
+    public static Exception MatchFilterValueNotSupported(object? value)
+    {
+        return new OperationFailedException($"Match filter value '{value}' is not supported.");
     }
 }

@@ -208,10 +208,13 @@ internal class FieldFilterResolver<TEntity>
             case FieldFilterOperator.AnyLike:
                 return Builders<TEntity>.Filter.AnyEq(attributeName, new BsonRegularExpression(GetRegex(value?.ToString()), "i"));
             case FieldFilterOperator.Match:
-                var filterMatch = (FilterDefinition<RtRecord>?)value;
-                return Builders<TEntity>.Filter.ElemMatch(attributeName, filterMatch);
+                if (value is FilterDefinition<RtRecord> filterMatch)
+                {
+                    return Builders<TEntity>.Filter.ElemMatch(attributeName, filterMatch);
+                }
+                throw OperationFailedException.MatchFilterValueNotSupported(value);
             default:
-                throw new NotSupportedException("Value is not implemented.");
+                throw OperationFailedException.OperatorNotSupported(comparisonOperator);
         }
     }
 
