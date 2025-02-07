@@ -184,9 +184,11 @@ internal class FieldFilterResolver<TEntity>
             case FieldFilterOperator.NotEquals:
                 return Builders<TEntity>.Filter.Ne(attributeName, value);
             case FieldFilterOperator.In:
-                return Builders<TEntity>.Filter.In(attributeName, value != null ? (IEnumerable<object>)value : Array.Empty<object>());
+                object[] array = ComparisonValueToArray(value);
+                return Builders<TEntity>.Filter.In(attributeName, array);
             case FieldFilterOperator.NotIn:
-                return Builders<TEntity>.Filter.Nin(attributeName, value != null ? (IEnumerable<object>)value : Array.Empty<object>());
+                array = ComparisonValueToArray(value);
+                return Builders<TEntity>.Filter.Nin(attributeName, array);
             case FieldFilterOperator.LessThan:
                 return Builders<TEntity>.Filter.Lt(attributeName, value);
             case FieldFilterOperator.LessEqualThan:
@@ -203,6 +205,8 @@ internal class FieldFilterResolver<TEntity>
                     new BsonRegularExpression(value?.ToString()));
             case FieldFilterOperator.AnyEq:
                 return Builders<TEntity>.Filter.AnyEq(attributeName, value);
+            case FieldFilterOperator.AnyLike:
+                return Builders<TEntity>.Filter.AnyEq(attributeName, new BsonRegularExpression(GetRegex(value?.ToString()), "i"));
             case FieldFilterOperator.Match:
                 var filterMatch = (FilterDefinition<RtRecord>?)value;
                 return Builders<TEntity>.Filter.ElemMatch(attributeName, filterMatch);
@@ -210,7 +214,25 @@ internal class FieldFilterResolver<TEntity>
                 throw new NotSupportedException("Value is not implemented.");
         }
     }
-    
+
+    private static object[] ComparisonValueToArray(object? value)
+    {
+        var array = new object[]{};
+        if (value is string stringValue)
+        {
+            if (stringValue.Contains(","))
+            {
+                array = stringValue.Split(',').ToArray<object>() ?? [];
+            }
+        }
+        else if (value is IEnumerable<object> enumerable)
+        {
+            array = enumerable.ToArray();
+        }
+
+        return array;
+    }
+
     private static string? GetRegex(string? value)
     {
         return value?.Replace("*", ".*");
