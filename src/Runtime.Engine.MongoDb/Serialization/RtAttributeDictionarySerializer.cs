@@ -3,6 +3,8 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Runtime.Contracts.Geospatial.Geometry;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories;
+
+using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Options;
 using MongoDB.Bson.Serialization.Serializers;
@@ -92,6 +94,12 @@ internal class RtAttributeDictionarySerializer()
         var ret = new Dictionary<string, object?>();
         foreach (var pair in dic)
         {
+            if (pair.Value is ObjectId oid)
+            {
+                ret[pair.Key.ToPascalCase()] = oid.ToOctoObjectId();
+                continue;
+            }
+
             if (pair.Value is GeoJsonPoint<GeoJson2DCoordinates> p)
             {
                 ret[pair.Key.ToPascalCase()] = new Point(new Position(p.Coordinates.X, p.Coordinates.Y));

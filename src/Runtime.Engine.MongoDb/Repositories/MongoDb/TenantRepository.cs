@@ -14,6 +14,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
+
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -252,35 +253,32 @@ internal class TenantRepository(
         return result.First().Value;
     }
 
-    public async Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
+    public async Task<IResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TTargetEntity>(IOctoSession session,
+        OctoObjectId originRtId, CkId<CkTypeId> originCkTypeId,
+        CkId<CkAssociationRoleId> roleId, GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds,
+        DataQueryOperation dataQueryOperation,
+        int? skip = null, int? take = null) where TTargetEntity : RtEntity, new()
+    {
+        var targetCkTypeId = RtEntityExtensions.GetCkTypeId<TTargetEntity>();
+
+        var result = await GetRtAssociationTargetsAsync<TTargetEntity>(session, [originRtId], originCkTypeId, roleId, graphDirection,
+            targetRtIds, targetCkTypeId, dataQueryOperation, skip, take);
+
+        return result.First().Value;
+    }
+
+    public Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
         CkId<CkTypeId> targetCkTypeId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, DataQueryOperation dataQueryOperation,
         int? skip = null,
         int? take = null)
     {
-        var ckCacheService = await GetCkCacheServiceAsync();
-        var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
-        var targetTypeGraph = await GetCkTypeGraphAsync(targetCkTypeId);
-
-        var hierarchicalRtQuery =
-            new MultipleOriginDirectAssociationsRtQuery(ckCacheService, TenantId, mongoDbRepositoryDataSource,
-                dataQueryOperation.Language,
-                originRtIds,
-                originTypeGraph, roleId, graphDirection, targetTypeGraph);
-
-        hierarchicalRtQuery.AddFieldFilters(dataQueryOperation.FieldFilters);
-        hierarchicalRtQuery.AddIdFilter(rtIds);
-        hierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        hierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        hierarchicalRtQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        hierarchicalRtQuery.AddGrouping(dataQueryOperation.FieldGroupBy);
-        hierarchicalRtQuery.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
-
-        return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
+        return GetRtAssociationTargetsAsync<RtEntity>(session, originRtIds, originCkTypeId, roleId, graphDirection,
+            targetRtIds, targetCkTypeId, dataQueryOperation, skip, take);
     }
 
-    public async Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity,
+    public Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity,
         TTargetEntity>(
         IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds, CkId<CkAssociationRoleId> roleId,
@@ -293,6 +291,19 @@ internal class TenantRepository(
         var originCkTypeId = RtEntityExtensions.GetCkTypeId<TOriginEntity>();
         var targetCkTypeId = RtEntityExtensions.GetCkTypeId<TTargetEntity>();
 
+        return GetRtAssociationTargetsAsync<TTargetEntity>(session, originRtIds, originCkTypeId, roleId, graphDirection,
+            targetRtIds, targetCkTypeId, dataQueryOperation, skip, take);
+    }
+
+    private async Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<
+        TTargetEntity>(
+        IOctoSession session,
+        IEnumerable<OctoObjectId> originRtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, CkId<CkTypeId> targetCkTypeId, DataQueryOperation dataQueryOperation,
+        int? skip = null,
+        int? take = null)
+        where TTargetEntity : RtEntity, new()
+    {
         var ckCacheService = await GetCkCacheServiceAsync();
         var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
         var targetTypeGraph = await GetCkTypeGraphAsync(targetCkTypeId);
@@ -489,33 +500,34 @@ internal class TenantRepository(
         CkId<CkTypeId> ckTypeId = RtEntityExtensions.GetCkTypeId<TEntity>();
         return WatchRtEntitiesAsync<TEntity>(ckTypeId, watchStreamFilter, cancellationToken);
     }
-    
+
     private async Task<IUpdateStream<TEntity>> WatchRtEntitiesAsync<TEntity>(CkId<CkTypeId> ckTypeId,
         WatchStreamFilter watchStreamFilter, CancellationToken cancellationToken = default)
         where TEntity : RtEntity, new()
     {
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
-        var subscription = new Subscription<TEntity>(ckCacheService, TenantId, ckTypeGraph, 
+        var subscription = new Subscription<TEntity>(ckCacheService, TenantId, ckTypeGraph,
             mongoDbRepositoryDataSource);
-        
+
         if (watchStreamFilter.BeforeFieldFilters != null && watchStreamFilter.BeforeFieldFilters.Any())
         {
             subscription.AddBeforeFieldFilters(watchStreamFilter.BeforeFieldFilters);
         }
-        
+
         if (watchStreamFilter.FieldFilters != null && watchStreamFilter.FieldFilters.Any())
         {
             subscription.AddFieldFilters(watchStreamFilter.FieldFilters);
         }
-        
+
         if (watchStreamFilter.RtId.HasValue)
         {
             subscription.AddIdFilter(new List<OctoObjectId> { watchStreamFilter.RtId.Value });
         }
-        
+
         return subscription.WatchRtEntitiesAsync(watchStreamFilter.UpdateTypes, cancellationToken);
     }
+
     public IUpdateStream<RtAssociation> WatchToRtAssociationsAsync(CkId<CkTypeId> originCkTypeId,
         CkId<CkTypeId> targetCkTypeId,
         UpdateAssociationStreamFilter updateStreamFilter,
@@ -691,33 +703,19 @@ internal class TenantRepository(
         var match = new BsonDocument
         {
             {
-                "$match", new BsonDocument
+                "$match",
+                new BsonDocument
                 {
                     {
-                        $"attributes.{attributeName.ToCamelCase()}", new BsonDocument
-                        {
-                            {
-                                "$regex", regexFilterValue
-                            }
-                        }
+                        $"attributes.{attributeName.ToCamelCase()}", new BsonDocument { { "$regex", regexFilterValue } }
                     }
                 }
             }
         };
 
-        var sortByCount = new BsonDocument
-        {
-            {
-                "$sortByCount", $"$attributes.{attributeName.ToCamelCase()}"
-            }
-        };
+        var sortByCount = new BsonDocument { { "$sortByCount", $"$attributes.{attributeName.ToCamelCase()}" } };
 
-        var limit = new BsonDocument
-        {
-            {
-                "$limit", takeCount
-            }
-        };
+        var limit = new BsonDocument { { "$limit", takeCount } };
 
         var collection = mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(ckTypeGraph);
         var result = collection.Aggregate(session,
