@@ -434,7 +434,7 @@ public class TenantContext : ITenantContext
         return result;
     }
 
-    private ITenantRepository GetTenantRepositoryAsAdmin()
+    public ITenantRepository GetTenantRepositoryAsAdmin()
     {
         var result = GetTenantRepositoryAsAdmin(TenantId, _databaseName);
         return result;

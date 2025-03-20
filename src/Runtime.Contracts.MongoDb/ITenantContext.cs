@@ -59,6 +59,12 @@ public interface ITenantContext
     ITenantRepository GetTenantRepository();
 
     /// <summary>
+    /// Returns an object that allows access to the tenant repository as admin.
+    /// </summary>
+    /// <returns></returns>
+    ITenantRepository GetTenantRepositoryAsAdmin();
+
+    /// <summary>
     /// Loads the cache for the tenant.
     /// </summary>
     /// <returns></returns>
