@@ -39,9 +39,23 @@ public interface ISystemContext : ITenantContext
     Task<ITenantContext> FindTenantContextAsync(string tenantId);
 
     /// <summary>
+    /// Gets based on the tenant id the tenant context.
+    /// </summary>
+    /// <param name="tenantId">The tenant id (also supports the system tenant id)</param>
+    /// <returns>The tenant context or null if not found</returns>
+    Task<ITenantContext?> TryFindTenantContextAsync(string tenantId);
+
+    /// <summary>
     /// Gets based on the tenant id the tenant repository.
     /// </summary>
     /// <param name="tenantId">The tenant id (also supports the system tenant id)</param>
-    /// <returns></returns>
+    /// <returns>The tenant repository</returns>
     Task<ITenantRepository> FindTenantRepositoryAsync(string tenantId);
+
+    /// <summary>
+    /// Tries to get based on the tenant id the tenant repository.
+    /// </summary>
+    /// <param name="tenantId">The tenant id (also supports the system tenant id)</param>
+    /// <returns>The tenant repository or null if not found</returns>
+    Task<ITenantRepository?> TryFindTenantRepositoryAsync(string tenantId);
 }

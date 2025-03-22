@@ -102,7 +102,7 @@ public class TenantContext : ITenantContext
             // Distribute updates (pre) to inform other services.
             await TenantNotifications.NotifyPreTenantCreateAsync(tenantId, correlationId);
 
-            // Create database
+            // Create the database
             await CreateTenantInternalAsync(databaseName);
 
             // Restore the tenant system model on the newly created repository
@@ -369,6 +369,17 @@ public class TenantContext : ITenantContext
 
     public async Task<OctoTenant> GetChildTenantAsync(IOctoAdminSession adminSession, string tenantId)
     {
+        var octoTenant = await TryGetChildTenantAsync(adminSession, tenantId);
+        if (octoTenant == null)
+        {
+            throw TenantException.TenantDoesNotExist(tenantId);
+        }
+
+        return octoTenant;
+    }
+
+    public async Task<OctoTenant?> TryGetChildTenantAsync(IOctoAdminSession adminSession, string tenantId)
+    {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
         var normalizedTenantId = tenantId.NormalizeString();
@@ -376,7 +387,7 @@ public class TenantContext : ITenantContext
         var rtSystemTenant = await GetRtTenantAsync(adminSession, normalizedTenantId);
         if (rtSystemTenant == null)
         {
-            throw TenantException.TenantDoesNotExist(tenantId);
+            return null;
         }
 
         return new OctoTenant(rtSystemTenant.TenantId, rtSystemTenant.DatabaseName);
@@ -388,10 +399,26 @@ public class TenantContext : ITenantContext
 
     public async Task<ITenantContext> GetChildTenantContextAsync(string tenantId)
     {
+        var tenantContext = await TryGetChildTenantContextAsync(tenantId);
+        if (tenantContext == null)
+        {
+            throw TenantException.TenantDoesNotExist(tenantId);
+        }
+
+        return tenantContext;
+    }
+
+    public async Task<ITenantContext?> TryGetChildTenantContextAsync(string tenantId)
+    {
         using var systemSession = await GetAdminSessionAsync();
         systemSession.StartTransaction();
 
-        var context = await GetChildTenantContextAsync(systemSession, tenantId);
+        var context = await TryGetChildTenantContextAsync(systemSession, tenantId);
+        if (context == null)
+        {
+            await systemSession.AbortTransactionAsync();
+            return null;
+        }
 
         await systemSession.CommitTransactionAsync();
 
@@ -400,9 +427,25 @@ public class TenantContext : ITenantContext
 
     public async Task<ITenantContext> GetChildTenantContextAsync(IOctoAdminSession adminSession, string tenantId)
     {
+        var tenantContext = await TryGetChildTenantContextAsync(adminSession, tenantId);
+        if (tenantContext == null)
+        {
+            throw TenantException.TenantDoesNotExist(tenantId);
+        }
+
+        return tenantContext;
+    }
+
+    public async Task<ITenantContext?> TryGetChildTenantContextAsync(IOctoAdminSession adminSession, string tenantId)
+    {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
-        var tenant = await GetChildTenantAsync(adminSession, tenantId);
+        var tenant = await TryGetChildTenantAsync(adminSession, tenantId);
+        if (tenant == null)
+        {
+            return null;
+        }
+
         var context = new TenantContext(_loggerFactory, SystemConfiguration, _serviceProvider, tenantId,
             tenant.DatabaseName);
 

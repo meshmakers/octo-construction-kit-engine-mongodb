@@ -27,17 +27,32 @@ public interface ITenantContext
     /// <summary>
     ///     Gets a child tenant context.
     /// </summary>
-    /// <param name="tenantId"></param>
-    /// <returns></returns>
+    /// <param name="tenantId">The tenant id</param>
+    /// <returns>Tenant context</returns>
     Task<ITenantContext> GetChildTenantContextAsync(string tenantId);
+
+    /// <summary>
+    ///     Tries to get a child tenant context.
+    /// </summary>
+    /// <param name="tenantId">The tenant id</param>
+    /// <returns>Tenant context or null if not found</returns>
+    Task<ITenantContext?> TryGetChildTenantContextAsync(string tenantId);
 
     /// <summary>
     ///     Gets a child tenant context.
     /// </summary>
-    /// <param name="adminSession"></param>
-    /// <param name="tenantId"></param>
-    /// <returns></returns>
+    /// <param name="adminSession">Admin session to get the tenant context</param>
+    /// <param name="tenantId">The tenant id</param>
+    /// <returns>Tenant context</returns>
     Task<ITenantContext> GetChildTenantContextAsync(IOctoAdminSession adminSession, string tenantId);
+
+    /// <summary>
+    ///     Tries to get a child tenant context.
+    /// </summary>
+    /// <param name="adminSession">Admin session to get the tenant context</param>
+    /// <param name="tenantId">The tenant id</param>
+    /// <returns>Tenant context or null if not found</returns>
+    Task<ITenantContext?> TryGetChildTenantContextAsync(IOctoAdminSession adminSession, string tenantId);
 
     /// <summary>
     ///     Returns an object that allows access to the system tenant repository.
@@ -87,15 +102,36 @@ public interface ITenantContext
     /// <summary>
     ///     Returns true if a child tenant with the given name exists.
     /// </summary>
-    /// <param name="adminSession"></param>
-    /// <param name="tenantId"></param>
-    /// <returns></returns>
+    /// <param name="adminSession">Admin session to get the tenant context</param>
+    /// <param name="tenantId">The tenant id</param>
+    /// <returns>True, if the tenant exists</returns>
     Task<bool> IsChildTenantExistingAsync(IOctoAdminSession adminSession, string tenantId);
 
+    /// <summary>
+    /// Gets all child tenants of the current tenant.
+    /// </summary>
+    /// <param name="adminSession">Admin session to get the tenant context</param>
+    /// <param name="skip">Number of tenants to skip</param>
+    /// <param name="take">Number of tenants to take</param>
+    /// <returns>List of child tenants</returns>
     Task<IResultSet<OctoTenant>> GetChildTenantsAsync(IOctoAdminSession adminSession, int? skip = null,
         int? take = null);
 
+    /// <summary>
+    ///    Gets a child tenant description object with the given name
+    /// </summary>
+    /// <param name="adminSession">Admin session to get the tenant context</param>
+    /// <param name="tenantId">The tenant id</param>
+    /// <returns>The tenant description object</returns>
     Task<OctoTenant> GetChildTenantAsync(IOctoAdminSession adminSession, string tenantId);
+
+    /// <summary>
+    ///    Tries to get a child tenant description object with the given name
+    /// </summary>
+    /// <param name="adminSession">Admin session to get the tenant context</param>
+    /// <param name="tenantId">The tenant id</param>
+    /// <returns>The tenant description object or null if not found</returns>
+    Task<OctoTenant?> TryGetChildTenantAsync(IOctoAdminSession adminSession, string tenantId);
 
     #endregion Tenant Management
 

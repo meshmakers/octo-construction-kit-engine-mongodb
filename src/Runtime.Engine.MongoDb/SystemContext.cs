@@ -120,18 +120,44 @@ public class SystemContext : TenantContext, ISystemContext
 
     public async Task<ITenantContext> FindTenantContextAsync(string tenantId)
     {
+        var tenantContext = await TryFindTenantContextAsync(tenantId);
+        if (tenantContext == null)
+        {
+            throw TenantException.TenantDoesNotExist(tenantId);
+        }
+        return tenantContext;
+    }
+
+    public async Task<ITenantContext?> TryFindTenantContextAsync(string tenantId)
+    {
         ITenantContext tenantContext = this;
         if (tenantId.NormalizeString() != TenantId)
         {
-            tenantContext = await GetChildTenantContextAsync(tenantId);
+            var childTenantContext = await TryGetChildTenantContextAsync(tenantId);
+            if (childTenantContext == null)
+            {
+                return null;
+            }
+            tenantContext = childTenantContext;
         }
 
         return tenantContext;
     }
 
+
     public async Task<ITenantRepository> FindTenantRepositoryAsync(string tenantId)
     {
         var tenantContext = await FindTenantContextAsync(tenantId);
+        return tenantContext.GetTenantRepository();
+    }
+
+    public async Task<ITenantRepository?> TryFindTenantRepositoryAsync(string tenantId)
+    {
+        var tenantContext = await TryFindTenantContextAsync(tenantId);
+        if (tenantContext == null)
+        {
+            return null;
+        }
         return tenantContext.GetTenantRepository();
     }
 
