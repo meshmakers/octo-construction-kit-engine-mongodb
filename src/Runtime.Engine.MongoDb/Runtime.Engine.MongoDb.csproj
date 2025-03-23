@@ -2,7 +2,7 @@
 
     <PropertyGroup>
         <Description>Octo Mesh Runtime Engine for MongoDB.</Description>
-        <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+        <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
         <AssemblyName>Meshmakers.Octo.Runtime.Engine.MongoDb</AssemblyName>
         <RootNamespace>Meshmakers.Octo.Runtime.Engine.MongoDb</RootNamespace>
         <Configurations>Debug;Release;DebugL</Configurations>

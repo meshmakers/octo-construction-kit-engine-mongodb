@@ -2,7 +2,7 @@
 
     <PropertyGroup>
         <Description>Octo Mesh Runtime Contracts for MongoDB.</Description>
-        <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+        <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
         <AssemblyName>Meshmakers.Octo.Runtime.Contracts.MongoDb</AssemblyName>
         <RootNamespace>Meshmakers.Octo.Runtime.Contracts.MongoDb</RootNamespace>
         <Configurations>Debug;Release;DebugL</Configurations>

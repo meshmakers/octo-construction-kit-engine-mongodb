@@ -52,5 +52,6 @@ stages:
             !'**/*SystemTests.csproj'
           testRunTitle: 'CI'
       - template: handle-artifacts.yml
+      - template: push-nuget-package.yml
 
         
