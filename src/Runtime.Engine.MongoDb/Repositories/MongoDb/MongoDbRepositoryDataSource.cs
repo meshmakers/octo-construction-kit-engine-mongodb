@@ -288,49 +288,50 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
     #region Large Binaries
 
-    public async Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,
-        Dictionary<string, object> metadata,
+    public override Task<OctoObjectId> UploadLargeBinaryAsync(IOctoSession session, string filename,
+        string contentType, BinaryType binaryType, Stream stream,
         CancellationToken cancellationToken = default)
     {
-        return await _repository.UploadLargeBinaryAsync(filename, contentType, stream, metadata, cancellationToken);
+        return _repository.UploadLargeBinaryAsync(session, filename, contentType, binaryType, stream, cancellationToken);
     }
 
-    public async Task ReplaceLargeBinaryAsync(ObjectId largeBinaryId, string filename, string contentType,
-        Stream stream, Dictionary<string, object> metadata,
-        CancellationToken cancellationToken = default)
+    public override async Task ReplaceLargeBinaryAsync(IOctoSession session, OctoObjectId largeBinaryId,
+        string filename, string contentType, BinaryType binaryType,
+        Stream stream, CancellationToken cancellationToken = default)
     {
-        await _repository.ReplaceLargeBinaryAsync(largeBinaryId, filename, contentType, stream, metadata,
+        await _repository.ReplaceLargeBinaryAsync(session, largeBinaryId, filename, contentType, binaryType, stream,
             cancellationToken);
     }
 
-    public async Task<ObjectId> ReplaceLargeBinaryAsync(string filename, string contentType,
-        Stream stream, Dictionary<string, object> metadata,
+    public override Task<OctoObjectId> ReplaceLargeBinaryAsync(IOctoSession session, string filename,
+        string contentType, BinaryType binaryType, Stream stream,
         CancellationToken cancellationToken = default)
     {
-        return await _repository.ReplaceLargeBinaryAsync(filename, contentType, stream, metadata, cancellationToken);
+        return _repository.ReplaceLargeBinaryAsync(session, filename, contentType, binaryType, stream, cancellationToken);
     }
 
-    public async Task DeleteLargeBinaryAsync(ObjectId largeBinaryId, CancellationToken cancellationToken = default)
-    {
-        await _repository.DeleteLargeBinaryAsync(largeBinaryId, cancellationToken);
-    }
-
-    public async Task<IDownloadStreamHandler> DownloadLargeBinaryAsync(ObjectId largeBinaryId,
+    public override async Task DeleteLargeBinaryAsync(IOctoSession session, OctoObjectId largeBinaryId,
         CancellationToken cancellationToken = default)
     {
-        return await _repository.DownloadLargeBinaryAsync(largeBinaryId, cancellationToken);
+        await _repository.DeleteLargeBinaryAsync(session, largeBinaryId, cancellationToken);
     }
 
-    public async Task<IDownloadInfo?> GetLargeBinaryAsync(ObjectId largeBinaryId,
-        CancellationToken cancellationToken = default)
+    public override Task<IDownloadStreamHandler> DownloadLargeBinaryAsync(IOctoSession session,
+        OctoObjectId largeBinaryId, CancellationToken cancellationToken = default)
     {
-        return await _repository.GetLargeBinaryAsync(largeBinaryId, cancellationToken);
+        return _repository.DownloadLargeBinaryAsync(session, largeBinaryId, cancellationToken);
     }
 
-    public async Task<IDownloadInfo?> GetLargeBinaryAsync(string fileName,
+    public override Task<IBinaryInfo?> GetLargeBinaryAsync(IOctoSession session, OctoObjectId largeBinaryId,
         CancellationToken cancellationToken = default)
     {
-        return await _repository.GetLargeBinaryAsync(fileName, cancellationToken);
+        return _repository.GetLargeBinaryAsync(session, largeBinaryId, cancellationToken);
+    }
+
+    public override Task<IBinaryInfo?> GetLargeBinaryAsync(IOctoSession session, string fileName, BinaryType binaryType,
+        CancellationToken cancellationToken = default)
+    {
+        return _repository.GetLargeBinaryAsync(session, fileName, binaryType, cancellationToken);
     }
 
     #endregion Large Binaries

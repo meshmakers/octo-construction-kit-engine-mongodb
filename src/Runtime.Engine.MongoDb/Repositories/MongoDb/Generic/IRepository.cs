@@ -1,4 +1,9 @@
-﻿using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
+﻿using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+
 using MongoDB.Bson;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
@@ -22,23 +27,27 @@ public interface IRepository
         new()
         where TKey : notnull;
 
-    Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream,
-        Dictionary<string, object> metadata,
+    Task<OctoObjectId> UploadLargeBinaryAsync(IOctoSession session, string filename,
+        string contentType, BinaryType binaryType, Stream stream,
         CancellationToken cancellationToken = default);
 
-    Task ReplaceLargeBinaryAsync(ObjectId largeBinaryId, string filename, string contentType, Stream stream,
-        Dictionary<string, object> metadata,
+    Task ReplaceLargeBinaryAsync(IOctoSession session, OctoObjectId largeBinaryId,
+        string filename, string contentType, BinaryType binaryType,
+        Stream stream, CancellationToken cancellationToken = default);
+
+    Task<OctoObjectId> ReplaceLargeBinaryAsync(IOctoSession session, string filename,
+        string contentType, BinaryType binaryType, Stream stream,
         CancellationToken cancellationToken = default);
 
-    Task<ObjectId> ReplaceLargeBinaryAsync(string filename, string contentType, Stream stream,
-        Dictionary<string, object> metadata,
+    Task DeleteLargeBinaryAsync(IOctoSession session, OctoObjectId largeBinaryId,
         CancellationToken cancellationToken = default);
 
-    Task DeleteLargeBinaryAsync(ObjectId largeBinaryId, CancellationToken cancellationToken = default);
+    Task<IDownloadStreamHandler> DownloadLargeBinaryAsync(IOctoSession session,
+        OctoObjectId largeBinaryId, CancellationToken cancellationToken = default);
 
-    Task<IDownloadStreamHandler> DownloadLargeBinaryAsync(ObjectId largeBinaryId,
+    Task<IBinaryInfo?> GetLargeBinaryAsync(IOctoSession session, OctoObjectId largeBinaryId,
         CancellationToken cancellationToken = default);
 
-    Task<IDownloadInfo?> GetLargeBinaryAsync(ObjectId largeBinaryId, CancellationToken cancellationToken = default);
-    Task<IDownloadInfo?> GetLargeBinaryAsync(string fileName, CancellationToken cancellationToken = default);
+    Task<IBinaryInfo?> GetLargeBinaryAsync(IOctoSession session, string fileName, BinaryType binaryType,
+        CancellationToken cancellationToken = default);
 }

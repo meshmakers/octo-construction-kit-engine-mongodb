@@ -30,26 +30,4 @@ public interface IMongoDbRepositoryDataSource : ICkMongoDbRepositoryDataSource, 
     Task<ICollection<CkTypeInfo>> GetCkTypeInfoAsync(IOctoSession session);
     Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, CkId<CkTypeId> ckTypeId);
     Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, CkType ckType);
-
-
-    #region Large Binaries
-
-    Task<ObjectId> UploadLargeBinaryAsync(string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
-        CancellationToken cancellationToken = default);
-
-    Task ReplaceLargeBinaryAsync(ObjectId largeBinaryId, string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
-        CancellationToken cancellationToken = default);
-    
-    Task<ObjectId> ReplaceLargeBinaryAsync(string filename, string contentType, Stream stream, Dictionary<string, object> metadata,
-        CancellationToken cancellationToken = default);
-
-    Task DeleteLargeBinaryAsync(ObjectId largeBinaryId, CancellationToken cancellationToken = default);
-
-    Task<IDownloadStreamHandler> DownloadLargeBinaryAsync(ObjectId largeBinaryId,
-        CancellationToken cancellationToken = default);
-
-    Task<IDownloadInfo?> GetLargeBinaryAsync(ObjectId largeBinaryId, CancellationToken cancellationToken = default);
-    Task<IDownloadInfo?> GetLargeBinaryAsync(string fileName, CancellationToken cancellationToken = default);
-
-    #endregion Large Binaries
 }

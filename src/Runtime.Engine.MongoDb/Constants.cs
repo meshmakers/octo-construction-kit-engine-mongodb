@@ -2,6 +2,7 @@
 
 public static class Constants
 {
+
     public const string RegexMongoDbHost = @"^([a-zA-Z0-9_.-]+)(:[0-9]{1,5})?$";
     public const string RegexWithoutWhitespaces = @"^[^\s]+$";
 
@@ -41,6 +42,7 @@ public static class Constants
     // BsonDocument attributes
     // ********************************************************************
     public const string ContentType = "contentType";
+    public const string BinaryType = "binaryType";
 
 
     internal static readonly string[] TextAnalyzerFeatures = { "frequency", "norm", "position" };
