@@ -26,13 +26,13 @@ public class AutoIncrementModifier : IAutoIncrementModifier
 
     public async Task RunAutoIncrementAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, IEnumerable<RtEntity> rtEntities)
     {
-        var entityCacheItem = _ckCacheService.GetCkType(_tenantRepository.TenantId, ckTypeId);
-        if (entityCacheItem == null)
+        var ckTypeGraph = _ckCacheService.GetCkType(_tenantRepository.TenantId, ckTypeId);
+        if (ckTypeGraph == null)
         {
             throw InvalidCkTypeIdException.CkTypeIdNotFound(_tenantRepository.TenantId, ckTypeId);
         }
 
-        var autoIncrementReferences = entityCacheItem.AllAttributes.Values
+        var autoIncrementReferences = ckTypeGraph.AllAttributes.Values
             .Where(a => !string.IsNullOrEmpty(a.AutoIncrementReference)).ToList();
         if (!autoIncrementReferences.Any())
         {
@@ -48,7 +48,7 @@ public class AutoIncrementModifier : IAutoIncrementModifier
         foreach (var rtEntity in rtEntities)
         foreach (var autoIncrementReference in autoIncrementReferences)
         {
-            var attributeCacheItem = entityCacheItem.AllAttributes[autoIncrementReference.AttributeName];
+            var attributeCacheItem = ckTypeGraph.AllAttributes[autoIncrementReference.AttributeName];
             if (attributeCacheItem == null)
             {
                 throw InvalidAttributeException.AttributeNotFound(ckTypeId, autoIncrementReference.AttributeName);
