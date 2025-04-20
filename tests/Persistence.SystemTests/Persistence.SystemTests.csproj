@@ -10,9 +10,9 @@
     <ItemGroup>
         <PackageReference Include="FakeItEasy" Version="8.3.0" />
         <PackageReference Include="MartinCostello.Logging.XUnit.v3" Version="0.5.1" />
-        <PackageReference Include="Microsoft.Extensions.Configuration" Version="9.0.3" />
-        <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="9.0.3" />
-        <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="9.0.3" />
+        <PackageReference Include="Microsoft.Extensions.Configuration" Version="9.0.4" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="9.0.4" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="9.0.4" />
         <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
         <PackageReference Include="xunit.runner.visualstudio" Version="3.0.2">
             <PrivateAssets>all</PrivateAssets>
@@ -22,7 +22,7 @@
             <PrivateAssets>all</PrivateAssets>
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
-        <PackageReference Include="xunit.v3" Version="2.0.0" />
+        <PackageReference Include="xunit.v3" Version="2.0.1" />
     </ItemGroup>
 
 
