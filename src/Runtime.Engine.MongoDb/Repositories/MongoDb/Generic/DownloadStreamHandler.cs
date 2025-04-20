@@ -17,7 +17,26 @@ internal class DownloadStreamHandler(GridFSDownloadStream<ObjectId> stream) : ID
     public OctoObjectId BinaryId => stream.FileInfo.Id.ToOctoObjectId();
     public string ContentType => stream.FileInfo.Metadata.GetValue(Constants.ContentType).AsBsonValue.AsString;
     public DateTime UploadDateTime => stream.FileInfo.UploadDateTime;
+
+    public DateTime? ExpiryDateTime =>
+        stream.FileInfo.Metadata.GetValue(Constants.ExpiryDateTime)?.AsBsonValue.ToUniversalTime();
+
     public BinaryType BinaryType => (BinaryType)stream.FileInfo.Metadata[Constants.BinaryType].AsBsonValue.ToInt32();
+
+    public RtEntityId? RtEntityId
+    {
+        get
+        {
+            if (!stream.FileInfo.Metadata.Contains(Constants.RtEntityId))
+            {
+                return null;
+            }
+
+            var rtEntityId = stream.FileInfo.Metadata[Constants.RtEntityId].AsBsonValue;
+            return new RtEntityId(rtEntityId.AsString);
+        }
+    }
+
     public long Size => stream.FileInfo.Length;
     public Stream Stream => stream;
     public string Filename => stream.FileInfo.Filename;

@@ -11,6 +11,20 @@ internal class BinaryInfo(GridFSFileInfo fsFileInfo) : IBinaryInfo
     public OctoObjectId BinaryId => fsFileInfo.Id.ToOctoObjectId();
     public string Filename => fsFileInfo.Filename;
     public DateTime UploadDateTime => fsFileInfo.UploadDateTime;
+    public DateTime? ExpiryDateTime => fsFileInfo.Metadata[Constants.ExpiryDateTime].AsBsonValue.ToUniversalTime();
     public BinaryType BinaryType => (BinaryType)fsFileInfo.Metadata[Constants.BinaryType].AsBsonValue.ToInt32();
+    public RtEntityId? RtEntityId
+    {
+        get
+        {
+            if (!fsFileInfo.Metadata.Contains(Constants.RtEntityId))
+            {
+                return null;
+            }
+
+            var rtEntityId = fsFileInfo.Metadata[Constants.RtEntityId].AsBsonValue;
+            return new RtEntityId(rtEntityId.AsString);
+        }
+    }
     public long Size => fsFileInfo.Length;
 }

@@ -42,7 +42,9 @@ public static class Constants
     // BsonDocument attributes
     // ********************************************************************
     public const string ContentType = "contentType";
+    public const string ExpiryDateTime = "expiryDateTime";
     public const string BinaryType = "binaryType";
+    public const string RtEntityId = "rtEntityId";
 
 
     internal static readonly string[] TextAnalyzerFeatures = { "frequency", "norm", "position" };

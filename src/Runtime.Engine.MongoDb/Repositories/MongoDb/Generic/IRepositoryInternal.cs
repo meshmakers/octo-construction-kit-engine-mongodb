@@ -1,3 +1,5 @@
+using MongoDB.Driver.GridFS;
+
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
 internal interface IRepositoryInternal : IRepository
@@ -6,4 +8,6 @@ internal interface IRepositoryInternal : IRepository
         string? suffix = null)
         where TKey : notnull
         where TDocument : class, new();
+
+    IGridFSBucket GetGridFsBucket();
 }

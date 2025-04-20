@@ -465,5 +465,13 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.TargetRtId);
             cm.GetMemberMap(c => c.TargetCkTypeId);
         });
+
+        BsonClassMap.RegisterClassMap<EntityBinaryInfo>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.AutoMap();
+
+            cm.GetMemberMap(c => c.Stream).SetShouldSerializeMethod(_=> false);
+        });
     }
 }

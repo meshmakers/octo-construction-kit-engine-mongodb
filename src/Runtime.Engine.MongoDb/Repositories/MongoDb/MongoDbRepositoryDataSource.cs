@@ -11,7 +11,6 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
 using Microsoft.Extensions.Logging;
-using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
@@ -36,7 +35,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     internal MongoDbRepositoryDataSource(ILogger<MongoDbRepositoryDataSource> logger,
         IRepositoryClient repositoryClient, string databaseName,
         string tenantId)
-        : base(tenantId)
+        : base(tenantId, new MongoLinkedBinaryDataSource(repositoryClient, databaseName))
     {
         _logger = logger;
         ArgumentValidation.ValidateString(databaseName, nameof(databaseName));
@@ -286,53 +285,5 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return ckEntity;
     }
 
-    #region Large Binaries
 
-    public override Task<OctoObjectId> UploadLargeBinaryAsync(IOctoSession session, string filename,
-        string contentType, BinaryType binaryType, Stream stream,
-        CancellationToken cancellationToken = default)
-    {
-        return _repository.UploadLargeBinaryAsync(session, filename, contentType, binaryType, stream, cancellationToken);
-    }
-
-    public override async Task ReplaceLargeBinaryAsync(IOctoSession session, OctoObjectId largeBinaryId,
-        string filename, string contentType, BinaryType binaryType,
-        Stream stream, CancellationToken cancellationToken = default)
-    {
-        await _repository.ReplaceLargeBinaryAsync(session, largeBinaryId, filename, contentType, binaryType, stream,
-            cancellationToken);
-    }
-
-    public override Task<OctoObjectId> ReplaceLargeBinaryAsync(IOctoSession session, string filename,
-        string contentType, BinaryType binaryType, Stream stream,
-        CancellationToken cancellationToken = default)
-    {
-        return _repository.ReplaceLargeBinaryAsync(session, filename, contentType, binaryType, stream, cancellationToken);
-    }
-
-    public override async Task DeleteLargeBinaryAsync(IOctoSession session, OctoObjectId largeBinaryId,
-        CancellationToken cancellationToken = default)
-    {
-        await _repository.DeleteLargeBinaryAsync(session, largeBinaryId, cancellationToken);
-    }
-
-    public override Task<IDownloadStreamHandler> DownloadLargeBinaryAsync(IOctoSession session,
-        OctoObjectId largeBinaryId, CancellationToken cancellationToken = default)
-    {
-        return _repository.DownloadLargeBinaryAsync(session, largeBinaryId, cancellationToken);
-    }
-
-    public override Task<IBinaryInfo?> GetLargeBinaryAsync(IOctoSession session, OctoObjectId largeBinaryId,
-        CancellationToken cancellationToken = default)
-    {
-        return _repository.GetLargeBinaryAsync(session, largeBinaryId, cancellationToken);
-    }
-
-    public override Task<IBinaryInfo?> GetLargeBinaryAsync(IOctoSession session, string fileName, BinaryType binaryType,
-        CancellationToken cancellationToken = default)
-    {
-        return _repository.GetLargeBinaryAsync(session, fileName, binaryType, cancellationToken);
-    }
-
-    #endregion Large Binaries
 }
