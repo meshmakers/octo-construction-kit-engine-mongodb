@@ -158,12 +158,12 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         if (session != null)
         {
             var queryable = GetMongoCollection().AsQueryable(((IOctoSessionInternal)session).SessionHandle);
-            return Task.FromResult((IQueryable<TDocument>)queryable);
+            return Task.FromResult(queryable);
         }
         else
         {
             var queryable = GetMongoCollection().AsQueryable();
-            return Task.FromResult((IQueryable<TDocument>)queryable);
+            return Task.FromResult(queryable);
         }
     }
 
@@ -302,10 +302,35 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             var document = await result.SingleOrDefaultAsync();
             if (document == null)
             {
-                return default;
+                return null;
             }
 
             return document;
+        }
+        catch (MongoException e)
+        {
+            throw OperationFailedException.DatabaseOperationFailed(nameof(DocumentAsync), e);
+        }
+    }
+
+    public async Task<IReadOnlyList<TDocument>> DocumentsAsync(IOctoSession session, IEnumerable<TKey> keys)
+    {
+        try
+        {
+            List<FilterDefinition<TDocument>> filters = new();
+            foreach (var key in keys)
+            {
+                var filter = Builders<TDocument>.Filter.BuildIdFilter(key);
+                filters.Add(filter);
+            }
+
+            var orFilter = Builders<TDocument>.Filter.Or(filters);
+            var result = await _documentCollection.FindAsync(
+                ((IOctoSessionInternal)session).SessionHandle, orFilter);
+
+            var documents = await result.ToListAsync();
+
+            return documents;
         }
         catch (MongoException e)
         {

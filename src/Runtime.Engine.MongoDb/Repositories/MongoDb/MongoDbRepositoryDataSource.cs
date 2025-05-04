@@ -10,7 +10,9 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
+
 using Microsoft.Extensions.Logging;
+
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
@@ -82,6 +84,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return GetRtDatabaseCollection<TEntity>(ckTypeGraph);
     }
 
+
     public IMongoDbDataSourceCollection<OctoObjectId, TEntity> GetRtDatabaseCollection<TEntity>(CkTypeGraph ckTypeGraph)
         where TEntity : RtEntity, new()
     {
@@ -95,46 +98,88 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return _repository.GetCollection(mapper, suffix);
     }
 
-    public override async Task<CurrentMultiplicity> GetCurrentRtAssociationMultiplicityAsync(
-        IOctoSession session, RtEntityId rtEntityId, CkId<CkAssociationRoleId> ckRoleId,
-        GraphDirections direction)
+    public override async Task<IReadOnlyList<RtAssociationsMultiplicityResult>> GetRtAssociationsMultiplicityAsync(
+        IOctoSession session, IEnumerable<RtEntityRoleIdDirectionPair> entityRoleIdDirectionPairs)
     {
-        long counter = 0;
-        if (direction == GraphDirections.Inbound || direction == GraphDirections.Any)
+        List<FilterDefinition<RtAssociation>> filters = new();
+        IEnumerable<RtEntityRoleIdDirectionPair> rtEntityRoleIdDirectionPairs = entityRoleIdDirectionPairs.ToList();
+        foreach (var pair in rtEntityRoleIdDirectionPairs)
         {
-            var filterDefinition = Builders<RtAssociation>.Filter.And(
-                Builders<RtAssociation>.Filter.Eq(x => x.TargetRtId, rtEntityId.RtId),
-                Builders<RtAssociation>.Filter.Eq(x => x.TargetCkTypeId, rtEntityId.CkTypeId),
-                Builders<RtAssociation>.Filter.Eq(x => x.AssociationRoleId, ckRoleId)
+            if (pair.Direction == GraphDirections.Inbound || pair.Direction == GraphDirections.Any)
+            {
+                filters.Add(Builders<RtAssociation>.Filter.And(
+                    Builders<RtAssociation>.Filter.Eq(x => x.TargetRtId, pair.RtEntityId.RtId),
+                    Builders<RtAssociation>.Filter.Eq(x => x.TargetCkTypeId, pair.RtEntityId.CkTypeId),
+                    Builders<RtAssociation>.Filter.Eq(x => x.AssociationRoleId, pair.CkRoleId)
+                ));
+            }
+
+            if (pair.Direction == GraphDirections.Outbound || pair.Direction == GraphDirections.Any)
+            {
+                filters.Add(Builders<RtAssociation>.Filter.And(
+                    Builders<RtAssociation>.Filter.Eq(x => x.OriginRtId, pair.RtEntityId.RtId),
+                    Builders<RtAssociation>.Filter.Eq(x => x.OriginCkTypeId, pair.RtEntityId.CkTypeId),
+                    Builders<RtAssociation>.Filter.Eq(x => x.AssociationRoleId, pair.CkRoleId)
+                ));
+            }
+        }
+
+        var orFilter = Builders<RtAssociation>.Filter.Or(filters);
+
+        var aggregate = RtMongoDbDataSourceAssociations.Aggregate(session);
+        var aggregateFluent = aggregate.Match(orFilter);
+
+        var result = await aggregateFluent.ToListAsync();
+
+        var multiplicityResults = new List<RtAssociationsMultiplicityResult>();
+
+        foreach (var pair in rtEntityRoleIdDirectionPairs)
+        {
+            var count = result.Count(x => x.AssociationRoleId == pair.CkRoleId &&
+                                          (((pair.Direction == GraphDirections.Inbound ||
+                                             pair.Direction == GraphDirections.Any) &&
+                                            x.TargetRtId == pair.RtEntityId.RtId) ||
+                                           (pair.Direction == GraphDirections.Outbound ||
+                                            pair.Direction == GraphDirections.Any) &&
+                                           x.OriginRtId == pair.RtEntityId.RtId));
+
+            CurrentMultiplicity multiplicity = count switch
+            {
+                >= 2 => CurrentMultiplicity.Many,
+                1 => CurrentMultiplicity.One,
+                _ => CurrentMultiplicity.Zero
+            };
+
+            multiplicityResults.Add(new RtAssociationsMultiplicityResult(pair, multiplicity));
+        }
+
+
+        return multiplicityResults;
+    }
+
+    public override async Task<IReadOnlyList<RtAssociation>> GetRtAssociationsAsync(IOctoSession session,
+        IEnumerable<RtOriginTargetPair> rtOriginTargetPair)
+    {
+        List<FilterDefinition<RtAssociation>> filters = new();
+        foreach (var pair in rtOriginTargetPair)
+        {
+            var filter = Builders<RtAssociation>.Filter.And(
+                Builders<RtAssociation>.Filter.Eq(x => x.OriginRtId, pair.Origin.RtId),
+                Builders<RtAssociation>.Filter.Eq(x => x.OriginCkTypeId, pair.Origin.CkTypeId),
+                Builders<RtAssociation>.Filter.Eq(x => x.TargetRtId, pair.Target.RtId),
+                Builders<RtAssociation>.Filter.Eq(x => x.TargetCkTypeId, pair.Target.CkTypeId),
+                Builders<RtAssociation>.Filter.Eq(x => x.AssociationRoleId, pair.AssociationRoleId)
             );
 
-            var r = await RtMongoDbDataSourceAssociations.GetTotalCountAsync(session, filterDefinition);
-            counter = Math.Max(r, counter);
+            filters.Add(filter);
         }
 
-        if (direction == GraphDirections.Outbound || direction == GraphDirections.Any)
-        {
-            var filterDefinition = Builders<RtAssociation>.Filter.And(
-                Builders<RtAssociation>.Filter.Eq(x => x.OriginRtId, rtEntityId.RtId),
-                Builders<RtAssociation>.Filter.Eq(x => x.TargetCkTypeId, rtEntityId.CkTypeId),
-                Builders<RtAssociation>.Filter.Eq(x => x.AssociationRoleId, ckRoleId)
-            );
+        var orFilter = Builders<RtAssociation>.Filter.Or(filters);
 
-            var r = await RtMongoDbDataSourceAssociations.GetTotalCountAsync(session, filterDefinition);
-            counter = Math.Max(r, counter);
-        }
+        var aggregate = RtMongoDbDataSourceAssociations.Aggregate(session);
+        var aggregateFluent = aggregate.Match(orFilter);
 
-        if (counter >= 2)
-        {
-            return CurrentMultiplicity.Many;
-        }
-
-        if (counter == 1)
-        {
-            return CurrentMultiplicity.One;
-        }
-
-        return CurrentMultiplicity.Zero;
+        return await aggregateFluent.ToListAsync();
     }
 
 
@@ -284,6 +329,4 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         return ckEntity;
     }
-
-
 }
