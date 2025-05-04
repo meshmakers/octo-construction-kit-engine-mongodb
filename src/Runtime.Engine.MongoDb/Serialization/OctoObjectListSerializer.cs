@@ -1,3 +1,5 @@
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+
 using MongoDB.Bson;
 using MongoDB.Bson.IO;
 using MongoDB.Bson.Serialization;
@@ -110,6 +112,18 @@ public class OctoObjectListSerializer : SerializerBase<List<object>>
                     break;
                 case TypeCode.DateTime:
                     bsonWriter.WriteDateTime(((DateTime)item).ToUniversalTime().Ticks);
+                    break;
+                case TypeCode.Object:
+                    if (firstItem is RtRecord)
+                    {
+                        var rtRecord = (RtRecord)item;
+                        var serializer = BsonSerializer.LookupSerializer(rtRecord.GetType());
+                        serializer.Serialize(context, args, rtRecord);
+                    }
+                    else
+                    {
+                        throw OctoSerializationException.UnsupportedType(item.GetType());
+                    }
                     break;
                default:
                    throw OctoSerializationException.UnsupportedType(item.GetType());
