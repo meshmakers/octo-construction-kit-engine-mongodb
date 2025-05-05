@@ -124,6 +124,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             }
         }
 
+        if (filters.Count == 0)
+        {
+            return [];
+        }
+
         var orFilter = Builders<RtAssociation>.Filter.Or(filters);
 
         var aggregate = RtMongoDbDataSourceAssociations.Aggregate(session);
@@ -172,6 +177,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             );
 
             filters.Add(filter);
+        }
+
+        if (filters.Count == 0)
+        {
+            return [];
         }
 
         var orFilter = Builders<RtAssociation>.Filter.Or(filters);
