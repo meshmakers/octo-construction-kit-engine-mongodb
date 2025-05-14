@@ -7,6 +7,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
+using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
@@ -464,6 +465,21 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.GetMemberMap(c => c.AssociationRoleId);
             cm.GetMemberMap(c => c.TargetRtId);
             cm.GetMemberMap(c => c.TargetCkTypeId);
+        });
+
+        BsonClassMap.RegisterClassMap<RtEntityGraphItem>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.AutoMap();
+
+            cm.GetMemberMap(c => c.Associations).SetElementName(Constants.AssociationName);
+        });
+
+        BsonClassMap.RegisterClassMap<NavigationEnd>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.MapIdMember(c => c.AssociationId).SetElementName("_id");
+            cm.AutoMap();
         });
 
         BsonClassMap.RegisterClassMap<EntityBinaryInfo>(cm =>

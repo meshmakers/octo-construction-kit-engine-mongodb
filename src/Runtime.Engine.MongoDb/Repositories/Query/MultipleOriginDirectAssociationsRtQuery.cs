@@ -120,8 +120,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         var @as = (FieldDefinition<BsonDocument, TTargetEntity[]>)"_associations";
 
         var targetCkIds = _targetCkTypeGraph.GetAllDerivedTypes(true);
-        var pipelineStageDefinitions = new List<IPipelineStageDefinition>(new IPipelineStageDefinition[]
-        {
+        var pipelineStageDefinitions = new List<IPipelineStageDefinition>([
             PipelineStageDefinitionBuilder.Match(
                 Builders<RtAssociation>.Filter.And(
                     Builders<RtAssociation>.Filter.Eq("associationRoleId", _roleId),
@@ -135,7 +134,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
                 (FieldDefinition<BsonDocument>)"target"),
             PipelineStageDefinitionBuilder.Unwind((FieldDefinition<BsonDocument>)"target"),
             PipelineStageDefinitionBuilder.ReplaceRoot<BsonDocument, TTargetEntity>("$target"),
-        });
+        ]);
 
 
         AddPreStagesToPipelines(pipelineStageDefinitions);

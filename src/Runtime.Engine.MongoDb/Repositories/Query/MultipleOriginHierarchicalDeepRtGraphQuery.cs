@@ -130,28 +130,24 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
                 ))
         ));
 
-        pipelineStageDefinitions.Add(OctoPipelineStageBuilder.AddFields(
+        pipelineStageDefinitions.Add(OctoPipelineStageBuilder.AddFields<BsonDocument, BsonDocument>(
             OctoBuilder<BsonDocument, BsonDocument>.Fields.Set("entities",
                 OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Reduce("$_associations", new BsonArray(),
-                    OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.ConcatArrays([
-                        "$$value",
+                    OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.ConcatArrays("$$value",
                         new BsonArray
                         {
                             new BsonDocument
                             {
-                                { "rtId", "$$this.targetRtId" },
-                                { "ckTypeId", "$$this.targetCkTypeId" }
+                                { "rtId", "$$this.targetRtId" }, { "ckTypeId", "$$this.targetCkTypeId" }
                             },
                             new BsonDocument
                             {
-                                { "rtId", "$$this.originRtId" },
-                                { "ckTypeId", "$$this.originCkTypeId" }
+                                { "rtId", "$$this.originRtId" }, { "ckTypeId", "$$this.originCkTypeId" }
                             }
-                        }
-                    ]))
+                        }))
             )
         ));
-        pipelineStageDefinitions.Add(OctoPipelineStageBuilder.AddFields(
+        pipelineStageDefinitions.Add(OctoPipelineStageBuilder.AddFields<BsonDocument, BsonDocument>(
             OctoBuilder<BsonDocument, BsonDocument>.Fields.Set("uniqueEntities",
                 OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Reduce(
                     OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Filter(
@@ -166,35 +162,22 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
                     OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Condition(
                         OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.In(
                             OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Document(
-                                new BsonDocument
-                                {
-                                    { "rtId", "$$this.rtId" },
-                                    { "ckTypeId", "$$this.ckTypeId" }
-                                }),
+                                new BsonDocument { { "rtId", "$$this.rtId" }, { "ckTypeId", "$$this.ckTypeId" } }),
                             OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Field("$$value")
                         ),
                         OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Field("$$value"),
-                        OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.ConcatArrays([
-                            "$$value",
+                        OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.ConcatArrays("$$value",
                             new BsonArray
                             {
-                                new BsonDocument
-                                {
-                                    { "rtId", "$$this.rtId" },
-                                    { "ckTypeId", "$$this.ckTypeId" }
-                                }
-                            }
-                        ])))
+                                new BsonDocument { { "rtId", "$$this.rtId" }, { "ckTypeId", "$$this.ckTypeId" } }
+                            })))
             )));
         pipelineStageDefinitions.Add(
             PipelineStageDefinitionBuilder
                 .Lookup<BsonDocument, RtAssociation, BsonDocument, IEnumerable<BsonDocument>, BsonDocument>(
                     foreignCollection: _mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations
                         .GetMongoCollection(),
-                    let: new BsonDocument
-                    {
-                        { "uniqueEntities", "$uniqueEntities" }
-                    },
+                    let: new BsonDocument { { "uniqueEntities", "$uniqueEntities" } },
                     lookupPipeline: PipelineDefinition<RtAssociation, BsonDocument>.Create(new[]
                     {
                         OctoPipelineStageBuilder.Match(
@@ -219,7 +202,7 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
                     }),
                     @as: "matchingAssociations")
         );
-        pipelineStageDefinitions.Add(OctoPipelineStageBuilder.AddFields(
+        pipelineStageDefinitions.Add(OctoPipelineStageBuilder.AddFields<BsonDocument, BsonDocument>(
             OctoBuilder<BsonDocument, BsonDocument>.Fields.Set("associations",
                 OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Filter(
                     "$matchingAssociations",
@@ -254,24 +237,15 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
                                 OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.In(
                                     OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.MergeObjects(
                                         OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Document(
-                                            new BsonDocument
-                                            {
-                                                { "originRtId", "$$uniqueEntity.rtId" },
-                                            }),
+                                            new BsonDocument { { "originRtId", "$$uniqueEntity.rtId" }, }),
                                         OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Document(
-                                            new BsonDocument
-                                            {
-                                                { "originCkTypeId", "$$uniqueEntity.ckTypeId" }
-                                            })
+                                            new BsonDocument { { "originCkTypeId", "$$uniqueEntity.ckTypeId" } })
                                     ),
                                     OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Map("$associations",
                                         "association",
                                         OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.MergeObjects(
                                             OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Document(
-                                                new BsonDocument
-                                                {
-                                                    { "originRtId", "$$association.originRtId" },
-                                                }),
+                                                new BsonDocument { { "originRtId", "$$association.originRtId" }, }),
                                             OctoBuilder<BsonDocument, BsonDocument>.AggregateOperators.Document(
                                                 new BsonDocument
                                                 {
@@ -283,8 +257,7 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
                         "uniqueEntity",
                         new BsonDocument
                         {
-                            { "originRtId", "$$uniqueEntity.rtId" },
-                            { "originCkTypeId", "$$uniqueEntity.ckTypeId" }
+                            { "originRtId", "$$uniqueEntity.rtId" }, { "originCkTypeId", "$$uniqueEntity.ckTypeId" }
                         })
                 ))));
 
@@ -294,29 +267,36 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
             new BsonDocument
             {
                 {
-                    "_id", new BsonDocument
+                    "_id",
+                    new BsonDocument
                     {
-                        { "rtId", "$associations.originRtId" },
-                        { "ckTypeId", "$associations.originCkTypeId" }
+                        { "rtId", "$associations.originRtId" }, { "ckTypeId", "$associations.originCkTypeId" }
                     }
                 },
                 {
-                    "associations", new BsonDocument
+                    "associations",
+                    new BsonDocument
                     {
                         {
-                            "$push", new BsonDocument
+                            "$push",
+                            new BsonDocument
                             {
                                 {
-                                    "$cond", new BsonDocument
+                                    "$cond",
+                                    new BsonDocument
                                     {
                                         {
-                                            "if", new BsonDocument
+                                            "if",
+                                            new BsonDocument
                                             {
-                                                { "$gte", new BsonArray { "$associations.targetRtId", BsonNull.Value } }
+                                                {
+                                                    "$gte", new BsonArray { "$associations.targetRtId", BsonNull.Value }
+                                                }
                                             }
                                         },
                                         {
-                                            "then", new BsonDocument
+                                            "then",
+                                            new BsonDocument
                                             {
                                                 { "associationId", "$associations._id" },
                                                 { "associationRoleId", "$associations.associationRoleId" },
@@ -326,9 +306,7 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
                                                 { "targetCkAttributeIds", "$associations.targetCkAttributeIds" }
                                             }
                                         },
-                                        {
-                                            "else", "$$REMOVE"
-                                        }
+                                        { "else", "$$REMOVE" }
                                     }
                                 }
                             }

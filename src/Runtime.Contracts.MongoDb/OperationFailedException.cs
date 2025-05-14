@@ -170,4 +170,9 @@ public class OperationFailedException : PersistenceException
     {
         return new OperationFailedException($"Match filter value '{value}' is not supported.");
     }
+
+    public static Exception AssociationNotFound(CkId<CkAssociationRoleId> ckRoleId, CkId<CkTypeId> targetCkTypeId)
+    {
+        return new OperationFailedException($"Association '{ckRoleId}' not found for target type '{targetCkTypeId}'.");
+    }
 }

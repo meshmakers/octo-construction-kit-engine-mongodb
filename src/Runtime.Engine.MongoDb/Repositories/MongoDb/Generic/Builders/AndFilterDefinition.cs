@@ -13,7 +13,10 @@ internal sealed class AndFilterDefinition<TSource, TResult>(
 
     public override BsonDocument Render(RenderArgs<TSource> args)
     {
-        if (_filters.Count == 0) return new BsonDocument("$and", new BsonArray(0));
+        if (_filters.Count == 0)
+        {
+            return new BsonDocument("$and", new BsonArray(0));
+        }
 
         var array = new BsonArray();
         foreach (var filter in _filters)

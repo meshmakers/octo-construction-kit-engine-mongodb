@@ -16,8 +16,17 @@ internal class FieldBuilder<TSource, TResult>
         AggregateExpressionDefinition<TSource, TResult> value)
     {
         var setFieldDefinition = new AggregateExpressionFieldDefinition<TSource, TResult>(field, value);
-        return new ListSetFieldDefinitions<TSource>(new[] { setFieldDefinition });
+        return new ListSetFieldDefinitions<TSource>([setFieldDefinition]);
     }
+
+    public ListSetFieldDefinitions<TSource> SetMultiple(params Tuple<FieldDefinition<TSource, TResult>,
+        AggregateExpressionDefinition<TSource, TResult>>[] fields)
+    {
+        var setFieldDefinitions = fields.Select(field =>
+            new AggregateExpressionFieldDefinition<TSource, TResult>(field.Item1, field.Item2)).ToList();
+        return new ListSetFieldDefinitions<TSource>(setFieldDefinitions);
+    }
+
 }
 
 internal class AggregationOperatorsBuilder<TSource, TResult>
@@ -32,9 +41,21 @@ internal class AggregationOperatorsBuilder<TSource, TResult>
         return new ArrayDefinition<TSource, TResult>(array);
     }
 
+    public AggregateExpressionDefinition<TSource, TResult> EmptyArray()
+    {
+        return new ArrayDefinition<TSource, TResult>(new BsonArray());
+    }
+
+
     public AggregateExpressionDefinition<TSource, TResult> Null()
     {
         return new NullDefinition<TSource, TResult>();
+    }
+
+    public AggregateExpressionDefinition<TSource, TResult> IfNull(
+        params AggregateExpressionDefinition<TSource, TResult>[] arrays)
+    {
+        return new IfNullDefinition<TSource, TResult>(arrays);
     }
 
     /// <summary>
@@ -165,9 +186,14 @@ internal class AggregationOperatorsBuilder<TSource, TResult>
         return new MergeObjectsDefinition<TSource, TResult>(documents);
     }
 
-    public AggregateExpressionDefinition<BsonDocument, BsonDocument> Int32(int i)
+    public AggregateExpressionDefinition<TSource, TResult> Int32(int i)
     {
-        return new ConstantDefinition<BsonDocument, BsonDocument>(i);
+        return new ConstantDefinition<TSource, TResult>(i);
+    }
+
+    public AggregateExpressionDefinition<TSource, TResult> String(string str)
+    {
+        return new ConstantDefinition<TSource, TResult>(str);
     }
 }
 
@@ -177,5 +203,10 @@ internal class ProjectionBuilder<TSource, TResult>
         AggregateExpressionDefinition<TSource, TResult> value)
     {
         return new SingleFieldProjectionDefinition<TSource, TResult>(field, value);
+    }
+
+    public ProjectionDefinition<TSource, TResult> Fields(IEnumerable<ProjectionDefinition<TSource, TResult>> fields)
+    {
+        return new MultipleFieldProjectionDefinition<TSource, TResult>(fields);
     }
 }

@@ -34,7 +34,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
             switch (pathTerm.Type)
             {
                 case PathType.Attribute:
-                    if (current.AllAttributesByName.TryGetValue(pathTerm.Value, out ckTypeAttributeGraph))
+                    if (current.AllAttributesByName.TryGetValue(pathTerm.Value.ToPascalCase(), out ckTypeAttributeGraph))
                     {
                         switch (ckTypeAttributeGraph.ValueType)
                         {
@@ -92,7 +92,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
             {
                 case PathType.Attribute:
 
-                    if (current.AllAttributesByName.TryGetValue(pathTerm.Value, out ckTypeAttributeGraph))
+                    if (current.AllAttributesByName.TryGetValue(pathTerm.Value.ToPascalCase(), out ckTypeAttributeGraph))
                     {
                         switch (ckTypeAttributeGraph.ValueType)
                         {

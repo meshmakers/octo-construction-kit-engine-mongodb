@@ -156,7 +156,7 @@ internal class FieldFilterResolver<TEntity>
             if (isEnum)
             {
                 _fieldFilters.Add(Builders<TEntity>.Filter.AnyIn(resolvedAttributeName,
-                    resolvedValue != null ? (IEnumerable<object>)resolvedValue : Array.Empty<object>()));
+                    resolvedValue != null ? (IEnumerable<object>)resolvedValue : []));
             }
             else if (!string.IsNullOrWhiteSpace(resolvedAttributeName))
             {

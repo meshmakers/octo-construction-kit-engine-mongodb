@@ -1,3 +1,5 @@
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic.Builders;
+
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
@@ -128,7 +130,7 @@ internal static class BuildExtensions
     {
         Ensure.IsNotNull(aggregate, nameof(aggregate));
         return aggregate.AppendStage(
-            CustomPipelineBuilder.Lookup(
+            OctoPipelineStageBuilder.Lookup(
                 foreignCollection,
                 localField,
                 foreignField,
