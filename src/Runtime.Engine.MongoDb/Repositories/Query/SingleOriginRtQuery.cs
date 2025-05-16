@@ -80,7 +80,10 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
             var innerLocalFieldRtId = (FieldDefinition<RtAssociation, string>)"originRtId";
             var foreignFieldRtId = (FieldDefinition<RtAssociation>)"targetRtId";
             var targetCkTypeIdField = (FieldDefinition<RtAssociation, CkId<CkTypeId>>)"originCkTypeId";
-            var association = _ckTypeGraph.Associations.In.All.SingleOrDefault(a =>
+            // We ensure that the association role exists.
+            // Because navigation properties are centralized in the definition, all
+            // associations with the same role id have the same navigation property name.
+            var association = _ckTypeGraph.Associations.In.All.FirstOrDefault(a =>
                 a.TargetCkTypeId == roleIdDirectionPair.TargetCkTypeId && a.CkRoleId == roleIdDirectionPair.CkRoleId);
 
             switch (roleIdDirectionPair.Direction)
@@ -88,7 +91,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                 case GraphDirections.Outbound:
                     innerLocalFieldRtId = "targetRtId";
                     foreignFieldRtId = "originRtId";
-                    association = _ckTypeGraph.Associations.Out.All.SingleOrDefault(a =>
+                    association = _ckTypeGraph.Associations.Out.All.FirstOrDefault(a =>
                         a.TargetCkTypeId == roleIdDirectionPair.TargetCkTypeId &&
                         a.CkRoleId == roleIdDirectionPair.CkRoleId);
                     targetCkTypeIdField = (FieldDefinition<RtAssociation, CkId<CkTypeId>>)"targetCkTypeId";
