@@ -70,7 +70,12 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
     }
 
 
-    public void AddAssociations(IEnumerable<NavigationPair> roleIdDirectionPairs)
+    /// <summary>
+    /// Adds navigation properties to the query.
+    /// </summary>
+    /// <param name="roleIdDirectionPairs"></param>
+    /// <exception cref="Exception"></exception>
+    public void AddNavigationProperties(IEnumerable<NavigationPair> roleIdDirectionPairs)
     {
         foreach (var roleIdDirectionPair in roleIdDirectionPairs)
         {

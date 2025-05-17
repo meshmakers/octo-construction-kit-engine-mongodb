@@ -498,7 +498,7 @@ internal class TenantRepository(
         query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
         query.AddGrouping(dataQueryOperation.FieldGroupBy);
         query.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
-        query.AddAssociations(roleIdDirectionPairs);
+        query.AddNavigationProperties(roleIdDirectionPairs);
 
         return await query.ExecuteQuery(session, skip, take);
     }
@@ -525,7 +525,7 @@ internal class TenantRepository(
         query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
         query.AddGrouping(dataQueryOperation.FieldGroupBy);
         query.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
-        query.AddAssociations(roleIdDirectionPairs);
+        query.AddNavigationProperties(roleIdDirectionPairs);
 
         return await query.ExecuteQuery(session, skip, take);
     }
