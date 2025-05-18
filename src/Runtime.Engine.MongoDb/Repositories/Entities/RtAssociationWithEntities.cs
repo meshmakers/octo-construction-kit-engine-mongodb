@@ -1,6 +1,7 @@
 using System.Diagnostics;
 
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
@@ -36,5 +37,5 @@ public class RtAssociationWithEntities : RtTypeWithAttributes
     /// <summary>
     /// Returns the list of entities that are part of the association
     /// </summary>
-    public List<RtEntity> Entities { get; set; } = new();
+    public List<RtEntityGraphItem> Entities { get; set; } = new();
 }

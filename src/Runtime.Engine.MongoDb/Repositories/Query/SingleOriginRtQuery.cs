@@ -79,121 +79,140 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
     {
         foreach (var roleIdDirectionPair in roleIdDirectionPairs)
         {
-            var targetCkTypeGraph = _ckCacheService.GetCkType(_tenantId, roleIdDirectionPair.TargetCkTypeId);
-            var targetCkTypeIds = targetCkTypeGraph.GetAllDerivedTypes(true);
+            CreateInnerNavigation(roleIdDirectionPair, _ckTypeGraph, _associationStageDefinitions);
+        }
+    }
 
-            var innerLocalFieldRtId = (FieldDefinition<RtAssociation, string>)"originRtId";
-            var foreignFieldRtId = (FieldDefinition<RtAssociation>)"targetRtId";
-            var targetCkTypeIdField = (FieldDefinition<RtAssociation, CkId<CkTypeId>>)"originCkTypeId";
-            // We ensure that the association role exists.
-            // Because navigation properties are centralized in the definition, all
-            // associations with the same role id have the same navigation property name.
-            var association = _ckTypeGraph.Associations.In.All.FirstOrDefault(a =>
-                a.TargetCkTypeId == roleIdDirectionPair.TargetCkTypeId && a.CkRoleId == roleIdDirectionPair.CkRoleId);
+    private void CreateInnerNavigation(NavigationPair roleIdDirectionPair, CkTypeGraph originCkTypeGraph, List<IPipelineStageDefinition> stageDefinitions)
+    {
+        var targetCkTypeGraph = _ckCacheService.GetCkType(_tenantId, roleIdDirectionPair.TargetCkTypeId);
+        var targetCkTypeIds = targetCkTypeGraph.GetAllDerivedTypes(true);
 
-            switch (roleIdDirectionPair.Direction)
-            {
-                case GraphDirections.Outbound:
-                    innerLocalFieldRtId = "targetRtId";
-                    foreignFieldRtId = "originRtId";
-                    association = _ckTypeGraph.Associations.Out.All.FirstOrDefault(a =>
-                        a.TargetCkTypeId == roleIdDirectionPair.TargetCkTypeId &&
-                        a.CkRoleId == roleIdDirectionPair.CkRoleId);
-                    targetCkTypeIdField = (FieldDefinition<RtAssociation, CkId<CkTypeId>>)"targetCkTypeId";
-                    break;
-                case GraphDirections.Inbound:
-                    break;
-                default:
-                    throw OperationFailedException.GraphDirectionUnsupported(roleIdDirectionPair.Direction);
-            }
+        // We need to have a list of all ck type ids we should handle as a candidate for the association target ck type id.
+        var baseCkTypeIds = targetCkTypeGraph.BaseTypes.Select(b => b.BaseCkTypeId).ToList();
+        baseCkTypeIds.Add(targetCkTypeGraph.CkTypeId);
 
-            if (association == null)
-            {
-                throw OperationFailedException.AssociationNotFound(roleIdDirectionPair.CkRoleId,
-                    roleIdDirectionPair.TargetCkTypeId);
-            }
+        var innerLocalFieldRtId = (FieldDefinition<RtAssociation, string>)"originRtId";
+        var foreignFieldRtId = (FieldDefinition<RtAssociation>)"targetRtId";
+        var targetCkTypeIdField = (FieldDefinition<RtAssociation, CkId<CkTypeId>>)"originCkTypeId";
+        // We ensure that the association role exists.
+        // Because navigation properties are centralized in the definition, all
+        // associations with the same role id have the same navigation property name.
+        var association = originCkTypeGraph.Associations.In.All.FirstOrDefault(a =>
+            baseCkTypeIds.Contains(a.TargetCkTypeId) && a.CkRoleId == roleIdDirectionPair.CkRoleId);
 
-            var lookupPipelineStages = new List<IPipelineStageDefinition>
-            {
-                PipelineStageDefinitionBuilder.Match(
-                    Builders<RtAssociation>.Filter.And(
-                        Builders<RtAssociation>.Filter.Eq(f => f.AssociationRoleId, roleIdDirectionPair.CkRoleId),
-                        Builders<RtAssociation>.Filter.In(targetCkTypeIdField, targetCkTypeIds)
-                    )
-                ),
-                PipelineStageDefinitionBuilder.Lookup<RtAssociation, RtEntity, RtEntity>(
-                    _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(targetCkTypeGraph)
+        switch (roleIdDirectionPair.Direction)
+        {
+            case GraphDirections.Outbound:
+                innerLocalFieldRtId = "targetRtId";
+                foreignFieldRtId = "originRtId";
+                association = originCkTypeGraph.Associations.Out.All.FirstOrDefault(a =>
+                    baseCkTypeIds.Contains(a.TargetCkTypeId) &&
+                    a.CkRoleId == roleIdDirectionPair.CkRoleId);
+                targetCkTypeIdField = (FieldDefinition<RtAssociation, CkId<CkTypeId>>)"targetCkTypeId";
+                break;
+            case GraphDirections.Inbound:
+                break;
+            default:
+                throw OperationFailedException.GraphDirectionUnsupported(roleIdDirectionPair.Direction);
+        }
+
+        if (association == null)
+        {
+            throw OperationFailedException.AssociationNotFound(roleIdDirectionPair.CkRoleId,
+                roleIdDirectionPair.TargetCkTypeId);
+        }
+
+        var innerLookupPipelineStages = new List<IPipelineStageDefinition>();
+        foreach (NavigationPair innerNavigationPair in roleIdDirectionPair.InnerNavigationPairs)
+        {
+            CreateInnerNavigation(innerNavigationPair, targetCkTypeGraph, innerLookupPipelineStages);
+        }
+        var innerLookupPipeline =
+            PipelineDefinition<TEntity, TEntity>.Create(innerLookupPipelineStages);
+        var lookupPipelineStages = new List<IPipelineStageDefinition>
+        {
+            PipelineStageDefinitionBuilder.Match(
+                Builders<RtAssociation>.Filter.And(
+                    Builders<RtAssociation>.Filter.Eq(f => f.AssociationRoleId, roleIdDirectionPair.CkRoleId),
+                    Builders<RtAssociation>.Filter.In(targetCkTypeIdField, targetCkTypeIds)
+                )
+            ),
+            OctoPipelineStageBuilder
+                .Lookup<RtAssociation, TEntity, TEntity, IEnumerable<TEntity>,
+                    RtEntityGraphItem>(
+                    _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(targetCkTypeGraph)
                         .GetMongoCollection(),
                     innerLocalFieldRtId,
                     "_id",
-                    (FieldDefinition<RtEntity>)"targets"),
-                PipelineStageDefinitionBuilder.Project<RtEntity, RtAssociationWithEntities>(
-                    new BsonDocument
-                    {
-                        { "_id", 1 }, { "associationRoleId", 1 }, { "attributes", 1 }, { "targets", 1 }
-                    }),
-            };
+                    (FieldDefinition<RtEntityGraphItem, IEnumerable<TEntity>>)"targets",
+                    innerLookupPipeline),
+            PipelineStageDefinitionBuilder.Project<TEntity, RtAssociationWithEntities>(
+                new BsonDocument
+                {
+                    { "_id", 1 }, { "associationRoleId", 1 }, { "attributes", 1 }, { "targets", 1 }
+                }),
+        };
 
-            var fieldTargetCkTypeId =
-                Tuple.Create<FieldDefinition<RtAssociationWithEntities, RtAssociationWithEntities>,
-                    AggregateExpressionDefinition<RtAssociationWithEntities, RtAssociationWithEntities>>(
-                    "targetCkTypeId",
-                    OctoBuilder<RtAssociationWithEntities, RtAssociationWithEntities>.AggregateOperators.String(
-                        roleIdDirectionPair.TargetCkTypeId
-                            .SemanticVersionedFullName));
-            var fieldNavigationPropertyName =
-                Tuple.Create<FieldDefinition<RtAssociationWithEntities, RtAssociationWithEntities>,
-                    AggregateExpressionDefinition<RtAssociationWithEntities, RtAssociationWithEntities>>(
-                    "navigationPropertyName",
-                    OctoBuilder<RtAssociationWithEntities, RtAssociationWithEntities>.AggregateOperators.String(
-                        association.NavigationPropertyName));
+        var fieldTargetCkTypeId =
+            Tuple.Create<FieldDefinition<RtAssociationWithEntities, RtAssociationWithEntities>,
+                AggregateExpressionDefinition<RtAssociationWithEntities, RtAssociationWithEntities>>(
+                "targetCkTypeId",
+                OctoBuilder<RtAssociationWithEntities, RtAssociationWithEntities>.AggregateOperators.String(
+                    roleIdDirectionPair.TargetCkTypeId
+                        .SemanticVersionedFullName));
+        var fieldNavigationPropertyName =
+            Tuple.Create<FieldDefinition<RtAssociationWithEntities, RtAssociationWithEntities>,
+                AggregateExpressionDefinition<RtAssociationWithEntities, RtAssociationWithEntities>>(
+                "navigationPropertyName",
+                OctoBuilder<RtAssociationWithEntities, RtAssociationWithEntities>.AggregateOperators.String(
+                    association.NavigationPropertyName));
 
-            lookupPipelineStages.Add(
-                OctoPipelineStageBuilder.AddFields<RtAssociationWithEntities, RtAssociationWithEntities>(
-                    OctoBuilder<RtAssociationWithEntities, RtAssociationWithEntities>.Fields.SetMultiple(
-                        fieldTargetCkTypeId, fieldNavigationPropertyName)));
+        lookupPipelineStages.Add(
+            OctoPipelineStageBuilder.AddFields<RtAssociationWithEntities, RtAssociationWithEntities>(
+                OctoBuilder<RtAssociationWithEntities, RtAssociationWithEntities>.Fields.SetMultiple(
+                    fieldTargetCkTypeId, fieldNavigationPropertyName)));
 
-            var lookupPipeline =
-                PipelineDefinition<RtAssociation, RtAssociationWithEntities>.Create(lookupPipelineStages);
+        var lookupPipeline =
+            PipelineDefinition<RtAssociation, RtAssociationWithEntities>.Create(lookupPipelineStages);
 
-            _associationStageDefinitions.Add(
-                OctoPipelineStageBuilder
-                    .Lookup<TEntity, RtAssociation, RtAssociationWithEntities, IEnumerable<RtAssociationWithEntities>,
-                        RtAssociationWithEntities>(
-                        _mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations.GetMongoCollection(),
-                        "_id",
-                        foreignFieldRtId,
-                        (FieldDefinition<RtAssociationWithEntities, IEnumerable<RtAssociationWithEntities>>)
-                        "__associations",
-                        lookupPipeline));
+        stageDefinitions.Add(
+            OctoPipelineStageBuilder
+                .Lookup<TEntity, RtAssociation, RtAssociationWithEntities, IEnumerable<RtAssociationWithEntities>,
+                    RtAssociationWithEntities>(
+                    _mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations.GetMongoCollection(),
+                    "_id",
+                    foreignFieldRtId,
+                    (FieldDefinition<RtAssociationWithEntities, IEnumerable<RtAssociationWithEntities>>)
+                    "__associations",
+                    lookupPipeline));
 
-            _associationStageDefinitions.Add(PipelineStageDefinitionBuilder.Project(
-                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.Fields(
-                [
-                    OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("_id",
-                        OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
-                    OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("ckTypeId",
-                        OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
-                    OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("attributes",
-                        OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
-                    OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtChangedDateTime",
-                        OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
-                    OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtCreationDateTime",
-                        OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
-                    OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtVersion",
-                        OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
-                    OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtWellKnownName",
-                        OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
-                    OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("_associations",
-                        OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.ConcatArrays(
-                            OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.IfNull(
-                                OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Field(
-                                    "$_associations"),
-                                OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.EmptyArray()),
-                            OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Field("$__associations")
-                        )),
-                ])));
-        }
+        stageDefinitions.Add(PipelineStageDefinitionBuilder.Project(
+            OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.Fields(
+            [
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("_id",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("ckTypeId",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("attributes",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtChangedDateTime",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtCreationDateTime",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtVersion",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtWellKnownName",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("_associations",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.ConcatArrays(
+                        OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.IfNull(
+                            OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Field(
+                                "$_associations"),
+                            OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.EmptyArray()),
+                        OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Field("$__associations")
+                    )),
+            ])));
     }
 
     protected override void AddPreFieldFilters(List<FilterDefinition<TEntity>> filters)
