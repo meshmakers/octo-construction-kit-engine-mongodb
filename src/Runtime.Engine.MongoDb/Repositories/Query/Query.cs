@@ -7,9 +7,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, new()
 {
     private readonly List<FilterDefinition<TEntity>> _attributeSearchFilter;
-
     private readonly List<SortDefinition<TEntity>> _sortDefinitions;
-
     private FilterDefinition<TEntity>? _textFilter;
 
     protected internal Query(FieldFilterResolver<TEntity> fieldFilterResolver, string language = "en")
@@ -95,20 +93,20 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
 
         foreach (var attributeName in attributeNameList)
         {
-            if (FieldFilterResolver.IsAttributePathValid(attributeName))
+            if (_fieldFilterResolver.IsAttributePathValid(attributeName))
             {
-                var resolvedAttributeName = FieldFilterResolver.ResolveAttributePath(attributeName);
-                var resolvedValue = FieldFilterResolver.ResolveSearchAttributeValue(attributeName,
+                var resolvedAttributeName = _fieldFilterResolver.ResolveAttributePath(attributeName);
+                var resolvedValue = _fieldFilterResolver.ResolveSearchAttributeValue(attributeName,
                     attributeSearchFilter.SearchTerm, out var isEnum);
 
                 if (isEnum)
                 {
                     _attributeSearchFilter.Add(Builders<TEntity>.Filter.AnyIn(resolvedAttributeName,
-                        resolvedValue != null ? (IEnumerable<object>)resolvedValue : Array.Empty<object>()));
+                        resolvedValue != null ? (IEnumerable<object>)resolvedValue : []));
                 }
                 else if (!string.IsNullOrWhiteSpace(resolvedAttributeName))
                 {
-                    _attributeSearchFilter.Add(FieldFilterResolver.CreateScalarFilter(resolvedAttributeName, FieldFilterOperator.Like,
+                    _attributeSearchFilter.Add(_fieldFilterResolver.CreateScalarFilter(resolvedAttributeName, FieldFilterOperator.Like,
                         resolvedValue));
                 }
                 else
@@ -118,7 +116,7 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
             }
             else
             {
-                throw OperationFailedException.AttributeDoesNotExist(attributeName, FieldFilterResolver.GetEntityName());
+                throw OperationFailedException.AttributeDoesNotExist(attributeName, _fieldFilterResolver.GetEntityName());
             }
         }
     }
@@ -138,12 +136,12 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
 
         foreach (var item in sortOrderList)
         {
-            if (!FieldFilterResolver.IsAttributePathValid(item.AttributePath) && item.AttributePath != Constants.IdField)
+            if (!_fieldFilterResolver.IsAttributePathValid(item.AttributePath) && item.AttributePath != Constants.IdField)
             {
-                throw InvalidAttributeException.SortDefinitionContainsInvalidAttribute(item.AttributePath, FieldFilterResolver.GetEntityName());
+                throw InvalidAttributeException.SortDefinitionContainsInvalidAttribute(item.AttributePath, _fieldFilterResolver.GetEntityName());
             }
 
-            var resolvedAttributeName = FieldFilterResolver.ResolveAttributePath(item.AttributePath);
+            var resolvedAttributeName = _fieldFilterResolver.ResolveAttributePath(item.AttributePath);
 
             switch (item.SortOrder)
             {

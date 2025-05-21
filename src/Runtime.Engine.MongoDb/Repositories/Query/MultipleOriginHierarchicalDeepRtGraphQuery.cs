@@ -58,7 +58,7 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
 
         foreach (var geospatialFilter in geospatialFilters)
         {
-            var resolvedAttributeName = FieldFilterResolver.ResolveAttributePath(geospatialFilter.AttributeName);
+            var resolvedAttributeName = _fieldFilterResolver.ResolveAttributePath(geospatialFilter.AttributeName);
             if (string.IsNullOrWhiteSpace(resolvedAttributeName))
             {
                 throw OperationFailedException.AttributeNameResolutionFailed(geospatialFilter.AttributeName);

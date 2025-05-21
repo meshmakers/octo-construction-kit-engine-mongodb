@@ -6,17 +6,17 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 internal class Engine<TEntity> where TEntity : class, new()
 {
     private readonly List<FilterDefinition<TEntity>> _idFilters;
-    protected readonly FieldFilterResolver<TEntity> FieldFilterResolver;
+    protected readonly FieldFilterResolver<TEntity> _fieldFilterResolver;
 
     protected Engine(FieldFilterResolver<TEntity> fieldFilterResolver)
     {
         _idFilters = new List<FilterDefinition<TEntity>>();
-        FieldFilterResolver = fieldFilterResolver;
+        _fieldFilterResolver = fieldFilterResolver;
     }
 
     internal void AddFieldFilters(ICollection<FieldFilter>? fieldFilters)
     {
-        FieldFilterResolver.AddFieldFilters(fieldFilters);
+        _fieldFilterResolver.AddFieldFilters(fieldFilters);
     }
 
     protected virtual void AddPreFieldFilters(List<FilterDefinition<TEntity>> filters)
@@ -33,16 +33,16 @@ internal class Engine<TEntity> where TEntity : class, new()
     {
         var filters = new List<FilterDefinition<TEntity>>();
 
-        // Allow to add filter definitions before field filters are applied
+        // Allow adding filter definitions before field filters are applied
         AddPreFieldFilters(filters);
 
         // Add filter for id and fields here
-        filters.AddRange(_idFilters.Concat(FieldFilterResolver.FilterDefinitions));
+        filters.AddRange(_idFilters.Concat(_fieldFilterResolver.FilterDefinitions));
 
-        // Allow to add filter definitions after field filters are applied
+        // Allow adding filter definitions after field filters are applied
         AddPostFieldFilters(filters);
 
-        // if filter constraints exist add them to the pipeline.
+        // if filter constraints exist, add them to the pipeline.
         if (filters.Any())
         {
             if (filters.Count == 1)

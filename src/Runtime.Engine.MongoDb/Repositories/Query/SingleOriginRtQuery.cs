@@ -53,7 +53,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
 
         foreach (var geospatialFilter in geospatialFilters)
         {
-            var resolvedAttributeName = FieldFilterResolver.ResolveAttributePath(geospatialFilter.AttributeName);
+            var resolvedAttributeName = _fieldFilterResolver.ResolveAttributePath(geospatialFilter.AttributeName);
             if (string.IsNullOrWhiteSpace(resolvedAttributeName))
             {
                 throw OperationFailedException.AttributeNameResolutionFailed(geospatialFilter.AttributeName);
@@ -83,7 +83,8 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         }
     }
 
-    private void CreateInnerNavigation(NavigationPair roleIdDirectionPair, CkTypeGraph originCkTypeGraph, List<IPipelineStageDefinition> stageDefinitions)
+    private void CreateInnerNavigation(NavigationPair roleIdDirectionPair, CkTypeGraph originCkTypeGraph,
+        List<IPipelineStageDefinition> stageDefinitions)
     {
         var targetCkTypeGraph = _ckCacheService.GetCkType(_tenantId, roleIdDirectionPair.TargetCkTypeId);
         var targetCkTypeIds = targetCkTypeGraph.GetAllDerivedTypes(true);
@@ -124,12 +125,31 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         }
 
         var innerLookupPipelineStages = new List<IPipelineStageDefinition>();
+
+        var targetCkTypeFilter = new List<FilterDefinition<RtEntityGraphItem>>();
+        var fieldFilterResolver =
+            new RtEntityFieldFilterResolver<RtEntityGraphItem>(_ckCacheService, _tenantId, targetCkTypeGraph);
+        targetCkTypeFilter.AddRange(fieldFilterResolver.FilterDefinitions);
+        if (targetCkTypeFilter.Any())
+        {
+            var filterDefinitions = targetCkTypeFilter.Count == 1
+                ? targetCkTypeFilter.First()
+                : Builders<RtEntityGraphItem>.Filter.And(targetCkTypeFilter);
+
+            if (filterDefinitions != null)
+            {
+                innerLookupPipelineStages.Add(PipelineStageDefinitionBuilder.Match(filterDefinitions));
+            }
+        }
+
         foreach (NavigationPair innerNavigationPair in roleIdDirectionPair.InnerNavigationPairs)
         {
             CreateInnerNavigation(innerNavigationPair, targetCkTypeGraph, innerLookupPipelineStages);
         }
+
         var innerLookupPipeline =
             PipelineDefinition<TEntity, TEntity>.Create(innerLookupPipelineStages);
+
         var lookupPipelineStages = new List<IPipelineStageDefinition>
         {
             PipelineStageDefinitionBuilder.Match(
@@ -148,10 +168,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                     (FieldDefinition<RtEntityGraphItem, IEnumerable<TEntity>>)"targets",
                     innerLookupPipeline),
             PipelineStageDefinitionBuilder.Project<TEntity, RtAssociationWithEntities>(
-                new BsonDocument
-                {
-                    { "_id", 1 }, { "associationRoleId", 1 }, { "attributes", 1 }, { "targets", 1 }
-                }),
+                new BsonDocument { { "_id", 1 }, { "associationRoleId", 1 }, { "attributes", 1 }, { "targets", 1 } }),
         };
 
         var fieldTargetCkTypeId =
