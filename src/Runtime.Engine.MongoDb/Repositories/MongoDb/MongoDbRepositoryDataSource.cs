@@ -273,6 +273,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 continue;
             }
 
+            int i = 0;
             foreach (var index in ckType.Indexes)
             {
                 if (index.IndexType == IndexTypes.None)
@@ -280,7 +281,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     continue;
                 }
 
-                var newName = ckType.CkTypeId.GetCkTypeCollectionName();
+                var newName = ckType.CkTypeId.GetCkTypeCollectionName() + "_" + i;
 
                 switch (index.IndexType)
                 {
