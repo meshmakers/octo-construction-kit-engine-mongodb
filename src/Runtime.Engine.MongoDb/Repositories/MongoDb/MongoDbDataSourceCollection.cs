@@ -106,7 +106,22 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         foreach (var i in await r.ToListAsync())
         {
             var indexName = i["name"].ToString();
-            if (!string.IsNullOrEmpty(indexName) && indexName.StartsWith(name))
+            if (!string.IsNullOrEmpty(indexName) && string.Compare(indexName, name, StringComparison.InvariantCultureIgnoreCase) != -1)
+            {
+                await _documentCollection.Indexes.DropOneAsync(indexName);
+            }
+        }
+    }
+
+    public async Task DropAllIndexesAsync(string prefix)
+    {
+        ArgumentValidation.ValidateString(nameof(prefix), prefix);
+
+        var r = await _documentCollection.Indexes.ListAsync();
+        foreach (var i in await r.ToListAsync())
+        {
+            var indexName = i["name"].ToString();
+            if (!string.IsNullOrEmpty(indexName) && indexName.StartsWith(prefix))
             {
                 await _documentCollection.Indexes.DropOneAsync(indexName);
             }
