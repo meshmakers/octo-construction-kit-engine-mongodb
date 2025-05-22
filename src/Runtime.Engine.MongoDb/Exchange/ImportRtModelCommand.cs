@@ -319,6 +319,7 @@ internal class ImportRtModelCommand(
                     continue;
                 }
                 var value = ckEnumGraph.Values.FirstOrDefault(x => x.Key.Equals(modelAttribute.Value) ||
+                                                                   x.Key.ToString().Equals(modelAttribute.Value) ||
                                                                    String.Compare(x.Name,
                                                                        modelAttribute.Value?.ToString(),
                                                                        StringComparison.OrdinalIgnoreCase) == 0);
