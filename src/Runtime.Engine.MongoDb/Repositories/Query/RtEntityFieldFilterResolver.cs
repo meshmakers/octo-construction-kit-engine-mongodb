@@ -25,11 +25,11 @@ internal class RtEntityFieldFilterResolver<TEntity>(
             return true;
         }
 
-        return attributePath == nameof(RtEntity.RtId) ||
-               attributePath == nameof(RtEntity.RtCreationDateTime) ||
-               attributePath == nameof(RtEntity.RtChangedDateTime) ||
-               attributePath == nameof(RtEntity.RtVersion) ||
-               attributePath == nameof(RtEntity.RtWellKnownName);
+        return attributePath.ToPascalCase() == nameof(RtEntity.RtId) ||
+               attributePath.ToPascalCase() == nameof(RtEntity.RtCreationDateTime) ||
+               attributePath.ToPascalCase() == nameof(RtEntity.RtChangedDateTime) ||
+               attributePath.ToPascalCase() == nameof(RtEntity.RtVersion) ||
+               attributePath.ToPascalCase() == nameof(RtEntity.RtWellKnownName);
     }
     
     internal override string? ResolveAttributePath(string attributePath)
@@ -40,7 +40,7 @@ internal class RtEntityFieldFilterResolver<TEntity>(
             return r;
         }
 
-        return attributePath switch
+        return attributePath.ToPascalCase() switch
         {
             nameof(RtEntity.RtId) => Constants.IdField,
             nameof(RtEntity.RtCreationDateTime) => nameof(RtEntity.RtCreationDateTime).ToCamelCase(),
