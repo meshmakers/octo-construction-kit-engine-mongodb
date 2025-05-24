@@ -168,6 +168,9 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                     "_id",
                     (FieldDefinition<RtEntityGraphItem, IEnumerable<TEntity>>)"targets",
                     innerLookupPipeline),
+            PipelineStageDefinitionBuilder.Match(
+                Builders<RtEntityGraphItem>.Filter.SizeGt("targets", 0)
+                ),
             PipelineStageDefinitionBuilder.Project<TEntity, RtAssociationWithEntities>(
                 new BsonDocument { { "_id", 1 }, { "associationRoleId", 1 }, { "attributes", 1 }, { "targets", 1 } }),
         };
@@ -204,6 +207,10 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                     (FieldDefinition<RtAssociationWithEntities, IEnumerable<RtAssociationWithEntities>>)
                     "__associations",
                     lookupPipeline));
+
+        stageDefinitions.Add(PipelineStageDefinitionBuilder.Match(
+            Builders<RtAssociationWithEntities>.Filter.SizeGt("__associations", 0)
+        ));
 
         stageDefinitions.Add(PipelineStageDefinitionBuilder.Project(
             OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.Fields(
