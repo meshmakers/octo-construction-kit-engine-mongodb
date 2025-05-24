@@ -175,4 +175,9 @@ public class OperationFailedException : PersistenceException
     {
         return new OperationFailedException($"Association '{ckRoleId}' not found for target type '{targetCkTypeId}'.");
     }
+
+    public static Exception CannotConvertToObjectId(string attributePath)
+    {
+        return new OperationFailedException($"Cannot convert attribute path '{attributePath}' to ObjectId.");
+    }
 }

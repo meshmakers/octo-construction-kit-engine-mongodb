@@ -492,19 +492,39 @@ internal class TenantRepository(
         {
             foreach (FieldFilter fieldFilter in dataQueryOperation.FieldFilters.ToArray())
             {
-                var x = RtPathEvaluator.TokenizeAndGetNavigationPair(ckCacheService, TenantId, ckTypeId,
+                var candidate = RtPathEvaluator.TokenizeAndGetNavigationPair(ckCacheService, TenantId, ckTypeId,
                     fieldFilter.AttributePath);
-                if (x != null)
+                if (candidate != null)
                 {
                     var navigationPair = roleIdDirectionPairs.FirstOrDefault(y =>
-                        y.CkRoleId == x.CkRoleId && y.TargetCkTypeId == x.TargetCkTypeId);
+                        y.CkRoleId == candidate.CkRoleId && y.TargetCkTypeId == candidate.TargetCkTypeId);
                     if (navigationPair == null)
                     {
                        throw OperationFailedException.CreateWithMessage(
                             $"Cannot find navigation pair for {fieldFilter.AttributePath}.");
                     }
 
-                    navigationPair.AddFieldFilter(RtPathEvaluator.GetPath(x.SubPathTerms.First()), fieldFilter.Operator, fieldFilter.ComparisonValue);
+                    while (navigationPair.SubPathTerms.First().First().Type == PathType.Navigation)
+                    {
+                       candidate = RtPathEvaluator.TokenizeAndGetNavigationPair(ckCacheService, TenantId, candidate.TargetCkTypeId,
+                            navigationPair.SubPathTerms.First());
+                       if (candidate == null)
+                       {
+                           throw OperationFailedException.CreateWithMessage(
+                               $"Cannot find navigation pair for {fieldFilter.AttributePath}.");
+                       }
+
+                       navigationPair = navigationPair.InnerNavigationPairs.FirstOrDefault(inp =>
+                           inp.CkRoleId == candidate.CkRoleId &&
+                           inp.TargetCkTypeId == candidate.TargetCkTypeId);
+                       if (navigationPair == null)
+                       {
+                           throw OperationFailedException.CreateWithMessage(
+                               $"Cannot find navigation pair for {fieldFilter.AttributePath}.");
+                       }
+                    }
+
+                    navigationPair.AddFieldFilter(RtPathEvaluator.GetPath(candidate.SubPathTerms.First()), fieldFilter.Operator, fieldFilter.ComparisonValue);
                     dataQueryOperation.FieldFilters.Remove(fieldFilter);
                 }
 

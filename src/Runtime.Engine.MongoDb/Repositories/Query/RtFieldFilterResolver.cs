@@ -151,7 +151,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
     internal override object? ResolveSearchAttributeValue(string attributeName, object? searchTerm, out bool isEnum)
     {
         if (searchTerm != null &&
-            ckTypeWithAttributesGraph.AllAttributesByName.TryGetValue(attributeName, out var ckTypeAttributeGraph))
+            ckTypeWithAttributesGraph.AllAttributesByName.TryGetValue(attributeName.ToPascalCase(), out var ckTypeAttributeGraph))
         {
             if (ckTypeAttributeGraph.ValueType == AttributeValueTypesDto.Enum &&
                 ckTypeAttributeGraph.ValueCkEnumId != null)
