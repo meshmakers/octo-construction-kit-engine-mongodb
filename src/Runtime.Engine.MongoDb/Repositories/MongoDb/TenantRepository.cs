@@ -23,11 +23,11 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 internal class TenantRepository(
     string tenantId,
     IMetricsContext metricsContext,
-    ICkCacheService ckCache,
+    ICkCacheService ckCacheService,
     IModelLoaderService modelLoaderService,
     IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
     IBulkRtMutation bulkRtMutation)
-    : RuntimeRepositoryBase(tenantId, ckCache, mongoDbRepositoryDataSource, bulkRtMutation), ITenantRepository
+    : RuntimeRepositoryBase(tenantId, ckCacheService, mongoDbRepositoryDataSource, bulkRtMutation), ITenantRepository
 {
     #region Transaction Handling
 
@@ -485,8 +485,32 @@ internal class TenantRepository(
     public override async Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByTypeAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, DataQueryOperation dataQueryOperation,
         IEnumerable<NavigationPair> roleIdDirectionPairs, int? skip = null, int? take = null)
     {
-
+        // We analyze FieldFilters and search for navigation properties, we assign them to the correct roleIdDirectionPairs
+        // and remove them from the FieldFilters
         var ckCacheService = await GetCkCacheServiceAsync();
+        if (dataQueryOperation.FieldFilters != null)
+        {
+            foreach (FieldFilter fieldFilter in dataQueryOperation.FieldFilters.ToArray())
+            {
+                var x = RtPathEvaluator.TokenizeAndGetNavigationPair(ckCacheService, TenantId, ckTypeId,
+                    fieldFilter.AttributePath);
+                if (x != null)
+                {
+                    var navigationPair = roleIdDirectionPairs.FirstOrDefault(y =>
+                        y.CkRoleId == x.CkRoleId && y.TargetCkTypeId == x.TargetCkTypeId);
+                    if (navigationPair == null)
+                    {
+                       throw OperationFailedException.CreateWithMessage(
+                            $"Cannot find navigation pair for {fieldFilter.AttributePath}.");
+                    }
+
+                    navigationPair.AddFieldFilter(RtPathEvaluator.GetPath(x.SubPathTerms.First()), fieldFilter.Operator, fieldFilter.ComparisonValue);
+                    dataQueryOperation.FieldFilters.Remove(fieldFilter);
+                }
+
+            }
+        }
+
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var query =
             new SingleOriginRtQuery<RtEntityGraphItem>(metricsContext, ckCacheService, TenantId, ckTypeGraph,

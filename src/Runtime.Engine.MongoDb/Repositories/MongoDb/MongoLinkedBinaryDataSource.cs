@@ -129,6 +129,7 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
             Metadata = meta
         };
 
+        await _bucket.DeleteAsync(binaryId.Value.ToObjectId(), cancellationToken);
         await _bucket.UploadFromStreamAsync(binaryId.Value.ToObjectId(), filename, stream, options, cancellationToken);
 
         return binaryId.Value;
