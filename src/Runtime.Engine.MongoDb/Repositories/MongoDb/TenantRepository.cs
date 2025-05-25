@@ -261,7 +261,8 @@ internal class TenantRepository(
     {
         var targetCkTypeId = RtEntityExtensions.GetCkTypeId<TTargetEntity>();
 
-        var result = await GetRtAssociationTargetsAsync<TTargetEntity>(session, [originRtId], originCkTypeId, roleId, graphDirection,
+        var result = await GetRtAssociationTargetsAsync<TTargetEntity>(session, [originRtId], originCkTypeId, roleId,
+            graphDirection,
             targetRtIds, targetCkTypeId, dataQueryOperation, skip, take);
 
         return result.First().Value;
@@ -299,7 +300,8 @@ internal class TenantRepository(
         TTargetEntity>(
         IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, CkId<CkTypeId> targetCkTypeId, DataQueryOperation dataQueryOperation,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, CkId<CkTypeId> targetCkTypeId,
+        DataQueryOperation dataQueryOperation,
         int? skip = null,
         int? take = null)
         where TTargetEntity : RtEntity, new()
@@ -482,53 +484,17 @@ internal class TenantRepository(
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public override async Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByTypeAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, DataQueryOperation dataQueryOperation,
-        IEnumerable<NavigationPair> roleIdDirectionPairs, int? skip = null, int? take = null)
+    public override async Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByTypeAsync(IOctoSession session,
+        CkId<CkTypeId> ckTypeId, DataQueryOperation dataQueryOperation,
+        ICollection<NavigationPair> navigationPairs, int? skip = null, int? take = null)
     {
         // We analyze FieldFilters and search for navigation properties, we assign them to the correct roleIdDirectionPairs
         // and remove them from the FieldFilters
         var ckCacheService = await GetCkCacheServiceAsync();
         if (dataQueryOperation.FieldFilters != null)
         {
-            foreach (FieldFilter fieldFilter in dataQueryOperation.FieldFilters.ToArray())
-            {
-                var candidate = RtPathEvaluator.TokenizeAndGetNavigationPair(ckCacheService, TenantId, ckTypeId,
-                    fieldFilter.AttributePath);
-                if (candidate != null)
-                {
-                    var navigationPair = roleIdDirectionPairs.FirstOrDefault(y =>
-                        y.CkRoleId == candidate.CkRoleId && y.TargetCkTypeId == candidate.TargetCkTypeId);
-                    if (navigationPair == null)
-                    {
-                       throw OperationFailedException.CreateWithMessage(
-                            $"Cannot find navigation pair for {fieldFilter.AttributePath}.");
-                    }
-
-                    while (navigationPair.SubPathTerms.First().First().Type == PathType.Navigation)
-                    {
-                       candidate = RtPathEvaluator.TokenizeAndGetNavigationPair(ckCacheService, TenantId, candidate.TargetCkTypeId,
-                            navigationPair.SubPathTerms.First());
-                       if (candidate == null)
-                       {
-                           throw OperationFailedException.CreateWithMessage(
-                               $"Cannot find navigation pair for {fieldFilter.AttributePath}.");
-                       }
-
-                       navigationPair = navigationPair.InnerNavigationPairs.FirstOrDefault(inp =>
-                           inp.CkRoleId == candidate.CkRoleId &&
-                           inp.TargetCkTypeId == candidate.TargetCkTypeId);
-                       if (navigationPair == null)
-                       {
-                           throw OperationFailedException.CreateWithMessage(
-                               $"Cannot find navigation pair for {fieldFilter.AttributePath}.");
-                       }
-                    }
-
-                    navigationPair.AddFieldFilter(RtPathEvaluator.GetPath(candidate.SubPathTerms.First()), fieldFilter.Operator, fieldFilter.ComparisonValue);
-                    dataQueryOperation.FieldFilters.Remove(fieldFilter);
-                }
-
-            }
+            RtPathEvaluator.MergeFieldFilterToNavigationPairs(ckCacheService, TenantId, ckTypeId,
+                navigationPairs.ToArray(), dataQueryOperation.FieldFilters);
         }
 
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
@@ -542,13 +508,15 @@ internal class TenantRepository(
         query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
         query.AddGrouping(dataQueryOperation.FieldGroupBy);
         query.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
-        query.AddNavigationProperties(roleIdDirectionPairs);
+        query.AddNavigationProperties(navigationPairs);
 
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public override async Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByIdAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, IReadOnlyList<OctoObjectId> rtIds,
-        DataQueryOperation dataQueryOperation, IEnumerable<NavigationPair> roleIdDirectionPairs, int? skip = null, int? take = null)
+    public override async Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByIdAsync(IOctoSession session,
+        CkId<CkTypeId> ckTypeId, IReadOnlyList<OctoObjectId> rtIds,
+        DataQueryOperation dataQueryOperation, IEnumerable<NavigationPair> roleIdDirectionPairs, int? skip = null,
+        int? take = null)
     {
         if (!rtIds.Any())
         {

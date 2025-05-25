@@ -180,4 +180,9 @@ public class OperationFailedException : PersistenceException
     {
         return new OperationFailedException($"Cannot convert attribute path '{attributePath}' to ObjectId.");
     }
+
+    public static Exception AttributePathInvalid(string attributePath)
+    {
+        return new OperationFailedException($"Attribute path '{attributePath}' is invalid, the last term needs to be of type 'Attribute'.");
+    }
 }

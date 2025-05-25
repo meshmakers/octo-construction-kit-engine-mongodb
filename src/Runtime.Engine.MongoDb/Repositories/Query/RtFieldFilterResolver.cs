@@ -23,11 +23,15 @@ internal abstract class RtFieldFilterResolver<TEntity>(
     : FieldFilterResolver<TEntity>
     where TEntity : RtTypeWithAttributes, new()
 {
+    protected readonly CkTypeWithAttributesGraph _ckTypeWithAttributesGraph = ckTypeWithAttributesGraph;
+    protected readonly ICkCacheService _ckCacheService = ckCacheService;
+    protected readonly string _tenantId = tenantId;
+
     internal override bool IsAttributePathValid(string attributePath)
     {
         var pathTerms = RtPathEvaluator.TokenizePath(attributePath);
 
-        CkTypeWithAttributesGraph current = ckTypeWithAttributesGraph;
+        CkTypeWithAttributesGraph current = _ckTypeWithAttributesGraph;
         CkTypeAttributeGraph? ckTypeAttributeGraph = null;
         foreach (var pathTerm in pathTerms)
         {
@@ -45,7 +49,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                                     throw OperationFailedException.CkRecordIdNotDefined(ckTypeAttributeGraph);
                                 }
 
-                                current = ckCacheService.GetCkRecord(tenantId, ckTypeAttributeGraph.ValueCkRecordId);
+                                current = _ckCacheService.GetCkRecord(_tenantId, ckTypeAttributeGraph.ValueCkRecordId);
                                 continue;
                             default:
                                 continue;
@@ -73,7 +77,6 @@ internal abstract class RtFieldFilterResolver<TEntity>(
             }
         }
 
-
         return true;
     }
 
@@ -84,7 +87,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
         StringBuilder sb = new();
         sb.Append(Constants.AttributesName);
 
-        CkTypeWithAttributesGraph current = ckTypeWithAttributesGraph;
+        CkTypeWithAttributesGraph current = _ckTypeWithAttributesGraph;
         CkTypeAttributeGraph? ckTypeAttributeGraph = null;
         foreach (var pathTerm in pathTerms)
         {
@@ -103,7 +106,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                                     throw OperationFailedException.CkRecordIdNotDefined(ckTypeAttributeGraph);
                                 }
 
-                                current = ckCacheService.GetCkRecord(tenantId, ckTypeAttributeGraph.ValueCkRecordId);
+                                current = _ckCacheService.GetCkRecord(_tenantId, ckTypeAttributeGraph.ValueCkRecordId);
                                 sb.Append(Constants.PathSeparator);
                                 sb.Append(pathTerm.Value.ToCamelCase());
                                 continue;
@@ -151,12 +154,12 @@ internal abstract class RtFieldFilterResolver<TEntity>(
     internal override object? ResolveSearchAttributeValue(string attributeName, object? searchTerm, out bool isEnum)
     {
         if (searchTerm != null &&
-            ckTypeWithAttributesGraph.AllAttributesByName.TryGetValue(attributeName.ToPascalCase(), out var ckTypeAttributeGraph))
+            _ckTypeWithAttributesGraph.AllAttributesByName.TryGetValue(attributeName.ToPascalCase(), out var ckTypeAttributeGraph))
         {
             if (ckTypeAttributeGraph.ValueType == AttributeValueTypesDto.Enum &&
                 ckTypeAttributeGraph.ValueCkEnumId != null)
             {
-                var ckEnumGraph = ckCacheService.GetCkEnum(tenantId, ckTypeAttributeGraph.ValueCkEnumId);
+                var ckEnumGraph = _ckCacheService.GetCkEnum(_tenantId, ckTypeAttributeGraph.ValueCkEnumId);
                 var searchTermString = searchTerm.ToString()?.Replace("_", "");
 
                 // Search for match in selection value
@@ -174,9 +177,9 @@ internal abstract class RtFieldFilterResolver<TEntity>(
             {
                 if (searchTerm is FieldFilterCriteria fieldFilterCriteria)
                 {
-                    var ckRecordGraph = ckCacheService.GetCkRecord(tenantId, ckTypeAttributeGraph.ValueCkRecordId);
+                    var ckRecordGraph = _ckCacheService.GetCkRecord(_tenantId, ckTypeAttributeGraph.ValueCkRecordId);
                     var rtRecordFieldFilterResolver =
-                        new RtRecordFieldFilterResolver<RtRecord>(ckCacheService, tenantId, ckRecordGraph);
+                        new RtRecordFieldFilterResolver<RtRecord>(_ckCacheService, _tenantId, ckRecordGraph);
                     rtRecordFieldFilterResolver.AddFieldFilters(fieldFilterCriteria.FieldFilters);
 
                     if (rtRecordFieldFilterResolver.FilterDefinitions.Any())

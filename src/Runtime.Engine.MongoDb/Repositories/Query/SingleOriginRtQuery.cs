@@ -128,7 +128,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
 
         var targetCkTypeFilter = new List<FilterDefinition<RtEntityGraphItem>>();
         var fieldFilterResolver =
-            new RtEntityFieldFilterResolver<RtEntityGraphItem>(_ckCacheService, _tenantId, targetCkTypeGraph);
+            new RtEntityGraphItemFieldFilterResolver(_ckCacheService, _tenantId, targetCkTypeGraph);
         fieldFilterResolver.AddFieldFilters(roleIdDirectionPair.FieldFilters);
         targetCkTypeFilter.AddRange(fieldFilterResolver.FilterDefinitions);
         if (targetCkTypeFilter.Any())
