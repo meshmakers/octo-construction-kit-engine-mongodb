@@ -259,50 +259,51 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
     public async Task UpdateIndexAsync(IOctoSession session)
     {
-        var ckTypes = (await CkTypes.FindManyAsync(session, t => t.IsCollectionRoot)).ToList();
-
-        foreach (var ckType in ckTypes)
-        {
-            var name = ckType.CkTypeId.GetCkTypeCollectionName();
-            var mapper = new RtEntityMongoDataSourceMapper<RtEntity>();
-            var collection = _repository.GetCollection(mapper, name);
-
-            // Drop old indexes that are named like the collection
-            await collection.DropIndexAsync(name);
-
-            if (ckType.Indexes == null || ckType.Indexes.Count == 0)
-            {
-                _logger.LogDebug("Dropping all indexes for '{CkTypeId}'", ckType.CkTypeId);
-                await collection.DropAllIndexesAsync(name);
-                continue;
-            }
-
-
-            int i = 0;
-            foreach (var index in ckType.Indexes)
-            {
-                if (index.IndexType == IndexTypes.None)
-                {
-                    continue;
-                }
-
-                var newName = ckType.CkTypeId.GetCkTypeCollectionName() + "_" + i;
-                await collection.DropIndexAsync(newName);
-
-                switch (index.IndexType)
-                {
-                    case IndexTypes.Ascending:
-                        await collection.CreateAscendingIndexAsync(newName,
-                            index.Fields.SelectMany(x => x.AttributeNames));
-                        break;
-                    case IndexTypes.Text:
-                        await collection.CreateTextIndexAsync(newName, index.Language ?? "en", index.Fields);
-                        break;
-                    default:
-                        throw OperationFailedException.IndexTypeNotImplemented(index.IndexType);
-                }
-            }
-        }
+        // var ckTypes = (await CkTypes.FindManyAsync(session, t => t.IsCollectionRoot)).ToList();
+        //
+        // foreach (var ckType in ckTypes)
+        // {
+        //     var name = ckType.CkTypeId.GetCkTypeCollectionName();
+        //     var mapper = new RtEntityMongoDataSourceMapper<RtEntity>();
+        //     var collection = _repository.GetCollection(mapper, name);
+        //
+        //     // Drop old indexes that are named like the collection
+        //     await collection.DropIndexAsync(name);
+        //
+        //     if (ckType.Indexes == null || ckType.Indexes.Count == 0)
+        //     {
+        //         _logger.LogDebug("Dropping all indexes for '{CkTypeId}'", ckType.CkTypeId);
+        //         await collection.DropAllIndexesAsync(name);
+        //         continue;
+        //     }
+        //
+        //
+        //     int i = 0;
+        //     foreach (var index in ckType.Indexes)
+        //     {
+        //         if (index.IndexType == IndexTypes.None)
+        //         {
+        //             continue;
+        //         }
+        //
+        //         var newName = ckType.CkTypeId.GetCkTypeCollectionName() + "_" + i;
+        //         await collection.DropIndexAsync(newName);
+        //
+        //         switch (index.IndexType)
+        //         {
+        //             case IndexTypes.Ascending:
+        //                 await collection.CreateAscendingIndexAsync(newName,
+        //                     index.Fields.SelectMany(x => x.AttributeNames));
+        //                 break;
+        //             case IndexTypes.Text:
+        //                 await collection.CreateTextIndexAsync(newName, index.Language ?? "en", index.Fields);
+        //                 break;
+        //             default:
+        //                 throw OperationFailedException.IndexTypeNotImplemented(index.IndexType);
+        //         }
+        //     }
+        // }
+        await Task.Yield();
     }
 
     public async Task<IOctoSession> CreateSessionAsync()
