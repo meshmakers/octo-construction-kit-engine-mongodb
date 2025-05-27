@@ -17,6 +17,6 @@ public interface IAdminRepositoryClient : IRepositoryClient
 
     Task<bool> IsRepositoryExistingAsync(string name);
 
-    Task CreateUser(string authenticationDatabaseName, string databaseName, string user,
+    Task CreateUser(string authenticationDatabaseName, string userDatabaseName, string user,
         string? password);
 }

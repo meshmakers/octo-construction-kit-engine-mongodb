@@ -1,6 +1,8 @@
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
+
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -10,7 +12,7 @@ using MongoDB.Driver;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
 /// <summary>
-///     Implementation of mongodb repository client for admin operations.
+///     Implementation of MongoDB repository client for admin operations.
 /// </summary>
 public class AdminMongoRepositoryClient(
     ILogger<AdminMongoRepositoryClient> logger,
@@ -37,8 +39,8 @@ public class AdminMongoRepositoryClient(
     {
         ArgumentValidation.ValidateString(nameof(name), name);
 
-        // MongoDB creates automatically databases. This method is
-        // existing to keep that in mind for other dbms
+        // MongoDB automatically creates databases. This method is
+        // existing to keep that in mind for other DBMS
         return Task.CompletedTask;
     }
 
@@ -57,12 +59,12 @@ public class AdminMongoRepositoryClient(
             StringComparison.InvariantCultureIgnoreCase) == 0);
     }
 
-    public async Task CreateUser(string authenticationDatabaseName, string databaseName,
+    public async Task CreateUser(string authenticationDatabaseName, string userDatabaseName,
         string user,
         string? password)
     {
         ArgumentValidation.ValidateString(nameof(authenticationDatabaseName), authenticationDatabaseName);
-        ArgumentValidation.ValidateString(nameof(databaseName), databaseName);
+        ArgumentValidation.ValidateString(nameof(userDatabaseName), userDatabaseName);
         ArgumentValidation.ValidateString(nameof(user), user);
         ArgumentValidation.ValidateString(nameof(password), password);
 
@@ -78,7 +80,7 @@ public class AdminMongoRepositoryClient(
             {
                 "roles", new BsonArray
                 {
-                    new BsonDocument { { "role", "readWrite" }, { "db", databaseName } }
+                    new BsonDocument { { "role", "readWrite" }, { "db", userDatabaseName } }
                 }
             }
         };
@@ -92,18 +94,26 @@ public class AdminMongoRepositoryClient(
 
         var systemConfiguration = _systemConfiguration.Value;
         if (systemConfiguration.DatabaseHost.Contains(","))
+        {
             urlBuilder.Servers =
                 systemConfiguration.DatabaseHost.Split(",").Select(x => new MongoServerAddress(x));
+        }
         else
+        {
             urlBuilder.Server = new MongoServerAddress(systemConfiguration.DatabaseHost);
+        }
 
-        if (!string.IsNullOrWhiteSpace(systemConfiguration.DatabaseUser)
-            && !string.IsNullOrWhiteSpace(systemConfiguration.DatabaseUserPassword))
+        if (!string.IsNullOrWhiteSpace(systemConfiguration.AdminUser)
+            && !string.IsNullOrWhiteSpace(systemConfiguration.AdminUserPassword))
         {
             urlBuilder.Username = systemConfiguration.AdminUser;
             urlBuilder.Password = systemConfiguration.AdminUserPassword;
             urlBuilder.DatabaseName = databaseName;
             urlBuilder.AuthenticationSource = systemConfiguration.AuthenticationDatabaseName;
+        }
+        else
+        {
+            throw TenantException.AdminCredentialsMissing();
         }
 
         urlBuilder.ApplicationName = $"OctoMesh-{databaseName}-{_instanceId}-{urlBuilder.Username}";

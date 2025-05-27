@@ -1,6 +1,9 @@
 using System.Diagnostics;
+
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+
 using Microsoft.Extensions.Logging;
+
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
@@ -16,7 +19,7 @@ internal abstract class OctoSession : IOctoSessionInternal
     internal OctoSession(ILogger<OctoSession> logger, IClientSessionHandle clientSessionHandle, string applicationName)
     {
         _logger = logger;
-        _logger.LogDebug("[{Id}] Create session", clientSessionHandle.ServerSession.Id);
+        _logger.LogDebug("[{ApplicationName}] Create session", applicationName);
         _isSessionActive = false;
         _isSessionStarted = false;
         _isDisposed = false;
@@ -42,25 +45,29 @@ internal abstract class OctoSession : IOctoSessionInternal
 
     public void StartTransaction()
     {
-        _logger.LogDebug("[{Id}] Start transaction", SessionHandle.ServerSession.Id);
+        _logger.LogDebug("[{ApplicationName}] Starting transaction", ApplicationName);
 
         if (_isDisposed)
         {
             throw SessionOperationException.SessionDisposed();
         }
+
         if (_isSessionStarted)
         {
             throw SessionOperationException.SessionAlreadyStarted();
         }
 
         SessionHandle.StartTransaction();
+        _logger.LogDebug("[{ApplicationName}, txnNumber {Id}] Transaction started", ApplicationName,
+            SessionHandle.WrappedCoreSession.CurrentTransaction.TransactionNumber);
         _isSessionStarted = true;
         _isSessionActive = true;
     }
 
     public async Task CommitTransactionAsync()
     {
-        _logger.LogDebug("[{Id}] Commit transaction", SessionHandle.ServerSession.Id);
+        _logger.LogDebug("[{ApplicationName}, txnNumber {Id}] Commit transaction", ApplicationName,
+            SessionHandle.WrappedCoreSession.CurrentTransaction.TransactionNumber);
 
         if (!_isSessionActive)
         {
@@ -73,7 +80,8 @@ internal abstract class OctoSession : IOctoSessionInternal
 
     public async Task AbortTransactionAsync()
     {
-        _logger.LogDebug("[{Id}] Abort transaction", SessionHandle.ServerSession.Id);
+        _logger.LogDebug("[{ApplicationName}, txnNumber {Id}] Abort transaction", ApplicationName,
+            SessionHandle.WrappedCoreSession.CurrentTransaction.TransactionNumber);
 
         if (!_isSessionActive)
         {

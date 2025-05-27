@@ -87,4 +87,9 @@ public class TenantException : PersistenceException
         return new TenantException(
             $"Cannot register type '{type}' because it is already registered. That indicates that BSON class maps where used before initialization of MongoDB client.");
     }
+
+    public static Exception AdminCredentialsMissing()
+    {
+        return new TenantException("Admin credentials are missing. Please provide admin user and password in the configuration.");
+    }
 }
