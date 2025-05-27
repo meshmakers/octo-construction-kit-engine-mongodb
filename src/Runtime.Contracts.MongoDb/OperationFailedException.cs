@@ -185,4 +185,10 @@ public class OperationFailedException : PersistenceException
     {
         return new OperationFailedException($"Attribute path '{attributePath}' is invalid, the last term needs to be of type 'Attribute'.");
     }
+
+    public static Exception CkTypeAttributePathNotFound(CkTypeWithAttributesGraph ckTypeWithAttributesGraph, string attributePath)
+    {
+        return new OperationFailedException(
+            $"CkTypeAttributePath '{attributePath}' not found in type '{ckTypeWithAttributesGraph}'.");
+    }
 }

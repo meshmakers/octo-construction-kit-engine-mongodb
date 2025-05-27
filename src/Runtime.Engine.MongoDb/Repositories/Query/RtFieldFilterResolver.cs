@@ -151,15 +151,53 @@ internal abstract class RtFieldFilterResolver<TEntity>(
         return sb.ToString();
     }
 
-    internal override object? ResolveSearchAttributeValue(string attributeName, object? searchTerm, out bool isEnum)
+    internal override object? ResolveSearchAttributeValue(string attributePath, object? searchTerm, out bool isEnum)
     {
-        if (searchTerm != null &&
-            _ckTypeWithAttributesGraph.AllAttributesByName.TryGetValue(attributeName.ToPascalCase(), out var ckTypeAttributeGraph))
+        // Search for the correct attribute in the CkTypeAttributesGraph
+        var pathTerms = RtPathEvaluator.TokenizePath(attributePath);
+        if (searchTerm != null)
         {
-            if (ckTypeAttributeGraph.ValueType == AttributeValueTypesDto.Enum &&
-                ckTypeAttributeGraph.ValueCkEnumId != null)
+            CkTypeAttributeGraph? currentTypeAttributeGraph = null;
+            var currentCkTypeWithAttributesGraph = _ckTypeWithAttributesGraph;
+            foreach (var pathTerm in pathTerms)
             {
-                var ckEnumGraph = _ckCacheService.GetCkEnum(_tenantId, ckTypeAttributeGraph.ValueCkEnumId);
+                switch (pathTerm.Type)
+                {
+                    // Currently, we only support attributes. Further path types need to be implemented
+                    case PathType.Attribute:
+                        if (currentCkTypeWithAttributesGraph.AllAttributesByName.TryGetValue(
+                                pathTerm.Value.ToPascalCase(), out var ckTypeAttributeGraph))
+                        {
+                            currentTypeAttributeGraph = ckTypeAttributeGraph;
+
+                            if (ckTypeAttributeGraph.ValueType == AttributeValueTypesDto.Record ||
+                                ckTypeAttributeGraph.ValueType == AttributeValueTypesDto.RecordArray)
+                            {
+                                if (ckTypeAttributeGraph.ValueCkRecordId == null)
+                                {
+                                    throw OperationFailedException.CkRecordIdNotDefined(ckTypeAttributeGraph);
+                                }
+
+                                currentCkTypeWithAttributesGraph =
+                                    _ckCacheService.GetCkRecord(_tenantId, ckTypeAttributeGraph.ValueCkRecordId);
+                            }
+                        }
+                        break;
+                    default:
+                        throw OperationFailedException.PathTypeNotSupported(pathTerm);
+                }
+
+            }
+
+            if (currentTypeAttributeGraph == null)
+            {
+                throw OperationFailedException.CkTypeAttributePathNotFound(_ckTypeWithAttributesGraph, attributePath);
+            }
+
+            if (currentTypeAttributeGraph.ValueType == AttributeValueTypesDto.Enum &&
+                currentTypeAttributeGraph.ValueCkEnumId != null)
+            {
+                var ckEnumGraph = _ckCacheService.GetCkEnum(_tenantId, currentTypeAttributeGraph.ValueCkEnumId);
                 var searchTermString = searchTerm.ToString()?.Replace("_", "");
 
                 // Search for match in selection value
@@ -172,12 +210,12 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                 }
             }
 
-            if (ckTypeAttributeGraph.ValueType == AttributeValueTypesDto.RecordArray &&
-                ckTypeAttributeGraph.ValueCkRecordId != null)
+            if (currentTypeAttributeGraph.ValueType == AttributeValueTypesDto.RecordArray &&
+                currentTypeAttributeGraph.ValueCkRecordId != null)
             {
                 if (searchTerm is FieldFilterCriteria fieldFilterCriteria)
                 {
-                    var ckRecordGraph = _ckCacheService.GetCkRecord(_tenantId, ckTypeAttributeGraph.ValueCkRecordId);
+                    var ckRecordGraph = _ckCacheService.GetCkRecord(_tenantId, currentTypeAttributeGraph.ValueCkRecordId);
                     var rtRecordFieldFilterResolver =
                         new RtRecordFieldFilterResolver<RtRecord>(_ckCacheService, _tenantId, ckRecordGraph);
                     rtRecordFieldFilterResolver.AddFieldFilters(fieldFilterCriteria.FieldFilters);
@@ -212,7 +250,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
 
                     if (!double.IsNaN(result))
                     {
-                        switch (ckTypeAttributeGraph.ValueType)
+                        switch (currentTypeAttributeGraph.ValueType)
                         {
                             case AttributeValueTypesDto.DateTime:
                                 isEnum = false;
@@ -226,7 +264,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                 }
             }
 
-            if (searchTerm is IEnumerable e)
+            if (searchTerm is IEnumerable e and not string)
             {
                 isEnum = false;
                 return e;
@@ -234,9 +272,9 @@ internal abstract class RtFieldFilterResolver<TEntity>(
 
             // Change to the type of attribute
             isEnum = false;
-            return AttributeValueConverter.ConvertAttributeValue(ckTypeAttributeGraph.ValueType, searchTerm);
+            return AttributeValueConverter.ConvertAttributeValue(currentTypeAttributeGraph.ValueType, searchTerm);
         }
 
-        return base.ResolveSearchAttributeValue(attributeName, searchTerm, out isEnum);
+        return base.ResolveSearchAttributeValue(attributePath, searchTerm, out isEnum);
     }
 }

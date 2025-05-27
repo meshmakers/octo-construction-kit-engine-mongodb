@@ -42,7 +42,7 @@ internal class FieldFilterResolver<TEntity>
         return memberMap.ElementName;
     }
     
-    internal virtual object? ResolveSearchAttributeValue(string attributeName, object? searchTerm, out bool isEnum)
+    internal virtual object? ResolveSearchAttributeValue(string attributePath, object? searchTerm, out bool isEnum)
     {
         if (searchTerm == null)
         {
@@ -50,7 +50,7 @@ internal class FieldFilterResolver<TEntity>
             return null;
         }
 
-        var propertyType = typeof(TEntity).GetProperty(attributeName)?.PropertyType;
+        var propertyType = typeof(TEntity).GetProperty(attributePath)?.PropertyType;
         if (propertyType != null && propertyType.IsEnum)
         {
             var nameCandidates = Enum.GetNames(propertyType)
