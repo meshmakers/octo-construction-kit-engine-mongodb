@@ -1,5 +1,4 @@
-﻿using System.Linq.Expressions;
-
+﻿
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 
 [Serializable]
@@ -31,4 +30,10 @@ public class EntityNotFoundException : OperationFailedException
     {
         return new EntityNotFoundException($"Operation failed because ID '{id}' is not existing for document type {typeName}.");
     }
+
+    public static Exception IdNotFound(string typeName, string id, Exception inner)
+    {
+        return new EntityNotFoundException($"Operation failed because ID '{id}' is not existing for document type {typeName}.", inner);
+    }
+
 }

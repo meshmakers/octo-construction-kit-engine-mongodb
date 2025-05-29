@@ -2,6 +2,7 @@ using System.Globalization;
 
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
@@ -48,9 +49,16 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
     public override async Task<IDownloadStreamHandler> DownloadBinaryAsync(IOctoSession session, OctoObjectId largeBinaryId,
         CancellationToken cancellationToken = new())
     {
-        var gridFsDownloadStream =
-            await _bucket.OpenDownloadStreamAsync(largeBinaryId.ToObjectId(), cancellationToken: cancellationToken);
-        return new DownloadStreamHandler(gridFsDownloadStream);
+        try
+        {
+            var gridFsDownloadStream =
+                await _bucket.OpenDownloadStreamAsync(largeBinaryId.ToObjectId(), cancellationToken: cancellationToken);
+            return new DownloadStreamHandler(gridFsDownloadStream);
+        }
+        catch (GridFSFileNotFoundException e)
+        {
+            throw EntityNotFoundException.IdNotFound(nameof(IDownloadStreamHandler), largeBinaryId.ToString(), e);
+        }
     }
 
     public override async Task<IBinaryInfo?> GetFileSystemBinaryAsync(IOctoSession session, OctoObjectId largeBinaryId,

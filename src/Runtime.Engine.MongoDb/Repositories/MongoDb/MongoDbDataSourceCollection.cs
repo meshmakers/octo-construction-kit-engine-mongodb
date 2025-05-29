@@ -1,13 +1,17 @@
 ﻿using System.Linq.Expressions;
+
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
+
 using MongoDB.Bson;
 using MongoDB.Driver;
+
 using NLog;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
@@ -59,11 +63,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
 
         await _documentCollection.Indexes.CreateOneAsync(new CreateIndexModel<TDocument>(
-            Builders<TDocument>.IndexKeys.Combine(indexKeys), new CreateIndexOptions
-            {
-                Background = true,
-                Name = name
-            }
+            Builders<TDocument>.IndexKeys.Combine(indexKeys), new CreateIndexOptions { Background = true, Name = name }
         ));
     }
 
@@ -77,24 +77,29 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
         var fieldList = fields.ToList();
         var indexKeys =
-            fieldList.SelectMany(f => f.AttributeNames).Select(f =>
+            fieldList.SelectMany(f => f.AttributeNames).Distinct().Select(f =>
                 Builders<TDocument>.IndexKeys.Text(Constants.AttributesName + "." + f.ToCamelCase()));
 
-        foreach (var field in fieldList)
-        foreach (var attributeName in field.AttributeNames)
+        HashSet<string> attributePaths = new();
+        foreach (var field in fieldList.OrderBy(f => f.Weight))
         {
-            weights.Add(Constants.AttributesName + "." + attributeName.ToCamelCase(),
-                field.Weight.GetValueOrDefault(1));
+            foreach (var attributePath in field.AttributeNames)
+            {
+                if (attributePaths.Contains(attributePath.ToLower()))
+                {
+                    continue; // Skip if already added
+                }
+
+                weights.Add(Constants.AttributesName + "." + attributePath.ToCamelCase(),
+                    field.Weight.GetValueOrDefault(1));
+                attributePaths.Add(attributePath.ToLower());
+            }
         }
 
         await _documentCollection.Indexes.CreateOneAsync(new CreateIndexModel<TDocument>(
             Builders<TDocument>.IndexKeys.Combine(
-                indexKeys), new CreateIndexOptions
-            {
-                Name = name,
-                Weights = new BsonDocument(weights),
-                DefaultLanguage = language
-            }
+                indexKeys),
+            new CreateIndexOptions { Name = name, Weights = new BsonDocument(weights), DefaultLanguage = language }
         ));
     }
 
@@ -106,11 +111,105 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         foreach (var i in await r.ToListAsync())
         {
             var indexName = i["name"].ToString();
-            if (!string.IsNullOrEmpty(indexName) && string.Compare(indexName, name, StringComparison.InvariantCultureIgnoreCase) != -1)
+            if (!string.IsNullOrEmpty(indexName) &&
+                string.Compare(indexName, name, StringComparison.InvariantCultureIgnoreCase) != -1)
             {
                 await _documentCollection.Indexes.DropOneAsync(indexName);
+                return;
             }
         }
+    }
+
+    public async Task<ICollection<CkTypeIndexWithName>> GetIndexListAsync(string prefix)
+    {
+        ArgumentValidation.ValidateString(nameof(prefix), prefix);
+
+        List<CkTypeIndexWithName> indexes = new();
+        var r = await _documentCollection.Indexes.ListAsync();
+        foreach (var doc in await r.ToListAsync())
+        {
+            var indexName = doc["name"].ToString();
+            if (!string.IsNullOrEmpty(indexName) && indexName.StartsWith(prefix))
+            {
+                var fieldsDict = new Dictionary<string, int>();
+                var indexType = IndexTypes.Ascending;
+                string? language = null;
+                if (doc.TryGetValue("key", out var keyElement) && keyElement is BsonDocument keyDoc)
+                {
+                    if (keyDoc.TryGetValue("_fts", out var valueElement))
+                    {
+                        if (valueElement.AsString == "text")
+                        {
+                            indexType = IndexTypes.Text;
+
+                            if (doc.TryGetValue("default_language", out var languageElement))
+                            {
+                                language = languageElement.AsString;
+                            }
+
+                            if (doc.TryGetValue("weights", out var keyElement2) &&
+                                keyElement2 is BsonDocument weightsDoc)
+                            {
+                                foreach (var elem in weightsDoc.Elements)
+                                {
+                                    var attributePath = elem.Name;
+                                    if (attributePath.StartsWith(Constants.AttributesName + "."))
+                                    {
+                                        attributePath = attributePath.Substring(Constants.AttributesName.Length + 1);
+                                    }
+
+                                    if (!fieldsDict.ContainsKey(attributePath))
+                                    {
+                                        fieldsDict[attributePath] = elem.Value.AsInt32; // Append weight info
+                                    }
+                                }
+                            }
+                        }
+                        else
+                        {
+                            throw OperationFailedException.IndexTypeNotSupported(valueElement.AsString);
+                        }
+                    }
+                    else
+                    {
+                        foreach (var elem in keyDoc.Elements)
+                        {
+                            var attributePath = elem.Name;
+                            if (attributePath.StartsWith(Constants.AttributesName + "."))
+                            {
+                                attributePath = attributePath.Substring(Constants.AttributesName.Length + 1);
+                            }
+
+                            fieldsDict[attributePath] = elem.Value.AsInt32; // "1", "-1", "text", etc.
+                        }
+                    }
+                }
+
+                List<CkIndexFields> fields = new();
+                if (indexType == IndexTypes.Ascending)
+                {
+                    fields.Add(new CkIndexFields { Weight = null, AttributeNames = fieldsDict.Keys });
+                }
+                else
+                {
+                    foreach (var grouping in fieldsDict.GroupBy(x => x.Value))
+                    {
+                        fields.Add(new CkIndexFields
+                        {
+                            Weight = grouping.Key, AttributeNames = grouping.Select(a => a.Key).ToList()
+                        });
+                    }
+                }
+
+                var index = new CkTypeIndexWithName
+                {
+                    Name = indexName, IndexType = indexType, Fields = fields, Language = language
+                };
+                indexes.Add(index);
+            }
+        }
+
+        return indexes;
     }
 
     public async Task DropAllIndexesAsync(string prefix)
@@ -135,18 +234,12 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         try
         {
             var cursor = await _documentCollection.FindAsync(((IOctoSessionInternal)session).SessionHandle,
-                filterDefinition, new FindOptions<TDocument>
-                {
-                    Sort = sort,
-                    Skip = skip,
-                    Limit = take
-                });
+                filterDefinition, new FindOptions<TDocument> { Sort = sort, Skip = skip, Limit = take });
             return await cursor.ToListAsync();
         }
         catch (Exception e)
         {
-            Console.WriteLine(e);
-            throw;
+            throw OperationFailedException.DatabaseOperationFailed(nameof(FindManyAsync), e);
         }
     }
 
@@ -235,7 +328,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             var id = _mongoDataSourceMapper.GetId(document);
             var filterDefinition = Builders<TDocument>.Filter.BuildIdFilter(id);
             var updateDefinition = _mongoDataSourceMapper.ApplyUpdate(document);
-            var result = await _documentCollection.UpdateOneAsync(((IOctoSessionInternal)session).SessionHandle, filterDefinition,
+            var result = await _documentCollection.UpdateOneAsync(((IOctoSessionInternal)session).SessionHandle,
+                filterDefinition,
                 updateDefinition);
             ThrowIfNotAcknowledged(result.IsAcknowledged);
             ThrowIfMatchedCountZero<TDocument>(result.MatchedCount, id);
@@ -248,7 +342,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         {
             var id = _mongoDataSourceMapper.GetId(document);
             var filterDefinition = Builders<TDocument>.Filter.BuildIdFilter(id);
-            var result = await _documentCollection.ReplaceOneAsync(((IOctoSessionInternal)session).SessionHandle, filterDefinition,
+            var result = await _documentCollection.ReplaceOneAsync(((IOctoSessionInternal)session).SessionHandle,
+                filterDefinition,
                 document);
             ThrowIfNotAcknowledged(result.IsAcknowledged);
             ThrowIfMatchedCountZero<TDocument>(result.MatchedCount, id);
@@ -272,7 +367,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
     }
 
-    public async Task ReplaceOneAsync(IOctoSession session, FilterDefinition<TDocument> filterDefinition, TDocument entity)
+    public async Task ReplaceOneAsync(IOctoSession session, FilterDefinition<TDocument> filterDefinition,
+        TDocument entity)
     {
         try
         {
@@ -395,7 +491,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         try
         {
             var filter = Builders<TDocument>.Filter.BuildIdFilter(id);
-            var deleteResult = await _documentCollection.DeleteOneAsync(((IOctoSessionInternal)session).SessionHandle, filter);
+            var deleteResult =
+                await _documentCollection.DeleteOneAsync(((IOctoSessionInternal)session).SessionHandle, filter);
             ThrowIfNotAcknowledged(deleteResult.IsAcknowledged);
             return deleteResult.DeletedCount > 0;
         }
@@ -410,7 +507,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         try
         {
             var filter = Builders<TDocument>.Filter.BuildIdFilter(id);
-            var deleteResult = await _documentCollection.DeleteOneAsync(((IOctoSessionInternal)session).SessionHandle, filter);
+            var deleteResult =
+                await _documentCollection.DeleteOneAsync(((IOctoSessionInternal)session).SessionHandle, filter);
             ThrowIfNotAcknowledged(deleteResult.IsAcknowledged);
             ThrowIfMatchedCountZero(deleteResult.DeletedCount, id);
         }

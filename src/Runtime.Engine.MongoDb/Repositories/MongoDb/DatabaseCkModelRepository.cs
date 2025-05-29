@@ -755,14 +755,14 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             var textSearchDefinitions = new List<CkTypeIndex>();
             if (ckTypeDto.Indexes != null)
             {
-                foreach (var entityIndexDto in ckTypeDto.Indexes)
+                foreach (var typeIndexDto in ckTypeDto.Indexes)
                 {
                     var typeIndex = new CkTypeIndex
                     {
-                        IndexType = (IndexTypes)entityIndexDto.IndexType,
-                        Language = entityIndexDto.Language,
-                        Fields = entityIndexDto.Fields
-                            .Select(x => new CkIndexFields { Weight = x.Weight, AttributeNames = x.AttributeNames })
+                        IndexType = (IndexTypes)typeIndexDto.IndexType,
+                        Language = typeIndexDto.Language,
+                        Fields = typeIndexDto.Fields
+                            .Select(x => new CkIndexFields { Weight = x.Weight, AttributeNames = x.AttributePaths })
                             .ToList()
                     };
 

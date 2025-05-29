@@ -7,4 +7,21 @@ public class CkTypeIndex
     public string? Language { get; set; }
 
     public ICollection<CkIndexFields> Fields { get; set; } = null!;
+
+    public bool CompareTo(CkTypeIndex? other)
+    {
+        if (other != null)
+        {
+            if (ReferenceEquals(this, other))
+            {
+                return true;
+            }
+
+            return IndexType == other.IndexType &&
+                   Language == other.Language &&
+                   Fields.All(f => other.Fields.Any(of => of.CompareTo(f)));
+        }
+
+        return false;
+    }
 }

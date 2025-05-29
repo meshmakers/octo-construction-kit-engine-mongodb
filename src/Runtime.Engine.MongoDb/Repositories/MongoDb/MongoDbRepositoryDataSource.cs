@@ -191,29 +191,6 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return await aggregateFluent.ToListAsync();
     }
 
-
-    public async Task<ICollection<CkTypeInfo>> GetCkTypeInfoAsync(IOctoSession session)
-    {
-        var aggregate = _ckTypes.Aggregate(session);
-
-        return await AggregateCkTypeInfo(aggregate).ToListAsync();
-    }
-
-    public async Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, CkId<CkTypeId> ckTypeId)
-    {
-        var ckEntity = await GetCkTypeAsync(session, ckTypeId);
-        return await GetCkTypeInfoAsync(session, ckEntity);
-    }
-
-    public async Task<CkTypeInfo> GetCkTypeInfoAsync(IOctoSession session, CkType ckType)
-    {
-        var filter = Builders<CkType>.Filter.BuildIdFilter(ckType.CkTypeId);
-
-        var aggregate = _ckTypes.Aggregate(session).Match(filter);
-
-        return await AggregateCkTypeInfo(aggregate).SingleOrDefaultAsync();
-    }
-
     public IMongoDbDataSourceCollection<CkModelId, CkModel> CkModels { get; }
     public IMongoDbDataSourceCollection<OctoObjectId, RtAssociation> RtMongoDbDataSourceAssociations { get; }
 
@@ -259,51 +236,178 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
     public async Task UpdateIndexAsync(IOctoSession session)
     {
-        // var ckTypes = (await CkTypes.FindManyAsync(session, t => t.IsCollectionRoot)).ToList();
-        //
-        // foreach (var ckType in ckTypes)
-        // {
-        //     var name = ckType.CkTypeId.GetCkTypeCollectionName();
-        //     var mapper = new RtEntityMongoDataSourceMapper<RtEntity>();
-        //     var collection = _repository.GetCollection(mapper, name);
-        //
-        //     // Drop old indexes that are named like the collection
-        //     await collection.DropIndexAsync(name);
-        //
-        //     if (ckType.Indexes == null || ckType.Indexes.Count == 0)
-        //     {
-        //         _logger.LogDebug("Dropping all indexes for '{CkTypeId}'", ckType.CkTypeId);
-        //         await collection.DropAllIndexesAsync(name);
-        //         continue;
-        //     }
-        //
-        //
-        //     int i = 0;
-        //     foreach (var index in ckType.Indexes)
-        //     {
-        //         if (index.IndexType == IndexTypes.None)
-        //         {
-        //             continue;
-        //         }
-        //
-        //         var newName = ckType.CkTypeId.GetCkTypeCollectionName() + "_" + i;
-        //         await collection.DropIndexAsync(newName);
-        //
-        //         switch (index.IndexType)
-        //         {
-        //             case IndexTypes.Ascending:
-        //                 await collection.CreateAscendingIndexAsync(newName,
-        //                     index.Fields.SelectMany(x => x.AttributeNames));
-        //                 break;
-        //             case IndexTypes.Text:
-        //                 await collection.CreateTextIndexAsync(newName, index.Language ?? "en", index.Fields);
-        //                 break;
-        //             default:
-        //                 throw OperationFailedException.IndexTypeNotImplemented(index.IndexType);
-        //         }
-        //     }
-        // }
-        await Task.Yield();
+        var aggregate = _ckTypes.Aggregate(session);
+        aggregate = aggregate.Match(x => x.IsCollectionRoot == true);
+
+        var ckTypeInfoList = await AggregateCkTypeInfo(aggregate).ToListAsync();
+        var ckTypeInfos = ckTypeInfoList.ToList();
+
+        foreach (var ckTypeInfo in ckTypeInfos)
+        {
+            await CreateIndexIfNotExists(ckTypeInfo);
+        }
+    }
+
+    private async Task CreateIndexIfNotExists(CkTypeInfo ckTypeInfo)
+    {
+        var name = ckTypeInfo.CkTypeId.GetCkTypeCollectionName();
+        var mapper = new RtEntityMongoDataSourceMapper<RtEntity>();
+        var collection = _repository.GetCollection(mapper, name);
+
+        _logger.LogDebug("Updating indexes for '{CkTypeId}'", ckTypeInfo.CkTypeId);
+
+        // We need to merge text indexes from inherited types, because MongoDB does not support more than one text index
+        Dictionary<CkType, List<CkTypeIndex>> regularIndices = new();
+        CkTypeIndex? textIndex = null;
+
+        // Analyse the base type first
+        if (ckTypeInfo.Indexes != null)
+        {
+            AnalyseIndex(ckTypeInfo, regularIndices, ref textIndex);
+        }
+
+        // Then analyze the inherited types, to merge text indexes
+        var inheritTypes = ckTypeInfo.Inheritances.ToDictionary(k => k.CkTypeId, v => v);
+        foreach (var ckInheritedTypeInfo in ckTypeInfo.InheritedTypes.OrderByDescending(x => x.BaseTypeDepthIndex))
+        {
+            if (!inheritTypes.TryGetValue(ckInheritedTypeInfo.InheritorCkTypeId, out var inheritCkTypeInfo))
+            {
+                _logger.LogWarning("Inherited type '{CkTypeId}' not found in inheritances for '{BaseCkTypeId}'",
+                    ckInheritedTypeInfo.InheritorCkTypeId, ckInheritedTypeInfo.BaseCkTypeId);
+                continue;
+            }
+
+            AnalyseIndex(inheritCkTypeInfo, regularIndices, ref textIndex);
+        }
+
+        // When there is no index defined, we drop all indexes for the collection in case
+        // an index was removed in the CK model.
+        if (regularIndices.Count == 0 && textIndex == null)
+        {
+            _logger.LogDebug("Dropping all indexes for '{CkTypeId}'", ckTypeInfo.CkTypeId);
+            await collection.DropAllIndexesAsync(name);
+            return;
+        }
+
+        // Now, we compare the existing indexes with the defined indexes in the CK model.
+        var repositoryIndices = await collection.GetIndexListAsync(name);
+
+        foreach (var keyValuePair in regularIndices)
+        {
+            int uniqueIndexNumber = 0;
+
+            foreach (CkTypeIndex ckTypeIndex in keyValuePair.Value)
+            {
+                await CreateIndexIfNotExists(keyValuePair.Key, ckTypeIndex, repositoryIndices, collection,
+                    uniqueIndexNumber);
+                uniqueIndexNumber++;
+            }
+
+            // Let's create the text index if it exists.
+            if (keyValuePair.Key == ckTypeInfo)
+            {
+                if (textIndex != null)
+                {
+                    await CreateIndexIfNotExists(keyValuePair.Key, textIndex, repositoryIndices, collection,
+                        uniqueIndexNumber);
+                }
+                else
+                {
+                    var repositoryTextIndex = repositoryIndices.SingleOrDefault(i => i.IndexType == IndexTypes.Text);
+                    if (repositoryTextIndex != null)
+                    {
+                        _logger.LogDebug("Dropping text index '{IndexName}' for '{CkTypeId}'",
+                            repositoryTextIndex.Name, keyValuePair.Key.CkTypeId);
+                        await collection.DropIndexAsync(repositoryTextIndex.Name);
+                    }
+                }
+            }
+        }
+    }
+
+    private async Task CreateIndexIfNotExists(CkType ckType, CkTypeIndex ckTypeIndex,
+        ICollection<CkTypeIndexWithName> repositoryIndices, IMongoDbDataSourceCollection<OctoObjectId, RtEntity> collection,
+        int uniqueIndexNumber)
+    {
+        if (ckTypeIndex.IndexType == IndexTypes.None)
+        {
+            return;
+        }
+
+        var indexName = ckType.CkTypeId.GetCkTypeCollectionName() + "_" + uniqueIndexNumber;
+
+        // Ensure that attributes are not multiple times in the index. If an attribute is defined multiple times, we remove duplicates.
+        HashSet<string> attributePaths = new();
+        foreach (CkIndexFields fields in ckTypeIndex.Fields.OrderBy(f=> f.Weight))
+        {
+            var fieldAttributePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string attributeName in fields.AttributeNames)
+            {
+                if (attributePaths.Add(attributeName))
+                {
+                    fieldAttributePaths.Add(attributeName);
+                }
+            }
+            fields.AttributeNames = fieldAttributePaths.ToList();
+        }
+
+        // We check if the index already exists in the repository, by comparing type, the fields' weight and the attribute paths
+        // The fields are compared case-insensitive, so we use the attribute names directly.
+        var repositoryIndex = repositoryIndices.SingleOrDefault(i =>
+            i.CompareTo(ckTypeIndex));
+
+        // If found, we skip the creation of the index.
+        if (repositoryIndex != null)
+        {
+            _logger.LogDebug("Index '{IndexName}' already exists for '{CkTypeId}', skipping creation",
+                indexName, ckType.CkTypeId);
+            return;
+        }
+
+        // If the index does not exist, we create it.
+        await collection.DropIndexAsync(indexName);
+
+        switch (ckTypeIndex.IndexType)
+        {
+            case IndexTypes.Ascending:
+                await collection.CreateAscendingIndexAsync(indexName,
+                    ckTypeIndex.Fields.SelectMany(x => x.AttributeNames));
+                break;
+            case IndexTypes.Text:
+                await collection.CreateTextIndexAsync(indexName, ckTypeIndex.Language ?? "en",
+                    ckTypeIndex.Fields);
+                break;
+            default:
+                throw OperationFailedException.IndexTypeNotSupported(ckTypeIndex.IndexType);
+        }
+    }
+
+    private void AnalyseIndex(CkType ckTypeInfo, Dictionary<CkType, List<CkTypeIndex>> regularIndices,
+        ref CkTypeIndex? textIndex)
+    {
+        if (ckTypeInfo.Indexes != null)
+        {
+            regularIndices.Add(ckTypeInfo,
+                ckTypeInfo.Indexes.Where(i => i.IndexType == IndexTypes.Ascending).ToList());
+
+            foreach (var index in ckTypeInfo.Indexes.Where(i => i.IndexType == IndexTypes.Text))
+            {
+                if (textIndex == null)
+                {
+                    textIndex = index;
+                    continue;
+                }
+
+                if (textIndex.Language != index.Language)
+                {
+                    _logger.LogWarning(
+                        "Text index for '{CkTypeId}' has different language '{Language}' than existing text index '{ExistingLanguage}'",
+                        ckTypeInfo.CkTypeId, index.Language, textIndex.Language);
+                }
+
+                textIndex.Fields = textIndex.Fields.Union(index.Fields).ToList();
+            }
+        }
     }
 
     public async Task<IOctoSession> CreateSessionAsync()
@@ -314,36 +418,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     private IAggregateFluent<CkTypeInfo> AggregateCkTypeInfo(IAggregateFluent<CkType> aggregate)
     {
         return aggregate.GraphLookup(_ckTypeInheritances.GetMongoCollection(),
-                x => x.BaseCkTypeId,
                 x => x.InheritorCkTypeId,
+                x => x.BaseCkTypeId,
                 x => x.CkTypeId,
-                (CkTypeInfo x) => x.BaseTypes, (CkBaseTypeInfo i) => i.BaseTypeDepthIndex)
-            .Lookup<CkTypeInfo, CkTypeInfo>(CkTypeAssociations.CollectionName,
-                "baseTypes.originCkTypeId",
-                "originCkTypeId",
-                "associations.out.inherited")
-            .Lookup<CkTypeInfo, CkTypeInfo>(CkTypeAssociations.CollectionName,
-                Constants.IdField,
-                "originCkTypeId",
-                "associations.out.owned")
-            .Lookup<CkTypeInfo, CkTypeInfo>(CkTypeAssociations.CollectionName,
-                "baseTypes.originCkTypeId",
-                "targetCkTypeId",
-                "associations.in.inherited")
-            .Lookup<CkTypeInfo, CkTypeInfo>(CkTypeAssociations.CollectionName,
-                Constants.IdField,
-                "targetCkTypeId",
-                "associations.in.owned");
-    }
-
-    private async Task<CkType> GetCkTypeAsync(IOctoSession session, CkId<CkTypeId> ckTypeId)
-    {
-        var ckEntity = await CkTypes.DocumentAsync(session, ckTypeId);
-        if (ckEntity == null)
-        {
-            throw InvalidCkTypeIdException.CkTypeIdNotFound(TenantId, ckTypeId);
-        }
-
-        return ckEntity;
+                (CkTypeInfo x) => x.InheritedTypes, (CkInheritedTypeInfo i) => i.BaseTypeDepthIndex)
+            .Lookup<CkTypeInfo, CkTypeInfo>(CkTypes.CollectionName,
+                "inheritedTypes.inheritorCkTypeId",
+                "_id",
+                "Inheritances");
     }
 }

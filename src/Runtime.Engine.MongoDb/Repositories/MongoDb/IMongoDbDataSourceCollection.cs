@@ -2,6 +2,8 @@ using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
+
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
@@ -17,6 +19,8 @@ public interface IMongoDbDataSourceCollection<TKey, TDocument> : IDataSourceColl
     Task CreateAscendingIndexAsync(string name, IEnumerable<string> fields);
     Task CreateTextIndexAsync(string name, string language, IEnumerable<CkIndexFields> fields);
     Task DropIndexAsync(string name);
+
+    Task<ICollection<CkTypeIndexWithName>> GetIndexListAsync(string prefix);
     Task DropAllIndexesAsync(string prefix);
 
     Task<ICollection<TDocument>> FindManyAsync(IOctoSession session, FilterDefinition<TDocument> filterDefinition,

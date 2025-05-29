@@ -75,9 +75,9 @@ public class OperationFailedException : PersistenceException
         return new OperationFailedException($"CkType '{ckTypeId}' has no defining collection root.");
     }
 
-    public static Exception IndexTypeNotImplemented(IndexTypes indexIndexType)
+    public static Exception IndexTypeNotSupported(IndexTypes indexIndexType)
     {
-        return new OperationFailedException($"Index type '{indexIndexType}' not implemented.");
+        return new OperationFailedException($"Index type '{indexIndexType}' not supported with MongoDB.");
     }
 
     public static Exception DatabaseOperationFailed(string operationName, Exception exception)
@@ -190,5 +190,11 @@ public class OperationFailedException : PersistenceException
     {
         return new OperationFailedException(
             $"CkTypeAttributePath '{attributePath}' not found in type '{ckTypeWithAttributesGraph}'.");
+    }
+
+    public static Exception IndexTypeNotSupported(string indexType)
+    {
+        return new OperationFailedException(
+            string.Format(CultureInfo.InvariantCulture, "Index type '{0}' is not supported.", indexType));
     }
 }

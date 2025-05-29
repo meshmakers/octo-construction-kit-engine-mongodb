@@ -371,23 +371,17 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         BsonClassMap.RegisterClassMap<CkTypeInfo>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
-            cm.MapIdMember(c => c.CkTypeId).SetIdGenerator(new NullIdChecker()).SetIsRequired(true);
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.TextSearchLanguages).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.BaseTypes).SetIsRequired(true);
-            cm.GetMemberMap(c => c.Associations).SetIsRequired(true);
-            cm.GetMemberMap(c => c.Attributes).SetIsRequired(true);
+            cm.GetMemberMap(c => c.Inheritances).SetIsRequired(true);
+            cm.GetMemberMap(c => c.InheritedTypes).SetIsRequired(true);
         });
 
-        BsonClassMap.RegisterClassMap<CkBaseTypeInfo>(cm =>
+        BsonClassMap.RegisterClassMap<CkInheritedTypeInfo>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
-            cm.MapIdMember(c => c.InheritanceId).SetIdGenerator(new OctoObjectIdGenerator());
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.OriginCkTypeId).SetIsRequired(true);
-            cm.GetMemberMap(c => c.TargetCkTypeId).SetIsRequired(true);
             cm.GetMemberMap(c => c.BaseTypeDepthIndex).SetIsRequired(true);
         });
 
