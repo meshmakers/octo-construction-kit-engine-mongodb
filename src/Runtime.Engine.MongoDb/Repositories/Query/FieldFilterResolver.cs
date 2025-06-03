@@ -1,3 +1,4 @@
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
@@ -227,6 +228,22 @@ internal class FieldFilterResolver<TEntity>
             {
                 array = stringValue.Split(',').ToArray<object>() ?? [];
             }
+        }
+        else if (value is OctoObjectId octoObjectId)
+        {
+            array = [octoObjectId];
+        }
+        else if (value is DateTime dateTime)
+        {
+            array = [dateTime];
+        }
+        else if (value is DateTimeOffset dateTimeOffset)
+        {
+            array = [dateTimeOffset.DateTime];
+        }
+        else if (value is IEnumerable<string> stringEnumerable)
+        {
+            array = stringEnumerable.ToArray<object>();
         }
         else if (value is IEnumerable<object> enumerable)
         {
