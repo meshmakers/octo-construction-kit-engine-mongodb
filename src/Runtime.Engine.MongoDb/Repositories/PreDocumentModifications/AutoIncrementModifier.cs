@@ -1,4 +1,6 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v1;
 using Meshmakers.Octo.Runtime.Contracts;
@@ -72,8 +74,7 @@ public class AutoIncrementModifier(
 
             foreach (var autoIncrementReference in typeIncrements)
             {
-                var ckTypeAttributeGraph = ckTypeGraph.AllAttributes[autoIncrementReference.AttributeName];
-                if (ckTypeAttributeGraph == null)
+                if (!ckTypeGraph.AllAttributesByName.TryGetValue(autoIncrementReference.AttributeName, out CkTypeAttributeGraph? ckTypeAttributeGraph))
                 {
                     throw InvalidAttributeException.AttributeNotFound(rtEntity.GetCkTypeId(),
                         autoIncrementReference.AttributeName);
@@ -87,9 +88,18 @@ public class AutoIncrementModifier(
                         autoIncrementReference.AutoIncrementReference);
                 }
 
-                rtEntity.SetAttributeValue(autoIncrementReference.AttributeName,
-                    ckTypeAttributeGraph.ValueType,
-                    await ExecuteAutoIncrementAsync(session, repositoryDataSource, autoIncrement));
+                var value = await ExecuteAutoIncrementAsync(session, repositoryDataSource, autoIncrement);
+                if (!string.IsNullOrEmpty(autoIncrement.Format) &&
+                    ckTypeAttributeGraph.ValueType == AttributeValueTypesDto.String)
+                {
+                    rtEntity.SetAttributeValue(autoIncrementReference.AttributeName,
+                        ckTypeAttributeGraph.ValueType, string.Format(autoIncrement.Format, value));
+                }
+                else
+                {
+                    rtEntity.SetAttributeValue(autoIncrementReference.AttributeName,
+                        ckTypeAttributeGraph.ValueType, value);
+                }
             }
         }
     }
