@@ -585,8 +585,6 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                             v) { IsUpsert = true });
                         break;
                 }
-
-                listWrites.Add(new InsertOneModel<TDocument>(v));
             }
 
             var result =
