@@ -3,21 +3,14 @@ using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 
-public class BulkImportResult : IBulkImportResult
+public class BulkImportResult(BulkWriteResult bulkWriteResult) : IBulkImportResult
 {
-    private readonly BulkWriteResult _bulkWriteResult;
-
-    public BulkImportResult(BulkWriteResult bulkWriteResult)
-    {
-        _bulkWriteResult = bulkWriteResult;
-    }
-
-    public long InsertedCount => _bulkWriteResult.InsertedCount;
-    public long DeletedCount => _bulkWriteResult.DeletedCount;
-    public long ModifiedCount => _bulkWriteResult.ModifiedCount;
+    public long InsertedCount => bulkWriteResult.InsertedCount;
+    public long DeletedCount => bulkWriteResult.DeletedCount;
+    public long ModifiedCount => bulkWriteResult.ModifiedCount;
 
     public bool HasError()
     {
-        return !_bulkWriteResult.IsAcknowledged;
+        return !bulkWriteResult.IsAcknowledged;
     }
 }

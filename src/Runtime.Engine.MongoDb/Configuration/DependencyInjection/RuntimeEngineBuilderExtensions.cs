@@ -4,11 +4,14 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Exchange;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
+using Meshmakers.Octo.Runtime.Contracts.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.Configuration.DependencyInjection;
 using Meshmakers.Octo.Runtime.Engine.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Exchange;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModifications;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Defaults;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -49,7 +52,11 @@ public static class RuntimeEngineBuilderExtensions
 
         builder.Services.AddSingleton<IUserRepositoryAccess, UserRepositoryAccess>();
         builder.Services.AddSingleton<IAdminRepositoryAccess, AdminRepositoryAccess>();
-        
+
+        // Add pre-document modification services
+        builder.Services.AddTransient<IPreDocumentModification<RtEntity>, AutoIncrementModifier>();
+
+
         MongoRepositoryClient.RegisterSerializers();
         
         return builder;

@@ -56,7 +56,7 @@ internal class TenantRepository(
     #region Data manipulation
 
     public async Task<AggregatedBulkImportResult> BulkInsertRtEntitiesAsync(IOctoSession session,
-        IEnumerable<RtEntity> rtEntityList)
+        IEnumerable<RtEntity> rtEntityList, BulkOperationOptions options)
     {
         var results = new List<IBulkImportResult>();
         foreach (var groupedEntities in rtEntityList.GroupBy(x => x.CkTypeId))
@@ -70,7 +70,7 @@ internal class TenantRepository(
             var ckTypeGraph = await GetCkTypeGraphAsync(groupedEntities.Key);
 
             results.Add(await mongoDbRepositoryDataSource.GetRtCollection<RtEntity>(ckTypeGraph)
-                .BulkImportAsync(session, groupedEntities));
+                .BulkImportAsync(session, groupedEntities, options));
         }
 
         return new AggregatedBulkImportResult(results);
@@ -128,13 +128,13 @@ internal class TenantRepository(
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation,
             mongoDbRepositoryDataSource);
         mutation.AddFieldFilters(fieldFilters);
-        await mutation.ReplaceOneAsync(session, ckTypeId, rtEntity).ConfigureAwait(false);
+        await mutation.ReplaceOneAsync(session, rtEntity).ConfigureAwait(false);
     }
 
     public async Task<IBulkImportResult> BulkRtAssociationsAsync(IOctoSession session,
-        IEnumerable<RtAssociation> rtAssociations)
+        IEnumerable<RtAssociation> rtAssociations, BulkOperationOptions options)
     {
-        return await mongoDbRepositoryDataSource.RtAssociations.BulkImportAsync(session, rtAssociations);
+        return await mongoDbRepositoryDataSource.RtAssociations.BulkImportAsync(session, rtAssociations, options);
     }
 
     #endregion Data manipulation

@@ -27,7 +27,7 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
     }
 
-    public async Task ReplaceOneAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, TEntity rtEntity)
+    public async Task ReplaceOneAsync(IOctoSession session, TEntity rtEntity)
     {
         var filterDefinitions = CreateFilterDefinitions();
         if (filterDefinitions == null)
@@ -46,7 +46,7 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
             EntityUpdateInfo<TEntity>.CreateReplace(entityToUpdate.ToRtEntityId(), rtEntity)).ToList();
 
         await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, _ckCacheService, entityUpdateInfoList,
-            new Collection<AssociationUpdateInfo>());
+            new Collection<AssociationUpdateInfo>(), BulkRtMutationOptions.Default);
     }
 
     public async Task UpdateOneAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, TEntity rtEntity)
@@ -68,7 +68,7 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
             EntityUpdateInfo<TEntity>.CreateUpdate(entityToUpdate.ToRtEntityId(), rtEntity)).ToList();
 
         await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, _ckCacheService, entityUpdateInfoList,
-            new Collection<AssociationUpdateInfo>());
+            new Collection<AssociationUpdateInfo>(), BulkRtMutationOptions.Default);
     }
 
     public async Task DeleteOneAsync(IOctoSession session)
@@ -90,7 +90,7 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
             EntityUpdateInfo<TEntity>.CreateDelete(entityToUpdate.ToRtEntityId())).ToList();
 
         await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, _ckCacheService, entityUpdateInfoList,
-            new Collection<AssociationUpdateInfo>());
+            new Collection<AssociationUpdateInfo>(), BulkRtMutationOptions.Default);
     }
 
     public async Task DeleteManyAsync(IOctoSession session)
@@ -108,7 +108,7 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
             EntityUpdateInfo<TEntity>.CreateDelete(entityToUpdate.ToRtEntityId())).ToList();
 
         await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, _ckCacheService, entityUpdateInfoList,
-            new Collection<AssociationUpdateInfo>());
+            new Collection<AssociationUpdateInfo>(), BulkRtMutationOptions.Default);
     }
 
     public async Task UpdateManyAsync(IOctoSession session, TEntity rtEntity)
@@ -126,6 +126,6 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
             EntityUpdateInfo<TEntity>.CreateUpdate(entityToUpdate.ToRtEntityId(), rtEntity)).ToList();
 
         await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, _ckCacheService, entityUpdateInfoList,
-            new Collection<AssociationUpdateInfo>());
+            new Collection<AssociationUpdateInfo>(), BulkRtMutationOptions.Default);
     }
 }

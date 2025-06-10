@@ -8,6 +8,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
+using Meshmakers.Octo.Runtime.Engine.Repositories;
 
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -565,13 +566,26 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
     }
 
-    public async Task<IBulkImportResult> BulkImportAsync(IOctoSession session, IEnumerable<TDocument> documents)
+    public async Task<IBulkImportResult> BulkImportAsync(IOctoSession session, IEnumerable<TDocument> documents,
+        BulkOperationOptions options)
     {
         try
         {
             var listWrites = new List<WriteModel<TDocument>>();
             foreach (var v in documents)
             {
+                switch (options.InsertStrategy)
+                {
+                    case BulkInsertStrategy.InsertOnly:
+                        listWrites.Add(new InsertOneModel<TDocument>(v));
+                        break;
+                    case BulkInsertStrategy.Upsert:
+                        listWrites.Add(new ReplaceOneModel<TDocument>(
+                            Builders<TDocument>.Filter.BuildIdFilter(_mongoDataSourceMapper.GetId(v)),
+                            v) { IsUpsert = true });
+                        break;
+                }
+
                 listWrites.Add(new InsertOneModel<TDocument>(v));
             }
 

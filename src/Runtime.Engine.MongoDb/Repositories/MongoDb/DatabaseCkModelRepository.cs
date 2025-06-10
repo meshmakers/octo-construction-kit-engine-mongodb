@@ -384,7 +384,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             {
                 ValidateAndThrow(
                     await mongoDbRepositoryDataSource.CkEnums.BulkImportAsync(session,
-                        transientCkModel.CkEnums.ToArray()));
+                        transientCkModel.CkEnums.ToArray(), BulkOperationOptions.Default));
                 CheckCancellation(cancellationToken);
             }
 
@@ -392,7 +392,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             {
                 ValidateAndThrow(
                     await mongoDbRepositoryDataSource.CkRecords.BulkImportAsync(session,
-                        transientCkModel.CkRecords.ToArray()));
+                        transientCkModel.CkRecords.ToArray(), BulkOperationOptions.Default));
                 CheckCancellation(cancellationToken);
             }
 
@@ -400,7 +400,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             {
                 ValidateAndThrow(
                     await mongoDbRepositoryDataSource.CkAttributes.BulkImportAsync(session,
-                        transientCkModel.CkAttributes.ToArray()));
+                        transientCkModel.CkAttributes.ToArray(), BulkOperationOptions.Default));
                 CheckCancellation(cancellationToken);
             }
 
@@ -408,7 +408,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             {
                 ValidateAndThrow(
                     await mongoDbRepositoryDataSource.CkAssociationRoles.BulkImportAsync(session,
-                        transientCkModel.CkAssociationRoles.ToArray()));
+                        transientCkModel.CkAssociationRoles.ToArray(), BulkOperationOptions.Default));
                 CheckCancellation(cancellationToken);
             }
 
@@ -416,7 +416,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             {
                 ValidateAndThrow(
                     await mongoDbRepositoryDataSource.CkTypes.BulkImportAsync(session,
-                        transientCkModel.CkTypes.ToArray()));
+                        transientCkModel.CkTypes.ToArray(), BulkOperationOptions.Default));
                 CheckCancellation(cancellationToken);
             }
 
@@ -424,7 +424,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             {
                 ValidateAndThrow(
                     await mongoDbRepositoryDataSource.CkTypeAssociations.BulkImportAsync(session,
-                        transientCkModel.CkTypeAssociations));
+                        transientCkModel.CkTypeAssociations, BulkOperationOptions.Default));
                 CheckCancellation(cancellationToken);
             }
 
@@ -432,7 +432,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             {
                 ValidateAndThrow(
                     await mongoDbRepositoryDataSource.CkTypeInheritances.BulkImportAsync(session,
-                        transientCkModel.CkTypeInheritances));
+                        transientCkModel.CkTypeInheritances, BulkOperationOptions.Default));
                 CheckCancellation(cancellationToken);
             }
 
@@ -440,7 +440,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             {
                 ValidateAndThrow(
                     await mongoDbRepositoryDataSource.CkRecordInheritances.BulkImportAsync(session,
-                        transientCkModel.CkRecordInheritances));
+                        transientCkModel.CkRecordInheritances, BulkOperationOptions.Default));
                 CheckCancellation(cancellationToken);
             }
 

@@ -1,5 +1,6 @@
 ﻿using System.Collections;
 using System.Collections.Concurrent;
+
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
@@ -9,8 +10,10 @@ using Meshmakers.Octo.Runtime.Contracts.DataTransferObjects;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Exchange;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.Serialization;
+
 using Microsoft.Extensions.Logging;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Exchange;
@@ -245,10 +248,7 @@ internal class ImportRtModelCommand(
                         throw OperationFailedException.RecordNotFound(rtRecordDto.CkRecordId, elementType, ckId);
                     }
 
-                    var rtRecord = new RtRecord
-                    {
-                        CkRecordId = ckRecordGraph.CkRecordId
-                    };
+                    var rtRecord = new RtRecord { CkRecordId = ckRecordGraph.CkRecordId };
                     AssignAttributes(tenantRepository, rtRecordDto, ckRecordGraph, rtRecord, elementType, ckId);
 
                     rtTypeWithAttributes.SetAttributeValue(typeAttributeGraph.AttributeName,
@@ -275,10 +275,7 @@ internal class ImportRtModelCommand(
                             throw OperationFailedException.RecordNotFound(record.CkRecordId, elementType, ckId);
                         }
 
-                        var rtRecord = new RtRecord
-                        {
-                            CkRecordId = ckRecordGraph.CkRecordId
-                        };
+                        var rtRecord = new RtRecord { CkRecordId = ckRecordGraph.CkRecordId };
                         AssignAttributes(tenantRepository, record, ckRecordGraph, rtRecord, elementType, ckId);
 
                         rtRecords.Add(rtRecord);
@@ -314,10 +311,12 @@ internal class ImportRtModelCommand(
 
                 if (modelAttribute.Value == null)
                 {
-                    rtTypeWithAttributes.SetAttributeValue(typeAttributeGraph.AttributeName, typeAttributeGraph.ValueType,
+                    rtTypeWithAttributes.SetAttributeValue(typeAttributeGraph.AttributeName,
+                        typeAttributeGraph.ValueType,
                         null);
                     continue;
                 }
+
                 var value = ckEnumGraph.Values.FirstOrDefault(x => x.Key.Equals(modelAttribute.Value) ||
                                                                    x.Key.ToString().Equals(modelAttribute.Value) ||
                                                                    String.Compare(x.Name,
@@ -381,13 +380,15 @@ internal class ImportRtModelCommand(
             if (importEntities.Any())
             {
                 logger.LogInformation("Adding entities...");
-                await tenantRepository.BulkInsertRtEntitiesAsync(session, importEntities);
+                await tenantRepository.BulkInsertRtEntitiesAsync(session, importEntities,
+                    new BulkOperationOptions { InsertStrategy = BulkInsertStrategy.InsertOnly });
             }
 
             if (importAssociations.Any())
             {
                 logger.LogInformation("Adding associations...");
-                await tenantRepository.BulkRtAssociationsAsync(session, importAssociations);
+                await tenantRepository.BulkRtAssociationsAsync(session, importAssociations,
+                    new BulkOperationOptions { InsertStrategy = BulkInsertStrategy.InsertOnly });
             }
 
 
