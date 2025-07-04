@@ -127,6 +127,15 @@ internal class RtAttributeDictionarySerializer()
                 }
                 
             }
+
+            // See https://stackoverflow.com/questions/66802866/why-doesnt-mongodb-c-sharp-driver-use-bsontype-decimal128-representation-for-de
+            // For backward compatibility -> the driver has been serializing System.Decimal as string since before the BSON Decimal128 type was introduced
+            // -> We ignore that because we introduced OctoMesh after this change.
+            if (pair.Value is Decimal128 decimal128)
+            {
+                ret[pair.Key.ToPascalCase()] = Convert.ToDecimal(decimal128);
+                continue;
+            }
             
             ret[pair.Key.ToPascalCase()] = pair.Value;
         }
