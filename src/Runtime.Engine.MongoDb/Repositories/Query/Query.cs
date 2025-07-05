@@ -89,34 +89,42 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
         }
 
         // ReSharper disable once PossibleMultipleEnumeration
-        var attributeNameList = attributeSearchFilter.AttributePaths.ToList();
+        var attributePathList = attributeSearchFilter.AttributePaths.ToList();
 
-        foreach (var attributeName in attributeNameList)
+        foreach (var attributePath in attributePathList)
         {
-            if (_fieldFilterResolver.IsAttributePathValid(attributeName))
+            if (_fieldFilterResolver.IsAttributePathValid(attributePath))
             {
-                var resolvedAttributeName = _fieldFilterResolver.ResolveAttributePath(attributeName);
-                var resolvedValue = _fieldFilterResolver.ResolveSearchAttributeValue(attributeName,
+                var resolveAttributePath = _fieldFilterResolver.ResolveAttributePath(attributePath);
+                var resolvedValue = _fieldFilterResolver.ResolveSearchAttributeValue(attributePath,
                     attributeSearchFilter.SearchTerm, out var isEnum);
 
                 if (isEnum)
                 {
-                    _attributeSearchFilter.Add(Builders<TEntity>.Filter.AnyIn(resolvedAttributeName,
+                    _attributeSearchFilter.Add(Builders<TEntity>.Filter.AnyIn(resolveAttributePath,
                         resolvedValue != null ? (IEnumerable<object>)resolvedValue : []));
                 }
-                else if (!string.IsNullOrWhiteSpace(resolvedAttributeName))
+                else if (!string.IsNullOrWhiteSpace(resolveAttributePath))
                 {
-                    _attributeSearchFilter.Add(_fieldFilterResolver.CreateScalarFilter(resolvedAttributeName, FieldFilterOperator.Like,
-                        resolvedValue));
+                    if (resolvedValue is not string)
+                    {
+                        _attributeSearchFilter.Add(_fieldFilterResolver.CreateScalarFilter(resolveAttributePath, FieldFilterOperator.Equals,
+                            resolvedValue));
+                    }
+                    else
+                    {
+                        _attributeSearchFilter.Add(_fieldFilterResolver.CreateScalarFilter(resolveAttributePath, FieldFilterOperator.Like,
+                            resolvedValue));
+                    }
                 }
                 else
                 {
-                    throw OperationFailedException.AttributeNameResolutionFailed(attributeName);
+                    throw OperationFailedException.AttributeNameResolutionFailed(attributePath);
                 }
             }
             else
             {
-                throw OperationFailedException.AttributeDoesNotExist(attributeName, _fieldFilterResolver.GetEntityName());
+                throw OperationFailedException.AttributeDoesNotExist(attributePath, _fieldFilterResolver.GetEntityName());
             }
         }
     }
