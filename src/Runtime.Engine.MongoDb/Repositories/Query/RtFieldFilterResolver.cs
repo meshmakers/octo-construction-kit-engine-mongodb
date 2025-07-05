@@ -202,6 +202,26 @@ internal abstract class RtFieldFilterResolver<TEntity>(
             {
                 var ckEnumGraph = _ckCacheService.GetCkEnum(_tenantId, currentTypeAttributeGraph.ValueCkEnumId);
 
+                if (searchTerm is string str && str.StartsWith("[") && str.EndsWith("]"))
+                {
+                    // Handle enum array search term
+                    var enumKeys = new List<int>();
+                    var enumValues = str.Trim('[', ']').Split(',')
+                        .Select(x => x.Trim())
+                        .Where(x => !string.IsNullOrWhiteSpace(x));
+
+                    foreach (var value in enumValues)
+                    {
+                        if (TryGetEnumKey(value, ckEnumGraph, out var enumKey))
+                        {
+                            enumKeys.Add(enumKey.Value);
+                        }
+                    }
+
+                    isEnum = false;
+                    return enumKeys;
+                }
+
                 if (searchTerm is IEnumerable termList)
                 {
                     List<int> enumKeys = new();
