@@ -249,6 +249,26 @@ internal class FieldFilterResolver<TEntity>
         {
             array = enumerable.ToArray();
         }
+        else if (value is IEnumerable<int> intEnumerable)
+        {
+            array = intEnumerable.Cast<object>().ToArray();
+        }
+        else if (value is IEnumerable<long> longEnumerable)
+        {
+            array = longEnumerable.Cast<object>().ToArray();
+        }
+        else if (value is IEnumerable<double> doubleEnumerable)
+        {
+            array = doubleEnumerable.Cast<object>().ToArray();
+        }
+        else if (value is IEnumerable<bool> boolEnumerable)
+        {
+            array = boolEnumerable.Cast<object>().ToArray();
+        }
+        else if (value is IEnumerable<DateTime> dateTimeEnumerable)
+        {
+            array = dateTimeEnumerable.Cast<object>().ToArray();
+        }
 
         return array;
     }

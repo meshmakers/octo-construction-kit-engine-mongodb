@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
 using Meshmakers.Common.Shared;
@@ -23,7 +24,6 @@ internal abstract class RtFieldFilterResolver<TEntity>(
     : FieldFilterResolver<TEntity>
     where TEntity : RtTypeWithAttributes, new()
 {
-    protected readonly CkTypeWithAttributesGraph _ckTypeWithAttributesGraph = ckTypeWithAttributesGraph;
     protected readonly ICkCacheService _ckCacheService = ckCacheService;
     protected readonly string _tenantId = tenantId;
 
@@ -31,14 +31,15 @@ internal abstract class RtFieldFilterResolver<TEntity>(
     {
         var pathTerms = RtPathEvaluator.TokenizePath(attributePath);
 
-        CkTypeWithAttributesGraph current = _ckTypeWithAttributesGraph;
+        CkTypeWithAttributesGraph current = ckTypeWithAttributesGraph;
         CkTypeAttributeGraph? ckTypeAttributeGraph = null;
         foreach (var pathTerm in pathTerms)
         {
             switch (pathTerm.Type)
             {
                 case PathType.Attribute:
-                    if (current.AllAttributesByName.TryGetValue(pathTerm.Value.ToPascalCase(), out ckTypeAttributeGraph))
+                    if (current.AllAttributesByName.TryGetValue(pathTerm.Value.ToPascalCase(),
+                            out ckTypeAttributeGraph))
                     {
                         switch (ckTypeAttributeGraph.ValueType)
                         {
@@ -87,7 +88,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
         StringBuilder sb = new();
         sb.Append(Constants.AttributesName);
 
-        CkTypeWithAttributesGraph current = _ckTypeWithAttributesGraph;
+        CkTypeWithAttributesGraph current = ckTypeWithAttributesGraph;
         CkTypeAttributeGraph? ckTypeAttributeGraph = null;
         foreach (var pathTerm in pathTerms)
         {
@@ -95,7 +96,8 @@ internal abstract class RtFieldFilterResolver<TEntity>(
             {
                 case PathType.Attribute:
 
-                    if (current.AllAttributesByName.TryGetValue(pathTerm.Value.ToPascalCase(), out ckTypeAttributeGraph))
+                    if (current.AllAttributesByName.TryGetValue(pathTerm.Value.ToPascalCase(),
+                            out ckTypeAttributeGraph))
                     {
                         switch (ckTypeAttributeGraph.ValueType)
                         {
@@ -136,6 +138,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                                 {
                                     sb.Append(string.Format(Constants.IndexAccessor, pathTerm.Value));
                                 }
+
                                 continue;
                             default:
                                 return null;
@@ -158,7 +161,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
         if (searchTerm != null)
         {
             CkTypeAttributeGraph? currentTypeAttributeGraph = null;
-            var currentCkTypeWithAttributesGraph = _ckTypeWithAttributesGraph;
+            var currentCkTypeWithAttributesGraph = ckTypeWithAttributesGraph;
             foreach (var pathTerm in pathTerms)
             {
                 switch (pathTerm.Type)
@@ -182,31 +185,42 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                                     _ckCacheService.GetCkRecord(_tenantId, ckTypeAttributeGraph.ValueCkRecordId);
                             }
                         }
+
                         break;
                     default:
                         throw OperationFailedException.PathTypeNotSupported(pathTerm);
                 }
-
             }
 
             if (currentTypeAttributeGraph == null)
             {
-                throw OperationFailedException.CkTypeAttributePathNotFound(_ckTypeWithAttributesGraph, attributePath);
+                throw OperationFailedException.CkTypeAttributePathNotFound(ckTypeWithAttributesGraph, attributePath);
             }
 
             if (currentTypeAttributeGraph.ValueType == AttributeValueTypesDto.Enum &&
                 currentTypeAttributeGraph.ValueCkEnumId != null)
             {
                 var ckEnumGraph = _ckCacheService.GetCkEnum(_tenantId, currentTypeAttributeGraph.ValueCkEnumId);
-                var searchTermString = searchTerm.ToString()?.Replace("_", "");
 
-                // Search for match in selection value
-                var result = ckEnumGraph.Values.FirstOrDefault(x =>
-                    string.Equals(x.Name, searchTermString, StringComparison.OrdinalIgnoreCase));
-                if (result != null)
+                if (searchTerm is IEnumerable termList)
+                {
+                    List<int> enumKeys = new();
+                    foreach (var v in termList)
+                    {
+                        if (TryGetEnumKey(v, ckEnumGraph, out var enumKey))
+                        {
+                            enumKeys.Add(enumKey.Value);
+                        }
+                    }
+
+                    isEnum = false;
+                    return enumKeys;
+                }
+
+                if (TryGetEnumKey(searchTerm, ckEnumGraph, out var enumKeySingle))
                 {
                     isEnum = false;
-                    return result.Key;
+                    return enumKeySingle;
                 }
             }
 
@@ -215,7 +229,8 @@ internal abstract class RtFieldFilterResolver<TEntity>(
             {
                 if (searchTerm is FieldFilterCriteria fieldFilterCriteria)
                 {
-                    var ckRecordGraph = _ckCacheService.GetCkRecord(_tenantId, currentTypeAttributeGraph.ValueCkRecordId);
+                    var ckRecordGraph =
+                        _ckCacheService.GetCkRecord(_tenantId, currentTypeAttributeGraph.ValueCkRecordId);
                     var rtRecordFieldFilterResolver =
                         new RtRecordFieldFilterResolver<RtRecord>(_ckCacheService, _tenantId, ckRecordGraph);
                     rtRecordFieldFilterResolver.AddFieldFilters(fieldFilterCriteria.FieldFilters);
@@ -276,5 +291,33 @@ internal abstract class RtFieldFilterResolver<TEntity>(
         }
 
         return base.ResolveSearchAttributeValue(attributePath, searchTerm, out isEnum);
+    }
+
+    private static bool TryGetEnumKey(object searchTerm, CkEnumGraph ckEnumGraph, [NotNullWhen(true)] out int? key)
+    {
+        if (int.TryParse(searchTerm.ToString(), out var searchTermInt))
+        {
+            // Search for match in selection value
+            var enumValueDto = ckEnumGraph.Values.FirstOrDefault(x => x.Key == searchTermInt);
+            if (enumValueDto != null)
+            {
+                key = enumValueDto.Key;
+                return true;
+            }
+        }
+
+        var searchTermString = searchTerm.ToString()?.Replace("_", "");
+
+        // Search for match in selection value
+        var result = ckEnumGraph.Values.FirstOrDefault(x =>
+            string.Equals(x.Name, searchTermString, StringComparison.OrdinalIgnoreCase));
+        if (result != null)
+        {
+            key = result.Key;
+            return true;
+        }
+
+        key = null;
+        return false;
     }
 }
