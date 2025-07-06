@@ -222,7 +222,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                     return enumKeys;
                 }
 
-                if (searchTerm is IEnumerable termList)
+                if (searchTerm is IEnumerable termList and not string)
                 {
                     List<int> enumKeys = new();
                     foreach (var v in termList)
