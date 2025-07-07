@@ -316,7 +316,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                 foreach (var item in items)
                 {
                     values.Add(AttributeValueConverter.ConvertAttributeValue(currentTypeAttributeGraph.ValueType,
-                        item));
+                        item.Trim('\"')));
                 }
 
                 isEnum = false;
