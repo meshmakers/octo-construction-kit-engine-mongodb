@@ -99,6 +99,12 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                     if (current.AllAttributesByName.TryGetValue(pathTerm.Value.ToPascalCase(),
                             out ckTypeAttributeGraph))
                     {
+                        if (current is CkRecordGraph)
+                        {
+                            sb.Append(Constants.PathSeparator);
+                            sb.Append(Constants.AttributesName);
+                        }
+
                         switch (ckTypeAttributeGraph.ValueType)
                         {
                             case AttributeValueTypesDto.Record:
@@ -113,12 +119,6 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                                 sb.Append(pathTerm.Value.ToCamelCase());
                                 continue;
                             default:
-                                if (current is CkRecordGraph)
-                                {
-                                    sb.Append(Constants.PathSeparator);
-                                    sb.Append(Constants.AttributesName);
-                                }
-
                                 sb.Append(Constants.PathSeparator);
                                 sb.Append(pathTerm.Value.ToCamelCase());
                                 continue;
@@ -202,11 +202,11 @@ internal abstract class RtFieldFilterResolver<TEntity>(
             {
                 var ckEnumGraph = _ckCacheService.GetCkEnum(_tenantId, currentTypeAttributeGraph.ValueCkEnumId);
 
-                if (searchTerm is string str && str.StartsWith("[") && str.EndsWith("]"))
+                if (searchTerm is string enumStr && enumStr.StartsWith("[") && enumStr.EndsWith("]"))
                 {
                     // Handle enum array search term
                     var enumKeys = new List<int>();
-                    var enumValues = str.Trim('[', ']').Split(',')
+                    var enumValues = enumStr.Trim('[', ']').Split(',')
                         .Select(x => x.Trim())
                         .Where(x => !string.IsNullOrWhiteSpace(x));
 
@@ -303,6 +303,24 @@ internal abstract class RtFieldFilterResolver<TEntity>(
             {
                 isEnum = false;
                 return e;
+            }
+
+            // Check if the search term is a string in array format. If yes, parse it as an array.
+            if (searchTerm is string str && str.StartsWith("[") && str.EndsWith("]"))
+            {
+                var values = new List<object?>();
+                var items = str.Trim('[', ']').Split(',')
+                    .Select(x => x.Trim())
+                    .Where(x => !string.IsNullOrWhiteSpace(x));
+
+                foreach (var item in items)
+                {
+                    values.Add(AttributeValueConverter.ConvertAttributeValue(currentTypeAttributeGraph.ValueType,
+                        item));
+                }
+
+                isEnum = false;
+                return values;
             }
 
             // Change to the type of attribute
