@@ -6,13 +6,15 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
 internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, new()
 {
+    protected readonly string _tenantId;
     private readonly List<FilterDefinition<TEntity>> _attributeSearchFilter;
     private readonly List<SortDefinition<TEntity>> _sortDefinitions;
     private FilterDefinition<TEntity>? _textFilter;
 
-    protected internal Query(FieldFilterResolver<TEntity> fieldFilterResolver, string language = "en")
+    protected internal Query(FieldFilterResolver<TEntity> fieldFilterResolver, string tenantId, string language = "en")
         : base(fieldFilterResolver)
     {
+        _tenantId = tenantId;
         Language = language;
 
         _attributeSearchFilter = new List<FilterDefinition<TEntity>>();

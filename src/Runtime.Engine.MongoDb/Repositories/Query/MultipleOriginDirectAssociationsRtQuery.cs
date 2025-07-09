@@ -34,6 +34,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
     where TTargetEntity : RtEntity, new()
 {
     private readonly GraphDirections _graphDirection;
+    private readonly ICkCacheService _ckCacheService;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
     private readonly CkTypeGraph _originCkTypeGraph;
     private readonly CkId<CkAssociationRoleId> _roleId;
@@ -48,6 +49,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
         : base(new RtEntityFieldFilterResolver<TTargetEntity>(ckCacheService, tenantId, targetCkTypeGraph), language)
     {
+        _ckCacheService = ckCacheService;
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
         _rtIds = rtIds;
         _originCkTypeGraph = originCkTypeGraph;
@@ -191,14 +193,14 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         return new MultipleOriginResultSet<TTargetEntity>(result);
     }
 
-    protected override IEnumerable<GroupingResult>? CalculateGrouping(IEnumerable<TTargetEntity> resultList)
+    protected override IEnumerable<GroupingResult>? CalculateGrouping( IEnumerable<TTargetEntity> resultList)
     {
         if (GroupBy == null)
         {
             return null;
         }
 
-        var statisticFunctions = new RtStatisticFunctions<TTargetEntity>(_targetCkTypeGraph, GroupBy);
+        var statisticFunctions = new RtStatisticFunctions<TTargetEntity>(_ckCacheService, _tenantId, GroupBy);
         return statisticFunctions.Calculate(resultList);
     }
 }
