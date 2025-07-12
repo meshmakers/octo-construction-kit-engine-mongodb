@@ -1,3 +1,4 @@
+using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
@@ -23,7 +24,7 @@ internal class FieldFilterResolver<TEntity>
     
     internal virtual bool IsAttributePathValid(string attributePath)
     {
-        var memberMap = _bsonClassMap.GetMemberMap(attributePath);
+        var memberMap = _bsonClassMap.GetMemberMap(attributePath.ToPascalCase());
         return memberMap != null;
     }
 
@@ -34,7 +35,7 @@ internal class FieldFilterResolver<TEntity>
             return Constants.IdField;
         }
 
-        var memberMap = _bsonClassMap.GetMemberMap(attributePath);
+        var memberMap = _bsonClassMap.GetMemberMap(attributePath.ToPascalCase());
         if (memberMap == null || (!memberMap.ShouldSerializeMethod?.Invoke(null) ?? false))
         {
             return null;
@@ -51,7 +52,7 @@ internal class FieldFilterResolver<TEntity>
             return null;
         }
 
-        var propertyType = typeof(TEntity).GetProperty(attributePath)?.PropertyType;
+        var propertyType = typeof(TEntity).GetProperty(attributePath.ToPascalCase())?.PropertyType;
         if (propertyType != null && propertyType.IsEnum)
         {
             var nameCandidates = Enum.GetNames(propertyType)
@@ -226,7 +227,7 @@ internal class FieldFilterResolver<TEntity>
         {
             if (stringValue.Contains(","))
             {
-                array = stringValue.Split(',').ToArray<object>() ?? [];
+                array = stringValue.Split(',').ToArray<object>();
             }
         }
         else if (value is OctoObjectId octoObjectId)

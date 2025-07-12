@@ -3,6 +3,7 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
+
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
@@ -72,8 +73,9 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
             var pipelineDefinition = PipelineDefinition<TEntity, QueryResult<TEntity>>.Create(pipelineStageDefinitions);
             var resultAggregate = _mongoDbDataSourceCollection.Aggregate(octoSession, pipelineDefinition);
             var result = await resultAggregate.SingleOrDefaultAsync();
-            var grouping = CalculateGrouping(result.Result);
-            return new ResultSet<TEntity>(result.Result, result.TotalCount.FirstOrDefault()?.Count ?? 0, grouping);
+            var aggregations = CalculateAggregations(result.Result);
+            return new ResultSet<TEntity>(result.Result, result.TotalCount.FirstOrDefault()?.Count ?? 0,
+                aggregations.Item1, aggregations.Item2);
         }
         else // Return result directly if there is no paging enabled
         {
@@ -81,8 +83,9 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
 
             var aggregate = _mongoDbDataSourceCollection.Aggregate(octoSession, pipelineDefinition);
             var resultNoTotalCount = await aggregate.ToListAsync();
-            var grouping = CalculateGrouping(resultNoTotalCount);
-            return new ResultSet<TEntity>(resultNoTotalCount, resultNoTotalCount.Count, grouping);
+            var aggregations = CalculateAggregations(resultNoTotalCount);
+            return new ResultSet<TEntity>(resultNoTotalCount, resultNoTotalCount.Count, aggregations.Item1,
+                aggregations.Item2);
         }
     }
 }

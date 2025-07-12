@@ -12,5 +12,6 @@ internal class QueryMultipleResult<TEntity>
     public long TotalCount { get; set; }
     public IEnumerable<TEntity> Targets { get; set; } = null!;
 
-    public IEnumerable<GroupingResult>? Grouping { get; set; }
+    public AggregationResult? AggregationResult { get; set; }
+    public IEnumerable<FieldAggregationResult>? FieldAggregationResults { get; set; }
 }

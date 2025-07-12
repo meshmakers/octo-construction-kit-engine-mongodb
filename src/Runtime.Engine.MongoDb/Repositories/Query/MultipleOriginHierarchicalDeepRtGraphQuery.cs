@@ -9,6 +9,7 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic.Builders;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
+
 using MongoDB.Bson;
 using MongoDB.Driver;
 using MongoDB.Driver.GeoJsonObjectModel;
@@ -353,9 +354,9 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
             var resultAggregate = _mongoDbRepositoryDataSource
                 .GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph).Aggregate(session, pipelineDefinition);
             QueryResult<RtDeepGraphQueryResult>? result = await resultAggregate.SingleOrDefaultAsync();
-            var grouping = CalculateGrouping(result.Result);
+            var aggregations = CalculateAggregations(result.Result);
             return new ResultSet<RtDeepGraphQueryResult>(result.Result, result.TotalCount.FirstOrDefault()?.Count ?? 0,
-                grouping);
+                aggregations.Item1, aggregations.Item2);
         }
         else // Return result directly if there is no paging enabled
         {
@@ -365,8 +366,9 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
             var aggregate = _mongoDbRepositoryDataSource
                 .GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph).Aggregate(session, pipelineDefinition);
             var resultNoTotalCount = await aggregate.ToListAsync();
-            var grouping = CalculateGrouping(resultNoTotalCount);
-            return new ResultSet<RtDeepGraphQueryResult>(resultNoTotalCount, resultNoTotalCount.Count, grouping);
+            var aggregations = CalculateAggregations(resultNoTotalCount);
+            return new ResultSet<RtDeepGraphQueryResult>(resultNoTotalCount, resultNoTotalCount.Count,
+                aggregations.Item1, aggregations.Item2);
         }
     }
 }

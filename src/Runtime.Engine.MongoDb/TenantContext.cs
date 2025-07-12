@@ -364,7 +364,7 @@ public class TenantContext : ITenantContext
             await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, DataQueryOperation.Create(), skip,
                 take);
         return new ResultSet<OctoTenant>(result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName)),
-            result.TotalCount, null);
+            result.TotalCount, null, null);
     }
 
     public async Task<OctoTenant> GetChildTenantAsync(IOctoAdminSession adminSession, string tenantId)

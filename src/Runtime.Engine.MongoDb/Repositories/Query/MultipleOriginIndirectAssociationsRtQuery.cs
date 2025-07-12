@@ -216,7 +216,9 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
 
         foreach (var multipleResult in result)
         {
-            multipleResult.Grouping = CalculateGrouping(multipleResult.Targets);
+            var aggregations = CalculateAggregations(multipleResult.Targets);
+            multipleResult.AggregationResult = aggregations.Item1;
+            multipleResult.FieldAggregationResults = aggregations.Item2;
         }
 
         return new MultipleOriginResultSet<TTargetEntity>(result);

@@ -6,15 +6,13 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
 internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, new()
 {
-    protected readonly string _tenantId;
     private readonly List<FilterDefinition<TEntity>> _attributeSearchFilter;
     private readonly List<SortDefinition<TEntity>> _sortDefinitions;
     private FilterDefinition<TEntity>? _textFilter;
 
-    protected internal Query(FieldFilterResolver<TEntity> fieldFilterResolver, string tenantId, string language = "en")
+    protected internal Query(FieldFilterResolver<TEntity> fieldFilterResolver, string language = "en")
         : base(fieldFilterResolver)
     {
-        _tenantId = tenantId;
         Language = language;
 
         _attributeSearchFilter = new List<FilterDefinition<TEntity>>();
@@ -23,7 +21,8 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
 
     private string Language { get; }
 
-    protected FieldGroupBy? GroupBy { get; private set; }
+    protected FieldAggregationInput? FieldAggregation { get; private set; }
+    protected AggregationInput? ResultAggregation { get; private set; }
 
     protected override void AddPreFieldFilters(List<FilterDefinition<TEntity>> filters)
     {
@@ -60,12 +59,12 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
             pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Sort(sortDefinition));
         }
     }
-    
-    protected virtual IEnumerable<GroupingResult>? CalculateGrouping(IEnumerable<TEntity> resultList)
-    {
-        return null;
-    }
 
+    protected virtual (AggregationResult?, IEnumerable<FieldAggregationResult>?) CalculateAggregations(
+        IEnumerable<TEntity> resultList)
+    {
+        return (null, null);
+    }
 
     internal void AddTextSearchFilter(TextSearchFilter? textSearchFilter)
     {
@@ -167,13 +166,23 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
         }
     }
 
-    internal void AddGrouping(FieldGroupBy? groupByDto)
+    internal void AddFieldAggregation(FieldAggregationInput? fieldAggregationInput)
     {
-        if (groupByDto == null)
+        if (fieldAggregationInput == null)
         {
             return;
         }
 
-        GroupBy = groupByDto;
+        FieldAggregation = fieldAggregationInput;
+    }
+
+    internal void AddResultAggregation(AggregationInput? aggregationInput)
+    {
+        if (aggregationInput == null)
+        {
+            return;
+        }
+
+        ResultAggregation = aggregationInput;
     }
 }

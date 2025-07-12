@@ -151,7 +151,8 @@ internal class TenantRepository(
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddGrouping(dataQueryOperation.FieldGroupBy);
+        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
+        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
 
         return await query.ExecuteQuery(session, skip, take);
     }
@@ -168,7 +169,8 @@ internal class TenantRepository(
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddGrouping(dataQueryOperation.FieldGroupBy);
+        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
+        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
 
         return await query.ExecuteQuery(session, skip, take);
     }
@@ -184,7 +186,8 @@ internal class TenantRepository(
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddGrouping(dataQueryOperation.FieldGroupBy);
+        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
+        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
 
         return await query.ExecuteQuery(session, skip, take);
     }
@@ -200,7 +203,8 @@ internal class TenantRepository(
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddGrouping(dataQueryOperation.FieldGroupBy);
+        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
+        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
 
         return await query.ExecuteQuery(session, skip, take);
     }
@@ -216,7 +220,8 @@ internal class TenantRepository(
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddGrouping(dataQueryOperation.FieldGroupBy);
+        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
+        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
 
         return await query.ExecuteQuery(session, skip, take);
     }
@@ -322,7 +327,8 @@ internal class TenantRepository(
         originHierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         originHierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         originHierarchicalRtQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        originHierarchicalRtQuery.AddGrouping(dataQueryOperation.FieldGroupBy);
+        originHierarchicalRtQuery.AddFieldAggregation(dataQueryOperation.FieldAggregation);
+        originHierarchicalRtQuery.AddResultAggregation(dataQueryOperation.ResultAggregation);
         originHierarchicalRtQuery.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
 
         return await originHierarchicalRtQuery.ExecuteQuery(session, skip, take);
@@ -348,7 +354,7 @@ internal class TenantRepository(
     {
         var dataQueryOperation = DataQueryOperation.Create();
 
-        var resultSets = await GetIndirectRtAssociationTargetsAsync(session, new[] { originRtId }, originCkTypeId,
+        var resultSets = await GetIndirectRtAssociationTargetsAsync(session, [originRtId], originCkTypeId,
             roleId,
             graphDirection, null, targetCkTypeId, dataQueryOperation);
         return resultSets[originRtId];
@@ -381,7 +387,8 @@ internal class TenantRepository(
         hierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         hierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         hierarchicalRtQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        hierarchicalRtQuery.AddGrouping(dataQueryOperation.FieldGroupBy);
+        hierarchicalRtQuery.AddFieldAggregation(dataQueryOperation.FieldAggregation);
+        hierarchicalRtQuery.AddResultAggregation(dataQueryOperation.ResultAggregation);
         hierarchicalRtQuery.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
 
         return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
@@ -409,7 +416,8 @@ internal class TenantRepository(
         hierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         hierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         hierarchicalRtQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        hierarchicalRtQuery.AddGrouping(dataQueryOperation.FieldGroupBy);
+        hierarchicalRtQuery.AddFieldAggregation(dataQueryOperation.FieldAggregation);
+        hierarchicalRtQuery.AddResultAggregation(dataQueryOperation.ResultAggregation);
         hierarchicalRtQuery.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
 
         return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
@@ -429,7 +437,8 @@ internal class TenantRepository(
         hierarchicalDeepRtGraphQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         hierarchicalDeepRtGraphQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         hierarchicalDeepRtGraphQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        hierarchicalDeepRtGraphQuery.AddGrouping(dataQueryOperation.FieldGroupBy);
+        hierarchicalDeepRtGraphQuery.AddFieldAggregation(dataQueryOperation.FieldAggregation);
+        hierarchicalDeepRtGraphQuery.AddResultAggregation(dataQueryOperation.ResultAggregation);
         hierarchicalDeepRtGraphQuery.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
 
         return await hierarchicalDeepRtGraphQuery.ExecuteQuery(session, skip, take);
@@ -450,7 +459,8 @@ internal class TenantRepository(
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddGrouping(dataQueryOperation.FieldGroupBy);
+        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
+        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
         query.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
 
         return await query.ExecuteQuery(session, skip, take);
@@ -463,7 +473,7 @@ internal class TenantRepository(
     {
         if (!rtIds.Any())
         {
-            return new ResultSet<TEntity>(new List<TEntity>(), 0, null);
+            return new ResultSet<TEntity>(new List<TEntity>(), 0, null, null);
         }
 
         var ckCacheService = await GetCkCacheServiceAsync();
@@ -478,7 +488,8 @@ internal class TenantRepository(
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddGrouping(dataQueryOperation.FieldGroupBy);
+        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
+        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
         query.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
 
         return await query.ExecuteQuery(session, skip, take);
@@ -506,7 +517,8 @@ internal class TenantRepository(
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddGrouping(dataQueryOperation.FieldGroupBy);
+        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
+        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
         query.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
         query.AddNavigationProperties(navigationPairs);
 
@@ -520,7 +532,7 @@ internal class TenantRepository(
     {
         if (!rtIds.Any())
         {
-            return new ResultSet<RtEntityGraphItem>(new List<RtEntityGraphItem>(), 0, null);
+            return new ResultSet<RtEntityGraphItem>(new List<RtEntityGraphItem>(), 0, null, null);
         }
 
         var ckCacheService = await GetCkCacheServiceAsync();
@@ -535,7 +547,8 @@ internal class TenantRepository(
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddGrouping(dataQueryOperation.FieldGroupBy);
+        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
+        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
         query.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
         query.AddNavigationProperties(roleIdDirectionPairs);
 

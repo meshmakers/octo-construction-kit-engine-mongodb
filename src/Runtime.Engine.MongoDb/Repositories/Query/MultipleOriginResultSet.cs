@@ -5,12 +5,8 @@ using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
-internal class MultipleOriginResultSet<TEntity> : Dictionary<OctoObjectId, IResultSet<TEntity>>,
-    IMultipleOriginResultSet<TEntity>
-{
-    public MultipleOriginResultSet(List<QueryMultipleResult<TEntity>> queryMultipleResult)
-        : base(queryMultipleResult.ToDictionary(k => k.Id,
-            v => (IResultSet<TEntity>)new ResultSet<TEntity>(v.Targets, v.TotalCount, v.Grouping)))
-    {
-    }
-}
+internal class MultipleOriginResultSet<TEntity>(List<QueryMultipleResult<TEntity>> queryMultipleResult)
+    : Dictionary<OctoObjectId, IResultSet<TEntity>>(queryMultipleResult.ToDictionary(k => k.Id,
+            v => (IResultSet<TEntity>)new ResultSet<TEntity>(v.Targets, v.TotalCount, v.AggregationResult,
+                v.FieldAggregationResults))),
+        IMultipleOriginResultSet<TEntity>;

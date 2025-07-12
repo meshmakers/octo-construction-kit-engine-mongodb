@@ -10,6 +10,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic.Builders;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
+
 using MongoDB.Bson;
 using MongoDB.Driver;
 using MongoDB.Driver.GeoJsonObjectModel;
@@ -35,6 +36,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
 {
     private readonly GraphDirections _graphDirection;
     private readonly ICkCacheService _ckCacheService;
+    private readonly string _tenantId;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
     private readonly CkTypeGraph _originCkTypeGraph;
     private readonly CkId<CkAssociationRoleId> _roleId;
@@ -50,6 +52,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         : base(new RtEntityFieldFilterResolver<TTargetEntity>(ckCacheService, tenantId, targetCkTypeGraph), language)
     {
         _ckCacheService = ckCacheService;
+        _tenantId = tenantId;
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
         _rtIds = rtIds;
         _originCkTypeGraph = originCkTypeGraph;
@@ -58,14 +61,14 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         _targetCkTypeGraph = targetCkTypeGraph;
         _geospatialFilters = new List<IPipelineStageDefinition>();
     }
-    
+
     protected override void AddPreStagesToPipelines(IList<IPipelineStageDefinition> pipelineStageDefinitions)
     {
         _geospatialFilters.ForEach(pipelineStageDefinitions.Add);
-        
+
         base.AddPostStagesToPipeline(pipelineStageDefinitions);
     }
-    
+
     /// <summary>
     /// Add a geospatial filters to the query
     /// </summary>
@@ -76,7 +79,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         {
             return;
         }
-        
+
         foreach (var geospatialFilter in geospatialFilters)
         {
             var resolvedAttributeName = _fieldFilterResolver.ResolveAttributePath(geospatialFilter.AttributeName);
@@ -84,11 +87,13 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
             {
                 throw OperationFailedException.AttributeNameResolutionFailed(geospatialFilter.AttributeName);
             }
+
             if (geospatialFilter is NearGeospatialFilter nearGeospatialFilter)
             {
                 GeoJsonPoint<GeoJsonCoordinates> point = nearGeospatialFilter.Point.ToGeoJsonPoint();
-                
-                _geospatialFilters.Add(OctoPipelineStageBuilder.GeoNear<RtEntity, GeoJsonCoordinates>(resolvedAttributeName, point, nearGeospatialFilter.MinDistance, nearGeospatialFilter.MaxDistance));
+
+                _geospatialFilters.Add(OctoPipelineStageBuilder.GeoNear<RtEntity, GeoJsonCoordinates>(
+                    resolvedAttributeName, point, nearGeospatialFilter.MinDistance, nearGeospatialFilter.MaxDistance));
             }
         }
     }
@@ -187,20 +192,28 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
 
         foreach (var multipleResult in result)
         {
-            multipleResult.Grouping = CalculateGrouping(multipleResult.Targets);
+            var targetEntities = CalculateAggregations(multipleResult.Targets);
+            multipleResult.AggregationResult = targetEntities.Item1;
+            multipleResult.FieldAggregationResults = targetEntities.Item2;
         }
 
         return new MultipleOriginResultSet<TTargetEntity>(result);
     }
 
-    protected override IEnumerable<GroupingResult>? CalculateGrouping( IEnumerable<TTargetEntity> resultList)
+
+    protected override (AggregationResult?, IEnumerable<FieldAggregationResult>?) CalculateAggregations(
+        IEnumerable<TTargetEntity> resultList)
     {
-        if (GroupBy == null)
+        if (ResultAggregation == null && FieldAggregation == null)
         {
-            return null;
+            return (null, null);
         }
 
-        var statisticFunctions = new RtStatisticFunctions<TTargetEntity>(_ckCacheService, _tenantId, GroupBy);
-        return statisticFunctions.Calculate(resultList);
+        var statisticFunctions =
+            new RtStatisticFunctions<TTargetEntity>(_ckCacheService, _tenantId, ResultAggregation, FieldAggregation);
+        IEnumerable<TTargetEntity> targetEntities = resultList as TTargetEntity[] ?? resultList.ToArray();
+        var fieldAggregationResults = statisticFunctions.CalculateFieldAggregation(targetEntities);
+        var resultAggregation = statisticFunctions.CalculateResultAggregation(targetEntities);
+        return (resultAggregation, fieldAggregationResults);
     }
 }

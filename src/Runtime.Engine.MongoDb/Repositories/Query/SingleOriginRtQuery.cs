@@ -20,6 +20,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TEntity> where TEntity : RtEntity, new()
 {
     private readonly ICkCacheService _ckCacheService;
+    private readonly string _tenantId;
     private readonly CkTypeGraph _ckTypeGraph;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
     private readonly List<IPipelineStageDefinition> _geospatialFilters;
@@ -32,6 +33,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
             new RtEntityFieldFilterResolver<TEntity>(ckCacheService, tenantId, ckTypeGraph), language)
     {
         _ckCacheService = ckCacheService;
+        _tenantId = tenantId;
         _ckTypeGraph = ckTypeGraph;
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
         _geospatialFilters = new List<IPipelineStageDefinition>();
@@ -261,14 +263,19 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         base.AddPostStagesToPipeline(pipelineStageDefinitions);
     }
 
-    protected override IEnumerable<GroupingResult>? CalculateGrouping(IEnumerable<TEntity> resultList)
+    protected override (AggregationResult?, IEnumerable<FieldAggregationResult>?) CalculateAggregations(
+        IEnumerable<TEntity> resultList)
     {
-        if (GroupBy == null)
+        if (ResultAggregation == null && FieldAggregation == null)
         {
-            return null;
+            return (null, null);
         }
 
-        var statisticFunctions = new RtStatisticFunctions<TEntity>(_ckCacheService, _tenantId, GroupBy);
-        return statisticFunctions.Calculate(resultList);
+        var statisticFunctions =
+            new RtStatisticFunctions<TEntity>(_ckCacheService, _tenantId, ResultAggregation, FieldAggregation);
+        IEnumerable<TEntity> targetEntities = resultList as TEntity[] ?? resultList.ToArray();
+        var fieldAggregationResults = statisticFunctions.CalculateFieldAggregation(targetEntities);
+        var resultAggregation = statisticFunctions.CalculateResultAggregation(targetEntities);
+        return (resultAggregation, fieldAggregationResults);
     }
 }
