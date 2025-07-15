@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -154,6 +155,14 @@ internal class FieldFilterResolver<TEntity>
             var resolvedAttributeName = ResolveAttributePath(fieldFilter.AttributePath);
             var resolvedValue = ResolveSearchAttributeValue(fieldFilter.AttributePath, fieldFilter.ComparisonValue,
                 out var isEnum);
+            
+            // Resolve the secondary value if present
+            object? resolvedSecondaryValue = null;
+            if (fieldFilter.SecondaryValue != null)
+            {
+                resolvedSecondaryValue = ResolveSearchAttributeValue(fieldFilter.AttributePath, fieldFilter.SecondaryValue,
+                    out _);
+            }
 
             if (isEnum)
             {
@@ -162,7 +171,7 @@ internal class FieldFilterResolver<TEntity>
             }
             else if (!string.IsNullOrWhiteSpace(resolvedAttributeName))
             {
-                var filter = CreateScalarFilter(resolvedAttributeName, fieldFilter.Operator, resolvedValue);
+                var filter = CreateScalarFilter(resolvedAttributeName, fieldFilter.Operator, resolvedValue, resolvedSecondaryValue);
                 _fieldFilters.Add(filter);
             }
             else
@@ -177,7 +186,7 @@ internal class FieldFilterResolver<TEntity>
     }
     
     internal FilterDefinition<TEntity> CreateScalarFilter(string attributeName, FieldFilterOperator comparisonOperator,
-        object? value)
+        object? value, object? secondaryValue = null)
     {
         switch (comparisonOperator)
         {
@@ -215,6 +224,38 @@ internal class FieldFilterResolver<TEntity>
                     return Builders<TEntity>.Filter.ElemMatch(attributeName, filterMatch);
                 }
                 throw OperationFailedException.MatchFilterValueNotSupported(value);
+            case FieldFilterOperator.Contains:
+                return Builders<TEntity>.Filter.Regex(attributeName,
+                    new BsonRegularExpression($".*{Regex.Escape(value?.ToString() ?? string.Empty)}.*", "i"));
+            case FieldFilterOperator.StartsWith:
+                return Builders<TEntity>.Filter.Regex(attributeName,
+                    new BsonRegularExpression($"^{Regex.Escape(value?.ToString() ?? string.Empty)}", "i"));
+            case FieldFilterOperator.EndsWith:
+                return Builders<TEntity>.Filter.Regex(attributeName,
+                    new BsonRegularExpression($"{Regex.Escape(value?.ToString() ?? string.Empty)}$", "i"));
+            case FieldFilterOperator.Between:
+                // If secondaryValue is provided, use it as the upper bound
+                if (secondaryValue != null)
+                {
+                    return Builders<TEntity>.Filter.And(
+                        Builders<TEntity>.Filter.Gte(attributeName, value),
+                        Builders<TEntity>.Filter.Lte(attributeName, secondaryValue)
+                    );
+                }
+                // Fall back to the old behavior of using an array for backward compatibility
+                array = ComparisonValueToArray(value);
+                if (array.Length >= 2)
+                {
+                    return Builders<TEntity>.Filter.And(
+                        Builders<TEntity>.Filter.Gte(attributeName, array[0]),
+                        Builders<TEntity>.Filter.Lte(attributeName, array[1])
+                    );
+                }
+                throw new InvalidOperationException("Between operator requires either a secondaryValue or an array with at least two values");
+            case FieldFilterOperator.IsNull:
+                return Builders<TEntity>.Filter.Eq<object?>(attributeName, null);
+            case FieldFilterOperator.IsNotNull:
+                return Builders<TEntity>.Filter.Ne<object?>(attributeName, null);
             default:
                 throw OperationFailedException.OperatorNotSupported(comparisonOperator);
         }
