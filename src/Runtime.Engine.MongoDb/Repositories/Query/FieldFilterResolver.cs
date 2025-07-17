@@ -202,7 +202,7 @@ internal class FieldFilterResolver<TEntity>
             }
             else if (!string.IsNullOrWhiteSpace(resolvedAttributePath))
             {
-                var filter = CreateScalarFilter(resolvedAttributePath, fieldFilter.Operator, resolvedValue);
+                var filter = CreateScalarFilter(resolvedAttributePath, fieldFilter.Operator, resolvedValue, resolvedSecondaryValue);
                 fieldFilters.Add(filter);
             }
             else
@@ -216,7 +216,7 @@ internal class FieldFilterResolver<TEntity>
         }
     }
     
-    internal FilterDefinition<TEntity> CreateScalarFilter(string attributePath, FieldFilterOperator comparisonOperator,
+    internal static FilterDefinition<TEntity> CreateScalarFilter(string attributePath, FieldFilterOperator comparisonOperator,
         object? value, object? secondaryValue = null)
     {
         switch (comparisonOperator)
@@ -282,7 +282,7 @@ internal class FieldFilterResolver<TEntity>
                         Builders<TEntity>.Filter.Lte(attributePath, array[1])
                     );
                 }
-                throw new InvalidOperationException("Between operator requires either a secondaryValue or an array with at least two values");
+                throw OperationFailedException.OperatorRequiresSecondaryValue(comparisonOperator);
             case FieldFilterOperator.IsNull:
                 return Builders<TEntity>.Filter.Eq<object?>(attributePath, null);
             case FieldFilterOperator.IsNotNull:
