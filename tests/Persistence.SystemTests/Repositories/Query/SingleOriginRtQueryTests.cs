@@ -1,5 +1,3 @@
-using System.Runtime.InteropServices.JavaScript;
-
 using FakeItEasy;
 using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Metrics.Meters;
@@ -118,6 +116,8 @@ public class SingleOriginRtQueryTests
 
     [Theory]
     [InlineData("EMailAddresses[*].EMailAddress", FieldFilterOperator.AnyEq, "jane.doe.office@demo.com")]
+    [InlineData("EMailAddresses[0].EMailAddress", FieldFilterOperator.AnyEq, "jane.doe.office@demo.com")]
+    [InlineData("EMailAddresses[1].EMailAddress", FieldFilterOperator.AnyEq, "jane.doe.private@demo.com")]
     public async Task FieldFilter_Attribute_Array_Wildcard_Embedded_OK(string attributePath, FieldFilterOperator fieldFilterOperator, string comparisonValue)
     {
         var systemContext = Prepare(TestCkIds.CustomerTypeId, out var query);

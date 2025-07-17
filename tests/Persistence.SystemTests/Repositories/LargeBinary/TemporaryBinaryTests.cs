@@ -4,6 +4,7 @@ using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Repositories.LargeBinary;
 
+[Collection("Sequential")]
 public class LocalDirectoryRepositoryTemporaryBinaryTests(ImportTestCkModelFixture fixture) : IClassFixture<ImportTestCkModelFixture>
 {
     [Fact]

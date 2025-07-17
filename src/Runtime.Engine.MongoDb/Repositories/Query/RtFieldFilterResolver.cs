@@ -187,6 +187,8 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                         }
 
                         break;
+                    case PathType.ArrayIndex:
+                        break;
                     default:
                         throw OperationFailedException.PathTypeNotSupported(pathTerm);
                 }

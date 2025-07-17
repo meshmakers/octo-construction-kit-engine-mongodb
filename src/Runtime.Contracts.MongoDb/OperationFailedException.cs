@@ -39,15 +39,15 @@ public class OperationFailedException : PersistenceException
         return new OperationFailedException($"Term '{searchTerm}' cannot be evaluated by formula.");
     }
 
-    public static Exception AttributeNameResolutionFailed(string fieldFilterAttributeName)
+    public static Exception AttributePathResolutionFailed(string attributePath)
     {
-        return new OperationFailedException($"Attribute name '{fieldFilterAttributeName}' cannot be resolved.");
+        return new OperationFailedException($"Attribute path '{attributePath}' cannot be resolved.");
     }
 
-    public static Exception AttributeDoesNotExist(string attributeName, string getEntityName)
+    public static Exception AttributePathDoesNotExist(string attributePath, string getEntityName)
     {
         return new OperationFailedException(
-            $"Attribute '{attributeName}' does not exist on type '{getEntityName}'");
+            $"Attribute path '{attributePath}' does not exist on type '{getEntityName}'");
     }
 
     public static Exception NoFilterSet()

@@ -120,12 +120,12 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
                 }
                 else
                 {
-                    throw OperationFailedException.AttributeNameResolutionFailed(attributePath);
+                    throw OperationFailedException.AttributePathResolutionFailed(attributePath);
                 }
             }
             else
             {
-                throw OperationFailedException.AttributeDoesNotExist(attributePath, _fieldFilterResolver.GetEntityName());
+                throw OperationFailedException.AttributePathDoesNotExist(attributePath, _fieldFilterResolver.GetEntityName());
             }
         }
     }

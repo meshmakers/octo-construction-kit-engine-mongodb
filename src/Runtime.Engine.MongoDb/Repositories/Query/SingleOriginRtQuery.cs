@@ -56,7 +56,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
             var resolvedAttributeName = _fieldFilterResolver.ResolveAttributePath(geospatialFilter.AttributeName);
             if (string.IsNullOrWhiteSpace(resolvedAttributeName))
             {
-                throw OperationFailedException.AttributeNameResolutionFailed(geospatialFilter.AttributeName);
+                throw OperationFailedException.AttributePathResolutionFailed(geospatialFilter.AttributeName);
             }
 
             if (geospatialFilter is NearGeospatialFilter nearGeospatialFilter)

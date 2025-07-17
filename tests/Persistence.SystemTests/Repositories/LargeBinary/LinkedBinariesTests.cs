@@ -10,6 +10,7 @@ using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Repositories.LargeBinary;
 
+[Collection("Sequential")]
 public class LinkedBinariesTests(ImportTestCkModelFixture fixture) : IClassFixture<ImportTestCkModelFixture>
 {
     [Fact]

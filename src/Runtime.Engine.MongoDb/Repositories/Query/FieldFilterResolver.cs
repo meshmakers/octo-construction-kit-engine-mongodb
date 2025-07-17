@@ -53,7 +53,7 @@ internal class FieldFilterResolver<TEntity>
         }
 
         var propertyType = typeof(TEntity).GetProperty(attributePath.ToPascalCase())?.PropertyType;
-        if (propertyType != null && propertyType.IsEnum)
+        if (propertyType is { IsEnum: true })
         {
             var nameCandidates = Enum.GetNames(propertyType)
                 .Where(x => x.ToLower().Contains(searchTerm.ToString()?.ToLower() ?? string.Empty));
@@ -151,68 +151,68 @@ internal class FieldFilterResolver<TEntity>
 
         if (IsAttributePathValid(fieldFilter.AttributePath))
         {
-            var resolvedAttributeName = ResolveAttributePath(fieldFilter.AttributePath);
+            var resolvedAttributePath = ResolveAttributePath(fieldFilter.AttributePath);
             var resolvedValue = ResolveSearchAttributeValue(fieldFilter.AttributePath, fieldFilter.ComparisonValue,
                 out var isEnum);
 
             if (isEnum)
             {
-                _fieldFilters.Add(Builders<TEntity>.Filter.AnyIn(resolvedAttributeName,
+                _fieldFilters.Add(Builders<TEntity>.Filter.AnyIn(resolvedAttributePath,
                     resolvedValue != null ? (IEnumerable<object>)resolvedValue : []));
             }
-            else if (!string.IsNullOrWhiteSpace(resolvedAttributeName))
+            else if (!string.IsNullOrWhiteSpace(resolvedAttributePath))
             {
-                var filter = CreateScalarFilter(resolvedAttributeName, fieldFilter.Operator, resolvedValue);
+                var filter = CreateScalarFilter(resolvedAttributePath, fieldFilter.Operator, resolvedValue);
                 _fieldFilters.Add(filter);
             }
             else
             {
-                throw OperationFailedException.AttributeNameResolutionFailed(fieldFilter.AttributePath);
+                throw OperationFailedException.AttributePathResolutionFailed(fieldFilter.AttributePath);
             }
         }
         else
         {
-            throw OperationFailedException.AttributeDoesNotExist(fieldFilter.AttributePath, GetEntityName());
+            throw OperationFailedException.AttributePathDoesNotExist(fieldFilter.AttributePath, GetEntityName());
         }
     }
     
-    internal FilterDefinition<TEntity> CreateScalarFilter(string attributeName, FieldFilterOperator comparisonOperator,
+    internal FilterDefinition<TEntity> CreateScalarFilter(string attributePath, FieldFilterOperator comparisonOperator,
         object? value)
     {
         switch (comparisonOperator)
         {
             case FieldFilterOperator.Equals:
-                return Builders<TEntity>.Filter.Eq(attributeName, value);
+                return Builders<TEntity>.Filter.Eq(attributePath, value);
             case FieldFilterOperator.NotEquals:
-                return Builders<TEntity>.Filter.Ne(attributeName, value);
+                return Builders<TEntity>.Filter.Ne(attributePath, value);
             case FieldFilterOperator.In:
                 object[] array = ComparisonValueToArray(value);
-                return Builders<TEntity>.Filter.In(attributeName, array);
+                return Builders<TEntity>.Filter.In(attributePath, array);
             case FieldFilterOperator.NotIn:
                 array = ComparisonValueToArray(value);
-                return Builders<TEntity>.Filter.Nin(attributeName, array);
+                return Builders<TEntity>.Filter.Nin(attributePath, array);
             case FieldFilterOperator.LessThan:
-                return Builders<TEntity>.Filter.Lt(attributeName, value);
+                return Builders<TEntity>.Filter.Lt(attributePath, value);
             case FieldFilterOperator.LessEqualThan:
-                return Builders<TEntity>.Filter.Lte(attributeName, value);
+                return Builders<TEntity>.Filter.Lte(attributePath, value);
             case FieldFilterOperator.GreaterThan:
-                return Builders<TEntity>.Filter.Gt(attributeName, value);
+                return Builders<TEntity>.Filter.Gt(attributePath, value);
             case FieldFilterOperator.GreaterEqualThan:
-                return Builders<TEntity>.Filter.Gte(attributeName, value);
+                return Builders<TEntity>.Filter.Gte(attributePath, value);
             case FieldFilterOperator.Like:
-                return Builders<TEntity>.Filter.Regex(attributeName,
+                return Builders<TEntity>.Filter.Regex(attributePath,
                     new BsonRegularExpression(GetRegex(value?.ToString()), "i"));
             case FieldFilterOperator.MatchRegEx:
-                return Builders<TEntity>.Filter.Regex(attributeName,
+                return Builders<TEntity>.Filter.Regex(attributePath,
                     new BsonRegularExpression(value?.ToString()));
             case FieldFilterOperator.AnyEq:
-                return Builders<TEntity>.Filter.AnyEq(attributeName, value);
+                return Builders<TEntity>.Filter.AnyEq(attributePath, value);
             case FieldFilterOperator.AnyLike:
-                return Builders<TEntity>.Filter.AnyEq(attributeName, new BsonRegularExpression(GetRegex(value?.ToString()), "i"));
+                return Builders<TEntity>.Filter.AnyEq(attributePath, new BsonRegularExpression(GetRegex(value?.ToString()), "i"));
             case FieldFilterOperator.Match:
                 if (value is FilterDefinition<RtRecord> filterMatch)
                 {
-                    return Builders<TEntity>.Filter.ElemMatch(attributeName, filterMatch);
+                    return Builders<TEntity>.Filter.ElemMatch(attributePath, filterMatch);
                 }
                 throw OperationFailedException.MatchFilterValueNotSupported(value);
             default:
