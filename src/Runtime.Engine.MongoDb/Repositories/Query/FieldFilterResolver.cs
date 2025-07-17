@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -186,6 +187,14 @@ internal class FieldFilterResolver<TEntity>
             var resolvedValue = ResolveSearchAttributeValue(fieldFilter.AttributePath, fieldFilter.ComparisonValue,
                 out var isEnum);
 
+            // Resolve the secondary value if present
+            object? resolvedSecondaryValue = null;
+            if (fieldFilter.SecondaryValue != null)
+            {
+                resolvedSecondaryValue = ResolveSearchAttributeValue(fieldFilter.AttributePath, fieldFilter.SecondaryValue,
+                    out _);
+            }
+
             if (isEnum)
             {
                 fieldFilters.Add(Builders<TEntity>.Filter.AnyIn(resolvedAttributePath,
@@ -207,8 +216,8 @@ internal class FieldFilterResolver<TEntity>
         }
     }
     
-    internal static FilterDefinition<TEntity> CreateScalarFilter(string attributePath, FieldFilterOperator comparisonOperator,
-        object? value)
+    internal FilterDefinition<TEntity> CreateScalarFilter(string attributePath, FieldFilterOperator comparisonOperator,
+        object? value, object? secondaryValue = null)
     {
         switch (comparisonOperator)
         {
@@ -246,6 +255,38 @@ internal class FieldFilterResolver<TEntity>
                     return Builders<TEntity>.Filter.ElemMatch(attributePath, filterMatch);
                 }
                 throw OperationFailedException.MatchFilterValueNotSupported(value);
+            case FieldFilterOperator.Contains:
+                return Builders<TEntity>.Filter.Regex(attributePath,
+                    new BsonRegularExpression($".*{Regex.Escape(value?.ToString() ?? string.Empty)}.*", "i"));
+            case FieldFilterOperator.StartsWith:
+                return Builders<TEntity>.Filter.Regex(attributePath,
+                    new BsonRegularExpression($"^{Regex.Escape(value?.ToString() ?? string.Empty)}", "i"));
+            case FieldFilterOperator.EndsWith:
+                return Builders<TEntity>.Filter.Regex(attributePath,
+                    new BsonRegularExpression($"{Regex.Escape(value?.ToString() ?? string.Empty)}$", "i"));
+            case FieldFilterOperator.Between:
+                // If secondaryValue is provided, use it as the upper bound
+                if (secondaryValue != null)
+                {
+                    return Builders<TEntity>.Filter.And(
+                        Builders<TEntity>.Filter.Gte(attributePath, value),
+                        Builders<TEntity>.Filter.Lte(attributePath, secondaryValue)
+                    );
+                }
+                // Fall back to the old behavior of using an array for backward compatibility
+                array = ComparisonValueToArray(value);
+                if (array.Length >= 2)
+                {
+                    return Builders<TEntity>.Filter.And(
+                        Builders<TEntity>.Filter.Gte(attributePath, array[0]),
+                        Builders<TEntity>.Filter.Lte(attributePath, array[1])
+                    );
+                }
+                throw new InvalidOperationException("Between operator requires either a secondaryValue or an array with at least two values");
+            case FieldFilterOperator.IsNull:
+                return Builders<TEntity>.Filter.Eq<object?>(attributePath, null);
+            case FieldFilterOperator.IsNotNull:
+                return Builders<TEntity>.Filter.Ne<object?>(attributePath, null);
             default:
                 throw OperationFailedException.OperatorNotSupported(comparisonOperator);
         }
