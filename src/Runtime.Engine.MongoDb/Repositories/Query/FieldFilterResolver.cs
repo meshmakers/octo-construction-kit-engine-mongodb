@@ -129,20 +129,51 @@ internal class FieldFilterResolver<TEntity>
         return searchTerm;
     }
 
-    internal void AddFieldFilters(IEnumerable<FieldFilter>? fieldFilters)
+    internal void AddFieldFilterCriteria(FieldFilterCriteria? fieldFilterCriteria)
     {
-        if (fieldFilters == null)
+        if (fieldFilterCriteria == null)
         {
             return;
         }
 
-        foreach (var fieldFilter in fieldFilters)
+        AddFieldFilterCriteria(_fieldFilters, fieldFilterCriteria);
+    }
+
+    private void AddFieldFilterCriteria(List<FilterDefinition<TEntity>> fieldFilters, FieldFilterCriteria fieldFilterCriteria)
+    {
+
+        List<FilterDefinition<TEntity>> innerFieldFilters = new();
+
+        if (fieldFilterCriteria.FieldFilters != null)
         {
-            AddFieldFilter(fieldFilter);
+            foreach (var fieldFilter in fieldFilterCriteria.FieldFilters)
+            {
+                AddFieldFilter(innerFieldFilters, fieldFilter);
+            }
+        }
+        else if (fieldFilterCriteria.NestedFilters != null)
+        {
+            foreach (var filterCriteria in fieldFilterCriteria.NestedFilters)
+            {
+                AddFieldFilterCriteria(innerFieldFilters, filterCriteria);
+            }
+        }
+
+        if (innerFieldFilters.Any())
+        {
+            switch (fieldFilterCriteria.Operator)
+            {
+                case LogicalOperator.And:
+                    fieldFilters.Add(Builders<TEntity>.Filter.And(innerFieldFilters));
+                    break;
+                case LogicalOperator.Or:
+                    fieldFilters.Add(Builders<TEntity>.Filter.Or(innerFieldFilters));
+                    break;
+            }
         }
     }
 
-    private void AddFieldFilter(FieldFilter fieldFilter)
+    private void AddFieldFilter(List<FilterDefinition<TEntity>> fieldFilters, FieldFilter fieldFilter)
     {
         if (string.IsNullOrWhiteSpace(fieldFilter.AttributePath))
         {
@@ -157,13 +188,13 @@ internal class FieldFilterResolver<TEntity>
 
             if (isEnum)
             {
-                _fieldFilters.Add(Builders<TEntity>.Filter.AnyIn(resolvedAttributePath,
+                fieldFilters.Add(Builders<TEntity>.Filter.AnyIn(resolvedAttributePath,
                     resolvedValue != null ? (IEnumerable<object>)resolvedValue : []));
             }
             else if (!string.IsNullOrWhiteSpace(resolvedAttributePath))
             {
                 var filter = CreateScalarFilter(resolvedAttributePath, fieldFilter.Operator, resolvedValue);
-                _fieldFilters.Add(filter);
+                fieldFilters.Add(filter);
             }
             else
             {
@@ -176,7 +207,7 @@ internal class FieldFilterResolver<TEntity>
         }
     }
     
-    internal FilterDefinition<TEntity> CreateScalarFilter(string attributePath, FieldFilterOperator comparisonOperator,
+    internal static FilterDefinition<TEntity> CreateScalarFilter(string attributePath, FieldFilterOperator comparisonOperator,
         object? value)
     {
         switch (comparisonOperator)

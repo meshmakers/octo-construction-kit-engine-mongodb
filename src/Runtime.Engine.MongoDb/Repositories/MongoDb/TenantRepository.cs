@@ -77,57 +77,57 @@ internal class TenantRepository(
     }
 
     protected override async Task DeleteManyRtEntitiesAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
-        ICollection<FieldFilter> fieldFilters)
+        FieldFilterCriteria fieldFilterCriteria)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation,
             mongoDbRepositoryDataSource);
-        mutation.AddFieldFilters(fieldFilters);
+        mutation.AddFieldFilterCriteria(fieldFilterCriteria);
         await mutation.DeleteManyAsync(session).ConfigureAwait(false);
     }
 
     protected override async Task DeleteOneRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
-        ICollection<FieldFilter> fieldFilters)
+        FieldFilterCriteria fieldFilterCriteria)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation,
             mongoDbRepositoryDataSource);
-        mutation.AddFieldFilters(fieldFilters);
+        mutation.AddFieldFilterCriteria(fieldFilterCriteria);
         await mutation.DeleteOneAsync(session).ConfigureAwait(false);
     }
 
     protected override async Task UpdateOneRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
-        ICollection<FieldFilter> fieldFilters, TEntity rtEntity)
+        FieldFilterCriteria fieldFilterCriteria, TEntity rtEntity)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation,
             mongoDbRepositoryDataSource);
-        mutation.AddFieldFilters(fieldFilters);
+        mutation.AddFieldFilterCriteria(fieldFilterCriteria);
         await mutation.UpdateOneAsync(session, ckTypeId, rtEntity).ConfigureAwait(false);
     }
 
     protected override async Task UpdateManyRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
-        ICollection<FieldFilter> fieldFilters, TEntity rtEntity)
+        FieldFilterCriteria fieldFilterCriteria, TEntity rtEntity)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation,
             mongoDbRepositoryDataSource);
-        mutation.AddFieldFilters(fieldFilters);
+        mutation.AddFieldFilterCriteria(fieldFilterCriteria);
         await mutation.UpdateManyAsync(session, rtEntity).ConfigureAwait(false);
     }
 
     protected override async Task ReplaceOneRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
-        ICollection<FieldFilter> fieldFilters, TEntity rtEntity)
+        FieldFilterCriteria fieldFilterCriteria, TEntity rtEntity)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation,
             mongoDbRepositoryDataSource);
-        mutation.AddFieldFilters(fieldFilters);
+        mutation.AddFieldFilterCriteria(fieldFilterCriteria);
         await mutation.ReplaceOneAsync(session, rtEntity).ConfigureAwait(false);
     }
 
@@ -146,7 +146,7 @@ internal class TenantRepository(
         int? take = null)
     {
         var query = new CkModelQuery(metricsContext, mongoDbRepositoryDataSource);
-        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddFieldFilterCriteria(dataQueryOperation);
         query.AddIdFilter(ckModelIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
@@ -163,7 +163,7 @@ internal class TenantRepository(
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var query = new CkAttributeQuery(metricsContext, mongoDbRepositoryDataSource);
-        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddFieldFilterCriteria(dataQueryOperation);
         query.AddModelIdFilter(ckModelIds);
         query.AddIdFilter(attributeIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
@@ -180,7 +180,7 @@ internal class TenantRepository(
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var query = new CkTypeQuery(metricsContext, mongoDbRepositoryDataSource);
-        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddFieldFilterCriteria(dataQueryOperation);
         query.AddModelIdFilter(ckModelIds);
         query.AddIdFilter(ckTypeIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
@@ -197,7 +197,7 @@ internal class TenantRepository(
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var query = new CkRecordQuery(metricsContext, mongoDbRepositoryDataSource);
-        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddFieldFilterCriteria(dataQueryOperation);
         query.AddModelIdFilter(ckModelIds);
         query.AddIdFilter(ckRecordIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
@@ -214,7 +214,7 @@ internal class TenantRepository(
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var query = new CkEnumQuery(metricsContext, mongoDbRepositoryDataSource);
-        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddFieldFilterCriteria(dataQueryOperation);
         query.AddModelIdFilter(ckModelIds);
         query.AddIdFilter(ckEnumIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
@@ -322,7 +322,7 @@ internal class TenantRepository(
                 originRtIds,
                 originTypeGraph, roleId, graphDirection, targetTypeGraph);
 
-        originHierarchicalRtQuery.AddFieldFilters(dataQueryOperation.FieldFilters);
+        originHierarchicalRtQuery.AddFieldFilterCriteria(dataQueryOperation);
         originHierarchicalRtQuery.AddIdFilter(targetRtIds);
         originHierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         originHierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
@@ -382,7 +382,7 @@ internal class TenantRepository(
                 originRtIds,
                 originTypeGraph, roleId, graphDirection, targetTypeGraph);
 
-        hierarchicalRtQuery.AddFieldFilters(dataQueryOperation.FieldFilters);
+        hierarchicalRtQuery.AddFieldFilterCriteria(dataQueryOperation);
         hierarchicalRtQuery.AddIdFilter(rtIds);
         hierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         hierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
@@ -411,7 +411,7 @@ internal class TenantRepository(
                 originRtIds,
                 originTypeGraph, roleId, graphDirection, targetTypeGraph);
 
-        hierarchicalRtQuery.AddFieldFilters(dataQueryOperation.FieldFilters);
+        hierarchicalRtQuery.AddFieldFilterCriteria(dataQueryOperation);
         hierarchicalRtQuery.AddIdFilter(targetRtIds);
         hierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         hierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
@@ -433,7 +433,7 @@ internal class TenantRepository(
         var hierarchicalDeepRtGraphQuery = new MultipleOriginHierarchicalDeepRtGraphQuery(mongoDbRepositoryDataSource,
             dataQueryOperation.Language, originRtIds, originTypeGraph,
             new CkId<CkAssociationRoleId>(SystemCkIds.ModelId, SystemCkIds.ParentChild));
-        hierarchicalDeepRtGraphQuery.AddFieldFilters(dataQueryOperation.FieldFilters);
+        hierarchicalDeepRtGraphQuery.AddFieldFilterCriteria(dataQueryOperation);
         hierarchicalDeepRtGraphQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         hierarchicalDeepRtGraphQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         hierarchicalDeepRtGraphQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
@@ -455,7 +455,7 @@ internal class TenantRepository(
             new SingleOriginRtQuery<TEntity>(metricsContext, ckCacheService, TenantId, ckTypeGraph,
                 mongoDbRepositoryDataSource,
                 dataQueryOperation.Language);
-        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddFieldFilterCriteria(dataQueryOperation);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
@@ -483,7 +483,7 @@ internal class TenantRepository(
             new SingleOriginRtQuery<TEntity>(metricsContext, ckCacheService, TenantId, ckTypeGraph,
                 mongoDbRepositoryDataSource,
                 dataQueryOperation.Language);
-        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddFieldFilterCriteria(dataQueryOperation);
         query.AddIdFilter(rtIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
@@ -513,7 +513,7 @@ internal class TenantRepository(
             new SingleOriginRtQuery<RtEntityGraphItem>(metricsContext, ckCacheService, TenantId, ckTypeGraph,
                 mongoDbRepositoryDataSource,
                 dataQueryOperation.Language);
-        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddFieldFilterCriteria(dataQueryOperation);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
         query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
@@ -542,7 +542,7 @@ internal class TenantRepository(
             new SingleOriginRtQuery<RtEntityGraphItem>(metricsContext, ckCacheService, TenantId, ckTypeGraph,
                 mongoDbRepositoryDataSource,
                 dataQueryOperation.Language);
-        query.AddFieldFilters(dataQueryOperation.FieldFilters);
+        query.AddFieldFilterCriteria(dataQueryOperation);
         query.AddIdFilter(rtIds);
         query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
@@ -583,14 +583,14 @@ internal class TenantRepository(
         var subscription = new Subscription<TEntity>(ckCacheService, TenantId, ckTypeGraph,
             mongoDbRepositoryDataSource);
 
-        if (watchStreamFilter.BeforeFieldFilters != null && watchStreamFilter.BeforeFieldFilters.Any())
+        if (watchStreamFilter.BeforeFieldFilterCriteria != null)
         {
-            subscription.AddBeforeFieldFilters(watchStreamFilter.BeforeFieldFilters);
+            subscription.AddBeforeFieldFilterCriteria(watchStreamFilter.BeforeFieldFilterCriteria);
         }
 
-        if (watchStreamFilter.FieldFilters != null && watchStreamFilter.FieldFilters.Any())
+        if (watchStreamFilter.FieldFilterCriteria != null)
         {
-            subscription.AddFieldFilters(watchStreamFilter.FieldFilters);
+            subscription.AddFieldFilterCriteria(watchStreamFilter.FieldFilterCriteria);
         }
 
         if (watchStreamFilter.RtId.HasValue)

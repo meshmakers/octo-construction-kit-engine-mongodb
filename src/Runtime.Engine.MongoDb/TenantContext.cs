@@ -16,6 +16,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
+
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -127,11 +128,7 @@ public class TenantContext : ITenantContext
             // Add the new tenant as child tenant of the current one
             if (TenantId != SystemConfiguration.Value.SystemTenantId.NormalizeString())
             {
-                var rtTenant = new RtTenant
-                {
-                    TenantId = normalizedTenantId,
-                    DatabaseName = normalizedDatabaseName
-                };
+                var rtTenant = new RtTenant { TenantId = normalizedTenantId, DatabaseName = normalizedDatabaseName };
 
                 var tenantRepository = GetTenantRepositoryAsAdmin();
                 await tenantRepository.InsertOneRtEntityAsync(adminSession, rtTenant);
@@ -140,9 +137,7 @@ public class TenantContext : ITenantContext
             // Add the new tenant in system tenant to be found in future operations
             var rtSystemTenant = new RtTenant
             {
-                TenantId = normalizedTenantId,
-                ParentTenantId = TenantId,
-                DatabaseName = normalizedDatabaseName
+                TenantId = normalizedTenantId, ParentTenantId = TenantId, DatabaseName = normalizedDatabaseName
             };
             var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
             await systemTenantRepository.InsertOneRtEntityAsync(adminSession, rtSystemTenant);
@@ -206,11 +201,7 @@ public class TenantContext : ITenantContext
             // Add the new tenant as child tenant of the current one
             if (TenantId != SystemConfiguration.Value.SystemTenantId.NormalizeString())
             {
-                var octoTenant = new RtTenant
-                {
-                    TenantId = tenantId,
-                    DatabaseName = databaseName
-                };
+                var octoTenant = new RtTenant { TenantId = tenantId, DatabaseName = databaseName };
 
                 var tenantRepository = GetTenantRepositoryAsAdmin();
                 await tenantRepository.InsertOneRtEntityAsync(adminSession, octoTenant);
@@ -219,9 +210,7 @@ public class TenantContext : ITenantContext
             // Add the new tenant in system tenant to be found in future operations
             var rtSystemTenant = new RtTenant
             {
-                TenantId = normalizedTenantId,
-                ParentTenantId = TenantId,
-                DatabaseName = normalizedDatabaseName
+                TenantId = normalizedTenantId, ParentTenantId = TenantId, DatabaseName = normalizedDatabaseName
             };
             var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
             await systemTenantRepository.InsertOneRtEntityAsync(adminSession, rtSystemTenant);
@@ -251,11 +240,8 @@ public class TenantContext : ITenantContext
 
             var tenantRepository = GetTenantRepositoryAsAdmin();
             await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
-                new List<FieldFilter>
-                {
-                    new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals,
-                        tenantId.NormalizeString())
-                });
+                FieldFilterCriteria.Create().FieldEquals(nameof(RtTenant.TenantId),
+                    tenantId.NormalizeString()));
         }
         finally
         {
@@ -313,11 +299,8 @@ public class TenantContext : ITenantContext
 
             // Deletes the tenant entry from the current tenant
             await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
-                new List<FieldFilter>
-                {
-                    new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals,
-                        tenantId.NormalizeString())
-                });
+                FieldFilterCriteria.Create().FieldEquals(nameof(RtTenant.TenantId),
+                    tenantId.NormalizeString()));
 
             // If the current tenant is not the system tenant, we need to delete the tenant entry in system tenant too.
             // Add the new tenant as child tenant of the current one
@@ -325,11 +308,8 @@ public class TenantContext : ITenantContext
             {
                 var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
                 await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
-                    new List<FieldFilter>
-                    {
-                        new(nameof(RtTenant.TenantId), FieldFilterOperator.Equals,
-                            tenantId.NormalizeString())
-                    });
+                    FieldFilterCriteria.Create().FieldEquals(nameof(RtTenant.TenantId),
+                        tenantId.NormalizeString()));
             }
         }
         finally
@@ -550,10 +530,11 @@ public class TenantContext : ITenantContext
 
         var tenantRepository = GetTenantRepositoryAsAdmin();
 
-        var fieldFilters = new List<FieldFilter>
-            { new(nameof(RtTenantConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key) };
+        var fieldFilterCriteria = FieldFilterCriteria
+            .Create()
+            .FieldEquals(nameof(RtTenantConfiguration.RtWellKnownName), key);
 
-        await tenantRepository.DeleteOneRtEntityAsync<RtTenantConfiguration>(adminSession, fieldFilters);
+        await tenantRepository.DeleteOneRtEntityAsync<RtTenantConfiguration>(adminSession, fieldFilterCriteria);
     }
 
     #endregion Configuration

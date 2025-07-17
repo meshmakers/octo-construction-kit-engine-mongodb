@@ -1,4 +1,5 @@
 using FakeItEasy;
+
 using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Metrics.Meters;
 using Meshmakers.Octo.ConstructionKit.Contracts;
@@ -10,9 +11,13 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
+
 using Microsoft.Extensions.Logging;
+
 using MongoDB.Bson;
+
 using TestCkModel.Generated.Test.v1;
+
 using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Repositories.Query;
@@ -36,10 +41,8 @@ public class SingleOriginRtQueryTests
     {
         var systemContext = Prepare(TestCkIds.CustomerTypeId, out var query);
 
-        query.AddFieldFilters(new List<FieldFilter>
-        {
-            new("RtWellKnownName", FieldFilterOperator.Equals, "TestCustomer3")
-        });
+        query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
+            .FieldEquals("RtWellKnownName", "TestCustomer3"));
 
         var session = await systemContext.GetAdminSessionAsync();
         session.StartTransaction();
@@ -55,10 +58,8 @@ public class SingleOriginRtQueryTests
     {
         var systemContext = Prepare(TestCkIds.CustomerTypeId, out var query);
 
-        query.AddFieldFilters(new List<FieldFilter>
-        {
-            new("RtId", FieldFilterOperator.Equals, ObjectId.Parse("66803ecf4aa85720dda96b15"))
-        });
+        query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
+            .FieldEquals("RtId", ObjectId.Parse("66803ecf4aa85720dda96b15")));
 
         var session = await systemContext.GetAdminSessionAsync();
         session.StartTransaction();
@@ -77,10 +78,8 @@ public class SingleOriginRtQueryTests
     {
         var systemContext = Prepare(TestCkIds.DistrictTypeId, out var query);
 
-        query.AddFieldFilters(new List<FieldFilter>
-        {
-            new("Name", fieldFilterOperator, comparisonValue)
-        });
+        query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
+            .Field("Name", fieldFilterOperator, comparisonValue));
 
         var session = await systemContext.GetAdminSessionAsync();
         session.StartTransaction();
@@ -95,15 +94,14 @@ public class SingleOriginRtQueryTests
     [InlineData("Address.Street", FieldFilterOperator.Equals, "Neutorstraße 25")]
     [InlineData("Address.Street", FieldFilterOperator.Like, "*Neutorstraße*")]
     [InlineData("Address.Street", FieldFilterOperator.MatchRegEx, "Neutorstraße")]
-    [InlineData("Address.Street", FieldFilterOperator.In, new object[] {"Neutorstraße 25", "Demo 25"})]
-    public async Task FieldFilter_Attribute_Scalar_Embedded_OK(string attributePath, FieldFilterOperator fieldFilterOperator, object comparisonValue)
+    [InlineData("Address.Street", FieldFilterOperator.In, new object[] { "Neutorstraße 25", "Demo 25" })]
+    public async Task FieldFilter_Attribute_Scalar_Embedded_OK(string attributePath,
+        FieldFilterOperator fieldFilterOperator, object comparisonValue)
     {
         var systemContext = Prepare(TestCkIds.CustomerTypeId, out var query);
 
-        query.AddFieldFilters(new List<FieldFilter>
-        {
-            new(attributePath, fieldFilterOperator, comparisonValue)
-        });
+        query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
+            .Field(attributePath, fieldFilterOperator, comparisonValue));
 
         var session = await systemContext.GetAdminSessionAsync();
         session.StartTransaction();
@@ -118,14 +116,13 @@ public class SingleOriginRtQueryTests
     [InlineData("EMailAddresses[*].EMailAddress", FieldFilterOperator.AnyEq, "jane.doe.office@demo.com")]
     [InlineData("EMailAddresses[0].EMailAddress", FieldFilterOperator.AnyEq, "jane.doe.office@demo.com")]
     [InlineData("EMailAddresses[1].EMailAddress", FieldFilterOperator.AnyEq, "jane.doe.private@demo.com")]
-    public async Task FieldFilter_Attribute_Array_Wildcard_Embedded_OK(string attributePath, FieldFilterOperator fieldFilterOperator, string comparisonValue)
+    public async Task FieldFilter_Attribute_Array_Wildcard_Embedded_OK(string attributePath,
+        FieldFilterOperator fieldFilterOperator, string comparisonValue)
     {
         var systemContext = Prepare(TestCkIds.CustomerTypeId, out var query);
 
-        query.AddFieldFilters(new List<FieldFilter>
-        {
-            new(attributePath, fieldFilterOperator, comparisonValue)
-        });
+        query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
+            .Field(attributePath, fieldFilterOperator, comparisonValue));
 
         var session = await systemContext.GetAdminSessionAsync();
         session.StartTransaction();
@@ -134,6 +131,27 @@ public class SingleOriginRtQueryTests
         Assert.Equal(1, resultSet.TotalCount);
         Assert.Equal("TestCustomer3", resultSet.Items.First().RtWellKnownName);
         Assert.Equal(OctoObjectId.Parse("66803ecf4aa85720dda96b15"), resultSet.Items.First().RtId);
+    }
+
+    [Fact]
+    public async Task FieldFilter_LogicalOr_Dim0_OK()
+    {
+        var systemContext = Prepare(TestCkIds.CustomerTypeId, out var query);
+
+        query.AddFieldFilterCriteria(FieldFilterCriteria.Create(LogicalOperator.Or)
+            .FieldEquals("rtWellKnownName", "TestCustomer2")
+            .FieldEquals("rtWellKnownName", "TestCustomer3"));
+
+        var session = await systemContext.GetAdminSessionAsync();
+        session.StartTransaction();
+
+        var resultSet = await query.ExecuteQuery(session);
+        Assert.Equal(2, resultSet.TotalCount);
+        // Check if the result contains TestCustomer2 and TestCustomer3 in any order
+        Assert.Contains(resultSet.Items, item => item.RtWellKnownName == "TestCustomer2");
+        Assert.Contains(resultSet.Items, item => item.RtWellKnownName == "TestCustomer3");
+        Assert.Contains(resultSet.Items, item => item.RtId == OctoObjectId.Parse("66803ecf4aa85720dda96b14"));
+        Assert.Contains(resultSet.Items, item => item.RtId == OctoObjectId.Parse("66803ecf4aa85720dda96b15"));
     }
 
     private ISystemContext Prepare(string typeId, out SingleOriginRtQuery<RtEntity> query)

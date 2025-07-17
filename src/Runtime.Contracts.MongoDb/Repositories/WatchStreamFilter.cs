@@ -20,12 +20,12 @@ public class WatchStreamFilter
     public OctoObjectId? RtId { get; set; }
     
     /// <summary>
-    /// Gets or sets optional field filters to filter by on the version before storing runtime entity object.
+    /// Gets or sets optional field filter criteria to filter by on the version before storing a runtime entity object.
     /// </summary>
-    public ICollection<FieldFilter>? BeforeFieldFilters { get; set; }
+    public FieldFilterCriteria? BeforeFieldFilterCriteria { get; set; }
     
     /// <summary>
-    /// Gets or sets optional field filters to filter by on the current runtime entity object.
+    /// Gets or sets optional field filter criteria to filter by on the version after storing a runtime entity object.
     /// </summary>
-    public ICollection<FieldFilter>? FieldFilters { get; set; }
+    public FieldFilterCriteria? FieldFilterCriteria { get; set; }
 }

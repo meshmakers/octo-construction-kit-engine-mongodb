@@ -14,9 +14,9 @@ internal class Engine<TEntity> where TEntity : class, new()
         _fieldFilterResolver = fieldFilterResolver;
     }
 
-    internal void AddFieldFilters(ICollection<FieldFilter>? fieldFilters)
+    internal void AddFieldFilterCriteria(FieldFilterCriteria? fieldFilterCriteria)
     {
-        _fieldFilterResolver.AddFieldFilters(fieldFilters);
+        _fieldFilterResolver.AddFieldFilterCriteria(fieldFilterCriteria);
     }
 
     protected virtual void AddPreFieldFilters(List<FilterDefinition<TEntity>> filters)
