@@ -21,9 +21,9 @@ internal class Subscription<TEntity>(
     private readonly FieldFilterResolver<TEntity> _beforeFieldFilterResolver =
         new RtEntityFieldFilterResolver<TEntity>(ckCacheService, tenantId, ckTypeGraph);
 
-    internal void AddBeforeFieldFilters(ICollection<FieldFilter>? fieldFilters)
+    internal void AddBeforeFieldFilterCriteria(FieldFilterCriteria? fieldFilterCriteria)
     {
-        _beforeFieldFilterResolver.AddFieldFilters(fieldFilters);
+        _beforeFieldFilterResolver.AddFieldFilterCriteria(fieldFilterCriteria);
     }
     
     public IUpdateStream<TEntity> WatchRtEntitiesAsync(UpdateTypes updateTypes, CancellationToken cancellationToken)

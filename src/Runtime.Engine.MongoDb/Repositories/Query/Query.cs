@@ -109,12 +109,12 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
                 {
                     if (resolvedValue is not string)
                     {
-                        _attributeSearchFilter.Add(_fieldFilterResolver.CreateScalarFilter(resolveAttributePath, FieldFilterOperator.Equals,
+                        _attributeSearchFilter.Add(FieldFilterResolver<TEntity>.CreateScalarFilter(resolveAttributePath, FieldFilterOperator.Equals,
                             resolvedValue));
                     }
                     else
                     {
-                        _attributeSearchFilter.Add(_fieldFilterResolver.CreateScalarFilter(resolveAttributePath, FieldFilterOperator.Like,
+                        _attributeSearchFilter.Add(FieldFilterResolver<TEntity>.CreateScalarFilter(resolveAttributePath, FieldFilterOperator.Like,
                             resolvedValue));
                     }
                 }

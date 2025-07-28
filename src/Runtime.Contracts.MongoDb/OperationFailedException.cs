@@ -197,4 +197,10 @@ public class OperationFailedException : PersistenceException
         return new OperationFailedException(
             string.Format(CultureInfo.InvariantCulture, "Index type '{0}' is not supported.", indexType));
     }
+
+    public static Exception OperatorRequiresSecondaryValue(FieldFilterOperator comparisonOperator)
+    {
+        return new OperationFailedException(
+            $"Operator '{comparisonOperator}' requires a secondary value to be set.");
+    }
 }

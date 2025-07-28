@@ -255,7 +255,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
                         _ckCacheService.GetCkRecord(_tenantId, currentTypeAttributeGraph.ValueCkRecordId);
                     var rtRecordFieldFilterResolver =
                         new RtRecordFieldFilterResolver<RtRecord>(_ckCacheService, _tenantId, ckRecordGraph);
-                    rtRecordFieldFilterResolver.AddFieldFilters(fieldFilterCriteria.FieldFilters);
+                    rtRecordFieldFilterResolver.AddFieldFilterCriteria(fieldFilterCriteria);
 
                     if (rtRecordFieldFilterResolver.FilterDefinitions.Any())
                     {

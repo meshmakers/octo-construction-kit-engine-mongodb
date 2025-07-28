@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -129,20 +130,51 @@ internal class FieldFilterResolver<TEntity>
         return searchTerm;
     }
 
-    internal void AddFieldFilters(IEnumerable<FieldFilter>? fieldFilters)
+    internal void AddFieldFilterCriteria(FieldFilterCriteria? fieldFilterCriteria)
     {
-        if (fieldFilters == null)
+        if (fieldFilterCriteria == null)
         {
             return;
         }
 
-        foreach (var fieldFilter in fieldFilters)
+        AddFieldFilterCriteria(_fieldFilters, fieldFilterCriteria);
+    }
+
+    private void AddFieldFilterCriteria(List<FilterDefinition<TEntity>> fieldFilters, FieldFilterCriteria fieldFilterCriteria)
+    {
+
+        List<FilterDefinition<TEntity>> innerFieldFilters = new();
+
+        if (fieldFilterCriteria.FieldFilters != null)
         {
-            AddFieldFilter(fieldFilter);
+            foreach (var fieldFilter in fieldFilterCriteria.FieldFilters)
+            {
+                AddFieldFilter(innerFieldFilters, fieldFilter);
+            }
+        }
+        else if (fieldFilterCriteria.NestedFilters != null)
+        {
+            foreach (var filterCriteria in fieldFilterCriteria.NestedFilters)
+            {
+                AddFieldFilterCriteria(innerFieldFilters, filterCriteria);
+            }
+        }
+
+        if (innerFieldFilters.Any())
+        {
+            switch (fieldFilterCriteria.Operator)
+            {
+                case LogicalOperator.And:
+                    fieldFilters.Add(Builders<TEntity>.Filter.And(innerFieldFilters));
+                    break;
+                case LogicalOperator.Or:
+                    fieldFilters.Add(Builders<TEntity>.Filter.Or(innerFieldFilters));
+                    break;
+            }
         }
     }
 
-    private void AddFieldFilter(FieldFilter fieldFilter)
+    private void AddFieldFilter(List<FilterDefinition<TEntity>> fieldFilters, FieldFilter fieldFilter)
     {
         if (string.IsNullOrWhiteSpace(fieldFilter.AttributePath))
         {
@@ -155,15 +187,23 @@ internal class FieldFilterResolver<TEntity>
             var resolvedValue = ResolveSearchAttributeValue(fieldFilter.AttributePath, fieldFilter.ComparisonValue,
                 out var isEnum);
 
+            // Resolve the secondary value if present
+            object? resolvedSecondaryValue = null;
+            if (fieldFilter.SecondaryValue != null)
+            {
+                resolvedSecondaryValue = ResolveSearchAttributeValue(fieldFilter.AttributePath, fieldFilter.SecondaryValue,
+                    out _);
+            }
+
             if (isEnum)
             {
-                _fieldFilters.Add(Builders<TEntity>.Filter.AnyIn(resolvedAttributePath,
+                fieldFilters.Add(Builders<TEntity>.Filter.AnyIn(resolvedAttributePath,
                     resolvedValue != null ? (IEnumerable<object>)resolvedValue : []));
             }
             else if (!string.IsNullOrWhiteSpace(resolvedAttributePath))
             {
-                var filter = CreateScalarFilter(resolvedAttributePath, fieldFilter.Operator, resolvedValue);
-                _fieldFilters.Add(filter);
+                var filter = CreateScalarFilter(resolvedAttributePath, fieldFilter.Operator, resolvedValue, resolvedSecondaryValue);
+                fieldFilters.Add(filter);
             }
             else
             {
@@ -176,8 +216,8 @@ internal class FieldFilterResolver<TEntity>
         }
     }
     
-    internal FilterDefinition<TEntity> CreateScalarFilter(string attributePath, FieldFilterOperator comparisonOperator,
-        object? value)
+    internal static FilterDefinition<TEntity> CreateScalarFilter(string attributePath, FieldFilterOperator comparisonOperator,
+        object? value, object? secondaryValue = null)
     {
         switch (comparisonOperator)
         {
@@ -215,6 +255,38 @@ internal class FieldFilterResolver<TEntity>
                     return Builders<TEntity>.Filter.ElemMatch(attributePath, filterMatch);
                 }
                 throw OperationFailedException.MatchFilterValueNotSupported(value);
+            case FieldFilterOperator.Contains:
+                return Builders<TEntity>.Filter.Regex(attributePath,
+                    new BsonRegularExpression($".*{Regex.Escape(value?.ToString() ?? string.Empty)}.*", "i"));
+            case FieldFilterOperator.StartsWith:
+                return Builders<TEntity>.Filter.Regex(attributePath,
+                    new BsonRegularExpression($"^{Regex.Escape(value?.ToString() ?? string.Empty)}", "i"));
+            case FieldFilterOperator.EndsWith:
+                return Builders<TEntity>.Filter.Regex(attributePath,
+                    new BsonRegularExpression($"{Regex.Escape(value?.ToString() ?? string.Empty)}$", "i"));
+            case FieldFilterOperator.Between:
+                // If secondaryValue is provided, use it as the upper bound
+                if (secondaryValue != null)
+                {
+                    return Builders<TEntity>.Filter.And(
+                        Builders<TEntity>.Filter.Gte(attributePath, value),
+                        Builders<TEntity>.Filter.Lte(attributePath, secondaryValue)
+                    );
+                }
+                // Fall back to the old behavior of using an array for backward compatibility
+                array = ComparisonValueToArray(value);
+                if (array.Length >= 2)
+                {
+                    return Builders<TEntity>.Filter.And(
+                        Builders<TEntity>.Filter.Gte(attributePath, array[0]),
+                        Builders<TEntity>.Filter.Lte(attributePath, array[1])
+                    );
+                }
+                throw OperationFailedException.OperatorRequiresSecondaryValue(comparisonOperator);
+            case FieldFilterOperator.IsNull:
+                return Builders<TEntity>.Filter.Eq<object?>(attributePath, null);
+            case FieldFilterOperator.IsNotNull:
+                return Builders<TEntity>.Filter.Ne<object?>(attributePath, null);
             default:
                 throw OperationFailedException.OperatorNotSupported(comparisonOperator);
         }
