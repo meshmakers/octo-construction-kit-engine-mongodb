@@ -17,11 +17,11 @@
         <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="$(OctoVersion)" />
         <PackageReference Include="Meshmakers.Octo.ConstructionKit.Models.System" Version="$(OctoVersion)" />
         <PackageReference Include="MathParser.org-mXparser" Version="6.1.0" />
-        <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="9.0.6" />
-        <PackageReference Include="NLog" Version="5.5.0" />
+        <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="9.0.7" />
+        <PackageReference Include="NLog" Version="6.0.2" />
         <PackageReference Include="System.Reactive" Version="6.0.1" />
-        <PackageReference Include="MongoDB.Bson" Version="3.4.0" />
-        <PackageReference Include="MongoDB.Driver" Version="3.4.0" />
+        <PackageReference Include="MongoDB.Bson" Version="3.4.2" />
+        <PackageReference Include="MongoDB.Driver" Version="3.4.2" />
     </ItemGroup>
 
     <ItemGroup>
