@@ -58,8 +58,14 @@ public class TenantContext : ITenantContext
         AdminRepositoryClient = _adminRepositoryAccess.GetRepositoryClient(databaseName);
     }
 
+    /// <summary>
+    /// Gets the unique identifier for the tenant.
+    /// </summary>
     public string TenantId { get; }
 
+    /// <summary>
+    /// Gets the name of the database associated with the tenant.
+    /// </summary>
     public string DatabaseName { get; }
 
     #region Transaction handling
