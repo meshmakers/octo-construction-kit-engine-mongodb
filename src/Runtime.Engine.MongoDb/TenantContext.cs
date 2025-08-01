@@ -28,7 +28,6 @@ public class TenantContext : ITenantContext
     private readonly IBulkRtMutation _bulkRtMutation;
     private readonly ICkCacheService _cacheService;
 
-    private readonly string _databaseName;
     private readonly ILoggerFactory _loggerFactory;
 
     private readonly IMetricsContext _metricsContext;
@@ -49,7 +48,7 @@ public class TenantContext : ITenantContext
         _loggerFactory = loggerFactory;
         SystemConfiguration = systemConfiguration;
         _serviceProvider = serviceProvider;
-        _databaseName = databaseName;
+        DatabaseName = databaseName;
         TenantNotifications = serviceProvider.GetRequiredService<ITenantNotifications>();
         CkModelRepositoryService = serviceProvider.GetRequiredService<ICkModelRepositoryService>();
         _cacheService = serviceProvider.GetRequiredService<ICkCacheService>();
@@ -59,7 +58,15 @@ public class TenantContext : ITenantContext
         AdminRepositoryClient = _adminRepositoryAccess.GetRepositoryClient(databaseName);
     }
 
+    /// <summary>
+    /// Gets the unique identifier for the tenant.
+    /// </summary>
     public string TenantId { get; }
+
+    /// <summary>
+    /// Gets the name of the database associated with the tenant.
+    /// </summary>
+    public string DatabaseName { get; }
 
     #region Transaction handling
 
@@ -453,13 +460,13 @@ public class TenantContext : ITenantContext
 
     public ITenantRepository GetTenantRepository()
     {
-        var result = GetTenantRepository(TenantId, _databaseName);
+        var result = GetTenantRepository(TenantId, DatabaseName);
         return result;
     }
 
     public ITenantRepository GetTenantRepositoryAsAdmin()
     {
-        var result = GetTenantRepositoryAsAdmin(TenantId, _databaseName);
+        var result = GetTenantRepositoryAsAdmin(TenantId, DatabaseName);
         return result;
     }
 
@@ -548,7 +555,7 @@ public class TenantContext : ITenantContext
         try
         {
             await TenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
-            var repositoryDataSource = CreateRepositoryDataSource(_databaseName);
+            var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
             await CkModelRepositoryService.PublishModelAsync(InternalConstants.CkModelRepositoryName,
                 ckCompiledModelRoot, false, true,
                 new TenantDatabaseSourceIdentifier(repositoryDataSource));
@@ -577,7 +584,7 @@ public class TenantContext : ITenantContext
 
     public async Task<bool> IsCkModelExistingAsync(CkModelId ckModelId)
     {
-        var repositoryDataSource = CreateRepositoryDataSource(_databaseName);
+        var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
 
         return await CkModelRepositoryService.IsCkModelExistingAsync(InternalConstants.CkModelRepositoryName, ckModelId,
             new TenantDatabaseSourceIdentifier(repositoryDataSource));
@@ -590,7 +597,7 @@ public class TenantContext : ITenantContext
 
         try
         {
-            var repositoryDataSource = CreateRepositoryDataSource(_databaseName);
+            var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
 
             await TenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
             await CkModelRepositoryService.CustomizeCkEnumAsync(InternalConstants.CkModelRepositoryName,

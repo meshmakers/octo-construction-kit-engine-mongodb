@@ -17,6 +17,11 @@ public interface ITenantContext
     string TenantId { get; }
 
     /// <summary>
+    /// Returns the database name of the tenant context.
+    /// </summary>
+    string DatabaseName { get; }
+
+    /// <summary>
     ///     Gets the system session object
     /// </summary>
     /// <returns></returns>
