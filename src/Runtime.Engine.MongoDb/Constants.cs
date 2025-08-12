@@ -18,11 +18,6 @@ public static class Constants
     internal const string OctoTextAnalyzerEn = "text_octo_en";
     internal const string OctoTextAnalyzerDe = "text_octo_de";
 
-    /// <summary>
-    /// YAML MIME type
-    /// </summary>
-    public const string MimeTypeYaml = "application/x-yaml";
-
     // ********************************************************************
     // Well-known association identifier
     // ********************************************************************

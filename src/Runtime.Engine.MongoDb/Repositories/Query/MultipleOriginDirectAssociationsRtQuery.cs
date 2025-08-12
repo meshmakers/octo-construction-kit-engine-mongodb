@@ -168,13 +168,12 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
 
         var aggregate2 = aggregate.ReplaceWith(
             (AggregateExpressionDefinition<BsonDocument, QueryMultipleResult<TTargetEntity>>)
-            "{ _id: '$_id', totalCount: {$size: '$_associations' }, 'targets': '$_associations'}");
-
+            "{ _id: {'rtId': '$_id', 'ckTypeId': '$ckTypeId' }, totalCount: {$size: '$_associations' }, 'targets': '$_associations'}");
 
         if (skip.HasValue)
         {
             var query =
-                "{ _id: '$_id', totalCount: {$size: '$_associations' }, 'targets': {'$slice': ['$_associations', " +
+                "{ _id: {'rtId': '$_id', 'ckTypeId': '$ckTypeId' }, totalCount: {$size: '$_associations' }, 'targets': {'$slice': ['$_associations', " +
                 skip + "," + take + "]}}";
             aggregate2 = aggregate.ReplaceWith(
                 (AggregateExpressionDefinition<BsonDocument, QueryMultipleResult<TTargetEntity>>)query);
@@ -182,7 +181,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         else if (take.HasValue)
         {
             var query =
-                "{ _id: '$_id', totalCount: {$size: '$_associations' }, 'targets': {'$slice': ['$_associations', 0," +
+                "{ _id: {'rtId': '$_id', 'ckTypeId': '$ckTypeId' }, totalCount: {$size: '$_associations' }, 'targets': {'$slice': ['$_associations', 0," +
                 take + "]}}";
             aggregate2 = aggregate.ReplaceWith(
                 (AggregateExpressionDefinition<BsonDocument, QueryMultipleResult<TTargetEntity>>)query);

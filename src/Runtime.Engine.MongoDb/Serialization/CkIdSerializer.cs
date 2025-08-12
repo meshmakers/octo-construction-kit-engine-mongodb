@@ -62,13 +62,18 @@ public class CkIdSerializer<TKey, TKeySerializer> : SerializerBase<CkId<TKey>>,
         }
     }
 
-    public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args, CkId<TKey> value)
+    public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args, CkId<TKey>? value)
     {
         var bsonWriter = context.Writer;
 
         switch (Representation)
         {
             case BsonType.String:
+                if (value == null)
+                {
+                    bsonWriter.WriteNull();
+                    break;
+                }
                 bsonWriter.WriteString(value.ToString());
                 break;
 

@@ -1,5 +1,4 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
@@ -136,7 +135,7 @@ public interface ITenantRepository : IRuntimeRepository
         where TTargetEntity : RtEntity, new();
 
     Task<IResultSet<RtEntity>> GetIndirectRtAssociationTargetsAsync(
-        IOctoSession session, OctoObjectId originRtId, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
+        IOctoSession session, RtEntityId originRtEntityId, CkId<CkAssociationRoleId> roleId,
         CkId<CkTypeId> targetCkTypeId, GraphDirections graphDirection);
 
     Task<IMultipleOriginResultSet<TTargetEntity>> GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
@@ -223,11 +222,6 @@ public interface ITenantRepository : IRuntimeRepository
 
     #region Advanced functionality
 
-    Task<AggregatedBulkImportResult>
-        BulkInsertRtEntitiesAsync(IOctoSession session, IEnumerable<RtEntity> rtEntityList, BulkOperationOptions options);
-
-    Task<IBulkImportResult> BulkRtAssociationsAsync(IOctoSession session, IEnumerable<RtAssociation> rtAssociations, BulkOperationOptions options);
-
     Task<IEnumerable<AutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session, CkId<CkTypeId> ckTypeId,
         string attributeName,
         string regexFilterValue, int takeCount);
@@ -236,10 +230,4 @@ public interface ITenantRepository : IRuntimeRepository
         IEnumerable<object> autoCompleteValues);
 
     #endregion Advanced functionality
-
-    /// <summary>
-    /// Loads the cache for the tenant.
-    /// </summary>
-    /// <returns></returns>
-    Task LoadCacheForTenantAsync(ICkCacheService cacheService);
 }

@@ -8,6 +8,7 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic.Builders;
+
 using MongoDB.Bson;
 using MongoDB.Driver;
 using MongoDB.Driver.GeoJsonObjectModel;
@@ -19,7 +20,8 @@ internal class MultipleOriginIndirectAssociationsRtQuery : MultipleOriginIndirec
 {
     internal MultipleOriginIndirectAssociationsRtQuery(ICkCacheService ckCacheService, string tenantId,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
-        string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph, CkId<CkAssociationRoleId> roleId,
+        string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
+        CkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
         : base(ckCacheService, tenantId, mongoDbRepositoryDataSource, language, rtIds, originCkTypeGraph, roleId,
             graphDirection,
@@ -28,7 +30,8 @@ internal class MultipleOriginIndirectAssociationsRtQuery : MultipleOriginIndirec
     }
 }
 
-internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<TTargetEntity> where TTargetEntity : RtEntity, new()
+internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<TTargetEntity>
+    where TTargetEntity : RtEntity, new()
 {
     private readonly GraphDirections _graphDirection;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
@@ -40,7 +43,8 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
 
     internal MultipleOriginIndirectAssociationsRtQuery(ICkCacheService ckCacheService, string tenantId,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
-        string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph, CkId<CkAssociationRoleId> roleId,
+        string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
+        CkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
         : base(new RtEntityFieldFilterResolver<TTargetEntity>(ckCacheService, tenantId, targetCkTypeGraph), language)
     {
@@ -52,14 +56,14 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
         _targetCkTypeGraph = targetCkTypeGraph;
         _geospatialFilters = new List<IPipelineStageDefinition>();
     }
-    
+
     protected override void AddPreStagesToPipelines(IList<IPipelineStageDefinition> pipelineStageDefinitions)
     {
         _geospatialFilters.ForEach(pipelineStageDefinitions.Add);
-        
+
         base.AddPostStagesToPipeline(pipelineStageDefinitions);
     }
-    
+
     /// <summary>
     /// Add a geospatial filters to the query
     /// </summary>
@@ -70,7 +74,7 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
         {
             return;
         }
-        
+
         foreach (var geospatialFilter in geospatialFilters)
         {
             var resolvedAttributeName = _fieldFilterResolver.ResolveAttributePath(geospatialFilter.AttributeName);
@@ -78,11 +82,13 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
             {
                 throw OperationFailedException.AttributePathResolutionFailed(geospatialFilter.AttributeName);
             }
+
             if (geospatialFilter is NearGeospatialFilter nearGeospatialFilter)
             {
                 GeoJsonPoint<GeoJsonCoordinates> point = nearGeospatialFilter.Point.ToGeoJsonPoint();
-                
-                _geospatialFilters.Add(OctoPipelineStageBuilder.GeoNear<RtEntity, GeoJsonCoordinates>(resolvedAttributeName, point, nearGeospatialFilter.MinDistance, nearGeospatialFilter.MaxDistance));
+
+                _geospatialFilters.Add(OctoPipelineStageBuilder.GeoNear<RtEntity, GeoJsonCoordinates>(
+                    resolvedAttributeName, point, nearGeospatialFilter.MinDistance, nearGeospatialFilter.MaxDistance));
             }
         }
     }
@@ -131,34 +137,35 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
         AddPostStagesToPipeline(pipelineStageDefinitions);
 
         var projectDefinition = (ProjectionDefinition<BsonDocument, BsonDocument>)
-            new BsonDocument(@as,
-                new BsonDocument("$sortArray",
-                    new BsonDocument
-                    {
+            new BsonDocument
+            {
+                { "ckTypeId", 1 },
+                {
+                    @as, new BsonDocument("$sortArray",
+                        new BsonDocument
                         {
-                            "input",
-                            new BsonDocument("$filter",
-                                new BsonDocument
-                                {
-                                    { "input", "$" + @as },
+                            {
+                                "input", new BsonDocument("$filter",
+                                    new BsonDocument
                                     {
-                                        "cond",
-                                        new BsonDocument("$eq",
-                                            new BsonArray
-                                            {
-                                                "$$this." + connectToCkTypeIdField,
-                                                _targetCkTypeGraph.CkTypeId.SemanticVersionedFullName
-                                            })
-                                    }
-                                })
-                        },
-                        {
-                            "sortBy",
-                            new BsonDocument("depth", 1)
-                        }
-                    }));
+                                        { "input", "$" + @as },
+                                        {
+                                            "cond", new BsonDocument("$eq",
+                                                new BsonArray
+                                                {
+                                                    "$$this." + connectToCkTypeIdField,
+                                                    _targetCkTypeGraph.CkTypeId.SemanticVersionedFullName
+                                                })
+                                        }
+                                    })
+                            },
+                            { "sortBy", new BsonDocument("depth", 1) }
+                        })
+                }
+            };
 
-        var aggregate = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph).Aggregate(session)
+        var aggregate = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph)
+            .Aggregate(session)
             .Match(
                 Builders<RtEntity>.Filter.And(Builders<RtEntity>.Filter.In(x => x.RtId, _rtIds)))
             .GraphLookup<RtAssociation, BsonValue, BsonValue, BsonValue, TTargetEntity, TTargetEntity[], BsonDocument>(
@@ -176,7 +183,8 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
             .Project(projectDefinition)
             .Unwind(@as, new AggregateUnwindOptions<BsonDocument> { PreserveNullAndEmptyArrays = true })
             .Lookup<BsonDocument, TTargetEntity, TTargetEntity, IEnumerable<TTargetEntity>, BsonDocument>(
-                _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TTargetEntity>(_targetCkTypeGraph).GetMongoCollection(),
+                _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TTargetEntity>(_targetCkTypeGraph)
+                    .GetMongoCollection(),
                 @as + "." + connectFromRtIdField,
                 "_id",
                 pipelineStageDefinitions.Any()
@@ -186,14 +194,12 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
             .Unwind(@as, new AggregateUnwindOptions<BsonDocument> { PreserveNullAndEmptyArrays = true })
             .Group<BsonDocument>(new BsonDocument
             {
-                { "_id", "$_id" },
-                { @as, new BsonDocument("$addToSet", "$" + @as) }
+                { "_id", new BsonDocument{{"rtId", "$_id"}, {"ckTypeId", "$ckTypeId" } }}, { @as, new BsonDocument("$addToSet", "$" + @as) }
             });
 
         var aggregate2 = aggregate.ReplaceWith(
             (AggregateExpressionDefinition<BsonDocument, QueryMultipleResult<TTargetEntity>>)
             "{ _id: '$_id', totalCount: {$size: '$_associations' }, 'targets': '$_associations'}");
-
 
         if (skip.HasValue)
         {

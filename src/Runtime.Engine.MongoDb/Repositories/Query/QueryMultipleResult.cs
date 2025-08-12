@@ -8,7 +8,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 // ReSharper disable once ClassNeverInstantiated.Global
 internal class QueryMultipleResult<TEntity>
 {
-    public OctoObjectId Id { get; set; }
+    public RtEntityId Id { get; set; }
     public long TotalCount { get; set; }
     public IEnumerable<TEntity> Targets { get; set; } = null!;
 

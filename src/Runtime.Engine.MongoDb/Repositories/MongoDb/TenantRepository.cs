@@ -55,27 +55,6 @@ internal class TenantRepository(
 
     #region Data manipulation
 
-    public async Task<AggregatedBulkImportResult> BulkInsertRtEntitiesAsync(IOctoSession session,
-        IEnumerable<RtEntity> rtEntityList, BulkOperationOptions options)
-    {
-        var results = new List<IBulkImportResult>();
-        foreach (var groupedEntities in rtEntityList.GroupBy(x => x.CkTypeId))
-        {
-            if (groupedEntities.Key == null)
-            {
-                throw OperationFailedException.CreateWithMessage(
-                    "Cannot update RtEntity without CkTypeId. Please provide a CkTypeId.");
-            }
-
-            var ckTypeGraph = await GetCkTypeGraphAsync(groupedEntities.Key);
-
-            results.Add(await mongoDbRepositoryDataSource.GetRtCollection<RtEntity>(ckTypeGraph)
-                .BulkImportAsync(session, groupedEntities, options));
-        }
-
-        return new AggregatedBulkImportResult(results);
-    }
-
     protected override async Task DeleteManyRtEntitiesAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
         FieldFilterCriteria fieldFilterCriteria)
     {
@@ -131,11 +110,7 @@ internal class TenantRepository(
         await mutation.ReplaceOneAsync(session, rtEntity).ConfigureAwait(false);
     }
 
-    public async Task<IBulkImportResult> BulkRtAssociationsAsync(IOctoSession session,
-        IEnumerable<RtAssociation> rtAssociations, BulkOperationOptions options)
-    {
-        return await mongoDbRepositoryDataSource.RtAssociations.BulkImportAsync(session, rtAssociations, options);
-    }
+
 
     #endregion Data manipulation
 
@@ -341,23 +316,25 @@ internal class TenantRepository(
         GraphDirections graphDirection) where TOriginEntity : RtEntity where TTargetEntity : RtEntity, new()
     {
         var dataQueryOperation = DataQueryOperation.Create();
+        var originCkTypeId = RtEntityExtensions.GetCkTypeId<TOriginEntity>();
+        var originRtEntityId = new RtEntityId(originCkTypeId, originRtId);
 
         var resultSets = await GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(session,
             [originRtId], roleId,
             graphDirection, null, dataQueryOperation);
-        return resultSets[originRtId];
+        return resultSets[originRtEntityId];
     }
 
     public async Task<IResultSet<RtEntity>> GetIndirectRtAssociationTargetsAsync(IOctoSession session,
-        OctoObjectId originRtId, CkId<CkTypeId> originCkTypeId,
+        RtEntityId originRtEntityId,
         CkId<CkAssociationRoleId> roleId, CkId<CkTypeId> targetCkTypeId, GraphDirections graphDirection)
     {
         var dataQueryOperation = DataQueryOperation.Create();
 
-        var resultSets = await GetIndirectRtAssociationTargetsAsync(session, [originRtId], originCkTypeId,
+        var resultSets = await GetIndirectRtAssociationTargetsAsync(session, [originRtEntityId.RtId], originRtEntityId.CkTypeId,
             roleId,
             graphDirection, null, targetCkTypeId, dataQueryOperation);
-        return resultSets[originRtId];
+        return resultSets[originRtEntityId];
     }
 
     public async Task<IMultipleOriginResultSet<TTargetEntity>> GetIndirectRtAssociationTargetsAsync<TOriginEntity,
@@ -761,11 +738,6 @@ internal class TenantRepository(
         {
             throw OperationFailedException.UpdateAutoCompleteTextsFailed(ckTypeId, attributeName, e);
         }
-    }
-
-    public async Task LoadCacheForTenantAsync(ICkCacheService cacheService)
-    {
-        await RefreshCkCacheServiceAsync(cacheService);
     }
 
     #endregion Advanced functionality

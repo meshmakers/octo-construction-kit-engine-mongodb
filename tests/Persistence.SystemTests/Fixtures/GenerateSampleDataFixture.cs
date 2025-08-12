@@ -1,5 +1,4 @@
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Exchange;
-using Meshmakers.Octo.Runtime.Engine.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.Exchange;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
@@ -10,7 +9,9 @@ public class GenerateSampleDataFixture: ImportTestCkModelFixture
     {
         await base.InitializeAsync();
         var importRtModelCommand = Provider.GetRequiredService<IImportRtModelCommand>();
-        await importRtModelCommand.ImportAsync("octosystem", "testData/sampleRtModel.yaml", Constants.MimeTypeYaml);
+        var systemContext = GetSystemContext();
+        var repository = systemContext.GetSystemTenantRepository();
+        await importRtModelCommand.ImportAsync(repository, "testData/sampleRtModel.yaml", ExchangeMimeTypes.MimeTypeYaml);
     }
 
     public override ValueTask DisposeAsync()
