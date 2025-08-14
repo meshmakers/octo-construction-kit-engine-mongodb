@@ -31,4 +31,10 @@
         <RestoreSources Condition="'$(OctoNugetPrivateServer)'!=''">$(OctoNugetPrivateServer)</RestoreSources>
         <RestoreSources Condition="'$(Configuration)'=='DebugL'">$(RestoreSources);$(OctoRepoRootPath)../nuget</RestoreSources>
     </PropertyGroup>
+    <PropertyGroup Condition=" '$(Configuration)' == 'DebugL' ">
+        <DebugSymbols>true</DebugSymbols>
+        <DebugType>full</DebugType>
+        <Optimize>false</Optimize>
+        <DefineConstants>DEBUG;TRACE</DefineConstants>
+    </PropertyGroup>
 </Project>
