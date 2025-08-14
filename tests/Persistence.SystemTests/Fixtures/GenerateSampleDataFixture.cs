@@ -1,9 +1,10 @@
 using Meshmakers.Octo.Runtime.Contracts.Exchange;
+
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
-public class GenerateSampleDataFixture: ImportTestCkModelFixture
+public class GenerateSampleDataFixture : ImportTestCkModelFixture
 {
     public override async ValueTask InitializeAsync()
     {
@@ -11,7 +12,8 @@ public class GenerateSampleDataFixture: ImportTestCkModelFixture
         var importRtModelCommand = Provider.GetRequiredService<IImportRtModelCommand>();
         var systemContext = GetSystemContext();
         var repository = systemContext.GetSystemTenantRepository();
-        await importRtModelCommand.ImportAsync(repository, "testData/sampleRtModel.yaml", ExchangeMimeTypes.MimeTypeYaml);
+        await importRtModelCommand.ImportAsync(repository, "testData/sampleRtModel.yaml",
+            ExchangeMimeTypes.MimeTypeYaml, ImportStrategy.Insert);
     }
 
     public override ValueTask DisposeAsync()
