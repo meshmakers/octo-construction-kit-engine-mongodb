@@ -80,6 +80,37 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
         return gridFsFileInfo == null ? null : new BinaryInfo(gridFsFileInfo);
     }
 
+    public override async Task DeleteExpiredTemporaryLargeBinariesAsync(IOctoSession session, DateTime expiryDateTime,
+        CancellationToken cancellationToken)
+    {
+        var filter = Builders<GridFSFileInfo>.Filter.Eq("Metadata." + Constants.BinaryType, (int)BinaryType.Temporary);
+        filter &= Builders<GridFSFileInfo>.Filter.Lte("Metadata." + Constants.ExpiryDateTime, expiryDateTime);
+        var asyncCursor = await _bucket.FindAsync(filter, cancellationToken: cancellationToken);
+
+        while (await asyncCursor.MoveNextAsync(cancellationToken))
+        {
+            foreach (var gridFsFileInfo in asyncCursor.Current)
+            {
+                await _bucket.DeleteAsync(gridFsFileInfo.Id, cancellationToken);
+            }
+        }
+    }
+
+    public override async Task DeleteAllTemporaryLargeBinariesAsync(IOctoSession session, CancellationToken cancellationToken)
+    {
+        var filter = Builders<GridFSFileInfo>.Filter.Eq("Metadata." + Constants.BinaryType, (int)BinaryType.Temporary);
+        filter &= Builders<GridFSFileInfo>.Filter.Ne("Metadata." + Constants.ExpiryDateTime, BsonNull.Value);
+        var asyncCursor = await _bucket.FindAsync(filter, cancellationToken: cancellationToken);
+
+        while (await asyncCursor.MoveNextAsync(cancellationToken))
+        {
+            foreach (var gridFsFileInfo in asyncCursor.Current)
+            {
+                await _bucket.DeleteAsync(gridFsFileInfo.Id, cancellationToken);
+            }
+        }
+    }
+
     protected override async Task<OctoObjectId> UploadLargeBinaryAsync(IOctoSession session, string filename, string contentType, BinaryType binaryType,
         RtEntityId? rtEntityId, DateTime? expiryDateTime, Stream stream,
         CancellationToken cancellationToken = new())
