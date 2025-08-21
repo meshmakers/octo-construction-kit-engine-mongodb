@@ -78,7 +78,7 @@ internal class RtEntityFieldFilterResolver<TEntity>(
 
     private static object Get(string attributePath, object searchTeam, Func<string, object, object> f)
     {
-        if (searchTeam is ICollection collection)
+        if (searchTeam is not string && searchTeam is IEnumerable collection)
         {
             var result = new List<object>();
             foreach (var item in collection)
