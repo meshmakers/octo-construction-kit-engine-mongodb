@@ -246,6 +246,9 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         {
             await CreateIndexIfNotExists(ckTypeInfo);
         }
+        
+        // Create indexes for RtAssociations collection
+        await CreateRtAssociationIndexIfNotExists();
     }
 
     private async Task CreateIndexIfNotExists(CkTypeInfo ckTypeInfo)
@@ -413,6 +416,61 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     public async Task<IOctoSession> CreateSessionAsync()
     {
         return await _repositoryClient.GetSessionAsync();
+    }
+
+    private async Task CreateRtAssociationIndexIfNotExists()
+    {
+        _logger.LogDebug("Creating indexes for RtAssociations collection");
+        
+        var collection = RtMongoDbDataSourceAssociations;
+        
+        // Get existing indexes to check if they already exist
+        var existingIndexes = await collection.GetIndexListAsync("originCkTypeId_");
+        existingIndexes = existingIndexes.Concat(await collection.GetIndexListAsync("targetCkTypeId_")).ToList();
+        existingIndexes = existingIndexes.Concat(await collection.GetIndexListAsync("associationRoleId_")).ToList();
+        
+        // Create all required compound indexes if they don't exist
+        await CreateIndexIfNotExistsInternal("originCkTypeId_1_originRtId_1",
+            ["originCkTypeId", "originRtId"], existingIndexes, collection);
+            
+        await CreateIndexIfNotExistsInternal("targetCkTypeId_1_targetRtId_1",
+            ["targetCkTypeId", "targetRtId"], existingIndexes, collection);
+            
+        await CreateIndexIfNotExistsInternal("originCkTypeId_1_originRtId_1_associationRoleId_1",
+            ["originCkTypeId", "originRtId", "associationRoleId"], existingIndexes, collection);
+            
+        await CreateIndexIfNotExistsInternal("targetCkTypeId_1_targetRtId_1_associationRoleId_1",
+            ["targetCkTypeId", "targetRtId", "associationRoleId"], existingIndexes, collection);
+            
+        await CreateIndexIfNotExistsInternal("associationRoleId_1_originCkTypeId_1",
+            ["associationRoleId", "originCkTypeId"], existingIndexes, collection);
+            
+        await CreateIndexIfNotExistsInternal("associationRoleId_1_targetCkTypeId_1",
+            ["associationRoleId", "targetCkTypeId"], existingIndexes, collection);
+            
+        await CreateIndexIfNotExistsInternal("associationRoleId_1_originCkTypeId_1_originRtId_1",
+            ["associationRoleId", "originCkTypeId", "originRtId"], existingIndexes, collection);
+            
+        await CreateIndexIfNotExistsInternal("associationRoleId_1_targetCkTypeId_1_targetRtId_1",
+            ["associationRoleId", "targetCkTypeId", "targetRtId"], existingIndexes, collection);
+    }
+    
+    private async Task CreateIndexIfNotExistsInternal(string indexName, string[] fields, 
+        ICollection<CkTypeIndexWithName> existingIndexes, 
+        IMongoDbDataSourceCollection<OctoObjectId, RtAssociation> collection)
+    {
+        // Check if index already exists
+        var existingIndex = existingIndexes.SingleOrDefault(i => 
+            string.Equals(i.Name, indexName, StringComparison.OrdinalIgnoreCase));
+            
+        if (existingIndex != null)
+        {
+            _logger.LogDebug("Index '{IndexName}' already exists for RtAssociations, skipping creation", indexName);
+            return;
+        }
+        
+        _logger.LogDebug("Creating index '{IndexName}' for RtAssociations", indexName);
+        await collection.CreateAscendingIndexAsync(indexName, fields);
     }
 
     private IAggregateFluent<CkTypeInfo> AggregateCkTypeInfo(IAggregateFluent<CkType> aggregate)
