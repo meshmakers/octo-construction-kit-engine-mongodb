@@ -289,7 +289,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 
                 if (!Regex.IsMatch(enumValueToAdd.Value.Name, "^[_a-zA-Z][_a-zA-Z0-9]*$"))
                 {
-                    throw DatabaseCkModelRepositoryException.CkEnumValueNameInvalid(ckEnumId, enumValueToAdd.Value.Key);
+                    throw DatabaseCkModelRepositoryException.CkEnumValueNameInvalid(ckEnumId, enumValueToAdd.Value.Key, enumValueToAdd.Value.Name);
                 }
                 
                 if (newEnumValueList.Any(x => x.Name == enumValueToAdd.Value.Name))
