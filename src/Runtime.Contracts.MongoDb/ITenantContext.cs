@@ -158,6 +158,17 @@ public interface ITenantContext
 
     #endregion Configuration
 
+    #region Database Maintenance
+
+    /// <summary>
+    ///     Creates indexes for the RtAssociations collection if they don't already exist.
+    ///     This method is typically called during migrations to ensure optimal query performance.
+    /// </summary>
+    /// <returns>A task representing the asynchronous operation</returns>
+    Task CreateRtAssociationIndexesAsync();
+
+    #endregion Database Maintenance
+
     #region Construction Kits
 
     /// <summary>
