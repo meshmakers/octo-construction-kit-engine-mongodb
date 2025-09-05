@@ -248,7 +248,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
         
         // Create indexes for RtAssociations collection
-        await CreateRtAssociationIndexIfNotExists();
+        await CreateRtAssociationIndexesAsync();
     }
 
     private async Task CreateIndexIfNotExists(CkTypeInfo ckTypeInfo)
@@ -418,7 +418,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return await _repositoryClient.GetSessionAsync();
     }
 
-    private async Task CreateRtAssociationIndexIfNotExists()
+    public async Task CreateRtAssociationIndexesAsync()
     {
         _logger.LogDebug("Creating indexes for RtAssociations collection");
         

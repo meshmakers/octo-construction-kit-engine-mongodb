@@ -1,12 +1,8 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.Runtime.Contracts;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
-using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
-using MongoDB.Bson;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
@@ -25,4 +21,11 @@ public interface IMongoDbRepositoryDataSource : ICkMongoDbRepositoryDataSource, 
 
     Task<IOctoSession> GetSessionAsync();
     IOctoSession GetSession();
+
+    /// <summary>
+    ///     Creates indexes for the RtAssociations collection if they don't already exist.
+    ///     This method is typically called during migrations to ensure optimal query performance.
+    /// </summary>
+    /// <returns>A task representing the asynchronous operation</returns>
+    Task CreateRtAssociationIndexesAsync();
 }
