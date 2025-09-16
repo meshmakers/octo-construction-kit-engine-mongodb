@@ -6,6 +6,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
@@ -60,7 +61,21 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
         var indexKeys =
             fields.Select(f =>
-                Builders<TDocument>.IndexKeys.Ascending(Constants.AttributesName + "." + f.ToCamelCase()));
+                {
+                    // Check if the field is "_id", rtWellKnownName. If so, do not prefix with "attributes."
+                    if (string.Compare(f, Constants.IdField, StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                        string.Compare(f, nameof(RtEntity.RtCreationDateTime), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                        string.Compare(f, nameof(RtEntity.RtChangedDateTime), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                        string.Compare(f, nameof(RtEntity.CkTypeId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                        string.Compare(f, nameof(RtEntity.RtVersion), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                        string.Compare(f, nameof(RtEntity.RtWellKnownName), StringComparison.InvariantCultureIgnoreCase) == 0)
+                    {
+                        return Builders<TDocument>.IndexKeys.Ascending(f);
+                    }
+
+                    return Builders<TDocument>.IndexKeys.Ascending(Constants.AttributesName + "." + f.ToCamelCase());
+                }
+            );
 
 
         await _documentCollection.Indexes.CreateOneAsync(new CreateIndexModel<TDocument>(

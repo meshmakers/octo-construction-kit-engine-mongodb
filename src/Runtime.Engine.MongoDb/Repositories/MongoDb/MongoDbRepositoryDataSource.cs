@@ -246,7 +246,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         {
             await CreateIndexIfNotExists(ckTypeInfo);
         }
-        
+
         // Create indexes for RtAssociations collection
         await CreateRtAssociationIndexesAsync();
     }
@@ -263,11 +263,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         Dictionary<CkType, List<CkTypeIndex>> regularIndices = new();
         CkTypeIndex? textIndex = null;
 
-        // Analyse the base type first
-        if (ckTypeInfo.Indexes != null)
-        {
-            AnalyseIndex(ckTypeInfo, regularIndices, ref textIndex);
-        }
+        // Analyze the base type first
+        AnalyseIndex(ckTypeInfo, regularIndices, ref textIndex);
 
         // Then analyze the inherited types, to merge text indexes
         var inheritTypes = ckTypeInfo.Inheritances.ToDictionary(k => k.CkTypeId, v => v);
@@ -329,7 +326,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     }
 
     private async Task CreateIndexIfNotExists(CkType ckType, CkTypeIndex ckTypeIndex,
-        ICollection<CkTypeIndexWithName> repositoryIndices, IMongoDbDataSourceCollection<OctoObjectId, RtEntity> collection,
+        ICollection<CkTypeIndexWithName> repositoryIndices,
+        IMongoDbDataSourceCollection<OctoObjectId, RtEntity> collection,
         int uniqueIndexNumber)
     {
         if (ckTypeIndex.IndexType == IndexTypes.None)
@@ -341,7 +339,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         // Ensure that attributes are not multiple times in the index. If an attribute is defined multiple times, we remove duplicates.
         HashSet<string> attributePaths = new();
-        foreach (CkIndexFields fields in ckTypeIndex.Fields.OrderBy(f=> f.Weight))
+        foreach (CkIndexFields fields in ckTypeIndex.Fields.OrderBy(f => f.Weight))
         {
             var fieldAttributePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (string attributeName in fields.AttributeNames)
@@ -351,6 +349,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     fieldAttributePaths.Add(attributeName);
                 }
             }
+
             fields.AttributeNames = fieldAttributePaths.ToList();
         }
 
@@ -388,9 +387,33 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     private void AnalyseIndex(CkType ckTypeInfo, Dictionary<CkType, List<CkTypeIndex>> regularIndices,
         ref CkTypeIndex? textIndex)
     {
+        var ckTypeIndices = new List<CkTypeIndex>();
+
+        if (ckTypeInfo.IsCollectionRoot)
+        {
+            ckTypeIndices.Add(new()
+            {
+                IndexType = IndexTypes.Ascending,
+                Fields = [new CkIndexFields { AttributeNames = [nameof(RtEntity.RtWellKnownName).ToCamelCase()] }]
+            });
+            ckTypeIndices.Add(
+                new()
+                {
+                    IndexType = IndexTypes.Ascending,
+                    Fields =
+                    [
+                        new CkIndexFields
+                        {
+                            AttributeNames = [nameof(RtEntity.CkTypeId).ToCamelCase(), Constants.IdField]
+                        }
+                    ]
+                });
+        };
+        regularIndices.Add(ckTypeInfo, ckTypeIndices);
+
         if (ckTypeInfo.Indexes != null)
         {
-            regularIndices.Add(ckTypeInfo,
+            ckTypeIndices.AddRange(
                 ckTypeInfo.Indexes.Where(i => i.IndexType == IndexTypes.Ascending).ToList());
 
             foreach (var index in ckTypeInfo.Indexes.Where(i => i.IndexType == IndexTypes.Text))
@@ -421,54 +444,57 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     public async Task CreateRtAssociationIndexesAsync()
     {
         _logger.LogDebug("Creating indexes for RtAssociations collection");
-        
+
         var collection = RtMongoDbDataSourceAssociations;
-        
+
         // Get existing indexes to check if they already exist
         var existingIndexes = await collection.GetIndexListAsync("originCkTypeId_");
         existingIndexes = existingIndexes.Concat(await collection.GetIndexListAsync("targetCkTypeId_")).ToList();
         existingIndexes = existingIndexes.Concat(await collection.GetIndexListAsync("associationRoleId_")).ToList();
-        
+
         // Create all required compound indexes if they don't exist
         await CreateIndexIfNotExistsInternal("originCkTypeId_1_originRtId_1",
             ["originCkTypeId", "originRtId"], existingIndexes, collection);
-            
+
         await CreateIndexIfNotExistsInternal("targetCkTypeId_1_targetRtId_1",
             ["targetCkTypeId", "targetRtId"], existingIndexes, collection);
-            
+
         await CreateIndexIfNotExistsInternal("originCkTypeId_1_originRtId_1_associationRoleId_1",
             ["originCkTypeId", "originRtId", "associationRoleId"], existingIndexes, collection);
-            
+
         await CreateIndexIfNotExistsInternal("targetCkTypeId_1_targetRtId_1_associationRoleId_1",
             ["targetCkTypeId", "targetRtId", "associationRoleId"], existingIndexes, collection);
-            
+
+        await CreateIndexIfNotExistsInternal("originRtId_1_associationRoleId_1_targetCkTypeId_1_targetRtId_1",
+            ["originRtId", "associationRoleId", "targetCkTypeId", "targetRtId"], existingIndexes, collection);
+
         await CreateIndexIfNotExistsInternal("associationRoleId_1_originCkTypeId_1",
             ["associationRoleId", "originCkTypeId"], existingIndexes, collection);
-            
+
         await CreateIndexIfNotExistsInternal("associationRoleId_1_targetCkTypeId_1",
             ["associationRoleId", "targetCkTypeId"], existingIndexes, collection);
-            
+
         await CreateIndexIfNotExistsInternal("associationRoleId_1_originCkTypeId_1_originRtId_1",
             ["associationRoleId", "originCkTypeId", "originRtId"], existingIndexes, collection);
-            
+
         await CreateIndexIfNotExistsInternal("associationRoleId_1_targetCkTypeId_1_targetRtId_1",
             ["associationRoleId", "targetCkTypeId", "targetRtId"], existingIndexes, collection);
     }
-    
-    private async Task CreateIndexIfNotExistsInternal(string indexName, string[] fields, 
-        ICollection<CkTypeIndexWithName> existingIndexes, 
+
+    private async Task CreateIndexIfNotExistsInternal(string indexName, string[] fields,
+        ICollection<CkTypeIndexWithName> existingIndexes,
         IMongoDbDataSourceCollection<OctoObjectId, RtAssociation> collection)
     {
         // Check if index already exists
-        var existingIndex = existingIndexes.SingleOrDefault(i => 
+        var existingIndex = existingIndexes.SingleOrDefault(i =>
             string.Equals(i.Name, indexName, StringComparison.OrdinalIgnoreCase));
-            
+
         if (existingIndex != null)
         {
             _logger.LogDebug("Index '{IndexName}' already exists for RtAssociations, skipping creation", indexName);
             return;
         }
-        
+
         _logger.LogDebug("Creating index '{IndexName}' for RtAssociations", indexName);
         await collection.CreateAscendingIndexAsync(indexName, fields);
     }

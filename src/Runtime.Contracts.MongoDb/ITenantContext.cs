@@ -167,6 +167,15 @@ public interface ITenantContext
     /// <returns>A task representing the asynchronous operation</returns>
     Task CreateRtAssociationIndexesAsync();
 
+    /// <summary>
+    /// Updates all indexes in the tenant database.
+    /// This method can be used to ensure that all indexes are up to date and optimized for
+    /// the current data and query patterns.
+    /// </summary>
+    /// <param name="adminSession">An admin session to perform the operation</param>
+    /// <returns></returns>
+    Task UpdateIndexesAsync(IOctoAdminSession adminSession);
+
     #endregion Database Maintenance
 
     #region Construction Kits

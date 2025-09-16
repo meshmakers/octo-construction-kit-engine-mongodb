@@ -97,6 +97,12 @@ public class TenantContext : ITenantContext
         await repositoryDataSource.CreateRtAssociationIndexesAsync();
     }
 
+    public async Task UpdateIndexesAsync(IOctoAdminSession adminSession)
+    {
+        var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName);
+        await repositoryDataSource.UpdateIndexAsync(adminSession);
+    }
+
     public async Task CreateChildTenantAsync(IOctoAdminSession adminSession, string databaseName, string tenantId)
     {
         ArgumentValidation.ValidateString(nameof(databaseName), databaseName);
