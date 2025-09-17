@@ -335,8 +335,6 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             return;
         }
 
-        var indexName = ckType.CkTypeId.GetCkTypeCollectionName() + "_" + uniqueIndexNumber;
-
         // Ensure that attributes are not multiple times in the index. If an attribute is defined multiple times, we remove duplicates.
         HashSet<string> attributePaths = new();
         foreach (CkIndexFields fields in ckTypeIndex.Fields.OrderBy(f => f.Weight))
@@ -353,16 +351,33 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             fields.AttributeNames = fieldAttributePaths.ToList();
         }
 
-        // We check if the index already exists in the repository, by comparing type, the fields' weight and the attribute paths
+        await CreateIndexIfNotExists(ckType.CkTypeId.GetCkTypeCollectionName(), ckTypeIndex, repositoryIndices,
+            collection, uniqueIndexNumber);
+    }
+
+    private async Task CreateIndexIfNotExists<TKey, TDocument>(string collectionName, CkTypeIndex ckTypeIndex,
+        ICollection<CkTypeIndexWithName> repositoryIndices,
+        IMongoDbDataSourceCollection<TKey, TDocument> collection, int uniqueIndexNumber)
+        where TDocument : class, new()
+        where TKey : notnull
+    {
+        var indexName = collectionName + "_" + uniqueIndexNumber;
+
+        // We check if the index already exists in the repository,
+        // by comparing type, the fields' weight and the attribute paths
         // The fields are compared case-insensitive, so we use the attribute names directly.
+        var repositoryIndexList = repositoryIndices.Where(i =>
+            i.CompareToInSequence(ckTypeIndex));
+
         var repositoryIndex = repositoryIndices.SingleOrDefault(i =>
-            i.CompareTo(ckTypeIndex));
+            i.CompareToInSequence(ckTypeIndex));
 
         // If found, we skip the creation of the index.
         if (repositoryIndex != null)
         {
-            _logger.LogDebug("Index '{IndexName}' already exists for '{CkTypeId}', skipping creation",
-                indexName, ckType.CkTypeId);
+            _logger.LogDebug("Index '{IndexName}' already exists for '{CollectionName}', skipping creation",
+                indexName, collectionName);
+            repositoryIndices.Remove(repositoryIndex);
             return;
         }
 
@@ -408,7 +423,9 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                         }
                     ]
                 });
-        };
+        }
+
+        ;
         regularIndices.Add(ckTypeInfo, ckTypeIndices);
 
         if (ckTypeInfo.Indexes != null)
@@ -428,7 +445,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 {
                     _logger.LogWarning(
                         "Text index for '{CkTypeId}' has different language '{Language}' than existing text index '{ExistingLanguage}'",
-                        ckTypeInfo.CkTypeId, index.Language, textIndex.Language);
+                        ckTypeInfo.CkTypeId.ToString(), index.Language, textIndex.Language);
                 }
 
                 textIndex.Fields = textIndex.Fields.Union(index.Fields).ToList();
@@ -448,55 +465,166 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var collection = RtMongoDbDataSourceAssociations;
 
         // Get existing indexes to check if they already exist
-        var existingIndexes = await collection.GetIndexListAsync("originCkTypeId_");
-        existingIndexes = existingIndexes.Concat(await collection.GetIndexListAsync("targetCkTypeId_")).ToList();
-        existingIndexes = existingIndexes.Concat(await collection.GetIndexListAsync("associationRoleId_")).ToList();
+        var existingIndexes = await collection.GetIndexListAsync();
 
-        // Create all required compound indexes if they don't exist
-        await CreateIndexIfNotExistsInternal("originCkTypeId_1_originRtId_1",
-            ["originCkTypeId", "originRtId"], existingIndexes, collection);
-
-        await CreateIndexIfNotExistsInternal("targetCkTypeId_1_targetRtId_1",
-            ["targetCkTypeId", "targetRtId"], existingIndexes, collection);
-
-        await CreateIndexIfNotExistsInternal("originCkTypeId_1_originRtId_1_associationRoleId_1",
-            ["originCkTypeId", "originRtId", "associationRoleId"], existingIndexes, collection);
-
-        await CreateIndexIfNotExistsInternal("targetCkTypeId_1_targetRtId_1_associationRoleId_1",
-            ["targetCkTypeId", "targetRtId", "associationRoleId"], existingIndexes, collection);
-
-        await CreateIndexIfNotExistsInternal("originRtId_1_associationRoleId_1_targetCkTypeId_1_targetRtId_1",
-            ["originRtId", "associationRoleId", "targetCkTypeId", "targetRtId"], existingIndexes, collection);
-
-        await CreateIndexIfNotExistsInternal("associationRoleId_1_originCkTypeId_1",
-            ["associationRoleId", "originCkTypeId"], existingIndexes, collection);
-
-        await CreateIndexIfNotExistsInternal("associationRoleId_1_targetCkTypeId_1",
-            ["associationRoleId", "targetCkTypeId"], existingIndexes, collection);
-
-        await CreateIndexIfNotExistsInternal("associationRoleId_1_originCkTypeId_1_originRtId_1",
-            ["associationRoleId", "originCkTypeId", "originRtId"], existingIndexes, collection);
-
-        await CreateIndexIfNotExistsInternal("associationRoleId_1_targetCkTypeId_1_targetRtId_1",
-            ["associationRoleId", "targetCkTypeId", "targetRtId"], existingIndexes, collection);
-    }
-
-    private async Task CreateIndexIfNotExistsInternal(string indexName, string[] fields,
-        ICollection<CkTypeIndexWithName> existingIndexes,
-        IMongoDbDataSourceCollection<OctoObjectId, RtAssociation> collection)
-    {
-        // Check if index already exists
-        var existingIndex = existingIndexes.SingleOrDefault(i =>
-            string.Equals(i.Name, indexName, StringComparison.OrdinalIgnoreCase));
-
-        if (existingIndex != null)
+        var ckTypeIndices = new List<CkTypeIndex>();
+        ckTypeIndices.Add(new()
         {
-            _logger.LogDebug("Index '{IndexName}' already exists for RtAssociations, skipping creation", indexName);
-            return;
+            IndexType = IndexTypes.Ascending,
+            Fields =
+            [
+                new CkIndexFields
+                {
+                    AttributeNames =
+                    [
+                        nameof(RtAssociation.OriginCkTypeId).ToCamelCase(),
+                        nameof(RtAssociation.OriginRtId).ToCamelCase()
+                    ]
+                }
+            ]
+        });
+        ckTypeIndices.Add(new()
+        {
+            IndexType = IndexTypes.Ascending,
+            Fields =
+            [
+                new CkIndexFields
+                {
+                    AttributeNames =
+                    [
+                        nameof(RtAssociation.TargetCkTypeId).ToCamelCase(),
+                        nameof(RtAssociation.TargetRtId).ToCamelCase()
+                    ]
+                }
+            ]
+        });
+        ckTypeIndices.Add(new()
+        {
+            IndexType = IndexTypes.Ascending,
+            Fields =
+            [
+                new CkIndexFields
+                {
+                    AttributeNames =
+                    [
+                        nameof(RtAssociation.OriginCkTypeId).ToCamelCase(),
+                        nameof(RtAssociation.OriginRtId).ToCamelCase(),
+                        nameof(RtAssociation.AssociationRoleId).ToCamelCase()
+                    ]
+                }
+            ]
+        });
+        ckTypeIndices.Add(new()
+        {
+            IndexType = IndexTypes.Ascending,
+            Fields =
+            [
+                new CkIndexFields
+                {
+                    AttributeNames =
+                    [
+                        nameof(RtAssociation.TargetCkTypeId).ToCamelCase(),
+                        nameof(RtAssociation.TargetRtId).ToCamelCase(),
+                        nameof(RtAssociation.AssociationRoleId).ToCamelCase()
+                    ]
+                }
+            ]
+        });
+        ckTypeIndices.Add(new()
+        {
+            IndexType = IndexTypes.Ascending,
+            Fields =
+            [
+                new CkIndexFields
+                {
+                    AttributeNames =
+                    [
+                        nameof(RtAssociation.OriginRtId).ToCamelCase(),
+                        nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
+                        nameof(RtAssociation.TargetCkTypeId).ToCamelCase(),
+                        nameof(RtAssociation.TargetRtId).ToCamelCase()
+                    ]
+                }
+            ]
+        });
+        ckTypeIndices.Add(new()
+        {
+            IndexType = IndexTypes.Ascending,
+            Fields =
+            [
+                new CkIndexFields
+                {
+                    AttributeNames =
+                    [
+                        nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
+                        nameof(RtAssociation.OriginCkTypeId).ToCamelCase()
+                    ]
+                }
+            ]
+        });
+        ckTypeIndices.Add(new()
+        {
+            IndexType = IndexTypes.Ascending,
+            Fields =
+            [
+                new CkIndexFields
+                {
+                    AttributeNames =
+                    [
+                        nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
+                        nameof(RtAssociation.TargetCkTypeId).ToCamelCase()
+                    ]
+                }
+            ]
+        });
+        ckTypeIndices.Add(new()
+        {
+            IndexType = IndexTypes.Ascending,
+            Fields =
+            [
+                new CkIndexFields
+                {
+                    AttributeNames =
+                    [
+                        nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
+                        nameof(RtAssociation.OriginCkTypeId).ToCamelCase(),
+                        nameof(RtAssociation.OriginRtId).ToCamelCase()
+                    ]
+                }
+            ]
+        });
+        ckTypeIndices.Add(new()
+        {
+            IndexType = IndexTypes.Ascending,
+            Fields =
+            [
+                new CkIndexFields
+                {
+                    AttributeNames =
+                    [
+                        nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
+                        nameof(RtAssociation.TargetCkTypeId).ToCamelCase(),
+                        nameof(RtAssociation.TargetRtId).ToCamelCase()
+                    ]
+                }
+            ]
+        });
+
+        int uniqueIndexNumber = 0;
+
+        foreach (CkTypeIndex ckTypeIndex in ckTypeIndices)
+        {
+            await CreateIndexIfNotExists(collection.CollectionName, ckTypeIndex, existingIndexes, collection,
+                uniqueIndexNumber++);
         }
 
-        _logger.LogDebug("Creating index '{IndexName}' for RtAssociations", indexName);
-        await collection.CreateAscendingIndexAsync(indexName, fields);
+        // We cleanup old indexes that are not defined anymore
+        foreach (var repositoryIndex in existingIndexes)
+        {
+            _logger.LogDebug("Dropping old index '{IndexName}' for RtAssociations collection",
+                repositoryIndex.Name);
+            await collection.DropIndexAsync(repositoryIndex.Name);
+        }
     }
 
     private IAggregateFluent<CkTypeInfo> AggregateCkTypeInfo(IAggregateFluent<CkType> aggregate)

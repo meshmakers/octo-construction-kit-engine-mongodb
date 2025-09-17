@@ -21,4 +21,20 @@ public class CkIndexFields
 
         return false;
     }
+    
+    public bool CompareToInSequence(CkIndexFields? other)
+    {
+        if (other != null)
+        {
+            if (ReferenceEquals(this, other))
+            {
+                return true;
+            }
+
+            return Weight == other.Weight &&
+                   AttributeNames.SequenceEqual(other.AttributeNames, StringComparer.OrdinalIgnoreCase);
+        }
+
+        return false;
+    }
 }

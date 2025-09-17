@@ -20,7 +20,7 @@ public interface IMongoDbDataSourceCollection<TKey, TDocument> : IDataSourceColl
     Task CreateTextIndexAsync(string name, string language, IEnumerable<CkIndexFields> fields);
     Task DropIndexAsync(string name);
 
-    Task<ICollection<CkTypeIndexWithName>> GetIndexListAsync(string prefix);
+    Task<ICollection<CkTypeIndexWithName>> GetIndexListAsync(string? prefix = null);
     Task DropAllIndexesAsync(string prefix);
 
     Task<ICollection<TDocument>> FindManyAsync(IOctoSession session, FilterDefinition<TDocument> filterDefinition,

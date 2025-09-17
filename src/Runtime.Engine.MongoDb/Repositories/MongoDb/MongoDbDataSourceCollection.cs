@@ -61,27 +61,9 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
         var indexKeys =
             fields.Select(f =>
-                {
-                    // Check if the field is "_id", rtWellKnownName. If so, do not prefix with "attributes."
-                    if (string.Compare(f, Constants.IdField, StringComparison.InvariantCultureIgnoreCase) == 0 ||
-                        string.Compare(f, nameof(RtEntity.RtCreationDateTime), StringComparison.InvariantCultureIgnoreCase) == 0 ||
-                        string.Compare(f, nameof(RtEntity.RtChangedDateTime), StringComparison.InvariantCultureIgnoreCase) == 0 ||
-                        string.Compare(f, nameof(RtEntity.CkTypeId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
-                        string.Compare(f, nameof(RtEntity.RtVersion), StringComparison.InvariantCultureIgnoreCase) == 0 ||
-                        string.Compare(f, nameof(RtEntity.RtWellKnownName), StringComparison.InvariantCultureIgnoreCase) == 0 ||
-                        string.Compare(f, nameof(RtAssociation.OriginCkTypeId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
-                        string.Compare(f, nameof(RtAssociation.OriginRtId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
-                        string.Compare(f, nameof(RtAssociation.TargetCkTypeId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
-                        string.Compare(f, nameof(RtAssociation.TargetRtId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
-                        string.Compare(f, nameof(RtAssociation.AssociationId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
-                        string.Compare(f, nameof(RtAssociation.AssociationRoleId), StringComparison.InvariantCultureIgnoreCase) == 0)
-                    {
-                        return Builders<TDocument>.IndexKeys.Ascending(f);
-                    }
-
-                    return Builders<TDocument>.IndexKeys.Ascending(Constants.AttributesName + "." + f.ToCamelCase());
-                }
-            );
+                Constants.IsSystemAttribute(f)
+                    ? Builders<TDocument>.IndexKeys.Ascending(f)
+                    : Builders<TDocument>.IndexKeys.Ascending(Constants.AttributesName + "." + f.ToCamelCase()));
 
 
         await _documentCollection.Indexes.CreateOneAsync(new CreateIndexModel<TDocument>(
@@ -142,18 +124,17 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
     }
 
-    public async Task<ICollection<CkTypeIndexWithName>> GetIndexListAsync(string prefix)
+    public async Task<ICollection<CkTypeIndexWithName>> GetIndexListAsync(string? prefix = null)
     {
-        ArgumentValidation.ValidateString(nameof(prefix), prefix);
-
         List<CkTypeIndexWithName> indexes = new();
         var r = await _documentCollection.Indexes.ListAsync();
         foreach (var doc in await r.ToListAsync())
         {
             var indexName = doc["name"].ToString();
-            if (!string.IsNullOrEmpty(indexName) && indexName.StartsWith(prefix))
+            if (!string.IsNullOrEmpty(indexName) && indexName != Constants.IdIndexName &&
+                (string.IsNullOrWhiteSpace(prefix) || indexName.StartsWith(prefix)))
             {
-                var fieldsDict = new Dictionary<string, int>();
+                var fieldsDict = new List<Tuple<string, int>>();
                 var indexType = IndexTypes.Ascending;
                 string? language = null;
                 if (doc.TryGetValue("key", out var keyElement) && keyElement is BsonDocument keyDoc)
@@ -180,10 +161,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                                         attributePath = attributePath.Substring(Constants.AttributesName.Length + 1);
                                     }
 
-                                    if (!fieldsDict.ContainsKey(attributePath))
-                                    {
-                                        fieldsDict[attributePath] = elem.Value.AsInt32; // Append weight info
-                                    }
+                                    fieldsDict.Add(new Tuple<string, int>(attributePath, elem.Value.AsInt32));
                                 }
                             }
                         }
@@ -197,12 +175,19 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                         foreach (var elem in keyDoc.Elements)
                         {
                             var attributePath = elem.Name;
+
                             if (attributePath.StartsWith(Constants.AttributesName + "."))
                             {
-                                attributePath = attributePath.Substring(Constants.AttributesName.Length + 1);
+                                var tmp = attributePath.Substring(Constants.AttributesName.Length + 1);
+                                // Fix to ensure that we can wrongly create indexes with "attributes._id"
+                                // or "attributes.rtWellKnownName"
+                                if (!Constants.IsSystemAttribute(tmp))
+                                {
+                                    attributePath = tmp;
+                                }
                             }
 
-                            fieldsDict[attributePath] = elem.Value.AsInt32; // "1", "-1", "text", etc.
+                            fieldsDict.Add(new Tuple<string, int>(attributePath, elem.Value.AsInt32));
                         }
                     }
                 }
@@ -210,15 +195,15 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 List<CkIndexFields> fields = new();
                 if (indexType == IndexTypes.Ascending)
                 {
-                    fields.Add(new CkIndexFields { Weight = null, AttributeNames = fieldsDict.Keys });
+                    fields.Add(new CkIndexFields { Weight = null, AttributeNames = fieldsDict.Select(t=> t.Item1).ToList() });
                 }
                 else
                 {
-                    foreach (var grouping in fieldsDict.GroupBy(x => x.Value))
+                    foreach (var grouping in fieldsDict.GroupBy(x => x.Item2))
                     {
                         fields.Add(new CkIndexFields
                         {
-                            Weight = grouping.Key, AttributeNames = grouping.Select(a => a.Key).ToList()
+                            Weight = grouping.Key, AttributeNames = grouping.Select(a => a.Item1).ToList()
                         });
                     }
                 }

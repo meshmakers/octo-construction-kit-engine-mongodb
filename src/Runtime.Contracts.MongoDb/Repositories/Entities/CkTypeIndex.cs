@@ -24,4 +24,23 @@ public class CkTypeIndex
 
         return false;
     }
+
+    public bool CompareToInSequence(CkTypeIndex? other)
+    {
+        if (other != null)
+        {
+            if (ReferenceEquals(this, other))
+            {
+                return true;
+            }
+
+            // Check if fields are in the same order
+            return IndexType == other.IndexType &&
+                   Language == other.Language &&
+                   Fields.Count == other.Fields.Count &&
+                   Fields.Zip(other.Fields, (f1, f2) => f1.CompareToInSequence(f2)).All(b => b);
+        }
+
+        return false;
+    }
 }

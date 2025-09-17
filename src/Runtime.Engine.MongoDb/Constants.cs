@@ -1,4 +1,6 @@
-﻿namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
+﻿using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+
+namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 
 public static class Constants
 {
@@ -13,6 +15,7 @@ public static class Constants
 
     public const string IdField = "_id";
     public const string ModelIdField = "ckModelId";
+    public const string IdIndexName = "_id_";
 
     internal const string OctoTextAnalyzer = "text_octo_";
     internal const string OctoTextAnalyzerEn = "text_octo_en";
@@ -44,4 +47,27 @@ public static class Constants
 
 
     internal static readonly string[] TextAnalyzerFeatures = { "frequency", "norm", "position" };
+
+
+    public static bool IsSystemAttribute(string f)
+    {
+        return (string.Compare(f, IdField, StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                string.Compare(f, nameof(RtEntity.RtCreationDateTime), StringComparison.InvariantCultureIgnoreCase) ==
+                0 ||
+                string.Compare(f, nameof(RtEntity.RtChangedDateTime), StringComparison.InvariantCultureIgnoreCase) ==
+                0 ||
+                string.Compare(f, nameof(RtEntity.CkTypeId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                string.Compare(f, nameof(RtEntity.RtVersion), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                string.Compare(f, nameof(RtEntity.RtWellKnownName), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                string.Compare(f, nameof(RtAssociation.OriginCkTypeId), StringComparison.InvariantCultureIgnoreCase) ==
+                0 ||
+                string.Compare(f, nameof(RtAssociation.OriginRtId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                string.Compare(f, nameof(RtAssociation.TargetCkTypeId), StringComparison.InvariantCultureIgnoreCase) ==
+                0 ||
+                string.Compare(f, nameof(RtAssociation.TargetRtId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                string.Compare(f, nameof(RtAssociation.AssociationId), StringComparison.InvariantCultureIgnoreCase) ==
+                0 ||
+                string.Compare(f, nameof(RtAssociation.AssociationRoleId),
+                    StringComparison.InvariantCultureIgnoreCase) == 0);
+    }
 }

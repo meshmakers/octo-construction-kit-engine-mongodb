@@ -48,7 +48,7 @@ public class SystemContext : TenantContext, ISystemContext
             // Distribute updates (pre) to inform other services.
             await TenantNotifications.NotifyPreTenantCreateAsync(normalizedTenantId, correlationId);
 
-            // Create database
+            // Create the database
             await CreateTenantInternalAsync(normalizedDatabaseName);
 
             // Restore the tenant system model on the newly created repository
