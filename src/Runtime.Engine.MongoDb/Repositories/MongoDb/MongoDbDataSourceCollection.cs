@@ -68,7 +68,13 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                         string.Compare(f, nameof(RtEntity.RtChangedDateTime), StringComparison.InvariantCultureIgnoreCase) == 0 ||
                         string.Compare(f, nameof(RtEntity.CkTypeId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
                         string.Compare(f, nameof(RtEntity.RtVersion), StringComparison.InvariantCultureIgnoreCase) == 0 ||
-                        string.Compare(f, nameof(RtEntity.RtWellKnownName), StringComparison.InvariantCultureIgnoreCase) == 0)
+                        string.Compare(f, nameof(RtEntity.RtWellKnownName), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                        string.Compare(f, nameof(RtAssociation.OriginCkTypeId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                        string.Compare(f, nameof(RtAssociation.OriginRtId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                        string.Compare(f, nameof(RtAssociation.TargetCkTypeId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                        string.Compare(f, nameof(RtAssociation.TargetRtId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                        string.Compare(f, nameof(RtAssociation.AssociationId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                        string.Compare(f, nameof(RtAssociation.AssociationRoleId), StringComparison.InvariantCultureIgnoreCase) == 0)
                     {
                         return Builders<TDocument>.IndexKeys.Ascending(f);
                     }
