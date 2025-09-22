@@ -114,7 +114,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
     {
         ArgumentValidation.ValidateString(nameof(name), name);
 
-        return new MongoRepository(Client.GetDatabase(name));
+        var loggerFactory = _serviceProvider.GetRequiredService<ILoggerFactory>();
+        return new MongoRepository(loggerFactory, Client.GetDatabase(name));
     }
 
     public void Dispose()

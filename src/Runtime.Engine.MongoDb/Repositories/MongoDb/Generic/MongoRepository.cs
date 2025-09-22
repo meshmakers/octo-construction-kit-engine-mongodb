@@ -1,4 +1,7 @@
 ﻿using System.Collections.Concurrent;
+
+using Microsoft.Extensions.Logging;
+
 using MongoDB.Bson;
 using MongoDB.Driver;
 using MongoDB.Driver.GridFS;
@@ -8,7 +11,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 /// <summary>
 ///     MongoDB CRUD operations' implementation.
 /// </summary>
-public class MongoRepository(IMongoDatabase mongoDatabase) : IRepositoryInternal
+public class MongoRepository(ILoggerFactory loggerFactory, IMongoDatabase mongoDatabase) : IRepositoryInternal
 {
     private readonly ConcurrentDictionary<Type, string> _collectionNameMapping = new();
 
@@ -42,8 +45,9 @@ public class MongoRepository(IMongoDatabase mongoDatabase) : IRepositoryInternal
         where TDocument : class, new()
     {
         var name = GetCollectionName(mongoDataSourceMapper, suffix);
+        var logger = loggerFactory.CreateLogger<MongoDbDataSourceCollection<TKey, TDocument>>();
 
-        return new MongoDbDataSourceCollection<TKey, TDocument>(mongoDatabase.GetCollection<TDocument>(name),
+        return new MongoDbDataSourceCollection<TKey, TDocument>(logger, mongoDatabase.GetCollection<TDocument>(name),
             mongoDataSourceMapper);
     }
 

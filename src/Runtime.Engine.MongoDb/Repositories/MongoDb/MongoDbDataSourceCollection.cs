@@ -6,15 +6,13 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
-using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
-using Meshmakers.Octo.Runtime.Engine.Repositories;
+
+using Microsoft.Extensions.Logging;
 
 using MongoDB.Bson;
 using MongoDB.Driver;
-
-using NLog;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
@@ -23,13 +21,14 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     where TKey : notnull
 {
     // ReSharper disable once StaticMemberInGenericType
-    private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
     private readonly IMongoCollection<TDocument> _documentCollection;
+    private readonly ILogger<MongoDbDataSourceCollection<TKey, TDocument>> _logger;
     private readonly IMongoDataSourceMapper<TKey, TDocument> _mongoDataSourceMapper;
 
-    internal MongoDbDataSourceCollection(IMongoCollection<TDocument> documentCollection,
+    internal MongoDbDataSourceCollection(ILogger<MongoDbDataSourceCollection<TKey, TDocument>> logger, IMongoCollection<TDocument> documentCollection,
         IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper)
     {
+        _logger = logger;
         _mongoDataSourceMapper = mongoDataSourceMapper;
         _documentCollection = documentCollection;
     }
@@ -369,7 +368,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoWriteException ex)
         {
-            Logger.Error(ex);
+            _logger.LogError(ex, "Error replacing document with id {Id}", id);
             HandleWriteException<TDocument>(ex);
         }
     }
@@ -386,7 +385,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoWriteException ex)
         {
-            Logger.Error(ex);
+            _logger.LogError(ex, "Error replacing document with filter {@FilterDefinition}", filterDefinition);
             HandleWriteException<TDocument>(ex);
         }
     }
@@ -404,7 +403,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoWriteException ex)
         {
-            Logger.Error(ex);
+            _logger.LogError(ex, "Error updating document with id {Id}", id);
             HandleWriteException<TDocument>(ex);
         }
     }
