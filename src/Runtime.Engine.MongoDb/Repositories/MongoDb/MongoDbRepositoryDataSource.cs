@@ -251,24 +251,24 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         await CreateRtAssociationIndexesAsync();
     }
 
-    private async Task CreateIndexIfNotExists(CkTypeInfo ckTypeInfo)
+    private async Task CreateIndexIfNotExists(CkTypeInfo collectionRootType)
     {
-        var name = ckTypeInfo.CkTypeId.GetCkTypeCollectionName();
+        var name = collectionRootType.CkTypeId.GetCkTypeCollectionName();
         var mapper = new RtEntityMongoDataSourceMapper<RtEntity>();
         var collection = _repository.GetCollection(mapper, name);
 
-        _logger.LogDebug("Updating indexes for '{CkTypeId}'", ckTypeInfo.CkTypeId);
+        _logger.LogDebug("Updating indexes for '{CkTypeId}'", collectionRootType.CkTypeId);
 
         // We need to merge text indexes from inherited types, because MongoDB does not support more than one text index
         Dictionary<CkType, List<CkTypeIndex>> regularIndices = new();
         CkTypeIndex? textIndex = null;
 
         // Analyze the base type first
-        AnalyseIndex(ckTypeInfo, regularIndices, ref textIndex);
+        AnalyseIndex(collectionRootType, regularIndices, ref textIndex);
 
         // Then analyze the inherited types, to merge text indexes
-        var inheritTypes = ckTypeInfo.Inheritances.ToDictionary(k => k.CkTypeId, v => v);
-        foreach (var ckInheritedTypeInfo in ckTypeInfo.InheritedTypes.OrderByDescending(x => x.BaseTypeDepthIndex))
+        var inheritTypes = collectionRootType.Inheritances.ToDictionary(k => k.CkTypeId, v => v);
+        foreach (var ckInheritedTypeInfo in collectionRootType.InheritedTypes.OrderByDescending(x => x.BaseTypeDepthIndex))
         {
             if (!inheritTypes.TryGetValue(ckInheritedTypeInfo.InheritorCkTypeId, out var inheritCkTypeInfo))
             {
@@ -284,7 +284,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         // an index was removed in the CK model.
         if (regularIndices.Count == 0 && textIndex == null)
         {
-            _logger.LogDebug("Dropping all indexes for '{CkTypeId}'", ckTypeInfo.CkTypeId);
+            _logger.LogDebug("Dropping all indexes for '{CkTypeId}'", collectionRootType.CkTypeId);
             await collection.DropAllIndexesAsync(name);
             return;
         }
@@ -299,17 +299,17 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             foreach (CkTypeIndex ckTypeIndex in keyValuePair.Value)
             {
                 await CreateIndexIfNotExists(keyValuePair.Key, ckTypeIndex, repositoryIndices, collection,
-                    uniqueIndexNumber);
+                    uniqueIndexNumber, collectionRootType);
                 uniqueIndexNumber++;
             }
 
             // Let's create the text index if it exists.
-            if (keyValuePair.Key == ckTypeInfo)
+            if (keyValuePair.Key == collectionRootType)
             {
                 if (textIndex != null)
                 {
                     await CreateIndexIfNotExists(keyValuePair.Key, textIndex, repositoryIndices, collection,
-                        uniqueIndexNumber);
+                        uniqueIndexNumber, collectionRootType);
                 }
                 else
                 {
@@ -325,10 +325,10 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
     }
 
-    private async Task CreateIndexIfNotExists(CkType ckType, CkTypeIndex ckTypeIndex,
+    private async Task CreateIndexIfNotExists(CkType indexDefiningType, CkTypeIndex ckTypeIndex,
         ICollection<CkTypeIndexWithName> repositoryIndices,
         IMongoDbDataSourceCollection<OctoObjectId, RtEntity> collection,
-        int uniqueIndexNumber)
+        int uniqueIndexNumber, CkTypeInfo? collectionRootType = null)
     {
         if (ckTypeIndex.IndexType == IndexTypes.None)
         {
@@ -351,13 +351,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             fields.AttributeNames = fieldAttributePaths.ToList();
         }
 
-        await CreateIndexIfNotExists(ckType.CkTypeId.GetCkTypeCollectionName(), ckTypeIndex, repositoryIndices,
-            collection, uniqueIndexNumber);
+        await CreateIndexIfNotExists(indexDefiningType.CkTypeId.GetCkTypeCollectionName(), ckTypeIndex, repositoryIndices,
+            collection, uniqueIndexNumber, collectionRootType, indexDefiningType);
     }
 
     private async Task CreateIndexIfNotExists<TKey, TDocument>(string collectionName, CkTypeIndex ckTypeIndex,
         ICollection<CkTypeIndexWithName> repositoryIndices,
-        IMongoDbDataSourceCollection<TKey, TDocument> collection, int uniqueIndexNumber)
+        IMongoDbDataSourceCollection<TKey, TDocument> collection, int uniqueIndexNumber, CkTypeInfo? collectionRootType = null, CkType? indexDefiningType = null)
         where TDocument : class, new()
         where TKey : notnull
     {
@@ -391,9 +391,54 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 await collection.CreateTextIndexAsync(indexName, ckTypeIndex.Language ?? "en",
                     ckTypeIndex.Fields);
                 break;
+            case IndexTypes.Unique:
+                await collection.CreateUniqueIndexAsync(indexName,
+                    ckTypeIndex.Fields.SelectMany(x => x.AttributeNames));
+                break;
+            case IndexTypes.UniqueNotDeleted:
+                // For UniqueNotDeleted, we need to gather type IDs for the index-defining type and its derived types
+                if (collectionRootType == null || indexDefiningType == null)
+                {
+                    throw new InvalidOperationException("UniqueNotDeleted index creation requires CkTypeInfo and indexDefiningType context");
+                }
+
+                // Collect type IDs: the index-defining type + types that derive from it
+                var typeIds = new List<CkId<CkTypeId>> { indexDefiningType.CkTypeId };
+
+                // Find all types that derive from the index-defining type (not the collection root)
+                var derivedTypeIds = GetDerivedTypeIds(indexDefiningType.CkTypeId, collectionRootType);
+                typeIds.AddRange(derivedTypeIds);
+
+                await collection.CreateUniqueNotDeletedIndexAsync(indexName,
+                    ckTypeIndex.Fields.SelectMany(x => x.AttributeNames),
+                    typeIds);
+                break;
             default:
                 throw OperationFailedException.IndexTypeNotSupported(ckTypeIndex.IndexType);
         }
+    }
+
+    private IEnumerable<CkId<CkTypeId>> GetDerivedTypeIds(CkId<CkTypeId> baseTypeId, CkTypeInfo ckTypeInfo)
+    {
+        // Get all inheritance relationships where the base type is our target type
+        var directDerived = ckTypeInfo.InheritedTypes
+            .Where(inheritance => inheritance.BaseCkTypeId.Equals(baseTypeId))
+            .Select(inheritance => inheritance.InheritorCkTypeId)
+            .ToList();
+
+        var allDerived = new HashSet<CkId<CkTypeId>>(directDerived);
+
+        // Recursively find derived types of the derived types
+        foreach (var derivedType in directDerived)
+        {
+            var nestedDerived = GetDerivedTypeIds(derivedType, ckTypeInfo);
+            foreach (var nestedType in nestedDerived)
+            {
+                allDerived.Add(nestedType);
+            }
+        }
+
+        return allDerived;
     }
 
     private void AnalyseIndex(CkType ckTypeInfo, Dictionary<CkType, List<CkTypeIndex>> regularIndices,
@@ -427,9 +472,14 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         if (ckTypeInfo.Indexes != null)
         {
+            // Add regular indexes (Ascending, Unique, UniqueNotDeleted)
             ckTypeIndices.AddRange(
-                ckTypeInfo.Indexes.Where(i => i.IndexType == IndexTypes.Ascending).ToList());
+                ckTypeInfo.Indexes.Where(i =>
+                    i.IndexType == IndexTypes.Ascending ||
+                    i.IndexType == IndexTypes.Unique ||
+                    i.IndexType == IndexTypes.UniqueNotDeleted).ToList());
 
+            // Handle text indexes separately (only one text index allowed per collection)
             foreach (var index in ckTypeInfo.Indexes.Where(i => i.IndexType == IndexTypes.Text))
             {
                 if (textIndex == null)
