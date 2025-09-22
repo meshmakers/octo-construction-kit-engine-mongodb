@@ -366,9 +366,6 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         // We check if the index already exists in the repository,
         // by comparing type, the fields' weight and the attribute paths
         // The fields are compared case-insensitive, so we use the attribute names directly.
-        var repositoryIndexList = repositoryIndices.Where(i =>
-            i.CompareToInSequence(ckTypeIndex));
-
         var repositoryIndex = repositoryIndices.SingleOrDefault(i =>
             i.CompareToInSequence(ckTypeIndex));
 
