@@ -107,7 +107,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         ));
     }
 
-    public async Task CreateUniqueIndexAsync(string name, IEnumerable<string> fields)
+    public async Task CreateUniqueIndexAsync(string name, IEnumerable<string> fields,
+        IEnumerable<CkId<CkTypeId>> typeIds)
     {
         ArgumentValidation.ValidateString(nameof(name), name);
 
@@ -117,9 +118,20 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                     ? Builders<TDocument>.IndexKeys.Ascending(f)
                     : Builders<TDocument>.IndexKeys.Ascending(Constants.AttributesName + "." + f.ToCamelCase()));
 
+        // Create partial filter for specific type IDs
+        var partialFilterExpression = Builders<TDocument>.Filter.In(nameof(RtEntity.CkTypeId).ToCamelCase(), typeIds);
+
+        var options = new CreateIndexOptions<TDocument>
+        {
+            Background = true,
+            Name = name,
+            Unique = true,
+            PartialFilterExpression = partialFilterExpression
+        };
+
         await _documentCollection.Indexes.CreateOneAsync(new CreateIndexModel<TDocument>(
             Builders<TDocument>.IndexKeys.Combine(indexKeys),
-            new CreateIndexOptions { Background = true, Name = name, Unique = true }
+            options
         ));
     }
 
@@ -136,8 +148,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
         // Create partial filter for active entities (not deleted) and specific type IDs
         var partialFilterExpression = Builders<TDocument>.Filter.And(
-            Builders<TDocument>.Filter.In(nameof(RtEntity.RtState), new int?[] { null, 0 }),
-            Builders<TDocument>.Filter.In("ckTypeId", typeIds)
+            Builders<TDocument>.Filter.In(nameof(RtEntity.RtState).ToCamelCase(), new int?[] { null, 0 }),
+            Builders<TDocument>.Filter.In(nameof(RtEntity.CkTypeId).ToCamelCase(), typeIds)
         );
 
         var options = new CreateIndexOptions<TDocument>

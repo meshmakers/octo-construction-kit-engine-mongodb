@@ -64,4 +64,10 @@ public class DatabaseCkModelRepositoryException : CkModelException
     {
         return new DatabaseCkModelRepositoryException($"Enum '{ckEnumId}' value '{valueKey}' name cannot be empty.");
     }
+
+    public static Exception IndexTypeNeedsCkTypeInfoAndIndexDefiningTypes(string indexTypeName)
+    {
+        return new DatabaseCkModelRepositoryException(
+            $"{indexTypeName} index creation requires CkTypeInfo and indexDefiningType context");
+    }
 }

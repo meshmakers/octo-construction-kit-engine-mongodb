@@ -392,22 +392,14 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     ckTypeIndex.Fields);
                 break;
             case IndexTypes.Unique:
+                var uniqueTypeIds = CollectTypeIdsForIndex(collectionRootType, indexDefiningType, "Unique");
+
                 await collection.CreateUniqueIndexAsync(indexName,
-                    ckTypeIndex.Fields.SelectMany(x => x.AttributeNames));
+                    ckTypeIndex.Fields.SelectMany(x => x.AttributeNames),
+                    uniqueTypeIds);
                 break;
             case IndexTypes.UniqueNotDeleted:
-                // For UniqueNotDeleted, we need to gather type IDs for the index-defining type and its derived types
-                if (collectionRootType == null || indexDefiningType == null)
-                {
-                    throw new InvalidOperationException("UniqueNotDeleted index creation requires CkTypeInfo and indexDefiningType context");
-                }
-
-                // Collect type IDs: the index-defining type + types that derive from it
-                var typeIds = new List<CkId<CkTypeId>> { indexDefiningType.CkTypeId };
-
-                // Find all types that derive from the index-defining type (not the collection root)
-                var derivedTypeIds = GetDerivedTypeIds(indexDefiningType.CkTypeId, collectionRootType);
-                typeIds.AddRange(derivedTypeIds);
+                var typeIds = CollectTypeIdsForIndex(collectionRootType, indexDefiningType, "UniqueNotDeleted");
 
                 await collection.CreateUniqueNotDeletedIndexAsync(indexName,
                     ckTypeIndex.Fields.SelectMany(x => x.AttributeNames),
@@ -416,6 +408,23 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             default:
                 throw OperationFailedException.IndexTypeNotSupported(ckTypeIndex.IndexType);
         }
+    }
+
+    private List<CkId<CkTypeId>> CollectTypeIdsForIndex(CkTypeInfo? collectionRootType, CkType? indexDefiningType, string indexTypeName)
+    {
+        if (collectionRootType == null || indexDefiningType == null)
+        {
+            throw DatabaseCkModelRepositoryException.IndexTypeNeedsCkTypeInfoAndIndexDefiningTypes(indexTypeName);
+        }
+
+        // Collect type IDs: the index-defining type + types that derive from it
+        var typeIds = new List<CkId<CkTypeId>> { indexDefiningType.CkTypeId };
+
+        // Find all types that derive from the index-defining type (not the collection root)
+        var derivedTypeIds = GetDerivedTypeIds(indexDefiningType.CkTypeId, collectionRootType);
+        typeIds.AddRange(derivedTypeIds);
+
+        return typeIds;
     }
 
     private IEnumerable<CkId<CkTypeId>> GetDerivedTypeIds(CkId<CkTypeId> baseTypeId, CkTypeInfo ckTypeInfo)
