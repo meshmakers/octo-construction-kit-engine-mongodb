@@ -211,7 +211,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         });
         await ExecuteImport(ckCompiledModel, transientCkModel,
             sourceIdentifierObject.MongoDbRepositoryDataSource,
-            operationResult, cancellationToken);
+            operationResult, sourceIdentifier, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -333,6 +333,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
     private async Task ExecuteImport(CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel,
         ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource, OperationResult operationResult,
+        object? sourceIdentifier,
         CancellationToken? cancellationToken)
     {
         _logger.LogInformation("Executing import of CK model");
@@ -340,9 +341,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
         try
         {
-
             _logger.LogInformation("Validating of CK model");
-            await _ckValidationService.ValidateAsync(compiledModel, operationResult);
+            await _ckValidationService.ValidateAsync(compiledModel, operationResult, sourceIdentifier);
             if (operationResult.HasErrors)
             {
                 _logger.LogInformation("Import of CK model failed, model is not valid");
@@ -359,7 +359,6 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             ProcessCkAttributes(compiledModel, transientCkModel);
             ProcessCkAssociationRoles(compiledModel, transientCkModel);
             ProcessCkTypesAndAssociations(compiledModel, transientCkModel);
-
 
             // ValidateAsync
             Debug.Assert(_ckValidationService != null, nameof(_ckValidationService) + " != null");
