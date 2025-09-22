@@ -163,7 +163,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         {
             var indexName = i["name"].ToString();
             if (!string.IsNullOrEmpty(indexName) &&
-                string.Compare(indexName, name, StringComparison.InvariantCultureIgnoreCase) != -1)
+                string.Compare(indexName, name, StringComparison.InvariantCultureIgnoreCase) == 0)
             {
                 await _documentCollection.Indexes.DropOneAsync(indexName);
                 return;
