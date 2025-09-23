@@ -378,7 +378,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
 
         // Now, we compare the existing indexes with the defined indexes in the CK model.
-        var repositoryIndices = await collection.GetIndexListAsync(name);
+        var repositoryIndices = await collection.GetIndexListAsync();
 
         foreach (var keyValuePair in regularIndices)
         {
