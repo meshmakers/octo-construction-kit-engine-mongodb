@@ -248,7 +248,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         foreach (var ckTypeInfo in collectionRootTypes)
         {
             var baseTypes = baseTypesMap.TryGetValue(ckTypeInfo.CkTypeId, out var types) ? types : [];
-            await CreateIndexIfNotExists(ckTypeInfo, baseTypes);
+            await UpdateIndexesForCollectionRoot(ckTypeInfo, baseTypes);
         }
 
         // Create indexes for RtAssociations collection
@@ -324,7 +324,14 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return result;
     }
 
-    private async Task CreateIndexIfNotExists(CkTypeInfo collectionRootType, List<CkType> baseTypes)
+    /// <summary>
+    /// Orchestrates index synchronization for a collection root type, including inherited types.
+    /// Analyzes index requirements from base types and inherited types, merges text indexes,
+    /// and manages cleanup of obsolete indexes.
+    /// </summary>
+    /// <param name="collectionRootType">The collection root type to update indexes for</param>
+    /// <param name="baseTypes">List of base types in inheritance hierarchy</param>
+    private async Task UpdateIndexesForCollectionRoot(CkTypeInfo collectionRootType, List<CkType> baseTypes)
     {
         var name = collectionRootType.CkTypeId.GetCkTypeCollectionName();
         var mapper = new RtEntityMongoDataSourceMapper<RtEntity>();
@@ -379,7 +386,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
             foreach (CkTypeIndex ckTypeIndex in keyValuePair.Value)
             {
-                await CreateIndexIfNotExists(keyValuePair.Key, ckTypeIndex, repositoryIndices, collection,
+                await PrepareAndCreateIndex(keyValuePair.Key, ckTypeIndex, repositoryIndices, collection,
                     uniqueIndexNumber, collectionRootType);
                 uniqueIndexNumber++;
             }
@@ -389,7 +396,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             {
                 if (textIndex != null)
                 {
-                    await CreateIndexIfNotExists(keyValuePair.Key, textIndex, repositoryIndices, collection,
+                    await PrepareAndCreateIndex(keyValuePair.Key, textIndex, repositoryIndices, collection,
                         uniqueIndexNumber, collectionRootType);
                 }
                 else
@@ -406,7 +413,17 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
     }
 
-    private async Task CreateIndexIfNotExists(CkType indexDefiningType, CkTypeIndex ckTypeIndex,
+    /// <summary>
+    /// Prepares index configuration by deduplicating attribute paths and then delegates
+    /// to the actual index creation method.
+    /// </summary>
+    /// <param name="indexDefiningType">The type that defines this index</param>
+    /// <param name="ckTypeIndex">The index configuration</param>
+    /// <param name="repositoryIndices">Existing indexes in the repository</param>
+    /// <param name="collection">The MongoDB collection</param>
+    /// <param name="uniqueIndexNumber">Unique number for index naming</param>
+    /// <param name="collectionRootType">Optional collection root type info</param>
+    private async Task PrepareAndCreateIndex(CkType indexDefiningType, CkTypeIndex ckTypeIndex,
         ICollection<CkTypeIndexWithName> repositoryIndices,
         IMongoDbDataSourceCollection<OctoObjectId, RtEntity> collection,
         int uniqueIndexNumber, CkTypeInfo? collectionRootType = null)
@@ -432,11 +449,23 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             fields.AttributeNames = fieldAttributePaths.ToList();
         }
 
-        await CreateIndexIfNotExists(indexDefiningType.CkTypeId.GetCkTypeCollectionName(), ckTypeIndex, repositoryIndices,
+        await CreateOrUpdateIndex(indexDefiningType.CkTypeId.GetCkTypeCollectionName(), ckTypeIndex, repositoryIndices,
             collection, uniqueIndexNumber, collectionRootType, indexDefiningType);
     }
 
-    private async Task CreateIndexIfNotExists<TKey, TDocument>(string collectionName, CkTypeIndex ckTypeIndex,
+    /// <summary>
+    /// Creates or updates an index in MongoDB. Compares with existing indexes to determine if creation
+    /// is needed, handles name conflicts by dropping and recreating, and actually performs the index
+    /// creation in the database.
+    /// </summary>
+    /// <param name="collectionName">Name of the MongoDB collection</param>
+    /// <param name="ckTypeIndex">The index configuration to create</param>
+    /// <param name="repositoryIndices">Existing indexes in the repository (modified to track processed indexes)</param>
+    /// <param name="collection">The MongoDB collection interface</param>
+    /// <param name="uniqueIndexNumber">Unique number for index naming</param>
+    /// <param name="collectionRootType">Optional collection root type info (required for Unique/UniqueNotDeleted)</param>
+    /// <param name="indexDefiningType">Optional type that defines this index (required for Unique/UniqueNotDeleted)</param>
+    private async Task CreateOrUpdateIndex<TKey, TDocument>(string collectionName, CkTypeIndex ckTypeIndex,
         ICollection<CkTypeIndexWithName> repositoryIndices,
         IMongoDbDataSourceCollection<TKey, TDocument> collection, int uniqueIndexNumber, CkTypeInfo? collectionRootType = null, CkType? indexDefiningType = null)
         where TDocument : class, new()
@@ -463,6 +492,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var existingIndexWithSameName = repositoryIndices.FirstOrDefault(i => i.Name == indexName);
         if (existingIndexWithSameName != null)
         {
+            _logger.LogDebug("Index name '{IndexName}' already exists with different configuration for '{CollectionName}', dropping it first", indexName, collectionName);
             // Index exists but has wrong configuration - drop it first
             await collection.DropIndexAsync(indexName);
         }
@@ -733,7 +763,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         foreach (CkTypeIndex ckTypeIndex in ckTypeIndices)
         {
-            await CreateIndexIfNotExists(collection.CollectionName, ckTypeIndex, existingIndexes, collection,
+            await CreateOrUpdateIndex(collection.CollectionName, ckTypeIndex, existingIndexes, collection,
                 uniqueIndexNumber++);
         }
 
