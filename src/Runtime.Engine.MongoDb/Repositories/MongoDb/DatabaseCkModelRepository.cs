@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
@@ -11,7 +12,9 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.CkCache;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
+
 using Microsoft.Extensions.Logging;
+
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
@@ -40,6 +43,37 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     public bool IsSupportingSourceIdentifier(object? sourceIdentifier = null)
     {
         return sourceIdentifier is TenantDatabaseSourceIdentifier;
+    }
+
+    /// <inheritdoc />
+    public async Task<ModelExistingResult> IsModelIdExistingAsync(CkModelIdVersionRange modelIdVersionRange,
+        object? sourceIdentifier = null)
+    {
+        var sourceIdentifierObject =
+            ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
+                sourceIdentifier);
+
+        using var session = await sourceIdentifierObject.MongoDbRepositoryDataSource.CreateSessionAsync();
+        session.StartTransaction();
+
+        var ckModels = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels.FindManyAsync(session,
+            e => e.ModelId == modelIdVersionRange.ModelId && e.ModelState == ModelState.Available);
+
+
+        var satisfiedModels = ckModels
+            .Where(m => modelIdVersionRange.IsSatisfiedBy(m.ModelId))
+            .ToList();
+
+        // Return the latest satisfied version
+        var latestSatisfiedModel = satisfiedModels
+            .OrderByDescending(m => m.Id.ModelVersion)
+            .First();
+
+        return new ModelExistingResult
+        {
+            Exists = true,
+            ModelId = latestSatisfiedModel.ModelId
+        };
     }
 
     /// <inheritdoc />
@@ -108,13 +142,11 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 Description = e.Description,
                 UseFlags = e.UseFlags,
                 IsExtensible = e.IsExtensible,
-                Values = e.Values.Select(v => new CkEnumValueDto
-                {
-                    Key = v.Key,
-                    Name = v.Name,
-                    Description = v.Description,
-                    IsExtension = v.IsExtension
-                }).ToList()
+                Values =
+                    e.Values.Select(v => new CkEnumValueDto
+                    {
+                        Key = v.Key, Name = v.Name, Description = v.Description, IsExtension = v.IsExtension
+                    }).ToList()
             }).ToList(),
             Records = ckRecords.Select(r => new CkRecordDto
             {
@@ -247,18 +279,18 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             {
                 throw DatabaseCkModelRepositoryException.CkEnumNotExtensible(ckEnumId);
             }
-            
+
             Regex nameRegex = new("^[_a-zA-Z][_a-zA-Z0-9]*$");
 
             // System enum values cannot be customized, we store it in a separate list to know them
             var systemValues = dbCkEnum.Values.Where(x => !x.IsExtension).ToList();
-            
+
             // Let's build a new list of enum values
             var newEnumValueList = dbCkEnum.Values.ToList();
 
             // Remove all enums that are marked for deletion, except system defined.
-            foreach (var enumValueToRemove in ckEnumUpdates.Where(
-                         x => x.Operation == CkExtensionUpdateOperations.Delete))
+            foreach (var enumValueToRemove in
+                     ckEnumUpdates.Where(x => x.Operation == CkExtensionUpdateOperations.Delete))
             {
                 if (systemValues.Any(x => x.Key == enumValueToRemove.Value.Key))
                 {
@@ -275,7 +307,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 {
                     throw DatabaseCkModelRepositoryException.CkEnumValueKeyInvalid(ckEnumId, enumValueToAdd.Value.Key);
                 }
-                
+
                 if (newEnumValueList.Any(x => x.Key == enumValueToAdd.Value.Key))
                 {
                     throw DatabaseCkModelRepositoryException.CkEnumValueAlreadyExists(ckEnumId,
@@ -284,14 +316,16 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
                 if (string.IsNullOrWhiteSpace(enumValueToAdd.Value.Name))
                 {
-                    throw DatabaseCkModelRepositoryException.CkEnumValueNameCannotBeEmpty(ckEnumId, enumValueToAdd.Value.Key);
+                    throw DatabaseCkModelRepositoryException.CkEnumValueNameCannotBeEmpty(ckEnumId,
+                        enumValueToAdd.Value.Key);
                 }
-                
+
                 if (!Regex.IsMatch(enumValueToAdd.Value.Name, "^[_a-zA-Z][_a-zA-Z0-9]*$"))
                 {
-                    throw DatabaseCkModelRepositoryException.CkEnumValueNameInvalid(ckEnumId, enumValueToAdd.Value.Key, enumValueToAdd.Value.Name);
+                    throw DatabaseCkModelRepositoryException.CkEnumValueNameInvalid(ckEnumId, enumValueToAdd.Value.Key,
+                        enumValueToAdd.Value.Name);
                 }
-                
+
                 if (newEnumValueList.Any(x => x.Name == enumValueToAdd.Value.Name))
                 {
                     throw DatabaseCkModelRepositoryException.CkEnumNameAlreadyExists(ckEnumId,
@@ -470,7 +504,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         {
             using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
             session.StartTransaction();
-            
+
             _logger.LogDebug("Rolling back CK model import transaction");
             await mongoDbRepositoryDataSource.CkModels.DeleteOneAsync(session, compiledModel.ModelId);
 
@@ -518,14 +552,15 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 session.StartTransaction();
 
                 await mongoDbRepositoryDataSource.CkModels.TryDeleteOneAsync(session, compiledModel.ModelId);
-                await mongoDbRepositoryDataSource.CkModels.InsertOneAsync(session, new CkModel
-                {
-                    Id = compiledModel.ModelId,
-                    ModelId = compiledModel.ModelId.ModelId,
-                    Dependencies = compiledModel.Dependencies?.ToArray(),
-                    Description = compiledModel.Description,
-                    ModelState = ModelState.Importing
-                });
+                await mongoDbRepositoryDataSource.CkModels.InsertOneAsync(session,
+                    new CkModel
+                    {
+                        Id = compiledModel.ModelId,
+                        ModelId = compiledModel.ModelId.ModelId,
+                        Dependencies = compiledModel.Dependencies?.ToArray(),
+                        Description = compiledModel.Description,
+                        ModelState = ModelState.Importing
+                    });
 
                 await session.CommitTransactionAsync();
                 break;
