@@ -1,7 +1,7 @@
 "$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
 types:
   - typeId: Customer
-    derivedFromCkTypeId: System/Entity
+    derivedFromCkTypeId: ${System}/Entity
     isFinal: false
     attributes:
     - id: ${thisModel}/Contacts.Name
@@ -13,6 +13,3 @@ types:
     - id: ${thisModel}/Contacts.EMailAddresses
       name: EMailAddresses
       isOptional: true
-    associations:
-    - id: System/Related
-      targetCkTypeId: ${thisModel}/MeasuringPoint

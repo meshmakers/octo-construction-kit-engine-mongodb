@@ -1,7 +1,7 @@
 "$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
 types:
 - typeId: MeasuringPoint
-  derivedFromCkTypeId: System/Entity
+  derivedFromCkTypeId: ${System}/Entity
   isFinal: true
   isAbstract: false
   attributes:
@@ -15,7 +15,5 @@ types:
     name: Tags
     isOptional: true
   associations:
-  - id: System/ParentChild
+  - id: ${System}/ParentChild
     targetCkTypeId: ${thisModel}/HouseHold
-  - id: System/Related
-    targetCkTypeId: ${thisModel}/Customer    

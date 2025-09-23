@@ -1,7 +1,7 @@
 $schema: "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
 types:
   - typeId: Location
-    derivedFromCkTypeId: System/Entity
+    derivedFromCkTypeId: ${System}/Entity
     isAbstract: true
     attributes:
     - id: ${thisModel}/Name
@@ -18,7 +18,7 @@ types:
     - id: ${thisModel}/ISOCode
       name: ISOCode
     associations:
-    - id: System/ParentChild
+    - id: ${System}/ParentChild
       targetCkTypeId: ${thisModel}/Continent
 
   - typeId: StateOrProvince
@@ -27,27 +27,25 @@ types:
     isFinal: true
     isAbstract: false
     associations:
-    - id: System/ParentChild
+    - id: ${System}/ParentChild
       targetCkTypeId: ${thisModel}/Country
 
   - typeId: District
     description: A district is a type of administrative division that, in some countries, is managed by local government.
     derivedFromCkTypeId: ${thisModel}/Location
     associations:
-    - id: System/ParentChild
+    - id: ${System}/ParentChild
       targetCkTypeId: ${thisModel}/StateOrProvince
 
   - typeId: Municipality
     description: A municipality is a local administrative division having corporate status and powers of self-government or jurisdiction as granted by national and regional laws.
     derivedFromCkTypeId: ${thisModel}/Location
     associations:
-    - id: System/ParentChild
+    - id: ${System}/ParentChild
       targetCkTypeId: ${thisModel}/District
   - typeId: HouseHold
     derivedFromCkTypeId: ${thisModel}/Location
     description: A house hold is a group of people who live together in the same dwelling and share meals.
     associations:
-    - id: System/ParentChild
+    - id: ${System}/ParentChild
       targetCkTypeId: ${thisModel}/Municipality
-    - id: System/Related
-      targetCkTypeId: ${thisModel}/Customer  
