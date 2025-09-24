@@ -4,8 +4,8 @@ types:
     derivedFromCkTypeId: ${System}/Entity
     isFinal: false
     attributes:
-    - id: ${thisModel}/Name
+    - id: ${this}/Name
       name: Name
-    - id: ${thisModel}/Icon
+    - id: ${this}/Icon
       name: Icon
 
