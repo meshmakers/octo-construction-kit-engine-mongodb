@@ -61,7 +61,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
 
         var satisfiedModels = ckModels
-            .Where(m => modelIdVersionRange.IsSatisfiedBy(m.ModelId))
+            .Where(m => modelIdVersionRange.IsSatisfiedBy(m.Id))
             .ToList();
 
         // Return the latest satisfied version
