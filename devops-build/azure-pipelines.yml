@@ -57,6 +57,7 @@ stages:
         displayName: 'Test'
         inputs:
           command: 'test'
+          asdfasdf
           projects: |
             '**/*Tests.csproj'
             '**/*SystemTests.csproj'
