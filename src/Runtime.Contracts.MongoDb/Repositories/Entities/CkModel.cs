@@ -33,7 +33,7 @@ public class CkModel
     /// <summary>
     ///     Defines the dependencies of the construction kit
     /// </summary>
-    public CkModelIdVersionRange[]? Dependencies { get; init; }
+    public CkModelId[]? Dependencies { get; init; }
     
     /// <summary>
     ///     An optional description of the model
