@@ -61,6 +61,7 @@ stages:
             '**/*Tests.csproj'
             '**/*SystemTests.csproj'
           testRunTitle: 'CI'
+          arguments: '--configuration $(BuildConfiguration) /p:OctoNugetPrivateServer=$(nugetPrivateServer)'
       - template: handle-artifacts.yml
       - template: push-nuget-package.yml
 
