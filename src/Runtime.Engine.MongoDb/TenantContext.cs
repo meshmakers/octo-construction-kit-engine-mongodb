@@ -598,8 +598,10 @@ public class TenantContext : ITenantContext
     {
         var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
 
-        return await CkModelRepositoryService.IsCkModelExistingAsync(InternalConstants.CkModelRepositoryName, ckModelId,
+        var r = await CkModelRepositoryService.IsCkModelExistingAsync(InternalConstants.CkModelRepositoryName,
+            ckModelId.ToVersionRange(),
             new TenantDatabaseSourceIdentifier(repositoryDataSource));
+        return r.Exists;
     }
 
     public async Task CustomizeCkEnumAsync(CkId<CkEnumId> ckEnumId, ICollection<CkEnumUpdate> ckEnumUpdates,
