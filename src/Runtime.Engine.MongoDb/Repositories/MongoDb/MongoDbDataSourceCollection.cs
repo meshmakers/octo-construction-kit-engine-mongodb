@@ -6,6 +6,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
@@ -25,7 +26,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     private readonly ILogger<MongoDbDataSourceCollection<TKey, TDocument>> _logger;
     private readonly IMongoDataSourceMapper<TKey, TDocument> _mongoDataSourceMapper;
 
-    internal MongoDbDataSourceCollection(ILogger<MongoDbDataSourceCollection<TKey, TDocument>> logger, IMongoCollection<TDocument> documentCollection,
+    internal MongoDbDataSourceCollection(ILogger<MongoDbDataSourceCollection<TKey, TDocument>> logger,
+        IMongoCollection<TDocument> documentCollection,
         IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper)
     {
         _logger = logger;
@@ -577,6 +579,28 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         try
         {
             var listWrites = new List<WriteModel<TDocument>>();
+            List<RtAssociation> existingAssociations = new();
+
+            if (options.InsertStrategy == BulkInsertStrategy.Upsert)
+            {
+                // For associations, we do not have an id, so we need to check if the association already exists
+                // because if the filter doesn't contain the id field, the upsert will not call the IdGenerator
+                // and we end up with associations with id 0 and this association is used for every import.
+                // So we need to find all existing associations first
+                // and then only insert the new ones
+                var filterConditions = documents.OfType<RtAssociation>().Select(association =>
+                    Builders<TDocument>.Filter.And(
+                        Builders<TDocument>.Filter.BuildAssociationFilter(association))).ToList();
+                
+                if (filterConditions.Any())
+                {
+                    var combinedFilter = Builders<TDocument>.Filter.Or(filterConditions);
+                    existingAssociations = (await _documentCollection
+                            .Find(((IOctoSessionInternal)session).SessionHandle, combinedFilter).ToListAsync())
+                        .OfType<RtAssociation>().ToList();
+                }
+            }
+
             foreach (var v in documents)
             {
                 switch (options.InsertStrategy)
@@ -585,15 +609,37 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                         listWrites.Add(new InsertOneModel<TDocument>(v));
                         break;
                     case BulkInsertStrategy.Upsert:
-                        listWrites.Add(new ReplaceOneModel<TDocument>(
-                            Builders<TDocument>.Filter.BuildIdFilter(_mongoDataSourceMapper.GetId(v)),
-                            v) { IsUpsert = true });
+                        if (v is RtAssociation association)
+                        {
+                            var existing = existingAssociations.FirstOrDefault(a =>
+                                a.OriginRtId == association.OriginRtId &&
+                                a.TargetRtId == association.TargetRtId &&
+                                a.AssociationRoleId == association.AssociationRoleId);
+
+                            // Only insert if not existing otherwise just skip because the association already exists
+                            if (existing == null)
+                            {
+                                listWrites.Add(new InsertOneModel<TDocument>(v));
+                            }
+                        }
+                        else
+                        {
+                            listWrites.Add(new ReplaceOneModel<TDocument>(
+                                Builders<TDocument>.Filter.BuildIdFilter(_mongoDataSourceMapper.GetId(v)),
+                                v) { IsUpsert = true });
+                        }
+
                         break;
                 }
             }
 
-            var result =
-                await _documentCollection.BulkWriteAsync(((IOctoSessionInternal)session).SessionHandle, listWrites);
+            BulkWriteResult<TDocument>? result = null;
+            if (listWrites.Any())
+            {
+                result =
+                    await _documentCollection.BulkWriteAsync(((IOctoSessionInternal)session).SessionHandle, listWrites);
+            }
+
             return new BulkImportResult(result);
         }
         catch (MongoBulkWriteException e)

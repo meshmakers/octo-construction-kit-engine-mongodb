@@ -1,3 +1,4 @@
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic.Builders;
 
 using MongoDB.Bson;
@@ -99,6 +100,18 @@ internal static class BuildExtensions
         this FilterDefinitionBuilder<TDocument> @this, TField id)
     {
         return @this.Eq(Constants.IdField, id);
+    }
+    
+    /// <summary>
+    /// Creates a filter for the RtAssociations
+    /// </summary>
+    internal static FilterDefinition<TDocument> BuildAssociationFilter<TDocument>(
+        this FilterDefinitionBuilder<TDocument> @this, RtAssociation association)
+    {
+        return @this.And(
+            @this.Eq("associationRoleId", association.AssociationRoleId),
+            @this.Eq("originRtId", association.OriginRtId),
+            @this.Eq("targetRtId", association.TargetRtId));
     }
 
     /// <summary>
