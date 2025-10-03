@@ -32,19 +32,21 @@ public class SystemFixture : ConfigurationFixture, IAsyncLifetime
         if (_isInitialized)
             return;
 
+        // We need to create a new instance here to get the default admin user name
+        var o = new OctoSystemConfiguration();
+
         // Start MongoDB test container with authentication
         _mongoDbContainer = new MongoDbBuilder()
-            .WithImage("mongo:7.0")
+            .WithImage("mongo:8.0")
             .WithReplicaSet()
-            .WithPortBinding(27017, true) // Random host port
             .WithName($"mongodb-test-{Guid.NewGuid():N}")
-            .WithUsername("octo-system-admin")
-            .WithPassword("OctoAdmin1")
+            .WithUsername(o.AdminUser)
+            .WithPassword(_options.AdminUserPassword)
             .Build();
 
         await _mongoDbContainer.StartAsync();
 
-        var mappedPort = _mongoDbContainer.GetMappedPublicPort(27017);
+        var mappedPort = _mongoDbContainer.GetMappedPublicPort();
         var databaseHost = $"localhost:{mappedPort}";
 
         // Configure services with the test container connection
@@ -52,8 +54,8 @@ public class SystemFixture : ConfigurationFixture, IAsyncLifetime
         {
             t.SystemDatabaseName = SystemDatabaseName;
             t.DatabaseHost = databaseHost;
-            t.AdminUser = "octo-system-admin";
-            t.AdminUserPassword = "OctoAdmin1";
+            t.AdminUser = o.AdminUser;
+            t.AdminUserPassword = _options.AdminUserPassword;
             t.DatabaseUserPassword = _options.DatabaseUserPassword;
             t.UseDirectConnection = true; // For single-node replica set in tests
         });
