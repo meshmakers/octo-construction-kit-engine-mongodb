@@ -46,6 +46,7 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services.AddSingleton<IModelLoaderService, ModelLoaderService>();
         builder.Services.AddSingleton<IMetricsContext, MetricsContext>();
         builder.Services.TryAddSingleton<ITenantNotifications, DefaultTenantNotifications>();
+        builder.Services.AddTransient<IRepositoryOpsService, RepositoryOpsService>();
 
         builder.Services.AddSingleton<IUserRepositoryAccess, UserRepositoryAccess>();
         builder.Services.AddSingleton<IAdminRepositoryAccess, AdminRepositoryAccess>();
