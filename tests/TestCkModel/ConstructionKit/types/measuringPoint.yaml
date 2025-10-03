@@ -5,15 +5,15 @@ types:
   isFinal: true
   isAbstract: false
   attributes:
-  - id: ${thisModel}/Name
+  - id: ${this}/Name
     name: Name
-  - id: ${thisModel}/CounterNumber
+  - id: ${this}/CounterNumber
     name: CounterNumber
-  - id: ${thisModel}/CounterReading
+  - id: ${this}/CounterReading
     name: CounterReading
-  - id: ${thisModel}/Tags
+  - id: ${this}/Tags
     name: Tags
     isOptional: true
   associations:
   - id: ${System}/ParentChild
-    targetCkTypeId: ${thisModel}/HouseHold
+    targetCkTypeId: ${this}/HouseHold

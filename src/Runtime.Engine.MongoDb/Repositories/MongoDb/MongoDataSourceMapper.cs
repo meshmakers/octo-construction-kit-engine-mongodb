@@ -42,6 +42,16 @@ public class RtEntityMongoDataSourceMapper<TEntity> : IMongoDataSourceMapper<Oct
         {
             list.Add(Builders<TEntity>.Update.Set("rtWellKnownName", document.RtWellKnownName));
         }
+
+        if (document.RtState.HasValue)
+        {
+            list.Add(Builders<TEntity>.Update.Set("rtState", document.RtState.Value));
+        }
+
+        if (document.RtDeletedDateTime.HasValue)
+        {
+            list.Add(Builders<TEntity>.Update.Set("rtDeletedDateTime", document.RtDeletedDateTime.Value));
+        }
         
         list.Add(Builders<TEntity>.Update.Inc("rtVersion", 1));
 

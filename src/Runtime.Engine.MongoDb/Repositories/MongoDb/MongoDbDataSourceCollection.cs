@@ -1,6 +1,7 @@
 ﻿using System.Linq.Expressions;
 
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
@@ -108,6 +109,65 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         ));
     }
 
+    public async Task CreateUniqueIndexAsync(string name, IEnumerable<string> fields,
+        IEnumerable<CkId<CkTypeId>> typeIds)
+    {
+        ArgumentValidation.ValidateString(nameof(name), name);
+
+        var indexKeys =
+            fields.Select(f =>
+                Constants.IsSystemAttribute(f)
+                    ? Builders<TDocument>.IndexKeys.Ascending(f)
+                    : Builders<TDocument>.IndexKeys.Ascending(Constants.AttributesName + "." + f.ToCamelCase()));
+
+        // Create partial filter for specific type IDs
+        var partialFilterExpression = Builders<TDocument>.Filter.In(nameof(RtEntity.CkTypeId).ToCamelCase(), typeIds);
+
+        var options = new CreateIndexOptions<TDocument>
+        {
+            Background = true,
+            Name = name,
+            Unique = true,
+            PartialFilterExpression = partialFilterExpression
+        };
+
+        await _documentCollection.Indexes.CreateOneAsync(new CreateIndexModel<TDocument>(
+            Builders<TDocument>.IndexKeys.Combine(indexKeys),
+            options
+        ));
+    }
+
+    public async Task CreateUniqueNotDeletedIndexAsync(string name, IEnumerable<string> fields,
+        IEnumerable<CkId<CkTypeId>> typeIds)
+    {
+        ArgumentValidation.ValidateString(nameof(name), name);
+
+        var indexKeys =
+            fields.Select(f =>
+                Constants.IsSystemAttribute(f)
+                    ? Builders<TDocument>.IndexKeys.Ascending(f)
+                    : Builders<TDocument>.IndexKeys.Ascending(Constants.AttributesName + "." + f.ToCamelCase()));
+
+        // Create partial filter for active entities (not deleted) and specific type IDs
+        var partialFilterExpression = Builders<TDocument>.Filter.And(
+            Builders<TDocument>.Filter.In(nameof(RtEntity.RtState).ToCamelCase(), new int?[] { null, 0 }),
+            Builders<TDocument>.Filter.In(nameof(RtEntity.CkTypeId).ToCamelCase(), typeIds)
+        );
+
+        var options = new CreateIndexOptions<TDocument>
+        {
+            Background = true,
+            Name = name,
+            Unique = true,
+            PartialFilterExpression = partialFilterExpression
+        };
+
+        await _documentCollection.Indexes.CreateOneAsync(new CreateIndexModel<TDocument>(
+            Builders<TDocument>.IndexKeys.Combine(indexKeys),
+            options
+        ));
+    }
+
     public async Task DropIndexAsync(string name)
     {
         ArgumentValidation.ValidateString(nameof(name), name);
@@ -117,7 +177,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         {
             var indexName = i["name"].ToString();
             if (!string.IsNullOrEmpty(indexName) &&
-                string.Compare(indexName, name, StringComparison.InvariantCultureIgnoreCase) != -1)
+                string.Compare(indexName, name, StringComparison.InvariantCultureIgnoreCase) == 0)
             {
                 await _documentCollection.Indexes.DropOneAsync(indexName);
                 return;
@@ -138,6 +198,21 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 var fieldsDict = new List<Tuple<string, int>>();
                 var indexType = IndexTypes.Ascending;
                 string? language = null;
+
+                // Check for unique constraint
+                bool isUnique = false;
+                if (doc.TryGetValue("unique", out var uniqueElement))
+                {
+                    isUnique = uniqueElement.AsBoolean;
+                }
+
+                // Check for partial filter expression (for UniqueNotDeleted)
+                bool hasPartialFilter = false;
+                if (doc.TryGetValue("partialFilterExpression", out var partialFilterElement))
+                {
+                    hasPartialFilter = partialFilterElement != null;
+                }
+
                 if (doc.TryGetValue("key", out var keyElement) && keyElement is BsonDocument keyDoc)
                 {
                     if (keyDoc.TryGetValue("_fts", out var valueElement))
@@ -173,6 +248,12 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                     }
                     else
                     {
+                        // Determine if it's a unique index
+                        if (isUnique)
+                        {
+                            indexType = hasPartialFilter ? IndexTypes.UniqueNotDeleted : IndexTypes.Unique;
+                        }
+
                         foreach (var elem in keyDoc.Elements)
                         {
                             var attributePath = elem.Name;
@@ -194,7 +275,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 }
 
                 List<CkIndexFields> fields = new();
-                if (indexType == IndexTypes.Ascending)
+                if (indexType == IndexTypes.Ascending || indexType == IndexTypes.Unique || indexType == IndexTypes.UniqueNotDeleted)
                 {
                     fields.Add(new CkIndexFields { Weight = null, AttributeNames = fieldsDict.Select(t=> t.Item1).ToList() });
                 }

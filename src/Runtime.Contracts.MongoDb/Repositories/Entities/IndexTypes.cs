@@ -4,5 +4,7 @@ public enum IndexTypes
 {
     None = 0,
     Ascending = 1,
-    Text = 2
+    Text = 2,
+    Unique = 3,
+    UniqueNotDeleted = 4,
 }

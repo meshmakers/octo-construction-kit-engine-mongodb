@@ -4,12 +4,12 @@ types:
     derivedFromCkTypeId: ${System}/Entity
     isFinal: false
     attributes:
-    - id: ${thisModel}/Contacts.Name
+    - id: ${this}/Contacts.Name
       name: Name
       isOptional: true
-    - id: ${thisModel}/Contacts.Address
+    - id: ${this}/Contacts.Address
       name: Address
       isOptional: true
-    - id: ${thisModel}/Contacts.EMailAddresses
+    - id: ${this}/Contacts.EMailAddresses
       name: EMailAddresses
       isOptional: true

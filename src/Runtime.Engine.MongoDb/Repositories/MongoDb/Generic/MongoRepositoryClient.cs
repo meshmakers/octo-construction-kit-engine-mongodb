@@ -418,6 +418,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.RtChangedDateTime).SetIsRequired(true);
             cm.MapMember(c => c.CkTypeId).SetIsRequired(true);
             cm.MapMember(c => c.RtWellKnownName).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.RtDeletedDateTime).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.RtState).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<RtRecord>(cm =>

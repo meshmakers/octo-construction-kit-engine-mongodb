@@ -68,4 +68,9 @@ public class CkType
     /// Defines the name of the collection in the database. If not set, the collection name is derived from the type name.
     /// </summary>
     public string CollectionName { get; set; } = null!;
+    
+    /// <summary>
+    /// Gets or sets the index states for this type.
+    /// </summary>
+    public List<CkIndexState>? IndexStates { get; set; }
 }
