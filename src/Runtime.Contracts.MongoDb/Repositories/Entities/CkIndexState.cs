@@ -1,9 +1,12 @@
+using System.Diagnostics;
+
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 
 /// <summary>
 /// Defines the state of an index.
 /// </summary>
 // ReSharper disable once ClassNeverInstantiated.Global
+[DebuggerDisplay("Index: {Name}, Collection {CollectionName} State: {State}, Error: {ErrorMessage}")]
 public class CkIndexState
 {
     /// <summary>

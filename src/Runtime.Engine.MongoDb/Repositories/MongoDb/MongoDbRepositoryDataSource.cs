@@ -4,7 +4,6 @@ using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
@@ -500,7 +499,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         where TDocument : class, new()
         where TKey : notnull
     {
-        var indexName = collectionName + "_" + uniqueIndexNumber;
+        // For system indexes (like RtAssociation indexes) where no defining type exists,
+        // fall back to collection name. Otherwise use the type name for backward compatibility.
+        var indexName = indexDefiningType != null
+            ? indexDefiningType.CkTypeId.GetCkTypeCollectionName() + "_" + uniqueIndexNumber
+            : collectionName + "_" + uniqueIndexNumber;
 
         // We check if the index already exists in the repository,
         // by comparing type, the fields' weight and the attribute paths
@@ -564,9 +567,10 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         where TDocument : class, new()
         where TKey : notnull
     {
-        // Generate index name using the defining type name, not the collection name
-        // Extract type name from CkTypeId (e.g., "System/Entity" -> "SystemEntity")
-        var indexName = indexDefiningType?.CkTypeId.ToString().Replace("/", "") + "_" + uniqueIndexNumber;
+        // Generate index name using the same logic as CreateOrUpdateIndex for consistency
+        var indexName = indexDefiningType != null
+            ? indexDefiningType.CkTypeId.GetCkTypeCollectionName() + "_" + uniqueIndexNumber
+            : collectionName + "_" + uniqueIndexNumber;
         
         try
         {
