@@ -5,9 +5,6 @@ using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
-using Microsoft.VisualBasic;
-
-using TestCkModel.Generated.Test.v1;
 using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
@@ -20,9 +17,6 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
         public const string SystemEntityType = "System/Entity";
         public const string SimpleTypeName = "SimpleType";
         public const string SimpleModelName = "SimpleModel";
-        public const string SimpleModelFixed = "SimpleModelFixed";
-        public const string SimpleModelUniqueNotDeleted = "SimpleModelUniqueNotDeleted";
-        public const string SimpleModelUniqueNotDeletedSuccess = "SimpleModelUniqueNotDeletedSuccess";
         public const string SimpleFieldName = "SimpleField";
         public const string DuplicateValue = "DuplicateValue";
         public const string UniqueValue = "UniqueValue";
@@ -39,273 +33,378 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
     [Fact]
     public async Task SuccessfulIndexCreation_ShouldBeTrackedInCkType()
     {
-        // Arrange
+        // Arrange - Create child tenant
         var systemContext = fixture.GetSystemContext();
-        var tenantRepository = systemContext.GetTenantRepository();
+        var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
 
-        // Act - No need to create indexes manually, they will be created automatically on
+        using (var adminSession = await systemContext.GetAdminSessionAsync())
+        {
+            adminSession.StartTransaction();
+            await systemContext.CreateChildTenantAsync(adminSession, tenantId, tenantId);
+            await adminSession.CommitTransactionAsync();
+        }
 
-        // Get a CkType that should have indexes (System/Entity is a good candidate)
-        var session = tenantRepository.GetSession();
-        var ckTypeId = new CkId<CkTypeId>(Constants.SystemEntityType);
-        var result = await tenantRepository.GetCkTypeAsync(
-            session,
-            null,
-            new List<CkId<CkTypeId>> { ckTypeId },
-            DataQueryOperation.Create(),
-            null,
-            null);
+        try
+        {
+            var tenantContext = await systemContext.GetChildTenantContextAsync(tenantId);
+            var tenantRepository = tenantContext.GetTenantRepository();
 
-        // Assert
-        var ckType = result.Items.FirstOrDefault();
-        Assert.NotNull(ckType);
-        Assert.NotNull(ckType.IndexStates);
-        Assert.NotEmpty(ckType.IndexStates);
+            // Act - No need to create indexes manually, they will be created automatically on
 
-        // Check that at least one index was successfully applied
-        var appliedIndex = ckType.IndexStates.FirstOrDefault(s => s.State == IndexState.Applied);
-        Assert.NotNull(appliedIndex);
-        Assert.NotNull(appliedIndex.Name);
-        Assert.NotNull(appliedIndex.CollectionName);
-        Assert.NotNull(appliedIndex.AppliedAt);
+            // Get a CkType that should have indexes (System/Entity is a good candidate)
+            var session = tenantRepository.GetSession();
+            var ckTypeId = new CkId<CkTypeId>(Constants.SystemEntityType);
+            var result = await tenantRepository.GetCkTypeAsync(
+                session,
+                null,
+                new List<CkId<CkTypeId>> { ckTypeId },
+                DataQueryOperation.Create(),
+                null,
+                null);
+
+            // Assert
+            var ckType = result.Items.FirstOrDefault();
+            Assert.NotNull(ckType);
+            Assert.NotNull(ckType.IndexStates);
+            Assert.NotEmpty(ckType.IndexStates);
+
+            // Check that at least one index was successfully applied
+            var appliedIndex = ckType.IndexStates.FirstOrDefault(s => s.State == IndexState.Applied);
+            Assert.NotNull(appliedIndex);
+            Assert.NotNull(appliedIndex.Name);
+            Assert.NotNull(appliedIndex.CollectionName);
+            Assert.NotNull(appliedIndex.AppliedAt);
+        }
+        finally
+        {
+            // Cleanup - Delete child tenant
+            using var cleanupSession = await systemContext.GetAdminSessionAsync();
+            cleanupSession.StartTransaction();
+            await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
+            await cleanupSession.CommitTransactionAsync();
+        }
     }
 
     [Fact]
     public async Task UniqueIndexViolation_ShouldBeTrackedInCkType()
     {
-        // Arrange - Start the System Tenant (done by fixture)
+        // Arrange - Create child tenant
         var systemContext = fixture.GetSystemContext();
-        var tenantRepository = systemContext.GetTenantRepository();
+        var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
 
-        var modelName = Constants.SimpleModelName;
+        using (var adminSession = await systemContext.GetAdminSessionAsync())
+        {
+            adminSession.StartTransaction();
+            await systemContext.CreateChildTenantAsync(adminSession, tenantId, tenantId);
+            await adminSession.CommitTransactionAsync();
+        }
 
-        // Step 1: Create a simple CK model with 1 type and 1 attribute (no index yet)
-        var modelWithoutIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), hasUniqueIndex: false);
-        await systemContext.ImportCkModelAsync(modelWithoutIndex);
+        try
+        {
+            var tenantContext = await systemContext.GetChildTenantContextAsync(tenantId);
+            var tenantRepository = tenantContext.GetTenantRepository();
 
-        // Step 2: Add Sample Data That Violates the Unique index constraints
-        var session = await tenantRepository.GetSessionAsync();
-        session.StartTransaction();
+            var modelName = Constants.SimpleModelName;
 
-        // Insert two entities with duplicate SimpleField values
-        var typeId = GetSimpleTypeId(modelName);
-        var entity1 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
-        entity1.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
-        await tenantRepository.InsertOneRtEntityAsync(session, entity1);
+            // Step 1: Create a simple CK model with 1 type and 1 attribute (no index yet)
+            var modelWithoutIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), hasUniqueIndex: false);
+            await tenantContext.ImportCkModelAsync(modelWithoutIndex);
 
-        var entity2 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
-        entity2.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue); // Same value as entity1
-        await tenantRepository.InsertOneRtEntityAsync(session, entity2);
+            // Step 2: Add Sample Data That Violates the Unique index constraints
+            var session = await tenantRepository.GetSessionAsync();
+            session.StartTransaction();
 
-        await session.CommitTransactionAsync();
+            // Insert two entities with duplicate SimpleField values
+            var typeId = GetSimpleTypeId(modelName);
+            var entity1 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
+            entity1.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
+            await tenantRepository.InsertOneRtEntityAsync(session, entity1);
 
-        // Step 3: Modify the ConstructionKit to add the violating unique index
-        // Import the SAME model but with a unique index - this will update the existing model
-        var modelWithIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), hasUniqueIndex: true);
+            var entity2 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
+            entity2.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue); // Same value as entity1
+            await tenantRepository.InsertOneRtEntityAsync(session, entity2);
 
-        // Act - Apply this new ConstructionKit
-        await systemContext.ImportCkModelAsync(modelWithIndex);
+            await session.CommitTransactionAsync();
 
-        // Assert - Verify a) It didn't fail b) the unique indices that failed are available via CkType
-        var session2 = tenantRepository.GetSession();
-        var ckTypeId = GetSimpleTypeId(modelName);
-        var result = await tenantRepository.GetCkTypeAsync(
-            session2,
-            null,
-            new List<CkId<CkTypeId>> { ckTypeId },
-            DataQueryOperation.Create(),
-            null,
-            null);
+            // Step 3: Modify the ConstructionKit to add the violating unique index
+            // Import the SAME model but with a unique index - this will update the existing model
+            var modelWithIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), hasUniqueIndex: true);
 
-        var ckType = result.Items.FirstOrDefault();
-        Assert.NotNull(ckType);
-        Assert.NotNull(ckType.IndexStates);
-        Assert.NotEmpty(ckType.IndexStates);
+            // Act - Apply this new ConstructionKit
+            await tenantContext.ImportCkModelAsync(modelWithIndex);
 
-        // Check that the unique index failed to be created
-        var failedIndex = ckType.IndexStates.FirstOrDefault(s => s.State == IndexState.Failed);
-        Assert.NotNull(failedIndex);
-        Assert.NotNull(failedIndex.Name);
-        Assert.NotNull(failedIndex.CollectionName);
-        Assert.NotNull(failedIndex.ErrorMessage);
-        Assert.Contains("duplicate", failedIndex.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+            // Assert - Verify a) It didn't fail b) the unique indices that failed are available via CkType
+            var session2 = tenantRepository.GetSession();
+            var ckTypeId = GetSimpleTypeId(modelName);
+            var result = await tenantRepository.GetCkTypeAsync(
+                session2,
+                null,
+                new List<CkId<CkTypeId>> { ckTypeId },
+                DataQueryOperation.Create(),
+                null,
+                null);
+
+            var ckType = result.Items.FirstOrDefault();
+            Assert.NotNull(ckType);
+            Assert.NotNull(ckType.IndexStates);
+            Assert.NotEmpty(ckType.IndexStates);
+
+            // Check that the unique index failed to be created
+            var failedIndex = ckType.IndexStates.FirstOrDefault(s => s.State == IndexState.Failed);
+            Assert.NotNull(failedIndex);
+            Assert.NotNull(failedIndex.Name);
+            Assert.NotNull(failedIndex.CollectionName);
+            Assert.NotNull(failedIndex.ErrorMessage);
+            Assert.Contains("duplicate", failedIndex.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            // Cleanup - Delete child tenant
+            using var cleanupSession = await systemContext.GetAdminSessionAsync();
+            cleanupSession.StartTransaction();
+            await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
+            await cleanupSession.CommitTransactionAsync();
+        }
     }
 
     [Fact]
     public async Task UniqueIndexViolation_AfterDataFixed_ShouldSucceed()
     {
-        // Arrange
+        // Arrange - Create child tenant
         var systemContext = fixture.GetSystemContext();
-        var tenantRepository = systemContext.GetTenantRepository();
-        var modelName = Constants.SimpleModelFixed;
+        var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
 
-        // Step 1: Create model and add duplicate data
-        var modelWithoutIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), hasUniqueIndex: false);
-        await systemContext.ImportCkModelAsync(modelWithoutIndex);
+        using (var adminSession = await systemContext.GetAdminSessionAsync())
+        {
+            adminSession.StartTransaction();
+            await systemContext.CreateChildTenantAsync(adminSession, tenantId, tenantId);
+            await adminSession.CommitTransactionAsync();
+        }
 
-        var session = await tenantRepository.GetSessionAsync();
-        session.StartTransaction();
+        try
+        {
+            var tenantContext = await systemContext.GetChildTenantContextAsync(tenantId);
+            var tenantRepository = tenantContext.GetTenantRepository();
+            var modelName = Constants.SimpleModelName;
 
-        var typeId = GetSimpleTypeId(modelName);
-        var entity1 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
-        entity1.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
-        await tenantRepository.InsertOneRtEntityAsync(session, entity1);
+            // Step 1: Create model and add duplicate data
+            var modelWithoutIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), hasUniqueIndex: false);
+            await tenantContext.ImportCkModelAsync(modelWithoutIndex);
 
-        var entity2 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
-        entity2.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
-        await tenantRepository.InsertOneRtEntityAsync(session, entity2);
+            var session = await tenantRepository.GetSessionAsync();
+            session.StartTransaction();
 
-        await session.CommitTransactionAsync();
+            var typeId = GetSimpleTypeId(modelName);
+            var entity1 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
+            entity1.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
+            await tenantRepository.InsertOneRtEntityAsync(session, entity1);
 
-        // Step 2: Import with unique index - should fail
-        var modelWithIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), hasUniqueIndex: true);
-        await systemContext.ImportCkModelAsync(modelWithIndex);
+            var entity2 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
+            entity2.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
+            await tenantRepository.InsertOneRtEntityAsync(session, entity2);
 
-        // Verify index failed
-        var session2 = tenantRepository.GetSession();
-        var ckTypeId = GetSimpleTypeId(modelName);
-        var result = await tenantRepository.GetCkTypeAsync(session2, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create(), null, null);
-        var ckType = result.Items.FirstOrDefault();
-        Assert.NotNull(ckType);
-        var failedIndex = ckType.IndexStates?.FirstOrDefault(s => s.State == IndexState.Failed);
-        Assert.NotNull(failedIndex);
+            await session.CommitTransactionAsync();
 
-        // Step 3: Fix the data - update entity2 to have different value
-        var session3 = await tenantRepository.GetSessionAsync();
-        session3.StartTransaction();
+            // Step 2: Import with unique index - should fail
+            var modelWithIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), hasUniqueIndex: true);
+            await tenantContext.ImportCkModelAsync(modelWithIndex);
 
-        entity2.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.UniqueValue);
-        await tenantRepository.UpdateOneRtEntityByIdAsync(session3, ckTypeId, entity2.RtId, entity2);
+            // Verify index failed
+            var session2 = tenantRepository.GetSession();
+            var ckTypeId = GetSimpleTypeId(modelName);
+            var result = await tenantRepository.GetCkTypeAsync(session2, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create(), null, null);
+            var ckType = result.Items.FirstOrDefault();
+            Assert.NotNull(ckType);
+            var failedIndex = ckType.IndexStates?.FirstOrDefault(s => s.State == IndexState.Failed);
+            Assert.NotNull(failedIndex);
 
-        await session3.CommitTransactionAsync();
+            // Step 3: Fix the data - update entity2 to have different value
+            var session3 = await tenantRepository.GetSessionAsync();
+            session3.StartTransaction();
 
-        // Act: Re-import the model with unique index
-        await systemContext.ImportCkModelAsync(modelWithIndex);
+            entity2.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.UniqueValue);
+            await tenantRepository.UpdateOneRtEntityByIdAsync(session3, ckTypeId, entity2.RtId, entity2);
 
-        // Assert: Index should now be successfully applied
-        var session4 = tenantRepository.GetSession();
-        var result2 = await tenantRepository.GetCkTypeAsync(session4, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create(), null, null);
-        var ckType2 = result2.Items.FirstOrDefault();
-        Assert.NotNull(ckType2);
-        Assert.NotNull(ckType2.IndexStates);
-        Assert.NotEmpty(ckType2.IndexStates);
+            await session3.CommitTransactionAsync();
 
-        var appliedIndex = ckType2.IndexStates.FirstOrDefault(s => s.State == IndexState.Applied);
-        Assert.NotNull(appliedIndex);
-        Assert.NotNull(appliedIndex.Name);
-        Assert.NotNull(appliedIndex.AppliedAt);
+            // Act: Re-import the model with unique index
+            await tenantContext.ImportCkModelAsync(modelWithIndex);
+
+            // Assert: Index should now be successfully applied
+            var session4 = tenantRepository.GetSession();
+            var result2 = await tenantRepository.GetCkTypeAsync(session4, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create(), null, null);
+            var ckType2 = result2.Items.FirstOrDefault();
+            Assert.NotNull(ckType2);
+            Assert.NotNull(ckType2.IndexStates);
+            Assert.NotEmpty(ckType2.IndexStates);
+
+            var appliedIndex = ckType2.IndexStates.FirstOrDefault(s => s.State == IndexState.Applied);
+            Assert.NotNull(appliedIndex);
+            Assert.NotNull(appliedIndex.Name);
+            Assert.NotNull(appliedIndex.AppliedAt);
+        }
+        finally
+        {
+            // Cleanup - Delete child tenant
+            using var cleanupSession = await systemContext.GetAdminSessionAsync();
+            cleanupSession.StartTransaction();
+            await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
+            await cleanupSession.CommitTransactionAsync();
+        }
     }
 
     [Fact]
     public async Task UniqueNotDeletedIndexViolation_ShouldBeTrackedInCkType()
     {
-        // Arrange
+        // Arrange - Create child tenant
         var systemContext = fixture.GetSystemContext();
-        var tenantRepository = systemContext.GetTenantRepository();
-        var modelName = Constants.SimpleModelUniqueNotDeleted;
+        var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
 
-        // Step 1: Create model without index
-        var modelWithoutIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), IndexTypeDto.None);
-        await systemContext.ImportCkModelAsync(modelWithoutIndex);
+        using (var adminSession = await systemContext.GetAdminSessionAsync())
+        {
+            adminSession.StartTransaction();
+            await systemContext.CreateChildTenantAsync(adminSession, tenantId, tenantId);
+            await adminSession.CommitTransactionAsync();
+        }
 
-        // Step 2: Add duplicate data (both NOT deleted)
-        var session = await tenantRepository.GetSessionAsync();
-        session.StartTransaction();
+        try
+        {
+            var tenantContext = await systemContext.GetChildTenantContextAsync(tenantId);
+            var tenantRepository = tenantContext.GetTenantRepository();
+            var modelName = Constants.SimpleModelName;
 
-        var typeId = GetSimpleTypeId(modelName);
-        var entity1 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
-        entity1.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
-        await tenantRepository.InsertOneRtEntityAsync(session, entity1);
+            // Step 1: Create model without index
+            var modelWithoutIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), IndexTypeDto.None);
+            await tenantContext.ImportCkModelAsync(modelWithoutIndex);
 
-        var entity2 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
-        entity2.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
-        await tenantRepository.InsertOneRtEntityAsync(session, entity2);
+            // Step 2: Add duplicate data (both NOT deleted)
+            var session = await tenantRepository.GetSessionAsync();
+            session.StartTransaction();
 
-        await session.CommitTransactionAsync();
+            var typeId = GetSimpleTypeId(modelName);
+            var entity1 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
+            entity1.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
+            await tenantRepository.InsertOneRtEntityAsync(session, entity1);
 
-        // Step 3: Import with UniqueNotDeleted index
-        var modelWithIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), IndexTypeDto.UniqueNotDeleted);
+            var entity2 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
+            entity2.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
+            await tenantRepository.InsertOneRtEntityAsync(session, entity2);
 
-        // Act
-        await systemContext.ImportCkModelAsync(modelWithIndex);
+            await session.CommitTransactionAsync();
 
-        // Assert: Index should fail due to duplicates
-        var session2 = tenantRepository.GetSession();
-        var ckTypeId = GetSimpleTypeId(modelName);
-        var result = await tenantRepository.GetCkTypeAsync(session2, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create(), null, null);
+            // Step 3: Import with UniqueNotDeleted index
+            var modelWithIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), IndexTypeDto.UniqueNotDeleted);
 
-        var ckType = result.Items.FirstOrDefault();
-        Assert.NotNull(ckType);
-        Assert.NotNull(ckType.IndexStates);
-        Assert.NotEmpty(ckType.IndexStates);
+            // Act
+            await tenantContext.ImportCkModelAsync(modelWithIndex);
 
-        var failedIndex = ckType.IndexStates.FirstOrDefault(s => s.State == IndexState.Failed);
-        Assert.NotNull(failedIndex);
-        Assert.NotNull(failedIndex.ErrorMessage);
-        Assert.Contains("duplicate", failedIndex.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+            // Assert: Index should fail due to duplicates
+            var session2 = tenantRepository.GetSession();
+            var ckTypeId = GetSimpleTypeId(modelName);
+            var result = await tenantRepository.GetCkTypeAsync(session2, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create(), null, null);
+
+            var ckType = result.Items.FirstOrDefault();
+            Assert.NotNull(ckType);
+            Assert.NotNull(ckType.IndexStates);
+            Assert.NotEmpty(ckType.IndexStates);
+
+            var failedIndex = ckType.IndexStates.FirstOrDefault(s => s.State == IndexState.Failed);
+            Assert.NotNull(failedIndex);
+            Assert.NotNull(failedIndex.ErrorMessage);
+            Assert.Contains("duplicate", failedIndex.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            // Cleanup - Delete child tenant
+            using var cleanupSession = await systemContext.GetAdminSessionAsync();
+            cleanupSession.StartTransaction();
+            await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
+            await cleanupSession.CommitTransactionAsync();
+        }
     }
 
     [Fact]
     public async Task UniqueNotDeletedIndex_WithDeletedEntity_ShouldSucceed()
     {
-        // Arrange
+        // Arrange - Create child tenant
         var systemContext = fixture.GetSystemContext();
-        var tenantRepository = systemContext.GetTenantRepository();
-        var modelName = Constants.SimpleModelUniqueNotDeletedSuccess;
+        var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
 
-        // Step 1: Create model without index
-        var modelWithoutIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), IndexTypeDto.None);
-        await systemContext.ImportCkModelAsync(modelWithoutIndex);
+        using (var adminSession = await systemContext.GetAdminSessionAsync())
+        {
+            adminSession.StartTransaction();
+            await systemContext.CreateChildTenantAsync(adminSession, tenantId, tenantId);
+            await adminSession.CommitTransactionAsync();
+        }
 
-        // Step 2: Add duplicate data
-        var session = await tenantRepository.GetSessionAsync();
-        session.StartTransaction();
+        try
+        {
+            var tenantContext = await systemContext.GetChildTenantContextAsync(tenantId);
+            var tenantRepository = tenantContext.GetTenantRepository();
+            var modelName = Constants.SimpleModelName;
 
-        var typeId = GetSimpleTypeId(modelName);
+            // Step 1: Create model without index
+            var modelWithoutIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), IndexTypeDto.None);
+            await tenantContext.ImportCkModelAsync(modelWithoutIndex);
 
-        var entity1 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
+            // Step 2: Add duplicate data
+            var session = await tenantRepository.GetSessionAsync();
+            session.StartTransaction();
 
-        entity1.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
-        await tenantRepository.InsertOneRtEntityAsync(session, entity1);
+            var typeId = GetSimpleTypeId(modelName);
 
-        var entity2 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
-        entity2.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
-        await tenantRepository.InsertOneRtEntityAsync(session, entity2);
+            var entity1 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
 
-        await session.CommitTransactionAsync();
+            entity1.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
+            await tenantRepository.InsertOneRtEntityAsync(session, entity1);
 
-        // Step 3: Delete one of the duplicate entities
-        var session2 = await tenantRepository.GetSessionAsync();
-        session2.StartTransaction();
+            var entity2 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
+            entity2.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
+            await tenantRepository.InsertOneRtEntityAsync(session, entity2);
 
-        entity1.RtState = RtEntityState.Deleted;
+            await session.CommitTransactionAsync();
 
-        var u = new RtEntity(typeId, entity1.RtId) { RtState = RtEntityState.Deleted };
+            // Step 3: Delete one of the duplicate entities
+            var session2 = await tenantRepository.GetSessionAsync();
+            session2.StartTransaction();
 
-        await tenantRepository.UpdateOneRtEntityByIdAsync(session2, typeId, entity1.RtId, u);
-        await session2.CommitTransactionAsync();
+            entity1.RtState = RtEntityState.Deleted;
 
-        // Step 4: Import with UniqueNotDeleted index
-        var modelWithIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), IndexTypeDto.UniqueNotDeleted);
+            var u = new RtEntity(typeId, entity1.RtId) { RtState = RtEntityState.Deleted };
 
-        // Act
-        await systemContext.ImportCkModelAsync(modelWithIndex);
+            await tenantRepository.UpdateOneRtEntityByIdAsync(session2, typeId, entity1.RtId, u);
+            await session2.CommitTransactionAsync();
 
-        // Assert: Index should succeed because one entity is deleted
-        var session3 = tenantRepository.GetSession();
-        var ckTypeId = typeId;
-        var result = await tenantRepository.GetCkTypeAsync(session3, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create(), null, null);
+            // Step 4: Import with UniqueNotDeleted index
+            var modelWithIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), IndexTypeDto.UniqueNotDeleted);
 
-        var ckType = result.Items.FirstOrDefault();
-        Assert.NotNull(ckType);
-        Assert.NotNull(ckType.IndexStates);
-        Assert.NotEmpty(ckType.IndexStates);
+            // Act
+            await tenantContext.ImportCkModelAsync(modelWithIndex);
 
-        // The index should be successfully applied (not failed)
-        var appliedIndex = ckType.IndexStates.FirstOrDefault(s => s.State == IndexState.Applied);
-        Assert.NotNull(appliedIndex);
-        Assert.NotNull(appliedIndex.Name);
-        Assert.NotNull(appliedIndex.AppliedAt);
+            // Assert: Index should succeed because one entity is deleted
+            var session3 = tenantRepository.GetSession();
+            var ckTypeId = typeId;
+            var result = await tenantRepository.GetCkTypeAsync(session3, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create(), null, null);
+
+            var ckType = result.Items.FirstOrDefault();
+            Assert.NotNull(ckType);
+            Assert.NotNull(ckType.IndexStates);
+            Assert.NotEmpty(ckType.IndexStates);
+
+            // The index should be successfully applied (not failed)
+            var appliedIndex = ckType.IndexStates.FirstOrDefault(s => s.State == IndexState.Applied);
+            Assert.NotNull(appliedIndex);
+            Assert.NotNull(appliedIndex.Name);
+            Assert.NotNull(appliedIndex.AppliedAt);
+        }
+        finally
+        {
+            // Cleanup - Delete child tenant
+            using var cleanupSession = await systemContext.GetAdminSessionAsync();
+            cleanupSession.StartTransaction();
+            await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
+            await cleanupSession.CommitTransactionAsync();
+        }
     }
 
     /// <summary>
