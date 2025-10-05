@@ -64,6 +64,11 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             .Where(m => modelIdVersionRange.IsSatisfiedBy(m.Id))
             .ToList();
 
+        if (!satisfiedModels.Any())
+        {
+            return new ModelExistingResult { Exists = false };
+        }
+
         // Return the latest satisfied version
         var latestSatisfiedModel = satisfiedModels
             .OrderByDescending(m => m.Id.ModelVersion)
