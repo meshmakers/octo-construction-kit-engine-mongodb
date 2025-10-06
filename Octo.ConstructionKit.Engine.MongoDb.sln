@@ -5,7 +5,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{892E504C
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Persistence.SystemTests", "tests\Persistence.SystemTests\Persistence.SystemTests.csproj", "{396D3170-2BAF-4B6E-B6ED-E15488506086}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharedTests", "tests\SharedTests\SharedTests.csproj", "{4896425A-129C-42EB-84A7-C6B5A247AB7D}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Runtime.Engine.MongoDb.Tests", "tests\Runtime.Engine.MongoDb.Tests\Runtime.Engine.MongoDb.Tests.csproj", "{4896425A-129C-42EB-84A7-C6B5A247AB7D}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "unittests", "unittests", "{30684BD2-BA15-48A4-B37F-5342F91C3188}"
 EndProject

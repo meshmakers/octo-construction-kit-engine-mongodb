@@ -19,15 +19,6 @@ public class MongoRestoreOptions
     public bool RestoreDbUsersAndRoles { get; set; }
     public int? NumParallelCollections { get; set; }
 
-    public static MongoRestoreOptions FromDirectory(string inputPath, string database)
-    {
-        return new MongoRestoreOptions
-        {
-            InputDirectory = inputPath,
-            Database = database
-        };
-    }
-
     public static MongoRestoreOptions FromArchive(string archivePath, string database)
     {
         return new MongoRestoreOptions
