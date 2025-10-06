@@ -4,7 +4,7 @@ namespace Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 /// Service for backing up and restoring tenants with lifecycle management.
 /// Handles orchestration of tenant detachment/attachment and database backup/restore operations.
 /// </summary>
-public interface ITenantBackupService
+internal interface ITenantBackupService
 {
     /// <summary>
     /// Creates a backup of a tenant's database to a gzipped archive file.

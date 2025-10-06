@@ -4,9 +4,11 @@ using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v1;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using MongoDB.Bson;
+
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
@@ -14,6 +16,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 // ReSharper disable once UnusedMember.Global
 public class SystemContext : TenantContext, ISystemContext
 {
+    private readonly IServiceProvider _serviceProvider;
+
     /// <summary>
     ///     Initializes a new instance of the <see cref="SystemContext" /> class.
     /// </summary>
@@ -27,6 +31,7 @@ public class SystemContext : TenantContext, ISystemContext
             systemConfiguration.Value.SystemTenantId.NormalizeString(),
             systemConfiguration.Value.SystemDatabaseName.ToLower())
     {
+        _serviceProvider = serviceProvider;
     }
 
     #region System database handling
@@ -178,4 +183,24 @@ public class SystemContext : TenantContext, ISystemContext
     }
 
     #endregion TenantId Context Handling
+
+    #region Backup and Restore
+
+    public Task<CommandResult> BackupTenantAsync(string tenantId, string archiveFilePath,
+        bool detachTenant = false, CancellationToken? cancellationToken = null)
+    {
+        var backupService = _serviceProvider.GetRequiredService<ITenantBackupService>();
+        return backupService.BackupTenantAsync(tenantId, archiveFilePath, detachTenant, cancellationToken);
+    }
+
+    public Task<CommandResult> RestoreTenantAsync(string tenantId, string databaseName, string archiveFilePath,
+        bool dropExistingTenant = true, bool attachTenant = true, TimeSpan? timeout = null,
+        CancellationToken? cancellationToken = null)
+    {
+        var backupService = _serviceProvider.GetRequiredService<ITenantBackupService>();
+        return backupService.RestoreTenantAsync(tenantId, databaseName, archiveFilePath, dropExistingTenant,
+            attachTenant, timeout, cancellationToken);
+    }
+
+    #endregion
 }
