@@ -1,11 +1,9 @@
 using FluentAssertions;
 
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
 
 using Xunit;
 
@@ -96,23 +94,22 @@ public class RepositoryOpsServiceTests(SystemFixture systemFixture) : IClassFixt
 
     #region Core Command Execution Tests
 
-    // [Fact]
-    // public async Task ExecuteCommandAsync_WithEchoCommand_ShouldReturnSuccess()
-    // {
-    //     // Arrange
-    //     var testMessage = "Hello World";
-    //
-    //     // Act
-    //     var result = await _service.ExecuteCommandAsync("echo", testMessage);
-    //
-    //     // Assert
-    //     result.Should().NotBeNull();
-    //     result.Success.Should().BeTrue();
-    //     result.ExitCode.Should().Be(0);
-    //     result.Output.Should().Contain(testMessage);
-    //     result.Duration.Should().BeGreaterThan(TimeSpan.Zero);
-    //     result.Command.Should().Be($"echo {testMessage}");
-    // }
+    [Fact]
+    public async Task ExecuteCommandAsync_WithEchoCommand_ShouldReturnSuccess()
+    {
+        // Arrange - using dotnet --version as a cross-platform executable
+
+        // Act
+        var result = await _service.ExecuteCommandAsync("dotnet", "--version");
+
+        // Assert
+        result.Should().NotBeNull();
+        result.Success.Should().BeTrue();
+        result.ExitCode.Should().Be(0);
+        result.Output.Should().NotBeNullOrWhiteSpace();
+        result.Duration.Should().BeGreaterThan(TimeSpan.Zero);
+        result.Command.Should().Be("dotnet --version");
+    }
 
     [Fact]
     public async Task ExecuteCommandAsync_WithInvalidCommand_ShouldReturnFailure()
