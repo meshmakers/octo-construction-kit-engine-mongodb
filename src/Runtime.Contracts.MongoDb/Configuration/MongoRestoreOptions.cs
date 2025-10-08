@@ -6,6 +6,10 @@ public class MongoRestoreOptions
     public required string Database { get; set; }
     public string Collection { get; set; } = "*";
     
+    // Namespace mapping for restore
+    public string? NsFrom { get; set; }
+    public string? NsTo { get; set; }
+    
     // Input
     public string? InputDirectory { get; set; }
     public string? Archive { get; set; }

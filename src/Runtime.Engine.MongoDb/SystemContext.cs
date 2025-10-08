@@ -194,12 +194,12 @@ public class SystemContext : TenantContext, ISystemContext
     }
 
     public Task<CommandResult> RestoreTenantAsync(string tenantId, string databaseName, string archiveFilePath,
-        bool dropExistingTenant = true, bool attachTenant = true, TimeSpan? timeout = null,
-        CancellationToken? cancellationToken = null)
+        string? sourceDatabaseName = null, bool dropExistingTenant = true, bool attachTenant = true,
+        TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
     {
         var backupService = _serviceProvider.GetRequiredService<ITenantBackupService>();
-        return backupService.RestoreTenantAsync(tenantId, databaseName, archiveFilePath, dropExistingTenant,
-            attachTenant, timeout, cancellationToken);
+        return backupService.RestoreTenantAsync(tenantId, databaseName, archiveFilePath, sourceDatabaseName,
+            dropExistingTenant, attachTenant, timeout, cancellationToken);
     }
 
     #endregion

@@ -79,13 +79,14 @@ public interface ISystemContext : ITenantContext
     /// <param name="tenantId">The tenant ID to restore</param>
     /// <param name="databaseName">The database name to restore to</param>
     /// <param name="archiveFilePath">Path to the backup archive file</param>
+    /// <param name="sourceDatabaseName">Optional source database name in the archive. If provided and different from databaseName, enables namespace mapping to restore to a different database name.</param>
     /// <param name="dropExistingTenant">If true, drops existing tenant before restore (default: true)</param>
     /// <param name="attachTenant">If true, attaches the tenant after restore (default: true)</param>
     /// <param name="timeout">Timeout for restore operation</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Command result indicating success or failure of the restore operation</returns>
     Task<CommandResult> RestoreTenantAsync(string tenantId, string databaseName, string archiveFilePath,
-        bool dropExistingTenant = true, bool attachTenant = true,
+        string? sourceDatabaseName = null, bool dropExistingTenant = true, bool attachTenant = true,
         TimeSpan? timeout = null, CancellationToken? cancellationToken = null);
 
     #endregion

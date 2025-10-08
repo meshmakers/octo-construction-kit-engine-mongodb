@@ -80,8 +80,8 @@ internal class TenantBackupService(
 
     /// <inheritdoc />
     public async Task<CommandResult> RestoreTenantAsync(string tenantId, string databaseName,
-        string archiveFilePath, bool dropExistingTenant = true, bool attachTenant = true,
-        TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
+        string archiveFilePath, string? sourceDatabaseName = null, bool dropExistingTenant = true,
+        bool attachTenant = true, TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
     {
         try
         {
@@ -140,6 +140,16 @@ internal class TenantBackupService(
                 Gzip = true,
                 Drop = true
             };
+
+            // Enable namespace mapping if restoring to a different database name
+            if (!string.IsNullOrEmpty(sourceDatabaseName) && sourceDatabaseName != databaseName)
+            {
+                restoreOptions.NsFrom = $"{sourceDatabaseName}.*";
+                restoreOptions.NsTo = $"{databaseName}.*";
+                logger.LogInformation(
+                    "Using namespace mapping: '{NsFrom}' -> '{NsTo}'",
+                    restoreOptions.NsFrom, restoreOptions.NsTo);
+            }
 
             var result = await repositoryOpsService.ExecuteMongoRestoreAsync(restoreOptions, timeout,
                 cancellationToken);

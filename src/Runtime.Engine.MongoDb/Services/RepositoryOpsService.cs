@@ -344,8 +344,20 @@ public class RepositoryOpsService(
             args.Add($"--password={systemConfigurationOptions.Value.AdminUserPassword}");
         }
 
-        // Database and Collection
-        args.Add($"--nsInclude={options.Database}.{options.Collection}");
+        // Namespace mapping (for restoring to different database name)
+        if (!string.IsNullOrEmpty(options.NsFrom) && !string.IsNullOrEmpty(options.NsTo))
+        {
+            // Include collections from archive that match the source pattern
+            args.Add($"--nsInclude={options.NsFrom}");
+            // Map the source namespace to the target namespace
+            args.Add($"--nsFrom={options.NsFrom}");
+            args.Add($"--nsTo={options.NsTo}");
+        }
+        else
+        {
+            // Database and Collection (default behavior)
+            args.Add($"--nsInclude={options.Database}.{options.Collection}");
+        }
 
         // Input
         if (!string.IsNullOrEmpty(options.InputDirectory))
