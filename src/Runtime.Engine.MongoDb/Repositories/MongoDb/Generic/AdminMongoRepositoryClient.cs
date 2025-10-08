@@ -71,7 +71,10 @@ public class AdminMongoRepositoryClient(
         var database = Client.GetDatabase(authenticationDatabaseName);
 
         var result = await database.RunCommandAsync<BsonDocument>("{usersInfo: '" + user + "'}");
-        if (result.GetValue("ok").AsDouble > 0 && result.GetValue("users").AsBsonArray.Count > 0) return;
+        if (result.GetValue("ok").AsDouble > 0 && result.GetValue("users").AsBsonArray.Count > 0)
+        {
+            return;
+        }
 
         var createUserCommand = new BsonDocument
         {

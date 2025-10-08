@@ -225,6 +225,10 @@ public class TenantContext : ITenantContext
                 var tenantRepository = GetTenantRepositoryAsAdmin();
                 await tenantRepository.InsertOneRtEntityAsync(adminSession, octoTenant);
             }
+            
+            await AdminRepositoryClient.CreateUser(SystemConfiguration.Value.AuthenticationDatabaseName,
+                normalizedDatabaseName, string.Format(SystemConfiguration.Value.DatabaseUser, normalizedDatabaseName),
+                SystemConfiguration.Value.DatabaseUserPassword);
 
             // Add the new tenant in system tenant to be found in future operations
             var rtSystemTenant = new RtTenant
