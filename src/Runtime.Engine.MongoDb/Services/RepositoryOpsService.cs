@@ -69,7 +69,7 @@ public class RepositoryOpsService(
 
         logger.LogInformation("Executing mongorestore with options: {Options}", args);
 
-        // Mongorestore kann hängen - Standard Timeout von 2 Minuten
+        // Mongorestore can hang - Standard timeout 2 minutes
         var restoreTimeout = timeout ?? TimeSpan.FromMinutes(2);
         return await ExecuteCommandAsync("mongorestore", args, timeout: restoreTimeout,
             cancellationToken: cancellationToken);
@@ -82,7 +82,7 @@ public class RepositoryOpsService(
     public async Task<CommandResult> ExecuteCommandAsync(string fileName, string arguments,
         string? workingDirectory = null, TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
     {
-        var timeoutMs = timeout?.TotalMilliseconds ?? 300000; // Default 5 Minuten
+        var timeoutMs = timeout?.TotalMilliseconds ?? 300000; // Default 5 minutes
         var workingDirectoryPath = workingDirectory ?? Directory.GetCurrentDirectory();
         logger.LogInformation("Executing command: {Command}", fileName);
         logger.LogInformation("Using working-directory: {WorkingDirectory}", workingDirectoryPath);
@@ -131,7 +131,6 @@ public class RepositoryOpsService(
                 error.AppendLine(e.Data);
                 logger.LogDebug("STDERR: {Error}", e.Data);
 
-                // Bei MongoDB Tools: Warnings als Warning-Level
                 if (fileName.StartsWith("mongo") && (e.Data.Contains("warning") ||
                                                      e.Data.Contains("error") || e.Data.Contains("failed")))
                 {
@@ -149,7 +148,6 @@ public class RepositoryOpsService(
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 
-            // Warten mit Timeout
             var processTask = process.WaitForExitAsync(cancellationToken ?? CancellationToken.None);
             var timeoutTask = Task.Delay(TimeSpan.FromMilliseconds(timeoutMs));
 
@@ -159,7 +157,6 @@ public class RepositoryOpsService(
 
             if (completedTask == timeoutTask)
             {
-                // Timeout erreicht - Process beenden
                 logger.LogWarning("Process timed out after {TimeoutMs}ms: {FileName} {Arguments}",
                     timeoutMs, fileName, arguments);
 
@@ -187,7 +184,6 @@ public class RepositoryOpsService(
                 };
             }
 
-            // Process normal beendet
             await processTask; // Ensure the process is fully completed
 
             logger.LogDebug("Process completed. Exit code: {ExitCode}, Duration: {Duration}ms",
@@ -391,7 +387,6 @@ public class RepositoryOpsService(
             args.Add("--dryRun");
         }
 
-        // Timeout und andere Optionen
         if (options.OplogReplay)
         {
             args.Add("--oplogReplay");
