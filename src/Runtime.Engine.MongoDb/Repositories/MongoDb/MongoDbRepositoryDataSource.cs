@@ -416,6 +416,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                             _logger.LogDebug("Dropping text index '{IndexName}' for '{CkTypeId}'",
                                 repositoryTextIndex.Name, keyValuePair.Key.CkTypeId);
                             await DropIndexWithTracking(collection, repositoryTextIndex.Name, keyValuePair.Key.CkTypeId);
+                            // Remove from repositoryIndices so it won't be processed again in the cleanup loop
+                            repositoryIndices.Remove(repositoryTextIndex);
                         }
                     }
                 }
@@ -424,7 +426,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             // Drop any remaining indexes that are no longer needed
             foreach (var repositoryIndex in repositoryIndices)
             {
-                _logger.LogDebug("Dropping obsolete index '{IndexName}' for '{CollectionName}'",
+                _logger.LogInformation("Dropping obsolete index '{IndexName}' for '{CollectionName}'",
                     repositoryIndex.Name, collection.CollectionName);
                 await collection.DropIndexAsync(repositoryIndex.Name);
             }
@@ -502,7 +504,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     /// <param name="uniqueIndexNumber">Unique number for index naming</param>
     /// <param name="collectionRootType">Optional collection root type info (required for Unique/UniqueNotDeleted)</param>
     /// <param name="indexDefiningType">Optional type that defines this index (required for Unique/UniqueNotDeleted)</param>
-    private async Task CreateOrUpdateIndex<TKey, TDocument>(string collectionName, CkTypeIndex ckTypeIndex,
+    private async Task<bool> CreateOrUpdateIndex<TKey, TDocument>(string collectionName, CkTypeIndex ckTypeIndex,
         ICollection<CkTypeIndexWithName> repositoryIndices,
         IMongoDbDataSourceCollection<TKey, TDocument> collection, int uniqueIndexNumber, CkTypeInfo? collectionRootType = null, CkType? indexDefiningType = null)
         where TDocument : class, new()
@@ -520,20 +522,39 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var repositoryIndex = repositoryIndices.SingleOrDefault(i =>
             i.CompareToInSequence(ckTypeIndex));
 
-        // If found, we skip the creation of the index.
+        // If found, check if the name matches what we expect
         if (repositoryIndex != null)
         {
-            _logger.LogDebug("Index '{IndexName}' already exists for '{CollectionName}', skipping creation",
-                indexName, collectionName);
+            // Remove the matching index from the list so it won't be dropped later
             repositoryIndices.Remove(repositoryIndex);
-            return;
+
+            // If the name doesn't match, we need to drop the old one and create with the correct name
+            if (repositoryIndex.Name != indexName)
+            {
+                _logger.LogInformation("Index with correct definition but wrong name: '{ActualName}' should be '{ExpectedName}'. Recreating with correct name.",
+                    repositoryIndex.Name, indexName);
+
+                // Drop the incorrectly named index
+                await collection.DropIndexAsync(repositoryIndex.Name);
+
+                // Fall through to create the index with the correct name
+            }
+            else
+            {
+                _logger.LogDebug("Index '{IndexName}' already exists for '{CollectionName}', skipping creation",
+                    indexName, collectionName);
+                return false; // Index already exists with correct name, not created
+            }
         }
 
         // Check if there's an existing index with this name (regardless of configuration)
         var existingIndexWithSameName = repositoryIndices.FirstOrDefault(i => i.Name == indexName);
         if (existingIndexWithSameName != null)
         {
-            _logger.LogDebug("Index name '{IndexName}' already exists with different configuration for '{CollectionName}', dropping it first", indexName, collectionName);
+            repositoryIndices.Remove(existingIndexWithSameName);
+
+            _logger.LogInformation("Index '{IndexName}' exists with different configuration, recreating",
+                indexName);
             // Index exists but has wrong configuration - drop it first
             await collection.DropIndexAsync(indexName);
         }
@@ -565,6 +586,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             default:
                 throw OperationFailedException.IndexTypeNotSupported(ckTypeIndex.IndexType);
         }
+
+        return true; // Index was created
     }
 
     /// <summary>
@@ -583,15 +606,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         
         try
         {
-            // Call the original method
-            await CreateOrUpdateIndex(collectionName, ckTypeIndex, repositoryIndices, collection, uniqueIndexNumber, collectionRootType, indexDefiningType);
+            // Call the original method and check if index was actually created
+            var wasCreated = await CreateOrUpdateIndex(collectionName, ckTypeIndex, repositoryIndices, collection, uniqueIndexNumber, collectionRootType, indexDefiningType);
 
-            // Track successful index creation
-            if (indexDefiningType != null)
+            // Only track if the index was actually created (not if it already existed)
+            if (wasCreated && indexDefiningType != null)
             {
                 _indexStateService.TrackIndexOperation(indexDefiningType.CkTypeId, indexName, collection.CollectionName, IndexState.Applied);
-                _logger.LogInformation("Creating index '{IndexName}' of type {IndexType} for '{CollectionName}'",
-                    indexName, ckTypeIndex.IndexType, collection.CollectionName);
             }
         }
         catch (MongoCommandException ex)
@@ -600,6 +621,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             if (indexDefiningType != null && indexName != null)
             {
                 _indexStateService.TrackIndexOperation(indexDefiningType.CkTypeId, indexName, collection.CollectionName, IndexState.Failed, ex.Message);
+            }
+            else
+            {
+                _logger.LogWarning(ex, "Index creation failed but cannot track (indexDefiningType={TypeId}, indexName={IndexName})",
+                    indexDefiningType?.CkTypeId.ToString() ?? "NULL", indexName ?? "NULL");
             }
 
             _logger.LogWarning(ex, "Failed to create index '{IndexName}' of type {IndexType} for '{CollectionName}': {ErrorMessage}",
@@ -857,7 +883,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         foreach (CkTypeIndex ckTypeIndex in ckTypeIndices)
         {
-            await CreateOrUpdateIndex(collection.CollectionName, ckTypeIndex, existingIndexes, collection,
+            _ = await CreateOrUpdateIndex(collection.CollectionName, ckTypeIndex, existingIndexes, collection,
                 uniqueIndexNumber++);
         }
 

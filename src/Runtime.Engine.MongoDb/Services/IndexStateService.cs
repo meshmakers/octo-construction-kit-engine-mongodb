@@ -41,6 +41,12 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
             AppliedAt = DateTime.UtcNow
         };
 
+        if (state == IndexState.Failed)
+        {
+            logger.LogWarning("Index '{IndexName}' failed for type '{TypeId}' on collection '{CollectionName}': {ErrorMessage}",
+                indexName, typeId, collectionName, errorMessage);
+        }
+
         _currentTracker.AddIndexState(typeId, indexState);
     }
 
@@ -59,37 +65,40 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
     {
         if (_currentTracker == null)
         {
-            logger.LogDebug("No active tracking context, skipping index state update");
+            logger.LogWarning("BulkUpdateIndexStatesAsync: No active tracking context, skipping index state update");
             return;
         }
 
         var indexStatesByType = _currentTracker.GetIndexStatesByType();
+
         if (!indexStatesByType.Any())
         {
-            logger.LogDebug("No index states to update");
             return;
         }
 
         var typesToUpdate = new List<CkType>();
 
-        foreach (var (typeId, indexStates) in indexStatesByType)
+        foreach (var (typeId, newStates) in indexStatesByType)
         {
             try
             {
                 var ckType = await ckTypes.DocumentAsync(session, typeId);
                 if (ckType != null)
                 {
-                    // Merge with existing index states for other collections
+                    // Get existing states
                     var existingStates = ckType.IndexStates?.ToList() ?? new List<CkIndexState>();
+                    var hadStates = ckType.IndexStates != null;
 
-                    // Remove existing states for the same collection to avoid duplicates
-                    var collectionsInNewStates = indexStates.Select(s => s.CollectionName).Distinct().ToHashSet();
-                    existingStates.RemoveAll(existing => collectionsInNewStates.Contains(existing.CollectionName));
+                    // Remove only states that will be replaced by new states (match by name + collection)
+                    var newStateKeys = newStates.Select(s => (s.Name, s.CollectionName)).ToHashSet();
+                    existingStates.RemoveAll(existing => newStateKeys.Contains((existing.Name, existing.CollectionName)));
 
-                    // Add the new states
-                    existingStates.AddRange(indexStates);
+                    // Add new states
+                    existingStates.AddRange(newStates);
 
-                    ckType.IndexStates = existingStates;
+                    // Set states, preserving null if it was null and list is now empty
+                    ckType.IndexStates = existingStates.Any() || hadStates ? existingStates : null;
+
                     typesToUpdate.Add(ckType);
                 }
                 else
@@ -109,7 +118,6 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
             try
             {
                 await ckTypes.ReplaceManyAsync(session, typesToUpdate);
-                logger.LogInformation("Successfully updated index states for {Count} CkTypes", typesToUpdate.Count);
             }
             catch (Exception ex)
             {
