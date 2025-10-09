@@ -428,15 +428,24 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     repositoryIndex.Name, collection.CollectionName);
                 await collection.DropIndexAsync(repositoryIndex.Name);
             }
-
-            // Save all tracked index states
-            using var updateSession = await GetSessionAsync();
-            await _indexStateService.BulkUpdateIndexStatesAsync(updateSession);
         }
         finally
         {
-            // Always end tracking
-            _indexStateService.EndTracking();
+            // Always save tracked index states before ending tracking
+            try
+            {
+                using var updateSession = await GetSessionAsync();
+                await _indexStateService.BulkUpdateIndexStatesAsync(updateSession);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to persist index states for collection '{CollectionName}'", collectionRootType.CkTypeId);
+            }
+            finally
+            {
+                // Always end tracking
+                _indexStateService.EndTracking();
+            }
         }
     }
 
