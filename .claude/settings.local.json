@@ -9,7 +9,8 @@
       "mcp__serena",
       "Bash(git add:*)",
       "Bash(dir:*)",
-      "Bash(dotnet test:*)"
+      "Bash(dotnet test:*)",
+      "Bash(findstr:*)"
     ],
     "deny": [],
     "ask": []
