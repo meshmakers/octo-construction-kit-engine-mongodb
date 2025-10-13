@@ -12,14 +12,19 @@ internal class TenantComparisonService : ITenantComparisonService
     private readonly MetadataComparator _metadataComparator;
     private readonly CkModelLoader _ckModelLoader;
     private readonly CkModelComparator _ckModelComparator;
+    private readonly CkTypeLoader _ckTypeLoader;
+    private readonly CkTypeComparator _ckTypeComparator;
 
     public TenantComparisonService(MetadataLoader metadataLoader, MetadataComparator metadataComparator,
-        CkModelLoader ckModelLoader, CkModelComparator ckModelComparator)
+        CkModelLoader ckModelLoader, CkModelComparator ckModelComparator,
+        CkTypeLoader ckTypeLoader, CkTypeComparator ckTypeComparator)
     {
         _metadataLoader = metadataLoader;
         _metadataComparator = metadataComparator;
         _ckModelLoader = ckModelLoader;
         _ckModelComparator = ckModelComparator;
+        _ckTypeLoader = ckTypeLoader;
+        _ckTypeComparator = ckTypeComparator;
     }
 
     public async Task<TenantComparisonReport> CompareTenantAsync(string sourceTenantId, string targetTenantId,
@@ -68,10 +73,23 @@ internal class TenantComparisonService : ITenantComparisonService
             report.Summary.CkModelDifferences = ckModelComparison.TotalDifferences;
         }
 
+        // Perform CkType comparison if requested
+        if (options.Areas.HasFlag(ComparisonAreas.CkTypes))
+        {
+            var sourceCkTypes = await _ckTypeLoader.LoadAsync(sourceTenantId, options, cancellationToken);
+            var targetCkTypes = await _ckTypeLoader.LoadAsync(targetTenantId, options, cancellationToken);
+
+            var ckTypeComparison = _ckTypeComparator.Compare(sourceCkTypes, targetCkTypes);
+
+            report.CkTypeComparison = ckTypeComparison;
+            report.Summary.CkTypeDifferences = ckTypeComparison.TotalDifferences;
+        }
+
         // Calculate total differences
         report.Summary.TotalDifferences =
             report.Summary.MetadataDifferences +
             report.Summary.CkModelDifferences +
+            report.Summary.CkTypeDifferences +
             report.Summary.RtEntityDifferences +
             report.Summary.AssociationDifferences;
 
@@ -107,6 +125,11 @@ internal class TenantComparisonService : ITenantComparisonService
         if (options.Areas.HasFlag(ComparisonAreas.CkModels))
         {
             parts.Add("CkModels");
+        }
+
+        if (options.Areas.HasFlag(ComparisonAreas.CkTypes))
+        {
+            parts.Add("CkTypes");
         }
 
         if (options.Areas.HasFlag(ComparisonAreas.RtEntities))

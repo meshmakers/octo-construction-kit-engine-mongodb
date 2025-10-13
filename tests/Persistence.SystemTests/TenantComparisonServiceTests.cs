@@ -61,7 +61,7 @@ public class TenantComparisonServiceTests : IClassFixture<SystemFixture>
             // Configure comparison options to only compare metadata
             TenantComparisonOptions options = new TenantComparisonOptions
             {
-                Areas = ComparisonAreas.Metadata | ComparisonAreas.CkModels | ComparisonAreas.Associations,
+                Areas = ComparisonAreas.Metadata | ComparisonAreas.CkModels | ComparisonAreas.CkTypes | ComparisonAreas.Associations,
                 IncludePropertyDifferences = false,
                 IncludeAssociationDifferences = false
             };
@@ -157,6 +157,52 @@ public class TenantComparisonServiceTests : IClassFixture<SystemFixture>
                 foreach (var diff in report.CkModelComparison.VersionDifferences)
                 {
                     _output.WriteLine($"  - {diff.ModelId}: Source={diff.SourceVersion.Id}, Target={diff.TargetVersion.Id}");
+                }
+            }
+
+            // Verify CkType comparison was performed
+            Assert.NotNull(report.CkTypeComparison);
+            _output.WriteLine("CkType comparison was performed");
+
+            _output.WriteLine($"CkType differences: OnlyInSource={report.CkTypeComparison.OnlyInSource.Count}, " +
+                              $"OnlyInTarget={report.CkTypeComparison.OnlyInTarget.Count}, " +
+                              $"InBothSame={report.CkTypeComparison.InBothSame.Count}, " +
+                              $"Differences={report.CkTypeComparison.Differences.Count}");
+
+            // Log CkType differences
+            if (report.CkTypeComparison.OnlyInSource.Count > 0)
+            {
+                _output.WriteLine("CkTypes only in source:");
+                foreach (var ckType in report.CkTypeComparison.OnlyInSource)
+                {
+                    _output.WriteLine($"  - {ckType.CkTypeId}");
+                }
+            }
+
+            if (report.CkTypeComparison.OnlyInTarget.Count > 0)
+            {
+                _output.WriteLine("CkTypes only in target:");
+                foreach (var ckType in report.CkTypeComparison.OnlyInTarget)
+                {
+                    _output.WriteLine($"  - {ckType.CkTypeId}");
+                }
+            }
+
+            if (report.CkTypeComparison.InBothSame.Count > 0)
+            {
+                _output.WriteLine("CkTypes in both with same properties:");
+                foreach (var ckType in report.CkTypeComparison.InBothSame)
+                {
+                    _output.WriteLine($"  - {ckType.CkTypeId}");
+                }
+            }
+
+            if (report.CkTypeComparison.Differences.Count > 0)
+            {
+                _output.WriteLine("CkTypes with differences:");
+                foreach (var diff in report.CkTypeComparison.Differences)
+                {
+                    _output.WriteLine($"  - {diff.CkTypeId}: {diff.Description}");
                 }
             }
 

@@ -32,7 +32,12 @@ public enum ComparisonAreas
     Associations = 8,
 
     /// <summary>
+    ///     Compare Construction Kit types
+    /// </summary>
+    CkTypes = 16,
+
+    /// <summary>
     ///     Compare all areas
     /// </summary>
-    All = Metadata | CkModels | RtEntities | Associations,
+    All = Metadata | CkModels | RtEntities | Associations | CkTypes,
 }

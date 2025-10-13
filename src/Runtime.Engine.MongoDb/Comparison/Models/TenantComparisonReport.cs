@@ -21,6 +21,11 @@ public class TenantComparisonReport
     public CkModelComparison? CkModelComparison { get; set; }
 
     /// <summary>
+    ///     CkType comparison results (if requested)
+    /// </summary>
+    public CkTypeComparison? CkTypeComparison { get; set; }
+
+    /// <summary>
     ///     RtEntity comparison results grouped by CkType (if requested)
     /// </summary>
     public Dictionary<string, RtEntityTypeComparison>? RtEntityComparisons { get; set; }

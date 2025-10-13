@@ -21,6 +21,11 @@ public class ComparisonSummary
     public int CkModelDifferences { get; set; }
 
     /// <summary>
+    ///     Number of CkType differences
+    /// </summary>
+    public int CkTypeDifferences { get; set; }
+
+    /// <summary>
     ///     Number of RtEntity differences
     /// </summary>
     public int RtEntityDifferences { get; set; }
