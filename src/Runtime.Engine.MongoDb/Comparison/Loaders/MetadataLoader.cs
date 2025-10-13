@@ -33,6 +33,7 @@ internal class MetadataLoader
     ///     Loads complete metadata for a tenant
     /// </summary>
     /// <param name="tenantId">The tenant identifier</param>
+    /// <param name="options">options</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Populated tenant metadata</returns>
     public async Task<TenantMetadata> LoadAsync(string tenantId, TenantComparisonOptions options,
