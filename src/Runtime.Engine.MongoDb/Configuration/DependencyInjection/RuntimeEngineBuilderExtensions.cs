@@ -7,6 +7,7 @@ using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.Configuration.DependencyInjection;
 using Meshmakers.Octo.Runtime.Engine.MongoDb;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModifications;
@@ -58,6 +59,20 @@ public static class RuntimeEngineBuilderExtensions
 
         MongoRepositoryClient.RegisterSerializers();
         
+        return builder;
+    }
+    
+    /// <summary>
+    ///     Add the Tenant Comparison feature to the runtime engine builder
+    /// </summary>
+    /// <param name="builder">Runtime engine builder</param>
+    /// <returns>The builder for chaining</returns>
+    public static IRuntimeEngineBuilder AddTenantComparison(
+        this IRuntimeEngineBuilder builder)
+    {
+        // Register core comparison service
+        builder.Services.AddTransient<ITenantComparisonService, TenantComparisonService>();
+
         return builder;
     }
 }

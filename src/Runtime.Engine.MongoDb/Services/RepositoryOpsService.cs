@@ -31,7 +31,8 @@ public class RepositoryOpsService(
         }
 
         logger.LogInformation("Executing MongoDB shell script: {ScriptPath}", scriptPath);
-        return await ExecuteCommandAsync("mongosh", $"{connectionString} {args} {scriptPath}", null, null, cancellationToken);
+        return await ExecuteCommandAsync("mongosh", $"{connectionString} {args} {scriptPath}", null, null,
+            cancellationToken);
     }
 
     public async Task<CommandResult> ExecuteMongoShellCommandAsync(string databaseName, string command,
@@ -43,7 +44,8 @@ public class RepositoryOpsService(
 
         logger.LogInformation("Executing MongoDB shell command: {Command}", command);
 
-        return await ExecuteCommandAsync("mongosh", $"{connectionString} {args} --eval \"{escapedCommand}\"", null, null,
+        return await ExecuteCommandAsync("mongosh", $"{connectionString} {args} --eval \"{escapedCommand}\"", null,
+            null,
             cancellationToken);
     }
 
@@ -73,6 +75,62 @@ public class RepositoryOpsService(
         var restoreTimeout = timeout ?? TimeSpan.FromMinutes(2);
         return await ExecuteCommandAsync("mongorestore", args, timeout: restoreTimeout,
             cancellationToken: cancellationToken);
+    }
+
+    public async Task<CommandResult> GetDatabaseNameFromArchiveAsync(string archiveFilePath,
+        CancellationToken? cancellationToken = null)
+    {
+        // Validate archive file exists
+        if (!File.Exists(archiveFilePath))
+        {
+            return CommandResult.Failure($"Archive file not found: {archiveFilePath}");
+        }
+
+        try
+        {
+            // Build arguments for dry run inspection
+            // No connection string needed - just inspect the archive file
+            var args = new List<string> { $"--archive=\"{archiveFilePath}\"", "--gzip", "--dryRun", "-vvvvv" };
+
+            var argsString = string.Join(" ", args);
+            logger.LogInformation("Inspecting archive to extract database name: {ArchiveFilePath}", archiveFilePath);
+            logger.LogDebug("Using args: {Args}", argsString);
+
+            var result = await ExecuteCommandAsync("mongorestore", argsString, timeout: TimeSpan.FromSeconds(30),
+                cancellationToken: cancellationToken);
+
+            if (!result.Success)
+            {
+                return CommandResult.Failure($"Failed to inspect archive: {result.Error}");
+            }
+
+            // Parse output to extract database name
+            var databaseName = ExtractDatabaseNameFromOutput(result.Output, result.Error);
+
+            if (string.IsNullOrEmpty(databaseName))
+            {
+                return CommandResult.Failure(
+                    $"Could not extract database name from archive. Output: {result.Output}, Error: {result.Error}");
+            }
+
+            logger.LogInformation("Successfully extracted database name from archive: {DatabaseName}", databaseName);
+
+            // Return success with database name in Output
+            return new CommandResult
+            {
+                Success = true,
+                ExitCode = 0,
+                Output = databaseName,
+                Error = string.Empty,
+                Duration = result.Duration,
+                Command = result.Command
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error inspecting archive '{ArchiveFilePath}'", archiveFilePath);
+            return CommandResult.Failure($"Exception during archive inspection: {ex.Message}");
+        }
     }
 
     #endregion
@@ -248,10 +306,7 @@ public class RepositoryOpsService(
     private string BuildMongoDumpArguments(MongoDumpOptions options)
     {
         // Connection
-        var args = new List<string>
-        {
-            $"--uri=\"{GetConnectionString(options.Database)}\""
-        };
+        var args = new List<string> { $"--uri=\"{GetConnectionString(options.Database)}\"" };
 
         // Authentication
         if (!string.IsNullOrEmpty(systemConfigurationOptions.Value.AdminUser))
@@ -318,16 +373,14 @@ public class RepositoryOpsService(
         {
             args.Add($"--password={systemConfigurationOptions.Value.AdminUserPassword}");
         }
+
         return string.Join(" ", args);
     }
 
     private string BuildMongoRestoreArguments(MongoRestoreOptions options)
     {
         // Connection
-        var args = new List<string>
-        {
-            $"--uri=\"{GetConnectionString(options.Database)}\""
-        };
+        var args = new List<string> { $"--uri=\"{GetConnectionString(options.Database)}\"" };
 
         // Authentication
         if (!string.IsNullOrEmpty(systemConfigurationOptions.Value.AdminUser))
@@ -403,6 +456,47 @@ public class RepositoryOpsService(
         }
 
         return string.Join(" ", args);
+    }
+
+    private string? ExtractDatabaseNameFromOutput(string output, string error)
+    {
+        // Combine both output and error streams as mongorestore can output to stderr
+        var combinedOutput = $"{output}\n{error}";
+
+        // Search for the specific pattern: "reading collections for database <dbname> in <dbname>"
+        // Example: "2025-10-10T17:46:32.753+0200	reading collections for database btgt32444c18 in btgt32444c18"
+        var regex = new System.Text.RegularExpressions.Regex(
+            @"reading collections for database\s+([a-zA-Z0-9_-]+)\s+in\s+\1");
+        var matches = regex.Matches(combinedOutput);
+
+        var databaseNames = new HashSet<string>();
+        foreach (System.Text.RegularExpressions.Match match in matches)
+        {
+            var databaseName = match.Groups[1].Value;
+            databaseNames.Add(databaseName);
+            logger.LogDebug("Found database name '{DatabaseName}'", databaseName);
+        }
+
+        // Check if we found multiple different database names
+        if (databaseNames.Count > 1)
+        {
+            var dbList = string.Join(", ", databaseNames);
+            logger.LogError("Archive contains multiple databases: {DatabaseNames}", dbList);
+            throw new InvalidOperationException(
+                $"Archive contains multiple databases ({dbList}). Only single-database archives are supported.");
+        }
+
+        // Return the single database name if found
+        if (databaseNames.Count == 1)
+        {
+            var dbName = databaseNames.First();
+            logger.LogInformation("Successfully extracted database name from archive: {DatabaseName}", dbName);
+            return dbName;
+        }
+
+        // No database name found
+        logger.LogWarning("Could not extract database name from mongorestore output");
+        return null;
     }
 
     #endregion private methods
