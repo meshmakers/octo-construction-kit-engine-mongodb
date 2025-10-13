@@ -58,12 +58,13 @@ public class TenantComparisonServiceTests : IClassFixture<SystemFixture>
             ITenantComparisonService comparisonService = _systemFixture.GetService<ITenantComparisonService>();
             _output.WriteLine("Retrieved ITenantComparisonService from DI");
 
-            // Configure comparison options to only compare metadata
+            // Configure comparison options to compare metadata, models, types, and entities
             TenantComparisonOptions options = new TenantComparisonOptions
             {
-                Areas = ComparisonAreas.Metadata | ComparisonAreas.CkModels | ComparisonAreas.CkTypes | ComparisonAreas.Associations,
-                IncludePropertyDifferences = false,
-                IncludeAssociationDifferences = false
+                Areas = ComparisonAreas.Metadata | ComparisonAreas.CkModels | ComparisonAreas.CkTypes | ComparisonAreas.RtEntities | ComparisonAreas.Associations,
+                IncludePropertyDifferences = true,
+                IncludeAssociationDifferences = false,
+                MaxEntitiesPerType = 100  // Limit entities per type for testing
             };
 
             // Act
@@ -203,6 +204,40 @@ public class TenantComparisonServiceTests : IClassFixture<SystemFixture>
                 foreach (var diff in report.CkTypeComparison.Differences)
                 {
                     _output.WriteLine($"  - {diff.CkTypeId}: {diff.Description}");
+                }
+            }
+
+            // Verify RtEntity comparison was performed
+            Assert.NotNull(report.RtEntityComparisons);
+            _output.WriteLine("RtEntity comparison was performed");
+
+            _output.WriteLine($"RtEntity comparison results: {report.RtEntityComparisons.Count} CkTypes compared");
+
+            // Log RtEntity comparison details for each CkType
+            foreach (var kvp in report.RtEntityComparisons)
+            {
+                var entityComparison = kvp.Value;
+                _output.WriteLine($"CkType {entityComparison.CkTypeId}:");
+                _output.WriteLine($"  Source: {entityComparison.SourceTotalCount} total, {entityComparison.SourceFilteredCount} filtered");
+                _output.WriteLine($"  Target: {entityComparison.TargetTotalCount} total, {entityComparison.TargetFilteredCount} filtered");
+                _output.WriteLine($"  OnlyInSource: {entityComparison.OnlyInSource.Count}");
+                _output.WriteLine($"  OnlyInTarget: {entityComparison.OnlyInTarget.Count}");
+                _output.WriteLine($"  Differences: {entityComparison.Differences.Count}");
+                _output.WriteLine($"  MatchedIdentical: {entityComparison.MatchedIdenticalCount}");
+                _output.WriteLine($"  TotalDifferences: {entityComparison.TotalDifferences}");
+
+                // Log matched entities with differences
+                if (entityComparison.Differences.Count > 0)
+                {
+                    _output.WriteLine($"  Entities with differences:");
+                    foreach (var diff in entityComparison.Differences)
+                    {
+                        _output.WriteLine($"    - RtId: {diff.SourceEntity.RtId}, MatchedBy: {diff.MatchedBy}, Differences: {diff.DifferenceCount}");
+                        foreach (var propDiff in diff.PropertyDifferences)
+                        {
+                        _output.WriteLine($"      - {propDiff.PropertyName} ({propDiff.DifferenceType}): {propDiff.SourceValue} -> {propDiff.TargetValue}");
+                        }
+                    }
                 }
             }
 

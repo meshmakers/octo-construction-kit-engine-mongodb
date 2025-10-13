@@ -76,11 +76,13 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services.AddTransient<MetadataLoader>();
         builder.Services.AddTransient<CkModelLoader>();
         builder.Services.AddTransient<CkTypeLoader>();
+        builder.Services.AddTransient<RtEntityLoader>();
 
         // Register comparison comparators
         builder.Services.AddTransient<MetadataComparator>();
         builder.Services.AddTransient<CkModelComparator>();
         builder.Services.AddTransient<CkTypeComparator>();
+        builder.Services.AddTransient<RtEntityComparator>();
 
         // Register core comparison service
         builder.Services.AddTransient<ITenantComparisonService, TenantComparisonService>();

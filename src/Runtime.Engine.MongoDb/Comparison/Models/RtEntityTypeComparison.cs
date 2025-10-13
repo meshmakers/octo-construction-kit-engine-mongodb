@@ -1,4 +1,5 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Models;
 
@@ -35,12 +36,12 @@ public class RtEntityTypeComparison
     /// <summary>
     ///     Entities present only in source tenant
     /// </summary>
-    public List<RtEntitySummary> OnlyInSource { get; set; } = new();
+    public List<RtEntity> OnlyInSource { get; set; } = new();
 
     /// <summary>
     ///     Entities present only in target tenant
     /// </summary>
-    public List<RtEntitySummary> OnlyInTarget { get; set; } = new();
+    public List<RtEntity> OnlyInTarget { get; set; } = new();
 
     /// <summary>
     ///     Matched entities with detected differences

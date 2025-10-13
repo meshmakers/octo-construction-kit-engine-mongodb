@@ -102,6 +102,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return _repository.GetCollection(mapper, suffix);
     }
 
+    internal IMongoDbDataSourceCollection<OctoObjectId, TEntity> GetRtDatabaseCollectionByCkType<TEntity>(CkType ckType)
+        where TEntity : RtEntity, new()
+    {
+        // Get the collection suffix from the CkType
+        string suffix = ckType.CkTypeId.GetCkTypeCollectionName();
+        var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
+        return _repository.GetCollection(mapper, suffix);
+    }
+
     public override async Task<IReadOnlyList<RtAssociationsMultiplicityResult>> GetRtAssociationsMultiplicityAsync(
         IOctoSession session, IEnumerable<RtEntityRoleIdDirectionPair> entityRoleIdDirectionPairs)
     {

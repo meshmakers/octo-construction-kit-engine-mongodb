@@ -1,5 +1,6 @@
 using System.Diagnostics;
 
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Comparators;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Loaders;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Models;
@@ -14,10 +15,13 @@ internal class TenantComparisonService : ITenantComparisonService
     private readonly CkModelComparator _ckModelComparator;
     private readonly CkTypeLoader _ckTypeLoader;
     private readonly CkTypeComparator _ckTypeComparator;
+    private readonly RtEntityLoader _rtEntityLoader;
+    private readonly RtEntityComparator _rtEntityComparator;
 
     public TenantComparisonService(MetadataLoader metadataLoader, MetadataComparator metadataComparator,
         CkModelLoader ckModelLoader, CkModelComparator ckModelComparator,
-        CkTypeLoader ckTypeLoader, CkTypeComparator ckTypeComparator)
+        CkTypeLoader ckTypeLoader, CkTypeComparator ckTypeComparator,
+        RtEntityLoader rtEntityLoader, RtEntityComparator rtEntityComparator)
     {
         _metadataLoader = metadataLoader;
         _metadataComparator = metadataComparator;
@@ -25,6 +29,8 @@ internal class TenantComparisonService : ITenantComparisonService
         _ckModelComparator = ckModelComparator;
         _ckTypeLoader = ckTypeLoader;
         _ckTypeComparator = ckTypeComparator;
+        _rtEntityLoader = rtEntityLoader;
+        _rtEntityComparator = rtEntityComparator;
     }
 
     public async Task<TenantComparisonReport> CompareTenantAsync(string sourceTenantId, string targetTenantId,
@@ -74,15 +80,43 @@ internal class TenantComparisonService : ITenantComparisonService
         }
 
         // Perform CkType comparison if requested
+        List<CkType> sourceCkTypes = new();
+        List<CkType> targetCkTypes = new();
+
         if (options.Areas.HasFlag(ComparisonAreas.CkTypes))
         {
-            var sourceCkTypes = await _ckTypeLoader.LoadAsync(sourceTenantId, options, cancellationToken);
-            var targetCkTypes = await _ckTypeLoader.LoadAsync(targetTenantId, options, cancellationToken);
+            sourceCkTypes = await _ckTypeLoader.LoadAsync(sourceTenantId, options, cancellationToken);
+            targetCkTypes = await _ckTypeLoader.LoadAsync(targetTenantId, options, cancellationToken);
 
             var ckTypeComparison = _ckTypeComparator.Compare(sourceCkTypes, targetCkTypes);
 
             report.CkTypeComparison = ckTypeComparison;
             report.Summary.CkTypeDifferences = ckTypeComparison.TotalDifferences;
+        }
+
+        // Perform RtEntity comparison if requested
+        if (options.Areas.HasFlag(ComparisonAreas.RtEntities))
+        {
+            // Load CkTypes if not already loaded (needed for entity comparison)
+            if (sourceCkTypes.Count == 0)
+            {
+                sourceCkTypes = await _ckTypeLoader.LoadAsync(sourceTenantId, options, cancellationToken);
+            }
+            if (targetCkTypes.Count == 0)
+            {
+                targetCkTypes = await _ckTypeLoader.LoadAsync(targetTenantId, options, cancellationToken);
+            }
+
+            var sourceEntities = await _rtEntityLoader.LoadAsync(sourceTenantId, options, cancellationToken);
+            var targetEntities = await _rtEntityLoader.LoadAsync(targetTenantId, options, cancellationToken);
+
+            var rtEntityComparisons = _rtEntityComparator.Compare(
+                sourceEntities, targetEntities,
+                sourceCkTypes, targetCkTypes,
+                options);
+
+            report.RtEntityComparisons = rtEntityComparisons;
+            report.Summary.RtEntityDifferences = rtEntityComparisons.Values.Sum(c => c.TotalDifferences);
         }
 
         // Calculate total differences

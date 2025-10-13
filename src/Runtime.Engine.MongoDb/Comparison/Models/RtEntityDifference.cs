@@ -1,3 +1,5 @@
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Models;
 
 /// <summary>
@@ -6,14 +8,14 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Models;
 public class RtEntityDifference
 {
     /// <summary>
-    ///     Summary of the source entity
+    ///     The source entity
     /// </summary>
-    public RtEntitySummary SourceEntity { get; set; } = null!;
+    public RtEntity SourceEntity { get; set; } = null!;
 
     /// <summary>
-    ///     Summary of the target entity
+    ///     The target entity
     /// </summary>
-    public RtEntitySummary TargetEntity { get; set; } = null!;
+    public RtEntity TargetEntity { get; set; } = null!;
 
     /// <summary>
     ///     Description of how entities were matched
