@@ -33,5 +33,5 @@ public class TenantMetadata
     /// <summary>
     ///     Number of imported CkModels
     /// </summary>
-    public int CkModelCount { get; set; }
+    public long CkModelCount { get; set; }
 }

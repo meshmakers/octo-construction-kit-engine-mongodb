@@ -11,7 +11,8 @@ public class ServiceCollectionFixture : ITestOutputHelperAccessor
     {
         Services = new ServiceCollection();
         Services.AddRuntimeEngine()
-            .AddMongoDbRuntimeRepository();
+            .AddMongoDbRuntimeRepository()
+            .AddTenantComparison();
         Services.AddCkModelTest();
         Services.AddLogging(loggingBuilder =>
         {

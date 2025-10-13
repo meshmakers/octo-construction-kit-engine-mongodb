@@ -8,6 +8,8 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.Configuration.DependencyInjection;
 using Meshmakers.Octo.Runtime.Engine.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Comparators;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Loaders;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModifications;
@@ -70,6 +72,10 @@ public static class RuntimeEngineBuilderExtensions
     public static IRuntimeEngineBuilder AddTenantComparison(
         this IRuntimeEngineBuilder builder)
     {
+        // Register comparison dependencies
+        builder.Services.AddTransient<MetadataLoader>();
+        builder.Services.AddTransient<MetadataComparator>();
+
         // Register core comparison service
         builder.Services.AddTransient<ITenantComparisonService, TenantComparisonService>();
 
