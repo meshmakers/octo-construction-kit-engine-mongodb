@@ -74,7 +74,11 @@ internal class RtEntityLoader : BaseTenantDataLoader
             mongoDataSource.GetRtDatabaseCollectionByCkType<RtEntity>(ckType);
 
         // Build filter for entities of this CkType
-        FilterDefinition<RtEntity> filter = Builders<RtEntity>.Filter.Eq(e => e.CkTypeId, ckType.CkTypeId);
+        // For abstract types, load all entities from the collection (includes all derived types)
+        // For concrete types, filter by exact CkTypeId
+        FilterDefinition<RtEntity> filter = ckType.IsAbstract
+            ? FilterDefinition<RtEntity>.Empty
+            : Builders<RtEntity>.Filter.Eq(e => e.CkTypeId, ckType.CkTypeId);
 
         // Apply MaxEntitiesPerType limit if specified
         int? limit = options.MaxEntitiesPerType;

@@ -1,7 +1,9 @@
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Models;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
@@ -96,8 +98,34 @@ internal class MetadataLoader : BaseTenantDataLoader
     private async Task<Dictionary<string, long>> LoadRtEntityCountByCkTypeAsync(ITenantContext tenantContext,
         CancellationToken cancellationToken)
     {
-        // TODO: Implement proper entity counting per CkType
-        return await Task.FromResult(new Dictionary<string, long>());
+        var dataSource = GetMongoDbRepositoryDataSource(tenantContext, cancellationToken);
+        using var session = await tenantContext.GetAdminSessionAsync();
+        session.StartTransaction();
+
+        // Load all CkTypes to know which ones are collection roots
+        var ckTypes = await dataSource.CkTypes.FindManyAsync(session, FilterDefinition<CkType>.Empty);
+
+        var result = new Dictionary<string, long>();
+
+        // Count entities for each collection root
+        foreach (CkType ckType in ckTypes.Where(t => t.IsCollectionRoot))
+        {
+            MongoDbRepositoryDataSource mongoDataSource = (MongoDbRepositoryDataSource)dataSource;
+            IMongoDbDataSourceCollection<OctoObjectId, RtEntity> collection =
+                mongoDataSource.GetRtDatabaseCollectionByCkType<RtEntity>(ckType);
+
+            // For abstract types, count all entities in collection
+            // For concrete types, count only entities with matching CkTypeId
+            FilterDefinition<RtEntity> filter = ckType.IsAbstract
+                ? FilterDefinition<RtEntity>.Empty
+                : Builders<RtEntity>.Filter.Eq(e => e.CkTypeId, ckType.CkTypeId);
+
+            long count = await collection.GetTotalCountAsync(session, filter);
+            result[ckType.CkTypeId.ToString()] = count;
+        }
+
+        await session.CommitTransactionAsync();
+        return result;
     }
 
     private async Task<long> LoadTotalAssociationCountAsync(ITenantContext tenantContext,

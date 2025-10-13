@@ -17,11 +17,14 @@ internal class TenantComparisonService : ITenantComparisonService
     private readonly CkTypeComparator _ckTypeComparator;
     private readonly RtEntityLoader _rtEntityLoader;
     private readonly RtEntityComparator _rtEntityComparator;
+    private readonly AssociationLoader _associationLoader;
+    private readonly AssociationComparator _associationComparator;
 
     public TenantComparisonService(MetadataLoader metadataLoader, MetadataComparator metadataComparator,
         CkModelLoader ckModelLoader, CkModelComparator ckModelComparator,
         CkTypeLoader ckTypeLoader, CkTypeComparator ckTypeComparator,
-        RtEntityLoader rtEntityLoader, RtEntityComparator rtEntityComparator)
+        RtEntityLoader rtEntityLoader, RtEntityComparator rtEntityComparator,
+        AssociationLoader associationLoader, AssociationComparator associationComparator)
     {
         _metadataLoader = metadataLoader;
         _metadataComparator = metadataComparator;
@@ -31,6 +34,8 @@ internal class TenantComparisonService : ITenantComparisonService
         _ckTypeComparator = ckTypeComparator;
         _rtEntityLoader = rtEntityLoader;
         _rtEntityComparator = rtEntityComparator;
+        _associationLoader = associationLoader;
+        _associationComparator = associationComparator;
     }
 
     public async Task<TenantComparisonReport> CompareTenantAsync(string sourceTenantId, string targetTenantId,
@@ -117,6 +122,18 @@ internal class TenantComparisonService : ITenantComparisonService
 
             report.RtEntityComparisons = rtEntityComparisons;
             report.Summary.RtEntityDifferences = rtEntityComparisons.Values.Sum(c => c.TotalDifferences);
+        }
+
+        // Perform Association comparison if requested
+        if (options.Areas.HasFlag(ComparisonAreas.Associations))
+        {
+            var sourceAssociations = await _associationLoader.LoadAsync(sourceTenantId, options, cancellationToken);
+            var targetAssociations = await _associationLoader.LoadAsync(targetTenantId, options, cancellationToken);
+
+            var associationComparison = _associationComparator.Compare(sourceAssociations, targetAssociations);
+
+            report.AssociationComparison = associationComparison;
+            report.Summary.AssociationDifferences = associationComparison.TotalDifferences;
         }
 
         // Calculate total differences

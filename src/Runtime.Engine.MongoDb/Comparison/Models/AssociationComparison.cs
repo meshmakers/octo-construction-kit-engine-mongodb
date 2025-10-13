@@ -1,3 +1,5 @@
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Models;
 
 /// <summary>
@@ -18,12 +20,12 @@ public class AssociationComparison
     /// <summary>
     ///     Associations present only in source tenant
     /// </summary>
-    public List<AssociationSummary> OnlyInSource { get; set; } = new();
+    public List<RtAssociation> OnlyInSource { get; set; } = new();
 
     /// <summary>
     ///     Associations present only in target tenant
     /// </summary>
-    public List<AssociationSummary> OnlyInTarget { get; set; } = new();
+    public List<RtAssociation> OnlyInTarget { get; set; } = new();
 
     /// <summary>
     ///     Number of associations present in both tenants
