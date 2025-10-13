@@ -15,18 +15,12 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Loaders;
 /// <summary>
 ///     Loads tenant metadata directly from MongoDB
 /// </summary>
-internal class MetadataLoader
+internal class MetadataLoader : BaseTenantDataLoader
 {
-    private readonly ISystemContext _systemContext;
-    private readonly IAdminRepositoryAccess _adminRepositoryAccess;
-    private readonly ILoggerFactory _loggerFactory;
-
     public MetadataLoader(ISystemContext systemContext, IAdminRepositoryAccess adminRepositoryAccess,
         ILoggerFactory loggerFactory)
+        : base(systemContext, adminRepositoryAccess, loggerFactory)
     {
-        _systemContext = systemContext;
-        _adminRepositoryAccess = adminRepositoryAccess;
-        _loggerFactory = loggerFactory;
     }
 
     /// <summary>
@@ -39,7 +33,7 @@ internal class MetadataLoader
     public async Task<TenantMetadata> LoadAsync(string tenantId, TenantComparisonOptions options,
         CancellationToken cancellationToken = default)
     {
-        ITenantContext tenantContext = await _systemContext.FindTenantContextAsync(tenantId);
+        ITenantContext tenantContext = await SystemContext.FindTenantContextAsync(tenantId);
 
         var databaseName = tenantContext.DatabaseName;
 
@@ -113,18 +107,5 @@ internal class MetadataLoader
         var session = await dataSource.GetSessionAsync();
         var count = await dataSource.RtMongoDbDataSourceAssociations.GetTotalCountAsync(session);
         return count;
-    }
-
-    private IMongoDbRepositoryDataSource GetMongoDbRepositoryDataSource(ITenantContext tenantContext,
-        CancellationToken cancellationToken)
-    {
-        IRepositoryClient repositoryClient = _adminRepositoryAccess.GetRepositoryClient(tenantContext.DatabaseName);
-        var dataSource = new MongoDbRepositoryDataSource(
-            _loggerFactory.CreateLogger<MongoDbRepositoryDataSource>(),
-            repositoryClient,
-            tenantContext.DatabaseName,
-            tenantContext.TenantId);
-
-        return dataSource;
     }
 }

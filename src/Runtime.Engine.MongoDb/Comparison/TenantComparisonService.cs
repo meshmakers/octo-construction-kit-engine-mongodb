@@ -10,11 +10,16 @@ internal class TenantComparisonService : ITenantComparisonService
 {
     private readonly MetadataLoader _metadataLoader;
     private readonly MetadataComparator _metadataComparator;
+    private readonly CkModelLoader _ckModelLoader;
+    private readonly CkModelComparator _ckModelComparator;
 
-    public TenantComparisonService(MetadataLoader metadataLoader, MetadataComparator metadataComparator)
+    public TenantComparisonService(MetadataLoader metadataLoader, MetadataComparator metadataComparator,
+        CkModelLoader ckModelLoader, CkModelComparator ckModelComparator)
     {
         _metadataLoader = metadataLoader;
         _metadataComparator = metadataComparator;
+        _ckModelLoader = ckModelLoader;
+        _ckModelComparator = ckModelComparator;
     }
 
     public async Task<TenantComparisonReport> CompareTenantAsync(string sourceTenantId, string targetTenantId,
@@ -49,6 +54,18 @@ internal class TenantComparisonService : ITenantComparisonService
 
             report.MetadataComparison = metadataComparison;
             report.Summary.MetadataDifferences = metadataComparison.Differences.Count;
+        }
+
+        // Perform CkModel comparison if requested
+        if (options.Areas.HasFlag(ComparisonAreas.CkModels))
+        {
+            var sourceCkModels = await _ckModelLoader.LoadAsync(sourceTenantId, options, cancellationToken);
+            var targetCkModels = await _ckModelLoader.LoadAsync(targetTenantId, options, cancellationToken);
+
+            var ckModelComparison = _ckModelComparator.Compare(sourceCkModels, targetCkModels);
+
+            report.CkModelComparison = ckModelComparison;
+            report.Summary.CkModelDifferences = ckModelComparison.TotalDifferences;
         }
 
         // Calculate total differences

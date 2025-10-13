@@ -114,6 +114,52 @@ public class TenantComparisonServiceTests : IClassFixture<SystemFixture>
                 _output.WriteLine("No metadata differences found between tenants (expected for empty tenants)");
             }
 
+            // Verify CkModel comparison was performed
+            Assert.NotNull(report.CkModelComparison);
+            _output.WriteLine("CkModel comparison was performed");
+
+            _output.WriteLine($"CkModel differences: OnlyInSource={report.CkModelComparison.OnlyInSource.Count}, " +
+                              $"OnlyInTarget={report.CkModelComparison.OnlyInTarget.Count}, " +
+                              $"InBothSameVersion={report.CkModelComparison.InBothSameVersion.Count}, " +
+                              $"VersionDifferences={report.CkModelComparison.VersionDifferences.Count}");
+
+            // Log CkModel differences
+            if (report.CkModelComparison.OnlyInSource.Count > 0)
+            {
+                _output.WriteLine("CkModels only in source:");
+                foreach (var model in report.CkModelComparison.OnlyInSource)
+                {
+                    _output.WriteLine($"  - {model.Id} ({model.ModelState})");
+                }
+            }
+
+            if (report.CkModelComparison.OnlyInTarget.Count > 0)
+            {
+                _output.WriteLine("CkModels only in target:");
+                foreach (var model in report.CkModelComparison.OnlyInTarget)
+                {
+                    _output.WriteLine($"  - {model.Id} ({model.ModelState})");
+                }
+            }
+
+            if (report.CkModelComparison.InBothSameVersion.Count > 0)
+            {
+                _output.WriteLine("CkModels in both with same version:");
+                foreach (var model in report.CkModelComparison.InBothSameVersion)
+                {
+                    _output.WriteLine($"  - {model.Id}");
+                }
+            }
+
+            if (report.CkModelComparison.VersionDifferences.Count > 0)
+            {
+                _output.WriteLine("CkModels with version differences:");
+                foreach (var diff in report.CkModelComparison.VersionDifferences)
+                {
+                    _output.WriteLine($"  - {diff.ModelId}: Source={diff.SourceVersion.Id}, Target={diff.TargetVersion.Id}");
+                }
+            }
+
             _output.WriteLine("Test completed successfully!");
         }
         finally

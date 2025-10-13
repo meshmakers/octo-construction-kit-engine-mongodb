@@ -1,3 +1,5 @@
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
+
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Models;
 
 /// <summary>
@@ -8,17 +10,17 @@ public class CkModelComparison
     /// <summary>
     ///     Models present only in source tenant
     /// </summary>
-    public List<CkModelInfo> OnlyInSource { get; set; } = new();
+    public List<CkModel> OnlyInSource { get; set; } = new();
 
     /// <summary>
     ///     Models present only in target tenant
     /// </summary>
-    public List<CkModelInfo> OnlyInTarget { get; set; } = new();
+    public List<CkModel> OnlyInTarget { get; set; } = new();
 
     /// <summary>
     ///     Models present in both tenants with identical versions
     /// </summary>
-    public List<CkModelInfo> InBothSameVersion { get; set; } = new();
+    public List<CkModel> InBothSameVersion { get; set; } = new();
 
     /// <summary>
     ///     Models present in both tenants with different versions

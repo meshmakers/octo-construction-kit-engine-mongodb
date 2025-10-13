@@ -1,3 +1,5 @@
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
+
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Models;
 
 /// <summary>
@@ -13,10 +15,10 @@ public class CkModelVersionDifference
     /// <summary>
     ///     Model version information from source tenant
     /// </summary>
-    public CkModelInfo SourceVersion { get; set; } = null!;
+    public CkModel SourceVersion { get; set; } = null!;
 
     /// <summary>
     ///     Model version information from target tenant
     /// </summary>
-    public CkModelInfo TargetVersion { get; set; } = null!;
+    public CkModel TargetVersion { get; set; } = null!;
 }
