@@ -8,7 +8,8 @@
       "Bash(dotnet build:*)",
       "mcp__serena",
       "Bash(git add:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(dotnet test:*)"
     ],
     "deny": [],
     "ask": []

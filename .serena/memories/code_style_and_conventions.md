@@ -42,7 +42,7 @@
 ## C# Language Preferences
 
 ### Type Usage
-- **var**: Do not use var; prefer explicit types
+- **var**: prefer explicit var. Do not use explicit type unless necessary
 - **this**: Do not use `this.` qualifier unless necessary
 
 ### Expression Preferences
