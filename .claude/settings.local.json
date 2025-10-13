@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat:*)",
+      "Bash(tree:*)",
+      "Read(//c/dev/meshmakers/**)",
+      "Bash(find:*)",
+      "Bash(dotnet build:*)",
+      "mcp__serena",
+      "Bash(git add:*)",
+      "Bash(dir:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
