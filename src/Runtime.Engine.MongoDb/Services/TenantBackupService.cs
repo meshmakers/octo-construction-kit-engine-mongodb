@@ -141,6 +141,19 @@ internal class TenantBackupService(
                 Drop = true
             };
 
+
+            if (string.IsNullOrEmpty(sourceDatabaseName))
+            {
+                var r = await repositoryOpsService.GetDatabaseNameFromArchiveAsync(archiveFilePath, cancellationToken);
+                if (!r.Success)
+                {
+                    logger.LogError("Failed to get source database name from archive: {Error}", r.Error);
+                    return r;
+                }
+
+                sourceDatabaseName = r.Output;
+            }
+
             // Enable namespace mapping if restoring to a different database name
             if (!string.IsNullOrEmpty(sourceDatabaseName) && sourceDatabaseName != databaseName)
             {

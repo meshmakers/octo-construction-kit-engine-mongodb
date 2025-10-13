@@ -31,8 +31,7 @@ public class RepositoryOpsService(
         }
 
         logger.LogInformation("Executing MongoDB shell script: {ScriptPath}", scriptPath);
-        return await ExecuteCommandAsync("mongosh", $"{connectionString} {args} {scriptPath}", null, null,
-            cancellationToken);
+        return await ExecuteCommandAsync("mongosh", $"{connectionString} {args} {scriptPath}", null, null, cancellationToken);
     }
 
     public async Task<CommandResult> ExecuteMongoShellCommandAsync(string databaseName, string command,
@@ -44,8 +43,7 @@ public class RepositoryOpsService(
 
         logger.LogInformation("Executing MongoDB shell command: {Command}", command);
 
-        return await ExecuteCommandAsync("mongosh", $"{connectionString} {args} --eval \"{escapedCommand}\"", null,
-            null,
+        return await ExecuteCommandAsync("mongosh", $"{connectionString} {args} --eval \"{escapedCommand}\"", null, null,
             cancellationToken);
     }
 
@@ -90,7 +88,13 @@ public class RepositoryOpsService(
         {
             // Build arguments for dry run inspection
             // No connection string needed - just inspect the archive file
-            var args = new List<string> { $"--archive=\"{archiveFilePath}\"", "--gzip", "--dryRun", "-vvvvv" };
+            var args = new List<string>
+            {
+                $"--archive=\"{archiveFilePath}\"",
+                "--gzip",
+                "--dryRun",
+                "-vvvvv"
+            };
 
             var argsString = string.Join(" ", args);
             logger.LogInformation("Inspecting archive to extract database name: {ArchiveFilePath}", archiveFilePath);
@@ -306,7 +310,10 @@ public class RepositoryOpsService(
     private string BuildMongoDumpArguments(MongoDumpOptions options)
     {
         // Connection
-        var args = new List<string> { $"--uri=\"{GetConnectionString(options.Database)}\"" };
+        var args = new List<string>
+        {
+            $"--uri=\"{GetConnectionString(options.Database)}\""
+        };
 
         // Authentication
         if (!string.IsNullOrEmpty(systemConfigurationOptions.Value.AdminUser))
@@ -373,14 +380,16 @@ public class RepositoryOpsService(
         {
             args.Add($"--password={systemConfigurationOptions.Value.AdminUserPassword}");
         }
-
         return string.Join(" ", args);
     }
 
     private string BuildMongoRestoreArguments(MongoRestoreOptions options)
     {
         // Connection
-        var args = new List<string> { $"--uri=\"{GetConnectionString(options.Database)}\"" };
+        var args = new List<string>
+        {
+            $"--uri=\"{GetConnectionString(options.Database)}\""
+        };
 
         // Authentication
         if (!string.IsNullOrEmpty(systemConfigurationOptions.Value.AdminUser))
@@ -432,7 +441,7 @@ public class RepositoryOpsService(
 
         if (options.Verbose)
         {
-            args.Add("--verbose");
+            args.Add("-vvvvv");
         }
 
         if (options.DryRun)
@@ -465,8 +474,7 @@ public class RepositoryOpsService(
 
         // Search for the specific pattern: "reading collections for database <dbname> in <dbname>"
         // Example: "2025-10-10T17:46:32.753+0200	reading collections for database btgt32444c18 in btgt32444c18"
-        var regex = new System.Text.RegularExpressions.Regex(
-            @"reading collections for database\s+([a-zA-Z0-9_-]+)\s+in\s+\1");
+        var regex = new System.Text.RegularExpressions.Regex(@"reading collections for database\s+([a-zA-Z0-9_-]+)\s+in\s+\1");
         var matches = regex.Matches(combinedOutput);
 
         var databaseNames = new HashSet<string>();
