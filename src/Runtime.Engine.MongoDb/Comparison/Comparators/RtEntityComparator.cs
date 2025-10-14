@@ -1,3 +1,4 @@
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Models;
@@ -9,6 +10,13 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Comparators;
 /// </summary>
 internal class RtEntityComparator
 {
+    private Dictionary<string, CkRecordGraph> _sourceCkRecordGraphsDict = null!;
+    private Dictionary<string, CkRecordGraph> _targetCkRecordGraphsDict = null!;
+
+    public RtEntityComparator()
+    {
+    }
+
     /// <summary>
     ///     Compares RtEntity lists from source and target tenants grouped by CkTypeId
     /// </summary>
@@ -16,6 +24,8 @@ internal class RtEntityComparator
     /// <param name="targetEntities">Target tenant entities grouped by CkTypeId</param>
     /// <param name="sourceCkTypes">Source tenant CkTypeGraphs for attribute metadata</param>
     /// <param name="targetCkTypes">Target tenant CkTypeGraphs for attribute metadata</param>
+    /// <param name="sourceCkRecords">Source tenant CkRecordGraphs for record attribute metadata</param>
+    /// <param name="targetCkRecords">Target tenant CkRecordGraphs for record attribute metadata</param>
     /// <param name="options">Comparison options</param>
     /// <returns>Dictionary of RtEntityTypeComparison results by CkTypeId</returns>
     public Dictionary<string, RtEntityTypeComparison> Compare(
@@ -23,8 +33,14 @@ internal class RtEntityComparator
         Dictionary<string, List<RtEntity>> targetEntities,
         List<CkTypeGraph> sourceCkTypes,
         List<CkTypeGraph> targetCkTypes,
+        List<CkRecordGraph> sourceCkRecords,
+        List<CkRecordGraph> targetCkRecords,
         TenantComparisonOptions options)
     {
+        // Store record graphs for use in record comparison
+        _sourceCkRecordGraphsDict = sourceCkRecords.ToDictionary(r => r.CkRecordId.ToString());
+        _targetCkRecordGraphsDict = targetCkRecords.ToDictionary(r => r.CkRecordId.ToString());
+
         var results = new Dictionary<string, RtEntityTypeComparison>();
 
         // Create dictionaries for quick CkTypeGraph lookup
@@ -294,6 +310,104 @@ internal class RtEntityComparator
         if (value1 == null && value2 == null) return true;
         if (value1 == null || value2 == null) return false;
 
+        // Check if values are RtRecord instances - need attribute-by-attribute comparison
+        if (value1 is RtRecord sourceRecord && value2 is RtRecord targetRecord)
+        {
+            return CompareRecords(sourceRecord, targetRecord);
+        }
+
+        // Check if values are lists of RtRecords
+        if (value1 is IEnumerable<RtRecord> sourceRecords && value2 is IEnumerable<RtRecord> targetRecords)
+        {
+            return CompareRecordLists(sourceRecords, targetRecords);
+        }
+
         return value1.Equals(value2);
+    }
+
+    /// <summary>
+    ///     Compares two RtRecord objects attribute-by-attribute
+    /// </summary>
+    /// <param name="sourceRecord">Source record</param>
+    /// <param name="targetRecord">Target record</param>
+    /// <returns>True if records are equal, false otherwise</returns>
+    private bool CompareRecords(RtRecord sourceRecord, RtRecord targetRecord)
+    {
+        // If CkRecordIds differ, records are not equal
+        if (sourceRecord.CkRecordId != targetRecord.CkRecordId)
+        {
+            return false;
+        }
+
+        // Get record metadata from dictionaries to know which attributes to compare
+        string recordId = sourceRecord.CkRecordId.ToString();
+        bool hasSourceRecord = _sourceCkRecordGraphsDict.TryGetValue(recordId, out CkRecordGraph? sourceCkRecord);
+        bool hasTargetRecord = _targetCkRecordGraphsDict.TryGetValue(recordId, out CkRecordGraph? targetCkRecord);
+
+        // If we don't have metadata for both, fall back to simple equality
+        if (!hasSourceRecord || !hasTargetRecord || sourceCkRecord == null || targetCkRecord == null)
+        {
+            return sourceRecord.Equals(targetRecord);
+        }
+
+        // Get all attribute names from both record definitions
+        var allAttributeNames = new HashSet<string>(sourceCkRecord.AllAttributesByName.Keys);
+        foreach (var attrName in targetCkRecord.AllAttributesByName.Keys)
+        {
+            allAttributeNames.Add(attrName);
+        }
+
+        // Compare each attribute
+        foreach (string attrName in allAttributeNames)
+        {
+            bool sourceHas = sourceRecord.Attributes.TryGetValue(attrName, out object? sourceValue);
+            bool targetHas = targetRecord.Attributes.TryGetValue(attrName, out object? targetValue);
+
+            // If one has the attribute and the other doesn't, they're not equal
+            if (sourceHas != targetHas)
+            {
+                return false;
+            }
+
+            // If both have the attribute, compare values recursively
+            if (sourceHas && targetHas)
+            {
+                if (!AreValuesEqual(sourceValue, targetValue))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    ///     Compares two lists of RtRecord objects
+    /// </summary>
+    /// <param name="sourceRecords">Source records</param>
+    /// <param name="targetRecords">Target records</param>
+    /// <returns>True if record lists are equal, false otherwise</returns>
+    private bool CompareRecordLists(IEnumerable<RtRecord> sourceRecords, IEnumerable<RtRecord> targetRecords)
+    {
+        List<RtRecord> sourceList = sourceRecords.ToList();
+        List<RtRecord> targetList = targetRecords.ToList();
+
+        // If counts differ, lists are not equal
+        if (sourceList.Count != targetList.Count)
+        {
+            return false;
+        }
+
+        // Compare records at same index position
+        for (int i = 0; i < sourceList.Count; i++)
+        {
+            if (!CompareRecords(sourceList[i], targetList[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

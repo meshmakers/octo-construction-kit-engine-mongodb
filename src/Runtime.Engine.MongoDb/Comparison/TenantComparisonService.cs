@@ -124,12 +124,17 @@ internal class TenantComparisonService : ITenantComparisonService
                 targetCkTypes = _ckCacheService.GetCkTypes(targetTenantId).ToList();
             }
 
+            // Load CkRecords for record comparison
+            var sourceCkRecords = _ckCacheService.GetCkRecords(sourceTenantId).ToList();
+            var targetCkRecords = _ckCacheService.GetCkRecords(targetTenantId).ToList();
+
             var sourceEntities = await _rtEntityLoader.LoadAsync(sourceTenantId, options, cancellationToken);
             var targetEntities = await _rtEntityLoader.LoadAsync(targetTenantId, options, cancellationToken);
 
             var rtEntityComparisons = _rtEntityComparator.Compare(
                 sourceEntities, targetEntities,
                 sourceCkTypes, targetCkTypes,
+                sourceCkRecords, targetCkRecords,
                 options);
 
             report.RtEntityComparisons = rtEntityComparisons;

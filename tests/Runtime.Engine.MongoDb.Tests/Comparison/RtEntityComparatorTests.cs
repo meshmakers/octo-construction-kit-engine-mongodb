@@ -36,7 +36,8 @@ public class RtEntityComparatorTests
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
-            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes, _defaultOptions);
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
 
         // Assert
         Assert.Empty(result);
@@ -61,7 +62,8 @@ public class RtEntityComparatorTests
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
-            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes, _defaultOptions);
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -91,7 +93,8 @@ public class RtEntityComparatorTests
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
-            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes, _defaultOptions);
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -129,7 +132,8 @@ public class RtEntityComparatorTests
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
-            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes, _defaultOptions);
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -167,7 +171,8 @@ public class RtEntityComparatorTests
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
-            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes, _defaultOptions);
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -210,7 +215,8 @@ public class RtEntityComparatorTests
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
-            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes, _defaultOptions);
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -247,7 +253,8 @@ public class RtEntityComparatorTests
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
-            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes, _defaultOptions);
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -296,7 +303,8 @@ public class RtEntityComparatorTests
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
-            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes, _defaultOptions);
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -342,7 +350,8 @@ public class RtEntityComparatorTests
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
-            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes, _defaultOptions);
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -389,7 +398,8 @@ public class RtEntityComparatorTests
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
-            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes, _defaultOptions);
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -437,7 +447,8 @@ public class RtEntityComparatorTests
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
-            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes, optionsWithoutProperties);
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            new List<CkRecordGraph>(), new List<CkRecordGraph>(), optionsWithoutProperties);
 
         // Assert
         Assert.Single(result);
@@ -546,7 +557,8 @@ public class RtEntityComparatorTests
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
-            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes, _defaultOptions);
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
 
         // Assert
         Assert.Equal(3, result.Count);
@@ -601,7 +613,8 @@ public class RtEntityComparatorTests
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
-            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes, _defaultOptions);
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -634,7 +647,8 @@ public class RtEntityComparatorTests
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
-            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes, _defaultOptions);
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
 
         // Assert - Should match by RtId without issues
         Assert.Single(result);
@@ -668,7 +682,8 @@ public class RtEntityComparatorTests
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
-            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes, _defaultOptions);
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
 
         // Assert - Should match one and leave one unmatched
         Assert.Single(result);
