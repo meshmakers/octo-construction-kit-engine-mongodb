@@ -130,7 +130,7 @@ public class TenantComparisonServiceTests : IClassFixture<SystemFixture>
                 _output.WriteLine("CkModels only in source:");
                 foreach (var model in report.CkModelComparison.OnlyInSource)
                 {
-                    _output.WriteLine($"  - {model.Id} ({model.ModelState})");
+                    _output.WriteLine($"  - {model.FullName}");
                 }
             }
 
@@ -139,7 +139,7 @@ public class TenantComparisonServiceTests : IClassFixture<SystemFixture>
                 _output.WriteLine("CkModels only in target:");
                 foreach (var model in report.CkModelComparison.OnlyInTarget)
                 {
-                    _output.WriteLine($"  - {model.Id} ({model.ModelState})");
+                    _output.WriteLine($"  - {model.FullName}");
                 }
             }
 
@@ -148,7 +148,7 @@ public class TenantComparisonServiceTests : IClassFixture<SystemFixture>
                 _output.WriteLine("CkModels in both with same version:");
                 foreach (var model in report.CkModelComparison.InBothSameVersion)
                 {
-                    _output.WriteLine($"  - {model.Id}");
+                    _output.WriteLine($"  - {model.FullName}");
                 }
             }
 
@@ -157,7 +157,7 @@ public class TenantComparisonServiceTests : IClassFixture<SystemFixture>
                 _output.WriteLine("CkModels with version differences:");
                 foreach (var diff in report.CkModelComparison.VersionDifferences)
                 {
-                    _output.WriteLine($"  - {diff.ModelId}: Source={diff.SourceVersion.Id}, Target={diff.TargetVersion.Id}");
+                    _output.WriteLine($"  - {diff.ModelKey}: Source={diff.SourceVersion.FullName}, Target={diff.TargetVersion.FullName}");
                 }
             }
 

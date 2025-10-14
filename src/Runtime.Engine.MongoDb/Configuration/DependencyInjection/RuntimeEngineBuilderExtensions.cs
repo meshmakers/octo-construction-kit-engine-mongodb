@@ -74,8 +74,6 @@ public static class RuntimeEngineBuilderExtensions
     {
         // Register comparison loaders
         builder.Services.AddTransient<MetadataLoader>();
-        builder.Services.AddTransient<CkModelLoader>();
-        builder.Services.AddTransient<CkTypeLoader>();
         builder.Services.AddTransient<RtEntityLoader>();
         builder.Services.AddTransient<AssociationLoader>();
 

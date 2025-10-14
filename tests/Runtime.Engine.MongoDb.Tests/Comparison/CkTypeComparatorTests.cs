@@ -1,5 +1,6 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Comparators;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Models;
 
@@ -20,8 +21,8 @@ public class CkTypeComparatorTests
     public void Compare_BothListsEmpty_ReturnsEmptyComparison()
     {
         // Arrange
-        var sourceTypes = new List<CkType>();
-        var targetTypes = new List<CkType>();
+        var sourceTypes = new List<CkTypeGraph>();
+        var targetTypes = new List<CkTypeGraph>();
 
         // Act
         CkTypeComparison result = _comparator.Compare(sourceTypes, targetTypes);
@@ -38,11 +39,11 @@ public class CkTypeComparatorTests
     public void Compare_TypeOnlyInSource_AddsToOnlyInSource()
     {
         // Arrange
-        var sourceTypes = new List<CkType>
+        var sourceTypes = new List<CkTypeGraph>
         {
             CreateCkType("TestModel", "Type1")
         };
-        var targetTypes = new List<CkType>();
+        var targetTypes = new List<CkTypeGraph>();
 
         // Act
         CkTypeComparison result = _comparator.Compare(sourceTypes, targetTypes);
@@ -60,8 +61,8 @@ public class CkTypeComparatorTests
     public void Compare_TypeOnlyInTarget_AddsToOnlyInTarget()
     {
         // Arrange
-        var sourceTypes = new List<CkType>();
-        var targetTypes = new List<CkType>
+        var sourceTypes = new List<CkTypeGraph>();
+        var targetTypes = new List<CkTypeGraph>
         {
             CreateCkType("TestModel", "Type1")
         };
@@ -82,11 +83,11 @@ public class CkTypeComparatorTests
     public void Compare_SameTypesInBoth_AddsToInBothSame()
     {
         // Arrange
-        var sourceTypes = new List<CkType>
+        var sourceTypes = new List<CkTypeGraph>
         {
             CreateCkType("TestModel", "Type1", isFinal: false, isAbstract: false)
         };
-        var targetTypes = new List<CkType>
+        var targetTypes = new List<CkTypeGraph>
         {
             CreateCkType("TestModel", "Type1", isFinal: false, isAbstract: false)
         };
@@ -107,11 +108,11 @@ public class CkTypeComparatorTests
     public void Compare_TypesWithDifferentIsFinal_AddsToDifferences()
     {
         // Arrange
-        var sourceTypes = new List<CkType>
+        var sourceTypes = new List<CkTypeGraph>
         {
             CreateCkType("TestModel", "Type1", isFinal: true, isAbstract: false)
         };
-        var targetTypes = new List<CkType>
+        var targetTypes = new List<CkTypeGraph>
         {
             CreateCkType("TestModel", "Type1", isFinal: false, isAbstract: false)
         };
@@ -133,11 +134,11 @@ public class CkTypeComparatorTests
     public void Compare_TypesWithDifferentIsAbstract_AddsToDifferences()
     {
         // Arrange
-        var sourceTypes = new List<CkType>
+        var sourceTypes = new List<CkTypeGraph>
         {
             CreateCkType("TestModel", "Type1", isFinal: false, isAbstract: true)
         };
-        var targetTypes = new List<CkType>
+        var targetTypes = new List<CkTypeGraph>
         {
             CreateCkType("TestModel", "Type1", isFinal: false, isAbstract: false)
         };
@@ -156,41 +157,16 @@ public class CkTypeComparatorTests
     }
 
     [Fact]
-    public void Compare_TypesWithDifferentCollectionName_AddsToDifferences()
-    {
-        // Arrange
-        var sourceTypes = new List<CkType>
-        {
-            CreateCkType("TestModel", "Type1", collectionName: "Collection1")
-        };
-        var targetTypes = new List<CkType>
-        {
-            CreateCkType("TestModel", "Type1", collectionName: "Collection2")
-        };
-
-        // Act
-        CkTypeComparison result = _comparator.Compare(sourceTypes, targetTypes);
-
-        // Assert
-        Assert.Empty(result.OnlyInSource);
-        Assert.Empty(result.OnlyInTarget);
-        Assert.Empty(result.InBothSame);
-        Assert.Single(result.Differences);
-        Assert.Equal(1, result.TotalDifferences);
-        Assert.Contains("CollectionName", result.Differences[0].Description);
-    }
-
-    [Fact]
     public void Compare_MultipleTypesWithMixedScenarios_CategorizesCorrectly()
     {
         // Arrange
-        var sourceTypes = new List<CkType>
+        var sourceTypes = new List<CkTypeGraph>
         {
             CreateCkType("TestModel", "Type1"), // Only in source
             CreateCkType("TestModel", "Type2"), // In both, same
             CreateCkType("TestModel", "Type3", isFinal: true), // In both, different
         };
-        var targetTypes = new List<CkType>
+        var targetTypes = new List<CkTypeGraph>
         {
             CreateCkType("TestModel", "Type2"), // In both, same
             CreateCkType("TestModel", "Type3", isFinal: false), // In both, different
@@ -216,15 +192,11 @@ public class CkTypeComparatorTests
     public void Compare_TypesWithDifferentAttributeCount_AddsToDifferences()
     {
         // Arrange
-        var sourceType = CreateCkType("TestModel", "Type1");
-        sourceType.Attributes.Add(CreateCkTypeAttribute("Attr1"));
-        sourceType.Attributes.Add(CreateCkTypeAttribute("Attr2"));
+        var sourceType = CreateCkType("TestModel", "Type1", attributeCount: 2);
+        var targetType = CreateCkType("TestModel", "Type1", attributeCount: 1);
 
-        var targetType = CreateCkType("TestModel", "Type1");
-        targetType.Attributes.Add(CreateCkTypeAttribute("Attr1"));
-
-        var sourceTypes = new List<CkType> { sourceType };
-        var targetTypes = new List<CkType> { targetType };
+        var sourceTypes = new List<CkTypeGraph> { sourceType };
+        var targetTypes = new List<CkTypeGraph> { targetType };
 
         // Act
         CkTypeComparison result = _comparator.Compare(sourceTypes, targetTypes);
@@ -237,44 +209,55 @@ public class CkTypeComparatorTests
     #region Helper Methods
 
     /// <summary>
-    ///     Creates a test CkType with common defaults
+    ///     Creates a test CkTypeGraph with common defaults
     /// </summary>
-    private CkType CreateCkType(
+    private CkTypeGraph CreateCkType(
         string modelId,
         string typeId,
         bool isFinal = false,
         bool isAbstract = false,
         string? description = null,
         bool isCollectionRoot = false,
-        string? collectionName = null,
-        bool enableChangeStreamPreAndPostImages = false)
+        int attributeCount = 0)
     {
-        return new CkType
-        {
-            CkModelId = new CkModelId(modelId),
-            CkTypeId = new CkId<CkTypeId>(modelId, new CkTypeId($"{modelId}.{typeId}")),
-            IsFinal = isFinal,
-            IsAbstract = isAbstract,
-            Description = description,
-            IsCollectionRoot = isCollectionRoot,
-            CollectionName = collectionName ?? $"{typeId}Collection",
-            EnableChangeStreamPreAndPostImages = enableChangeStreamPreAndPostImages,
-            Attributes = new HashSet<CkTypeAttribute>(),
-            Indexes = new HashSet<CkTypeIndex>()
-        };
-    }
+        CkId<CkTypeId> ckTypeId = new CkId<CkTypeId>(modelId, new CkTypeId($"{modelId}.{typeId}"));
 
-    /// <summary>
-    ///     Creates a test CkTypeAttribute
-    /// </summary>
-    private CkTypeAttribute CreateCkTypeAttribute(string attributeName)
-    {
-        return new CkTypeAttribute
+        // Create attributes if requested
+        var allAttributes = new Dictionary<CkId<CkAttributeId>, CkTypeAttributeGraph>();
+        for (int i = 0; i < attributeCount; i++)
         {
-            AttributeId = new CkId<CkAttributeId>("TestModel", new CkAttributeId($"TestModel.{attributeName}")),
-            AttributeName = attributeName,
-            IsOptional = false
-        };
+            CkId<CkAttributeId> attrId = new CkId<CkAttributeId>(modelId, new CkAttributeId($"{modelId}.Attr{i + 1}"));
+            var attrGraph = new CkTypeAttributeGraph(
+                ckAttributeId: attrId,
+                attributeName: $"Attr{i + 1}",
+                autoCompleteValues: null,
+                valueType: AttributeValueTypesDto.String,
+                valueCkRecordId: null,
+                valueCkEnumId: null,
+                autoIncrementReference: null,
+                metaData: null,
+                isDataStream: false,
+                defaultValues: null,
+                isOptional: false,
+                description: null);
+            allAttributes.Add(attrId, attrGraph);
+        }
+
+        return new CkTypeGraph(
+            ckTypeId: ckTypeId,
+            isAbstract: isAbstract,
+            isFinal: isFinal,
+            isCollectionRoot: isCollectionRoot,
+            isStreamType: false,
+            baseTypes: [],
+            derivedFromCkTypeId: null,
+            definingCollectionRootCkTypeId: null,
+            derivedTypes: [],
+            definedAttributes: [],
+            allAttributes: allAttributes,
+            indexes: [],
+            associations: new CkGraphDirectedAssociations(Array.Empty<CkTypeAssociationDto>()),
+            description: description ?? string.Empty);
     }
 
     #endregion

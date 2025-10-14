@@ -327,7 +327,7 @@ entities:
             Assert.NotNull(report.CkModelComparison.VersionDifferences);
             // Both tenants have Test-1.0.0
             Assert.Contains(report.CkModelComparison.InBothSameVersion,
-                model => model.Id.ToString().StartsWith("Test"));
+                model => model.ModelId.StartsWith("Test"));
 
             // Assert - CkTypeComparison
             Assert.NotNull(report.CkTypeComparison);

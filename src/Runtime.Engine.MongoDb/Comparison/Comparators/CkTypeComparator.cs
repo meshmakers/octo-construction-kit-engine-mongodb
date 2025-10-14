@@ -1,4 +1,4 @@
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Models;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Comparators;
@@ -9,12 +9,12 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Comparators;
 internal class CkTypeComparator
 {
     /// <summary>
-    ///     Compares CkType lists from source and target tenants
+    ///     Compares CkTypeGraph lists from source and target tenants
     /// </summary>
-    /// <param name="sourceTypes">Source tenant CkTypes</param>
-    /// <param name="targetTypes">Target tenant CkTypes</param>
+    /// <param name="sourceTypes">Source tenant CkTypeGraphs</param>
+    /// <param name="targetTypes">Target tenant CkTypeGraphs</param>
     /// <returns>CkType comparison results with identified differences</returns>
-    public CkTypeComparison Compare(List<CkType> sourceTypes, List<CkType> targetTypes)
+    public CkTypeComparison Compare(List<CkTypeGraph> sourceTypes, List<CkTypeGraph> targetTypes)
     {
         var comparison = new CkTypeComparison();
 
@@ -32,8 +32,8 @@ internal class CkTypeComparator
         // Compare each CkTypeId
         foreach (string typeId in allTypeIds)
         {
-            bool inSource = sourceByTypeId.TryGetValue(typeId, out CkType? sourceType);
-            bool inTarget = targetByTypeId.TryGetValue(typeId, out CkType? targetType);
+            bool inSource = sourceByTypeId.TryGetValue(typeId, out CkTypeGraph? sourceType);
+            bool inTarget = targetByTypeId.TryGetValue(typeId, out CkTypeGraph? targetType);
 
             if (inSource && !inTarget)
             {
@@ -68,31 +68,32 @@ internal class CkTypeComparator
         return comparison;
     }
 
-    private bool AreTypesIdentical(CkType source, CkType target)
+    private bool AreTypesIdentical(CkTypeGraph source, CkTypeGraph target)
     {
         // Compare key properties
-        if (source.CkModelId != target.CkModelId) return false;
         if (source.IsFinal != target.IsFinal) return false;
         if (source.IsAbstract != target.IsAbstract) return false;
         if (source.Description != target.Description) return false;
         if (source.IsCollectionRoot != target.IsCollectionRoot) return false;
-        if (source.CollectionName != target.CollectionName) return false;
-        if (source.EnableChangeStreamPreAndPostImages != target.EnableChangeStreamPreAndPostImages) return false;
+        if (source.IsStreamType != target.IsStreamType) return false;
+        if (source.DerivedFromCkTypeId != target.DerivedFromCkTypeId) return false;
 
         // Compare attribute count (simple comparison)
-        if (source.Attributes.Count != target.Attributes.Count) return false;
+        if (source.AllAttributes.Count != target.AllAttributes.Count) return false;
+
+        // Compare associations count
+        if (source.Associations.In.All.Count + source.Associations.Out.All.Count !=
+            target.Associations.In.All.Count + target.Associations.Out.All.Count) return false;
+
+        // Compare indexes count
+        if (source.Indexes.Count != target.Indexes.Count) return false;
 
         return true;
     }
 
-    private string BuildDifferenceDescription(CkType source, CkType target)
+    private string BuildDifferenceDescription(CkTypeGraph source, CkTypeGraph target)
     {
         var differences = new List<string>();
-
-        if (source.CkModelId != target.CkModelId)
-        {
-            differences.Add($"CkModelId: '{source.CkModelId}' vs '{target.CkModelId}'");
-        }
 
         if (source.IsFinal != target.IsFinal)
         {
@@ -114,19 +115,31 @@ internal class CkTypeComparator
             differences.Add($"IsCollectionRoot: {source.IsCollectionRoot} vs {target.IsCollectionRoot}");
         }
 
-        if (source.CollectionName != target.CollectionName)
+        if (source.IsStreamType != target.IsStreamType)
         {
-            differences.Add($"CollectionName: '{source.CollectionName}' vs '{target.CollectionName}'");
+            differences.Add($"IsStreamType: {source.IsStreamType} vs {target.IsStreamType}");
         }
 
-        if (source.EnableChangeStreamPreAndPostImages != target.EnableChangeStreamPreAndPostImages)
+        if (source.DerivedFromCkTypeId != target.DerivedFromCkTypeId)
         {
-            differences.Add($"EnableChangeStreamPreAndPostImages: {source.EnableChangeStreamPreAndPostImages} vs {target.EnableChangeStreamPreAndPostImages}");
+            differences.Add($"DerivedFromCkTypeId: '{source.DerivedFromCkTypeId}' vs '{target.DerivedFromCkTypeId}'");
         }
 
-        if (source.Attributes.Count != target.Attributes.Count)
+        if (source.AllAttributes.Count != target.AllAttributes.Count)
         {
-            differences.Add($"Attributes count: {source.Attributes.Count} vs {target.Attributes.Count}");
+            differences.Add($"Attributes count: {source.AllAttributes.Count} vs {target.AllAttributes.Count}");
+        }
+
+        int sourceAssocCount = source.Associations.In.All.Count + source.Associations.Out.All.Count;
+        int targetAssocCount = target.Associations.In.All.Count + target.Associations.Out.All.Count;
+        if (sourceAssocCount != targetAssocCount)
+        {
+            differences.Add($"Associations count: {sourceAssocCount} vs {targetAssocCount}");
+        }
+
+        if (source.Indexes.Count != target.Indexes.Count)
+        {
+            differences.Add($"Indexes count: {source.Indexes.Count} vs {target.Indexes.Count}");
         }
 
         return string.Join("; ", differences);

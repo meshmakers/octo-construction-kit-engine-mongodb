@@ -1,4 +1,4 @@
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Models;
 
@@ -13,14 +13,14 @@ public class CkTypeDifference
     public string CkTypeId { get; set; } = null!;
 
     /// <summary>
-    ///     The CkType from the source tenant
+    ///     The CkTypeGraph from the source tenant
     /// </summary>
-    public CkType SourceType { get; set; } = null!;
+    public CkTypeGraph SourceType { get; set; } = null!;
 
     /// <summary>
-    ///     The CkType from the target tenant
+    ///     The CkTypeGraph from the target tenant
     /// </summary>
-    public CkType TargetType { get; set; } = null!;
+    public CkTypeGraph TargetType { get; set; } = null!;
 
     /// <summary>
     ///     Description of the difference

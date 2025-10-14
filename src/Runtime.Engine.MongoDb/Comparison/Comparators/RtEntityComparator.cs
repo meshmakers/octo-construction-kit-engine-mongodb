@@ -1,4 +1,4 @@
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Models;
 
@@ -14,20 +14,20 @@ internal class RtEntityComparator
     /// </summary>
     /// <param name="sourceEntities">Source tenant entities grouped by CkTypeId</param>
     /// <param name="targetEntities">Target tenant entities grouped by CkTypeId</param>
-    /// <param name="sourceCkTypes">Source tenant CkTypes for attribute metadata</param>
-    /// <param name="targetCkTypes">Target tenant CkTypes for attribute metadata</param>
+    /// <param name="sourceCkTypes">Source tenant CkTypeGraphs for attribute metadata</param>
+    /// <param name="targetCkTypes">Target tenant CkTypeGraphs for attribute metadata</param>
     /// <param name="options">Comparison options</param>
     /// <returns>Dictionary of RtEntityTypeComparison results by CkTypeId</returns>
     public Dictionary<string, RtEntityTypeComparison> Compare(
         Dictionary<string, List<RtEntity>> sourceEntities,
         Dictionary<string, List<RtEntity>> targetEntities,
-        List<CkType> sourceCkTypes,
-        List<CkType> targetCkTypes,
+        List<CkTypeGraph> sourceCkTypes,
+        List<CkTypeGraph> targetCkTypes,
         TenantComparisonOptions options)
     {
         var results = new Dictionary<string, RtEntityTypeComparison>();
 
-        // Create dictionaries for quick CkType lookup
+        // Create dictionaries for quick CkTypeGraph lookup
         var sourceCkTypesDict = sourceCkTypes.ToDictionary(t => t.CkTypeId.ToString());
         var targetCkTypesDict = targetCkTypes.ToDictionary(t => t.CkTypeId.ToString());
 
@@ -53,9 +53,9 @@ internal class RtEntityComparator
                 TargetFilteredCount = hasTarget ? targetList!.Count : 0
             };
 
-            // Get CkType for attribute comparison
-            sourceCkTypesDict.TryGetValue(ckTypeId, out CkType? sourceCkType);
-            targetCkTypesDict.TryGetValue(ckTypeId, out CkType? targetCkType);
+            // Get CkTypeGraph for attribute comparison
+            sourceCkTypesDict.TryGetValue(ckTypeId, out CkTypeGraph? sourceCkType);
+            targetCkTypesDict.TryGetValue(ckTypeId, out CkTypeGraph? targetCkType);
 
             if (hasSource && hasTarget)
             {
@@ -82,8 +82,8 @@ internal class RtEntityComparator
         List<RtEntity> sourceList,
         List<RtEntity> targetList,
         RtEntityTypeComparison comparison,
-        CkType? sourceCkType,
-        CkType? targetCkType,
+        CkTypeGraph? sourceCkType,
+        CkTypeGraph? targetCkType,
         TenantComparisonOptions options)
     {
         // Create dictionaries for matching
@@ -159,8 +159,8 @@ internal class RtEntityComparator
         RtEntity source,
         RtEntity target,
         string matchedBy,
-        CkType? sourceCkType,
-        CkType? targetCkType,
+        CkTypeGraph? sourceCkType,
+        CkTypeGraph? targetCkType,
         TenantComparisonOptions options)
     {
         var propertyDifferences = new List<PropertyDifference>();
@@ -233,17 +233,17 @@ internal class RtEntityComparator
     private void CompareAttributes(
         RtEntity source,
         RtEntity target,
-        CkType sourceCkType,
-        CkType targetCkType,
+        CkTypeGraph sourceCkType,
+        CkTypeGraph targetCkType,
         List<PropertyDifference> differences)
     {
-        // Get all attribute names from both CkTypes
-        var allAttributeNames = new HashSet<string>(
-            sourceCkType.Attributes.Select(a => a.AttributeName));
+        // Get all attribute names from both CkTypeGraphs
+        // AllAttributesByName is a dictionary with string keys
+        var allAttributeNames = new HashSet<string>(sourceCkType.AllAttributesByName.Keys);
 
-        foreach (var attr in targetCkType.Attributes)
+        foreach (var attrName in targetCkType.AllAttributesByName.Keys)
         {
-            allAttributeNames.Add(attr.AttributeName);
+            allAttributeNames.Add(attrName);
         }
 
         // Compare Attributes (from RtEntity.Attributes dictionary)

@@ -1,8 +1,8 @@
 using System.Diagnostics;
 
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Comparators;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Loaders;
@@ -13,11 +13,10 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison;
 internal class TenantComparisonService : ITenantComparisonService
 {
     private readonly ISystemContext _systemContext;
+    private readonly ICkCacheService _ckCacheService;
     private readonly MetadataLoader _metadataLoader;
     private readonly MetadataComparator _metadataComparator;
-    private readonly CkModelLoader _ckModelLoader;
     private readonly CkModelComparator _ckModelComparator;
-    private readonly CkTypeLoader _ckTypeLoader;
     private readonly CkTypeComparator _ckTypeComparator;
     private readonly RtEntityLoader _rtEntityLoader;
     private readonly RtEntityComparator _rtEntityComparator;
@@ -25,18 +24,18 @@ internal class TenantComparisonService : ITenantComparisonService
     private readonly AssociationComparator _associationComparator;
 
     public TenantComparisonService(ISystemContext systemContext,
+        ICkCacheService ckCacheService,
         MetadataLoader metadataLoader, MetadataComparator metadataComparator,
-        CkModelLoader ckModelLoader, CkModelComparator ckModelComparator,
-        CkTypeLoader ckTypeLoader, CkTypeComparator ckTypeComparator,
+        CkModelComparator ckModelComparator,
+        CkTypeComparator ckTypeComparator,
         RtEntityLoader rtEntityLoader, RtEntityComparator rtEntityComparator,
         AssociationLoader associationLoader, AssociationComparator associationComparator)
     {
         _systemContext = systemContext;
+        _ckCacheService = ckCacheService;
         _metadataLoader = metadataLoader;
         _metadataComparator = metadataComparator;
-        _ckModelLoader = ckModelLoader;
         _ckModelComparator = ckModelComparator;
-        _ckTypeLoader = ckTypeLoader;
         _ckTypeComparator = ckTypeComparator;
         _rtEntityLoader = rtEntityLoader;
         _rtEntityComparator = rtEntityComparator;
@@ -66,6 +65,13 @@ internal class TenantComparisonService : ITenantComparisonService
             Summary = new ComparisonSummary(),
         };
 
+        // Ensure cache is loaded for both tenants (required for ICkCacheService queries)
+        var sourceTenantContext = await _systemContext.FindTenantContextAsync(sourceTenantId);
+        await sourceTenantContext.LoadCacheForTenantAsync();
+
+        var targetTenantContext = await _systemContext.FindTenantContextAsync(targetTenantId);
+        await targetTenantContext.LoadCacheForTenantAsync();
+
         // Perform metadata comparison if requested
         if (options.Areas.HasFlag(ComparisonAreas.Metadata))
         {
@@ -81,23 +87,23 @@ internal class TenantComparisonService : ITenantComparisonService
         // Perform CkModel comparison if requested
         if (options.Areas.HasFlag(ComparisonAreas.CkModels))
         {
-            var sourceCkModels = await _ckModelLoader.LoadAsync(sourceTenantId, options, cancellationToken);
-            var targetCkModels = await _ckModelLoader.LoadAsync(targetTenantId, options, cancellationToken);
+            var sourceCkModelIds = _ckCacheService.GetCkModelIds(sourceTenantId);
+            var targetCkModelIds = _ckCacheService.GetCkModelIds(targetTenantId);
 
-            var ckModelComparison = _ckModelComparator.Compare(sourceCkModels, targetCkModels);
+            var ckModelComparison = _ckModelComparator.Compare(sourceCkModelIds, targetCkModelIds);
 
             report.CkModelComparison = ckModelComparison;
             report.Summary.CkModelDifferences = ckModelComparison.TotalDifferences;
         }
 
         // Perform CkType comparison if requested
-        List<CkType> sourceCkTypes = new();
-        List<CkType> targetCkTypes = new();
+        List<ConstructionKit.Contracts.DependencyGraph.CkTypeGraph> sourceCkTypes = new();
+        List<ConstructionKit.Contracts.DependencyGraph.CkTypeGraph> targetCkTypes = new();
 
         if (options.Areas.HasFlag(ComparisonAreas.CkTypes))
         {
-            sourceCkTypes = await _ckTypeLoader.LoadAsync(sourceTenantId, options, cancellationToken);
-            targetCkTypes = await _ckTypeLoader.LoadAsync(targetTenantId, options, cancellationToken);
+            sourceCkTypes = _ckCacheService.GetCkTypes(sourceTenantId).ToList();
+            targetCkTypes = _ckCacheService.GetCkTypes(targetTenantId).ToList();
 
             var ckTypeComparison = _ckTypeComparator.Compare(sourceCkTypes, targetCkTypes);
 
@@ -111,11 +117,11 @@ internal class TenantComparisonService : ITenantComparisonService
             // Load CkTypes if not already loaded (needed for entity comparison)
             if (sourceCkTypes.Count == 0)
             {
-                sourceCkTypes = await _ckTypeLoader.LoadAsync(sourceTenantId, options, cancellationToken);
+                sourceCkTypes = _ckCacheService.GetCkTypes(sourceTenantId).ToList();
             }
             if (targetCkTypes.Count == 0)
             {
-                targetCkTypes = await _ckTypeLoader.LoadAsync(targetTenantId, options, cancellationToken);
+                targetCkTypes = _ckCacheService.GetCkTypes(targetTenantId).ToList();
             }
 
             var sourceEntities = await _rtEntityLoader.LoadAsync(sourceTenantId, options, cancellationToken);

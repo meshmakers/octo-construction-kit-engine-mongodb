@@ -1,6 +1,6 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Comparators;
@@ -31,8 +31,8 @@ public class RtEntityComparatorTests
         // Arrange
         var sourceEntities = new Dictionary<string, List<RtEntity>>();
         var targetEntities = new Dictionary<string, List<RtEntity>>();
-        var sourceCkTypes = new List<CkType>();
-        var targetCkTypes = new List<CkType>();
+        var sourceCkTypes = new List<CkTypeGraph>();
+        var targetCkTypes = new List<CkTypeGraph>();
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
@@ -56,8 +56,8 @@ public class RtEntityComparatorTests
             }
         };
         var targetEntities = new Dictionary<string, List<RtEntity>>();
-        var sourceCkTypes = new List<CkType> { CreateCkType("CRM", "Customer") };
-        var targetCkTypes = new List<CkType>();
+        var sourceCkTypes = new List<CkTypeGraph> { CreateCkType("CRM", "Customer") };
+        var targetCkTypes = new List<CkTypeGraph>();
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
@@ -86,8 +86,8 @@ public class RtEntityComparatorTests
                 CreateRtEntitiy(ckTypeId, "customer2", "CustomerB")
             }
         };
-        var sourceCkTypes = new List<CkType>();
-        var targetCkTypes = new List<CkType> { CreateCkType("CRM", "Customer") };
+        var sourceCkTypes = new List<CkTypeGraph>();
+        var targetCkTypes = new List<CkTypeGraph> { CreateCkType("CRM", "Customer") };
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
@@ -124,8 +124,8 @@ public class RtEntityComparatorTests
         {
             [ckTypeId] = new List<RtEntity> { targetEntity }
         };
-        var sourceCkTypes = new List<CkType> { CreateCkType("ECommerce", "Product") };
-        var targetCkTypes = new List<CkType> { CreateCkType("ECommerce", "Product") };
+        var sourceCkTypes = new List<CkTypeGraph> { CreateCkType("ECommerce", "Product") };
+        var targetCkTypes = new List<CkTypeGraph> { CreateCkType("ECommerce", "Product") };
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
@@ -162,8 +162,8 @@ public class RtEntityComparatorTests
         {
             [ckTypeId] = new List<RtEntity> { targetEntity }
         };
-        var sourceCkTypes = new List<CkType> { CreateCkType("Logistics", "Shipment") };
-        var targetCkTypes = new List<CkType> { CreateCkType("Logistics", "Shipment") };
+        var sourceCkTypes = new List<CkTypeGraph> { CreateCkType("Logistics", "Shipment") };
+        var targetCkTypes = new List<CkTypeGraph> { CreateCkType("Logistics", "Shipment") };
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
@@ -205,8 +205,8 @@ public class RtEntityComparatorTests
         {
             [ckTypeId] = new List<RtEntity> { targetEntity }
         };
-        var sourceCkTypes = new List<CkType> { CreateCkType("Config", "SystemConfiguration") };
-        var targetCkTypes = new List<CkType> { CreateCkType("Config", "SystemConfiguration") };
+        var sourceCkTypes = new List<CkTypeGraph> { CreateCkType("Config", "SystemConfiguration") };
+        var targetCkTypes = new List<CkTypeGraph> { CreateCkType("Config", "SystemConfiguration") };
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
@@ -242,8 +242,8 @@ public class RtEntityComparatorTests
         {
             [ckTypeId] = new List<RtEntity> { targetEntity }
         };
-        var sourceCkTypes = new List<CkType> { CreateCkType("HR", "Employee") };
-        var targetCkTypes = new List<CkType> { CreateCkType("HR", "Employee") };
+        var sourceCkTypes = new List<CkTypeGraph> { CreateCkType("HR", "Employee") };
+        var targetCkTypes = new List<CkTypeGraph> { CreateCkType("HR", "Employee") };
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
@@ -289,13 +289,10 @@ public class RtEntityComparatorTests
             [ckTypeId] = new List<RtEntity> { targetEntity }
         };
 
-        var ckType = CreateCkType("Sales", "Invoice");
-        ckType.Attributes.Add(CreateCkTypeAttribute("InvoiceNumber"));
-        ckType.Attributes.Add(CreateCkTypeAttribute("Amount"));
-        ckType.Attributes.Add(CreateCkTypeAttribute("Status"));
+        var ckType = CreateCkType("Sales", "Invoice", attributeNames: new[] { "InvoiceNumber", "Amount", "Status" });
 
-        var sourceCkTypes = new List<CkType> { ckType };
-        var targetCkTypes = new List<CkType> { ckType };
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
@@ -338,13 +335,10 @@ public class RtEntityComparatorTests
             [ckTypeId] = new List<RtEntity> { targetEntity }
         };
 
-        var ckType = CreateCkType("Inventory", "Product");
-        ckType.Attributes.Add(CreateCkTypeAttribute("Name"));
-        ckType.Attributes.Add(CreateCkTypeAttribute("Code"));
-        ckType.Attributes.Add(CreateCkTypeAttribute("Description"));
+        var ckType = CreateCkType("Inventory", "Product", attributeNames: new[] { "Name", "Code", "Description" });
 
-        var sourceCkTypes = new List<CkType> { ckType };
-        var targetCkTypes = new List<CkType> { ckType };
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
@@ -388,13 +382,10 @@ public class RtEntityComparatorTests
             [ckTypeId] = new List<RtEntity> { targetEntity }
         };
 
-        var ckType = CreateCkType("Marketing", "Campaign");
-        ckType.Attributes.Add(CreateCkTypeAttribute("Name"));
-        ckType.Attributes.Add(CreateCkTypeAttribute("Budget"));
-        ckType.Attributes.Add(CreateCkTypeAttribute("Label"));
+        var ckType = CreateCkType("Marketing", "Campaign", attributeNames: new[] { "Name", "Budget", "Label" });
 
-        var sourceCkTypes = new List<CkType> { ckType };
-        var targetCkTypes = new List<CkType> { ckType };
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
@@ -434,11 +425,10 @@ public class RtEntityComparatorTests
             [ckTypeId] = new List<RtEntity> { targetEntity }
         };
 
-        var ckType = CreateCkType("Test", "Entity");
-        ckType.Attributes.Add(CreateCkTypeAttribute("Name"));
+        var ckType = CreateCkType("Test", "Entity", attributeNames: new[] { "Name" });
 
-        var sourceCkTypes = new List<CkType> { ckType };
-        var targetCkTypes = new List<CkType> { ckType };
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
 
         var optionsWithoutProperties = new TenantComparisonOptions
         {
@@ -547,20 +537,12 @@ public class RtEntityComparatorTests
             [productTypeId] = targetProducts
         };
 
-        var customerType = CreateCkType("ECommerce", "Customer");
-        customerType.Attributes.Add(CreateCkTypeAttribute("Name"));
-        customerType.Attributes.Add(CreateCkTypeAttribute("Email"));
+        var customerType = CreateCkType("ECommerce", "Customer", attributeNames: new[] { "Name", "Email" });
+        var orderType = CreateCkType("ECommerce", "Order", attributeNames: new[] { "OrderNumber", "Status" });
+        var productType = CreateCkType("ECommerce", "Product", attributeNames: new[] { "Name", "Code" });
 
-        var orderType = CreateCkType("ECommerce", "Order");
-        orderType.Attributes.Add(CreateCkTypeAttribute("OrderNumber"));
-        orderType.Attributes.Add(CreateCkTypeAttribute("Status"));
-
-        var productType = CreateCkType("ECommerce", "Product");
-        productType.Attributes.Add(CreateCkTypeAttribute("Name"));
-        productType.Attributes.Add(CreateCkTypeAttribute("Code"));
-
-        var sourceCkTypes = new List<CkType> { customerType, orderType, productType };
-        var targetCkTypes = new List<CkType> { customerType, orderType, productType };
+        var sourceCkTypes = new List<CkTypeGraph> { customerType, orderType, productType };
+        var targetCkTypes = new List<CkTypeGraph> { customerType, orderType, productType };
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
@@ -614,8 +596,8 @@ public class RtEntityComparatorTests
         {
             [ckTypeId] = new List<RtEntity>()
         };
-        var sourceCkTypes = new List<CkType> { CreateCkType("Test", "EmptyType") };
-        var targetCkTypes = new List<CkType> { CreateCkType("Test", "EmptyType") };
+        var sourceCkTypes = new List<CkTypeGraph> { CreateCkType("Test", "EmptyType") };
+        var targetCkTypes = new List<CkTypeGraph> { CreateCkType("Test", "EmptyType") };
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
@@ -647,8 +629,8 @@ public class RtEntityComparatorTests
         {
             [ckTypeId] = new List<RtEntity> { targetEntity }
         };
-        var sourceCkTypes = new List<CkType> { CreateCkType("Test", "Entity") };
-        var targetCkTypes = new List<CkType> { CreateCkType("Test", "Entity") };
+        var sourceCkTypes = new List<CkTypeGraph> { CreateCkType("Test", "Entity") };
+        var targetCkTypes = new List<CkTypeGraph> { CreateCkType("Test", "Entity") };
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
@@ -681,8 +663,8 @@ public class RtEntityComparatorTests
                 CreateRtEntitiy(ckTypeId, "config999", wellKnownName) // Different RtId, same well-known name
             }
         };
-        var sourceCkTypes = new List<CkType> { CreateCkType("Test", "Config") };
-        var targetCkTypes = new List<CkType> { CreateCkType("Test", "Config") };
+        var sourceCkTypes = new List<CkTypeGraph> { CreateCkType("Test", "Config") };
+        var targetCkTypes = new List<CkTypeGraph> { CreateCkType("Test", "Config") };
 
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
@@ -737,38 +719,58 @@ public class RtEntityComparatorTests
         return new CkId<CkTypeId>(parts[0], new CkTypeId(parts[1]));
     }
 
-    private CkType CreateCkType(
+    private CkTypeGraph CreateCkType(
         string modelId,
         string typeId,
         bool isFinal = false,
         bool isAbstract = false,
         string? description = null,
         bool isCollectionRoot = true,
-        string? collectionName = null)
+        string? collectionName = null,
+        params string[] attributeNames)
     {
-        return new CkType
-        {
-            CkModelId = new CkModelId(modelId),
-            CkTypeId = new CkId<CkTypeId>(modelId, new CkTypeId($"{modelId}.{typeId}")),
-            IsFinal = isFinal,
-            IsAbstract = isAbstract,
-            Description = description,
-            IsCollectionRoot = isCollectionRoot,
-            CollectionName = collectionName ?? $"{typeId}Collection",
-            EnableChangeStreamPreAndPostImages = false,
-            Attributes = new HashSet<CkTypeAttribute>(),
-            Indexes = new HashSet<CkTypeIndex>()
-        };
-    }
+        CkId<CkTypeId> ckTypeId = new CkId<CkTypeId>(modelId, new CkTypeId($"{modelId}.{typeId}"));
 
-    private CkTypeAttribute CreateCkTypeAttribute(string attributeName)
-    {
-        return new CkTypeAttribute
+        // Create AllAttributesByName dictionary
+        var allAttributesByName = new Dictionary<string, CkTypeAttributeGraph>();
+        var allAttributes = new Dictionary<CkId<CkAttributeId>, CkTypeAttributeGraph>();
+
+        foreach (string attrName in attributeNames)
         {
-            AttributeId = new CkId<CkAttributeId>("TestModel", new CkAttributeId($"TestModel.{attributeName}")),
-            AttributeName = attributeName,
-            IsOptional = false
-        };
+            CkId<CkAttributeId> attrId = new CkId<CkAttributeId>(modelId, new CkAttributeId($"{modelId}.{attrName}"));
+            var attrGraph = new CkTypeAttributeGraph(
+                ckAttributeId: attrId,
+                attributeName: attrName,
+                autoCompleteValues: null,
+                valueType: AttributeValueTypesDto.String,
+                valueCkRecordId: null,
+                valueCkEnumId: null,
+                autoIncrementReference: null,
+                metaData: null,
+                isDataStream: false,
+                defaultValues: null,
+                isOptional: false,
+                description: null);
+
+            allAttributes.Add(attrId, attrGraph);
+            allAttributesByName.Add(attrName, attrGraph);
+        }
+
+        return new CkTypeGraph(
+            ckTypeId: ckTypeId,
+            isAbstract: isAbstract,
+            isFinal: isFinal,
+            isCollectionRoot: isCollectionRoot,
+            isStreamType: false,
+            baseTypes: Array.Empty<CkGraphTypeInheritance>(),
+            derivedFromCkTypeId: null,
+            definingCollectionRootCkTypeId: null,
+            derivedTypes: Array.Empty<CkGraphTypeInheritance>(),
+            definedAttributes: Array.Empty<CkTypeAttributeDto>(),
+            allAttributes: allAttributes,
+            indexes: Array.Empty<CkTypeIndexDto>(),
+            associations: new CkGraphDirectedAssociations(Array.Empty<CkTypeAssociationDto>()),
+            description: description ?? string.Empty);
     }
 
     #endregion

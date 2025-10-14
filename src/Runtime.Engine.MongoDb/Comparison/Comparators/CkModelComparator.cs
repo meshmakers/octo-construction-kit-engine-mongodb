@@ -1,4 +1,4 @@
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Models;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Comparators;
@@ -9,33 +9,33 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Comparators;
 internal class CkModelComparator
 {
     /// <summary>
-    ///     Compares CkModel lists from source and target tenants
+    ///     Compares CkModelId collections from source and target tenants
     /// </summary>
-    /// <param name="sourceModels">Source tenant CkModels</param>
-    /// <param name="targetModels">Target tenant CkModels</param>
+    /// <param name="sourceModels">Source tenant CkModelIds</param>
+    /// <param name="targetModels">Target tenant CkModelIds</param>
     /// <returns>CkModel comparison results with identified differences</returns>
-    public CkModelComparison Compare(List<CkModel> sourceModels, List<CkModel> targetModels)
+    public CkModelComparison Compare(ICollection<CkModelId> sourceModels, ICollection<CkModelId> targetModels)
     {
         var comparison = new CkModelComparison();
 
         // Group models by ModelId (without version)
-        var sourceByModelId = sourceModels.GroupBy(m => m.ModelId)
+        var sourceByModelKey = sourceModels.GroupBy(m => m.ModelId)
             .ToDictionary(g => g.Key, g => g.ToList());
-        var targetByModelId = targetModels.GroupBy(m => m.ModelId)
+        var targetByModelKey = targetModels.GroupBy(m => m.ModelId)
             .ToDictionary(g => g.Key, g => g.ToList());
 
-        // Get all unique ModelIds
-        var allModelIds = new HashSet<string>(sourceByModelId.Keys);
-        foreach (string modelId in targetByModelId.Keys)
+        // Get all unique model keys
+        var allModelKeys = new HashSet<string>(sourceByModelKey.Keys);
+        foreach (string modelKey in targetByModelKey.Keys)
         {
-            allModelIds.Add(modelId);
+            allModelKeys.Add(modelKey);
         }
 
-        // Compare each ModelId
-        foreach (string modelId in allModelIds)
+        // Compare each model
+        foreach (string modelKey in allModelKeys)
         {
-            bool inSource = sourceByModelId.TryGetValue(modelId, out List<CkModel>? sourceVersions);
-            bool inTarget = targetByModelId.TryGetValue(modelId, out List<CkModel>? targetVersions);
+            bool inSource = sourceByModelKey.TryGetValue(modelKey, out List<CkModelId>? sourceVersions);
+            bool inTarget = targetByModelKey.TryGetValue(modelKey, out List<CkModelId>? targetVersions);
 
             if (inSource && !inTarget)
             {
@@ -50,19 +50,19 @@ internal class CkModelComparator
             else if (inSource && inTarget)
             {
                 // Model exists in both - compare versions
-                CompareModelVersions(modelId, sourceVersions!, targetVersions!, comparison);
+                CompareModelVersions(modelKey, sourceVersions!, targetVersions!, comparison);
             }
         }
 
         return comparison;
     }
 
-    private void CompareModelVersions(string modelId, List<CkModel> sourceVersions,
-        List<CkModel> targetVersions, CkModelComparison comparison)
+    private void CompareModelVersions(string modelKey, List<CkModelId> sourceVersions,
+        List<CkModelId> targetVersions, CkModelComparison comparison)
     {
-        // Create dictionaries by full CkModelId for quick lookup
-        var sourceByFullId = sourceVersions.ToDictionary(m => m.Id.ToString());
-        var targetByFullId = targetVersions.ToDictionary(m => m.Id.ToString());
+        // Create dictionaries by full CkModelId (with version) for quick lookup
+        var sourceByFullId = sourceVersions.ToDictionary(m => m.ToString());
+        var targetByFullId = targetVersions.ToDictionary(m => m.ToString());
 
         // Get all unique full model IDs (with version)
         var allFullIds = new HashSet<string>(sourceByFullId.Keys);
@@ -73,8 +73,8 @@ internal class CkModelComparator
 
         foreach (string fullId in allFullIds)
         {
-            bool inSource = sourceByFullId.TryGetValue(fullId, out CkModel? sourceModel);
-            bool inTarget = targetByFullId.TryGetValue(fullId, out CkModel? targetModel);
+            bool inSource = sourceByFullId.TryGetValue(fullId, out CkModelId? sourceModel);
+            bool inTarget = targetByFullId.TryGetValue(fullId, out CkModelId? targetModel);
 
             if (inSource && inTarget)
             {
@@ -88,10 +88,10 @@ internal class CkModelComparator
                 if (targetVersions.Count > 0)
                 {
                     // Find the corresponding target version for this model
-                    var targetVersion = targetVersions.First();
+                    CkModelId targetVersion = targetVersions.First();
                     comparison.VersionDifferences.Add(new CkModelVersionDifference
                     {
-                        ModelId = modelId,
+                        ModelKey = modelKey,
                         SourceVersion = sourceModel!,
                         TargetVersion = targetVersion
                     });
@@ -101,13 +101,13 @@ internal class CkModelComparator
             {
                 // Different version - target has a version that source doesn't
                 // Check if this difference wasn't already recorded
-                bool alreadyRecorded = comparison.VersionDifferences.Any(d => d.ModelId == modelId);
+                bool alreadyRecorded = comparison.VersionDifferences.Any(d => d.ModelKey == modelKey);
                 if (!alreadyRecorded && sourceVersions.Count > 0)
                 {
                     var sourceVersion = sourceVersions.First();
                     comparison.VersionDifferences.Add(new CkModelVersionDifference
                     {
-                        ModelId = modelId,
+                        ModelKey = modelKey,
                         SourceVersion = sourceVersion,
                         TargetVersion = targetModel!
                     });
