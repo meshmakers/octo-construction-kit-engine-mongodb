@@ -54,7 +54,7 @@ public class CkTypeComparatorTests
         Assert.Empty(result.InBothSame);
         Assert.Empty(result.Differences);
         Assert.Equal(1, result.TotalDifferences);
-        Assert.Equal("TestModel/TestModel.Type1", result.OnlyInSource[0].CkTypeId.ToString());
+        Assert.Equal("TestModel/TestModel.Type1", result.OnlyInSource[0].CkTypeId);
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public class CkTypeComparatorTests
         Assert.Empty(result.InBothSame);
         Assert.Empty(result.Differences);
         Assert.Equal(1, result.TotalDifferences);
-        Assert.Equal("TestModel/TestModel.Type1", result.OnlyInTarget[0].CkTypeId.ToString());
+        Assert.Equal("TestModel/TestModel.Type1", result.OnlyInTarget[0].CkTypeId);
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class CkTypeComparatorTests
         Assert.Single(result.InBothSame);
         Assert.Empty(result.Differences);
         Assert.Equal(0, result.TotalDifferences);
-        Assert.Equal("TestModel/TestModel.Type1", result.InBothSame[0].CkTypeId.ToString());
+        Assert.Equal("TestModel/TestModel.Type1", result.InBothSame[0].CkTypeId);
     }
 
     [Fact]
@@ -182,9 +182,9 @@ public class CkTypeComparatorTests
         Assert.Single(result.InBothSame);
         Assert.Single(result.Differences);
         Assert.Equal(3, result.TotalDifferences); // OnlyInSource + OnlyInTarget + Differences
-        Assert.Equal("TestModel/TestModel.Type1", result.OnlyInSource[0].CkTypeId.ToString());
-        Assert.Equal("TestModel/TestModel.Type4", result.OnlyInTarget[0].CkTypeId.ToString());
-        Assert.Equal("TestModel/TestModel.Type2", result.InBothSame[0].CkTypeId.ToString());
+        Assert.Equal("TestModel/TestModel.Type1", result.OnlyInSource[0].CkTypeId);
+        Assert.Equal("TestModel/TestModel.Type4", result.OnlyInTarget[0].CkTypeId);
+        Assert.Equal("TestModel/TestModel.Type2", result.InBothSame[0].CkTypeId);
         Assert.Equal("TestModel/TestModel.Type3", result.Differences[0].CkTypeId);
     }
 

@@ -1,5 +1,3 @@
-using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
-
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Models;
 
 /// <summary>
@@ -10,17 +8,17 @@ public class CkTypeComparison
     /// <summary>
     ///     Types present only in source tenant
     /// </summary>
-    public List<CkTypeGraph> OnlyInSource { get; set; } = new();
+    public List<CkTypeInfo> OnlyInSource { get; set; } = new();
 
     /// <summary>
     ///     Types present only in target tenant
     /// </summary>
-    public List<CkTypeGraph> OnlyInTarget { get; set; } = new();
+    public List<CkTypeInfo> OnlyInTarget { get; set; } = new();
 
     /// <summary>
     ///     Types present in both tenants with identical properties
     /// </summary>
-    public List<CkTypeGraph> InBothSame { get; set; } = new();
+    public List<CkTypeInfo> InBothSame { get; set; } = new();
 
     /// <summary>
     ///     Types present in both tenants with different properties

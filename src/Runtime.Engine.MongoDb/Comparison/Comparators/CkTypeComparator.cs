@@ -38,27 +38,27 @@ internal class CkTypeComparator
             if (inSource && !inTarget)
             {
                 // Type exists only in source
-                comparison.OnlyInSource.Add(sourceType!);
+                comparison.OnlyInSource.Add(ConvertToTypeInfo(sourceType!));
             }
             else if (!inSource && inTarget)
             {
                 // Type exists only in target
-                comparison.OnlyInTarget.Add(targetType!);
+                comparison.OnlyInTarget.Add(ConvertToTypeInfo(targetType!));
             }
             else if (inSource && inTarget)
             {
                 // Type exists in both - compare properties
                 if (AreTypesIdentical(sourceType!, targetType!))
                 {
-                    comparison.InBothSame.Add(sourceType!);
+                    comparison.InBothSame.Add(ConvertToTypeInfo(sourceType!));
                 }
                 else
                 {
                     comparison.Differences.Add(new CkTypeDifference
                     {
                         CkTypeId = typeId,
-                        SourceType = sourceType!,
-                        TargetType = targetType!,
+                        SourceType = ConvertToTypeInfo(sourceType!),
+                        TargetType = ConvertToTypeInfo(targetType!),
                         Description = BuildDifferenceDescription(sourceType!, targetType!)
                     });
                 }
@@ -66,6 +66,29 @@ internal class CkTypeComparator
         }
 
         return comparison;
+    }
+
+    /// <summary>
+    ///     Converts a CkTypeGraph to a simplified, JSON-serializable CkTypeInfo
+    /// </summary>
+    /// <param name="typeGraph">The CkTypeGraph to convert</param>
+    /// <returns>A CkTypeInfo with essential comparison information</returns>
+    private CkTypeInfo ConvertToTypeInfo(CkTypeGraph typeGraph)
+    {
+        return new CkTypeInfo
+        {
+            CkTypeId = typeGraph.CkTypeId.ToString(),
+            IsFinal = typeGraph.IsFinal,
+            IsAbstract = typeGraph.IsAbstract,
+            Description = typeGraph.Description,
+            IsCollectionRoot = typeGraph.IsCollectionRoot,
+            IsStreamType = typeGraph.IsStreamType,
+            DerivedFromCkTypeId = typeGraph.DerivedFromCkTypeId?.ToString(),
+            AttributeIds = typeGraph.AllAttributes.Keys.Select(k => k.ToString()).ToList(),
+            IncomingAssociationsCount = typeGraph.Associations.In.All.Count,
+            OutgoingAssociationsCount = typeGraph.Associations.Out.All.Count,
+            IndexesCount = typeGraph.Indexes.Count
+        };
     }
 
     private bool AreTypesIdentical(CkTypeGraph source, CkTypeGraph target)
