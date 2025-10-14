@@ -1,4 +1,5 @@
-using Meshmakers.Octo.ConstructionKit.Contracts;
+using System.Collections;
+
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Comparison.Models;
@@ -12,10 +13,6 @@ internal class RtEntityComparator
 {
     private Dictionary<string, CkRecordGraph> _sourceCkRecordGraphsDict = null!;
     private Dictionary<string, CkRecordGraph> _targetCkRecordGraphsDict = null!;
-
-    public RtEntityComparator()
-    {
-    }
 
     /// <summary>
     ///     Compares RtEntity lists from source and target tenants grouped by CkTypeId
@@ -322,6 +319,13 @@ internal class RtEntityComparator
             return CompareRecordLists(sourceRecords, targetRecords);
         }
 
+        // Check if values are collections (but not strings, since string implements IEnumerable<char>)
+        if (value1 is not string && value2 is not string &&
+            value1 is IEnumerable sourceCollection && value2 is IEnumerable targetCollection)
+        {
+            return CompareCollections(sourceCollection, targetCollection);
+        }
+
         return value1.Equals(value2);
     }
 
@@ -403,6 +407,36 @@ internal class RtEntityComparator
         for (int i = 0; i < sourceList.Count; i++)
         {
             if (!CompareRecords(sourceList[i], targetList[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    ///     Compares two general collections element-by-element
+    /// </summary>
+    /// <param name="sourceCollection">Source collection</param>
+    /// <param name="targetCollection">Target collection</param>
+    /// <returns>True if collections are equal, false otherwise</returns>
+    private bool CompareCollections(IEnumerable sourceCollection, IEnumerable targetCollection)
+    {
+        // Convert to lists for comparison
+        List<object?> sourceList = sourceCollection.Cast<object?>().ToList();
+        List<object?> targetList = targetCollection.Cast<object?>().ToList();
+
+        // If counts differ, collections are not equal
+        if (sourceList.Count != targetList.Count)
+        {
+            return false;
+        }
+
+        // Compare elements at same index position recursively
+        for (int i = 0; i < sourceList.Count; i++)
+        {
+            if (!AreValuesEqual(sourceList[i], targetList[i]))
             {
                 return false;
             }
