@@ -54,4 +54,21 @@ public interface ITenantComparisonService
         string targetBackupPath,
         TenantComparisonOptions options,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    ///     Compares a backup archive with a live tenant (reverse comparison).
+    /// </summary>
+    /// <param name="backupArchivePath">File system path to the backup archive (.gz file)</param>
+    /// <param name="liveTenantId">The ID of the live tenant (target)</param>
+    /// <param name="options">Comparison configuration options</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>A comparison report detailing the differences</returns>
+    /// <exception cref="ArgumentNullException">If any required parameter is null</exception>
+    /// <exception cref="FileNotFoundException">If the backup archive file does not exist</exception>
+    /// <exception cref="InvalidOperationException">If the restore or comparison fails</exception>
+    Task<TenantComparisonReport> CompareBackupWithTenantAsync(
+        string backupArchivePath,
+        string liveTenantId,
+        TenantComparisonOptions options,
+        CancellationToken cancellationToken = default);
 }

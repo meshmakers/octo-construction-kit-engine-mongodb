@@ -248,6 +248,46 @@ internal class TenantComparisonService : ITenantComparisonService
         }
     }
 
+    public async Task<TenantComparisonReport> CompareBackupWithTenantAsync(string backupArchivePath, string liveTenantId,
+        TenantComparisonOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        // Validate inputs
+        ValidateBackupPath(backupArchivePath, nameof(backupArchivePath));
+
+        if (string.IsNullOrEmpty(liveTenantId))
+        {
+            throw new ArgumentException("Live tenant ID cannot be null or empty", nameof(liveTenantId));
+        }
+
+        // Generate temporary tenant information
+        (string tempTenantId, string tempDatabaseName) = GenerateTemporaryTenantInfo();
+
+        try
+        {
+            // Restore backup to temporary tenant
+            await RestoreBackupToTemporaryTenantAsync(tempTenantId, tempDatabaseName, backupArchivePath, cancellationToken);
+
+            // Perform comparison between restored backup and live tenant
+            TenantComparisonReport report = await CompareTenantAsync(
+                sourceTenantId: tempTenantId,
+                targetTenantId: liveTenantId,
+                options: options,
+                cancellationToken: cancellationToken);
+
+            // Update metadata to indicate source was restored from backup
+            report.Metadata.SourceWasRestoredFromBackup = true;
+            report.Metadata.SourceBackupPath = backupArchivePath;
+
+            return report;
+        }
+        finally
+        {
+            // Cleanup: Drop the temporary tenant in any case
+            await CleanupTemporaryTenantAsync(tempTenantId);
+        }
+    }
+
     /// <summary>
     ///     Generates a unique temporary tenant ID and database name
     ///     Uses short names to respect MongoDB's 64-character database name limit (38 chars on some Windows systems)
