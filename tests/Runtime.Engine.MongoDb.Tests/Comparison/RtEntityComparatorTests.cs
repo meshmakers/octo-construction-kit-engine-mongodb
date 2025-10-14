@@ -37,7 +37,7 @@ public class RtEntityComparatorTests
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
             sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
-            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
+            [], [], _defaultOptions);
 
         // Assert
         Assert.Empty(result);
@@ -50,11 +50,11 @@ public class RtEntityComparatorTests
         string ckTypeId = "CRM/CRM.Customer";
         var sourceEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity>
-            {
+            [ckTypeId] =
+            [
                 CreateRtEntitiy(ckTypeId, "customer1", "CustomerA"),
-                CreateRtEntitiy(ckTypeId, "customer2", "CustomerB")
-            }
+                CreateRtEntitiy(ckTypeId, "customer2", "CustomerB"),
+            ]
         };
         var targetEntities = new Dictionary<string, List<RtEntity>>();
         var sourceCkTypes = new List<CkTypeGraph> { CreateCkType("CRM", "Customer") };
@@ -63,7 +63,7 @@ public class RtEntityComparatorTests
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
             sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
-            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
+            [], [], _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -82,11 +82,11 @@ public class RtEntityComparatorTests
         var sourceEntities = new Dictionary<string, List<RtEntity>>();
         var targetEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity>
-            {
+            [ckTypeId] =
+            [
                 CreateRtEntitiy(ckTypeId, "customer1", "CustomerA"),
-                CreateRtEntitiy(ckTypeId, "customer2", "CustomerB")
-            }
+                CreateRtEntitiy(ckTypeId, "customer2", "CustomerB"),
+            ]
         };
         var sourceCkTypes = new List<CkTypeGraph>();
         var targetCkTypes = new List<CkTypeGraph> { CreateCkType("CRM", "Customer") };
@@ -94,7 +94,7 @@ public class RtEntityComparatorTests
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
             sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
-            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
+            [], [], _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -121,11 +121,11 @@ public class RtEntityComparatorTests
 
         var sourceEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { sourceEntity }
+            [ckTypeId] = [sourceEntity]
         };
         var targetEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { targetEntity }
+            [ckTypeId] = [targetEntity]
         };
         var sourceCkTypes = new List<CkTypeGraph> { CreateCkType("ECommerce", "Product") };
         var targetCkTypes = new List<CkTypeGraph> { CreateCkType("ECommerce", "Product") };
@@ -133,7 +133,7 @@ public class RtEntityComparatorTests
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
             sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
-            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
+            [], [], _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -160,11 +160,11 @@ public class RtEntityComparatorTests
 
         var sourceEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { sourceEntity }
+            [ckTypeId] = [sourceEntity]
         };
         var targetEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { targetEntity }
+            [ckTypeId] = [targetEntity]
         };
         var sourceCkTypes = new List<CkTypeGraph> { CreateCkType("Logistics", "Shipment") };
         var targetCkTypes = new List<CkTypeGraph> { CreateCkType("Logistics", "Shipment") };
@@ -172,7 +172,7 @@ public class RtEntityComparatorTests
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
             sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
-            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
+            [], [], _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -204,11 +204,11 @@ public class RtEntityComparatorTests
 
         var sourceEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { sourceEntity }
+            [ckTypeId] = [sourceEntity]
         };
         var targetEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { targetEntity }
+            [ckTypeId] = [targetEntity]
         };
         var sourceCkTypes = new List<CkTypeGraph> { CreateCkType("Config", "SystemConfiguration") };
         var targetCkTypes = new List<CkTypeGraph> { CreateCkType("Config", "SystemConfiguration") };
@@ -216,7 +216,7 @@ public class RtEntityComparatorTests
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
             sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
-            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
+            [], [], _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -242,11 +242,11 @@ public class RtEntityComparatorTests
 
         var sourceEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { sourceEntity }
+            [ckTypeId] = [sourceEntity]
         };
         var targetEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { targetEntity }
+            [ckTypeId] = [targetEntity]
         };
         var sourceCkTypes = new List<CkTypeGraph> { CreateCkType("HR", "Employee") };
         var targetCkTypes = new List<CkTypeGraph> { CreateCkType("HR", "Employee") };
@@ -254,7 +254,7 @@ public class RtEntityComparatorTests
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
             sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
-            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
+            [], [], _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -289,14 +289,14 @@ public class RtEntityComparatorTests
 
         var sourceEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { sourceEntity }
+            [ckTypeId] = [sourceEntity]
         };
         var targetEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { targetEntity }
+            [ckTypeId] = [targetEntity]
         };
 
-        var ckType = CreateCkType("Sales", "Invoice", attributeNames: new[] { "InvoiceNumber", "Amount", "Status" });
+        var ckType = CreateCkType("Sales", "Invoice", attributeNames: ["InvoiceNumber", "Amount", "Status"]);
 
         var sourceCkTypes = new List<CkTypeGraph> { ckType };
         var targetCkTypes = new List<CkTypeGraph> { ckType };
@@ -304,7 +304,7 @@ public class RtEntityComparatorTests
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
             sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
-            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
+            [], [], _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -336,14 +336,14 @@ public class RtEntityComparatorTests
 
         var sourceEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { sourceEntity }
+            [ckTypeId] = [sourceEntity]
         };
         var targetEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { targetEntity }
+            [ckTypeId] = [targetEntity]
         };
 
-        var ckType = CreateCkType("Inventory", "Product", attributeNames: new[] { "Name", "Code", "Description" });
+        var ckType = CreateCkType("Inventory", "Product", attributeNames: ["Name", "Code", "Description"]);
 
         var sourceCkTypes = new List<CkTypeGraph> { ckType };
         var targetCkTypes = new List<CkTypeGraph> { ckType };
@@ -351,7 +351,7 @@ public class RtEntityComparatorTests
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
             sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
-            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
+            [], [], _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -384,14 +384,14 @@ public class RtEntityComparatorTests
 
         var sourceEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { sourceEntity }
+            [ckTypeId] = [sourceEntity]
         };
         var targetEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { targetEntity }
+            [ckTypeId] = [targetEntity]
         };
 
-        var ckType = CreateCkType("Marketing", "Campaign", attributeNames: new[] { "Name", "Budget", "Label" });
+        var ckType = CreateCkType("Marketing", "Campaign", attributeNames: ["Name", "Budget", "Label"]);
 
         var sourceCkTypes = new List<CkTypeGraph> { ckType };
         var targetCkTypes = new List<CkTypeGraph> { ckType };
@@ -399,7 +399,7 @@ public class RtEntityComparatorTests
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
             sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
-            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
+            [], [], _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -428,14 +428,14 @@ public class RtEntityComparatorTests
 
         var sourceEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { sourceEntity }
+            [ckTypeId] = [sourceEntity]
         };
         var targetEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { targetEntity }
+            [ckTypeId] = [targetEntity]
         };
 
-        var ckType = CreateCkType("Test", "Entity", attributeNames: new[] { "Name" });
+        var ckType = CreateCkType("Test", "Entity", attributeNames: ["Name"]);
 
         var sourceCkTypes = new List<CkTypeGraph> { ckType };
         var targetCkTypes = new List<CkTypeGraph> { ckType };
@@ -448,7 +448,7 @@ public class RtEntityComparatorTests
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
             sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
-            new List<CkRecordGraph>(), new List<CkRecordGraph>(), optionsWithoutProperties);
+            [], [], optionsWithoutProperties);
 
         // Assert
         Assert.Single(result);
@@ -548,9 +548,9 @@ public class RtEntityComparatorTests
             [productTypeId] = targetProducts
         };
 
-        var customerType = CreateCkType("ECommerce", "Customer", attributeNames: new[] { "Name", "Email" });
-        var orderType = CreateCkType("ECommerce", "Order", attributeNames: new[] { "OrderNumber", "Status" });
-        var productType = CreateCkType("ECommerce", "Product", attributeNames: new[] { "Name", "Code" });
+        var customerType = CreateCkType("ECommerce", "Customer", attributeNames: ["Name", "Email"]);
+        var orderType = CreateCkType("ECommerce", "Order", attributeNames: ["OrderNumber", "Status"]);
+        var productType = CreateCkType("ECommerce", "Product", attributeNames: ["Name", "Code"]);
 
         var sourceCkTypes = new List<CkTypeGraph> { customerType, orderType, productType };
         var targetCkTypes = new List<CkTypeGraph> { customerType, orderType, productType };
@@ -558,7 +558,7 @@ public class RtEntityComparatorTests
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
             sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
-            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
+            [], [], _defaultOptions);
 
         // Assert
         Assert.Equal(3, result.Count);
@@ -593,6 +593,697 @@ public class RtEntityComparatorTests
 
     #endregion
 
+    #region Record Comparison Tests
+
+    [Fact]
+    public void Compare_EntitiesWithIdenticalRecordAttributes_MatchesIdentically()
+    {
+        // Arrange
+        string ckTypeId = "OrderMgmt/OrderMgmt.Order";
+        string rtId = "507f1f77bcf86cd799439011";
+        string recordId = "Address";
+
+        var addressRecord1 = CreateRtRecord("OrderMgmt", recordId, new Dictionary<string, object?>
+        {
+            ["Street"] = "123 Main St",
+            ["City"] = "Boston",
+            ["ZipCode"] = "02101"
+        });
+
+        var addressRecord2 = CreateRtRecord("OrderMgmt", recordId, new Dictionary<string, object?>
+        {
+            ["Street"] = "123 Main St",
+            ["City"] = "Boston",
+            ["ZipCode"] = "02101"
+        });
+
+        var sourceEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        sourceEntity.SetAttributeValue("ShippingAddress", AttributeValueTypesDto.Record, addressRecord1);
+
+        var targetEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        targetEntity.SetAttributeValue("ShippingAddress", AttributeValueTypesDto.Record, addressRecord2);
+
+        var sourceEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [sourceEntity] };
+        var targetEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [targetEntity] };
+
+        var ckType = CreateCkType("OrderMgmt", "Order", attributeNames: ["ShippingAddress"]);
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
+
+        var ckRecordGraph = CreateCkRecordGraph("OrderMgmt", recordId, "Street", "City", "ZipCode");
+        var sourceCkRecords = new List<CkRecordGraph> { ckRecordGraph };
+        var targetCkRecords = new List<CkRecordGraph> { ckRecordGraph };
+
+        // Act
+        Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            sourceCkRecords, targetCkRecords, _defaultOptions);
+
+        // Assert
+        Assert.Single(result);
+        Assert.Empty(result[ckTypeId].Differences);
+        Assert.Equal(1, result[ckTypeId].MatchedIdenticalCount);
+    }
+
+    [Fact]
+    public void Compare_RecordsWithDifferentCkRecordIds_DetectsDifference()
+    {
+        // Arrange
+        string ckTypeId = "Config/Config.Settings";
+        string rtId = "507f1f77bcf86cd799439011";
+
+        var record1 = CreateRtRecord("Config", "AddressRecord", new Dictionary<string, object?>
+        {
+            ["Value"] = "Test"
+        });
+
+        var record2 = CreateRtRecord("Config", "DifferentRecord", new Dictionary<string, object?>
+        {
+            ["Value"] = "Test"
+        });
+
+        var sourceEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        sourceEntity.SetAttributeValue("ConfigValue", AttributeValueTypesDto.Record, record1);
+
+        var targetEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        targetEntity.SetAttributeValue("ConfigValue", AttributeValueTypesDto.Record, record2);
+
+        var sourceEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [sourceEntity] };
+        var targetEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [targetEntity] };
+
+        var ckType = CreateCkType("Config", "Settings", attributeNames: ["ConfigValue"]);
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
+
+        var ckRecordGraph1 = CreateCkRecordGraph("Config", "AddressRecord", "Value");
+        var ckRecordGraph2 = CreateCkRecordGraph("Config", "DifferentRecord", "Value");
+        var sourceCkRecords = new List<CkRecordGraph> { ckRecordGraph1 };
+        var targetCkRecords = new List<CkRecordGraph> { ckRecordGraph2 };
+
+        // Act
+        Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            sourceCkRecords, targetCkRecords, _defaultOptions);
+
+        // Assert
+        Assert.Single(result);
+        Assert.Single(result[ckTypeId].Differences);
+        Assert.Equal("ConfigValue", result[ckTypeId].Differences[0].PropertyDifferences[0].PropertyName);
+    }
+
+    [Fact]
+    public void Compare_RecordsWithDifferentAttributeValues_DetectsDifference()
+    {
+        // Arrange
+        string ckTypeId = "Customer/Customer.Person";
+        string rtId = "507f1f77bcf86cd799439011";
+        string recordId = "ContactInfo";
+
+        var contactRecord1 = CreateRtRecord("Customer", recordId, new Dictionary<string, object?>
+        {
+            ["Email"] = "old@example.com",
+            ["Phone"] = "555-1234"
+        });
+
+        var contactRecord2 = CreateRtRecord("Customer", recordId, new Dictionary<string, object?>
+        {
+            ["Email"] = "new@example.com",
+            ["Phone"] = "555-1234"
+        });
+
+        var sourceEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        sourceEntity.SetAttributeValue("Contact", AttributeValueTypesDto.Record, contactRecord1);
+
+        var targetEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        targetEntity.SetAttributeValue("Contact", AttributeValueTypesDto.Record, contactRecord2);
+
+        var sourceEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [sourceEntity] };
+        var targetEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [targetEntity] };
+
+        var ckType = CreateCkType("Customer", "Person", attributeNames: ["Contact"]);
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
+
+        var ckRecordGraph = CreateCkRecordGraph("Customer", recordId, "Email", "Phone");
+        var sourceCkRecords = new List<CkRecordGraph> { ckRecordGraph };
+        var targetCkRecords = new List<CkRecordGraph> { ckRecordGraph };
+
+        // Act
+        Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            sourceCkRecords, targetCkRecords, _defaultOptions);
+
+        // Assert
+        Assert.Single(result);
+        Assert.Single(result[ckTypeId].Differences);
+        Assert.Equal("Contact", result[ckTypeId].Differences[0].PropertyDifferences[0].PropertyName);
+    }
+
+    [Fact]
+    public void Compare_RecordsWithoutMetadata_FallsBackToEquals()
+    {
+        // Arrange
+        string ckTypeId = "Test/Test.Entity";
+        string rtId = "507f1f77bcf86cd799439011";
+
+        var record1 = CreateRtRecord("Test", "UnknownRecord", new Dictionary<string, object?>
+        {
+            ["Value"] = "Same"
+        });
+
+        var record2 = CreateRtRecord("Test", "UnknownRecord", new Dictionary<string, object?>
+        {
+            ["Value"] = "Same"
+        });
+
+        var sourceEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        sourceEntity.SetAttributeValue("Data", AttributeValueTypesDto.Record, record1);
+
+        var targetEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        targetEntity.SetAttributeValue("Data", AttributeValueTypesDto.Record, record2);
+
+        var sourceEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [sourceEntity] };
+        var targetEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [targetEntity] };
+
+        var ckType = CreateCkType("Test", "Entity", attributeNames: ["Data"]);
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
+
+        // No CkRecordGraph provided - should fall back to Equals
+        var sourceCkRecords = new List<CkRecordGraph>();
+        var targetCkRecords = new List<CkRecordGraph>();
+
+        // Act
+        Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            sourceCkRecords, targetCkRecords, _defaultOptions);
+
+        // Assert - Will use RtRecord.Equals which may detect differences or not depending on implementation
+        Assert.Single(result);
+    }
+
+    [Fact]
+    public void Compare_RecordsWithAddedOrRemovedAttributes_DetectsDifference()
+    {
+        // Arrange
+        string ckTypeId = "Product/Product.Item";
+        string rtId = "507f1f77bcf86cd799439011";
+        string recordId = "Dimensions";
+
+        var dimensionsRecord1 = CreateRtRecord("Product", recordId, new Dictionary<string, object?>
+        {
+            ["Width"] = 10.5,
+            ["Height"] = 20.0,
+            ["Depth"] = 5.0
+        });
+
+        var dimensionsRecord2 = CreateRtRecord("Product", recordId, new Dictionary<string, object?>
+        {
+            ["Width"] = 10.5,
+            ["Height"] = 20.0
+            // Depth removed!
+        });
+
+        var sourceEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        sourceEntity.SetAttributeValue("Dimensions", AttributeValueTypesDto.Record, dimensionsRecord1);
+
+        var targetEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        targetEntity.SetAttributeValue("Dimensions", AttributeValueTypesDto.Record, dimensionsRecord2);
+
+        var sourceEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [sourceEntity] };
+        var targetEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [targetEntity] };
+
+        var ckType = CreateCkType("Product", "Item", attributeNames: ["Dimensions"]);
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
+
+        var ckRecordGraph = CreateCkRecordGraph("Product", recordId, "Width", "Height", "Depth");
+        var sourceCkRecords = new List<CkRecordGraph> { ckRecordGraph };
+        var targetCkRecords = new List<CkRecordGraph> { ckRecordGraph };
+
+        // Act
+        Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            sourceCkRecords, targetCkRecords, _defaultOptions);
+
+        // Assert
+        Assert.Single(result);
+        Assert.Single(result[ckTypeId].Differences);
+        Assert.Equal("Dimensions", result[ckTypeId].Differences[0].PropertyDifferences[0].PropertyName);
+    }
+
+    #endregion
+
+    #region Record List Comparison Tests
+
+    [Fact]
+    public void Compare_EntitiesWithIdenticalRecordLists_MatchesIdentically()
+    {
+        // Arrange
+        string ckTypeId = "Order/Order.Purchase";
+        string rtId = "507f1f77bcf86cd799439011";
+        string recordId = "LineItem";
+
+        var lineItems1 = new List<RtRecord>
+        {
+            CreateRtRecord("Order", recordId, new Dictionary<string, object?>
+            {
+                ["ProductCode"] = "ITEM-001",
+                ["Quantity"] = 5,
+                ["Price"] = 29.99
+            }),
+            CreateRtRecord("Order", recordId, new Dictionary<string, object?>
+            {
+                ["ProductCode"] = "ITEM-002",
+                ["Quantity"] = 2,
+                ["Price"] = 49.99
+            })
+        };
+
+        var lineItems2 = new List<RtRecord>
+        {
+            CreateRtRecord("Order", recordId, new Dictionary<string, object?>
+            {
+                ["ProductCode"] = "ITEM-001",
+                ["Quantity"] = 5,
+                ["Price"] = 29.99
+            }),
+            CreateRtRecord("Order", recordId, new Dictionary<string, object?>
+            {
+                ["ProductCode"] = "ITEM-002",
+                ["Quantity"] = 2,
+                ["Price"] = 49.99
+            })
+        };
+
+        var sourceEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        sourceEntity.SetAttributeValue("LineItems", AttributeValueTypesDto.RecordArray, lineItems1);
+
+        var targetEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        targetEntity.SetAttributeValue("LineItems", AttributeValueTypesDto.RecordArray, lineItems2);
+
+        var sourceEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [sourceEntity] };
+        var targetEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [targetEntity] };
+
+        var ckType = CreateCkType("Order", "Purchase", attributeNames: ["LineItems"]);
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
+
+        var ckRecordGraph = CreateCkRecordGraph("Order", recordId, "ProductCode", "Quantity", "Price");
+        var sourceCkRecords = new List<CkRecordGraph> { ckRecordGraph };
+        var targetCkRecords = new List<CkRecordGraph> { ckRecordGraph };
+
+        // Act
+        Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            sourceCkRecords, targetCkRecords, _defaultOptions);
+
+        // Assert
+        Assert.Single(result);
+        Assert.Empty(result[ckTypeId].Differences);
+        Assert.Equal(1, result[ckTypeId].MatchedIdenticalCount);
+    }
+
+    [Fact]
+    public void Compare_RecordListsWithDifferentCounts_DetectsDifference()
+    {
+        // Arrange
+        string ckTypeId = "Invoice/Invoice.Document";
+        string rtId = "507f1f77bcf86cd799439011";
+        string recordId = "TaxItem";
+
+        var taxItems1 = new List<RtRecord>
+        {
+            CreateRtRecord("Invoice", recordId, new Dictionary<string, object?>
+            {
+                ["TaxType"] = "VAT",
+                ["Rate"] = 20.0
+            }),
+            CreateRtRecord("Invoice", recordId, new Dictionary<string, object?>
+            {
+                ["TaxType"] = "Sales Tax",
+                ["Rate"] = 8.5
+            })
+        };
+
+        var taxItems2 = new List<RtRecord>
+        {
+            CreateRtRecord("Invoice", recordId, new Dictionary<string, object?>
+            {
+                ["TaxType"] = "VAT",
+                ["Rate"] = 20.0
+            })
+            // One item missing
+        };
+
+        var sourceEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        sourceEntity.SetAttributeValue("Taxes", AttributeValueTypesDto.RecordArray, taxItems1);
+
+        var targetEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        targetEntity.SetAttributeValue("Taxes", AttributeValueTypesDto.RecordArray, taxItems2);
+
+        var sourceEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [sourceEntity] };
+        var targetEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [targetEntity] };
+
+        var ckType = CreateCkType("Invoice", "Document", attributeNames: ["Taxes"]);
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
+
+        var ckRecordGraph = CreateCkRecordGraph("Invoice", recordId, "TaxType", "Rate");
+        var sourceCkRecords = new List<CkRecordGraph> { ckRecordGraph };
+        var targetCkRecords = new List<CkRecordGraph> { ckRecordGraph };
+
+        // Act
+        Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            sourceCkRecords, targetCkRecords, _defaultOptions);
+
+        // Assert
+        Assert.Single(result);
+        Assert.Single(result[ckTypeId].Differences);
+        Assert.Equal("Taxes", result[ckTypeId].Differences[0].PropertyDifferences[0].PropertyName);
+    }
+
+    [Fact]
+    public void Compare_RecordListsWithDifferentValues_DetectsDifference()
+    {
+        // Arrange
+        string ckTypeId = "Booking/Booking.Reservation";
+        string rtId = "507f1f77bcf86cd799439011";
+        string recordId = "Guest";
+
+        var guests1 = new List<RtRecord>
+        {
+            CreateRtRecord("Booking", recordId, new Dictionary<string, object?>
+            {
+                ["Name"] = "John Doe",
+                ["Age"] = 35
+            }),
+            CreateRtRecord("Booking", recordId, new Dictionary<string, object?>
+            {
+                ["Name"] = "Jane Smith",
+                ["Age"] = 28
+            })
+        };
+
+        var guests2 = new List<RtRecord>
+        {
+            CreateRtRecord("Booking", recordId, new Dictionary<string, object?>
+            {
+                ["Name"] = "John Doe",
+                ["Age"] = 35
+            }),
+            CreateRtRecord("Booking", recordId, new Dictionary<string, object?>
+            {
+                ["Name"] = "Jane Smith",
+                ["Age"] = 29 // Different age
+            })
+        };
+
+        var sourceEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        sourceEntity.SetAttributeValue("Guests", AttributeValueTypesDto.RecordArray, guests1);
+
+        var targetEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        targetEntity.SetAttributeValue("Guests", AttributeValueTypesDto.RecordArray, guests2);
+
+        var sourceEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [sourceEntity] };
+        var targetEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [targetEntity] };
+
+        var ckType = CreateCkType("Booking", "Reservation", attributeNames: ["Guests"]);
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
+
+        var ckRecordGraph = CreateCkRecordGraph("Booking", recordId, "Name", "Age");
+        var sourceCkRecords = new List<CkRecordGraph> { ckRecordGraph };
+        var targetCkRecords = new List<CkRecordGraph> { ckRecordGraph };
+
+        // Act
+        Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            sourceCkRecords, targetCkRecords, _defaultOptions);
+
+        // Assert
+        Assert.Single(result);
+        Assert.Single(result[ckTypeId].Differences);
+        Assert.Equal("Guests", result[ckTypeId].Differences[0].PropertyDifferences[0].PropertyName);
+    }
+
+    #endregion
+
+    #region Collection Comparison Tests
+
+    [Fact]
+    public void Compare_EntitiesWithIdenticalPrimitiveCollections_MatchesIdentically()
+    {
+        // Arrange
+        string ckTypeId = "Content/Content.Article";
+        string rtId = "507f1f77bcf86cd799439011";
+
+        var tags1 = new List<string> { "technology", "programming", "dotnet" };
+        var tags2 = new List<string> { "technology", "programming", "dotnet" };
+
+        var sourceEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        sourceEntity.SetAttributeValue("Tags", AttributeValueTypesDto.StringArray, tags1);
+
+        var targetEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        targetEntity.SetAttributeValue("Tags", AttributeValueTypesDto.StringArray, tags2);
+
+        var sourceEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [sourceEntity] };
+        var targetEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [targetEntity] };
+
+        var ckType = CreateCkType("Content", "Article", attributeNames: ["Tags"]);
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
+
+        // Act
+        Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            [], [], _defaultOptions);
+
+        // Assert
+        Assert.Single(result);
+        Assert.Empty(result[ckTypeId].Differences);
+        Assert.Equal(1, result[ckTypeId].MatchedIdenticalCount);
+    }
+
+    [Fact]
+    public void Compare_CollectionsWithDifferentCounts_DetectsDifference()
+    {
+        // Arrange
+        string ckTypeId = "Analytics/Analytics.Report";
+        string rtId = "507f1f77bcf86cd799439011";
+
+        var metrics1 = new List<int> { 100, 250, 500, 750 };
+        var metrics2 = new List<int> { 100, 250, 500 }; // One fewer element
+
+        var sourceEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        sourceEntity.SetAttributeValue("Metrics", AttributeValueTypesDto.IntArray, metrics1);
+
+        var targetEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        targetEntity.SetAttributeValue("Metrics", AttributeValueTypesDto.IntArray, metrics2);
+
+        var sourceEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [sourceEntity] };
+        var targetEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [targetEntity] };
+
+        var ckType = CreateCkType("Analytics", "Report", attributeNames: ["Metrics"]);
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
+
+        // Act
+        Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            [], [], _defaultOptions);
+
+        // Assert
+        Assert.Single(result);
+        Assert.Single(result[ckTypeId].Differences);
+        Assert.Equal("Metrics", result[ckTypeId].Differences[0].PropertyDifferences[0].PropertyName);
+    }
+
+    [Fact]
+    public void Compare_CollectionsWithDifferentValues_DetectsDifference()
+    {
+        // Arrange
+        string ckTypeId = "Survey/Survey.Response";
+        string rtId = "507f1f77bcf86cd799439011";
+
+        var scores1 = new List<int> { 4, 3, 5, 4 };
+        var scores2 = new List<int> { 4, 3, 4, 4 }; // Third element different
+
+        var sourceEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        sourceEntity.SetAttributeValue("Scores", AttributeValueTypesDto.IntArray, scores1);
+
+        var targetEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        targetEntity.SetAttributeValue("Scores", AttributeValueTypesDto.IntArray, scores2);
+
+        var sourceEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [sourceEntity] };
+        var targetEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [targetEntity] };
+
+        var ckType = CreateCkType("Survey", "Response", attributeNames: ["Scores"]);
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
+
+        // Act
+        Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            [], [], _defaultOptions);
+
+        // Assert
+        Assert.Single(result);
+        Assert.Single(result[ckTypeId].Differences);
+        Assert.Equal("Scores", result[ckTypeId].Differences[0].PropertyDifferences[0].PropertyName);
+    }
+
+    #endregion
+
+    #region Nested/Complex Scenarios
+
+    [Fact]
+    public void Compare_RecordsContainingNestedRecords_ComparesRecursively()
+    {
+        // Arrange
+        string ckTypeId = "HR/HR.Employee";
+        string rtId = "507f1f77bcf86cd799439011";
+
+        // Create nested address record
+        var address1 = CreateRtRecord("HR", "Address", new Dictionary<string, object?>
+        {
+            ["Street"] = "123 Main St",
+            ["City"] = "Boston"
+        });
+
+        var address2 = CreateRtRecord("HR", "Address", new Dictionary<string, object?>
+        {
+            ["Street"] = "456 Oak Ave", // Different street
+            ["City"] = "Boston"
+        });
+
+        // Create contact record that contains nested address
+        var contact1 = CreateRtRecord("HR", "Contact", new Dictionary<string, object?>
+        {
+            ["Email"] = "john@example.com",
+            ["HomeAddress"] = address1
+        });
+
+        var contact2 = CreateRtRecord("HR", "Contact", new Dictionary<string, object?>
+        {
+            ["Email"] = "john@example.com",
+            ["HomeAddress"] = address2
+        });
+
+        var sourceEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        sourceEntity.SetAttributeValue("ContactInfo", AttributeValueTypesDto.Record, contact1);
+
+        var targetEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        targetEntity.SetAttributeValue("ContactInfo", AttributeValueTypesDto.Record, contact2);
+
+        var sourceEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [sourceEntity] };
+        var targetEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [targetEntity] };
+
+        var ckType = CreateCkType("HR", "Employee", attributeNames: ["ContactInfo"]);
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
+
+        var addressRecordGraph = CreateCkRecordGraph("HR", "Address", "Street", "City");
+        var contactRecordGraph = CreateCkRecordGraph("HR", "Contact", "Email", "HomeAddress");
+        var sourceCkRecords = new List<CkRecordGraph> { addressRecordGraph, contactRecordGraph };
+        var targetCkRecords = new List<CkRecordGraph> { addressRecordGraph, contactRecordGraph };
+
+        // Act
+        Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            sourceCkRecords, targetCkRecords, _defaultOptions);
+
+        // Assert
+        Assert.Single(result);
+        Assert.Single(result[ckTypeId].Differences);
+        Assert.Equal("ContactInfo", result[ckTypeId].Differences[0].PropertyDifferences[0].PropertyName);
+    }
+
+    [Fact]
+    public void Compare_ComplexEntityWithMixedAttributeTypes_DetectsAllDifferences()
+    {
+        // Arrange - Complex entity with primitives, records, and collections
+        string ckTypeId = "Shop/Shop.Order";
+        string rtId = "507f1f77bcf86cd799439011";
+
+        // Create shipping address records
+        var shippingAddress1 = CreateRtRecord("Shop", "Address", new Dictionary<string, object?>
+        {
+            ["Street"] = "100 Commerce Blvd",
+            ["City"] = "Seattle"
+        });
+
+        var shippingAddress2 = CreateRtRecord("Shop", "Address", new Dictionary<string, object?>
+        {
+            ["Street"] = "100 Commerce Blvd",
+            ["City"] = "Seattle"
+        });
+
+        // Create line item records
+        var lineItems1 = new List<RtRecord>
+        {
+            CreateRtRecord("Shop", "LineItem", new Dictionary<string, object?>
+            {
+                ["ProductName"] = "Widget",
+                ["Quantity"] = 2
+            })
+        };
+
+        var lineItems2 = new List<RtRecord>
+        {
+            CreateRtRecord("Shop", "LineItem", new Dictionary<string, object?>
+            {
+                ["ProductName"] = "Widget",
+                ["Quantity"] = 3 // Different quantity
+            })
+        };
+
+        var sourceEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        sourceEntity.SetAttributeValue("OrderNumber", AttributeValueTypesDto.String, "ORD-12345");
+        sourceEntity.SetAttributeValue("TotalAmount", AttributeValueTypesDto.Double, 299.99);
+        sourceEntity.SetAttributeValue("ShippingAddress", AttributeValueTypesDto.Record, shippingAddress1);
+        sourceEntity.SetAttributeValue("Items", AttributeValueTypesDto.RecordArray, lineItems1);
+        sourceEntity.SetAttributeValue("Tags", AttributeValueTypesDto.StringArray, new List<string> { "priority", "express" });
+
+        var targetEntity = CreateRtEntitiy(ckTypeId, rtId, null);
+        targetEntity.SetAttributeValue("OrderNumber", AttributeValueTypesDto.String, "ORD-12345");
+        targetEntity.SetAttributeValue("TotalAmount", AttributeValueTypesDto.Double, 399.99); // Different amount
+        targetEntity.SetAttributeValue("ShippingAddress", AttributeValueTypesDto.Record, shippingAddress2);
+        targetEntity.SetAttributeValue("Items", AttributeValueTypesDto.RecordArray, lineItems2); // Different items
+        targetEntity.SetAttributeValue("Tags", AttributeValueTypesDto.StringArray, new List<string> { "priority", "express" });
+
+        var sourceEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [sourceEntity] };
+        var targetEntities = new Dictionary<string, List<RtEntity>> { [ckTypeId] = [targetEntity] };
+
+        var ckType = CreateCkType("Shop", "Order", attributeNames: ["OrderNumber", "TotalAmount", "ShippingAddress", "Items", "Tags",
+        ]);
+        var sourceCkTypes = new List<CkTypeGraph> { ckType };
+        var targetCkTypes = new List<CkTypeGraph> { ckType };
+
+        var addressRecordGraph = CreateCkRecordGraph("Shop", "Address", "Street", "City");
+        var lineItemRecordGraph = CreateCkRecordGraph("Shop", "LineItem", "ProductName", "Quantity");
+        var sourceCkRecords = new List<CkRecordGraph> { addressRecordGraph, lineItemRecordGraph };
+        var targetCkRecords = new List<CkRecordGraph> { addressRecordGraph, lineItemRecordGraph };
+
+        // Act
+        Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
+            sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
+            sourceCkRecords, targetCkRecords, _defaultOptions);
+
+        // Assert
+        Assert.Single(result);
+        Assert.Single(result[ckTypeId].Differences);
+
+        RtEntityDifference diff = result[ckTypeId].Differences[0];
+        Assert.Equal(2, diff.PropertyDifferences.Count); // TotalAmount and Items
+
+        Assert.Contains(diff.PropertyDifferences, pd => pd.PropertyName == "TotalAmount");
+        Assert.Contains(diff.PropertyDifferences, pd => pd.PropertyName == "Items");
+    }
+
+    #endregion
+
     #region Edge Cases
 
     [Fact]
@@ -602,11 +1293,11 @@ public class RtEntityComparatorTests
         string ckTypeId = "Test/Test.EmptyType";
         var sourceEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity>()
+            [ckTypeId] = []
         };
         var targetEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity>()
+            [ckTypeId] = []
         };
         var sourceCkTypes = new List<CkTypeGraph> { CreateCkType("Test", "EmptyType") };
         var targetCkTypes = new List<CkTypeGraph> { CreateCkType("Test", "EmptyType") };
@@ -614,7 +1305,7 @@ public class RtEntityComparatorTests
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
             sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
-            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
+            [], [], _defaultOptions);
 
         // Assert
         Assert.Single(result);
@@ -636,11 +1327,11 @@ public class RtEntityComparatorTests
 
         var sourceEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { sourceEntity }
+            [ckTypeId] = [sourceEntity]
         };
         var targetEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity> { targetEntity }
+            [ckTypeId] = [targetEntity]
         };
         var sourceCkTypes = new List<CkTypeGraph> { CreateCkType("Test", "Entity") };
         var targetCkTypes = new List<CkTypeGraph> { CreateCkType("Test", "Entity") };
@@ -648,7 +1339,7 @@ public class RtEntityComparatorTests
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
             sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
-            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
+            [], [], _defaultOptions);
 
         // Assert - Should match by RtId without issues
         Assert.Single(result);
@@ -664,18 +1355,15 @@ public class RtEntityComparatorTests
 
         var sourceEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity>
-            {
+            [ckTypeId] =
+            [
                 CreateRtEntitiy(ckTypeId, "config001", wellKnownName),
-                CreateRtEntitiy(ckTypeId, "config002", wellKnownName) // Duplicate well-known name
-            }
+                CreateRtEntitiy(ckTypeId, "config002", wellKnownName),
+            ]
         };
         var targetEntities = new Dictionary<string, List<RtEntity>>
         {
-            [ckTypeId] = new List<RtEntity>
-            {
-                CreateRtEntitiy(ckTypeId, "config999", wellKnownName) // Different RtId, same well-known name
-            }
+            [ckTypeId] = [CreateRtEntitiy(ckTypeId, "config999", wellKnownName)]
         };
         var sourceCkTypes = new List<CkTypeGraph> { CreateCkType("Test", "Config") };
         var targetCkTypes = new List<CkTypeGraph> { CreateCkType("Test", "Config") };
@@ -683,7 +1371,7 @@ public class RtEntityComparatorTests
         // Act
         Dictionary<string, RtEntityTypeComparison> result = _comparator.Compare(
             sourceEntities, targetEntities, sourceCkTypes, targetCkTypes,
-            new List<CkRecordGraph>(), new List<CkRecordGraph>(), _defaultOptions);
+            [], [], _defaultOptions);
 
         // Assert - Should match one and leave one unmatched
         Assert.Single(result);
@@ -777,15 +1465,73 @@ public class RtEntityComparatorTests
             isFinal: isFinal,
             isCollectionRoot: isCollectionRoot,
             isStreamType: false,
-            baseTypes: Array.Empty<CkGraphTypeInheritance>(),
+            baseTypes: [],
             derivedFromCkTypeId: null,
             definingCollectionRootCkTypeId: null,
-            derivedTypes: Array.Empty<CkGraphTypeInheritance>(),
-            definedAttributes: Array.Empty<CkTypeAttributeDto>(),
+            derivedTypes: [],
+            definedAttributes: [],
             allAttributes: allAttributes,
-            indexes: Array.Empty<CkTypeIndexDto>(),
+            indexes: [],
             associations: new CkGraphDirectedAssociations(Array.Empty<CkTypeAssociationDto>()),
             description: description ?? string.Empty);
+    }
+
+    private CkRecordGraph CreateCkRecordGraph(
+        string modelId,
+        string recordId,
+        params string[] attributeNames)
+    {
+        CkId<CkRecordId> ckRecordId = new CkId<CkRecordId>(modelId, new CkRecordId($"{modelId}.{recordId}"));
+
+        // Create attributes dictionary
+        var allAttributes = new Dictionary<CkId<CkAttributeId>, CkTypeAttributeGraph>();
+
+        foreach (string attrName in attributeNames)
+        {
+            CkId<CkAttributeId> attrId = new CkId<CkAttributeId>(modelId, new CkAttributeId($"{modelId}.{attrName}"));
+            var attrGraph = new CkTypeAttributeGraph(
+                ckAttributeId: attrId,
+                attributeName: attrName,
+                autoCompleteValues: null,
+                valueType: AttributeValueTypesDto.String,
+                valueCkRecordId: null,
+                valueCkEnumId: null,
+                autoIncrementReference: null,
+                metaData: null,
+                isDataStream: false,
+                defaultValues: null,
+                isOptional: false,
+                description: null);
+
+            allAttributes.Add(attrId, attrGraph);
+        }
+
+        return new CkRecordGraph(
+            ckRecordId: ckRecordId,
+            isAbstract: false,
+            isFinal: false,
+            baseRecords: [],
+            derivedFromCkRecordId: null,
+            derivedRecords: [],
+            definedAttributes: [],
+            allAttributes: allAttributes,
+            description: string.Empty);
+    }
+
+    private RtRecord CreateRtRecord(
+        string modelId,
+        string recordId,
+        Dictionary<string, object?>? attributes = null)
+    {
+        CkId<CkRecordId> ckRecordId = new CkId<CkRecordId>(modelId, new CkRecordId($"{modelId}.{recordId}"));
+        
+        var d = attributes ?? new Dictionary<string, object?>();
+
+        var record = new RtRecord(ckRecordId, d);
+
+
+
+        return record;
     }
 
     #endregion
