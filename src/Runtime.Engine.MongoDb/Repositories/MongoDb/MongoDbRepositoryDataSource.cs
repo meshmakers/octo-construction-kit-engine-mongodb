@@ -540,7 +540,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             // If the name doesn't match, we need to drop the old one and create with the correct name
             if (repositoryIndex.Name != indexName)
             {
-                _logger.LogInformation("Index with correct definition but wrong name: '{ActualName}' should be '{ExpectedName}'. Recreating with correct name.",
+                _logger.LogInformation("Index with correct definition but wrong name: '{ActualName}' should be '{ExpectedName}'. Recreating with correct name",
                     repositoryIndex.Name, indexName);
 
                 // Drop the incorrectly named index
@@ -655,7 +655,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         _indexStateService.RemoveIndexState(typeId, indexName, collection.CollectionName);
     }
 
-    private List<CkId<CkTypeId>> CollectTypeIdsForIndex(CkTypeInfo? collectionRootType, CkType? indexDefiningType, string indexTypeName)
+    private List<RtCkId<CkTypeId>> CollectTypeIdsForIndex(CkTypeInfo? collectionRootType, CkType? indexDefiningType, string indexTypeName)
     {
         if (collectionRootType == null || indexDefiningType == null)
         {
