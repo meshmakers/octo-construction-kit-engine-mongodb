@@ -22,14 +22,14 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
 {
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
     private readonly CkTypeGraph _originCkTypeGraph;
-    private readonly CkId<CkAssociationRoleId> _roleId;
+    private readonly RtCkId<CkAssociationRoleId> _roleId;
     private readonly IEnumerable<OctoObjectId> _rtIds;
     private readonly List<IPipelineStageDefinition> _geospatialFilters;
 
     internal MultipleOriginHierarchicalDeepRtGraphQuery(
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
         string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
-        CkId<CkAssociationRoleId> roleId)
+        RtCkId<CkAssociationRoleId> roleId)
         : base(new RtFieldFilterResolver(), language)
     {
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
@@ -337,8 +337,7 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
 
             pipelineStageDefinitions.Add(
                 PipelineStageDefinitionBuilder.Facet<RtDeepGraphQueryResult, QueryResult<RtDeepGraphQueryResult>>(
-                    new List<AggregateFacet<RtDeepGraphQueryResult>>(new AggregateFacet<RtDeepGraphQueryResult>[]
-                    {
+                    new List<AggregateFacet<RtDeepGraphQueryResult>>([
                         new AggregateFacet<RtDeepGraphQueryResult, RtDeepGraphQueryResult>(
                             nameof(QueryResult<RtDeepGraphQueryResult>.Result).ToCamelCase(),
                             PipelineDefinition<RtDeepGraphQueryResult, RtDeepGraphQueryResult>.Create(
@@ -346,8 +345,8 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
                         new AggregateFacet<RtDeepGraphQueryResult, AggregateCountResult>(
                             nameof(QueryResult<RtDeepGraphQueryResult>.TotalCount).ToCamelCase(),
                             PipelineDefinition<RtDeepGraphQueryResult, AggregateCountResult>
-                                .Create(countPipelineStageDefinitions))
-                    })));
+                                .Create(countPipelineStageDefinitions)),
+                    ])));
 
             var pipelineDefinition =
                 PipelineDefinition<RtEntity, QueryResult<RtDeepGraphQueryResult>>.Create(pipelineStageDefinitions);

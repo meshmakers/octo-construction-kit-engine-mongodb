@@ -71,8 +71,7 @@ public class RtEntityFieldFilterResolverTests(ImportTestCkModelFixture systemFix
        var systemContext = systemFixture.GetSystemContext();
        await systemContext.LoadCacheForTenantAsync();
        var ckCacheService = systemFixture.GetService<ICkCacheService>();
-       var ckTypeGraph = ckCacheService.GetCkType(systemContext.TenantId,
-           new CkId<CkTypeId>(TestCkIds.ModelId, TestCkIds.CustomerTypeId));
+       var ckTypeGraph = ckCacheService.GetCkType(systemContext.TenantId, TestCkIds.CkCustomerTypeId);
 
        var resolver = A.Fake<RtEntityFieldFilterResolver<RtCustomer>>(o => o.
            WithArgumentsForConstructor([ckCacheService, systemContext.TenantId, ckTypeGraph]).CallsBaseMethods()

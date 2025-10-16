@@ -14,24 +14,21 @@ public class AutoIncrementModifier(
     ICkCacheService ckCacheService)
     : IPreDocumentModification<RtEntity>
 {
-    private readonly static CkId<CkTypeId> AutoIncrementCkTypeId =
-        new(SystemCkIds.ModelId, SystemCkIds.AutoIncrementTypeId);
-
     public async Task RunAsync(IOctoSession session, IRepositoryDataSource repositoryDataSource,
         IEnumerable<RtEntity> documents)
     {
-        var autoIncrementGraphType = ckCacheService.GetCkType(repositoryDataSource.TenantId, AutoIncrementCkTypeId);
+        var autoIncrementGraphType = ckCacheService.GetCkType(repositoryDataSource.TenantId, SystemCkIds.CkAutoIncrementTypeId);
         var autoIncrementCollection = repositoryDataSource.GetRtCollection<RtAutoIncrement>(autoIncrementGraphType);
 
         var documentList = documents.ToArray();
-        var ckTypeIds = documentList.GroupBy(d => d.GetCkTypeId());
+        var ckTypeIds = documentList.GroupBy(d => d.GetRtCkTypeId());
         HashSet<string> autoIncrementReferences = new();
-        foreach (IGrouping<CkId<CkTypeId>, RtEntity> ckTypeId in ckTypeIds)
+        foreach (IGrouping<RtCkId<CkTypeId>, RtEntity> ckTypeId in ckTypeIds)
         {
-            var ckTypeGraph = ckCacheService.GetCkType(repositoryDataSource.TenantId, ckTypeId.Key);
+            var ckTypeGraph = ckCacheService.GetRtCkType(repositoryDataSource.TenantId, ckTypeId.Key);
             if (ckTypeGraph == null)
             {
-                throw InvalidCkTypeIdException.CkTypeIdNotFound(repositoryDataSource.TenantId, ckTypeId.Key);
+                throw InvalidCkTypeIdException.RtCkTypeIdNotFound(repositoryDataSource.TenantId, ckTypeId.Key);
             }
 
             var typeAttributeGraphs = ckTypeGraph.AllAttributes.Values
@@ -59,10 +56,10 @@ public class AutoIncrementModifier(
 
         foreach (RtEntity rtEntity in documentList.AsParallel())
         {
-            var ckTypeGraph = ckCacheService.GetCkType(repositoryDataSource.TenantId, rtEntity.GetCkTypeId());
+            var ckTypeGraph = ckCacheService.GetRtCkType(repositoryDataSource.TenantId, rtEntity.GetRtCkTypeId());
             if (ckTypeGraph == null)
             {
-                throw InvalidCkTypeIdException.CkTypeIdNotFound(repositoryDataSource.TenantId, rtEntity.GetCkTypeId());
+                throw InvalidCkTypeIdException.RtCkTypeIdNotFound(repositoryDataSource.TenantId, rtEntity.GetRtCkTypeId());
             }
 
             var typeIncrements = ckTypeGraph.AllAttributes.Values
@@ -76,7 +73,7 @@ public class AutoIncrementModifier(
             {
                 if (!ckTypeGraph.AllAttributesByName.TryGetValue(autoIncrementReference.AttributeName, out CkTypeAttributeGraph? ckTypeAttributeGraph))
                 {
-                    throw InvalidAttributeException.AttributeNotFound(rtEntity.GetCkTypeId(),
+                    throw InvalidAttributeException.AttributeNotFoundAtRtCkIdType(rtEntity.GetRtCkTypeId(),
                         autoIncrementReference.AttributeName);
                 }
 
@@ -84,7 +81,7 @@ public class AutoIncrementModifier(
                     x.RtWellKnownName == autoIncrementReference.AutoIncrementReference);
                 if (autoIncrement == null)
                 {
-                    throw InvalidAttributeException.AutoIncrementReferenceNotFound(rtEntity.GetCkTypeId(),
+                    throw InvalidAttributeException.AutoIncrementReferenceNotFound(rtEntity.GetRtCkTypeId(),
                         autoIncrementReference.AutoIncrementReference);
                 }
 
@@ -118,7 +115,7 @@ public class AutoIncrementModifier(
             throw AutoIncrementFailedException.AutoIncrementEndReached(autoIncrement.RtId);
         }
 
-        var ckTypeGraph = ckCacheService.GetCkType(repositoryDataSource.TenantId,
+        var ckTypeGraph = ckCacheService.GetRtCkType(repositoryDataSource.TenantId,
             autoIncrement.CkTypeId ?? throw OperationFailedException.CkTypeIdUndefined());
 
         autoIncrement.CurrentValue = currentValue;

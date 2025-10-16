@@ -2,14 +2,19 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Engine.Resolvers;
+using Meshmakers.Octo.ConstructionKit.Engine.Resolvers.Repository;
 using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+
+using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 
 internal class ModelLoaderService(
     ICkCacheService cacheService,
-    IModelResolver modelResolver)
+    IRepositoryModelResolver modelResolver)
     : IModelLoaderService
 {
     private readonly SemaphoreSlim _loadSemaphore = new(1, 1);
@@ -34,9 +39,25 @@ internal class ModelLoaderService(
             var sourceIdentifier = new TenantDatabaseSourceIdentifier(mongoDbRepositoryDataSource);
             OperationResult operationResult = new();
             var ckModels = await mongoDbRepositoryDataSource.CkModels.FindManyAsync(session, m=> m.ModelState == ModelState.Available);
-            var modelGraph = await modelResolver.ResolveAsync(ckModels.Select(x => x.Id).ToList(), operationResult, sourceIdentifier);
+            var originFileResolver = new OriginFileResolver("-");
+            var resolveResult = await modelResolver.SoftResolveAsync(ckModels.Select(x => x.Id).ToList(), originFileResolver, operationResult, sourceIdentifier);
+
+            if (operationResult.HasErrors || operationResult.HasFatalErrors)
+            {
+                throw TenantException.FailedLoadingTenant(tenantId, operationResult);
+            }
+
+            if (resolveResult.SkippedModelIds.Any())
+            {
+                foreach (CkModelId skippedModelId in resolveResult.SkippedModelIds)
+                {
+                    var updateDefinition = Builders<CkModel>.Update.Set(x => x.ModelState, ModelState.ResolveFailed);
+                    await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(session, skippedModelId, updateDefinition);
+                }
+            }
+
             cacheService.CreateTenant(tenantId);
-            cacheService.LoadCkModelGraph(tenantId, modelGraph);
+            cacheService.LoadCkModelGraph(tenantId, resolveResult.CkModelGraph);
         }
         finally
         {

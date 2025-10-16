@@ -1,5 +1,6 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v1;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
@@ -10,31 +11,37 @@ using Xunit;
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
 [Collection("Sequential")]
-public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixture<ImportTestCkModelFixture>
+public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
 {
+    private readonly ImportTestCkModelFixture _fixture;
+
+    public IndexCreationTests(ImportTestCkModelFixture fixture, ITestOutputHelper output)
+    {
+        _fixture = fixture;
+        _fixture.OutputHelper = output;
+    }
+
+
     private static class Constants
     {
-        public const string SystemEntityType = "System/Entity";
         public const string SimpleTypeName = "SimpleType";
         public const string SimpleModelName = "SimpleModel";
         public const string SimpleFieldName = "SimpleField";
         public const string DuplicateValue = "DuplicateValue";
         public const string UniqueValue = "UniqueValue";
-        public const string SystemModel = "System-1.0.0";
     }
 
-    private static CkId<CkTypeId> GetSimpleTypeId(string modelName) =>
-        new CkId<CkTypeId>($"{modelName}/{Constants.SimpleTypeName}");
+    private static CkId<CkTypeId> GetSimpleTypeId(string modelName) => new($"{modelName}/{Constants.SimpleTypeName}");
 
     private static CkId<CkAttributeId> GetSimpleFieldId(string modelName) =>
-        new CkId<CkAttributeId>($"{modelName}/{Constants.SimpleFieldName}");
+        new($"{modelName}/{Constants.SimpleFieldName}");
 
     private static string GetModelVersion(string modelName) => $"{modelName}-1.0.0";
     [Fact]
     public async Task SuccessfulIndexCreation_ShouldBeTrackedInCkType()
     {
         // Arrange - Create child tenant
-        var systemContext = fixture.GetSystemContext();
+        var systemContext = _fixture.GetSystemContext();
         var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
 
         using (var adminSession = await systemContext.GetAdminSessionAsync())
@@ -51,16 +58,13 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
 
             // Act - No need to create indexes manually, they will be created automatically on
 
-            // Get a CkType that should have indexes (System/Entity is a good candidate)
+            // Get a CkType that should have indexes (System-1.0.1/Entity is a good candidate)
             var session = tenantRepository.GetSession();
-            var ckTypeId = new CkId<CkTypeId>(Constants.SystemEntityType);
             var result = await tenantRepository.GetCkTypeAsync(
                 session,
                 null,
-                new List<CkId<CkTypeId>> { ckTypeId },
-                DataQueryOperation.Create(),
-                null,
-                null);
+                new List<CkId<CkTypeId>> { SystemCkIds.CkEntityTypeId },
+                DataQueryOperation.Create());
 
             // Assert
             var ckType = result.Items.FirstOrDefault();
@@ -89,7 +93,7 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
     public async Task UniqueIndexViolation_ShouldBeTrackedInCkType()
     {
         // Arrange - Create child tenant
-        var systemContext = fixture.GetSystemContext();
+        var systemContext = _fixture.GetSystemContext();
         var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
 
         using (var adminSession = await systemContext.GetAdminSessionAsync())
@@ -140,9 +144,9 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
                 session2,
                 null,
                 new List<CkId<CkTypeId>> { ckTypeId },
-                DataQueryOperation.Create(),
-                null,
-                null);
+                DataQueryOperation.Create());
+
+            var r = await tenantRepository.GetRtEntitiesByTypeAsync(session2, typeId.ToRtCkId(), DataQueryOperation.Create());
 
             var ckType = result.Items.FirstOrDefault();
             Assert.NotNull(ckType);
@@ -160,10 +164,10 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
         finally
         {
             // Cleanup - Delete child tenant
-            using var cleanupSession = await systemContext.GetAdminSessionAsync();
-            cleanupSession.StartTransaction();
-            await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
-            await cleanupSession.CommitTransactionAsync();
+         //   using var cleanupSession = await systemContext.GetAdminSessionAsync();
+        //    cleanupSession.StartTransaction();
+        //    await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
+        //    await cleanupSession.CommitTransactionAsync();
         }
     }
 
@@ -171,7 +175,7 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
     public async Task UniqueIndexViolation_AfterDataFixed_ShouldSucceed()
     {
         // Arrange - Create child tenant
-        var systemContext = fixture.GetSystemContext();
+        var systemContext = _fixture.GetSystemContext();
         var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
 
         using (var adminSession = await systemContext.GetAdminSessionAsync())
@@ -212,7 +216,7 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
             // Verify index failed
             var session2 = tenantRepository.GetSession();
             var ckTypeId = GetSimpleTypeId(modelName);
-            var result = await tenantRepository.GetCkTypeAsync(session2, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create(), null, null);
+            var result = await tenantRepository.GetCkTypeAsync(session2, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create());
             var ckType = result.Items.FirstOrDefault();
             Assert.NotNull(ckType);
             var failedIndex = ckType.IndexStates?.FirstOrDefault(s => s.State == IndexState.Failed);
@@ -223,7 +227,7 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
             session3.StartTransaction();
 
             entity2.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.UniqueValue);
-            await tenantRepository.UpdateOneRtEntityByIdAsync(session3, ckTypeId, entity2.RtId, entity2);
+            await tenantRepository.UpdateOneRtEntityByIdAsync(session3, ckTypeId.ToRtCkId(), entity2.RtId, entity2);
 
             await session3.CommitTransactionAsync();
 
@@ -232,7 +236,7 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
 
             // Assert: Index should now be successfully applied
             var session4 = tenantRepository.GetSession();
-            var result2 = await tenantRepository.GetCkTypeAsync(session4, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create(), null, null);
+            var result2 = await tenantRepository.GetCkTypeAsync(session4, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create());
             var ckType2 = result2.Items.FirstOrDefault();
             Assert.NotNull(ckType2);
             Assert.NotNull(ckType2.IndexStates);
@@ -257,7 +261,7 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
     public async Task UniqueNotDeletedIndexViolation_ShouldBeTrackedInCkType()
     {
         // Arrange - Create child tenant
-        var systemContext = fixture.GetSystemContext();
+        var systemContext = _fixture.GetSystemContext();
         var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
 
         using (var adminSession = await systemContext.GetAdminSessionAsync())
@@ -301,7 +305,7 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
             // Assert: Index should fail due to duplicates
             var session2 = tenantRepository.GetSession();
             var ckTypeId = GetSimpleTypeId(modelName);
-            var result = await tenantRepository.GetCkTypeAsync(session2, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create(), null, null);
+            var result = await tenantRepository.GetCkTypeAsync(session2, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create());
 
             var ckType = result.Items.FirstOrDefault();
             Assert.NotNull(ckType);
@@ -327,7 +331,7 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
     public async Task UniqueNotDeletedIndex_WithDeletedEntity_ShouldSucceed()
     {
         // Arrange - Create child tenant
-        var systemContext = fixture.GetSystemContext();
+        var systemContext = _fixture.GetSystemContext();
         var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
 
         using (var adminSession = await systemContext.GetAdminSessionAsync())
@@ -351,14 +355,15 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
             var session = await tenantRepository.GetSessionAsync();
             session.StartTransaction();
 
-            var typeId = GetSimpleTypeId(modelName);
+            var ckTypeId = GetSimpleTypeId(modelName);
+            var rtCkTypeId = GetSimpleTypeId(modelName).ToRtCkId();
 
-            var entity1 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
+            var entity1 = await tenantRepository.CreateTransientRtEntityByRtCkIdAsync(rtCkTypeId);
 
             entity1.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
             await tenantRepository.InsertOneRtEntityAsync(session, entity1);
 
-            var entity2 = await tenantRepository.CreateTransientRtEntityAsync(typeId);
+            var entity2 = await tenantRepository.CreateTransientRtEntityByRtCkIdAsync(rtCkTypeId);
             entity2.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
             await tenantRepository.InsertOneRtEntityAsync(session, entity2);
 
@@ -370,9 +375,9 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
 
             entity1.RtState = RtEntityState.Deleted;
 
-            var u = new RtEntity(typeId, entity1.RtId) { RtState = RtEntityState.Deleted };
+            var u = new RtEntity(rtCkTypeId, entity1.RtId) { RtState = RtEntityState.Deleted };
 
-            await tenantRepository.UpdateOneRtEntityByIdAsync(session2, typeId, entity1.RtId, u);
+            await tenantRepository.UpdateOneRtEntityByIdAsync(session2, rtCkTypeId, entity1.RtId, u);
             await session2.CommitTransactionAsync();
 
             // Step 4: Import with UniqueNotDeleted index
@@ -383,8 +388,7 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
 
             // Assert: Index should succeed because one entity is deleted
             var session3 = tenantRepository.GetSession();
-            var ckTypeId = typeId;
-            var result = await tenantRepository.GetCkTypeAsync(session3, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create(), null, null);
+            var result = await tenantRepository.GetCkTypeAsync(session3, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create());
 
             var ckType = result.Items.FirstOrDefault();
             Assert.NotNull(ckType);
@@ -423,51 +427,41 @@ public class IndexCreationTests(ImportTestCkModelFixture fixture) : IClassFixtur
         var model = new CkCompiledModelRoot
         {
             ModelId = new CkModelId(modelVersion),
-            Dependencies = new List<CkModelId> { new CkModelId(Constants.SystemModel) },
-            Attributes = new List<CkAttributeDto>
-            {
+            Dependencies = [SystemCkIds.CkModelId],
+            Attributes =
+            [
                 new CkAttributeDto
                 {
                     AttributeId = new CkAttributeId(Constants.SimpleFieldName),
                     ValueType = AttributeValueTypesDto.String
-                }
-            },
-            Types = new List<CkCompiledTypeDto>
-            {
-                new CkCompiledTypeDto
+                },
+            ],
+            Types =
+            [
+                new()
                 {
                     TypeId = new CkTypeId(Constants.SimpleTypeName),
-                    DerivedFromCkTypeId = new CkId<CkTypeId>(Constants.SystemEntityType),
+                    DerivedFromCkTypeId = SystemCkIds.CkEntityTypeId,
                     IsCollectionRoot = true,
-                    Attributes = new List<CkTypeAttributeDto>
-                    {
-                        new CkTypeAttributeDto
-                        {
-                            CkAttributeId = GetSimpleFieldId(modelName),
-                            AttributeName = Constants.SimpleFieldName
-                        }
-                    }
-                }
-            }
+                    Attributes =
+                    [
+                        new() { CkAttributeId = GetSimpleFieldId(modelName), AttributeName = Constants.SimpleFieldName },
+                    ]
+                },
+            ]
         };
 
         // Add index if requested
         if (indexType != IndexTypeDto.None)
         {
-            model.Types[0].Indexes = new List<CkTypeIndexDto>
-            {
-                new CkTypeIndexDto
+            model.Types[0].Indexes =
+            [
+                new()
                 {
                     IndexType = indexType,
-                    Fields = new List<CkIndexFieldsDto>
-                    {
-                        new CkIndexFieldsDto
-                        {
-                            AttributePaths = new List<string> { Constants.SimpleFieldName }
-                        }
-                    }
-                }
-            };
+                    Fields = [new() { AttributePaths = [Constants.SimpleFieldName] }]
+                },
+            ];
         }
 
         return model;

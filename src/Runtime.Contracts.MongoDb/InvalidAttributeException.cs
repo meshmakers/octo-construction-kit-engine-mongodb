@@ -27,8 +27,13 @@ public class InvalidAttributeException : OperationFailedException
         return new InvalidAttributeException($"Attribute with name '{attributeName}' does not exist at CkTypeId '{ckTypeId}'.");
     }
 
-    public static Exception AutoIncrementReferenceNotFound(CkId<CkTypeId> ckTypeId, string? autoIncrementReference)
+    public static Exception AttributeNotFoundAtRtCkIdType(RtCkId<CkTypeId> rtCkTypeId, string attributeName)
     {
-        return new InvalidAttributeException($"Auto increment reference '{autoIncrementReference}' does not exist at CkTypeId '{ckTypeId}'.");
+        return new InvalidAttributeException($"Attribute with name '{attributeName}' does not exist at RtCkTypeId '{rtCkTypeId}'.");
+    }
+
+    public static Exception AutoIncrementReferenceNotFound(RtCkId<CkTypeId> rtCTypeId, string? autoIncrementReference)
+    {
+        return new InvalidAttributeException($"Auto increment reference '{autoIncrementReference}' does not exist at CkTypeId '{rtCTypeId}'.");
     }
 }

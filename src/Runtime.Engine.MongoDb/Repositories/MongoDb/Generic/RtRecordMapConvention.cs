@@ -40,12 +40,12 @@ internal class RtRecordMapConvention : IMemberMapConvention, IClassMapConvention
 
     public string Name => "RtRecordMapConvention";
 
-    private RtRecord CreateInstance(CkId<CkRecordId> ckRecordId)
+    private RtRecord CreateInstance(RtCkId<CkRecordId> rtCkRecordId)
     {
-        var type = _ckClassMappingService.GetCkRecordClass(ckRecordId);
+        var type = _ckClassMappingService.GetCkRecordClass(rtCkRecordId);
 
         var rtRecord = (type == null ? new RtRecord() : (RtRecord?)Activator.CreateInstance(type)) ?? new RtRecord();
-        rtRecord.CkRecordId = ckRecordId;
+        rtRecord.CkRecordId = rtCkRecordId;
 
         return rtRecord;
     }

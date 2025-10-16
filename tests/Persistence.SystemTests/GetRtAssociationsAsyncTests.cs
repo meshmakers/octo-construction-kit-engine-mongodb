@@ -28,8 +28,7 @@ public class GetRtAssociationsAsyncTests(GenerateSampleDataFixture generateSampl
         var dataQueryOperation = DataQueryOperation.Create()
             .SortOrder(nameof(RtEntity.RtId), SortOrders.Ascending);
 
-        var result = await tenantRepository.GetRtEntitiesByTypeAsync(session,
-            new CkId<CkTypeId>(TestCkIds.ModelId, TestCkIds.DistrictTypeId),
+        var result = await tenantRepository.GetRtEntitiesByTypeAsync(session, TestCkIds.RtCkDistrictTypeId,
             dataQueryOperation, 0, 5);
 
         var rtEntityIds = result.Items.Select(x => x.ToRtEntityId()).ToList();

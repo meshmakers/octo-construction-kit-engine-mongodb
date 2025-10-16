@@ -86,7 +86,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
     private void CreateInnerNavigation(NavigationPair roleIdDirectionPair, CkTypeGraph originCkTypeGraph,
         List<IPipelineStageDefinition> stageDefinitions)
     {
-        var targetCkTypeGraph = _ckCacheService.GetCkType(_tenantId, roleIdDirectionPair.TargetCkTypeId);
+        var targetCkTypeGraph = _ckCacheService.GetRtCkType(_tenantId, roleIdDirectionPair.TargetCkTypeId);
         var targetCkTypeIds = targetCkTypeGraph.GetAllDerivedTypes(true);
 
         // We need to have a list of all ck type ids we should handle as a candidate for the association target ck type id.
@@ -100,7 +100,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         // Because navigation properties are centralized in the definition, all
         // associations with the same role id have the same navigation property name.
         var association = originCkTypeGraph.Associations.In.All.FirstOrDefault(a =>
-            baseCkTypeIds.Contains(a.TargetCkTypeId) && a.CkRoleId == roleIdDirectionPair.CkRoleId);
+            baseCkTypeIds.Contains(a.TargetCkTypeId) && a.CkRoleId.Equals(roleIdDirectionPair.CkRoleId));
 
         switch (roleIdDirectionPair.Direction)
         {
@@ -109,7 +109,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                 foreignFieldRtId = "originRtId";
                 association = originCkTypeGraph.Associations.Out.All.FirstOrDefault(a =>
                     baseCkTypeIds.Contains(a.TargetCkTypeId) &&
-                    a.CkRoleId == roleIdDirectionPair.CkRoleId);
+                    a.CkRoleId.Equals(roleIdDirectionPair.CkRoleId));
                 targetCkTypeIdField = (FieldDefinition<RtAssociation, CkId<CkTypeId>>)"targetCkTypeId";
                 break;
             case GraphDirections.Inbound:
@@ -170,7 +170,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                     innerLookupPipeline),
             PipelineStageDefinitionBuilder.Match(
                 Builders<RtEntityGraphItem>.Filter.SizeGt("targets", 0)
-                ),
+            ),
             PipelineStageDefinitionBuilder.Project<TEntity, RtAssociationWithEntities>(
                 new BsonDocument { { "_id", 1 }, { "associationRoleId", 1 }, { "attributes", 1 }, { "targets", 1 } }),
         };
@@ -245,7 +245,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         base.AddPreFieldFilters(filters);
 
         // Add filter for ck type and derived ones
-        var ckTypeIds = _ckTypeGraph.GetAllDerivedTypes(true);
+        var ckTypeIds = _ckTypeGraph.GetAllDerivedTypes(true).Select(t => t.ToRtCkId());
         filters.Add(Builders<TEntity>.Filter.In(f => f.CkTypeId, ckTypeIds));
     }
 

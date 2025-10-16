@@ -17,9 +17,9 @@ public class TenantException : PersistenceException
     {
     }
 
-    internal static Exception SystemModelNotFound()
+    internal static Exception SystemModelNotFoundInCatalog(CkModelId ckModelId)
     {
-        return new TenantException("System model not found.");
+        return new TenantException($"System model {ckModelId} not found in any catalog.");
     }
 
     internal static Exception ErrorDuringSystemModelLoad(OperationResult operationResult)
@@ -64,7 +64,7 @@ public class TenantException : PersistenceException
 
     public static Exception SystemTenantDatabaseNotExisting()
     {
-        return new TenantException("System tenant database does not exist.");
+        return new TenantException("System tenant database does not exist, is not accessible or the system model is missing.");
     }
 
     public static Exception CannotCreateMongoDbRepositoryClient(string databaseName)
@@ -91,5 +91,15 @@ public class TenantException : PersistenceException
     public static Exception AdminCredentialsMissing()
     {
         return new TenantException("Admin credentials are missing. Please provide admin user and password in the configuration.");
+    }
+
+    public static Exception FailedLoadingTenant(string tenantId, OperationResult operationResult)
+    {
+        return new TenantException($"Failed loading tenant '{tenantId}'.{Environment.NewLine}{operationResult.GetMessages()}");
+    }
+
+    public static Exception ModelNotFoundInACatalog(CkModelId ckModelId)
+    {
+        return new TenantException($"Model {ckModelId} not found in any catalog.");
     }
 }

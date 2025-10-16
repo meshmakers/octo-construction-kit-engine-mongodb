@@ -17,7 +17,7 @@ public class RtDeepGraphAssociationQueryResult : RtTypeWithAttributes
     /// <summary>
     ///     Gets or sets the association role id of the association role
     /// </summary>
-    public CkId<CkAssociationRoleId>? AssociationRoleId { get; init; } 
+    public RtCkId<CkAssociationRoleId>? AssociationRoleId { get; init; }
     
     /// <summary>
     ///     Gets or sets the object id of the target runtime entity
@@ -27,12 +27,12 @@ public class RtDeepGraphAssociationQueryResult : RtTypeWithAttributes
     /// <summary>
     ///     Gets or sets the target ck type id.
     /// </summary>
-    public CkId<CkTypeId>? TargetCkTypeId { get; init; } 
+    public RtCkId<CkTypeId>? TargetCkTypeId { get; init; }
     
     /// <summary>
     ///     Gets or sets the target ck attribute ids to the associated relates to 
     /// </summary>
-    public List<CkId<CkAttributeId>>? TargetCkAttributeIds { get; set; }
+    public List<RtCkId<CkAttributeId>>? TargetCkAttributeIds { get; set; }
 
     /// <inheritdoc />
     protected override string GetLocation()

@@ -6,6 +6,9 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Configuration
 public class SystemTestOptions
 {
     public string TenantId { get; set; } = null!;
+
+    public string MongoDbImage { get; set; } = "mongo:8.0.15";
+    public string AdminUser { get; set; } = "octo-system-admin";
     public string AdminUserPassword { get; set; } = null!;
     public string DatabaseUserPassword { get; set; } = null!;
     

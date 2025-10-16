@@ -5,7 +5,7 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
-using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.ConstructionKit.Engine.Resolvers.Repository;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
@@ -24,29 +24,23 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 /// </summary>
 public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 {
-    private readonly ICkValidationService _ckValidationService;
+    private readonly IRepositoryModelResolver _repositoryModelResolver;
     private readonly ILogger<DatabaseCkModelRepository> _logger;
 
     /// <summary>
     ///     Creates a new instance of the <see cref="DatabaseCkModelRepository" /> class.
     /// </summary>
     /// <param name="logger"></param>
-    /// <param name="ckValidationService"></param>
+    /// <param name="repositoryModelResolver"></param>
     public DatabaseCkModelRepository(ILogger<DatabaseCkModelRepository> logger,
-        ICkValidationService ckValidationService)
+        IRepositoryModelResolver repositoryModelResolver)
     {
         _logger = logger;
-        _ckValidationService = ckValidationService;
+        _repositoryModelResolver = repositoryModelResolver;
     }
 
     /// <inheritdoc />
-    public bool IsSupportingSourceIdentifier(object? sourceIdentifier = null)
-    {
-        return sourceIdentifier is TenantDatabaseSourceIdentifier;
-    }
-
-    /// <inheritdoc />
-    public async Task<ModelExistingResult> IsModelIdExistingAsync(CkModelIdVersionRange modelIdVersionRange,
+    public async Task<ModelExistingResult> IsExistingAsync(CkModelIdVersionRange modelIdVersionRange,
         object? sourceIdentifier = null)
     {
         var sourceIdentifierObject =
@@ -57,7 +51,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         session.StartTransaction();
 
         var ckModels = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels.FindManyAsync(session,
-            e => e.ModelId == modelIdVersionRange.ModelId && e.ModelState == ModelState.Available);
+            e => e.ModelId == modelIdVersionRange.Name && e.ModelState == ModelState.Available);
 
 
         var satisfiedModels = ckModels
@@ -71,18 +65,14 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
         // Return the latest satisfied version
         var latestSatisfiedModel = satisfiedModels
-            .OrderByDescending(m => m.Id.ModelVersion)
+            .OrderByDescending(m => m.Id.Version)
             .First();
 
-        return new ModelExistingResult
-        {
-            Exists = true,
-            ModelId = latestSatisfiedModel.ModelId
-        };
+        return new ModelExistingResult { Exists = true, ModelId = latestSatisfiedModel.Id };
     }
 
     /// <inheritdoc />
-    public async Task<bool> IsModelIdExistingAsync(CkModelId modelId, object? sourceIdentifier = null)
+    public async Task<bool> IsExistingAsync(CkModelId modelId, object? sourceIdentifier = null)
     {
         var sourceIdentifierObject =
             ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
@@ -99,7 +89,26 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     }
 
     /// <inheritdoc />
-    public async Task<CkCompiledModelRoot> GetModelAsync(CkModelId modelId, OperationResult operationResult,
+    public async Task UpdateModelAsync(CkCompiledModelRoot ckCompiledModel,
+        object? sourceIdentifier = null, CancellationToken? cancellationToken = null)
+    {
+        var sourceIdentifierObject =
+            ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
+                sourceIdentifier);
+
+        OperationResult operationResult = new();
+        var transientCkModel = new TransientCkModel(new CkModel
+        {
+            Id = ckCompiledModel.ModelId,
+            Description = ckCompiledModel.Description,
+            Dependencies = ckCompiledModel.Dependencies?.ToArray()
+        });
+        await ExecuteImport(ckCompiledModel, transientCkModel,
+            sourceIdentifierObject.MongoDbRepositoryDataSource,
+            operationResult, sourceIdentifier, cancellationToken);
+    }
+
+    public async Task<CkCompiledModelRoot?> TryLookupCkModelAsync(CkModelId ckModelId, OperationResult operationResult,
         object? sourceIdentifier = null,
         CancellationToken? cancellationToken = null)
     {
@@ -111,28 +120,28 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         session.StartTransaction();
 
         var ckModel = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels
-            .FindSingleOrDefaultAsync(session, e => e.Id == modelId && e.ModelState == ModelState.Available);
+            .FindSingleOrDefaultAsync(session, e => e.Id == ckModelId && e.ModelState == ModelState.Available);
         if (ckModel == null)
         {
-            throw ModelRepositoryException.ModelNotFound(modelId, RepositoryName);
+            return null;
         }
 
         var ckEnums = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkEnums
-            .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
+            .FindManyAsync(session, e => e.CkModelId == ckModelId);
         var ckRecords = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkRecords
-            .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
+            .FindManyAsync(session, e => e.CkModelId == ckModelId);
         var ckRecordInheritances = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkRecordInheritances
-            .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
+            .FindManyAsync(session, e => e.CkModelId == ckModelId);
         var ckAttributes = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkAttributes
-            .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
+            .FindManyAsync(session, e => e.CkModelId == ckModelId);
         var ckTypes = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkTypes
-            .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
+            .FindManyAsync(session, e => e.CkModelId == ckModelId);
         var ckTypeInheritances = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkTypeInheritances
-            .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
+            .FindManyAsync(session, e => e.CkModelId == ckModelId);
         var ckTypeAssociations = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkTypeAssociations
-            .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
+            .FindManyAsync(session, e => e.CkModelId == ckModelId);
         var ckAssociationRoles = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkAssociationRoles
-            .FindManyAsync(session, e => e.CkModelId == modelId.ModelId);
+            .FindManyAsync(session, e => e.CkModelId == ckModelId);
 
         await session.CommitTransactionAsync();
 
@@ -143,7 +152,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             Dependencies = ckModel.Dependencies?.ToList(),
             Enums = ckEnums.Select(e => new CkEnumDto
             {
-                EnumId = e.CkEnumId.Key,
+                EnumId = e.CkEnumId.ElementId,
                 Description = e.Description,
                 UseFlags = e.UseFlags,
                 IsExtensible = e.IsExtensible,
@@ -155,7 +164,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             }).ToList(),
             Records = ckRecords.Select(r => new CkRecordDto
             {
-                RecordId = r.CkRecordId.Key,
+                RecordId = r.CkRecordId.ElementId,
                 Description = r.Description,
                 IsAbstract = r.IsAbstract,
                 IsFinal = r.IsFinal,
@@ -172,7 +181,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             }).ToList(),
             Attributes = ckAttributes.Select(a => new CkAttributeDto
             {
-                AttributeId = a.CkAttributeId.Key,
+                AttributeId = a.CkAttributeId.ElementId,
                 ValueType = a.AttributeValueType,
                 ValueCkEnumId = a.ValueCkEnumId,
                 ValueCkRecordId = a.ValueCkRecordId,
@@ -184,7 +193,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             }).ToList(),
             Types = ckTypes.Select(t => new CkCompiledTypeDto
             {
-                TypeId = t.CkTypeId.Key,
+                TypeId = t.CkTypeId.ElementId,
                 Description = t.Description,
                 IsAbstract = t.IsAbstract,
                 IsFinal = t.IsFinal,
@@ -210,7 +219,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             }).ToList(),
             AssociationRoles = ckAssociationRoles.Select(ar => new CkAssociationRoleDto
             {
-                AssociationRoleId = ar.RoleId.Key,
+                AssociationRoleId = ar.RoleId.ElementId,
                 Description = ar.Description,
                 InboundMultiplicity = ar.InboundMultiplicity,
                 OutboundMultiplicity = ar.OutboundMultiplicity,
@@ -228,34 +237,6 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         };
 
         return ckCompiledModelRoot;
-    }
-
-    /// <inheritdoc />
-    public async Task PublishModelAsync(CkCompiledModelRoot ckCompiledModel, bool force = false,
-        bool publishExtensions = false, object? sourceIdentifier = null,
-        CancellationToken? cancellationToken = null)
-    {
-        var sourceIdentifierObject =
-            ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
-                sourceIdentifier);
-
-        OperationResult operationResult = new();
-        var transientCkModel = new TransientCkModel(new CkModel
-        {
-            Id = ckCompiledModel.ModelId,
-            Description = ckCompiledModel.Description,
-            Dependencies = ckCompiledModel.Dependencies?.ToArray()
-        });
-        await ExecuteImport(ckCompiledModel, transientCkModel,
-            sourceIdentifierObject.MongoDbRepositoryDataSource,
-            operationResult, sourceIdentifier, cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public async Task UpdateModelAsync(CkCompiledModelRoot ckCompiledModel, bool publishExtensions = false,
-        object? sourceIdentifier = null, CancellationToken? cancellationToken = null)
-    {
-        await PublishModelAsync(ckCompiledModel, false, publishExtensions, sourceIdentifier, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -284,8 +265,6 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             {
                 throw DatabaseCkModelRepositoryException.CkEnumNotExtensible(ckEnumId);
             }
-
-            Regex nameRegex = new("^[_a-zA-Z][_a-zA-Z0-9]*$");
 
             // System enum values cannot be customized, we store it in a separate list to know them
             var systemValues = dbCkEnum.Values.Where(x => !x.IsExtension).ToList();
@@ -358,18 +337,6 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         }
     }
 
-    /// <inheritdoc />
-    public int Order => 5;
-
-    /// <inheritdoc />
-    public string RepositoryName => InternalConstants.CkModelRepositoryName;
-
-    /// <inheritdoc />
-    public string Description => "Repository for OctoMesh tenant models.";
-
-    /// <inheritdoc />
-    public bool CanWrite => true;
-
     private async Task ExecuteImport(CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel,
         ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource, OperationResult operationResult,
         object? sourceIdentifier,
@@ -381,7 +348,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         try
         {
             _logger.LogInformation("Validating of CK model");
-            await _ckValidationService.ValidateAsync(compiledModel, operationResult, sourceIdentifier);
+            var originFileResolver = new OriginFileResolver("-");
+            await _repositoryModelResolver.HardResolveAsync(compiledModel, originFileResolver, operationResult,
+                sourceIdentifier);
             if (operationResult.HasErrors)
             {
                 _logger.LogInformation("Import of CK model failed, model is not valid");
@@ -400,7 +369,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             ProcessCkTypesAndAssociations(compiledModel, transientCkModel);
 
             // ValidateAsync
-            Debug.Assert(_ckValidationService != null, nameof(_ckValidationService) + " != null");
+            Debug.Assert(_repositoryModelResolver != null, nameof(_repositoryModelResolver) + " != null");
 
             using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
             session.StartTransaction();
@@ -494,6 +463,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             using var sessionComplete = await mongoDbRepositoryDataSource.CreateSessionAsync();
             sessionComplete.StartTransaction();
 
+            // Attention! This operation is critical. It forces an exclusive write lock on the database.
             _logger.LogDebug("Updating index");
             await mongoDbRepositoryDataSource.UpdateIndexAsync(sessionComplete);
             CheckCancellation(cancellationToken);
@@ -505,8 +475,10 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
             await sessionComplete.CommitTransactionAsync();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Import of CK model to database failed");
+
             using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
             session.StartTransaction();
 
@@ -556,12 +528,13 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
                 session.StartTransaction();
 
-                await mongoDbRepositoryDataSource.CkModels.TryDeleteOneAsync(session, compiledModel.ModelId);
+                await mongoDbRepositoryDataSource.CkModels.TryDeleteOneAsync(session,
+                    e => e.ModelId == compiledModel.ModelId.Name);
                 await mongoDbRepositoryDataSource.CkModels.InsertOneAsync(session,
                     new CkModel
                     {
                         Id = compiledModel.ModelId,
-                        ModelId = compiledModel.ModelId.ModelId,
+                        ModelId = compiledModel.ModelId.Name,
                         Dependencies = compiledModel.Dependencies?.ToArray(),
                         Description = compiledModel.Description,
                         ModelState = ModelState.Importing
@@ -706,42 +679,46 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     {
         var ckModel =
             await mongoDbRepositoryDataSource.CkModels.FindSingleOrDefaultAsync(session, model =>
-                model.ModelId == ckModelId.ModelId);
+                model.ModelId == ckModelId.Name);
         if (ckModel == null)
         {
             return;
         }
 
         await mongoDbRepositoryDataSource.CkRecords.DeleteManyAsync(session,
-            Builders<CkRecord>.Filter.Eq(nameof(CkRecord.CkModelId).ToCamelCase(), ckModel.Id));
+            Builders<CkRecord>.Filter.Regex(nameof(CkRecord.CkModelId).ToCamelCase(), $"^{ckModel.ModelId}-.*$"));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkEnums.DeleteManyAsync(session,
-            Builders<CkEnum>.Filter.Eq(nameof(CkEnum.CkModelId).ToCamelCase(), ckModel.Id));
+            Builders<CkEnum>.Filter.Regex(nameof(CkEnum.CkModelId).ToCamelCase(), $"^{ckModel.ModelId}-.*$"));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkAttributes.DeleteManyAsync(session,
-            Builders<CkAttribute>.Filter.Eq(nameof(CkAttribute.CkModelId).ToCamelCase(), ckModel.Id));
+            Builders<CkAttribute>.Filter.Regex(nameof(CkAttribute.CkModelId).ToCamelCase(), $"^{ckModel.ModelId}-.*$"));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkAssociationRoles.DeleteManyAsync(session,
-            Builders<CkAssociationRole>.Filter.Eq(nameof(CkAssociationRole.CkModelId).ToCamelCase(), ckModel.Id));
+            Builders<CkAssociationRole>.Filter.Regex(nameof(CkAssociationRole.CkModelId).ToCamelCase(),
+                $"^{ckModel.ModelId}-.*$"));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkTypes.DeleteManyAsync(session,
-            Builders<CkType>.Filter.Eq(nameof(CkType.CkModelId).ToCamelCase(), ckModel.Id));
+            Builders<CkType>.Filter.Regex(nameof(CkType.CkModelId).ToCamelCase(), $"^{ckModel.ModelId}-.*$"));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkTypeAssociations.DeleteManyAsync(session,
-            Builders<CkTypeAssociation>.Filter.Eq(nameof(CkTypeAssociation.CkModelId).ToCamelCase(), ckModel.Id));
+            Builders<CkTypeAssociation>.Filter.Regex(nameof(CkTypeAssociation.CkModelId).ToCamelCase(),
+                $"^{ckModel.ModelId}-.*$"));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkTypeInheritances.DeleteManyAsync(session,
-            Builders<CkTypeInheritance>.Filter.Eq(nameof(CkTypeInheritance.CkModelId).ToCamelCase(), ckModel.Id));
+            Builders<CkTypeInheritance>.Filter.Regex(nameof(CkTypeInheritance.CkModelId).ToCamelCase(),
+                $"^{ckModel.ModelId}-.*$"));
         CheckCancellation(cancellationToken);
 
         await mongoDbRepositoryDataSource.CkRecordInheritances.DeleteManyAsync(session,
-            Builders<CkRecordInheritance>.Filter.Eq(nameof(CkRecordInheritance.CkModelId).ToCamelCase(), ckModel.Id));
+            Builders<CkRecordInheritance>.Filter.Regex(nameof(CkRecordInheritance.CkModelId).ToCamelCase(),
+                $"^{ckModel.ModelId}-.*$"));
         CheckCancellation(cancellationToken);
     }
 
@@ -842,7 +819,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     {
                         CkModelId = compiledModel.ModelId,
                         RoleId = association.CkRoleId,
-                        OriginCkTypeId = new CkId<CkTypeId>(compiledModel.ModelId, ckType.CkTypeId.Key),
+                        OriginCkTypeId = new CkId<CkTypeId>(compiledModel.ModelId, ckType.CkTypeId.ElementId),
                         TargetCkTypeId = association.TargetCkTypeId,
                         TargetCkAttributeIds = association.TargetCkAttributeIds
                     };

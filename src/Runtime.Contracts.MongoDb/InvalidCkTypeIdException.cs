@@ -17,6 +17,11 @@ public class InvalidCkTypeIdException : OperationFailedException
     {
     }
 
+    public static Exception RtCkTypeIdNotFound(string tenantId, RtCkId<CkTypeId> rtCkTypeId)
+    {
+        return new InvalidCkTypeIdException($"Runtime Construction Kit Type Id '{rtCkTypeId}' is invalid for tenant '{tenantId}'.");
+    }
+
     public static Exception CkTypeIdNotFound(string tenantId, CkId<CkTypeId> ckTypeId)
     {
         return new InvalidCkTypeIdException($"Construction Kit Type Id '{ckTypeId}' is invalid for tenant '{tenantId}'.");

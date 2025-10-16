@@ -43,6 +43,18 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         return _documentCollection;
     }
 
+    public async Task<TDocument?> FindOneAndUpsertAsync(IOctoSession session, FilterDefinition<TDocument> filter,
+        UpdateDefinition<TDocument> updateDefinition, ReturnDocument returnDocument = ReturnDocument.After)
+    {
+        var options = new FindOneAndUpdateOptions<TDocument> {
+            IsUpsert = true,
+            ReturnDocument = returnDocument
+        };
+        var document = await _documentCollection.FindOneAndUpdateAsync(((IOctoSessionInternal)session).SessionHandle, filter,
+            updateDefinition, options);
+        return document;
+    }
+
     public IAggregateFluent<TDocument> Aggregate(IOctoSession session)
     {
         return _documentCollection.Aggregate(((IOctoSessionInternal)session).SessionHandle,
@@ -110,7 +122,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     }
 
     public async Task CreateUniqueIndexAsync(string name, IEnumerable<string> fields,
-        IEnumerable<CkId<CkTypeId>> typeIds)
+        IEnumerable<RtCkId<CkTypeId>> rtCkTypeIds)
     {
         ArgumentValidation.ValidateString(nameof(name), name);
 
@@ -121,7 +133,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                     : Builders<TDocument>.IndexKeys.Ascending(Constants.AttributesName + "." + f.ToCamelCase()));
 
         // Create partial filter for specific type IDs
-        var partialFilterExpression = Builders<TDocument>.Filter.In(nameof(RtEntity.CkTypeId).ToCamelCase(), typeIds);
+        var partialFilterExpression = Builders<TDocument>.Filter.In(nameof(RtEntity.CkTypeId).ToCamelCase(), rtCkTypeIds);
 
         var options = new CreateIndexOptions<TDocument>
         {
@@ -138,7 +150,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     }
 
     public async Task CreateUniqueNotDeletedIndexAsync(string name, IEnumerable<string> fields,
-        IEnumerable<CkId<CkTypeId>> typeIds)
+        IEnumerable<RtCkId<CkTypeId>> rtCkTypeIds)
     {
         ArgumentValidation.ValidateString(nameof(name), name);
 
@@ -151,7 +163,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         // Create partial filter for active entities (not deleted) and specific type IDs
         var partialFilterExpression = Builders<TDocument>.Filter.And(
             Builders<TDocument>.Filter.In(nameof(RtEntity.RtState).ToCamelCase(), new int?[] { null, 0 }),
-            Builders<TDocument>.Filter.In(nameof(RtEntity.CkTypeId).ToCamelCase(), typeIds)
+            Builders<TDocument>.Filter.In(nameof(RtEntity.CkTypeId).ToCamelCase(), rtCkTypeIds)
         );
 
         var options = new CreateIndexOptions<TDocument>
@@ -588,6 +600,22 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         catch (MongoException e)
         {
             throw OperationFailedException.DatabaseOperationFailed(nameof(TryDeleteOneAsync), e);
+        }
+    }
+
+    public async Task<bool> TryDeleteOneAsync(IOctoSession session, Expression<Func<TDocument, bool>> expression)
+    {
+        try
+        {
+            var deleteResult =
+                await _documentCollection.DeleteOneAsync(((IOctoSessionInternal)session).SessionHandle, expression);
+            ThrowIfNotAcknowledged(deleteResult.IsAcknowledged);
+
+            return deleteResult.DeletedCount > 0;
+        }
+        catch (MongoException e)
+        {
+            throw OperationFailedException.DatabaseOperationFailed(nameof(DeleteOneAsync), e);
         }
     }
 

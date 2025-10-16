@@ -5,16 +5,16 @@ using MongoDB.Bson.Serialization.Serializers;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 
-public class CkIdSerializer<TKey, TKeySerializer> : SerializerBase<CkId<TKey>>,
-    IRepresentationConfigurable<CkIdSerializer<TKey, TKeySerializer>> where TKey : IComparable<TKey>, ICkElementId
+public class RtCkIdSerializer<TKey, TKeySerializer> : SerializerBase<RtCkId<TKey>>,
+    IRepresentationConfigurable<RtCkIdSerializer<TKey, TKeySerializer>> where TKey : IComparable<TKey>, ICkElementId
     where TKeySerializer : SerializerBase<TKey>
 {
-    public CkIdSerializer()
+    public RtCkIdSerializer()
         : this(BsonType.String)
     {
     }
 
-    public CkIdSerializer(BsonType representation)
+    public RtCkIdSerializer(BsonType representation)
     {
         switch (representation)
         {
@@ -23,21 +23,21 @@ public class CkIdSerializer<TKey, TKeySerializer> : SerializerBase<CkId<TKey>>,
                 break;
 
             default:
-                var message = $"{representation} is not a valid representation for an CkIdSerializer.";
+                var message = $"{representation} is not a valid representation for an RtCkIdSerializer.";
                 throw new ArgumentException(message);
         }
 
         Representation = representation;
     }
 
-    public CkIdSerializer<TKey, TKeySerializer> WithRepresentation(BsonType representation)
+    public RtCkIdSerializer<TKey, TKeySerializer> WithRepresentation(BsonType representation)
     {
         if (representation == Representation)
         {
             return this;
         }
 
-        return new CkIdSerializer<TKey, TKeySerializer>(representation);
+        return new RtCkIdSerializer<TKey, TKeySerializer>(representation);
     }
 
     public BsonType Representation { get; }
@@ -47,7 +47,7 @@ public class CkIdSerializer<TKey, TKeySerializer> : SerializerBase<CkId<TKey>>,
         return WithRepresentation(representation);
     }
 
-    public override CkId<TKey> Deserialize(BsonDeserializationContext context, BsonDeserializationArgs args)
+    public override RtCkId<TKey> Deserialize(BsonDeserializationContext context, BsonDeserializationArgs args)
     {
         var bsonReader = context.Reader;
 
@@ -55,14 +55,14 @@ public class CkIdSerializer<TKey, TKeySerializer> : SerializerBase<CkId<TKey>>,
         switch (bsonType)
         {
             case BsonType.String:
-                return new CkId<TKey>(bsonReader.ReadString());
+                return new RtCkId<TKey>(bsonReader.ReadString());
 
             default:
                 throw CreateCannotDeserializeFromBsonTypeException(bsonType);
         }
     }
 
-    public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args, CkId<TKey>? value)
+    public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args, RtCkId<TKey>? value)
     {
         var bsonWriter = context.Writer;
 
@@ -78,7 +78,7 @@ public class CkIdSerializer<TKey, TKeySerializer> : SerializerBase<CkId<TKey>>,
                 break;
 
             default:
-                var message = $"'{Representation}' is not a valid CkId representation.";
+                var message = $"'{Representation}' is not a valid RtCkId representation.";
                 throw new BsonSerializationException(message);
         }
     }

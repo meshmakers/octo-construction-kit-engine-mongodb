@@ -2,11 +2,14 @@ using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Configuration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
+using Xunit;
+
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
-public class ConfigurationFixture : ServiceCollectionFixture
+public abstract class ConfigurationFixture : ServiceCollectionFixture
 {
     private readonly SystemTestConfiguration _configuration;
+    public string SystemDatabaseName => "PersistenceSystemTests".ToLower();
 
     protected ConfigurationFixture()
     {

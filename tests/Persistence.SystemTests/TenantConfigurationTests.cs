@@ -1,15 +1,29 @@
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v1;
+using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
 [Collection("Sequential")]
-public class TenantConfigurationTests(SystemFixture systemFixture) : IClassFixture<SystemFixture>
+public class TenantConfigurationTests : IClassFixture<SystemFixture>
 {
+    private readonly SystemFixture _systemFixture;
+
+    public TenantConfigurationTests(SystemFixture systemFixture, ITestOutputHelper outputHelper)
+    {
+        _systemFixture = systemFixture;
+        _systemFixture.OutputHelper = outputHelper;
+    }
+
     [Fact]
     public async Task SetGetConfigurationAsString()
     {
-        var systemContext = systemFixture.GetSystemContext();
+        var systemContext = _systemFixture.GetSystemContext();
         using var session = await systemContext.GetAdminSessionAsync();
         session.StartTransaction();
         await systemContext.SetConfigurationAsync(session, "test", "398FE06C-4E21-433F-A8EA-1BDD74E1B167");
@@ -29,7 +43,7 @@ public class TenantConfigurationTests(SystemFixture systemFixture) : IClassFixtu
     [Fact]
     public async Task SetGetConfigurationAsObject()
     {
-        var systemContext = systemFixture.GetSystemContext();
+        var systemContext = _systemFixture.GetSystemContext();
         using var session = await systemContext.GetAdminSessionAsync();
         session.StartTransaction();
         await systemContext.SetConfigurationAsync(session, "test", new TestClass { TestProperty = "398FE06C-4E21-433F-A8EA-1BDD74E1B168" });
@@ -49,7 +63,7 @@ public class TenantConfigurationTests(SystemFixture systemFixture) : IClassFixtu
     [Fact]
     public async Task GetConfigurationObject_NoKey()
     {
-        var systemContext = systemFixture.GetSystemContext();
+        var systemContext = _systemFixture.GetSystemContext();
         using var session2 = await systemContext.GetAdminSessionAsync();
         session2.StartTransaction();
 
@@ -63,7 +77,7 @@ public class TenantConfigurationTests(SystemFixture systemFixture) : IClassFixtu
     [Fact]
     public async Task GetConfigurationString_NoKey()
     {
-        var systemContext = systemFixture.GetSystemContext();
+        var systemContext = _systemFixture.GetSystemContext();
         using var session2 = await systemContext.GetAdminSessionAsync();
         session2.StartTransaction();
 

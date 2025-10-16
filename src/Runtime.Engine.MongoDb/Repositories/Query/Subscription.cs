@@ -48,7 +48,7 @@ internal class Subscription<TEntity>(
         base.AddPreFieldFilters(filters);
 
         // Add filter for ck type and derived ones
-        var ckTypeIds = ckTypeGraph.GetAllDerivedTypes(true);
+        var ckTypeIds = ckTypeGraph.GetAllDerivedTypes(true).Select(t=> t.ToRtCkId());
         filters.Add(Builders<TEntity>.Filter.In(f => f.CkTypeId, ckTypeIds));
     }
     
@@ -58,7 +58,7 @@ internal class Subscription<TEntity>(
 
         filters.AddRange(_beforeFieldFilterResolver.FilterDefinitions);
 
-        // if filter constraints exist add them to the pipeline.
+        // if filter constraints exist, add them to the pipeline.
         if (filters.Any())
         {
             if (filters.Count == 1)

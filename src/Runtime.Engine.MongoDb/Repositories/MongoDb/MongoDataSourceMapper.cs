@@ -59,6 +59,28 @@ public class RtEntityMongoDataSourceMapper<TEntity> : IMongoDataSourceMapper<Oct
     }
 }
 
+public class LockMongoDataSourceMapper : IMongoDataSourceMapper<string, SysLock>
+{
+    public string CollectionNamePrefix => nameof(SysLock);
+
+    public string GetId(SysLock document)
+    {
+        return document.Id;
+    }
+
+    public UpdateDefinition<SysLock> ApplyUpdate(SysLock document)
+    {
+        var update = Builders<SysLock>.Update;
+        List<UpdateDefinition<SysLock>> list =
+        [
+            update.Set(p => p.Id, document.Id),
+            update.Set(p => p.CreationDateTime, document.CreationDateTime)
+        ];
+
+        return update.Combine(list);
+    }
+}
+
 public class CkModelMongoDataSourceMapper : IMongoDataSourceMapper<CkModelId, CkModel>
 {
     public string CollectionNamePrefix => nameof(CkModel);

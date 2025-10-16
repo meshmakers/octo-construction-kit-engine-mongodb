@@ -20,8 +20,7 @@ public class GetIndirectRtAssociationTargetsAsyncTests(GenerateSampleDataFixture
 
         var originRtId = OctoObjectId.Parse(KnownRtIds.SalzburgStateOrProvince);
 
-        var r = await tenantRepository.GetIndirectRtAssociationTargetsAsync<RtStateOrProvince, RtMunicipality>(session, originRtId,
-            new CkId<CkAssociationRoleId>(SystemCkIds.ModelId, SystemCkIds.ParentChild),
+        var r = await tenantRepository.GetIndirectRtAssociationTargetsAsync<RtStateOrProvince, RtMunicipality>(session, originRtId, SystemCkIds.RtCkParentChildRoleId,
             GraphDirections.Inbound);
         
         await session.CommitTransactionAsync();

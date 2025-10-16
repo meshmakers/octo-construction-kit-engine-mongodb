@@ -34,7 +34,7 @@ internal class RtEntityMapConvention(ICkClassMappingService ckClassMappingServic
 
     public string Name => "RtEntityMapConvention";
 
-    private RtEntity CreateInstance(CkId<CkTypeId> ckTypeId, OctoObjectId rtId)
+    private RtEntity CreateInstance(RtCkId<CkTypeId> ckTypeId, OctoObjectId rtId)
     {
         var type = ckClassMappingService.GetCkTypeClass(ckTypeId);
 

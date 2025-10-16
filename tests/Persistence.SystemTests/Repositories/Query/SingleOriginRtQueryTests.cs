@@ -39,7 +39,7 @@ public class SingleOriginRtQueryTests
     [Fact]
     public async Task FieldFilter_SystemAttribute_RtWellKnownName_OK()
     {
-        var systemContext = Prepare(TestCkIds.CustomerTypeId, out var query);
+        var systemContext = Prepare(TestCkIds.CkCustomerTypeId, out var query);
 
         query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
             .FieldEquals("RtWellKnownName", "TestCustomer3"));
@@ -56,7 +56,7 @@ public class SingleOriginRtQueryTests
     [Fact]
     public async Task FieldFilter_SystemAttribute_RtId_OK()
     {
-        var systemContext = Prepare(TestCkIds.CustomerTypeId, out var query);
+        var systemContext = Prepare(TestCkIds.CkCustomerTypeId, out var query);
 
         query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
             .FieldEquals("RtId", ObjectId.Parse("66803ecf4aa85720dda96b15")));
@@ -76,7 +76,7 @@ public class SingleOriginRtQueryTests
     [InlineData(FieldFilterOperator.MatchRegEx, "Zell")]
     public async Task FieldFilter_Attribute_OK(FieldFilterOperator fieldFilterOperator, object comparisonValue)
     {
-        var systemContext = Prepare(TestCkIds.DistrictTypeId, out var query);
+        var systemContext = Prepare(TestCkIds.CkDistrictTypeId, out var query);
 
         query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
             .Field("Name", fieldFilterOperator, comparisonValue));
@@ -98,7 +98,7 @@ public class SingleOriginRtQueryTests
     public async Task FieldFilter_Attribute_Scalar_Embedded_OK(string attributePath,
         FieldFilterOperator fieldFilterOperator, object comparisonValue)
     {
-        var systemContext = Prepare(TestCkIds.CustomerTypeId, out var query);
+        var systemContext = Prepare(TestCkIds.CkCustomerTypeId, out var query);
 
         query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
             .Field(attributePath, fieldFilterOperator, comparisonValue));
@@ -119,7 +119,7 @@ public class SingleOriginRtQueryTests
     public async Task FieldFilter_Attribute_Array_Wildcard_Embedded_OK(string attributePath,
         FieldFilterOperator fieldFilterOperator, string comparisonValue)
     {
-        var systemContext = Prepare(TestCkIds.CustomerTypeId, out var query);
+        var systemContext = Prepare(TestCkIds.CkCustomerTypeId, out var query);
 
         query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
             .Field(attributePath, fieldFilterOperator, comparisonValue));
@@ -136,7 +136,7 @@ public class SingleOriginRtQueryTests
     [Fact]
     public async Task FieldFilter_LogicalOr_Dim0_OK()
     {
-        var systemContext = Prepare(TestCkIds.CustomerTypeId, out var query);
+        var systemContext = Prepare(TestCkIds.CkCustomerTypeId, out var query);
 
         query.AddFieldFilterCriteria(FieldFilterCriteria.Create(LogicalOperator.Or)
             .FieldEquals("rtWellKnownName", "TestCustomer2")
@@ -154,12 +154,11 @@ public class SingleOriginRtQueryTests
         Assert.Contains(resultSet.Items, item => item.RtId == OctoObjectId.Parse("66803ecf4aa85720dda96b15"));
     }
 
-    private ISystemContext Prepare(string typeId, out SingleOriginRtQuery<RtEntity> query)
+    private ISystemContext Prepare(CkId<CkTypeId> ckTypeId, out SingleOriginRtQuery<RtEntity> query)
     {
         var systemContext = _systemFixture.GetSystemContext();
         var ckCacheService = _systemFixture.GetService<ICkCacheService>();
-        var ckTypeGraph = ckCacheService.GetCkType(systemContext.TenantId,
-            new CkId<CkTypeId>(TestCkIds.ModelId, typeId));
+        var ckTypeGraph = ckCacheService.GetCkType(systemContext.TenantId, ckTypeId);
 
         var metricsContext = A.Fake<IMetricsContext>();
         A.CallTo(() => metricsContext.CreateRuntimeMeter(A<string>.Ignored))

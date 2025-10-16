@@ -62,7 +62,10 @@ public class MongoRepository(ILoggerFactory loggerFactory, IMongoDatabase mongoD
             _collectionNameMapping.TryAdd(typeof(TDocument), name);
         }
 
-        if (!string.IsNullOrEmpty(suffix)) return name + "_" + suffix;
+        if (!string.IsNullOrEmpty(suffix))
+        {
+            return name + "_" + suffix;
+        }
 
         return name;
     }

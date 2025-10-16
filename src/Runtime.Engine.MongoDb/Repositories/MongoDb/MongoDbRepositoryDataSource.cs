@@ -241,6 +241,10 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
     public async Task UpdateIndexAsync(IOctoSession session)
     {
+        await using var lockService =
+            new RepositoryDistributedLockService(_repositoryClient, _repository, _logger, "index_update_lock");
+        await lockService.AcquireLockAsync();
+
         var aggregate = _ckTypes.Aggregate(session);
         aggregate = aggregate.Match(x => x.IsCollectionRoot == true);
 
@@ -260,11 +264,12 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         await CreateRtAssociationIndexesAsync();
     }
 
-    private async Task<Dictionary<CkId<CkTypeId>, List<CkType>>> CollectBaseTypesForCollectionRoots(IOctoSession session, IEnumerable<CkTypeInfo> collectionRoots)
+    private async Task<Dictionary<CkId<CkTypeId>, List<CkType>>> CollectBaseTypesForCollectionRoots(
+        IOctoSession session, IEnumerable<CkTypeInfo> collectionRoots)
     {
         var result = new Dictionary<CkId<CkTypeId>, List<CkType>>();
         var collectionRootsList = collectionRoots.ToList();
-        
+
         if (!collectionRootsList.Any())
         {
             return result;
@@ -276,7 +281,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         // Collect all type IDs that we might need (all collection roots + their potential base types)
         var allTypeIds = new HashSet<CkId<CkTypeId>>(collectionRootsList.Select(x => x.CkTypeId));
-        
+
         // Add all potential base type IDs from inheritances
         foreach (var inheritance in allInheritances)
         {
@@ -359,7 +364,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
             // Then analyze the inherited types (descendants), to merge text indexes
             var inheritTypes = collectionRootType.Inheritances.ToDictionary(k => k.CkTypeId, v => v);
-            foreach (var ckInheritedTypeInfo in collectionRootType.InheritedTypes.OrderByDescending(x => x.BaseTypeDepthIndex))
+            foreach (var ckInheritedTypeInfo in collectionRootType.InheritedTypes.OrderByDescending(x =>
+                         x.BaseTypeDepthIndex))
             {
                 if (!inheritTypes.TryGetValue(ckInheritedTypeInfo.InheritorCkTypeId, out var inheritCkTypeInfo))
                 {
@@ -377,12 +383,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             {
                 _logger.LogDebug("Dropping all indexes for '{CkTypeId}'", collectionRootType.CkTypeId);
                 await collection.DropAllIndexesAsync(name);
-                
+
                 // Clear index states for affected types
                 using var session = await GetSessionAsync();
                 var affectedTypeIds = new List<CkId<CkTypeId>> { collectionRootType.CkTypeId };
                 affectedTypeIds.AddRange(regularIndices.Keys.Select(k => k.CkTypeId));
-                await _indexStateService.ClearIndexStatesForCollectionAsync(session, collection.CollectionName, affectedTypeIds);
+                await _indexStateService.ClearIndexStatesForCollectionAsync(session, collection.CollectionName,
+                    affectedTypeIds);
                 return;
             }
 
@@ -410,7 +417,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     }
                     else
                     {
-                        var repositoryTextIndex = repositoryIndices.SingleOrDefault(i => i.IndexType == IndexTypes.Text);
+                        var repositoryTextIndex =
+                            repositoryIndices.SingleOrDefault(i => i.IndexType == IndexTypes.Text);
                         if (repositoryTextIndex != null)
                         {
                             _logger.LogDebug("Dropping text index '{IndexName}' for '{CkTypeId}'",
@@ -506,12 +514,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     /// <param name="indexDefiningType">Optional type that defines this index (required for Unique/UniqueNotDeleted)</param>
     private async Task<bool> CreateOrUpdateIndex<TKey, TDocument>(string collectionName, CkTypeIndex ckTypeIndex,
         ICollection<CkTypeIndexWithName> repositoryIndices,
-        IMongoDbDataSourceCollection<TKey, TDocument> collection, int uniqueIndexNumber, CkTypeInfo? collectionRootType = null, CkType? indexDefiningType = null)
+        IMongoDbDataSourceCollection<TKey, TDocument> collection, int uniqueIndexNumber,
+        CkTypeInfo? collectionRootType = null, CkType? indexDefiningType = null)
         where TDocument : class, new()
         where TKey : notnull
     {
         // For system indexes (like RtAssociation indexes) where no defining type exists,
-        // fall back to collection name. Otherwise use the type name for backward compatibility.
+        // fall back to collection name. Otherwise, use the type name for backward compatibility.
         var indexName = indexDefiningType != null
             ? indexDefiningType.CkTypeId.GetCkTypeCollectionName() + "_" + uniqueIndexNumber
             : collectionName + "_" + uniqueIndexNumber;
@@ -654,24 +663,24 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
 
         // Collect type IDs: the index-defining type + types that derive from it
-        var typeIds = new List<CkId<CkTypeId>> { indexDefiningType.CkTypeId };
+        var typeIds = new List<RtCkId<CkTypeId>> { indexDefiningType.CkTypeId.ToRtCkId() };
 
         // Find all types that derive from the index-defining type (not the collection root)
-        var derivedTypeIds = GetDerivedTypeIds(indexDefiningType.CkTypeId, collectionRootType);
+        var derivedTypeIds = GetDerivedTypeIds(indexDefiningType.CkTypeId.ToRtCkId(), collectionRootType);
         typeIds.AddRange(derivedTypeIds);
 
         return typeIds;
     }
 
-    private IEnumerable<CkId<CkTypeId>> GetDerivedTypeIds(CkId<CkTypeId> baseTypeId, CkTypeInfo ckTypeInfo)
+    private IEnumerable<RtCkId<CkTypeId>> GetDerivedTypeIds(RtCkId<CkTypeId> baseRtCkTypeId, CkTypeInfo ckTypeInfo)
     {
         // Get all inheritance relationships where the base type is our target type
         var directDerived = ckTypeInfo.InheritedTypes
-            .Where(inheritance => inheritance.BaseCkTypeId.Equals(baseTypeId))
-            .Select(inheritance => inheritance.InheritorCkTypeId)
+            .Where(inheritance => inheritance.BaseCkTypeId.Equals(baseRtCkTypeId))
+            .Select(inheritance => inheritance.InheritorCkTypeId.ToRtCkId())
             .ToList();
 
-        var allDerived = new HashSet<CkId<CkTypeId>>(directDerived);
+        var allDerived = new HashSet<RtCkId<CkTypeId>>(directDerived);
 
         // Recursively find derived types of the derived types
         foreach (var derivedType in directDerived)

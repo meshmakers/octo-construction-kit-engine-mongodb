@@ -115,13 +115,13 @@ public class OperationFailedException : PersistenceException
     }
 
     public static Exception AttributeNotFound<TKey>(CkId<CkAttributeId> modelAttributeId, string elementType, CkId<TKey> ckId)
-        where TKey : IComparable<TKey>, ICkKey
+        where TKey : IComparable<TKey>, ICkElementId
     {
         return new OperationFailedException($"Attribute '{modelAttributeId}' does not exist at {elementType} '{ckId}'.");
     }
 
     public static Exception RecordNotFound<TKey>(CkId<CkRecordId> ckRecordId, string elementType,  CkId<TKey> ckId)
-        where TKey : IComparable<TKey>, ICkKey
+        where TKey : IComparable<TKey>, ICkElementId
     {
         return new OperationFailedException($"Record '{ckRecordId}' does not exist at {elementType} '{ckId}'.");
     }
@@ -171,9 +171,9 @@ public class OperationFailedException : PersistenceException
         return new OperationFailedException($"Match filter value '{value}' is not supported.");
     }
 
-    public static Exception AssociationNotFound(CkId<CkAssociationRoleId> ckRoleId, CkId<CkTypeId> targetCkTypeId)
+    public static Exception AssociationNotFound(RtCkId<CkAssociationRoleId> rtCkRoleId, RtCkId<CkTypeId> targetRtCkTypeId)
     {
-        return new OperationFailedException($"Association '{ckRoleId}' not found for target type '{targetCkTypeId}'.");
+        return new OperationFailedException($"Association '{rtCkRoleId}' not found for target type '{targetRtCkTypeId}'.");
     }
 
     public static Exception CannotConvertToObjectId(string attributePath)

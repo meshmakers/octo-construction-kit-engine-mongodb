@@ -19,8 +19,8 @@ public interface IMongoDbDataSourceCollection<TKey, TDocument> : IDataSourceColl
 
     Task CreateAscendingIndexAsync(string name, IEnumerable<string> fields);
     Task CreateTextIndexAsync(string name, string language, IEnumerable<CkIndexFields> fields);
-    Task CreateUniqueIndexAsync(string name, IEnumerable<string> fields, IEnumerable<CkId<CkTypeId>> typeIds);
-    Task CreateUniqueNotDeletedIndexAsync(string name, IEnumerable<string> fields, IEnumerable<CkId<CkTypeId>> typeIds);
+    Task CreateUniqueIndexAsync(string name, IEnumerable<string> fields, IEnumerable<RtCkId<CkTypeId>> rtCkTypeIds);
+    Task CreateUniqueNotDeletedIndexAsync(string name, IEnumerable<string> fields, IEnumerable<RtCkId<CkTypeId>> rtCkTypeIds);
     Task DropIndexAsync(string name);
 
     Task<ICollection<CkTypeIndexWithName>> GetIndexListAsync(string? prefix = null);
@@ -50,4 +50,7 @@ public interface IMongoDbDataSourceCollection<TKey, TDocument> : IDataSourceColl
     Task<long> GetTotalCountAsync(IOctoSession session, FilterDefinition<TDocument> filterDefinition);
 
     IMongoCollection<TDocument> GetMongoCollection();
+
+    Task<TDocument?> FindOneAndUpsertAsync(IOctoSession session, FilterDefinition<TDocument> filter,
+        UpdateDefinition<TDocument> updateDefinition, ReturnDocument returnDocument = ReturnDocument.After);
 }

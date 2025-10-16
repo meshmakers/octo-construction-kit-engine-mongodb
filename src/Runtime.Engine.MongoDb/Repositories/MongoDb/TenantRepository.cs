@@ -55,7 +55,7 @@ internal class TenantRepository(
 
     #region Data manipulation
 
-    protected override async Task DeleteManyRtEntitiesAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
+    protected override async Task DeleteManyRtEntitiesAsync<TEntity>(IOctoSession session, RtCkId<CkTypeId> ckTypeId,
         FieldFilterCriteria fieldFilterCriteria)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
@@ -66,7 +66,7 @@ internal class TenantRepository(
         await mutation.DeleteManyAsync(session).ConfigureAwait(false);
     }
 
-    protected override async Task DeleteOneRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
+    protected override async Task DeleteOneRtEntityAsync<TEntity>(IOctoSession session, RtCkId<CkTypeId> ckTypeId,
         FieldFilterCriteria fieldFilterCriteria)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
@@ -77,7 +77,7 @@ internal class TenantRepository(
         await mutation.DeleteOneAsync(session).ConfigureAwait(false);
     }
 
-    protected override async Task UpdateOneRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
+    protected override async Task UpdateOneRtEntityAsync<TEntity>(IOctoSession session, RtCkId<CkTypeId> ckTypeId,
         FieldFilterCriteria fieldFilterCriteria, TEntity rtEntity)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
@@ -88,7 +88,7 @@ internal class TenantRepository(
         await mutation.UpdateOneAsync(session, ckTypeId, rtEntity).ConfigureAwait(false);
     }
 
-    protected override async Task UpdateManyRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
+    protected override async Task UpdateManyRtEntityAsync<TEntity>(IOctoSession session, RtCkId<CkTypeId> ckTypeId,
         FieldFilterCriteria fieldFilterCriteria, TEntity rtEntity)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
@@ -99,7 +99,7 @@ internal class TenantRepository(
         await mutation.UpdateManyAsync(session, rtEntity).ConfigureAwait(false);
     }
 
-    protected override async Task ReplaceOneRtEntityAsync<TEntity>(IOctoSession session, CkId<CkTypeId> ckTypeId,
+    protected override async Task ReplaceOneRtEntityAsync<TEntity>(IOctoSession session, RtCkId<CkTypeId> ckTypeId,
         FieldFilterCriteria fieldFilterCriteria, TEntity rtEntity)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
@@ -202,9 +202,9 @@ internal class TenantRepository(
     }
 
     public async Task<IResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session, OctoObjectId originRtId,
-        CkId<CkTypeId> originCkTypeId,
-        CkId<CkAssociationRoleId> roleId,
-        CkId<CkTypeId> targetCkTypeId,
+        RtCkId<CkTypeId> originCkTypeId,
+        RtCkId<CkAssociationRoleId> roleId,
+        RtCkId<CkTypeId> targetCkTypeId,
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation,
         int? skip = null,
         int? take = null)
@@ -219,7 +219,7 @@ internal class TenantRepository(
     public async Task<IResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
         IOctoSession session,
         OctoObjectId originRtId,
-        CkId<CkAssociationRoleId> roleId,
+        RtCkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, DataQueryOperation dataQueryOperation,
         int? skip = null,
         int? take = null)
@@ -234,12 +234,12 @@ internal class TenantRepository(
     }
 
     public async Task<IResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TTargetEntity>(IOctoSession session,
-        OctoObjectId originRtId, CkId<CkTypeId> originCkTypeId,
-        CkId<CkAssociationRoleId> roleId, GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds,
+        OctoObjectId originRtId, RtCkId<CkTypeId> originCkTypeId,
+        RtCkId<CkAssociationRoleId> roleId, GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds,
         DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null) where TTargetEntity : RtEntity, new()
     {
-        var targetCkTypeId = RtEntityExtensions.GetCkTypeId<TTargetEntity>();
+        var targetCkTypeId = RtEntityExtensions.GetRtCkTypeId<TTargetEntity>();
 
         var result = await GetRtAssociationTargetsAsync<TTargetEntity>(session, [originRtId], originCkTypeId, roleId,
             graphDirection,
@@ -249,8 +249,8 @@ internal class TenantRepository(
     }
 
     public Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
-        IEnumerable<OctoObjectId> originRtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
-        CkId<CkTypeId> targetCkTypeId,
+        IEnumerable<OctoObjectId> originRtIds, RtCkId<CkTypeId> originCkTypeId, RtCkId<CkAssociationRoleId> roleId,
+        RtCkId<CkTypeId> targetCkTypeId,
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, DataQueryOperation dataQueryOperation,
         int? skip = null,
         int? take = null)
@@ -262,15 +262,15 @@ internal class TenantRepository(
     public Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity,
         TTargetEntity>(
         IOctoSession session,
-        IEnumerable<OctoObjectId> originRtIds, CkId<CkAssociationRoleId> roleId,
+        IEnumerable<OctoObjectId> originRtIds, RtCkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, DataQueryOperation dataQueryOperation,
         int? skip = null,
         int? take = null)
         where TOriginEntity : RtEntity
         where TTargetEntity : RtEntity, new()
     {
-        var originCkTypeId = RtEntityExtensions.GetCkTypeId<TOriginEntity>();
-        var targetCkTypeId = RtEntityExtensions.GetCkTypeId<TTargetEntity>();
+        var originCkTypeId = RtEntityExtensions.GetRtCkTypeId<TOriginEntity>();
+        var targetCkTypeId = RtEntityExtensions.GetRtCkTypeId<TTargetEntity>();
 
         return GetRtAssociationTargetsAsync<TTargetEntity>(session, originRtIds, originCkTypeId, roleId, graphDirection,
             targetRtIds, targetCkTypeId, dataQueryOperation, skip, take);
@@ -279,8 +279,8 @@ internal class TenantRepository(
     private async Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<
         TTargetEntity>(
         IOctoSession session,
-        IEnumerable<OctoObjectId> originRtIds, CkId<CkTypeId> originCkTypeId, CkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, CkId<CkTypeId> targetCkTypeId,
+        IEnumerable<OctoObjectId> originRtIds, RtCkId<CkTypeId> originCkTypeId, RtCkId<CkAssociationRoleId> roleId,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, RtCkId<CkTypeId> targetCkTypeId,
         DataQueryOperation dataQueryOperation,
         int? skip = null,
         int? take = null)
@@ -312,11 +312,11 @@ internal class TenantRepository(
     public async Task<IResultSet<TTargetEntity>> GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
         IOctoSession session,
         OctoObjectId originRtId,
-        CkId<CkAssociationRoleId> roleId,
+        RtCkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection) where TOriginEntity : RtEntity where TTargetEntity : RtEntity, new()
     {
         var dataQueryOperation = DataQueryOperation.Create();
-        var originCkTypeId = RtEntityExtensions.GetCkTypeId<TOriginEntity>();
+        var originCkTypeId = RtEntityExtensions.GetRtCkTypeId<TOriginEntity>();
         var originRtEntityId = new RtEntityId(originCkTypeId, originRtId);
 
         var resultSets = await GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(session,
@@ -327,7 +327,7 @@ internal class TenantRepository(
 
     public async Task<IResultSet<RtEntity>> GetIndirectRtAssociationTargetsAsync(IOctoSession session,
         RtEntityId originRtEntityId,
-        CkId<CkAssociationRoleId> roleId, CkId<CkTypeId> targetCkTypeId, GraphDirections graphDirection)
+        RtCkId<CkAssociationRoleId> roleId, RtCkId<CkTypeId> targetCkTypeId, GraphDirections graphDirection)
     {
         var dataQueryOperation = DataQueryOperation.Create();
 
@@ -340,13 +340,13 @@ internal class TenantRepository(
     public async Task<IMultipleOriginResultSet<TTargetEntity>> GetIndirectRtAssociationTargetsAsync<TOriginEntity,
         TTargetEntity>(
         IOctoSession session, IEnumerable<OctoObjectId> originRtIds,
-        CkId<CkAssociationRoleId> roleId,
+        RtCkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation,
         int? skip = null,
         int? take = null) where TOriginEntity : RtEntity where TTargetEntity : RtEntity, new()
     {
-        var originCkTypeId = RtEntityExtensions.GetCkTypeId<TOriginEntity>();
-        var targetCkTypeId = RtEntityExtensions.GetCkTypeId<TTargetEntity>();
+        var originCkTypeId = RtEntityExtensions.GetRtCkTypeId<TOriginEntity>();
+        var targetCkTypeId = RtEntityExtensions.GetRtCkTypeId<TTargetEntity>();
 
         var ckCacheService = await GetCkCacheServiceAsync();
         var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
@@ -372,9 +372,9 @@ internal class TenantRepository(
     }
 
     public async Task<IMultipleOriginResultSet<RtEntity>> GetIndirectRtAssociationTargetsAsync(IOctoSession session,
-        IEnumerable<OctoObjectId> originRtIds, CkId<CkTypeId> originCkTypeId,
-        CkId<CkAssociationRoleId> roleId, GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds,
-        CkId<CkTypeId> targetCkTypeId,
+        IEnumerable<OctoObjectId> originRtIds, RtCkId<CkTypeId> originCkTypeId,
+        RtCkId<CkAssociationRoleId> roleId, GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds,
+        RtCkId<CkTypeId> targetCkTypeId,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
@@ -402,14 +402,13 @@ internal class TenantRepository(
 
     public async Task<IResultSet<RtDeepGraphQueryResult>> GetRtDeepGraphAsync(IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds,
-        CkId<CkTypeId> originCkTypeId,
+        RtCkId<CkTypeId> originCkTypeId,
         DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
     {
         var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
 
         var hierarchicalDeepRtGraphQuery = new MultipleOriginHierarchicalDeepRtGraphQuery(mongoDbRepositoryDataSource,
-            dataQueryOperation.Language, originRtIds, originTypeGraph,
-            new CkId<CkAssociationRoleId>(SystemCkIds.ModelId, SystemCkIds.ParentChild));
+            dataQueryOperation.Language, originRtIds, originTypeGraph, SystemCkIds.RtCkParentChildRoleId);
         hierarchicalDeepRtGraphQuery.AddFieldFilterCriteria(dataQueryOperation);
         hierarchicalDeepRtGraphQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
         hierarchicalDeepRtGraphQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
@@ -422,7 +421,7 @@ internal class TenantRepository(
     }
 
     protected override async Task<IResultSet<TEntity>> GetRtEntitiesByTypeAsync<TEntity>(IOctoSession session,
-        CkId<CkTypeId> ckTypeId,
+        RtCkId<CkTypeId> ckTypeId,
         DataQueryOperation dataQueryOperation, int? skip = null,
         int? take = null)
     {
@@ -444,7 +443,7 @@ internal class TenantRepository(
     }
 
     protected override async Task<IResultSet<TEntity>> GetRtEntitiesByIdAsync<TEntity>(IOctoSession session,
-        CkId<CkTypeId> ckTypeId,
+        RtCkId<CkTypeId> ckTypeId,
         IReadOnlyList<OctoObjectId> rtIds, DataQueryOperation dataQueryOperation,
         int? skip = null, int? take = null)
     {
@@ -473,19 +472,20 @@ internal class TenantRepository(
     }
 
     public override async Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByTypeAsync(IOctoSession session,
-        CkId<CkTypeId> ckTypeId, DataQueryOperation dataQueryOperation,
+        RtCkId<CkTypeId> ckTypeId, DataQueryOperation dataQueryOperation,
         ICollection<NavigationPair> navigationPairs, int? skip = null, int? take = null)
     {
+        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
+
         // We analyze FieldFilters and search for navigation properties, we assign them to the correct roleIdDirectionPairs
         // and remove them from the FieldFilters
         var ckCacheService = await GetCkCacheServiceAsync();
         if (dataQueryOperation.FieldFilters != null)
         {
-            RtPathEvaluator.MergeFieldFilterToNavigationPairs(ckCacheService, TenantId, ckTypeId,
+            RtPathEvaluator.MergeFieldFilterToNavigationPairs(ckCacheService, TenantId, ckTypeGraph.CkTypeId,
                 navigationPairs.ToArray(), dataQueryOperation.FieldFilters);
         }
 
-        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var query =
             new SingleOriginRtQuery<RtEntityGraphItem>(metricsContext, ckCacheService, TenantId, ckTypeGraph,
                 mongoDbRepositoryDataSource,
@@ -503,7 +503,7 @@ internal class TenantRepository(
     }
 
     public override async Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByIdAsync(IOctoSession session,
-        CkId<CkTypeId> ckTypeId, IReadOnlyList<OctoObjectId> rtIds,
+        RtCkId<CkTypeId> ckTypeId, IReadOnlyList<OctoObjectId> rtIds,
         DataQueryOperation dataQueryOperation, IEnumerable<NavigationPair> roleIdDirectionPairs, int? skip = null,
         int? take = null)
     {
@@ -536,7 +536,7 @@ internal class TenantRepository(
 
     #region Subscriptions
 
-    public Task<IUpdateStream<RtEntity>> WatchRtEntitiesAsync(CkId<CkTypeId> ckTypeId,
+    public Task<IUpdateStream<RtEntity>> WatchRtEntitiesAsync(RtCkId<CkTypeId> ckTypeId,
         WatchStreamFilter watchStreamFilter,
         CancellationToken cancellationToken = default)
     {
@@ -547,11 +547,11 @@ internal class TenantRepository(
         CancellationToken cancellationToken = default)
         where TEntity : RtEntity, new()
     {
-        CkId<CkTypeId> ckTypeId = RtEntityExtensions.GetCkTypeId<TEntity>();
+        RtCkId<CkTypeId> ckTypeId = RtEntityExtensions.GetRtCkTypeId<TEntity>();
         return WatchRtEntitiesAsync<TEntity>(ckTypeId, watchStreamFilter, cancellationToken);
     }
 
-    private async Task<IUpdateStream<TEntity>> WatchRtEntitiesAsync<TEntity>(CkId<CkTypeId> ckTypeId,
+    private async Task<IUpdateStream<TEntity>> WatchRtEntitiesAsync<TEntity>(RtCkId<CkTypeId> ckTypeId,
         WatchStreamFilter watchStreamFilter, CancellationToken cancellationToken = default)
         where TEntity : RtEntity, new()
     {
@@ -578,8 +578,8 @@ internal class TenantRepository(
         return subscription.WatchRtEntitiesAsync(watchStreamFilter.UpdateTypes, cancellationToken);
     }
 
-    public IUpdateStream<RtAssociation> WatchToRtAssociationsAsync(CkId<CkTypeId> originCkTypeId,
-        CkId<CkTypeId> targetCkTypeId,
+    public IUpdateStream<RtAssociation> WatchToRtAssociationsAsync(RtCkId<CkTypeId> originCkTypeId,
+        RtCkId<CkTypeId> targetCkTypeId,
         UpdateAssociationStreamFilter updateStreamFilter,
         CancellationToken cancellationToken = default)
     {
@@ -658,8 +658,8 @@ internal class TenantRepository(
         CancellationToken cancellationToken = default) where TOriginEntity : RtEntity, new()
         where TTargetEntity : RtEntity, new()
     {
-        var originCkTypeId = RtEntityExtensions.GetCkTypeId<TOriginEntity>();
-        var targetCkTypeId = RtEntityExtensions.GetCkTypeId<TTargetEntity>();
+        var originCkTypeId = RtEntityExtensions.GetRtCkTypeId<TOriginEntity>();
+        var targetCkTypeId = RtEntityExtensions.GetRtCkTypeId<TTargetEntity>();
 
         return WatchToRtAssociationsAsync(originCkTypeId, targetCkTypeId, updateStreamFilter, cancellationToken);
     }
@@ -669,21 +669,21 @@ internal class TenantRepository(
     #region Advanced functionality
 
     public async Task<IEnumerable<AutoCompleteText>> ExtractAutoCompleteValuesAsync(IOctoSession session,
-        CkId<CkTypeId> ckTypeId,
+        RtCkId<CkTypeId> rtCkTypeId,
         string attributeName, string regexFilterValue, int takeCount)
     {
         ArgumentValidation.ValidateString(nameof(attributeName), attributeName);
         ArgumentValidation.ValidateString(nameof(regexFilterValue), regexFilterValue);
 
-        var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
-        if (ckTypeGraph == null)
+        var cacheService = await this.GetCkCacheServiceAsync().ConfigureAwait(false);
+        if (!cacheService.TryGetRtCkType(TenantId, rtCkTypeId, out var ckTypeGraph))
         {
-            throw InvalidCkTypeIdException.CkTypeIdNotFound(TenantId, ckTypeId);
+            throw InvalidCkTypeIdException.RtCkTypeIdNotFound(TenantId, rtCkTypeId);
         }
 
         if (ckTypeGraph.AllAttributes.All(x => x.Value.AttributeName != attributeName))
         {
-            throw InvalidAttributeException.AttributeNotFound(ckTypeId, attributeName);
+            throw InvalidAttributeException.AttributeNotFoundAtRtCkIdType(rtCkTypeId, attributeName);
         }
 
         var match = new BsonDocument
@@ -716,7 +716,7 @@ internal class TenantRepository(
         ArgumentValidation.ValidateString(nameof(attributeName), attributeName);
 
         var ckType =
-            await mongoDbRepositoryDataSource.CkTypes.FindSingleOrDefaultAsync(session, x => x.CkTypeId == ckTypeId);
+            await mongoDbRepositoryDataSource.CkTypes.DocumentAsync(session, ckTypeId);
         if (ckType == null)
         {
             throw InvalidCkTypeIdException.CkTypeIdNotFound(TenantId, ckTypeId);

@@ -2,7 +2,9 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v1;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
+
 using TestCkModel.Generated.Test.v1;
+
 using Xunit;
 
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
@@ -24,15 +26,13 @@ public class GetRtAssociationTargetsAsyncTests(GenerateSampleDataFixture generat
 
         var dataQueryOperation = DataQueryOperation.Create();
 
-        var result = await tenantRepository.GetRtEntitiesByTypeAsync(session, new CkId<CkTypeId>(TestCkIds.ModelId, TestCkIds.DistrictTypeId),
+        var result = await tenantRepository.GetRtEntitiesByTypeAsync(session, TestCkIds.RtCkDistrictTypeId,
             dataQueryOperation, 0, 5);
 
         var rtIds = result.Items.Select(x => x.RtId).ToList();
-        var deep = await tenantRepository.GetRtAssociationTargetsAsync(session, rtIds,
-            new CkId<CkTypeId>(TestCkIds.ModelId, TestCkIds.DistrictTypeId),
-            new CkId<CkAssociationRoleId>(SystemCkIds.ModelId, SystemCkIds.ParentChild), 
-            new CkId<CkTypeId>(TestCkIds.ModelId, TestCkIds.MunicipalityTypeId),
-            GraphDirections.Inbound, null,
+        var deep = await tenantRepository.GetRtAssociationTargetsAsync(session, rtIds, TestCkIds.RtCkDistrictTypeId,
+            SystemCkIds.RtCkParentChildRoleId,
+            TestCkIds.RtCkMunicipalityTypeId, GraphDirections.Inbound, null,
             dataQueryOperation, 0, 5);
 
         Assert.Equal(5, deep.Count);

@@ -32,7 +32,7 @@ internal class RtEntityGraphItemFieldFilterResolver(
             throw OperationFailedException.AttributePathInvalid(attributePath);
         }
 
-        var targetCkTypeGraph = _ckCacheService.GetCkType(_tenantId, navigationPair.TargetCkTypeId);
+        var targetCkTypeGraph = _ckCacheService.GetRtCkType(_tenantId, navigationPair.TargetCkTypeId);
         RtEntityFieldFilterResolver<RtEntity> resolver = new(_ckCacheService, _tenantId, targetCkTypeGraph);
         return resolver.IsAttributePathValid(RtPathEvaluator.GetPath(navigationPair.SubPathTerms.First()));
     }
@@ -55,7 +55,7 @@ internal class RtEntityGraphItemFieldFilterResolver(
             throw OperationFailedException.AttributePathInvalid(attributePath);
         }
 
-        var targetCkTypeGraph = _ckCacheService.GetCkType(_tenantId, navigationPair.TargetCkTypeId);
+        var targetCkTypeGraph = _ckCacheService.GetRtCkType(_tenantId, navigationPair.TargetCkTypeId);
         RtEntityFieldFilterResolver<RtEntity> resolver = new(_ckCacheService, _tenantId, targetCkTypeGraph);
         return resolver.ResolveAttributePath(RtPathEvaluator.GetPath(navigationPair.SubPathTerms.First()));
 

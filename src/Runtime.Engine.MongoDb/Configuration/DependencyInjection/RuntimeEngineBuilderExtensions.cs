@@ -1,5 +1,5 @@
 using Meshmakers.Common.Metrics.Context;
-using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
+using Meshmakers.Octo.ConstructionKit.Engine.ModelRepositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
@@ -12,6 +12,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModifications;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Defaults;
+
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 // ReSharper disable once CheckNamespace
@@ -41,7 +42,8 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services.AddCkModelSystem();
 
         // Add services of Persistence module
-        builder.Services.AddTransient<ICkModelRepository, DatabaseCkModelRepository>();
+        builder.Services.AddTransient<IDatabaseCkModelRepository, DatabaseCkModelRepository>();
+        builder.Services.AddTransient<IModelRepository>(sp => sp.GetRequiredService<IDatabaseCkModelRepository>());
         builder.Services.AddSingleton<ISystemContext, SystemContext>();
         builder.Services.AddSingleton<IModelLoaderService, ModelLoaderService>();
         builder.Services.AddSingleton<IMetricsContext, MetricsContext>();
@@ -57,7 +59,7 @@ public static class RuntimeEngineBuilderExtensions
 
 
         MongoRepositoryClient.RegisterSerializers();
-        
+
         return builder;
     }
 }

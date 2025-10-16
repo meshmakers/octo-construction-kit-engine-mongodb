@@ -49,7 +49,7 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
             new Collection<AssociationUpdateInfo>(), BulkRtMutationOptions.Default);
     }
 
-    public async Task UpdateOneAsync(IOctoSession session, CkId<CkTypeId> ckTypeId, TEntity rtEntity)
+    public async Task UpdateOneAsync(IOctoSession session, RtCkId<CkTypeId> ckTypeId, TEntity rtEntity)
     {
         var filterDefinitions = CreateFilterDefinitions();
         if (filterDefinitions == null)

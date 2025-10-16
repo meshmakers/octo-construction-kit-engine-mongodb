@@ -54,7 +54,7 @@ public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture syst
 
         for (var i = 0; i < 5; i++)
         {
-            var rtContinent = await tenantRepository.CreateTransientRtEntityAsync(new CkId<CkTypeId>(TestCkIds.ModelId, TestCkIds.ContinentTypeId));
+            var rtContinent = await tenantRepository.CreateTransientRtEntityAsync(TestCkIds.CkContinentTypeId);
             rtContinent.SetAttributeValue("Name", AttributeValueTypesDto.String, "test" + i);
             await tenantRepository.InsertOneRtEntityAsync(session, rtContinent);
         }

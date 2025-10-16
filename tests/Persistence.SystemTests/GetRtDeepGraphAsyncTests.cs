@@ -31,7 +31,7 @@ public class GetRtDeepGraphAsyncTests
         var resultSet = await tenantRepository.GetRtDeepGraphAsync(session, [
                 new OctoObjectId("66803ecf4aa85720dda96a97"),
             ],
-            new CkId<CkTypeId>("Test/Continent"), dataOperation);
+            new RtCkId<CkTypeId>("Test/Continent"), dataOperation);
 
         await session.CommitTransactionAsync();
 
@@ -51,7 +51,7 @@ public class GetRtDeepGraphAsyncTests
         var resultSet = await tenantRepository.GetRtDeepGraphAsync(session, [
                 new OctoObjectId("66803ecf4aa85720dda96b09"),
             ],
-            new CkId<CkTypeId>("Test/HouseHold"), dataOperation);
+            new RtCkId<CkTypeId>("Test/HouseHold"), dataOperation);
 
         await session.CommitTransactionAsync();
 
@@ -73,7 +73,7 @@ public class GetRtDeepGraphAsyncTests
         var resultSet = await tenantRepository.GetRtDeepGraphAsync(session, [
                 new OctoObjectId("66803ecf4aa85720dda96a97"),
             ],
-            new CkId<CkTypeId>("Test/Continent"), dataOperation, 1, 2);
+            new RtCkId<CkTypeId>("Test/Continent"), dataOperation, 1, 2);
 
         await session.CommitTransactionAsync();
 
@@ -95,7 +95,7 @@ public class GetRtDeepGraphAsyncTests
                 new OctoObjectId("66803ecf4aa85720dda96b07"),
                 new OctoObjectId("66803ecf4aa85720dda96b08"),
             ],
-            new CkId<CkTypeId>("Test/Municipality"), dataOperation);
+            new RtCkId<CkTypeId>("Test/Municipality"), dataOperation);
 
         await session.CommitTransactionAsync();
 
@@ -115,7 +115,7 @@ public class GetRtDeepGraphAsyncTests
         var resultSet = await tenantRepository.GetRtDeepGraphAsync(session, [
                 new OctoObjectId("66803ecf4aa85720dda96b11"),
             ],
-            new CkId<CkTypeId>("Test/MeasuringPoint"), dataOperation);
+            new RtCkId<CkTypeId>("Test/MeasuringPoint"), dataOperation);
 
         await session.CommitTransactionAsync();
 

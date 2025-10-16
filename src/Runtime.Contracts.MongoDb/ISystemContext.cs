@@ -60,6 +60,12 @@ public interface ISystemContext : ITenantContext
     /// <returns>The tenant repository or null if not found</returns>
     Task<ITenantRepository?> TryFindTenantRepositoryAsync(string tenantId);
 
+    /// <summary>
+    /// Ensures that the system construction kit model is imported into the tenant with the correct version.
+    /// </summary>
+    /// <returns>></returns>
+    Task EnsureSystemCkModelAsync();
+
     #region Backup and Restore
 
     /// <summary>

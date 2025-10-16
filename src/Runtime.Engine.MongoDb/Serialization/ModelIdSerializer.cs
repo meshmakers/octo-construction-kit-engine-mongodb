@@ -31,7 +31,7 @@ public class ModelIdSerializer : SerializerBase<CkModelId>, IBsonDocumentSeriali
 
     public bool TryGetMemberSerializationInfo(string memberName, [UnscopedRef] out BsonSerializationInfo serializationInfo)
     {
-        if (memberName == nameof(CkModelId.ModelId))
+        if (memberName == nameof(CkModelId.Name))
         {
             serializationInfo = new BsonSerializationInfo(memberName, new ModelIdSerializer(), typeof(string));
             return true;

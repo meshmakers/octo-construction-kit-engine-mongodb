@@ -22,7 +22,7 @@ internal class MultipleOriginDirectAssociationsRtQuery : MultipleOriginDirectAss
     internal MultipleOriginDirectAssociationsRtQuery(ICkCacheService ckCacheService, string tenantId,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
         string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
-        CkId<CkAssociationRoleId> roleId,
+        RtCkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
         : base(ckCacheService, tenantId, mongoDbRepositoryDataSource, language, rtIds, originCkTypeGraph, roleId,
             graphDirection,
@@ -39,7 +39,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
     private readonly string _tenantId;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
     private readonly CkTypeGraph _originCkTypeGraph;
-    private readonly CkId<CkAssociationRoleId> _roleId;
+    private readonly RtCkId<CkAssociationRoleId> _roleId;
     private readonly IEnumerable<OctoObjectId> _rtIds;
     private readonly CkTypeGraph _targetCkTypeGraph;
     private readonly List<IPipelineStageDefinition> _geospatialFilters;
@@ -47,7 +47,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
     internal MultipleOriginDirectAssociationsRtQuery(ICkCacheService ckCacheService, string tenantId,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
         string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
-        CkId<CkAssociationRoleId> roleId,
+        RtCkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
         : base(new RtEntityFieldFilterResolver<TTargetEntity>(ckCacheService, tenantId, targetCkTypeGraph), language)
     {
