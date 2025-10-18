@@ -104,9 +104,11 @@ public class OperationFailedException : PersistenceException
             exception);
     }
 
-    public static Exception ModelImportingWaitTimeout()
+    public static Exception ModelImportingWaitTimeout(IEnumerable<string> importingModels, int timeoutMilliseconds)
     {
-        return new OperationFailedException("Model importing wait timeout.");
+        return new OperationFailedException("Model importing wait timeout. That means a construction kit model is in" +
+                                            $" importing state since {timeoutMilliseconds} milliseconds. Importing" +
+                                            $" models: {string.Join(", ", importingModels)}");
     }
 
     public static Exception CkTypeIdUndefined()

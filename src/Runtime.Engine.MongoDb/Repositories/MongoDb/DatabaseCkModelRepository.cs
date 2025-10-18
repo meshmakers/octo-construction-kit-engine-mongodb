@@ -24,6 +24,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 /// </summary>
 public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 {
+    private const int MaxRetryAttempts = 60;
+    private const int DelayMilliseconds = 2000;
     private readonly IRepositoryModelResolver _repositoryModelResolver;
     private readonly ILogger<DatabaseCkModelRepository> _logger;
 
@@ -342,23 +344,24 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         object? sourceIdentifier,
         CancellationToken? cancellationToken)
     {
-        _logger.LogInformation("Executing import of CK model");
+        _logger.LogInformation("Executing import of CK model '{CkModelId}' to database", compiledModel.ModelId);
         await CheckParallelModelImport(compiledModel, mongoDbRepositoryDataSource);
 
         try
         {
-            _logger.LogInformation("Validating of CK model");
+            _logger.LogInformation("Validating of CK model '{CkModelId}'", compiledModel.ModelId);
             var originFileResolver = new OriginFileResolver("-");
             await _repositoryModelResolver.HardResolveAsync(compiledModel, originFileResolver, operationResult,
                 sourceIdentifier);
             if (operationResult.HasErrors)
             {
-                _logger.LogInformation("Import of CK model failed, model is not valid");
+                _logger.LogInformation("Import of CK model '{CkModelId}' failed, model is not valid",
+                    compiledModel.ModelId);
                 operationResult.WriteMessagesToLogger(_logger);
                 throw OperationFailedException.ValidationErrors();
             }
 
-            _logger.LogDebug("Starting import of CK model");
+            _logger.LogInformation("Starting import of CK model '{CkModelId}'", compiledModel.ModelId);
 
             CheckCancellation(cancellationToken);
 
@@ -474,10 +477,12 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 updateDefinition);
 
             await sessionComplete.CommitTransactionAsync();
+
+            _logger.LogInformation("Import of CK model {CkModelId} to database succeeded", compiledModel.ModelId);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Import of CK model to database failed");
+            _logger.LogError(ex, "Import of CK model {CkModelId}  to database failed", compiledModel.ModelId);
 
             using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
             session.StartTransaction();
@@ -489,8 +494,6 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
             throw;
         }
-
-        _logger.LogDebug("Import of CK model to database completed");
     }
 
     private async Task CheckParallelModelImport(CkCompiledModelRoot compiledModel,
@@ -498,7 +501,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     {
         var queryable = await mongoDbRepositoryDataSource.CkModels.AsQueryableAsync();
 
-        int retries = 5;
+        int retries = MaxRetryAttempts;
         while (true)
         {
             _logger.LogInformation("Checking if CK model '{ModelId}' can be imported", compiledModel.ModelId);
@@ -515,12 +518,11 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 Interlocked.Decrement(ref retries);
                 if (retries <= 0)
                 {
-                    _logger.LogInformation(
-                        "Current CK model is importing, tried 5 times to wait for the import to finish");
-                    throw OperationFailedException.ModelImportingWaitTimeout();
+                    throw OperationFailedException.ModelImportingWaitTimeout(importingModels,
+                        MaxRetryAttempts * DelayMilliseconds);
                 }
 
-                await Task.Delay(1000);
+                await Task.Delay(DelayMilliseconds);
             }
             else
             {

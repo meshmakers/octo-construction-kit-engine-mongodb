@@ -10,10 +10,11 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 internal class RepositoryDistributedLockService(
     IRepositoryClient repositoryClient,
     IRepositoryInternal repository,
-    ILogger logger, string id)
+    ILogger logger,
+    string id)
     : IAsyncDisposable
 {
-    private const int MaxRetryAttempts = 5;
+    private const int MaxRetryAttempts = 60;
     private const int DelayMilliseconds = 2000;
     private bool _isLockAcquired;
 
@@ -28,12 +29,12 @@ internal class RepositoryDistributedLockService(
             var collection = repository.GetCollection(new LockMongoDataSourceMapper());
 
             var filter = Builders<SysLock>.Filter.And(
-                Builders<SysLock>.Filter.Eq(sysLock=> sysLock.Id, id)
+                Builders<SysLock>.Filter.Eq(sysLock => sysLock.Id, id)
             );
 
             var update = Builders<SysLock>.Update
-                .Set(sysLock=> sysLock.Id, id)
-                .Set(sysLock=> sysLock.CreationDateTime, DateTime.UtcNow);
+                .Set(sysLock => sysLock.Id, id)
+                .Set(sysLock => sysLock.CreationDateTime, DateTime.UtcNow);
 
             SysLock? result = null;
             int attempt = 0;
@@ -44,11 +45,14 @@ internal class RepositoryDistributedLockService(
                     attempt++;
                     if (attempt >= MaxRetryAttempts)
                     {
-                        throw new Exception($"Could not acquire distributed lock '{id}' after {MaxRetryAttempts} attempts.");
+                        throw new Exception(
+                            $"Could not acquire distributed lock '{id}' after {MaxRetryAttempts * DelayMilliseconds} milliseconds.");
                     }
+
                     logger.LogInformation("Waiting for distributed lock '{LockId}'", id);
                     await Task.Delay(DelayMilliseconds);
                 }
+
                 result = await collection.FindOneAndUpsertAsync(session, filter, update, ReturnDocument.Before);
             } while (result != null);
 
@@ -56,6 +60,13 @@ internal class RepositoryDistributedLockService(
             await session.CommitTransactionAsync();
 
             _isLockAcquired = true;
+        }
+        catch (MongoCommandException ex)
+        {
+            logger.LogError(ex, "MongoDB command error while acquiring distributed lock '{LockId}', code {Code}", id,
+                ex.Code);
+            await session.AbortTransactionAsync();
+            throw;
         }
         catch (Exception e)
         {
@@ -67,8 +78,12 @@ internal class RepositoryDistributedLockService(
 
     public async ValueTask DisposeAsync()
     {
+        logger.LogInformation("Disposing distributed lock service");
+
         if (_isLockAcquired)
         {
+            logger.LogInformation("Releasing distributed lock on dispose");
+
             var session = await repositoryClient.GetSessionAsync().ConfigureAwait(false);
             session.StartTransaction();
             try
@@ -78,13 +93,14 @@ internal class RepositoryDistributedLockService(
                 var collection = repository.GetCollection(new LockMongoDataSourceMapper());
 
                 var filter = Builders<SysLock>.Filter.And(
-                    Builders<SysLock>.Filter.Eq(sysLock=> sysLock.Id, id)
+                    Builders<SysLock>.Filter.Eq(sysLock => sysLock.Id, id)
                 );
                 await collection.DeleteOneAsync(session, filter);
 
                 logger.LogInformation("Released distributed lock");
                 await session.CommitTransactionAsync();
 
+                _isLockAcquired = false;
             }
             catch (Exception e)
             {

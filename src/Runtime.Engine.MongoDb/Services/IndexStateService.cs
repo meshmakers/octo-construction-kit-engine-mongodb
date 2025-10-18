@@ -10,7 +10,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 /// <summary>
 /// Service responsible for tracking index creation operations and managing index states on CkTypes
 /// </summary>
-internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, CkType> ckTypes, ILogger logger) {
+internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, CkType> ckTypes, ILogger logger)
+{
     private IndexOperationTracker? _currentTracker;
 
     public void BeginTracking()
@@ -43,7 +44,8 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
 
         if (state == IndexState.Failed)
         {
-            logger.LogWarning("Index '{IndexName}' failed for type '{TypeId}' on collection '{CollectionName}': {ErrorMessage}",
+            logger.LogWarning(
+                "Index '{IndexName}' failed for type '{TypeId}' on collection '{CollectionName}': {ErrorMessage}",
                 indexName, typeId, collectionName, errorMessage);
         }
 
@@ -91,12 +93,13 @@ internal class IndexStateService(IMongoDbDataSourceCollection<CkId<CkTypeId>, Ck
 
                     // Remove only states that will be replaced by new states (match by name + collection)
                     var newStateKeys = newStates.Select(s => (s.Name, s.CollectionName)).ToHashSet();
-                    existingStates.RemoveAll(existing => newStateKeys.Contains((existing.Name, existing.CollectionName)));
+                    existingStates.RemoveAll(existing =>
+                        newStateKeys.Contains((existing.Name, existing.CollectionName)));
 
                     // Add new states
                     existingStates.AddRange(newStates);
 
-                    // Set states, preserving null if it was null and list is now empty
+                    // Set states, preserving null if it was null and the list is now empty
                     ckType.IndexStates = existingStates.Any() || hadStates ? existingStates : null;
 
                     typesToUpdate.Add(ckType);

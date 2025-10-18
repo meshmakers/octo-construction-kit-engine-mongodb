@@ -241,6 +241,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
     public async Task UpdateIndexAsync(IOctoSession session)
     {
+        _logger.LogInformation("Updating indexes of tenant '{TenantId}'", TenantId);
+
         await using var lockService =
             new RepositoryDistributedLockService(_repositoryClient, _repository, _logger, "index_update_lock");
         await lockService.AcquireLockAsync();
@@ -262,6 +264,9 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         // Create indexes for RtAssociations collection
         await CreateRtAssociationIndexesAsync();
+
+        _logger.LogInformation("Updating indexes of tenant '{TenantId}' completed", TenantId);
+
     }
 
     private async Task<Dictionary<CkId<CkTypeId>, List<CkType>>> CollectBaseTypesForCollectionRoots(
@@ -745,148 +750,150 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         // Get existing indexes to check if they already exist
         var existingIndexes = await collection.GetIndexListAsync();
 
-        var ckTypeIndices = new List<CkTypeIndex>();
-        ckTypeIndices.Add(new()
+        var ckTypeIndices = new List<CkTypeIndex>
         {
-            IndexType = IndexTypes.Ascending,
-            Fields =
-            [
-                new CkIndexFields
-                {
-                    AttributeNames =
-                    [
-                        nameof(RtAssociation.OriginCkTypeId).ToCamelCase(),
-                        nameof(RtAssociation.OriginRtId).ToCamelCase()
-                    ]
-                }
-            ]
-        });
-        ckTypeIndices.Add(new()
-        {
-            IndexType = IndexTypes.Ascending,
-            Fields =
-            [
-                new CkIndexFields
-                {
-                    AttributeNames =
-                    [
-                        nameof(RtAssociation.TargetCkTypeId).ToCamelCase(),
-                        nameof(RtAssociation.TargetRtId).ToCamelCase()
-                    ]
-                }
-            ]
-        });
-        ckTypeIndices.Add(new()
-        {
-            IndexType = IndexTypes.Ascending,
-            Fields =
-            [
-                new CkIndexFields
-                {
-                    AttributeNames =
-                    [
-                        nameof(RtAssociation.OriginCkTypeId).ToCamelCase(),
-                        nameof(RtAssociation.OriginRtId).ToCamelCase(),
-                        nameof(RtAssociation.AssociationRoleId).ToCamelCase()
-                    ]
-                }
-            ]
-        });
-        ckTypeIndices.Add(new()
-        {
-            IndexType = IndexTypes.Ascending,
-            Fields =
-            [
-                new CkIndexFields
-                {
-                    AttributeNames =
-                    [
-                        nameof(RtAssociation.TargetCkTypeId).ToCamelCase(),
-                        nameof(RtAssociation.TargetRtId).ToCamelCase(),
-                        nameof(RtAssociation.AssociationRoleId).ToCamelCase()
-                    ]
-                }
-            ]
-        });
-        ckTypeIndices.Add(new()
-        {
-            IndexType = IndexTypes.Ascending,
-            Fields =
-            [
-                new CkIndexFields
-                {
-                    AttributeNames =
-                    [
-                        nameof(RtAssociation.OriginRtId).ToCamelCase(),
-                        nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
-                        nameof(RtAssociation.TargetCkTypeId).ToCamelCase(),
-                        nameof(RtAssociation.TargetRtId).ToCamelCase()
-                    ]
-                }
-            ]
-        });
-        ckTypeIndices.Add(new()
-        {
-            IndexType = IndexTypes.Ascending,
-            Fields =
-            [
-                new CkIndexFields
-                {
-                    AttributeNames =
-                    [
-                        nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
-                        nameof(RtAssociation.OriginCkTypeId).ToCamelCase()
-                    ]
-                }
-            ]
-        });
-        ckTypeIndices.Add(new()
-        {
-            IndexType = IndexTypes.Ascending,
-            Fields =
-            [
-                new CkIndexFields
-                {
-                    AttributeNames =
-                    [
-                        nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
-                        nameof(RtAssociation.TargetCkTypeId).ToCamelCase()
-                    ]
-                }
-            ]
-        });
-        ckTypeIndices.Add(new()
-        {
-            IndexType = IndexTypes.Ascending,
-            Fields =
-            [
-                new CkIndexFields
-                {
-                    AttributeNames =
-                    [
-                        nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
-                        nameof(RtAssociation.OriginCkTypeId).ToCamelCase(),
-                        nameof(RtAssociation.OriginRtId).ToCamelCase()
-                    ]
-                }
-            ]
-        });
-        ckTypeIndices.Add(new()
-        {
-            IndexType = IndexTypes.Ascending,
-            Fields =
-            [
-                new CkIndexFields
-                {
-                    AttributeNames =
-                    [
-                        nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
-                        nameof(RtAssociation.TargetCkTypeId).ToCamelCase(),
-                        nameof(RtAssociation.TargetRtId).ToCamelCase()
-                    ]
-                }
-            ]
-        });
+            new()
+            {
+                IndexType = IndexTypes.Ascending,
+                Fields =
+                [
+                    new CkIndexFields
+                    {
+                        AttributeNames =
+                        [
+                            nameof(RtAssociation.OriginCkTypeId).ToCamelCase(),
+                            nameof(RtAssociation.OriginRtId).ToCamelCase()
+                        ]
+                    }
+                ]
+            },
+            new()
+            {
+                IndexType = IndexTypes.Ascending,
+                Fields =
+                [
+                    new CkIndexFields
+                    {
+                        AttributeNames =
+                        [
+                            nameof(RtAssociation.TargetCkTypeId).ToCamelCase(),
+                            nameof(RtAssociation.TargetRtId).ToCamelCase()
+                        ]
+                    }
+                ]
+            },
+            new()
+            {
+                IndexType = IndexTypes.Ascending,
+                Fields =
+                [
+                    new CkIndexFields
+                    {
+                        AttributeNames =
+                        [
+                            nameof(RtAssociation.OriginCkTypeId).ToCamelCase(),
+                            nameof(RtAssociation.OriginRtId).ToCamelCase(),
+                            nameof(RtAssociation.AssociationRoleId).ToCamelCase()
+                        ]
+                    }
+                ]
+            },
+            new()
+            {
+                IndexType = IndexTypes.Ascending,
+                Fields =
+                [
+                    new CkIndexFields
+                    {
+                        AttributeNames =
+                        [
+                            nameof(RtAssociation.TargetCkTypeId).ToCamelCase(),
+                            nameof(RtAssociation.TargetRtId).ToCamelCase(),
+                            nameof(RtAssociation.AssociationRoleId).ToCamelCase()
+                        ]
+                    }
+                ]
+            },
+            new()
+            {
+                IndexType = IndexTypes.Ascending,
+                Fields =
+                [
+                    new CkIndexFields
+                    {
+                        AttributeNames =
+                        [
+                            nameof(RtAssociation.OriginRtId).ToCamelCase(),
+                            nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
+                            nameof(RtAssociation.TargetCkTypeId).ToCamelCase(),
+                            nameof(RtAssociation.TargetRtId).ToCamelCase()
+                        ]
+                    }
+                ]
+            },
+            new()
+            {
+                IndexType = IndexTypes.Ascending,
+                Fields =
+                [
+                    new CkIndexFields
+                    {
+                        AttributeNames =
+                        [
+                            nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
+                            nameof(RtAssociation.OriginCkTypeId).ToCamelCase()
+                        ]
+                    }
+                ]
+            },
+            new()
+            {
+                IndexType = IndexTypes.Ascending,
+                Fields =
+                [
+                    new CkIndexFields
+                    {
+                        AttributeNames =
+                        [
+                            nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
+                            nameof(RtAssociation.TargetCkTypeId).ToCamelCase()
+                        ]
+                    }
+                ]
+            },
+            new()
+            {
+                IndexType = IndexTypes.Ascending,
+                Fields =
+                [
+                    new CkIndexFields
+                    {
+                        AttributeNames =
+                        [
+                            nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
+                            nameof(RtAssociation.OriginCkTypeId).ToCamelCase(),
+                            nameof(RtAssociation.OriginRtId).ToCamelCase()
+                        ]
+                    }
+                ]
+            },
+            new()
+            {
+                IndexType = IndexTypes.Ascending,
+                Fields =
+                [
+                    new CkIndexFields
+                    {
+                        AttributeNames =
+                        [
+                            nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
+                            nameof(RtAssociation.TargetCkTypeId).ToCamelCase(),
+                            nameof(RtAssociation.TargetRtId).ToCamelCase()
+                        ]
+                    }
+                ]
+            },
+        };
 
         int uniqueIndexNumber = 0;
 
