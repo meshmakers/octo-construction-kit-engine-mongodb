@@ -169,6 +169,13 @@ public class TenantContext : ITenantContext
             return;
         }
 
+        // If either the database not exist or the model already exist, we do nothing.
+        if (!await IsDatabaseExistingAsync(normalizedDatabaseName) ||
+            await IsCkModelExistingAsync(SystemCkIds.CkModelId))
+        {
+            return;
+        }
+
         var correlationId = Guid.NewGuid();
         try
         {
@@ -253,7 +260,7 @@ public class TenantContext : ITenantContext
                 var tenantRepository = GetTenantRepositoryAsAdmin();
                 await tenantRepository.InsertOneRtEntityAsync(adminSession, octoTenant);
             }
-            
+
             await _adminRepositoryClient.CreateUser(_systemConfiguration.Value.AuthenticationDatabaseName,
                 normalizedDatabaseName, string.Format(_systemConfiguration.Value.DatabaseUser, normalizedDatabaseName),
                 _systemConfiguration.Value.DatabaseUserPassword);
