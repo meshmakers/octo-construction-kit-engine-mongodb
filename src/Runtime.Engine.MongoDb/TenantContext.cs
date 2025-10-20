@@ -128,7 +128,7 @@ public class TenantContext : ITenantContext
             await CreateTenantInternalAsync(databaseName);
 
             // Restore the tenant system model on the newly created repository
-            await UpdateSystemCkModelAsync(normalizedDatabaseName, false);
+            await UpdateSystemCkModelAsync(normalizedDatabaseName, true);
 
             // Add the new tenant as child tenant of the current one
             if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
@@ -159,7 +159,7 @@ public class TenantContext : ITenantContext
         }
     }
 
-    protected async Task UpdateSystemCkModelAsync(string normalizedDatabaseName, bool sendNotifications = true)
+    protected async Task UpdateSystemCkModelAsync(string normalizedDatabaseName, bool isRepositoryInCreation = false)
     {
         var databaseContext = CreateRepositoryDataSourceAsAdmin(normalizedDatabaseName);
         var databaseSourceIdentifier = new TenantDatabaseSourceIdentifier(databaseContext);
@@ -170,8 +170,7 @@ public class TenantContext : ITenantContext
         }
 
         // If either the database not exist or the model already exist, we do nothing.
-        if (!await IsDatabaseExistingAsync(normalizedDatabaseName) ||
-            await IsCkModelExistingAsync(SystemCkIds.CkModelId))
+        if (!isRepositoryInCreation && (!await IsDatabaseExistingAsync(normalizedDatabaseName)))
         {
             return;
         }
@@ -179,7 +178,7 @@ public class TenantContext : ITenantContext
         var correlationId = Guid.NewGuid();
         try
         {
-            if (sendNotifications)
+            if (isRepositoryInCreation)
             {
                 await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
             }
@@ -201,7 +200,7 @@ public class TenantContext : ITenantContext
         }
         finally
         {
-            if (sendNotifications)
+            if (isRepositoryInCreation)
             {
                 await _tenantNotifications.NotifyPosTenantUpdateAsync(TenantId, correlationId);
             }
