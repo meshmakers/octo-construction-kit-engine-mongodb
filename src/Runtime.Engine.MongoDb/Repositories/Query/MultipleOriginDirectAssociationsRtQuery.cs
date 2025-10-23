@@ -126,7 +126,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         var connectFromField = (FieldDefinition<RtEntity, string[]>)"_id";
         var @as = (FieldDefinition<BsonDocument, TTargetEntity[]>)"_associations";
 
-        var targetCkIds = _targetCkTypeGraph.GetAllDerivedTypes(true);
+        var targetCkIds = _targetCkTypeGraph.GetAllDerivedTypes(true).Select(t=> t.ToRtCkId());
         var pipelineStageDefinitions = new List<IPipelineStageDefinition>([
             PipelineStageDefinitionBuilder.Match(
                 Builders<RtAssociation>.Filter.And(
