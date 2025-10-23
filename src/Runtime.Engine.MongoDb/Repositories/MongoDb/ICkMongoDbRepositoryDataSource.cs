@@ -1,4 +1,5 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
@@ -19,7 +20,7 @@ public interface ICkMongoDbRepositoryDataSource
     IMongoDbDataSourceCollection<OctoObjectId, CkRecordInheritance> CkRecordInheritances { get; }
 
     Task UpdateCollectionsAsync(IOctoSession session);
-    Task UpdateIndexAsync(IOctoSession session);
+    Task UpdateIndexAsync(IOctoSession session, bool includeModelsInStateImporting);
     
     Task<IOctoSession> CreateSessionAsync();
 }

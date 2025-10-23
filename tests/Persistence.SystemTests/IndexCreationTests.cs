@@ -163,11 +163,11 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
         }
         finally
         {
-            // Cleanup - Delete child tenant
-         //   using var cleanupSession = await systemContext.GetAdminSessionAsync();
-        //    cleanupSession.StartTransaction();
-        //    await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
-        //    await cleanupSession.CommitTransactionAsync();
+           //  Cleanup - Delete child tenant
+           using var cleanupSession = await systemContext.GetAdminSessionAsync();
+           cleanupSession.StartTransaction();
+           await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
+           await cleanupSession.CommitTransactionAsync();
         }
     }
 

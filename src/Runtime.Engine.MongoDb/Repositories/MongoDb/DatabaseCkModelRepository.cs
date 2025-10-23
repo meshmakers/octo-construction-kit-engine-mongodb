@@ -464,18 +464,24 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             await session.CommitTransactionAsync();
 
             _logger.LogDebug("Pos-work of CK model import");
-            using var sessionComplete = await mongoDbRepositoryDataSource.CreateSessionAsync();
-            sessionComplete.StartTransaction();
+            using var posWorkSession = await mongoDbRepositoryDataSource.CreateSessionAsync();
+            posWorkSession.StartTransaction();
 
             // Attention! This operation is critical. It forces an exclusive write lock on the database.
             _logger.LogDebug("Updating index");
-            await mongoDbRepositoryDataSource.UpdateIndexAsync(sessionComplete);
+            await mongoDbRepositoryDataSource.UpdateIndexAsync(posWorkSession,  true);
             CheckCancellation(cancellationToken);
 
             _logger.LogDebug("Validating dependencies of other CK models");
-            await ValidateDependencies(sessionComplete, mongoDbRepositoryDataSource);
+            await ValidateDependencies(posWorkSession, mongoDbRepositoryDataSource);
+            CheckCancellation(cancellationToken);
+
+            await posWorkSession.CommitTransactionAsync();
+
 
             _logger.LogDebug("Updating model state");
+            using var sessionComplete = await mongoDbRepositoryDataSource.CreateSessionAsync();
+            sessionComplete.StartTransaction();
             await UpdateModelStateAsync(sessionComplete, mongoDbRepositoryDataSource, compiledModel.ModelId,
                 ModelState.Available);
 

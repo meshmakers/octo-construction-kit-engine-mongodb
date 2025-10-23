@@ -46,11 +46,9 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     public async Task<TDocument?> FindOneAndUpsertAsync(IOctoSession session, FilterDefinition<TDocument> filter,
         UpdateDefinition<TDocument> updateDefinition, ReturnDocument returnDocument = ReturnDocument.After)
     {
-        var options = new FindOneAndUpdateOptions<TDocument> {
-            IsUpsert = true,
-            ReturnDocument = returnDocument
-        };
-        var document = await _documentCollection.FindOneAndUpdateAsync(((IOctoSessionInternal)session).SessionHandle, filter,
+        var options = new FindOneAndUpdateOptions<TDocument> { IsUpsert = true, ReturnDocument = returnDocument };
+        var document = await _documentCollection.FindOneAndUpdateAsync(((IOctoSessionInternal)session).SessionHandle,
+            filter,
             updateDefinition, options);
         return document;
     }
@@ -133,14 +131,12 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                     : Builders<TDocument>.IndexKeys.Ascending(Constants.AttributesName + "." + f.ToCamelCase()));
 
         // Create partial filter for specific type IDs
-        var partialFilterExpression = Builders<TDocument>.Filter.In(nameof(RtEntity.CkTypeId).ToCamelCase(), rtCkTypeIds);
+        var partialFilterExpression =
+            Builders<TDocument>.Filter.In(nameof(RtEntity.CkTypeId).ToCamelCase(), rtCkTypeIds);
 
         var options = new CreateIndexOptions<TDocument>
         {
-            Background = true,
-            Name = name,
-            Unique = true,
-            PartialFilterExpression = partialFilterExpression
+            Background = true, Name = name, Unique = true, PartialFilterExpression = partialFilterExpression
         };
 
         await _documentCollection.Indexes.CreateOneAsync(new CreateIndexModel<TDocument>(
@@ -168,10 +164,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
         var options = new CreateIndexOptions<TDocument>
         {
-            Background = true,
-            Name = name,
-            Unique = true,
-            PartialFilterExpression = partialFilterExpression
+            Background = true, Name = name, Unique = true, PartialFilterExpression = partialFilterExpression
         };
 
         await _documentCollection.Indexes.CreateOneAsync(new CreateIndexModel<TDocument>(
@@ -199,118 +192,136 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
     public async Task<ICollection<CkTypeIndexWithName>> GetIndexListAsync(string? prefix = null)
     {
-        List<CkTypeIndexWithName> indexes = new();
-        var r = await _documentCollection.Indexes.ListAsync();
-        foreach (var doc in await r.ToListAsync())
+        try
         {
-            var indexName = doc["name"].ToString();
-            if (!string.IsNullOrEmpty(indexName) && indexName != Constants.IdIndexName &&
-                (string.IsNullOrWhiteSpace(prefix) || indexName.StartsWith(prefix)))
+            List<CkTypeIndexWithName> indexes = new();
+
+            var r = await _documentCollection.Indexes.ListAsync();
+            foreach (var doc in await r.ToListAsync())
             {
-                var fieldsDict = new List<Tuple<string, int>>();
-                var indexType = IndexTypes.Ascending;
-                string? language = null;
-
-                // Check for unique constraint
-                bool isUnique = false;
-                if (doc.TryGetValue("unique", out var uniqueElement))
+                var indexName = doc["name"].ToString();
+                if (!string.IsNullOrEmpty(indexName) && indexName != Constants.IdIndexName &&
+                    (string.IsNullOrWhiteSpace(prefix) || indexName.StartsWith(prefix)))
                 {
-                    isUnique = uniqueElement.AsBoolean;
-                }
+                    var fieldsDict = new List<Tuple<string, int>>();
+                    var indexType = IndexTypes.Ascending;
+                    string? language = null;
 
-                // Check for partial filter expression (for UniqueNotDeleted)
-                bool hasPartialFilter = false;
-                if (doc.TryGetValue("partialFilterExpression", out var partialFilterElement))
-                {
-                    hasPartialFilter = partialFilterElement != null;
-                }
-
-                if (doc.TryGetValue("key", out var keyElement) && keyElement is BsonDocument keyDoc)
-                {
-                    if (keyDoc.TryGetValue("_fts", out var valueElement))
+                    // Check for unique constraint
+                    bool isUnique = false;
+                    if (doc.TryGetValue("unique", out var uniqueElement))
                     {
-                        if (valueElement.AsString == "text")
+                        isUnique = uniqueElement.AsBoolean;
+                    }
+
+                    // Check for partial filter expression (for UniqueNotDeleted)
+                    bool hasPartialFilter = false;
+                    if (doc.TryGetValue("partialFilterExpression", out var partialFilterElement))
+                    {
+                        hasPartialFilter = partialFilterElement != null;
+                    }
+
+                    if (doc.TryGetValue("key", out var keyElement) && keyElement is BsonDocument keyDoc)
+                    {
+                        if (keyDoc.TryGetValue("_fts", out var valueElement))
                         {
-                            indexType = IndexTypes.Text;
-
-                            if (doc.TryGetValue("default_language", out var languageElement))
+                            if (valueElement.AsString == "text")
                             {
-                                language = languageElement.AsString;
-                            }
+                                indexType = IndexTypes.Text;
 
-                            if (doc.TryGetValue("weights", out var keyElement2) &&
-                                keyElement2 is BsonDocument weightsDoc)
-                            {
-                                foreach (var elem in weightsDoc.Elements)
+                                if (doc.TryGetValue("default_language", out var languageElement))
                                 {
-                                    var attributePath = elem.Name;
-                                    if (attributePath.StartsWith(Constants.AttributesName + "."))
-                                    {
-                                        attributePath = attributePath.Substring(Constants.AttributesName.Length + 1);
-                                    }
-
-                                    fieldsDict.Add(new Tuple<string, int>(attributePath, elem.Value.AsInt32));
+                                    language = languageElement.AsString;
                                 }
+
+                                if (doc.TryGetValue("weights", out var keyElement2) &&
+                                    keyElement2 is BsonDocument weightsDoc)
+                                {
+                                    foreach (var elem in weightsDoc.Elements)
+                                    {
+                                        var attributePath = elem.Name;
+                                        if (attributePath.StartsWith(Constants.AttributesName + "."))
+                                        {
+                                            attributePath =
+                                                attributePath.Substring(Constants.AttributesName.Length + 1);
+                                        }
+
+                                        fieldsDict.Add(new Tuple<string, int>(attributePath, elem.Value.AsInt32));
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                throw OperationFailedException.IndexTypeNotSupported(valueElement.AsString);
                             }
                         }
                         else
                         {
-                            throw OperationFailedException.IndexTypeNotSupported(valueElement.AsString);
-                        }
-                    }
-                    else
-                    {
-                        // Determine if it's a unique index
-                        if (isUnique)
-                        {
-                            indexType = hasPartialFilter ? IndexTypes.UniqueNotDeleted : IndexTypes.Unique;
-                        }
-
-                        foreach (var elem in keyDoc.Elements)
-                        {
-                            var attributePath = elem.Name;
-
-                            if (attributePath.StartsWith(Constants.AttributesName + "."))
+                            // Determine if it's a unique index
+                            if (isUnique)
                             {
-                                var tmp = attributePath.Substring(Constants.AttributesName.Length + 1);
-                                // Fix to ensure that we can wrongly create indexes with "attributes._id"
-                                // or "attributes.rtWellKnownName"
-                                if (!Constants.IsSystemAttribute(tmp))
-                                {
-                                    attributePath = tmp;
-                                }
+                                indexType = hasPartialFilter ? IndexTypes.UniqueNotDeleted : IndexTypes.Unique;
                             }
 
-                            fieldsDict.Add(new Tuple<string, int>(attributePath, elem.Value.AsInt32));
+                            foreach (var elem in keyDoc.Elements)
+                            {
+                                var attributePath = elem.Name;
+
+                                if (attributePath.StartsWith(Constants.AttributesName + "."))
+                                {
+                                    var tmp = attributePath.Substring(Constants.AttributesName.Length + 1);
+                                    // Fix to ensure that we can wrongly create indexes with "attributes._id"
+                                    // or "attributes.rtWellKnownName"
+                                    if (!Constants.IsSystemAttribute(tmp))
+                                    {
+                                        attributePath = tmp;
+                                    }
+                                }
+
+                                fieldsDict.Add(new Tuple<string, int>(attributePath, elem.Value.AsInt32));
+                            }
                         }
                     }
-                }
 
-                List<CkIndexFields> fields = new();
-                if (indexType == IndexTypes.Ascending || indexType == IndexTypes.Unique || indexType == IndexTypes.UniqueNotDeleted)
-                {
-                    fields.Add(new CkIndexFields { Weight = null, AttributeNames = fieldsDict.Select(t=> t.Item1).ToList() });
-                }
-                else
-                {
-                    foreach (var grouping in fieldsDict.GroupBy(x => x.Item2))
+                    List<CkIndexFields> fields = new();
+                    if (indexType == IndexTypes.Ascending || indexType == IndexTypes.Unique ||
+                        indexType == IndexTypes.UniqueNotDeleted)
                     {
                         fields.Add(new CkIndexFields
                         {
-                            Weight = grouping.Key, AttributeNames = grouping.Select(a => a.Item1).ToList()
+                            Weight = null, AttributeNames = fieldsDict.Select(t => t.Item1).ToList()
                         });
                     }
+                    else
+                    {
+                        foreach (var grouping in fieldsDict.GroupBy(x => x.Item2))
+                        {
+                            fields.Add(new CkIndexFields
+                            {
+                                Weight = grouping.Key, AttributeNames = grouping.Select(a => a.Item1).ToList()
+                            });
+                        }
+                    }
+
+                    var index = new CkTypeIndexWithName
+                    {
+                        Name = indexName, IndexType = indexType, Fields = fields, Language = language
+                    };
+                    indexes.Add(index);
                 }
-
-                var index = new CkTypeIndexWithName
-                {
-                    Name = indexName, IndexType = indexType, Fields = fields, Language = language
-                };
-                indexes.Add(index);
             }
-        }
 
-        return indexes;
+            return indexes;
+        }
+        // When MongoCommandException and code 26 (NamespaceNotFound)
+        catch (MongoCommandException e) when (e.Code == 26)
+        {
+            return new List<CkTypeIndexWithName>();
+        }
+        catch (Exception ex)
+        {
+            throw OperationFailedException.CannotQueryIndexes(ex);
+        }
     }
 
     public async Task DropAllIndexesAsync(string prefix)
@@ -716,7 +727,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 var filterConditions = documents.OfType<RtAssociation>().Select(association =>
                     Builders<TDocument>.Filter.And(
                         Builders<TDocument>.Filter.BuildAssociationFilter(association))).ToList();
-                
+
                 if (filterConditions.Any())
                 {
                     var combinedFilter = Builders<TDocument>.Filter.Or(filterConditions);

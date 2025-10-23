@@ -242,7 +242,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         _logger.LogDebug("Type root collections created for tenant '{TenantId}'", TenantId);
     }
 
-    public async Task UpdateIndexAsync(IOctoSession session)
+    public async Task UpdateIndexAsync(IOctoSession session, bool includeModelsInStateImporting)
     {
         _logger.LogInformation("Updating indexes of tenant '{TenantId}'", TenantId);
 
@@ -251,13 +251,16 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         await lockService.AcquireLockAsync();
 
         var aggregate = _ckTypes.Aggregate(session);
-        aggregate = aggregate.Match(x => x.IsCollectionRoot == true && x.ModelState == ModelState.Available);
+        aggregate = aggregate.Match(x => x.IsCollectionRoot == true && includeModelsInStateImporting
+            ? x.ModelState == ModelState.Available || x.ModelState == ModelState.Importing
+            : x.ModelState == ModelState.Available);
 
         var ckTypeInfoList = await AggregateCkTypeInfo(aggregate).ToListAsync();
         var collectionRootTypes = ckTypeInfoList.ToList();
 
         // Pre-fetch all base types for all collection roots to avoid long transactions
-        var baseTypesMap = await CollectBaseTypesForCollectionRoots(session, collectionRootTypes);
+        var baseTypesMap =
+            await CollectBaseTypesForCollectionRoots(session, collectionRootTypes, includeModelsInStateImporting);
 
         foreach (var ckTypeInfo in collectionRootTypes)
         {
@@ -272,7 +275,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     }
 
     private async Task<Dictionary<CkId<CkTypeId>, List<CkType>>> CollectBaseTypesForCollectionRoots(
-        IOctoSession session, IEnumerable<CkTypeInfo> collectionRoots)
+        IOctoSession session, IEnumerable<CkTypeInfo> collectionRoots, bool includeModelsInStateImporting)
     {
         var result = new Dictionary<CkId<CkTypeId>, List<CkType>>();
         var collectionRootsList = collectionRoots.ToList();
@@ -298,7 +301,9 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         // Bulk fetch ALL types that we might need in one query
         var allTypes = await _ckTypes.FindManyAsync(session,
-            x => allTypeIds.Contains(x.CkTypeId) && x.ModelState == ModelState.Available);
+            x => allTypeIds.Contains(x.CkTypeId) && includeModelsInStateImporting
+                ? (x.ModelState == ModelState.Available || x.ModelState == ModelState.Importing)
+                : x.ModelState == ModelState.Available);
         var typeDict = allTypes.ToDictionary(x => x.CkTypeId, x => x);
 
         // Build inheritance chains in memory using the fetched data
@@ -308,7 +313,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             var currentTypeId = collectionRoot.CkTypeId;
 
             // Traverse up the inheritance chain using in-memory data
-            while (currentTypeId != null)
+            while (true)
             {
                 var inheritances = inheritanceDict[currentTypeId];
                 var inheritance = inheritances.FirstOrDefault();
@@ -458,7 +463,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to persist index states for collection '{CollectionName}'",
+                _logger.LogError(ex, "Failed to persist index states for collection of CkTypeId '{CkTypeId}'",
                     collectionRootType.CkTypeId);
             }
             finally

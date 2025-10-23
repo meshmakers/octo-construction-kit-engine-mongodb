@@ -212,4 +212,10 @@ public class OperationFailedException : PersistenceException
             $"Validation failed during import with {operationResult.Messages.Count} errors." +
             string.Join(Environment.NewLine, operationResult.Messages));
     }
+
+    public static Exception CannotQueryIndexes(Exception exception)
+    {
+        return new OperationFailedException(
+            $"Cannot query indexes: {exception.Message}", exception);
+    }
 }

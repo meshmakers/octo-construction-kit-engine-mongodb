@@ -110,7 +110,7 @@ public class TenantContext : ITenantContext
             DatabaseName);
 
         var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName);
-        await repositoryDataSource.UpdateIndexAsync(adminSession);
+        await repositoryDataSource.UpdateIndexAsync(adminSession, false);
 
         _logger.LogInformation("Indexes updated for tenant {TenantId} in database {DatabaseName}", TenantId,
             DatabaseName);
@@ -191,7 +191,7 @@ public class TenantContext : ITenantContext
         {
             _logger.LogInformation("Restoring system CK Model into tenant '{TenantId}'", TenantId);
 
-            if (isRepositoryInCreation)
+            if (!isRepositoryInCreation)
             {
                 await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
             }
@@ -213,7 +213,7 @@ public class TenantContext : ITenantContext
         }
         finally
         {
-            if (isRepositoryInCreation)
+            if (!isRepositoryInCreation)
             {
                 await _tenantNotifications.NotifyPosTenantUpdateAsync(TenantId, correlationId);
             }
