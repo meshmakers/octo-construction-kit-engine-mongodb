@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 
@@ -15,6 +16,11 @@ public class CkTypeAssociation
     ///     Gets or sets the construction kit model id
     /// </summary>
     public CkModelId CkModelId { get; set; } = null!;
+
+    /// <summary>
+    ///     Defines the state of the construction kit model
+    /// </summary>
+    public ModelState ModelState { get; init; }
 
     /// <summary>
     ///     Returns the corresponding role Id

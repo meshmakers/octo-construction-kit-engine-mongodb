@@ -503,6 +503,22 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
     }
 
+    public async Task UpdateManyAsync(IOctoSession session, FilterDefinition<TDocument> filter,
+        UpdateDefinition<TDocument> updateDefinition)
+    {
+        try
+        {
+            var result = await _documentCollection.UpdateManyAsync(((IOctoSessionInternal)session).SessionHandle,
+                filter, updateDefinition);
+            ThrowIfNotAcknowledged(result.IsAcknowledged);
+        }
+        catch (MongoWriteException ex)
+        {
+            _logger.LogError(ex, "Error updating documents with filter {@FilterDefinition}", filter);
+            HandleWriteException<TDocument>(ex);
+        }
+    }
+
     public async Task<TDocument?> DocumentAsync(IOctoSession session, TKey key)
     {
         try

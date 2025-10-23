@@ -20,6 +20,12 @@ public class CkAssociationRole
     /// </summary>
     public CkModelId CkModelId { get; set; } = null!;
 
+
+    /// <summary>
+    ///     Defines the state of the construction kit model
+    /// </summary>
+    public ModelState ModelState { get; init; }
+
     /// <summary>
     ///     Returns the mongodb ID
     /// </summary>

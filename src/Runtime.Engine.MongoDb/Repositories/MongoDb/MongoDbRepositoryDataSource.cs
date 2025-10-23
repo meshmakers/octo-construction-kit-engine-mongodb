@@ -1,5 +1,6 @@
 ﻿using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -227,7 +228,9 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         await _repository.CreateCollectionIfNotExistsAsync(RtMongoDbDataSourceAssociations.MongoDataSourceMapper, true);
 
         _logger.LogDebug("Creating type root collections for tenant '{TenantId}'", TenantId);
-        var ckTypes = (await CkTypes.FindManyAsync(session, t => t.IsCollectionRoot)).ToList();
+        var ckTypes =
+            (await CkTypes.FindManyAsync(session, t => t.IsCollectionRoot && t.ModelState == ModelState.Available))
+            .ToList();
         foreach (var ckType in ckTypes)
         {
             _logger.LogDebug("Creating type root collection for '{CkTypeId}'", ckType.CkTypeId);
@@ -248,7 +251,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         await lockService.AcquireLockAsync();
 
         var aggregate = _ckTypes.Aggregate(session);
-        aggregate = aggregate.Match(x => x.IsCollectionRoot == true);
+        aggregate = aggregate.Match(x => x.IsCollectionRoot == true && x.ModelState == ModelState.Available);
 
         var ckTypeInfoList = await AggregateCkTypeInfo(aggregate).ToListAsync();
         var collectionRootTypes = ckTypeInfoList.ToList();
@@ -266,7 +269,6 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         await CreateRtAssociationIndexesAsync();
 
         _logger.LogInformation("Updating indexes of tenant '{TenantId}' completed", TenantId);
-
     }
 
     private async Task<Dictionary<CkId<CkTypeId>, List<CkType>>> CollectBaseTypesForCollectionRoots(
@@ -295,7 +297,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
 
         // Bulk fetch ALL types that we might need in one query
-        var allTypes = await _ckTypes.FindManyAsync(session, x => allTypeIds.Contains(x.CkTypeId));
+        var allTypes = await _ckTypes.FindManyAsync(session,
+            x => allTypeIds.Contains(x.CkTypeId) && x.ModelState == ModelState.Available);
         var typeDict = allTypes.ToDictionary(x => x.CkTypeId, x => x);
 
         // Build inheritance chains in memory using the fetched data
@@ -428,7 +431,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                         {
                             _logger.LogDebug("Dropping text index '{IndexName}' for '{CkTypeId}'",
                                 repositoryTextIndex.Name, keyValuePair.Key.CkTypeId);
-                            await DropIndexWithTracking(collection, repositoryTextIndex.Name, keyValuePair.Key.CkTypeId);
+                            await DropIndexWithTracking(collection, repositoryTextIndex.Name,
+                                keyValuePair.Key.CkTypeId);
                             // Remove from repositoryIndices so it won't be processed again in the cleanup loop
                             repositoryIndices.Remove(repositoryTextIndex);
                         }
@@ -454,7 +458,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to persist index states for collection '{CollectionName}'", collectionRootType.CkTypeId);
+                _logger.LogError(ex, "Failed to persist index states for collection '{CollectionName}'",
+                    collectionRootType.CkTypeId);
             }
             finally
             {
@@ -545,7 +550,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             // If the name doesn't match, we need to drop the old one and create with the correct name
             if (repositoryIndex.Name != indexName)
             {
-                _logger.LogInformation("Index with correct definition but wrong name: '{ActualName}' should be '{ExpectedName}'. Recreating with correct name",
+                _logger.LogInformation(
+                    "Index with correct definition but wrong name: '{ActualName}' should be '{ExpectedName}'. Recreating with correct name",
                     repositoryIndex.Name, indexName);
 
                 // Drop the incorrectly named index
@@ -609,7 +615,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     /// </summary>
     private async Task CreateOrUpdateIndexWithTracking<TKey, TDocument>(string collectionName, CkTypeIndex ckTypeIndex,
         ICollection<CkTypeIndexWithName> repositoryIndices,
-        IMongoDbDataSourceCollection<TKey, TDocument> collection, int uniqueIndexNumber, CkTypeInfo? collectionRootType = null, CkType? indexDefiningType = null)
+        IMongoDbDataSourceCollection<TKey, TDocument> collection, int uniqueIndexNumber,
+        CkTypeInfo? collectionRootType = null, CkType? indexDefiningType = null)
         where TDocument : class, new()
         where TKey : notnull
     {
@@ -617,32 +624,38 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var indexName = indexDefiningType != null
             ? indexDefiningType.CkTypeId.GetCkTypeCollectionName() + "_" + uniqueIndexNumber
             : collectionName + "_" + uniqueIndexNumber;
-        
+
         try
         {
             // Call the original method and check if index was actually created
-            var wasCreated = await CreateOrUpdateIndex(collectionName, ckTypeIndex, repositoryIndices, collection, uniqueIndexNumber, collectionRootType, indexDefiningType);
+            var wasCreated = await CreateOrUpdateIndex(collectionName, ckTypeIndex, repositoryIndices, collection,
+                uniqueIndexNumber, collectionRootType, indexDefiningType);
 
             // Only track if the index was actually created (not if it already existed)
             if (wasCreated && indexDefiningType != null)
             {
-                _indexStateService.TrackIndexOperation(indexDefiningType.CkTypeId, indexName, collection.CollectionName, IndexState.Applied);
+                _indexStateService.TrackIndexOperation(indexDefiningType.CkTypeId, indexName, collection.CollectionName,
+                    IndexState.Applied);
             }
         }
         catch (MongoCommandException ex)
         {
             // Track failed index creation
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalse
             if (indexDefiningType != null && indexName != null)
             {
-                _indexStateService.TrackIndexOperation(indexDefiningType.CkTypeId, indexName, collection.CollectionName, IndexState.Failed, ex.Message);
+                _indexStateService.TrackIndexOperation(indexDefiningType.CkTypeId, indexName, collection.CollectionName,
+                    IndexState.Failed, ex.Message);
             }
             else
             {
-                _logger.LogWarning(ex, "Index creation failed but cannot track (indexDefiningType={TypeId}, indexName={IndexName})",
+                _logger.LogWarning(ex,
+                    "Index creation failed but cannot track (indexDefiningType={TypeId}, indexName={IndexName})",
                     indexDefiningType?.CkTypeId.ToString() ?? "NULL", indexName ?? "NULL");
             }
 
-            _logger.LogWarning(ex, "Failed to create index '{IndexName}' of type {IndexType} for '{CollectionName}': {ErrorMessage}",
+            _logger.LogWarning(ex,
+                "Failed to create index '{IndexName}' of type {IndexType} for '{CollectionName}': {ErrorMessage}",
                 indexName, ckTypeIndex.IndexType, collection.CollectionName, ex.Message);
 
             // Don't rethrow - continue with other indexes
@@ -652,7 +665,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     /// <summary>
     /// Wrapper for DropIndexAsync that adds index state tracking
     /// </summary>
-    private async Task DropIndexWithTracking<TKey, TDocument>(IMongoDbDataSourceCollection<TKey, TDocument> collection, string indexName, CkId<CkTypeId> typeId)
+    private async Task DropIndexWithTracking<TKey, TDocument>(IMongoDbDataSourceCollection<TKey, TDocument> collection,
+        string indexName, CkId<CkTypeId> typeId)
         where TDocument : class, new()
         where TKey : notnull
     {
@@ -660,7 +674,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         _indexStateService.RemoveIndexState(typeId, indexName, collection.CollectionName);
     }
 
-    private List<RtCkId<CkTypeId>> CollectTypeIdsForIndex(CkTypeInfo? collectionRootType, CkType? indexDefiningType, string indexTypeName)
+    private List<RtCkId<CkTypeId>> CollectTypeIdsForIndex(CkTypeInfo? collectionRootType, CkType? indexDefiningType,
+        string indexTypeName)
     {
         if (collectionRootType == null || indexDefiningType == null)
         {

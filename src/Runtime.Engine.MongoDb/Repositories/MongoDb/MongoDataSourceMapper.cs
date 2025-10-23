@@ -119,6 +119,7 @@ public class CkTypeMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkTypeId>
         [
             update.Set(p => p.Attributes, document.Attributes),
             update.Set(p => p.CkModelId, document.CkModelId),
+            update.Set(p => p.ModelState, document.ModelState),
             update.Set(p => p.EnableChangeStreamPreAndPostImages, document.EnableChangeStreamPreAndPostImages),
             update.Set(p => p.Indexes, document.Indexes),
             update.Set(p => p.IsAbstract, document.IsAbstract),
@@ -145,6 +146,7 @@ public class CkRecordMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkRecor
         [
             update.Set(p => p.Attributes, document.Attributes),
             update.Set(p => p.CkModelId, document.CkModelId),
+            update.Set(p => p.ModelState, document.ModelState),
             update.Set(p => p.IsAbstract, document.IsAbstract),
             update.Set(p => p.IsFinal, document.IsFinal)
         ];
@@ -168,6 +170,7 @@ public class CkEnumMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkEnumId>
         List<UpdateDefinition<CkEnum>> list =
         [
             update.Set(p => p.CkModelId, document.CkModelId),
+            update.Set(p => p.ModelState, document.ModelState),
             update.Set(p => p.UseFlags, document.UseFlags),
             update.Set(p => p.IsExtensible, document.IsExtensible),
             update.Set(p => p.Values, document.Values)
@@ -192,6 +195,7 @@ public class CkAttributeMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkAt
         List<UpdateDefinition<CkAttribute>> list =
         [
             update.Set(p => p.CkModelId, document.CkModelId),
+            update.Set(p => p.ModelState, document.ModelState),
             update.Set(p => p.AttributeValueType, document.AttributeValueType),
             update.Set(p => p.DefaultValues, document.DefaultValues),
             update.Set(p => p.ValueCkEnumId, document.ValueCkEnumId),
@@ -218,6 +222,7 @@ public class CkAssociationRoleMongoDataSourceMapper : IMongoDataSourceMapper<CkI
         List<UpdateDefinition<CkAssociationRole>> list =
         [
             update.Set(p => p.CkModelId, document.CkModelId),
+            update.Set(p => p.ModelState, document.ModelState),
             update.Set(p => p.InboundName, document.InboundName),
             update.Set(p => p.OutboundName, document.OutboundName),
             update.Set(p => p.InboundMultiplicity, document.InboundMultiplicity),
@@ -244,6 +249,7 @@ public class CkTypeAssociationMongoDataSourceMapper : IMongoDataSourceMapper<Oct
         List<UpdateDefinition<CkTypeAssociation>> list =
         [
             update.Set(p => p.CkModelId, document.CkModelId),
+            update.Set(p => p.ModelState, document.ModelState),
             update.Set(p => p.RoleId, document.RoleId),
             update.Set(p => p.OriginCkTypeId, document.OriginCkTypeId),
             update.Set(p => p.TargetCkTypeId, document.TargetCkTypeId),
@@ -269,6 +275,7 @@ public class CkTypeInheritanceMongoDataSourceMapper : IMongoDataSourceMapper<Oct
         List<UpdateDefinition<CkTypeInheritance>> list =
         [
             update.Set(p => p.CkModelId, document.CkModelId),
+            update.Set(p => p.ModelState, document.ModelState),
             update.Set(p => p.BaseCkTypeId, document.BaseCkTypeId),
             update.Set(p => p.InheritorCkTypeId, document.InheritorCkTypeId)
         ];
@@ -292,6 +299,7 @@ public class CkRecordInheritanceMongoDataSourceMapper : IMongoDataSourceMapper<O
         List<UpdateDefinition<CkRecordInheritance>> list =
         [
             update.Set(p => p.CkModelId, document.CkModelId),
+            update.Set(p => p.ModelState, document.ModelState),
             update.Set(p => p.BaseCkRecordId, document.BaseCkRecordId),
             update.Set(p => p.InheritorCkRecordId, document.InheritorCkRecordId)
         ];

@@ -205,4 +205,11 @@ public class OperationFailedException : PersistenceException
         return new OperationFailedException(
             $"Operator '{comparisonOperator}' requires a secondary value to be set.");
     }
+
+    public static Exception ValidateFailed(OperationResult operationResult)
+    {
+        return new OperationFailedException(
+            $"Validation failed during import with {operationResult.Messages.Count} errors." +
+            string.Join(Environment.NewLine, operationResult.Messages));
+    }
 }

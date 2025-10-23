@@ -55,6 +55,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         var ckModels = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels.FindManyAsync(session,
             e => e.ModelId == modelIdVersionRange.Name && e.ModelState == ModelState.Available);
 
+        await session.CommitTransactionAsync();
 
         var satisfiedModels = ckModels
             .Where(m => modelIdVersionRange.IsSatisfiedBy(m.Id))
@@ -353,7 +354,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             var originFileResolver = new OriginFileResolver("-");
             await _repositoryModelResolver.HardResolveAsync(compiledModel, originFileResolver, operationResult,
                 sourceIdentifier);
-            if (operationResult.HasErrors)
+            if (operationResult.HasErrors || operationResult.HasFatalErrors)
             {
                 _logger.LogInformation("Import of CK model '{CkModelId}' failed, model is not valid",
                     compiledModel.ModelId);
@@ -379,7 +380,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
             _logger.LogDebug("Preparing import of CK model to database");
 
-            // Create basic collections first (latter this method is called again to create CkType document collections)
+            // Create basic collections first (later this method is called again to create CkType document collections)
             await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session);
             CheckCancellation(cancellationToken);
 
@@ -471,10 +472,12 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             await mongoDbRepositoryDataSource.UpdateIndexAsync(sessionComplete);
             CheckCancellation(cancellationToken);
 
+            _logger.LogDebug("Validating dependencies of other CK models");
+            await ValidateDependencies(sessionComplete, mongoDbRepositoryDataSource);
+
             _logger.LogDebug("Updating model state");
-            var updateDefinition = Builders<CkModel>.Update.Set(x => x.ModelState, ModelState.Available);
-            await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(sessionComplete, compiledModel.ModelId,
-                updateDefinition);
+            await UpdateModelStateAsync(sessionComplete, mongoDbRepositoryDataSource, compiledModel.ModelId,
+                ModelState.Available);
 
             await sessionComplete.CommitTransactionAsync();
 
@@ -493,6 +496,65 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             await session.CommitTransactionAsync();
 
             throw;
+        }
+    }
+
+    private static async Task UpdateModelStateAsync(IOctoSession sessionComplete,
+        ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
+        CkModelId ckModelId, ModelState modelState)
+    {
+        await mongoDbRepositoryDataSource.CkTypeAssociations.UpdateManyAsync(sessionComplete,
+            Builders<CkTypeAssociation>.Filter.Eq(x => x.CkModelId, ckModelId),
+            Builders<CkTypeAssociation>.Update.Set(x => x.ModelState, modelState));
+        await mongoDbRepositoryDataSource.CkRecordInheritances.UpdateManyAsync(sessionComplete,
+            Builders<CkRecordInheritance>.Filter.Eq(x => x.CkModelId, ckModelId),
+            Builders<CkRecordInheritance>.Update.Set(x => x.ModelState, modelState));
+        await mongoDbRepositoryDataSource.CkTypeInheritances.UpdateManyAsync(sessionComplete,
+            Builders<CkTypeInheritance>.Filter.Eq(x => x.CkModelId, ckModelId),
+            Builders<CkTypeInheritance>.Update.Set(x => x.ModelState, modelState));
+        await mongoDbRepositoryDataSource.CkRecords.UpdateManyAsync(sessionComplete,
+            Builders<CkRecord>.Filter.Eq(x => x.CkModelId, ckModelId),
+            Builders<CkRecord>.Update.Set(x => x.ModelState, modelState));
+        await mongoDbRepositoryDataSource.CkTypes.UpdateManyAsync(sessionComplete,
+            Builders<CkType>.Filter.Eq(x => x.CkModelId, ckModelId),
+            Builders<CkType>.Update.Set(x => x.ModelState, modelState));
+        await mongoDbRepositoryDataSource.CkAttributes.UpdateManyAsync(sessionComplete,
+            Builders<CkAttribute>.Filter.Eq(x => x.CkModelId, ckModelId),
+            Builders<CkAttribute>.Update.Set(x => x.ModelState, modelState));
+        await mongoDbRepositoryDataSource.CkEnums.UpdateManyAsync(sessionComplete,
+            Builders<CkEnum>.Filter.Eq(x => x.CkModelId, ckModelId),
+            Builders<CkEnum>.Update.Set(x => x.ModelState, modelState));
+        await mongoDbRepositoryDataSource.CkAssociationRoles.UpdateManyAsync(sessionComplete,
+            Builders<CkAssociationRole>.Filter.Eq(x => x.CkModelId, ckModelId),
+            Builders<CkAssociationRole>.Update.Set(x => x.ModelState, modelState));
+
+        await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(sessionComplete, ckModelId,
+            Builders<CkModel>.Update.Set(x => x.ModelState, modelState));
+    }
+
+    private async Task ValidateDependencies(IOctoSession session,
+        ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
+    {
+        var sourceIdentifier = new TenantDatabaseSourceIdentifier(mongoDbRepositoryDataSource);
+        OperationResult operationResult = new();
+        var ckModels =
+            await mongoDbRepositoryDataSource.CkModels.FindManyAsync(session,
+                m => m.ModelState == ModelState.Available);
+        var originFileResolver = new OriginFileResolver("-");
+        var resolveResult = await _repositoryModelResolver.SoftResolveAsync(ckModels.Select(x => x.Id).ToList(),
+            originFileResolver, operationResult, sourceIdentifier);
+
+        if (operationResult.HasErrors || operationResult.HasFatalErrors)
+        {
+            throw OperationFailedException.ValidateFailed(operationResult);
+        }
+
+        if (resolveResult.SkippedModelIds.Any())
+        {
+            foreach (CkModelId skippedModelId in resolveResult.SkippedModelIds)
+            {
+                await UpdateModelStateAsync(session, mongoDbRepositoryDataSource, skippedModelId, ModelState.ResolveFailed);
+            }
         }
     }
 
@@ -571,6 +633,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 var ckEnum = new CkEnum
                 {
                     CkModelId = compiledModel.ModelId,
+                    ModelState = ModelState.Importing,
                     CkEnumId = new CkId<CkEnumId>(compiledModel.ModelId, ckEnumDto.EnumId),
                     Description = ckEnumDto.Description,
                     UseFlags = ckEnumDto.UseFlags,
@@ -592,18 +655,20 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
                 if (ckRecordDto.DerivedFromCkRecordId != null)
                 {
-                    var ckTypeInheritance = new CkRecordInheritance
+                    var ckRecordInheritance = new CkRecordInheritance
                     {
                         CkModelId = compiledModel.ModelId,
+                        ModelState = ModelState.Importing,
                         BaseCkRecordId = ckRecordDto.DerivedFromCkRecordId,
                         InheritorCkRecordId = new CkId<CkRecordId>(compiledModel.ModelId, ckRecordDto.RecordId)
                     };
-                    transientCkModel.CkRecordInheritances.Add(ckTypeInheritance);
+                    transientCkModel.CkRecordInheritances.Add(ckRecordInheritance);
                 }
 
                 var recordDto = new CkRecord
                 {
                     CkModelId = compiledModel.ModelId,
+                    ModelState = ModelState.Importing,
                     CkRecordId = new CkId<CkRecordId>(compiledModel.ModelId, ckRecordDto.RecordId),
                     Description = ckRecordDto.Description,
                     IsFinal = ckRecordDto.IsFinal,
@@ -626,6 +691,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 var associationRole = new CkAssociationRole
                 {
                     CkModelId = compiledModel.ModelId,
+                    ModelState = ModelState.Importing,
                     RoleId = new CkId<CkAssociationRoleId>(compiledModel.ModelId,
                         modelAssociationRole.AssociationRoleId),
                     Description = modelAssociationRole.Description,
@@ -742,6 +808,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 var ckAttribute = new CkAttribute
                 {
                     CkModelId = compiledModel.ModelId,
+                    ModelState = ModelState.Importing,
                     CkAttributeId = new CkId<CkAttributeId>(compiledModel.ModelId, ckAttributeDto.AttributeId),
                     AttributeValueType = ckAttributeDto.ValueType,
                     ValueCkEnumId = ckAttributeDto.ValueCkEnumId,
@@ -792,6 +859,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             var ckType = new CkType
             {
                 CkModelId = compiledModel.ModelId,
+                ModelState = ModelState.Importing,
                 CkTypeId = new CkId<CkTypeId>(compiledModel.ModelId, ckTypeDto.TypeId),
                 Description = ckTypeDto.Description,
                 IsFinal = ckTypeDto.IsFinal,
@@ -807,6 +875,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 var ckTypeInheritance = new CkTypeInheritance
                 {
                     CkModelId = compiledModel.ModelId,
+                    ModelState = ModelState.Importing,
                     BaseCkTypeId = ckTypeDto.DerivedFromCkTypeId,
                     InheritorCkTypeId = new CkId<CkTypeId>(compiledModel.ModelId, ckTypeDto.TypeId)
                 };
@@ -820,6 +889,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     var ckTypeAssociation = new CkTypeAssociation
                     {
                         CkModelId = compiledModel.ModelId,
+                        ModelState = ModelState.Importing,
                         RoleId = association.CkRoleId,
                         OriginCkTypeId = new CkId<CkTypeId>(compiledModel.ModelId, ckType.CkTypeId.ElementId),
                         TargetCkTypeId = association.TargetCkTypeId,

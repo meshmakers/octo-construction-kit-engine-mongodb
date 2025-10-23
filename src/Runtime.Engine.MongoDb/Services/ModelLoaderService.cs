@@ -40,24 +40,15 @@ internal class ModelLoaderService(
             OperationResult operationResult = new();
             var ckModels = await mongoDbRepositoryDataSource.CkModels.FindManyAsync(session, m=> m.ModelState == ModelState.Available);
             var originFileResolver = new OriginFileResolver("-");
-            var resolveResult = await modelResolver.SoftResolveAsync(ckModels.Select(x => x.Id).ToList(), originFileResolver, operationResult, sourceIdentifier);
+            var ckModelGraph = await modelResolver.HardResolveAsync(ckModels.Select(x => x.Id).ToList(), originFileResolver, operationResult, sourceIdentifier);
 
             if (operationResult.HasErrors || operationResult.HasFatalErrors)
             {
                 throw TenantException.FailedLoadingTenant(tenantId, operationResult);
             }
 
-            if (resolveResult.SkippedModelIds.Any())
-            {
-                foreach (CkModelId skippedModelId in resolveResult.SkippedModelIds)
-                {
-                    var updateDefinition = Builders<CkModel>.Update.Set(x => x.ModelState, ModelState.ResolveFailed);
-                    await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(session, skippedModelId, updateDefinition);
-                }
-            }
-
             cacheService.CreateTenant(tenantId);
-            cacheService.LoadCkModelGraph(tenantId, resolveResult.CkModelGraph);
+            cacheService.LoadCkModelGraph(tenantId, ckModelGraph);
         }
         finally
         {

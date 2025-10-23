@@ -31,6 +31,9 @@ public interface IMongoDbDataSourceCollection<TKey, TDocument> : IDataSourceColl
 
     Task UpdateOneAsync(IOctoSession session, TKey id, UpdateDefinition<TDocument> updateDefinition);
 
+    Task UpdateManyAsync(IOctoSession session, FilterDefinition<TDocument> filter,
+        UpdateDefinition<TDocument> updateDefinition);
+
     Task DeleteOneAsync(IOctoSession session, FilterDefinition<TDocument> filter);
 
     Task DeleteManyAsync(IOctoSession session, FilterDefinition<TDocument> filter);

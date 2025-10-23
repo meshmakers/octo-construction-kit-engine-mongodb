@@ -16,6 +16,11 @@ public class CkAttribute
     public CkModelId CkModelId { get; set; } = null!;
 
     /// <summary>
+    ///     Defines the state of the construction kit model
+    /// </summary>
+    public ModelState ModelState { get; init; }
+
+    /// <summary>
     ///     The id of the attribute
     /// </summary>
     public CkId<CkAttributeId> CkAttributeId { get; set; } = null!;

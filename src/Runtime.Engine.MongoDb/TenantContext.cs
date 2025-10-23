@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
@@ -23,8 +25,10 @@ using Microsoft.Extensions.Options;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 
+[DebuggerDisplay("TenantId = {TenantId}")]
 public class TenantContext : ITenantContext
 {
+    private readonly ILogger<TenantContext> _logger;
     private readonly IBulkRtMutation _bulkRtMutation;
     private readonly ICkCacheService _cacheService;
 
@@ -47,6 +51,7 @@ public class TenantContext : ITenantContext
         TenantId = tenantId;
         _metricsContext = serviceProvider.GetRequiredService<IMetricsContext>();
         _loggerFactory = loggerFactory;
+        _logger = loggerFactory.CreateLogger<TenantContext>();
         _systemConfiguration = systemConfiguration;
         _serviceProvider = serviceProvider;
         DatabaseName = databaseName;
@@ -101,8 +106,14 @@ public class TenantContext : ITenantContext
 
     public async Task UpdateIndexesAsync(IOctoAdminSession adminSession)
     {
+        _logger.LogInformation("Updating indexes for tenant {TenantId} in database {DatabaseName}", TenantId,
+            DatabaseName);
+
         var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName);
         await repositoryDataSource.UpdateIndexAsync(adminSession);
+
+        _logger.LogInformation("Indexes updated for tenant {TenantId} in database {DatabaseName}", TenantId,
+            DatabaseName);
     }
 
     public async Task CreateChildTenantAsync(IOctoAdminSession adminSession, string databaseName, string tenantId)
@@ -178,6 +189,8 @@ public class TenantContext : ITenantContext
         var correlationId = Guid.NewGuid();
         try
         {
+            _logger.LogInformation("Restoring system CK Model into tenant '{TenantId}'", TenantId);
+
             if (isRepositoryInCreation)
             {
                 await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
@@ -204,6 +217,8 @@ public class TenantContext : ITenantContext
             {
                 await _tenantNotifications.NotifyPosTenantUpdateAsync(TenantId, correlationId);
             }
+
+            _logger.LogInformation("System CK Model restored into tenant '{TenantId}'", TenantId);
         }
     }
 
@@ -606,10 +621,16 @@ public class TenantContext : ITenantContext
 
         try
         {
+            _logger.LogInformation("Importing CK Model '{CkModelId}' into tenant '{TenantId}'",
+                ckCompiledModelRoot.ModelId, TenantId);
+
             await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
             var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
             await _ckModelRepositoryService.UpdateModelAsync(ckCompiledModelRoot,
                 new TenantDatabaseSourceIdentifier(repositoryDataSource));
+
+            _logger.LogInformation("CK Model '{CkModelId}' imported into tenant '{TenantId}'",
+                ckCompiledModelRoot.ModelId, TenantId);
         }
         finally
         {
@@ -621,10 +642,20 @@ public class TenantContext : ITenantContext
     {
         Guid correlationId = Guid.NewGuid();
 
+        var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
+        var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(repositoryDataSource);
+        if (await _ckModelRepositoryService.IsExistingAsync(ckModelId, tenantDatabaseSourceIdentifier))
+        {
+            _logger.LogDebug("CK Model '{CkModelId}' already exists in tenant '{TenantId}', skipping import",
+                ckModelId, TenantId);
+            return;
+        }
+
         try
         {
+            _logger.LogInformation("Importing CK Model '{CkModelId}' into tenant '{TenantId}'", ckModelId, TenantId);
+
             await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
-            var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
 
             var ckCompiledModelRoot =
                 await _catalogService.GetAsync(ckModelId, operationResult);
@@ -639,8 +670,9 @@ public class TenantContext : ITenantContext
                 throw TenantException.ModelNotFoundInACatalog(ckModelId);
             }
 
-            await _ckModelRepositoryService.UpdateModelAsync(ckCompiledModelRoot,
-                new TenantDatabaseSourceIdentifier(repositoryDataSource));
+            await _ckModelRepositoryService.UpdateModelAsync(ckCompiledModelRoot, tenantDatabaseSourceIdentifier);
+
+            _logger.LogInformation("CK Model '{CkModelId}' imported into tenant '{TenantId}'", ckModelId, TenantId);
         }
         finally
         {

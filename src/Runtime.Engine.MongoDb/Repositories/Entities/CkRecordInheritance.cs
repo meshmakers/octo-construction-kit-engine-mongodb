@@ -1,4 +1,5 @@
 ﻿using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
 
@@ -13,6 +14,11 @@ public class CkRecordInheritance
     ///     Gets or sets the construction kit model id
     /// </summary>
     public CkModelId CkModelId { get; set; } = null!;
+
+    /// <summary>
+    ///     Defines the state of the construction kit model
+    /// </summary>
+    public ModelState ModelState { get; init; }
 
     public CkId<CkRecordId> BaseCkRecordId { get; set; } = null!;
 
