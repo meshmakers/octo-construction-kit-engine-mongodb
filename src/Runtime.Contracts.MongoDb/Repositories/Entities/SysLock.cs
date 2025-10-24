@@ -20,7 +20,19 @@ public class SysLock
     public string Id { get; init; } = null!;
 
     /// <summary>
-    /// Gets or sets the id of the owner of the lock
+    /// Gets or sets the creation date and time of the lock
     /// </summary>
     public DateTime? CreationDateTime { get; set; }
+
+    /// <summary>
+    /// Gets or sets the expiry date and time of the lock.
+    /// After this time, the lock is considered stale and can be claimed by another service.
+    /// </summary>
+    public DateTime? ExpiryDateTime { get; set; }
+
+    /// <summary>
+    /// Gets or sets the last heartbeat timestamp.
+    /// Used to extend the lock lifetime for long-running operations.
+    /// </summary>
+    public DateTime? LastHeartbeat { get; set; }
 }
