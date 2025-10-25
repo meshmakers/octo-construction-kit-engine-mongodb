@@ -25,7 +25,6 @@ internal class RepositoryDistributedLockService(
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromMinutes(2);
 
     private bool _isLockAcquired;
-    private IOctoSession? _session;
     private readonly Lock _lockObject = new();
     private CancellationTokenSource? _heartbeatCts;
     private Task? _heartbeatTask;
@@ -40,15 +39,12 @@ internal class RepositoryDistributedLockService(
             }
         }
 
-        _session = await repositoryClient.GetSessionAsync().ConfigureAwait(false);
-        _session.StartTransaction();
+
         try
         {
             logger.LogInformation("Acquiring distributed lock '{LockId}'", id);
 
             var collection = repository.GetCollection(new LockMongoDataSourceMapper());
-            var mongoCollection = collection.GetMongoCollection();
-            var sessionHandle = ((IOctoSessionInternal)_session).SessionHandle;
 
             int attempt = 0;
             bool lockAcquired = false;
@@ -60,7 +56,10 @@ internal class RepositoryDistributedLockService(
 
                 // Versuche, einen neuen Lock zu erstellen oder einen abgelaufenen zu übernehmen
                 var filter = Builders<SysLock>.Filter.Eq(sysLock => sysLock.Id, id);
-                var existingLocks = await collection.FindManyAsync(_session, filter, null, null, 1);
+                var session = await repositoryClient.GetSessionAsync().ConfigureAwait(false);
+                session.StartTransaction();
+                var existingLocks = await collection.FindManyAsync(session, filter, null, null, 1);
+                await session.CommitTransactionAsync();
                 var existingLock = existingLocks.FirstOrDefault();
 
                 if (existingLock == null)
@@ -68,15 +67,15 @@ internal class RepositoryDistributedLockService(
                     // Kein Lock existiert - versuche ihn zu erstellen
                     var newLock = new SysLock
                     {
-                        Id = id,
-                        CreationDateTime = now,
-                        ExpiryDateTime = expiryTime,
-                        LastHeartbeat = now
+                        Id = id, CreationDateTime = now, ExpiryDateTime = expiryTime, LastHeartbeat = now
                     };
 
                     try
                     {
-                        await mongoCollection.InsertOneAsync(sessionHandle, newLock);
+                        session = await repositoryClient.GetSessionAsync().ConfigureAwait(false);
+                        session.StartTransaction();
+                        await collection.InsertOneAsync(session, newLock);
+                        await session.CommitTransactionAsync();
                         lockAcquired = true;
                     }
                     catch (MongoWriteException ex) when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
@@ -99,15 +98,16 @@ internal class RepositoryDistributedLockService(
 
                     var updatedLock = new SysLock
                     {
-                        Id = id,
-                        CreationDateTime = now,
-                        ExpiryDateTime = expiryTime,
-                        LastHeartbeat = now
+                        Id = id, CreationDateTime = now, ExpiryDateTime = expiryTime, LastHeartbeat = now
                     };
 
-                    var result = await mongoCollection.ReplaceOneAsync(sessionHandle, replaceFilter, updatedLock);
+                    session = await repositoryClient.GetSessionAsync().ConfigureAwait(false);
+                    session.StartTransaction();
+                    var modifiedCount =
+                        await collection.ReplaceOneWithModificationCountAsync(session, replaceFilter, updatedLock);
+                    await session.CommitTransactionAsync();
 
-                    if (result.ModifiedCount > 0)
+                    if (modifiedCount > 0)
                     {
                         lockAcquired = true;
                         logger.LogInformation("Successfully claimed stale lock '{LockId}'", id);
@@ -137,7 +137,6 @@ internal class RepositoryDistributedLockService(
             }
 
             logger.LogInformation("Acquired distributed lock '{LockId}'", id);
-            await _session.CommitTransactionAsync();
 
             lock (_lockObject)
             {
@@ -150,16 +149,6 @@ internal class RepositoryDistributedLockService(
         catch (Exception e)
         {
             logger.LogError(e, "Error acquiring distributed lock '{LockId}'", id);
-            try
-            {
-                await _session.AbortTransactionAsync();
-            }
-            catch (Exception abortEx)
-            {
-                logger.LogError(abortEx, "Error aborting transaction for lock '{LockId}'", id);
-            }
-
-            _session = null;
             throw;
         }
     }
@@ -309,7 +298,5 @@ internal class RepositoryDistributedLockService(
                 // WICHTIG: Keine Exception werfen in Dispose! Nur loggen.
             }
         }
-
-        _session = null;
     }
 }

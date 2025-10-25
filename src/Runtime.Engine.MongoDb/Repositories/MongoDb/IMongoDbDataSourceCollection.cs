@@ -39,6 +39,7 @@ public interface IMongoDbDataSourceCollection<TKey, TDocument> : IDataSourceColl
     Task DeleteManyAsync(IOctoSession session, FilterDefinition<TDocument> filter);
 
     Task ReplaceOneAsync(IOctoSession session, FilterDefinition<TDocument> filter, TDocument entity);
+    Task<long> ReplaceOneWithModificationCountAsync(IOctoSession session, FilterDefinition<TDocument> filter, TDocument entity);
 
     IUpdateStream<TDocument> WatchAsync(UpdateTypes updateTypes,
         Func<FilterDefinition<ChangeStreamDocument<TDocument>>?>? documentFilterFunc = null,

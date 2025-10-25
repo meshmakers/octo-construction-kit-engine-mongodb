@@ -475,7 +475,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         catch (MongoWriteException ex)
         {
             _logger.LogError(ex, "Error replacing document with id {Id}", id);
-            HandleWriteException<TDocument>(ex);
+            throw CreateWriteException<TDocument>(nameof(ReplaceByIdAsync), ex);
         }
     }
 
@@ -492,7 +492,24 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         catch (MongoWriteException ex)
         {
             _logger.LogError(ex, "Error replacing document with filter {@FilterDefinition}", filterDefinition);
-            HandleWriteException<TDocument>(ex);
+            throw CreateWriteException<TDocument>(nameof(ReplaceOneAsync), ex);
+        }
+    }
+
+    public async Task<long> ReplaceOneWithModificationCountAsync(IOctoSession session,
+        FilterDefinition<TDocument> filterDefinition, TDocument entity)
+    {
+        try
+        {
+            var result = await _documentCollection.ReplaceOneAsync(((IOctoSessionInternal)session).SessionHandle,
+                filterDefinition, entity);
+            ThrowIfNotAcknowledged(result.IsAcknowledged);
+            return result.ModifiedCount;
+        }
+        catch (MongoWriteException ex)
+        {
+            _logger.LogError(ex, "Error replacing document with filter {@FilterDefinition}", filterDefinition);
+            throw CreateWriteException<TDocument>(nameof(ReplaceOneWithModificationCountAsync), ex);
         }
     }
 
@@ -510,7 +527,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         catch (MongoWriteException ex)
         {
             _logger.LogError(ex, "Error updating document with id {Id}", id);
-            HandleWriteException<TDocument>(ex);
+            throw CreateWriteException<TDocument>(nameof(UpdateOneAsync), ex);
         }
     }
 
@@ -526,7 +543,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         catch (MongoWriteException ex)
         {
             _logger.LogError(ex, "Error updating documents with filter {@FilterDefinition}", filter);
-            HandleWriteException<TDocument>(ex);
+            throw CreateWriteException<TDocument>(nameof(UpdateManyAsync), ex);
         }
     }
 
@@ -881,8 +898,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoWriteException ex)
         {
-            HandleWriteException<TDocument>(ex);
-            throw;
+            throw CreateWriteException<TDocument>(nameof(InsertManyAsync), ex);
         }
         catch (MongoException e)
         {
@@ -898,8 +914,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
         catch (MongoWriteException ex)
         {
-            HandleWriteException<TDocument>(ex);
-            throw;
+            throw CreateWriteException<TDocument>(nameof(InsertOneAsync), ex);
         }
         catch (MongoException e)
         {
@@ -911,14 +926,14 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
     #region Exception helpers
 
-    private void HandleWriteException<T>(MongoWriteException ex)
+    private Exception CreateWriteException<T>(string operationName, MongoWriteException ex)
     {
         if (ex.WriteError.Category == ServerErrorCategory.DuplicateKey)
         {
-            throw DuplicateKeyException.DuplicateKeyError(typeof(T), ex);
+            return DuplicateKeyException.DuplicateKeyError(typeof(T), ex);
         }
 
-        throw OperationFailedException.DatabaseOperationFailed(nameof(HandleWriteException), ex);
+        return OperationFailedException.DatabaseOperationFailed(operationName, ex);
     }
 
     // ReSharper disable once ParameterOnlyUsedForPreconditionCheck.Local
