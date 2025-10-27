@@ -21,6 +21,7 @@ internal class RtFieldFilterResolver : FieldFilterResolver<RtDeepGraphQueryResul
 internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQueryResult>
 {
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
+    private readonly bool _includeDeletedEntities;
     private readonly CkTypeGraph _originCkTypeGraph;
     private readonly RtCkId<CkAssociationRoleId> _roleId;
     private readonly IEnumerable<OctoObjectId> _rtIds;
@@ -28,11 +29,12 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
 
     internal MultipleOriginHierarchicalDeepRtGraphQuery(
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
-        string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
+        string language, bool includeDeletedEntities, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
         RtCkId<CkAssociationRoleId> roleId)
         : base(new RtFieldFilterResolver(), language)
     {
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
+        _includeDeletedEntities = includeDeletedEntities;
         _rtIds = rtIds;
         _originCkTypeGraph = originCkTypeGraph;
         _roleId = roleId;
@@ -92,6 +94,18 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
         pipelineStageDefinitions.Add(
             PipelineStageDefinitionBuilder.Match(
                 Builders<RtEntity>.Filter.And(Builders<RtEntity>.Filter.In(x => x.RtId, _rtIds))));
+
+        var restrictSearchWithMatch =
+            new FilterDefinitionBuilder<RtAssociation>().Eq(x => x.AssociationRoleId, _roleId);
+
+        if (!_includeDeletedEntities)
+        {
+            restrictSearchWithMatch = new FilterDefinitionBuilder<RtAssociation>().And(
+                new FilterDefinitionBuilder<RtAssociation>().Eq(x => x.AssociationRoleId, _roleId),
+                new FilterDefinitionBuilder<RtAssociation>().Ne(x => x.RtState, RtState.Deleted)
+            );
+        }
+
         pipelineStageDefinitions.Add(
             PipelineStageDefinitionBuilder
                 .GraphLookup<RtEntity, RtAssociation, BsonValue, BsonValue, BsonValue, RtEntity, RtEntity[],
@@ -104,8 +118,7 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
                     depthField: "depth",
                     options: new AggregateGraphLookupOptions<RtAssociation, RtEntity, BsonDocument>
                     {
-                        RestrictSearchWithMatch =
-                            new FilterDefinitionBuilder<RtAssociation>().Eq(x => x.AssociationRoleId, _roleId)
+                        RestrictSearchWithMatch = restrictSearchWithMatch
                     }
                 ));
 
@@ -173,34 +186,54 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
                                 new BsonDocument { { "rtId", "$$this.rtId" }, { "ckTypeId", "$$this.ckTypeId" } }
                             })))
             )));
+
+
+        var lookupPipelineFilter = OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.Or(
+            OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.And(
+                OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.In(
+                    "$originRtId",
+                    "$$uniqueEntities.rtId"),
+                OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.In(
+                    "$originCkTypeId",
+                    "$$uniqueEntities.ckTypeId")
+            ),
+            OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.And(
+                OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.In(
+                    "$targetRtId",
+                    "$$uniqueEntities.rtId"),
+                OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.In(
+                    "$targetCkTypeId",
+                    "$$uniqueEntities.ckTypeId")
+            )
+        );
+
+        var lookupPipeline = PipelineDefinition<RtAssociation, BsonDocument>.Create([
+            OctoPipelineStageBuilder.Match(
+                OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.Expression(
+                    lookupPipelineFilter
+                )),
+        ]);
+
+        if (!_includeDeletedEntities)
+        {
+            lookupPipeline = PipelineDefinition<RtAssociation, BsonDocument>.Create([
+                OctoPipelineStageBuilder.Match(
+                    OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.Expression(
+                        OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.And(
+                            OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.Neq("rtState",
+                                OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.Int32(1)),
+                            lookupPipelineFilter
+                        ))),
+            ]);
+        }
+
         pipelineStageDefinitions.Add(
             PipelineStageDefinitionBuilder
                 .Lookup<BsonDocument, RtAssociation, BsonDocument, IEnumerable<BsonDocument>, BsonDocument>(
                     foreignCollection: _mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations
                         .GetMongoCollection(),
                     let: new BsonDocument { { "uniqueEntities", "$uniqueEntities" } },
-                    lookupPipeline: PipelineDefinition<RtAssociation, BsonDocument>.Create(new[]
-                    {
-                        OctoPipelineStageBuilder.Match(
-                            OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.Expression(
-                                OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.Or(
-                                    OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.And(
-                                        OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.In("$originRtId",
-                                            "$$uniqueEntities.rtId"),
-                                        OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.In(
-                                            "$originCkTypeId",
-                                            "$$uniqueEntities.ckTypeId")
-                                    ),
-                                    OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.And(
-                                        OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.In("$targetRtId",
-                                            "$$uniqueEntities.rtId"),
-                                        OctoBuilder<RtAssociation, BsonDocument>.AggregateOperators.In(
-                                            "$targetCkTypeId",
-                                            "$$uniqueEntities.ckTypeId")
-                                    )
-                                )
-                            ))
-                    }),
+                    lookupPipeline: lookupPipeline,
                     @as: "matchingAssociations")
         );
         pipelineStageDefinitions.Add(OctoPipelineStageBuilder.AddFields<BsonDocument, BsonDocument>(

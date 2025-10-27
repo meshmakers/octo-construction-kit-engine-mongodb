@@ -5,11 +5,9 @@ using Microsoft.Extensions.DependencyInjection;
 
 using Testcontainers.MongoDb;
 
-using Xunit;
-
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
-public class DatabaseFixture: ConfigurationFixture
+public class DatabaseFixture : ConfigurationFixture
 {
     protected readonly SystemTestOptions _options;
     private MongoDbContainer? _mongoDbContainer;
@@ -17,7 +15,6 @@ public class DatabaseFixture: ConfigurationFixture
     public DatabaseFixture()
     {
         _options = GetOptions<SystemTestOptions>("systemTest");
-
     }
 
     protected override async Task InitializeServicesAsync()
@@ -52,6 +49,7 @@ public class DatabaseFixture: ConfigurationFixture
 
     protected override async Task DisposeServicesAsync()
     {
+        await Task.Yield();
         if (_mongoDbContainer != null)
         {
             await _mongoDbContainer.StopAsync();
@@ -60,15 +58,15 @@ public class DatabaseFixture: ConfigurationFixture
     }
 
 
-    public string GetConnectionString()
-    {
-        EnsureInitialized();
-
-        if (_mongoDbContainer is null)
-        {
-            throw new InvalidOperationException("MongoDB container is not initialized. Call InitializeAsync first.");
-        }
-
-        return _mongoDbContainer.GetConnectionString();
-    }
+    // public string GetConnectionString()
+    // {
+    //     EnsureInitialized();
+    //
+    //     if (_mongoDbContainer is null)
+    //     {
+    //         throw new InvalidOperationException("MongoDB container is not initialized. Call InitializeAsync first.");
+    //     }
+    //
+    //     return _mongoDbContainer.GetConnectionString();
+    // }
 }

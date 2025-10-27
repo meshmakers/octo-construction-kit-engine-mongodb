@@ -7,12 +7,12 @@ using Xunit;
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
 [Collection("Sequential")]
-public class GetIndirectRtAssociationTargetsAsyncTests(GenerateSampleDataFixture generateSampleDataFixture) : IClassFixture<GenerateSampleDataFixture>
+public class GetIndirectRtAssociationTargetsAsyncTests(SampleRtModelDataFixture sampleRtModelDataFixture) : IClassFixture<SampleRtModelDataFixture>
 {
     [Fact]
     public async Task GetIndirectRtAssociationTargetsAsync_OK()
     {
-        var systemContext = generateSampleDataFixture.GetSystemContext();
+        var systemContext = sampleRtModelDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();
 
         using var session = await tenantRepository.GetSessionAsync();

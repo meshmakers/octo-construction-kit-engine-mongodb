@@ -23,12 +23,13 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
     private readonly string _tenantId;
     private readonly CkTypeGraph _ckTypeGraph;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
+    private readonly bool _includeDeletedEntities;
     private readonly List<IPipelineStageDefinition> _geospatialFilters;
     private readonly List<IPipelineStageDefinition> _associationStageDefinitions;
 
     internal SingleOriginRtQuery(IMetricsContext metricsContext, ICkCacheService ckCacheService, string tenantId,
         CkTypeGraph ckTypeGraph,
-        IMongoDbRepositoryDataSource mongoDbRepositoryDataSource, string language)
+        IMongoDbRepositoryDataSource mongoDbRepositoryDataSource, string language, bool includeDeletedEntities)
         : base(metricsContext, mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(ckTypeGraph),
             new RtEntityFieldFilterResolver<TEntity>(ckCacheService, tenantId, ckTypeGraph), language)
     {
@@ -36,6 +37,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         _tenantId = tenantId;
         _ckTypeGraph = ckTypeGraph;
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
+        _includeDeletedEntities = includeDeletedEntities;
         _geospatialFilters = new List<IPipelineStageDefinition>();
         _associationStageDefinitions = new List<IPipelineStageDefinition>();
     }
@@ -247,6 +249,12 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         // Add filter for ck type and derived ones
         var ckTypeIds = _ckTypeGraph.GetAllDerivedTypes(true).Select(t => t.ToRtCkId());
         filters.Add(Builders<TEntity>.Filter.In(f => f.CkTypeId, ckTypeIds));
+
+        // Ensure that deleted entities are not added to the result if defined.
+        if (!_includeDeletedEntities)
+        {
+            filters.Add(Builders<TEntity>.Filter.Ne(ckType => ckType.RtState, RtState.Deleted));
+        }
     }
 
     protected override void AddPreStagesToPipelines(IList<IPipelineStageDefinition> pipelineStageDefinitions)

@@ -11,13 +11,13 @@ using Xunit;
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
 [Collection("Sequential")]
-public class GetRtAssociationsAsyncTests(GenerateSampleDataFixture generateSampleDataFixture)
-    : IClassFixture<GenerateSampleDataFixture>
+public class GetRtAssociationsAsyncTests(SampleRtModelDataFixture sampleRtModelDataFixture)
+    : IClassFixture<SampleRtModelDataFixture>
 {
     [Fact]
     public async Task GetRtAssociationsAsync_OK()
     {
-        var systemContext = generateSampleDataFixture.GetSystemContext();
+        var systemContext = sampleRtModelDataFixture.GetSystemContext();
 
         var tenantRepository = systemContext.GetTenantRepository();
 
@@ -25,15 +25,15 @@ public class GetRtAssociationsAsyncTests(GenerateSampleDataFixture generateSampl
         session.StartTransaction();
 
 
-        var dataQueryOperation = DataQueryOperation.Create()
+        var queryOptions = RtEntityQueryOptions.Create()
             .SortOrder(nameof(RtEntity.RtId), SortOrders.Ascending);
 
         var result = await tenantRepository.GetRtEntitiesByTypeAsync(session, TestCkIds.RtCkDistrictTypeId,
-            dataQueryOperation, 0, 5);
+            queryOptions, 0, 5);
 
         var rtEntityIds = result.Items.Select(x => x.ToRtEntityId()).ToList();
         var deep = await tenantRepository.GetRtAssociationsAsync(session, rtEntityIds,
-            GraphDirections.Inbound, 0, 5);
+            RtAssociationQueryOptions.Create(GraphDirections.Inbound, 0, 5));
 
         Assert.Equal(5, deep.Count);
         Assert.Single(deep["Test/District@66803ecf4aa85720dda96b01"].Items);

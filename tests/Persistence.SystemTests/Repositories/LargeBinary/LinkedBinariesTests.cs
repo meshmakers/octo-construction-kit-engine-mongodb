@@ -1,6 +1,7 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
@@ -37,7 +38,7 @@ public class LinkedBinariesTests(ImportTestCkModelFixture fixture) : IClassFixtu
 
         var (session, binaryEntity) = await InsertCustomers(tenantRepository);
 
-        await tenantRepository.DeleteOneRtEntityByRtIdAsync<RtBinaryEntity>(session, binaryEntity.RtId);
+        await tenantRepository.DeleteOneRtEntityByRtIdAsync<RtBinaryEntity>(session, binaryEntity.RtId, DeleteOptions.Erase);
 
         await session.CommitTransactionAsync();
     }

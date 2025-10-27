@@ -1,10 +1,8 @@
 using Meshmakers.Octo.Runtime.Contracts.Exchange;
 
-using Xunit;
-
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests.Fixtures;
 
-public class GenerateSampleDataFixture : ImportTestCkModelFixture
+public class SampleRtModelDataFixture : ImportTestCkModelFixture
 {
     protected override async Task InitializeServicesAsync()
     {

@@ -23,10 +23,10 @@ public class MeteringPointController(ILogger<MeteringPointController> logger, IS
             session.StartTransaction();
 
            // var point = new Point(new Position(40.7358879, -74.005));
-            var dataQueryOperation = DataQueryOperation.Create();
+            var queryOptions = RtEntityQueryOptions.Create();
          //   dataQueryOperation.NearGeospatialFilter("Location", point, 2000, 2100);
 
-            var r = await tenantRepository.GetRtEntitiesByTypeAsync(session, "AccountingDemo/TreasureHunt", dataQueryOperation);
+            var r = await tenantRepository.GetRtEntitiesByTypeAsync(session, "AccountingDemo/TreasureHunt", queryOptions);
             return r.Items;
         }
         catch (Exception e)

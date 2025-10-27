@@ -18,6 +18,8 @@ using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
+using DeleteOptions = Meshmakers.Octo.Runtime.Contracts.Repositories.DeleteOptions;
+
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 internal class TenantRepository(
@@ -56,23 +58,23 @@ internal class TenantRepository(
     #region Data manipulation
 
     protected override async Task DeleteManyRtEntitiesAsync<TEntity>(IOctoSession session, RtCkId<CkTypeId> ckTypeId,
-        FieldFilterCriteria fieldFilterCriteria)
+        FieldFilterCriteria fieldFilterCriteria, DeleteOptions deleteOptions)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation,
-            mongoDbRepositoryDataSource);
+            mongoDbRepositoryDataSource, deleteOptions);
         mutation.AddFieldFilterCriteria(fieldFilterCriteria);
         await mutation.DeleteManyAsync(session).ConfigureAwait(false);
     }
 
     protected override async Task DeleteOneRtEntityAsync<TEntity>(IOctoSession session, RtCkId<CkTypeId> ckTypeId,
-        FieldFilterCriteria fieldFilterCriteria)
+        FieldFilterCriteria fieldFilterCriteria, DeleteOptions deleteOptions)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation,
-            mongoDbRepositoryDataSource);
+            mongoDbRepositoryDataSource, deleteOptions);
         mutation.AddFieldFilterCriteria(fieldFilterCriteria);
         await mutation.DeleteOneAsync(session).ConfigureAwait(false);
     }
@@ -83,9 +85,9 @@ internal class TenantRepository(
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation,
-            mongoDbRepositoryDataSource);
+            mongoDbRepositoryDataSource, DeleteOptions.Default);
         mutation.AddFieldFilterCriteria(fieldFilterCriteria);
-        await mutation.UpdateOneAsync(session, ckTypeId, rtEntity).ConfigureAwait(false);
+        await mutation.UpdateOneAsync(session, rtEntity).ConfigureAwait(false);
     }
 
     protected override async Task UpdateManyRtEntityAsync<TEntity>(IOctoSession session, RtCkId<CkTypeId> ckTypeId,
@@ -94,7 +96,7 @@ internal class TenantRepository(
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation,
-            mongoDbRepositoryDataSource);
+            mongoDbRepositoryDataSource, DeleteOptions.Default);
         mutation.AddFieldFilterCriteria(fieldFilterCriteria);
         await mutation.UpdateManyAsync(session, rtEntity).ConfigureAwait(false);
     }
@@ -105,29 +107,27 @@ internal class TenantRepository(
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation,
-            mongoDbRepositoryDataSource);
+            mongoDbRepositoryDataSource, DeleteOptions.Default);
         mutation.AddFieldFilterCriteria(fieldFilterCriteria);
         await mutation.ReplaceOneAsync(session, rtEntity).ConfigureAwait(false);
     }
-
-
 
     #endregion Data manipulation
 
     #region Data query
 
     public async Task<IResultSet<CkModel>> GetCkModelsAsync(IOctoSession session, List<CkModelId>? ckModelIds,
-        DataQueryOperation dataQueryOperation, int? skip = null,
+        RtEntityQueryOptions queryOptions, int? skip = null,
         int? take = null)
     {
         var query = new CkModelQuery(metricsContext, mongoDbRepositoryDataSource);
-        query.AddFieldFilterCriteria(dataQueryOperation);
+        query.AddFieldFilterCriteria(queryOptions);
         query.AddIdFilter(ckModelIds);
-        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
-        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
 
         return await query.ExecuteQuery(session, skip, take);
     }
@@ -135,68 +135,68 @@ internal class TenantRepository(
     public async Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session,
         IReadOnlyList<CkModelId>? ckModelIds,
         IReadOnlyList<CkId<CkAttributeId>>? attributeIds,
-        DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
+        RtEntityQueryOptions queryOptions, int? skip = null, int? take = null)
     {
         var query = new CkAttributeQuery(metricsContext, mongoDbRepositoryDataSource);
-        query.AddFieldFilterCriteria(dataQueryOperation);
+        query.AddFieldFilterCriteria(queryOptions);
         query.AddModelIdFilter(ckModelIds);
         query.AddIdFilter(attributeIds);
-        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
-        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
 
         return await query.ExecuteQuery(session, skip, take);
     }
 
     public async Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkModelId>? ckModelIds,
         IReadOnlyList<CkId<CkTypeId>>? ckTypeIds,
-        DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
+        RtEntityQueryOptions queryOptions, int? skip = null, int? take = null)
     {
         var query = new CkTypeQuery(metricsContext, mongoDbRepositoryDataSource);
-        query.AddFieldFilterCriteria(dataQueryOperation);
+        query.AddFieldFilterCriteria(queryOptions);
         query.AddModelIdFilter(ckModelIds);
         query.AddIdFilter(ckTypeIds);
-        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
-        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
 
         return await query.ExecuteQuery(session, skip, take);
     }
 
     public async Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session, IReadOnlyList<CkModelId>? ckModelIds,
         List<CkId<CkRecordId>>? ckRecordIds,
-        DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
+        RtEntityQueryOptions queryOptions, int? skip = null, int? take = null)
     {
         var query = new CkRecordQuery(metricsContext, mongoDbRepositoryDataSource);
-        query.AddFieldFilterCriteria(dataQueryOperation);
+        query.AddFieldFilterCriteria(queryOptions);
         query.AddModelIdFilter(ckModelIds);
         query.AddIdFilter(ckRecordIds);
-        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
-        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
 
         return await query.ExecuteQuery(session, skip, take);
     }
 
     public async Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, IReadOnlyList<CkModelId>? ckModelIds,
         List<CkId<CkEnumId>>? ckEnumIds,
-        DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
+        RtEntityQueryOptions queryOptions, int? skip = null, int? take = null)
     {
         var query = new CkEnumQuery(metricsContext, mongoDbRepositoryDataSource);
-        query.AddFieldFilterCriteria(dataQueryOperation);
+        query.AddFieldFilterCriteria(queryOptions);
         query.AddModelIdFilter(ckModelIds);
         query.AddIdFilter(ckEnumIds);
-        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
-        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
 
         return await query.ExecuteQuery(session, skip, take);
     }
@@ -205,13 +205,13 @@ internal class TenantRepository(
         RtCkId<CkTypeId> originCkTypeId,
         RtCkId<CkAssociationRoleId> roleId,
         RtCkId<CkTypeId> targetCkTypeId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, RtEntityQueryOptions queryOptions,
         int? skip = null,
         int? take = null)
     {
         var result = await GetRtAssociationTargetsAsync(session, [originRtId], originCkTypeId, roleId,
             targetCkTypeId,
-            graphDirection, rtIds, dataQueryOperation, skip, take);
+            graphDirection, rtIds, queryOptions, skip, take);
 
         return result.First().Value;
     }
@@ -220,7 +220,7 @@ internal class TenantRepository(
         IOctoSession session,
         OctoObjectId originRtId,
         RtCkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, DataQueryOperation dataQueryOperation,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, RtEntityQueryOptions queryOptions,
         int? skip = null,
         int? take = null)
         where TOriginEntity : RtEntity
@@ -228,7 +228,7 @@ internal class TenantRepository(
     {
         var result = await GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(session, [originRtId],
             roleId,
-            graphDirection, targetRtIds, dataQueryOperation, skip, take);
+            graphDirection, targetRtIds, queryOptions, skip, take);
 
         return result.First().Value;
     }
@@ -236,14 +236,14 @@ internal class TenantRepository(
     public async Task<IResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TTargetEntity>(IOctoSession session,
         OctoObjectId originRtId, RtCkId<CkTypeId> originCkTypeId,
         RtCkId<CkAssociationRoleId> roleId, GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds,
-        DataQueryOperation dataQueryOperation,
+        RtEntityQueryOptions queryOptions,
         int? skip = null, int? take = null) where TTargetEntity : RtEntity, new()
     {
         var targetCkTypeId = RtEntityExtensions.GetRtCkTypeId<TTargetEntity>();
 
         var result = await GetRtAssociationTargetsAsync<TTargetEntity>(session, [originRtId], originCkTypeId, roleId,
             graphDirection,
-            targetRtIds, targetCkTypeId, dataQueryOperation, skip, take);
+            targetRtIds, targetCkTypeId, queryOptions, skip, take);
 
         return result.First().Value;
     }
@@ -251,19 +251,19 @@ internal class TenantRepository(
     public Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds, RtCkId<CkTypeId> originCkTypeId, RtCkId<CkAssociationRoleId> roleId,
         RtCkId<CkTypeId> targetCkTypeId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, DataQueryOperation dataQueryOperation,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, RtEntityQueryOptions queryOptions,
         int? skip = null,
         int? take = null)
     {
         return GetRtAssociationTargetsAsync<RtEntity>(session, originRtIds, originCkTypeId, roleId, graphDirection,
-            targetRtIds, targetCkTypeId, dataQueryOperation, skip, take);
+            targetRtIds, targetCkTypeId, queryOptions, skip, take);
     }
 
     public Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity,
         TTargetEntity>(
         IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds, RtCkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, DataQueryOperation dataQueryOperation,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, RtEntityQueryOptions queryOptions,
         int? skip = null,
         int? take = null)
         where TOriginEntity : RtEntity
@@ -273,7 +273,7 @@ internal class TenantRepository(
         var targetCkTypeId = RtEntityExtensions.GetRtCkTypeId<TTargetEntity>();
 
         return GetRtAssociationTargetsAsync<TTargetEntity>(session, originRtIds, originCkTypeId, roleId, graphDirection,
-            targetRtIds, targetCkTypeId, dataQueryOperation, skip, take);
+            targetRtIds, targetCkTypeId, queryOptions, skip, take);
     }
 
     private async Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<
@@ -281,7 +281,7 @@ internal class TenantRepository(
         IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds, RtCkId<CkTypeId> originCkTypeId, RtCkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, RtCkId<CkTypeId> targetCkTypeId,
-        DataQueryOperation dataQueryOperation,
+        RtEntityQueryOptions queryOptions,
         int? skip = null,
         int? take = null)
         where TTargetEntity : RtEntity, new()
@@ -293,18 +293,18 @@ internal class TenantRepository(
         var originHierarchicalRtQuery =
             new MultipleOriginDirectAssociationsRtQuery<TTargetEntity>(ckCacheService, TenantId,
                 mongoDbRepositoryDataSource,
-                dataQueryOperation.Language,
+                queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false,
                 originRtIds,
                 originTypeGraph, roleId, graphDirection, targetTypeGraph);
 
-        originHierarchicalRtQuery.AddFieldFilterCriteria(dataQueryOperation);
+        originHierarchicalRtQuery.AddFieldFilterCriteria(queryOptions);
         originHierarchicalRtQuery.AddIdFilter(targetRtIds);
-        originHierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        originHierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        originHierarchicalRtQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        originHierarchicalRtQuery.AddFieldAggregation(dataQueryOperation.FieldAggregation);
-        originHierarchicalRtQuery.AddResultAggregation(dataQueryOperation.ResultAggregation);
-        originHierarchicalRtQuery.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
+        originHierarchicalRtQuery.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        originHierarchicalRtQuery.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        originHierarchicalRtQuery.AddPostStagesToPipeline(queryOptions.SortOrders);
+        originHierarchicalRtQuery.AddFieldAggregation(queryOptions.FieldAggregation);
+        originHierarchicalRtQuery.AddResultAggregation(queryOptions.ResultAggregation);
+        originHierarchicalRtQuery.AddGeospatialFilters(queryOptions.GeospatialFilters);
 
         return await originHierarchicalRtQuery.ExecuteQuery(session, skip, take);
     }
@@ -315,13 +315,13 @@ internal class TenantRepository(
         RtCkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection) where TOriginEntity : RtEntity where TTargetEntity : RtEntity, new()
     {
-        var dataQueryOperation = DataQueryOperation.Create();
+        var queryOptions = RtEntityQueryOptions.Create();
         var originCkTypeId = RtEntityExtensions.GetRtCkTypeId<TOriginEntity>();
         var originRtEntityId = new RtEntityId(originCkTypeId, originRtId);
 
         var resultSets = await GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(session,
             [originRtId], roleId,
-            graphDirection, null, dataQueryOperation);
+            graphDirection, null, queryOptions);
         return resultSets[originRtEntityId];
     }
 
@@ -329,11 +329,12 @@ internal class TenantRepository(
         RtEntityId originRtEntityId,
         RtCkId<CkAssociationRoleId> roleId, RtCkId<CkTypeId> targetCkTypeId, GraphDirections graphDirection)
     {
-        var dataQueryOperation = DataQueryOperation.Create();
+        var queryOptions = RtEntityQueryOptions.Create();
 
-        var resultSets = await GetIndirectRtAssociationTargetsAsync(session, [originRtEntityId.RtId], originRtEntityId.CkTypeId,
+        var resultSets = await GetIndirectRtAssociationTargetsAsync(session, [originRtEntityId.RtId],
+            originRtEntityId.CkTypeId,
             roleId,
-            graphDirection, null, targetCkTypeId, dataQueryOperation);
+            graphDirection, null, targetCkTypeId, queryOptions);
         return resultSets[originRtEntityId];
     }
 
@@ -341,7 +342,7 @@ internal class TenantRepository(
         TTargetEntity>(
         IOctoSession session, IEnumerable<OctoObjectId> originRtIds,
         RtCkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, RtEntityQueryOptions queryOptions,
         int? skip = null,
         int? take = null) where TOriginEntity : RtEntity where TTargetEntity : RtEntity, new()
     {
@@ -355,18 +356,18 @@ internal class TenantRepository(
         var hierarchicalRtQuery =
             new MultipleOriginIndirectAssociationsRtQuery<TTargetEntity>(ckCacheService, TenantId,
                 mongoDbRepositoryDataSource,
-                dataQueryOperation.Language,
+                queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false,
                 originRtIds,
                 originTypeGraph, roleId, graphDirection, targetTypeGraph);
 
-        hierarchicalRtQuery.AddFieldFilterCriteria(dataQueryOperation);
+        hierarchicalRtQuery.AddFieldFilterCriteria(queryOptions);
         hierarchicalRtQuery.AddIdFilter(rtIds);
-        hierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        hierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        hierarchicalRtQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        hierarchicalRtQuery.AddFieldAggregation(dataQueryOperation.FieldAggregation);
-        hierarchicalRtQuery.AddResultAggregation(dataQueryOperation.ResultAggregation);
-        hierarchicalRtQuery.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
+        hierarchicalRtQuery.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        hierarchicalRtQuery.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        hierarchicalRtQuery.AddPostStagesToPipeline(queryOptions.SortOrders);
+        hierarchicalRtQuery.AddFieldAggregation(queryOptions.FieldAggregation);
+        hierarchicalRtQuery.AddResultAggregation(queryOptions.ResultAggregation);
+        hierarchicalRtQuery.AddGeospatialFilters(queryOptions.GeospatialFilters);
 
         return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
     }
@@ -375,7 +376,7 @@ internal class TenantRepository(
         IEnumerable<OctoObjectId> originRtIds, RtCkId<CkTypeId> originCkTypeId,
         RtCkId<CkAssociationRoleId> roleId, GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds,
         RtCkId<CkTypeId> targetCkTypeId,
-        DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
+        RtEntityQueryOptions queryOptions, int? skip = null, int? take = null)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
         var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
@@ -384,18 +385,18 @@ internal class TenantRepository(
         var hierarchicalRtQuery =
             new MultipleOriginIndirectAssociationsRtQuery<RtEntity>(ckCacheService, TenantId,
                 mongoDbRepositoryDataSource,
-                dataQueryOperation.Language,
+                queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false,
                 originRtIds,
                 originTypeGraph, roleId, graphDirection, targetTypeGraph);
 
-        hierarchicalRtQuery.AddFieldFilterCriteria(dataQueryOperation);
+        hierarchicalRtQuery.AddFieldFilterCriteria(queryOptions);
         hierarchicalRtQuery.AddIdFilter(targetRtIds);
-        hierarchicalRtQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        hierarchicalRtQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        hierarchicalRtQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        hierarchicalRtQuery.AddFieldAggregation(dataQueryOperation.FieldAggregation);
-        hierarchicalRtQuery.AddResultAggregation(dataQueryOperation.ResultAggregation);
-        hierarchicalRtQuery.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
+        hierarchicalRtQuery.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        hierarchicalRtQuery.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        hierarchicalRtQuery.AddPostStagesToPipeline(queryOptions.SortOrders);
+        hierarchicalRtQuery.AddFieldAggregation(queryOptions.FieldAggregation);
+        hierarchicalRtQuery.AddResultAggregation(queryOptions.ResultAggregation);
+        hierarchicalRtQuery.AddGeospatialFilters(queryOptions.GeospatialFilters);
 
         return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
     }
@@ -403,26 +404,27 @@ internal class TenantRepository(
     public async Task<IResultSet<RtDeepGraphQueryResult>> GetRtDeepGraphAsync(IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds,
         RtCkId<CkTypeId> originCkTypeId,
-        DataQueryOperation dataQueryOperation, int? skip = null, int? take = null)
+        RtEntityQueryOptions queryOptions, int? skip = null, int? take = null)
     {
         var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
 
         var hierarchicalDeepRtGraphQuery = new MultipleOriginHierarchicalDeepRtGraphQuery(mongoDbRepositoryDataSource,
-            dataQueryOperation.Language, originRtIds, originTypeGraph, SystemCkIds.RtCkParentChildRoleId);
-        hierarchicalDeepRtGraphQuery.AddFieldFilterCriteria(dataQueryOperation);
-        hierarchicalDeepRtGraphQuery.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        hierarchicalDeepRtGraphQuery.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        hierarchicalDeepRtGraphQuery.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        hierarchicalDeepRtGraphQuery.AddFieldAggregation(dataQueryOperation.FieldAggregation);
-        hierarchicalDeepRtGraphQuery.AddResultAggregation(dataQueryOperation.ResultAggregation);
-        hierarchicalDeepRtGraphQuery.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
+            queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false, originRtIds,
+            originTypeGraph, SystemCkIds.RtCkParentChildRoleId);
+        hierarchicalDeepRtGraphQuery.AddFieldFilterCriteria(queryOptions);
+        hierarchicalDeepRtGraphQuery.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        hierarchicalDeepRtGraphQuery.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        hierarchicalDeepRtGraphQuery.AddPostStagesToPipeline(queryOptions.SortOrders);
+        hierarchicalDeepRtGraphQuery.AddFieldAggregation(queryOptions.FieldAggregation);
+        hierarchicalDeepRtGraphQuery.AddResultAggregation(queryOptions.ResultAggregation);
+        hierarchicalDeepRtGraphQuery.AddGeospatialFilters(queryOptions.GeospatialFilters);
 
         return await hierarchicalDeepRtGraphQuery.ExecuteQuery(session, skip, take);
     }
 
     protected override async Task<IResultSet<TEntity>> GetRtEntitiesByTypeAsync<TEntity>(IOctoSession session,
         RtCkId<CkTypeId> ckTypeId,
-        DataQueryOperation dataQueryOperation, int? skip = null,
+        RtEntityQueryOptions queryOptions, int? skip = null,
         int? take = null)
     {
         var ckCacheService = await GetCkCacheServiceAsync();
@@ -430,21 +432,21 @@ internal class TenantRepository(
         var query =
             new SingleOriginRtQuery<TEntity>(metricsContext, ckCacheService, TenantId, ckTypeGraph,
                 mongoDbRepositoryDataSource,
-                dataQueryOperation.Language);
-        query.AddFieldFilterCriteria(dataQueryOperation);
-        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
-        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
-        query.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
+                queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false);
+        query.AddFieldFilterCriteria(queryOptions);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
+        query.AddGeospatialFilters(queryOptions.GeospatialFilters);
 
         return await query.ExecuteQuery(session, skip, take);
     }
 
     protected override async Task<IResultSet<TEntity>> GetRtEntitiesByIdAsync<TEntity>(IOctoSession session,
         RtCkId<CkTypeId> ckTypeId,
-        IReadOnlyList<OctoObjectId> rtIds, DataQueryOperation dataQueryOperation,
+        IReadOnlyList<OctoObjectId> rtIds, RtEntityQueryOptions queryOptions,
         int? skip = null, int? take = null)
     {
         if (!rtIds.Any())
@@ -458,21 +460,21 @@ internal class TenantRepository(
         var query =
             new SingleOriginRtQuery<TEntity>(metricsContext, ckCacheService, TenantId, ckTypeGraph,
                 mongoDbRepositoryDataSource,
-                dataQueryOperation.Language);
-        query.AddFieldFilterCriteria(dataQueryOperation);
+                queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false);
+        query.AddFieldFilterCriteria(queryOptions);
         query.AddIdFilter(rtIds);
-        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
-        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
-        query.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
+        query.AddGeospatialFilters(queryOptions.GeospatialFilters);
 
         return await query.ExecuteQuery(session, skip, take);
     }
 
     public override async Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByTypeAsync(IOctoSession session,
-        RtCkId<CkTypeId> ckTypeId, DataQueryOperation dataQueryOperation,
+        RtCkId<CkTypeId> ckTypeId, RtEntityQueryOptions queryOptions,
         ICollection<NavigationPair> navigationPairs, int? skip = null, int? take = null)
     {
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
@@ -480,23 +482,23 @@ internal class TenantRepository(
         // We analyze FieldFilters and search for navigation properties, we assign them to the correct roleIdDirectionPairs
         // and remove them from the FieldFilters
         var ckCacheService = await GetCkCacheServiceAsync();
-        if (dataQueryOperation.FieldFilters != null)
+        if (queryOptions.FieldFilters != null)
         {
             RtPathEvaluator.MergeFieldFilterToNavigationPairs(ckCacheService, TenantId, ckTypeGraph.CkTypeId,
-                navigationPairs.ToArray(), dataQueryOperation.FieldFilters);
+                navigationPairs.ToArray(), queryOptions.FieldFilters);
         }
 
         var query =
             new SingleOriginRtQuery<RtEntityGraphItem>(metricsContext, ckCacheService, TenantId, ckTypeGraph,
                 mongoDbRepositoryDataSource,
-                dataQueryOperation.Language);
-        query.AddFieldFilterCriteria(dataQueryOperation);
-        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
-        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
-        query.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
+                queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false);
+        query.AddFieldFilterCriteria(queryOptions);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
+        query.AddGeospatialFilters(queryOptions.GeospatialFilters);
         query.AddNavigationProperties(navigationPairs);
 
         return await query.ExecuteQuery(session, skip, take);
@@ -504,7 +506,7 @@ internal class TenantRepository(
 
     public override async Task<IResultSet<RtEntityGraphItem>> GetRtEntitiesGraphByIdAsync(IOctoSession session,
         RtCkId<CkTypeId> ckTypeId, IReadOnlyList<OctoObjectId> rtIds,
-        DataQueryOperation dataQueryOperation, IEnumerable<NavigationPair> roleIdDirectionPairs, int? skip = null,
+        RtEntityQueryOptions queryOptions, IEnumerable<NavigationPair> roleIdDirectionPairs, int? skip = null,
         int? take = null)
     {
         if (!rtIds.Any())
@@ -518,15 +520,15 @@ internal class TenantRepository(
         var query =
             new SingleOriginRtQuery<RtEntityGraphItem>(metricsContext, ckCacheService, TenantId, ckTypeGraph,
                 mongoDbRepositoryDataSource,
-                dataQueryOperation.Language);
-        query.AddFieldFilterCriteria(dataQueryOperation);
+                queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false);
+        query.AddFieldFilterCriteria(queryOptions);
         query.AddIdFilter(rtIds);
-        query.AddTextSearchFilter(dataQueryOperation.TextSearchFilter);
-        query.AddAttributeSearchFilter(dataQueryOperation.AttributeSearchFilter);
-        query.AddPostStagesToPipeline(dataQueryOperation.SortOrders);
-        query.AddFieldAggregation(dataQueryOperation.FieldAggregation);
-        query.AddResultAggregation(dataQueryOperation.ResultAggregation);
-        query.AddGeospatialFilters(dataQueryOperation.GeospatialFilters);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
+        query.AddGeospatialFilters(queryOptions.GeospatialFilters);
         query.AddNavigationProperties(roleIdDirectionPairs);
 
         return await query.ExecuteQuery(session, skip, take);

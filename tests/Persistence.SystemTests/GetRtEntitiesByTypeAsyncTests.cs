@@ -6,12 +6,12 @@ using Xunit;
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
 [Collection("Sequential")]
-public class GetRtEntitiesByTypeAsyncTests(GenerateSampleDataFixture generateSampleDataFixture) : IClassFixture<GenerateSampleDataFixture>
+public class GetRtEntitiesByTypeAsyncTests(SampleRtModelDataFixture sampleRtModelDataFixture) : IClassFixture<SampleRtModelDataFixture>
 {
     [Fact]
     public async Task GetRtEntitiesByTypeAsync_Filter_In_StringArray_OK()
     {
-        var systemContext = generateSampleDataFixture.GetSystemContext();
+        var systemContext = sampleRtModelDataFixture.GetSystemContext();
 
         var tenantRepository = systemContext.GetTenantRepository();
 
@@ -19,11 +19,11 @@ public class GetRtEntitiesByTypeAsyncTests(GenerateSampleDataFixture generateSam
         session.StartTransaction();
 
         var tags = new[] { "Water" };
-        var dataQueryOperation = DataQueryOperation.Create()
+        var queryOptions = RtEntityQueryOptions.Create()
             .FieldFilter("Tags", FieldFilterOperator.In, tags);
 
         var result =
-            await tenantRepository.GetRtEntitiesByTypeAsync(session, "Test/MeasuringPoint", dataQueryOperation);
+            await tenantRepository.GetRtEntitiesByTypeAsync(session, "Test/MeasuringPoint", queryOptions);
 
         await session.CommitTransactionAsync();
 
@@ -38,15 +38,15 @@ public class GetRtEntitiesByTypeAsyncTests(GenerateSampleDataFixture generateSam
     {
         var designation = "Pinzgau / Zell am See";
 
-        var systemContext = generateSampleDataFixture.GetSystemContext();
+        var systemContext = sampleRtModelDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();
 
         using var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
-        var dataQueryOperation = DataQueryOperation.Create()
+        var queryOptions = RtEntityQueryOptions.Create()
             .FieldFilter(nameof(RtStateOrProvince.Name), FieldFilterOperator.Equals, designation);
 
-        var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtDistrict>(session, dataQueryOperation);
+        var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtDistrict>(session, queryOptions);
 
         await session.CommitTransactionAsync();
 
@@ -58,16 +58,16 @@ public class GetRtEntitiesByTypeAsyncTests(GenerateSampleDataFixture generateSam
     [Fact]
     public async Task GetRtEntitiesByTypeAsync_Filter_Like_OK()
     {
-        var systemContext = generateSampleDataFixture.GetSystemContext();
+        var systemContext = sampleRtModelDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();
 
         using var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        var dataOperation = DataQueryOperation.Create()
+        var queryOptions = RtEntityQueryOptions.Create()
             .FieldFilter(nameof(RtDistrict.Name), FieldFilterOperator.Like, "P*");
 
-        var deep = await tenantRepository.GetRtEntitiesByTypeAsync<RtDistrict>(session, dataOperation,
+        var deep = await tenantRepository.GetRtEntitiesByTypeAsync<RtDistrict>(session, queryOptions,
              0, 5);
 
         Assert.Equal(2, deep.TotalCount);

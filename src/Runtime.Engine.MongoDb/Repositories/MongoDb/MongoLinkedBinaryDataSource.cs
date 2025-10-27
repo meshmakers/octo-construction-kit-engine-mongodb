@@ -12,6 +12,7 @@ using MongoDB.Driver;
 using MongoDB.Driver.GridFS;
 
 using BinaryInfo = Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic.BinaryInfo;
+using DeleteOptions = Meshmakers.Octo.Runtime.Contracts.Repositories.DeleteOptions;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
@@ -28,8 +29,10 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
     public override async Task DeleteAllFileSystemBinariesAsync(IOctoSession session, RtEntityId rtEntityId,
         CancellationToken cancellationToken = new())
     {
-        var filter = Builders<GridFSFileInfo>.Filter.Eq("Metadata." + Constants.RtEntityId, rtEntityId.ToString(CultureInfo.InvariantCulture));
+        var filter = Builders<GridFSFileInfo>.Filter.Eq("Metadata." + Constants.RtEntityId,
+            rtEntityId.ToString(CultureInfo.InvariantCulture));
         var asyncCursor = await _bucket.FindAsync(filter, cancellationToken: cancellationToken);
+
 
         while (await asyncCursor.MoveNextAsync(cancellationToken))
         {
@@ -46,7 +49,8 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
         await _bucket.DeleteAsync(largeBinaryId.ToObjectId(), cancellationToken);
     }
 
-    public override async Task<IDownloadStreamHandler> DownloadBinaryAsync(IOctoSession session, OctoObjectId largeBinaryId,
+    public override async Task<IDownloadStreamHandler> DownloadBinaryAsync(IOctoSession session,
+        OctoObjectId largeBinaryId,
         CancellationToken cancellationToken = new())
     {
         try
@@ -96,7 +100,8 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
         }
     }
 
-    public override async Task DeleteAllTemporaryLargeBinariesAsync(IOctoSession session, CancellationToken cancellationToken)
+    public override async Task DeleteAllTemporaryLargeBinariesAsync(IOctoSession session,
+        CancellationToken cancellationToken)
     {
         var filter = Builders<GridFSFileInfo>.Filter.Eq("Metadata." + Constants.BinaryType, (int)BinaryType.Temporary);
         filter &= Builders<GridFSFileInfo>.Filter.Ne("Metadata." + Constants.ExpiryDateTime, BsonNull.Value);
@@ -111,7 +116,8 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
         }
     }
 
-    protected override async Task<OctoObjectId> UploadLargeBinaryAsync(IOctoSession session, string filename, string contentType, BinaryType binaryType,
+    protected override async Task<OctoObjectId> UploadLargeBinaryAsync(IOctoSession session, string filename,
+        string contentType, BinaryType binaryType,
         RtEntityId? rtEntityId, DateTime? expiryDateTime, Stream stream,
         CancellationToken cancellationToken = new())
     {
@@ -133,7 +139,8 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
         return (await _bucket.UploadFromStreamAsync(filename, stream, options, cancellationToken)).ToOctoObjectId();
     }
 
-    protected override async Task<OctoObjectId> ReplaceLargeBinaryAsync(IOctoSession session, string filename, string contentType, BinaryType binaryType,
+    protected override async Task<OctoObjectId> ReplaceLargeBinaryAsync(IOctoSession session, string filename,
+        string contentType, BinaryType binaryType,
         OctoObjectId? binaryId, Stream stream, CancellationToken cancellationToken = new())
     {
         BsonDocument meta;
@@ -163,10 +170,7 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
         meta[Constants.ContentType] = contentType;
         meta[Constants.BinaryType] = binaryType;
 
-        var options = new GridFSUploadOptions
-        {
-            Metadata = meta
-        };
+        var options = new GridFSUploadOptions { Metadata = meta };
 
         await _bucket.DeleteAsync(binaryId.Value.ToObjectId(), cancellationToken);
         await _bucket.UploadFromStreamAsync(binaryId.Value.ToObjectId(), filename, stream, options, cancellationToken);

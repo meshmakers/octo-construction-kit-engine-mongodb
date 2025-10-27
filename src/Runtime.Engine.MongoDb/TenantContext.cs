@@ -12,6 +12,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
+using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
@@ -313,7 +314,7 @@ public class TenantContext : ITenantContext
             var tenantRepository = GetTenantRepositoryAsAdmin();
             await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
                 FieldFilterCriteria.Create().FieldEquals(nameof(RtTenant.TenantId),
-                    tenantId.NormalizeString()));
+                    tenantId.NormalizeString()), DeleteOptions.Erase);
         }
         finally
         {
@@ -372,7 +373,7 @@ public class TenantContext : ITenantContext
             // Deletes the tenant entry from the current tenant
             await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
                 FieldFilterCriteria.Create().FieldEquals(nameof(RtTenant.TenantId),
-                    tenantId.NormalizeString()));
+                    tenantId.NormalizeString()), DeleteOptions.Erase);
 
             // If the current tenant is not the system tenant, we need to delete the tenant entry in system tenant too.
             // Add the new tenant as child tenant of the current one
@@ -381,7 +382,7 @@ public class TenantContext : ITenantContext
                 var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
                 await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
                     FieldFilterCriteria.Create().FieldEquals(nameof(RtTenant.TenantId),
-                        tenantId.NormalizeString()));
+                        tenantId.NormalizeString()), DeleteOptions.Erase);
             }
         }
         finally
@@ -413,7 +414,7 @@ public class TenantContext : ITenantContext
         var tenantRepository = GetTenantRepositoryAsAdmin();
 
         var result =
-            await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, DataQueryOperation.Create(), skip,
+            await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, RtEntityQueryOptions.Create(), skip,
                 take);
         return new ResultSet<OctoTenant>(result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName)),
             result.TotalCount, null, null);
@@ -580,11 +581,11 @@ public class TenantContext : ITenantContext
 
         var tenantRepository = GetTenantRepositoryAsAdmin();
 
-        var dataQueryOperation = DataQueryOperation.Create()
+        var queryOptions = RtEntityQueryOptions.Create()
             .FieldFilter(nameof(RtTenantConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);
 
         var resultSet =
-            await tenantRepository.GetRtEntitiesByTypeAsync<RtTenantConfiguration>(adminSession, dataQueryOperation);
+            await tenantRepository.GetRtEntitiesByTypeAsync<RtTenantConfiguration>(adminSession, queryOptions);
         var configuration = resultSet.Items.FirstOrDefault();
         if (configuration == null)
         {
@@ -608,7 +609,8 @@ public class TenantContext : ITenantContext
             .Create()
             .FieldEquals(nameof(RtTenantConfiguration.RtWellKnownName), key);
 
-        await tenantRepository.DeleteOneRtEntityAsync<RtTenantConfiguration>(adminSession, fieldFilterCriteria);
+        await tenantRepository.DeleteOneRtEntityAsync<RtTenantConfiguration>(adminSession, fieldFilterCriteria,
+            DeleteOptions.Erase);
     }
 
     #endregion Configuration
@@ -751,10 +753,10 @@ public class TenantContext : ITenantContext
     {
         var tenantRepository = GetTenantRepositoryAsAdmin();
 
-        var dataQueryOperation = DataQueryOperation.Create()
+        var queryOptions = RtEntityQueryOptions.Create()
             .FieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.NormalizeString());
 
-        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, dataQueryOperation);
+        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions);
         return resultSet.Items.FirstOrDefault();
     }
 
@@ -763,10 +765,10 @@ public class TenantContext : ITenantContext
     {
         var tenantRepository = GetTenantRepositoryAsAdmin();
 
-        var dataQueryOperation = DataQueryOperation.Create()
+        var queryOptions = RtEntityQueryOptions.Create()
             .FieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.NormalizeString());
 
-        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, dataQueryOperation);
+        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions);
         return resultSet.Items.FirstOrDefault();
     }
 
@@ -779,11 +781,11 @@ public class TenantContext : ITenantContext
     {
         var tenantRepository = GetTenantRepositoryAsAdmin();
 
-        var dataQueryOperation = DataQueryOperation.Create()
+        var queryOptions = RtEntityQueryOptions.Create()
             .FieldFilter(nameof(RtTenantConfiguration.RtWellKnownName), FieldFilterOperator.Equals, key);
 
         var resultSet =
-            await tenantRepository.GetRtEntitiesByTypeAsync<RtTenantConfiguration>(systemSession, dataQueryOperation);
+            await tenantRepository.GetRtEntitiesByTypeAsync<RtTenantConfiguration>(systemSession, queryOptions);
         var configuration = resultSet.Items.FirstOrDefault();
         if (configuration == null || configuration.ConfigurationValue == null)
         {

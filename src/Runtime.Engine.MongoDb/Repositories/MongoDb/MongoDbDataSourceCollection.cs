@@ -433,7 +433,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             expression);
     }
 
-    public async Task UpdateManyAsync(IOctoSession session, IEnumerable<TDocument> documents)
+    public async Task UpdateOneAsync(IOctoSession session, IEnumerable<TDocument> documents)
     {
         foreach (var document in documents)
         {
@@ -446,6 +446,16 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             ThrowIfNotAcknowledged(result.IsAcknowledged);
             ThrowIfMatchedCountZero<TDocument>(result.MatchedCount, id);
         }
+    }
+
+    public async Task UpdateManyAsync(IOctoSession session, Expression<Func<TDocument, bool>> expression,
+        TDocument document)
+    {
+        var updateDefinition = _mongoDataSourceMapper.ApplyUpdate(document);
+        var result = await _documentCollection.UpdateManyAsync(((IOctoSessionInternal)session).SessionHandle,
+            expression,
+            updateDefinition);
+        ThrowIfNotAcknowledged(result.IsAcknowledged);
     }
 
     public async Task ReplaceManyAsync(IOctoSession session, IEnumerable<TDocument> documents)
@@ -694,7 +704,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
     }
 
-    public async Task DeleteManyAsync(IOctoSession session, IEnumerable<TKey> ids)
+    public async Task DeleteOneAsync(IOctoSession session, IEnumerable<TKey> ids)
     {
         try
         {
@@ -734,7 +744,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             var listWrites = new List<WriteModel<TDocument>>();
             List<RtAssociation> existingAssociations = new();
 
-            if (options.InsertStrategy == BulkInsertStrategy.Upsert)
+            if (options.InsertStrategy == BulkInsertStrategies.Upsert)
             {
                 // For associations, we do not have an id, so we need to check if the association already exists
                 // because if the filter doesn't contain the id field, the upsert will not call the IdGenerator
@@ -758,10 +768,10 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             {
                 switch (options.InsertStrategy)
                 {
-                    case BulkInsertStrategy.InsertOnly:
+                    case BulkInsertStrategies.InsertOnly:
                         listWrites.Add(new InsertOneModel<TDocument>(v));
                         break;
-                    case BulkInsertStrategy.Upsert:
+                    case BulkInsertStrategies.Upsert:
                         if (v is RtAssociation association)
                         {
                             var existing = existingAssociations.FirstOrDefault(a =>
@@ -879,7 +889,6 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 await _documentCollection.DeleteManyAsync(((IOctoSessionInternal)session).SessionHandle,
                     expression);
             ThrowIfNotAcknowledged(deleteResult.IsAcknowledged);
-            ThrowIfMatchedCountZero(deleteResult.DeletedCount, expression);
         }
         catch (MongoException e)
         {

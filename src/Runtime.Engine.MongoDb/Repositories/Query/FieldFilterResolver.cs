@@ -164,10 +164,10 @@ internal class FieldFilterResolver<TEntity>
         {
             switch (fieldFilterCriteria.Operator)
             {
-                case LogicalOperator.And:
+                case LogicalOperators.And:
                     fieldFilters.Add(Builders<TEntity>.Filter.And(innerFieldFilters));
                     break;
-                case LogicalOperator.Or:
+                case LogicalOperators.Or:
                     fieldFilters.Add(Builders<TEntity>.Filter.Or(innerFieldFilters));
                     break;
             }

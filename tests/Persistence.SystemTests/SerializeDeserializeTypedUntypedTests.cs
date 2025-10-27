@@ -35,7 +35,7 @@ public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture syst
         using var session2 = await tenantRepository.GetSessionAsync();
         session2.StartTransaction();
         var y = await tenantRepository.GetRtEntitiesByTypeAsync<RtContinent>(session2,
-            DataQueryOperation.Create());
+            RtEntityQueryOptions.Create());
 
         await session2.CommitTransactionAsync();
 
@@ -64,7 +64,7 @@ public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture syst
         using var session2 = await tenantRepository.GetSessionAsync();
         session2.StartTransaction();
         var y = await tenantRepository.GetRtEntitiesByTypeAsync(session2, "Test/Continent",
-            DataQueryOperation.Create());
+            RtEntityQueryOptions.Create());
 
         await session2.CommitTransactionAsync();
 
@@ -100,7 +100,7 @@ public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture syst
         using var session2 = await tenantRepository.GetSessionAsync();
         session2.StartTransaction();
         var y = await tenantRepository.GetRtEntitiesByTypeAsync(session2, "Test/Customer",
-            DataQueryOperation.Create());
+            RtEntityQueryOptions.Create());
         await session2.CommitTransactionAsync();
 
         Assert.Equal(5, y.Items.Count());
@@ -142,7 +142,7 @@ public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture syst
         using var session2 = await tenantRepository.GetSessionAsync();
         session2.StartTransaction();
         var y = await tenantRepository.GetRtEntitiesByTypeAsync<RtCustomer>(session2, 
-            DataQueryOperation.Create());
+            RtEntityQueryOptions.Create());
         await session2.CommitTransactionAsync();
 
         Assert.Equal(5, y.Items.Count());
@@ -176,7 +176,7 @@ public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture syst
         using var session2 = await tenantRepository.GetSessionAsync();
         session2.StartTransaction();
         var y = await tenantRepository.GetRtEntitiesByTypeAsync<RtTestPosition>(session2, 
-            DataQueryOperation.Create());
+            RtEntityQueryOptions.Create());
         await session2.CommitTransactionAsync();
 
         Assert.Equal(5, y.Items.Count());
@@ -208,7 +208,7 @@ public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture syst
         using var session2 = await tenantRepository.GetSessionAsync();
         session2.StartTransaction();
         var y = await tenantRepository.GetRtEntitiesByTypeAsync<RtMenuItem>(session2, 
-            DataQueryOperation.Create());
+            RtEntityQueryOptions.Create());
         await session2.CommitTransactionAsync();
 
         Assert.Single(y.Items);
@@ -236,7 +236,7 @@ public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture syst
         using var session2 = await tenantRepository.GetSessionAsync();
         session2.StartTransaction();
         var y = await tenantRepository.GetRtEntitiesByTypeAsync<RtTagsItem>(session2, 
-            DataQueryOperation.Create());
+            RtEntityQueryOptions.Create());
         await session2.CommitTransactionAsync();
 
         Assert.Single(y.Items);
@@ -265,7 +265,7 @@ public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture syst
         using var session2 = await tenantRepository.GetSessionAsync();
         session2.StartTransaction();
         var y = await tenantRepository.GetRtEntitiesByTypeAsync<RtTagsItem>(session2, 
-            DataQueryOperation.Create());
+            RtEntityQueryOptions.Create());
         await session2.CommitTransactionAsync();
         
         using var session3 = await tenantRepository.GetSessionAsync();
@@ -279,7 +279,7 @@ public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture syst
         using var session4 = await tenantRepository.GetSessionAsync();
         session4.StartTransaction();
         var z = await tenantRepository.GetRtEntitiesByTypeAsync<RtTagsItem>(session4, 
-            DataQueryOperation.Create());
+            RtEntityQueryOptions.Create());
         await session4.CommitTransactionAsync();
 
         Assert.Single(z.Items);
@@ -310,7 +310,7 @@ public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture syst
         using var session2 = await tenantRepository.GetSessionAsync();
         session2.StartTransaction();
         var y = await tenantRepository.GetRtEntitiesByTypeAsync<RtTagsItem>(session2, 
-            DataQueryOperation.Create());
+            RtEntityQueryOptions.Create());
         await session2.CommitTransactionAsync();
         
         using var session3 = await tenantRepository.GetSessionAsync();
@@ -323,7 +323,7 @@ public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture syst
         using var session4 = await tenantRepository.GetSessionAsync();
         session4.StartTransaction();
         var z = await tenantRepository.GetRtEntitiesByTypeAsync<RtTagsItem>(session4, 
-            DataQueryOperation.Create());
+            RtEntityQueryOptions.Create());
         await session4.CommitTransactionAsync();
 
         Assert.Single(z.Items);

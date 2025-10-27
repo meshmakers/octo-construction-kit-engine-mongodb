@@ -21,12 +21,12 @@ public interface ITenantRepository : IRuntimeRepository
     /// </summary>
     /// <param name="session">Octo session</param>
     /// <param name="ckModelIds">List of construction kit model ids, when null all is returned, based on the further filter options</param>
-    /// <param name="dataQueryOperation">Data query filter and sorting options</param>
+    /// <param name="queryOptions">Data query filter and sorting options</param>
     /// <param name="skip">Skips the defined amount of items, when null no items are skipped</param>
     /// <param name="take">Takes the defined amount of items, when null all items are taken</param>
     /// <returns>Result set object that contains the results based on filter options</returns>
     Task<IResultSet<CkModel>> GetCkModelsAsync(IOctoSession session, List<CkModelId>? ckModelIds,
-        DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
+        RtEntityQueryOptions queryOptions, int? skip = null, int? take = null);
 
     /// <summary>
     /// Gets the construction kit attributes.
@@ -34,13 +34,13 @@ public interface ITenantRepository : IRuntimeRepository
     /// <param name="session">Octo session</param>
     /// <param name="ckModelIds">List of construction kit model ids, when null all is returned, based on the further filter options</param>
     /// <param name="attributeIds">List of construction kit attribute ids, when null all is returned, based on the further filter options</param>
-    /// <param name="dataQueryOperation">Data query filter and sorting options</param>
+    /// <param name="queryOptions">Data query filter and sorting options</param>
     /// <param name="skip">Skips the defined amount of items, when null no items are skipped</param>
     /// <param name="take">Takes the defined amount of items, when null all items are taken</param>
     /// <returns>Result set object that contains the results based on filter options</returns>
     Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session, IReadOnlyList<CkModelId>? ckModelIds,
         IReadOnlyList<CkId<CkAttributeId>>? attributeIds,
-        DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
+        RtEntityQueryOptions queryOptions, int? skip = null, int? take = null);
 
     /// <summary>
     /// Gets the construction kit types.
@@ -48,12 +48,12 @@ public interface ITenantRepository : IRuntimeRepository
     /// <param name="session">Octo session</param>
     /// <param name="ckModelIds">List of construction kit model ids, when null all is returned, based on the further filter options</param>
     /// <param name="ckTypeIds">List of construction kit type ids, when null all is returned, based on the further filter options</param>
-    /// <param name="dataQueryOperation">Data query filter and sorting options</param>
+    /// <param name="queryOptions">Data query filter and sorting options</param>
     /// <param name="skip">Skips the defined amount of items, when null no items are skipped</param>
     /// <param name="take">Takes the defined amount of items, when null all items are taken</param>
     /// <returns>Result set object that contains the results based on filter options</returns>
     Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkModelId>? ckModelIds, IReadOnlyList<CkId<CkTypeId>>? ckTypeIds,
-        DataQueryOperation dataQueryOperation,
+        RtEntityQueryOptions queryOptions,
         int? skip = null, int? take = null);
 
     /// <summary>
@@ -62,12 +62,12 @@ public interface ITenantRepository : IRuntimeRepository
     /// <param name="session">Octo session</param>
     /// <param name="ckModelIds">List of construction kit model ids, when null all is returned, based on the further filter options</param>
     /// <param name="ckRecordIds">List of construction kit record ids, when null all is returned, based on the further filter options</param>
-    /// <param name="dataQueryOperation">Data query filter and sorting options</param>
+    /// <param name="queryOptions">Data query filter and sorting options</param>
     /// <param name="skip">Skips the defined amount of items, when null no items are skipped</param>
     /// <param name="take">Takes the defined amount of items, when null all items are taken</param>
     /// <returns>Result set object that contains the results based on filter options</returns>
     Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session, IReadOnlyList<CkModelId>? ckModelIds, List<CkId<CkRecordId>>? ckRecordIds,
-        DataQueryOperation dataQueryOperation,
+        RtEntityQueryOptions queryOptions,
         int? skip = null, int? take = null);
 
     /// <summary>
@@ -76,19 +76,19 @@ public interface ITenantRepository : IRuntimeRepository
     /// <param name="session">Octo session</param>
     /// <param name="ckModelIds">List of construction kit model ids, when null all is returned, based on the further filter options</param>
     /// <param name="ckEnumIds">List of construction kit enum ids, when null all is returned, based on the further filter options</param>
-    /// <param name="dataQueryOperation">Data query filter and sorting options</param>
+    /// <param name="queryOptions">Data query filter and sorting options</param>
     /// <param name="skip">Skips the defined amount of items, when null no items are skipped</param>
     /// <param name="take">Takes the defined amount of items, when null all items are taken</param>
     /// <returns>Result set object that contains the results based on filter options</returns>
     Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, IReadOnlyList<CkModelId>? ckModelIds, List<CkId<CkEnumId>>? ckEnumIds,
-        DataQueryOperation dataQueryOperation,
+        RtEntityQueryOptions queryOptions,
         int? skip = null, int? take = null);
 
     Task<IResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session, OctoObjectId originRtId,
         RtCkId<CkTypeId> originCkTypeId,
         RtCkId<CkAssociationRoleId> roleId,
         RtCkId<CkTypeId> targetCkTypeId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, RtEntityQueryOptions queryOptions,
         int? skip = null,
         int? take = null);
 
@@ -96,7 +96,7 @@ public interface ITenantRepository : IRuntimeRepository
         IOctoSession session,
         OctoObjectId originRtId,
         RtCkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, DataQueryOperation dataQueryOperation,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, RtEntityQueryOptions queryOptions,
         int? skip = null,
         int? take = null)
         where TOriginEntity : RtEntity
@@ -107,7 +107,7 @@ public interface ITenantRepository : IRuntimeRepository
         OctoObjectId originRtId,
         RtCkId<CkTypeId> originCkTypeId,
         RtCkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, DataQueryOperation dataQueryOperation,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, RtEntityQueryOptions queryOptions,
         int? skip = null,
         int? take = null)
         where TTargetEntity : RtEntity, new();
@@ -115,14 +115,14 @@ public interface ITenantRepository : IRuntimeRepository
     Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds, RtCkId<CkTypeId> originCkTypeId, RtCkId<CkAssociationRoleId> roleId,
         RtCkId<CkTypeId> targetCkTypeId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, RtEntityQueryOptions queryOptions,
         int? skip = null,
         int? take = null);
 
     Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
         IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds, RtCkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, DataQueryOperation dataQueryOperation,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, RtEntityQueryOptions queryOptions,
         int? skip = null,
         int? take = null)
         where TOriginEntity : RtEntity
@@ -142,14 +142,14 @@ public interface ITenantRepository : IRuntimeRepository
         IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds,
         RtCkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, DataQueryOperation dataQueryOperation,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, RtEntityQueryOptions queryOptions,
         int? skip = null,
         int? take = null) where TOriginEntity : RtEntity where TTargetEntity : RtEntity, new();
 
     Task<IMultipleOriginResultSet<RtEntity>> GetIndirectRtAssociationTargetsAsync(IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds, RtCkId<CkTypeId> originCkTypeId, RtCkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, RtCkId<CkTypeId> targetCkTypeId,
-        DataQueryOperation dataQueryOperation, int? skip = null,
+        RtEntityQueryOptions queryOptions, int? skip = null,
         int? take = null);
 
     /// <summary>
@@ -161,12 +161,12 @@ public interface ITenantRepository : IRuntimeRepository
     /// <param name="session">Session object</param>
     /// <param name="originRtIds">Origin runtime entity ids</param>
     /// <param name="originCkTypeId">Origin construction kit type id</param>
-    /// <param name="dataQueryOperation">Query operation object that defines further filter options</param>
+    /// <param name="queryOptions">Query operation object that defines further filter options</param>
     /// <param name="skip">Amount of items to skip</param>
     /// <param name="take">Amount of items to take</param>
     /// <returns>Result set object that contains the results based on filter options</returns>
     Task<IResultSet<RtDeepGraphQueryResult>> GetRtDeepGraphAsync(IOctoSession session, IEnumerable<OctoObjectId> originRtIds, RtCkId<CkTypeId> originCkTypeId,
-        DataQueryOperation dataQueryOperation, int? skip = null, int? take = null);
+        RtEntityQueryOptions queryOptions, int? skip = null, int? take = null);
 
     #endregion Data query
     

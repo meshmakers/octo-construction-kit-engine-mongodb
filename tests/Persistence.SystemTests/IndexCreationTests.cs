@@ -64,7 +64,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
                 session,
                 null,
                 new List<CkId<CkTypeId>> { SystemCkIds.CkEntityTypeId },
-                DataQueryOperation.Create());
+                RtEntityQueryOptions.Create());
 
             // Assert
             var ckType = result.Items.FirstOrDefault();
@@ -144,9 +144,9 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
                 session2,
                 null,
                 new List<CkId<CkTypeId>> { ckTypeId },
-                DataQueryOperation.Create());
+                RtEntityQueryOptions.Create());
 
-            var r = await tenantRepository.GetRtEntitiesByTypeAsync(session2, typeId.ToRtCkId(), DataQueryOperation.Create());
+            var r = await tenantRepository.GetRtEntitiesByTypeAsync(session2, typeId.ToRtCkId(), RtEntityQueryOptions.Create());
 
             var ckType = result.Items.FirstOrDefault();
             Assert.NotNull(ckType);
@@ -216,7 +216,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
             // Verify index failed
             var session2 = tenantRepository.GetSession();
             var ckTypeId = GetSimpleTypeId(modelName);
-            var result = await tenantRepository.GetCkTypeAsync(session2, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create());
+            var result = await tenantRepository.GetCkTypeAsync(session2, null, new List<CkId<CkTypeId>> { ckTypeId }, RtEntityQueryOptions.Create());
             var ckType = result.Items.FirstOrDefault();
             Assert.NotNull(ckType);
             var failedIndex = ckType.IndexStates?.FirstOrDefault(s => s.State == IndexState.Failed);
@@ -236,7 +236,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
 
             // Assert: Index should now be successfully applied
             var session4 = tenantRepository.GetSession();
-            var result2 = await tenantRepository.GetCkTypeAsync(session4, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create());
+            var result2 = await tenantRepository.GetCkTypeAsync(session4, null, new List<CkId<CkTypeId>> { ckTypeId }, RtEntityQueryOptions.Create());
             var ckType2 = result2.Items.FirstOrDefault();
             Assert.NotNull(ckType2);
             Assert.NotNull(ckType2.IndexStates);
@@ -305,7 +305,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
             // Assert: Index should fail due to duplicates
             var session2 = tenantRepository.GetSession();
             var ckTypeId = GetSimpleTypeId(modelName);
-            var result = await tenantRepository.GetCkTypeAsync(session2, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create());
+            var result = await tenantRepository.GetCkTypeAsync(session2, null, new List<CkId<CkTypeId>> { ckTypeId }, RtEntityQueryOptions.Create());
 
             var ckType = result.Items.FirstOrDefault();
             Assert.NotNull(ckType);
@@ -373,9 +373,9 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
             var session2 = await tenantRepository.GetSessionAsync();
             session2.StartTransaction();
 
-            entity1.RtState = RtEntityState.Deleted;
+            entity1.RtState = RtState.Deleted;
 
-            var u = new RtEntity(rtCkTypeId, entity1.RtId) { RtState = RtEntityState.Deleted };
+            var u = new RtEntity(rtCkTypeId, entity1.RtId) { RtState = RtState.Deleted };
 
             await tenantRepository.UpdateOneRtEntityByIdAsync(session2, rtCkTypeId, entity1.RtId, u);
             await session2.CommitTransactionAsync();
@@ -388,7 +388,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
 
             // Assert: Index should succeed because one entity is deleted
             var session3 = tenantRepository.GetSession();
-            var result = await tenantRepository.GetCkTypeAsync(session3, null, new List<CkId<CkTypeId>> { ckTypeId }, DataQueryOperation.Create());
+            var result = await tenantRepository.GetCkTypeAsync(session3, null, new List<CkId<CkTypeId>> { ckTypeId }, RtEntityQueryOptions.Create());
 
             var ckType = result.Items.FirstOrDefault();
             Assert.NotNull(ckType);

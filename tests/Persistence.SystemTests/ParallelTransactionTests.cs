@@ -8,13 +8,13 @@ using Xunit;
 namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
 [Collection("Sequential")]
-public class ParallelTransactionTests(GenerateSampleDataFixture generateSampleDataFixture)
-    : IClassFixture<GenerateSampleDataFixture>
+public class ParallelTransactionTests(SampleRtModelDataFixture sampleRtModelDataFixture)
+    : IClassFixture<SampleRtModelDataFixture>
 {
     [Fact]
     public async Task MultipleInserts_OK()
     {
-        var systemContext = generateSampleDataFixture.GetSystemContext();
+        var systemContext = sampleRtModelDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();
         
         var sessionA = await tenantRepository.GetSessionAsync();
@@ -61,10 +61,10 @@ public class ParallelTransactionTests(GenerateSampleDataFixture generateSampleDa
         var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        DataQueryOperation dataQueryOperation = DataQueryOperation.Create()
+        var queryOptions = RtEntityQueryOptions.Create()
             .FieldFilter(nameof(RtStateOrProvince.RtWellKnownName), FieldFilterOperator.Equals, prefix + index);
 
-        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtContinent>(session, dataQueryOperation);
+        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtContinent>(session, queryOptions);
 
         var rtContinent = resultSet.Items.FirstOrDefault();
         if (rtContinent == null)
@@ -84,7 +84,7 @@ public class ParallelTransactionTests(GenerateSampleDataFixture generateSampleDa
     [Fact]
     public async Task MultipleUpdates_OK()
     {
-        var systemContext = generateSampleDataFixture.GetSystemContext();
+        var systemContext = sampleRtModelDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();
         
         await PrepareData(tenantRepository, 5);

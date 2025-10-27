@@ -18,6 +18,7 @@ entities:
       - roleId: System/ParentChild
         targetRtId: 66803ecf4aa85720dda96a97
         targetCkTypeId: Test/Continent
+
   - rtId: 66803ecf4aa85720dda96a99
     ckTypeId: Test/StateOrProvince
     attributes:
@@ -291,3 +292,72 @@ entities:
       - roleId: System/ParentChild
         targetRtId: 66803ecf4aa85720dda96b07
         targetCkTypeId: Test/Municipality
+
+    #
+  - rtId: 68fded922b85e5d74c05a560
+    ckTypeId: Test/StateOrProvince
+    attributes:
+      - id: Test/Name
+        value: Tirol
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96a98
+        targetCkTypeId: Test/Country
+  - rtId: 68fded922b85e5d74c05a561
+    ckTypeId: Test/District
+    attributes:
+      - id: Test/Name
+        value: Lienz
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 68fded922b85e5d74c05a560
+        targetCkTypeId: Test/StateOrProvince
+  - rtId: 68fded922b85e5d74c05a562
+    ckTypeId: Test/District
+    attributes:
+      - id: Test/Name
+        value: Landeck
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 68fded922b85e5d74c05a560
+        targetCkTypeId: Test/StateOrProvince
+  - rtId: 68fded922b85e5d74c05a563
+    ckTypeId: Test/District
+    rtState: Deleted
+    attributes:
+      - id: Test/Name
+        value: Imst
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 68fded922b85e5d74c05a560
+        targetCkTypeId: Test/StateOrProvince
+  - rtId: 68fded922b85e5d74c05a564
+    ckTypeId: Test/District
+    rtState: Deleted
+    attributes:
+      - id: Test/Name
+        value: Kitzbühel
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 68fded922b85e5d74c05a560
+        targetCkTypeId: Test/StateOrProvince
+  - rtId: 68fded922b85e5d74c05a565
+    ckTypeId: Test/Municipality
+    rtState: Deleted
+    attributes:
+      - id: Test/Name
+        value: Fieberbrunn
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 68fded922b85e5d74c05a564
+        targetCkTypeId: Test/District
+  - rtId: 68fded922b85e5d74c05a566
+    ckTypeId: Test/Municipality
+    rtState: Deleted
+    attributes:
+      - id: Test/Name
+        value: Hochfilzen
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 68fded922b85e5d74c05a564
+        targetCkTypeId: Test/District

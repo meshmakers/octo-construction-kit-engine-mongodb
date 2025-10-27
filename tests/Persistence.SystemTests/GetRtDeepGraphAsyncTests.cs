@@ -8,50 +8,70 @@ namespace Meshmakers.Octo.SystematizedData.Persistence.SystemTests;
 
 [Collection("Sequential")]
 public class GetRtDeepGraphAsyncTests
-    : IClassFixture<GenerateSampleDataFixture>
+    : IClassFixture<SampleRtModelDataFixture>
 {
-    private readonly GenerateSampleDataFixture _generateSampleDataFixture;
+    private readonly SampleRtModelDataFixture _sampleRtModelDataFixture;
 
-    public GetRtDeepGraphAsyncTests(GenerateSampleDataFixture generateSampleDataFixture, ITestOutputHelper output)
+    public GetRtDeepGraphAsyncTests(SampleRtModelDataFixture sampleRtModelDataFixture, ITestOutputHelper output)
     {
-        _generateSampleDataFixture = generateSampleDataFixture;
-        generateSampleDataFixture.OutputHelper = output;
+        _sampleRtModelDataFixture = sampleRtModelDataFixture;
+        sampleRtModelDataFixture.OutputHelper = output;
     }
 
     [Fact]
     public async Task GetSubgraphAsync_Default_OK()
     {
-        var systemContext = _generateSampleDataFixture.GetSystemContext();
+        var systemContext = _sampleRtModelDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();
         using var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        var dataOperation = DataQueryOperation.Create();
+        var queryOptions = RtEntityQueryOptions.Create();
 
         var resultSet = await tenantRepository.GetRtDeepGraphAsync(session, [
                 new OctoObjectId("66803ecf4aa85720dda96a97"),
             ],
-            new RtCkId<CkTypeId>("Test/Continent"), dataOperation);
+            new RtCkId<CkTypeId>("Test/Continent"), queryOptions);
 
         await session.CommitTransactionAsync();
 
-        Assert.Equal(18, resultSet.TotalCount);
+        Assert.Equal(21, resultSet.TotalCount);
+    }
+
+    [Fact]
+    public async Task GetSubgraphAsync_Default_IncludeDeleted_OK()
+    {
+        var systemContext = _sampleRtModelDataFixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var queryOptions = RtEntityQueryOptions.Create().Global(true);
+
+        var resultSet = await tenantRepository.GetRtDeepGraphAsync(session, [
+                new OctoObjectId("66803ecf4aa85720dda96a97"),
+            ],
+            new RtCkId<CkTypeId>("Test/Continent"), queryOptions);
+
+        await session.CommitTransactionAsync();
+
+        Assert.Equal(25, resultSet.TotalCount);
     }
 
     [Fact]
     public async Task GetSubgraphAsync_NoRelationships_OK()
     {
-        var systemContext = _generateSampleDataFixture.GetSystemContext();
+        var systemContext = _sampleRtModelDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();
         using var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        var dataOperation = DataQueryOperation.Create();
+        var queryOptions = RtEntityQueryOptions.Create();
 
         var resultSet = await tenantRepository.GetRtDeepGraphAsync(session, [
                 new OctoObjectId("66803ecf4aa85720dda96b09"),
             ],
-            new RtCkId<CkTypeId>("Test/HouseHold"), dataOperation);
+            new RtCkId<CkTypeId>("Test/HouseHold"), queryOptions);
 
         await session.CommitTransactionAsync();
 
@@ -63,39 +83,39 @@ public class GetRtDeepGraphAsyncTests
     [Fact]
     public async Task GetSubgraphAsync_Paging_OK()
     {
-        var systemContext = _generateSampleDataFixture.GetSystemContext();
+        var systemContext = _sampleRtModelDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();
         using var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        var dataOperation = DataQueryOperation.Create();
+        var queryOptions = RtEntityQueryOptions.Create();
 
         var resultSet = await tenantRepository.GetRtDeepGraphAsync(session, [
                 new OctoObjectId("66803ecf4aa85720dda96a97"),
             ],
-            new RtCkId<CkTypeId>("Test/Continent"), dataOperation, 1, 2);
+            new RtCkId<CkTypeId>("Test/Continent"), queryOptions, 1, 2);
 
         await session.CommitTransactionAsync();
 
-        Assert.Equal(18, resultSet.TotalCount);
+        Assert.Equal(21, resultSet.TotalCount);
         Assert.Equal(2, resultSet.Items.Count());
     }
 
     [Fact]
     public async Task GetSubgraphAsync_MultipleOriginRtIds_OK()
     {
-        var systemContext = _generateSampleDataFixture.GetSystemContext();
+        var systemContext = _sampleRtModelDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();
         using var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        var dataOperation = DataQueryOperation.Create();
+        var queryOptions = RtEntityQueryOptions.Create();
 
         var resultSet = await tenantRepository.GetRtDeepGraphAsync(session, [
                 new OctoObjectId("66803ecf4aa85720dda96b07"),
                 new OctoObjectId("66803ecf4aa85720dda96b08"),
             ],
-            new RtCkId<CkTypeId>("Test/Municipality"), dataOperation);
+            new RtCkId<CkTypeId>("Test/Municipality"), queryOptions);
 
         await session.CommitTransactionAsync();
 
@@ -105,17 +125,17 @@ public class GetRtDeepGraphAsyncTests
     [Fact]
     public async Task GetSubgraphAsync_SingleEntity_OK()
     {
-        var systemContext = _generateSampleDataFixture.GetSystemContext();
+        var systemContext = _sampleRtModelDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();
         using var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
-        var dataOperation = DataQueryOperation.Create();
+        var queryOptions = RtEntityQueryOptions.Create();
 
         var resultSet = await tenantRepository.GetRtDeepGraphAsync(session, [
                 new OctoObjectId("66803ecf4aa85720dda96b11"),
             ],
-            new RtCkId<CkTypeId>("Test/MeasuringPoint"), dataOperation);
+            new RtCkId<CkTypeId>("Test/MeasuringPoint"), queryOptions);
 
         await session.CommitTransactionAsync();
 

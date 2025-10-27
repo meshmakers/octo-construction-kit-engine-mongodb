@@ -20,10 +20,11 @@ internal class MultipleOriginIndirectAssociationsRtQuery : MultipleOriginIndirec
 {
     internal MultipleOriginIndirectAssociationsRtQuery(ICkCacheService ckCacheService, string tenantId,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
-        string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
+        string language, bool includeDeletedEntities, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
         RtCkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
-        : base(ckCacheService, tenantId, mongoDbRepositoryDataSource, language, rtIds, originCkTypeGraph, roleId,
+        : base(ckCacheService, tenantId, mongoDbRepositoryDataSource, language, includeDeletedEntities, rtIds,
+            originCkTypeGraph, roleId,
             graphDirection,
             targetCkTypeGraph)
     {
@@ -35,6 +36,7 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
 {
     private readonly GraphDirections _graphDirection;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
+    private readonly bool _includeDeletedEntities;
     private readonly CkTypeGraph _originCkTypeGraph;
     private readonly RtCkId<CkAssociationRoleId> _roleId;
     private readonly IEnumerable<OctoObjectId> _rtIds;
@@ -43,12 +45,13 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
 
     internal MultipleOriginIndirectAssociationsRtQuery(ICkCacheService ckCacheService, string tenantId,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
-        string language, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
+        string language, bool includeDeletedEntities, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
         RtCkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
         : base(new RtEntityFieldFilterResolver<TTargetEntity>(ckCacheService, tenantId, targetCkTypeGraph), language)
     {
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
+        _includeDeletedEntities = includeDeletedEntities;
         _rtIds = rtIds;
         _originCkTypeGraph = originCkTypeGraph;
         _roleId = roleId;
@@ -194,7 +197,8 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
             .Unwind(@as, new AggregateUnwindOptions<BsonDocument> { PreserveNullAndEmptyArrays = true })
             .Group<BsonDocument>(new BsonDocument
             {
-                { "_id", new BsonDocument{{"rtId", "$_id"}, {"ckTypeId", "$ckTypeId" } }}, { @as, new BsonDocument("$addToSet", "$" + @as) }
+                { "_id", new BsonDocument { { "rtId", "$_id" }, { "ckTypeId", "$ckTypeId" } } },
+                { @as, new BsonDocument("$addToSet", "$" + @as) }
             });
 
         var aggregate2 = aggregate.ReplaceWith(
