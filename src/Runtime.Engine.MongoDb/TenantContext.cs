@@ -503,6 +503,7 @@ public class TenantContext : ITenantContext
             tenant.DatabaseName);
 
         await UpdateSystemCkModelAsync(tenant.DatabaseName);
+        await context.LoadCacheForTenantAsync();
 
         return context;
     }
