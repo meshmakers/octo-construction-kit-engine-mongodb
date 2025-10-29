@@ -627,6 +627,11 @@ public class TenantContext : ITenantContext
             _logger.LogInformation("Importing CK Model '{CkModelId}' into tenant '{TenantId}'",
                 ckCompiledModelRoot.ModelId, TenantId);
 
+            if (_cacheService.IsTenantLoaded(TenantId))
+            {
+                _cacheService.Unload(TenantId);
+            }
+            
             await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
             var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
             await _ckModelRepositoryService.UpdateModelAsync(ckCompiledModelRoot,
@@ -657,6 +662,11 @@ public class TenantContext : ITenantContext
         try
         {
             _logger.LogInformation("Importing CK Model '{CkModelId}' into tenant '{TenantId}'", ckModelId, TenantId);
+
+            if (_cacheService.IsTenantLoaded(TenantId))
+            {
+                _cacheService.Unload(TenantId);
+            }
 
             await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
 
