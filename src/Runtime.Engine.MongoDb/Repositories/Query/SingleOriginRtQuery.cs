@@ -87,7 +87,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         List<IPipelineStageDefinition> stageDefinitions)
     {
         var targetCkTypeGraph = _ckCacheService.GetRtCkType(_tenantId, roleIdDirectionPair.TargetCkTypeId);
-        var targetCkTypeIds = targetCkTypeGraph.GetAllDerivedTypes(true);
+        var targetCkTypeIds = targetCkTypeGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
 
         // We need to have a list of all ck type ids we should handle as a candidate for the association target ck type id.
         var baseCkTypeIds = targetCkTypeGraph.BaseTypes.Select(b => b.BaseCkTypeId).ToList();
@@ -95,7 +95,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
 
         var innerLocalFieldRtId = (FieldDefinition<RtAssociation, string>)"originRtId";
         var foreignFieldRtId = (FieldDefinition<RtAssociation>)"targetRtId";
-        var targetCkTypeIdField = (FieldDefinition<RtAssociation, CkId<CkTypeId>>)"originCkTypeId";
+        var targetCkTypeIdField = (FieldDefinition<RtAssociation, RtCkId<CkTypeId>>)"originCkTypeId";
         // We ensure that the association role exists.
         // Because navigation properties are centralized in the definition, all
         // associations with the same role id have the same navigation property name.
@@ -110,7 +110,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                 association = originCkTypeGraph.Associations.Out.All.FirstOrDefault(a =>
                     baseCkTypeIds.Contains(a.TargetCkTypeId) &&
                     a.CkRoleId.Equals(roleIdDirectionPair.CkRoleId));
-                targetCkTypeIdField = (FieldDefinition<RtAssociation, CkId<CkTypeId>>)"targetCkTypeId";
+                targetCkTypeIdField = (FieldDefinition<RtAssociation, RtCkId<CkTypeId>>)"targetCkTypeId";
                 break;
             case GraphDirections.Inbound:
                 break;
