@@ -64,6 +64,14 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
     {
         _geospatialFilters.ForEach(pipelineStageDefinitions.Add);
 
+        // Ensure that deleted entities are not added to the result if defined.
+        if (!_includeDeletedEntities)
+        {
+            pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(
+                Builders<TTargetEntity>.Filter.Ne(ckType => ckType.RtState, RtState.Deleted)
+            ));
+        }
+
         base.AddPostStagesToPipeline(pipelineStageDefinitions);
     }
 

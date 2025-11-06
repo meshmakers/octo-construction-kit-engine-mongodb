@@ -134,16 +134,26 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
                 throw OperationFailedException.GraphDirectionUnsupported(_graphDirection);
         }
 
+
+
+
+
         var connectFromField = (FieldDefinition<RtEntity, string[]>)"_id";
         var @as = (FieldDefinition<BsonDocument, TTargetEntity[]>)"_associations";
 
         var targetCkIds = _targetCkTypeGraph.GetAllDerivedTypes(true).Select(t => t.ToRtCkId());
+        List<FilterDefinition<RtAssociation>> associationFilter = new();
+        associationFilter.AddRange(Builders<RtAssociation>.Filter.Eq("associationRoleId", _roleId),
+            Builders<RtAssociation>.Filter.In(innerLocalFieldCkId, targetCkIds));
+
+        if (!_includeDeletedEntities)
+        {
+            associationFilter.Add(Builders<RtAssociation>.Filter.Ne(ckType => ckType.RtState, RtState.Deleted));
+        }
+
         var pipelineStageDefinitions = new List<IPipelineStageDefinition>([
             PipelineStageDefinitionBuilder.Match(
-                Builders<RtAssociation>.Filter.And(
-                    Builders<RtAssociation>.Filter.Eq("associationRoleId", _roleId),
-                    Builders<RtAssociation>.Filter.In(innerLocalFieldCkId, targetCkIds)
-                )),
+                Builders<RtAssociation>.Filter.And(associationFilter)),
             PipelineStageDefinitionBuilder.Lookup(
                 _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TTargetEntity>(_targetCkTypeGraph)
                     .GetMongoCollection(),

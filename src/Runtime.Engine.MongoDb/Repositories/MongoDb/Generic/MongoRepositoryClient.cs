@@ -250,7 +250,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapIdMember(c => c.Id).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Description).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkType>(cm =>
@@ -259,12 +259,12 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapIdMember(c => c.CkTypeId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.IsFinal).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.IsAbstract).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.Attributes).SetIsRequired(true);
-            cm.GetMemberMap(c => c.Indexes).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.EnableChangeStreamPreAndPostImages).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Description).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.IsFinal).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.IsAbstract).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Attributes).SetIsRequired(true);
+            cm.MapMember(c => c.Indexes).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.EnableChangeStreamPreAndPostImages).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkRecord>(cm =>
@@ -273,10 +273,10 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapIdMember(c => c.CkRecordId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.IsFinal).SetIsRequired(true);
-            cm.GetMemberMap(c => c.IsAbstract).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.Attributes).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Description).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.IsFinal).SetIsRequired(true);
+            cm.MapMember(c => c.IsAbstract).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Attributes).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkEnum>(cm =>
@@ -285,9 +285,9 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapIdMember(c => c.CkEnumId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.IsExtensible).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.Values).SetIsRequired(true);
+            cm.MapMember(c => c.Description).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.IsExtensible).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Values).SetIsRequired(true);
         });
 
         BsonClassMap.RegisterClassMap<CkEnumValue>(cm =>
@@ -295,17 +295,17 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.SetIgnoreExtraElements(true);
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.Key).SetIsRequired(true);
-            cm.GetMemberMap(c => c.Name).SetIsRequired(true);
-            cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.IsExtension).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Key).SetIsRequired(true);
+            cm.MapMember(c => c.Name).SetIsRequired(true);
+            cm.MapMember(c => c.Description).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.IsExtension).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkAttributeMetaData>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
             cm.AutoMap();
-            cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Description).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkAttribute>(cm =>
@@ -315,14 +315,14 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 .SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.CkModelId).SetIsRequired(true);
-            cm.GetMemberMap(c => c.AttributeValueType).SetIsRequired(true);
-            cm.GetMemberMap(c => c.DefaultValues).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.ValueCkEnumId).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.ValueCkRecordId).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.MetaData).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.IsDataStream).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.CkModelId).SetIsRequired(true);
+            cm.MapMember(c => c.AttributeValueType).SetIsRequired(true);
+            cm.MapMember(c => c.DefaultValues).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Description).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.ValueCkEnumId).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.ValueCkRecordId).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.MetaData).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.IsDataStream).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkAssociationRole>(cm =>
@@ -331,11 +331,11 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapIdMember(c => c.RoleId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.Description).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.InboundMultiplicity).SetIsRequired(true);
-            cm.GetMemberMap(c => c.InboundName).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.OutboundMultiplicity).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.OutboundName).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Description).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.InboundMultiplicity).SetIsRequired(true);
+            cm.MapMember(c => c.InboundName).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.OutboundMultiplicity).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.OutboundName).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkTypeAssociation>(cm =>
@@ -344,9 +344,9 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapIdMember(c => c.AssociationId).SetIdGenerator(new OctoObjectIdGenerator());
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.RoleId).SetIsRequired(true);
-            cm.GetMemberMap(c => c.OriginCkTypeId).SetIsRequired(true);
-            cm.GetMemberMap(c => c.TargetCkTypeId).SetIsRequired(true);
+            cm.MapMember(c => c.RoleId).SetIsRequired(true);
+            cm.MapMember(c => c.OriginCkTypeId).SetIsRequired(true);
+            cm.MapMember(c => c.TargetCkTypeId).SetIsRequired(true);
         });
 
         BsonClassMap.RegisterClassMap<CkTypeAttribute>(cm =>
@@ -356,9 +356,9 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 .SetIdGenerator(new NullIdChecker());
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.AttributeName).SetIsRequired(true);
-            cm.GetMemberMap(c => c.AutoIncrementReference).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.AutoCompleteValues).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.AttributeName).SetIsRequired(true);
+            cm.MapMember(c => c.AutoIncrementReference).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.AutoCompleteValues).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkTypeInheritance>(cm =>
@@ -367,8 +367,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapIdMember(c => c.InheritanceId).SetIdGenerator(new OctoObjectIdGenerator());
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.BaseCkTypeId).SetIsRequired(true);
-            cm.GetMemberMap(c => c.InheritorCkTypeId).SetIsRequired(true);
+            cm.MapMember(c => c.BaseCkTypeId).SetIsRequired(true);
+            cm.MapMember(c => c.InheritorCkTypeId).SetIsRequired(true);
         });
 
         BsonClassMap.RegisterClassMap<CkTypeIndex>(cm =>
@@ -376,9 +376,9 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.SetIgnoreExtraElements(true);
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.IndexType).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.Fields).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.Language).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.IndexType).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Fields).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Language).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkIndexFields>(cm =>
@@ -386,8 +386,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.SetIgnoreExtraElements(true);
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.Weight).SetIgnoreIfDefault(true);
-            cm.GetMemberMap(c => c.AttributeNames).SetIsRequired(true);
+            cm.MapMember(c => c.Weight).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.AttributeNames).SetIsRequired(true);
         });
 
         BsonClassMap.RegisterClassMap<CkTypeInfo>(cm =>
@@ -395,8 +395,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.SetIgnoreExtraElements(true);
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.Inheritances).SetIsRequired(true);
-            cm.GetMemberMap(c => c.InheritedTypes).SetIsRequired(true);
+            cm.MapMember(c => c.Inheritances).SetIsRequired(true);
+            cm.MapMember(c => c.InheritedTypes).SetIsRequired(true);
         });
 
         BsonClassMap.RegisterClassMap<CkInheritedTypeInfo>(cm =>
@@ -404,7 +404,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.SetIgnoreExtraElements(true);
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.BaseTypeDepthIndex).SetIsRequired(true);
+            cm.MapMember(c => c.BaseTypeDepthIndex).SetIsRequired(true);
         });
 
         BsonClassMap.RegisterClassMap<AutoCompleteText>(cm =>
@@ -412,8 +412,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.SetIgnoreExtraElements(true);
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.OccurrenceCount);
-            cm.GetMemberMap(c => c.Text);
+            cm.MapMember(c => c.OccurrenceCount);
+            cm.MapMember(c => c.Text);
         });
 
         var isRegisterSuccessful = BsonClassMap.TryRegisterClassMap<RtTypeWithAttributes>(cm =>
@@ -458,12 +458,13 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapIdMember(c => c.AssociationId).SetIdGenerator(new OctoObjectIdGenerator());
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.AssociationRoleId).SetIsRequired(true);
-            cm.GetMemberMap(c => c.OriginCkTypeId).SetIsRequired(true);
-            cm.GetMemberMap(c => c.OriginRtId).SetIsRequired(true);
-            cm.GetMemberMap(c => c.TargetCkTypeId).SetIsRequired(true);
-            cm.GetMemberMap(c => c.TargetRtId).SetIsRequired(true);
-            cm.GetMemberMap(c => c.TargetCkAttributeIds).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.AssociationRoleId).SetIsRequired(true);
+            cm.MapMember(c => c.OriginCkTypeId).SetIsRequired(true);
+            cm.MapMember(c => c.OriginRtId).SetIsRequired(true);
+            cm.MapMember(c => c.TargetCkTypeId).SetIsRequired(true);
+            cm.MapMember(c => c.TargetRtId).SetIsRequired(true);
+            cm.MapMember(c => c.TargetCkAttributeIds).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.RtState).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<RtDeepGraphQueryResult>(cm =>
@@ -471,7 +472,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.Id).SetElementName("_id");
             cm.AutoMap();
-            cm.GetMemberMap(c => c.Associations);
+            cm.MapMember(c => c.Associations);
         });
 
         BsonClassMap.RegisterClassMap<RtDeepGraphAssociationQueryResult>(cm =>
@@ -479,10 +480,10 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.SetIgnoreExtraElements(true);
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.AssociationId);
-            cm.GetMemberMap(c => c.AssociationRoleId);
-            cm.GetMemberMap(c => c.TargetRtId);
-            cm.GetMemberMap(c => c.TargetCkTypeId);
+            cm.MapMember(c => c.AssociationId);
+            cm.MapMember(c => c.AssociationRoleId);
+            cm.MapMember(c => c.TargetRtId);
+            cm.MapMember(c => c.TargetCkTypeId);
         });
 
         BsonClassMap.RegisterClassMap<RtEntityGraphItem>(cm =>
@@ -490,7 +491,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.SetIgnoreExtraElements(true);
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.Associations).SetElementName(Constants.AssociationName);
+            cm.MapMember(c => c.Associations).SetElementName(Constants.AssociationName);
         });
 
         BsonClassMap.RegisterClassMap<NavigationEnd>(cm =>
@@ -505,7 +506,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.SetIgnoreExtraElements(true);
             cm.AutoMap();
 
-            cm.GetMemberMap(c => c.Stream).SetShouldSerializeMethod(_ => false);
+            cm.MapMember(c => c.Stream).SetShouldSerializeMethod(_ => false);
         });
     }
 }
