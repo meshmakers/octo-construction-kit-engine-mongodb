@@ -60,7 +60,6 @@ stages:
           arguments: '--configuration $(buildConfiguration) /p:OctoNugetPrivateServer=$(nugetPrivateServer)'
           projects: |
             **/*Tests.csproj
-            **/*SystemTests.csproj
           testRunTitle: 'CI'
       - template: handle-artifacts.yml
       - template: push-nuget-package.yml
