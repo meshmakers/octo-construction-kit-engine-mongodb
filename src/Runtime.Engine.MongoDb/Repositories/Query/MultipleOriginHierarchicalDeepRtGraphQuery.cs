@@ -21,7 +21,7 @@ internal class RtFieldFilterResolver : FieldFilterResolver<RtDeepGraphQueryResul
 internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQueryResult>
 {
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
-    private readonly bool _includeDeletedEntities;
+    private readonly bool _includeArchivedEntities;
     private readonly CkTypeGraph _originCkTypeGraph;
     private readonly RtCkId<CkAssociationRoleId> _roleId;
     private readonly IEnumerable<OctoObjectId> _rtIds;
@@ -29,12 +29,12 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
 
     internal MultipleOriginHierarchicalDeepRtGraphQuery(
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
-        string language, bool includeDeletedEntities, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
+        string language, bool includeArchivedEntities, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
         RtCkId<CkAssociationRoleId> roleId)
         : base(new RtFieldFilterResolver(), language)
     {
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
-        _includeDeletedEntities = includeDeletedEntities;
+        _includeArchivedEntities = includeArchivedEntities;
         _rtIds = rtIds;
         _originCkTypeGraph = originCkTypeGraph;
         _roleId = roleId;
@@ -98,11 +98,11 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
         var restrictSearchWithMatch =
             new FilterDefinitionBuilder<RtAssociation>().Eq(x => x.AssociationRoleId, _roleId);
 
-        if (!_includeDeletedEntities)
+        if (!_includeArchivedEntities)
         {
             restrictSearchWithMatch = new FilterDefinitionBuilder<RtAssociation>().And(
                 new FilterDefinitionBuilder<RtAssociation>().Eq(x => x.AssociationRoleId, _roleId),
-                new FilterDefinitionBuilder<RtAssociation>().Ne(x => x.RtState, RtState.Deleted)
+                new FilterDefinitionBuilder<RtAssociation>().Ne(x => x.RtState, RtState.Archived)
             );
         }
 
@@ -214,7 +214,7 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
                 )),
         ]);
 
-        if (!_includeDeletedEntities)
+        if (!_includeArchivedEntities)
         {
             lookupPipeline = PipelineDefinition<RtAssociation, BsonDocument>.Create([
                 OctoPipelineStageBuilder.Match(

@@ -253,7 +253,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         // Ensure that deleted entities are not added to the result if defined.
         if (!_includeDeletedEntities)
         {
-            filters.Add(Builders<TEntity>.Filter.Ne(ckType => ckType.RtState, RtState.Deleted));
+            filters.Add(Builders<TEntity>.Filter.Ne(ckType => ckType.RtState, RtState.Archived));
         }
     }
 

@@ -328,7 +328,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
     }
 
     [Fact]
-    public async Task UniqueNotDeletedIndex_WithDeletedEntity_ShouldSucceed()
+    public async Task UniqueNotDeletedIndex_WithArchivedEntity_ShouldSucceed()
     {
         // Arrange - Create child tenant
         var systemContext = _fixture.GetSystemContext();
@@ -373,9 +373,9 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
             var session2 = await tenantRepository.GetSessionAsync();
             session2.StartTransaction();
 
-            entity1.RtState = RtState.Deleted;
+            entity1.RtState = RtState.Archived;
 
-            var u = new RtEntity(rtCkTypeId, entity1.RtId) { RtState = RtState.Deleted };
+            var u = new RtEntity(rtCkTypeId, entity1.RtId) { RtState = RtState.Archived };
 
             await tenantRepository.UpdateOneRtEntityByIdAsync(session2, rtCkTypeId, entity1.RtId, u);
             await session2.CommitTransactionAsync();

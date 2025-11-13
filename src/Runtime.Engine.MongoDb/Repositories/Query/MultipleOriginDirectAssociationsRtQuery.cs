@@ -21,10 +21,10 @@ internal class MultipleOriginDirectAssociationsRtQuery : MultipleOriginDirectAss
 {
     internal MultipleOriginDirectAssociationsRtQuery(ICkCacheService ckCacheService, string tenantId,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
-        string language, bool includeDeletedEntities, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
+        string language, bool includeArchivedEntities, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
         RtCkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
-        : base(ckCacheService, tenantId, mongoDbRepositoryDataSource, language, includeDeletedEntities, rtIds,
+        : base(ckCacheService, tenantId, mongoDbRepositoryDataSource, language, includeArchivedEntities, rtIds,
             originCkTypeGraph, roleId,
             graphDirection,
             targetCkTypeGraph)
@@ -39,7 +39,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
     private readonly ICkCacheService _ckCacheService;
     private readonly string _tenantId;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
-    private readonly bool _includeDeletedEntities;
+    private readonly bool _includeArchivedEntities;
     private readonly CkTypeGraph _originCkTypeGraph;
     private readonly RtCkId<CkAssociationRoleId> _roleId;
     private readonly IEnumerable<OctoObjectId> _rtIds;
@@ -48,7 +48,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
 
     internal MultipleOriginDirectAssociationsRtQuery(ICkCacheService ckCacheService, string tenantId,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
-        string language, bool includeDeletedEntities, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
+        string language, bool includeArchivedEntities, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
         RtCkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
         : base(new RtEntityFieldFilterResolver<TTargetEntity>(ckCacheService, tenantId, targetCkTypeGraph), language)
@@ -56,7 +56,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         _ckCacheService = ckCacheService;
         _tenantId = tenantId;
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
-        _includeDeletedEntities = includeDeletedEntities;
+        _includeArchivedEntities = includeArchivedEntities;
         _rtIds = rtIds;
         _originCkTypeGraph = originCkTypeGraph;
         _roleId = roleId;
@@ -69,11 +69,11 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
     {
         _geospatialFilters.ForEach(pipelineStageDefinitions.Add);
 
-        // Ensure that deleted entities are not added to the result if defined.
-        if (!_includeDeletedEntities)
+        // Ensure that archived entities are not added to the result if defined.
+        if (!_includeArchivedEntities)
         {
             pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(
-                Builders<TTargetEntity>.Filter.Ne(ckType => ckType.RtState, RtState.Deleted)
+                Builders<TTargetEntity>.Filter.Ne(ckType => ckType.RtState, RtState.Archived)
             ));
         }
 
@@ -146,9 +146,9 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         associationFilter.AddRange(Builders<RtAssociation>.Filter.Eq("associationRoleId", _roleId),
             Builders<RtAssociation>.Filter.In(innerLocalFieldCkId, targetCkIds));
 
-        if (!_includeDeletedEntities)
+        if (!_includeArchivedEntities)
         {
-            associationFilter.Add(Builders<RtAssociation>.Filter.Ne(ckType => ckType.RtState, RtState.Deleted));
+            associationFilter.Add(Builders<RtAssociation>.Filter.Ne(ckType => ckType.RtState, RtState.Archived));
         }
 
         var pipelineStageDefinitions = new List<IPipelineStageDefinition>([

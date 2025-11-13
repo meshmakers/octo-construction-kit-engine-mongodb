@@ -20,10 +20,10 @@ internal class MultipleOriginIndirectAssociationsRtQuery : MultipleOriginIndirec
 {
     internal MultipleOriginIndirectAssociationsRtQuery(ICkCacheService ckCacheService, string tenantId,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
-        string language, bool includeDeletedEntities, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
+        string language, bool includeArchivedEntities, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
         RtCkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
-        : base(ckCacheService, tenantId, mongoDbRepositoryDataSource, language, includeDeletedEntities, rtIds,
+        : base(ckCacheService, tenantId, mongoDbRepositoryDataSource, language, includeArchivedEntities, rtIds,
             originCkTypeGraph, roleId,
             graphDirection,
             targetCkTypeGraph)
@@ -36,7 +36,7 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
 {
     private readonly GraphDirections _graphDirection;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
-    private readonly bool _includeDeletedEntities;
+    private readonly bool _includeArchivedEntities;
     private readonly CkTypeGraph _originCkTypeGraph;
     private readonly RtCkId<CkAssociationRoleId> _roleId;
     private readonly IEnumerable<OctoObjectId> _rtIds;
@@ -45,13 +45,13 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
 
     internal MultipleOriginIndirectAssociationsRtQuery(ICkCacheService ckCacheService, string tenantId,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
-        string language, bool includeDeletedEntities, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
+        string language, bool includeArchivedEntities, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
         RtCkId<CkAssociationRoleId> roleId,
         GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
         : base(new RtEntityFieldFilterResolver<TTargetEntity>(ckCacheService, tenantId, targetCkTypeGraph), language)
     {
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
-        _includeDeletedEntities = includeDeletedEntities;
+        _includeArchivedEntities = includeArchivedEntities;
         _rtIds = rtIds;
         _originCkTypeGraph = originCkTypeGraph;
         _roleId = roleId;
@@ -65,10 +65,10 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
         _geospatialFilters.ForEach(pipelineStageDefinitions.Add);
 
         // Ensure that deleted entities are not added to the result if defined.
-        if (!_includeDeletedEntities)
+        if (!_includeArchivedEntities)
         {
             pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(
-                Builders<TTargetEntity>.Filter.Ne(ckType => ckType.RtState, RtState.Deleted)
+                Builders<TTargetEntity>.Filter.Ne(ckType => ckType.RtState, RtState.Archived)
             ));
         }
 
