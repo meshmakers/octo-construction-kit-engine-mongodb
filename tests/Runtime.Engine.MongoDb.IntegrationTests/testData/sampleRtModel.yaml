@@ -323,7 +323,7 @@ entities:
         targetCkTypeId: Test/StateOrProvince
   - rtId: 68fded922b85e5d74c05a563
     ckTypeId: Test/District
-    rtState: Deleted
+    rtState: Archived
     attributes:
       - id: Test/Name
         value: Imst
@@ -333,7 +333,7 @@ entities:
         targetCkTypeId: Test/StateOrProvince
   - rtId: 68fded922b85e5d74c05a564
     ckTypeId: Test/District
-    rtState: Deleted
+    rtState: Archived
     attributes:
       - id: Test/Name
         value: Kitzbühel
@@ -343,7 +343,7 @@ entities:
         targetCkTypeId: Test/StateOrProvince
   - rtId: 68fded922b85e5d74c05a565
     ckTypeId: Test/Municipality
-    rtState: Deleted
+    rtState: Archived
     attributes:
       - id: Test/Name
         value: Fieberbrunn
@@ -353,7 +353,7 @@ entities:
         targetCkTypeId: Test/District
   - rtId: 68fded922b85e5d74c05a566
     ckTypeId: Test/Municipality
-    rtState: Deleted
+    rtState: Archived
     attributes:
       - id: Test/Name
         value: Hochfilzen
