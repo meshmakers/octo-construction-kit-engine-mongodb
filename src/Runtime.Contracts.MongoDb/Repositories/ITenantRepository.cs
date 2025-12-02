@@ -47,12 +47,37 @@ public interface ITenantRepository : IRuntimeRepository
     /// </summary>
     /// <param name="session">Octo session</param>
     /// <param name="ckModelIds">List of construction kit model ids, when null all is returned, based on the further filter options</param>
+    /// <param name="queryOptions">Data query filter and sorting options</param>
+    /// <param name="skip">Skips the defined amount of items, when null no items are skipped</param>
+    /// <param name="take">Takes the defined amount of items, when null all items are taken</param>
+    /// <returns>Result set object that contains the results based on filter options</returns>
+    Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkModelId> ckModelIds,
+        RtEntityQueryOptions queryOptions,
+        int? skip = null, int? take = null);
+
+    /// <summary>
+    /// Gets the construction kit types.
+    /// </summary>
+    /// <param name="session">Octo session</param>
     /// <param name="ckTypeIds">List of construction kit type ids, when null all is returned, based on the further filter options</param>
     /// <param name="queryOptions">Data query filter and sorting options</param>
     /// <param name="skip">Skips the defined amount of items, when null no items are skipped</param>
     /// <param name="take">Takes the defined amount of items, when null all items are taken</param>
     /// <returns>Result set object that contains the results based on filter options</returns>
-    Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkModelId>? ckModelIds, IReadOnlyList<CkId<CkTypeId>>? ckTypeIds,
+    Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkId<CkTypeId>> ckTypeIds,
+        RtEntityQueryOptions queryOptions,
+        int? skip = null, int? take = null);
+
+    /// <summary>
+    /// Gets the construction kit types.
+    /// </summary>
+    /// <param name="session">Octo session</param>
+    /// <param name="rtCkTypeIds">List of runtime construction kit type ids, when null all is returned, based on the further filter options</param>
+    /// <param name="queryOptions">Data query filter and sorting options</param>
+    /// <param name="skip">Skips the defined amount of items, when null no items are skipped</param>
+    /// <param name="take">Takes the defined amount of items, when null all items are taken</param>
+    /// <returns>Result set object that contains the results based on filter options</returns>
+    Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<RtCkId<CkTypeId>> rtCkTypeIds,
         RtEntityQueryOptions queryOptions,
         int? skip = null, int? take = null);
 
