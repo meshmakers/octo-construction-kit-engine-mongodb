@@ -133,14 +133,12 @@ internal class TenantRepository(
     }
 
     public async Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session,
-        IReadOnlyList<CkModelId>? ckModelIds,
-        IReadOnlyList<CkId<CkAttributeId>>? attributeIds,
-        RtEntityQueryOptions queryOptions, int? skip = null, int? take = null)
+        IReadOnlyList<CkModelId> ckModelIds, RtEntityQueryOptions queryOptions,
+        int? skip = null, int? take = null)
     {
         var query = new CkAttributeQuery(metricsContext, mongoDbRepositoryDataSource);
         query.AddFieldFilterCriteria(queryOptions);
         query.AddModelIdFilter(ckModelIds);
-        query.AddIdFilter(attributeIds);
         query.AddTextSearchFilter(queryOptions.TextSearchFilter);
         query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
         query.AddPostStagesToPipeline(queryOptions.SortOrders);
@@ -150,7 +148,40 @@ internal class TenantRepository(
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkModelId> ckModelIds, RtEntityQueryOptions queryOptions,
+    public async Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session,
+        IReadOnlyList<CkId<CkAttributeId>> ckAttributeIds, RtEntityQueryOptions queryOptions,
+        int? skip = null, int? take = null)
+    {
+        var query = new CkAttributeQuery(metricsContext, mongoDbRepositoryDataSource);
+        query.AddFieldFilterCriteria(queryOptions);
+        query.AddIdFilter(ckAttributeIds);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
+
+        return await query.ExecuteQuery(session, skip, take);
+    }
+
+    public async Task<IResultSet<CkAttribute>> GetCkAttributesAsync(IOctoSession session,
+        IReadOnlyList<RtCkId<CkAttributeId>> rtCkAttributeIds, RtEntityQueryOptions queryOptions,
+        int? skip = null, int? take = null)
+    {
+        var query = new CkAttributeQuery(metricsContext, mongoDbRepositoryDataSource);
+        query.AddFieldFilterCriteria(queryOptions);
+        query.AddRtCkIdFilter(rtCkAttributeIds);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
+
+        return await query.ExecuteQuery(session, skip, take);
+    }
+
+    public async Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkModelId> ckModelIds,
+        RtEntityQueryOptions queryOptions,
         int? skip = null, int? take = null)
     {
         var query = new CkTypeQuery(metricsContext, mongoDbRepositoryDataSource);
@@ -165,7 +196,8 @@ internal class TenantRepository(
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkId<CkTypeId>> ckTypeIds, RtEntityQueryOptions queryOptions, int? skip = null,
+    public async Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<CkId<CkTypeId>> ckTypeIds,
+        RtEntityQueryOptions queryOptions, int? skip = null,
         int? take = null)
     {
         var query = new CkTypeQuery(metricsContext, mongoDbRepositoryDataSource);
@@ -180,7 +212,8 @@ internal class TenantRepository(
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session, IReadOnlyList<RtCkId<CkTypeId>> rtCkTypeIds, RtEntityQueryOptions queryOptions,
+    public async Task<IResultSet<CkType>> GetCkTypeAsync(IOctoSession session,
+        IReadOnlyList<RtCkId<CkTypeId>> rtCkTypeIds, RtEntityQueryOptions queryOptions,
         int? skip = null, int? take = null)
     {
         var query = new CkTypeQuery(metricsContext, mongoDbRepositoryDataSource);
@@ -195,13 +228,28 @@ internal class TenantRepository(
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session, IReadOnlyList<CkModelId>? ckModelIds,
-        List<CkId<CkRecordId>>? ckRecordIds,
-        RtEntityQueryOptions queryOptions, int? skip = null, int? take = null)
+    public async Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session, IReadOnlyList<CkModelId> ckModelIds,
+        RtEntityQueryOptions queryOptions,
+        int? skip = null, int? take = null)
     {
         var query = new CkRecordQuery(metricsContext, mongoDbRepositoryDataSource);
         query.AddFieldFilterCriteria(queryOptions);
         query.AddModelIdFilter(ckModelIds);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
+
+        return await query.ExecuteQuery(session, skip, take);
+    }
+
+    public async Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session, List<CkId<CkRecordId>> ckRecordIds,
+        RtEntityQueryOptions queryOptions, int? skip = null,
+        int? take = null)
+    {
+        var query = new CkRecordQuery(metricsContext, mongoDbRepositoryDataSource);
+        query.AddFieldFilterCriteria(queryOptions);
         query.AddIdFilter(ckRecordIds);
         query.AddTextSearchFilter(queryOptions.TextSearchFilter);
         query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
@@ -212,14 +260,61 @@ internal class TenantRepository(
         return await query.ExecuteQuery(session, skip, take);
     }
 
-    public async Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, IReadOnlyList<CkModelId>? ckModelIds,
-        List<CkId<CkEnumId>>? ckEnumIds,
-        RtEntityQueryOptions queryOptions, int? skip = null, int? take = null)
+    public async Task<IResultSet<CkRecord>> GetCkRecordAsync(IOctoSession session,
+        List<RtCkId<CkRecordId>> rtCkRecordIds, RtEntityQueryOptions queryOptions, int? skip = null,
+        int? take = null)
+    {
+        var query = new CkRecordQuery(metricsContext, mongoDbRepositoryDataSource);
+        query.AddFieldFilterCriteria(queryOptions);
+        query.AddRtCkIdFilter(rtCkRecordIds);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
+
+        return await query.ExecuteQuery(session, skip, take);
+    }
+
+    public async Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, IReadOnlyList<CkModelId> ckModelIds,
+        RtEntityQueryOptions queryOptions,
+        int? skip = null, int? take = null)
     {
         var query = new CkEnumQuery(metricsContext, mongoDbRepositoryDataSource);
         query.AddFieldFilterCriteria(queryOptions);
         query.AddModelIdFilter(ckModelIds);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
+
+        return await query.ExecuteQuery(session, skip, take);
+    }
+
+    public async Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, List<CkId<CkEnumId>> ckEnumIds,
+        RtEntityQueryOptions queryOptions, int? skip = null,
+        int? take = null)
+    {
+        var query = new CkEnumQuery(metricsContext, mongoDbRepositoryDataSource);
+        query.AddFieldFilterCriteria(queryOptions);
         query.AddIdFilter(ckEnumIds);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
+
+        return await query.ExecuteQuery(session, skip, take);
+    }
+
+    public async Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, List<RtCkId<CkEnumId>> rtCkEnumIds,
+        RtEntityQueryOptions queryOptions, int? skip = null,
+        int? take = null)
+    {
+        var query = new CkEnumQuery(metricsContext, mongoDbRepositoryDataSource);
+        query.AddFieldFilterCriteria(queryOptions);
+        query.AddRtCkIdFilter(rtCkEnumIds);
         query.AddTextSearchFilter(queryOptions.TextSearchFilter);
         query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
         query.AddPostStagesToPipeline(queryOptions.SortOrders);
