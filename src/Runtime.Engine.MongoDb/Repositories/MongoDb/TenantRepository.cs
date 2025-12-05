@@ -276,6 +276,54 @@ internal class TenantRepository(
         return await query.ExecuteQuery(session, skip, take);
     }
 
+    public async Task<IResultSet<CkAssociationRole>> GetCkAssociationRoleAsync(IOctoSession session,
+        IReadOnlyList<CkModelId> ckModelIds, RtEntityQueryOptions queryOptions,
+        int? skip = null, int? take = null)
+    {
+        var query = new CkAssociationRoleQuery(metricsContext, mongoDbRepositoryDataSource);
+        query.AddFieldFilterCriteria(queryOptions);
+        query.AddModelIdFilter(ckModelIds);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
+
+        return await query.ExecuteQuery(session, skip, take);
+    }
+
+    public async Task<IResultSet<CkAssociationRole>> GetCkAssociationRoleAsync(IOctoSession session,
+        List<CkId<CkAssociationRoleId>> ckAssociationRoleIds, RtEntityQueryOptions queryOptions,
+        int? skip = null, int? take = null)
+    {
+        var query = new CkAssociationRoleQuery(metricsContext, mongoDbRepositoryDataSource);
+        query.AddFieldFilterCriteria(queryOptions);
+        query.AddIdFilter(ckAssociationRoleIds);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
+
+        return await query.ExecuteQuery(session, skip, take);
+    }
+
+    public async Task<IResultSet<CkAssociationRole>> GetCkAssociationRoleAsync(IOctoSession session,
+        List<RtCkId<CkAssociationRoleId>> ckAssociationRoleIds, RtEntityQueryOptions queryOptions,
+        int? skip = null, int? take = null)
+    {
+        var query = new CkAssociationRoleQuery(metricsContext, mongoDbRepositoryDataSource);
+        query.AddFieldFilterCriteria(queryOptions);
+        query.AddRtCkIdFilter(ckAssociationRoleIds);
+        query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+        query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+        query.AddPostStagesToPipeline(queryOptions.SortOrders);
+        query.AddFieldAggregation(queryOptions.FieldAggregation);
+        query.AddResultAggregation(queryOptions.ResultAggregation);
+
+        return await query.ExecuteQuery(session, skip, take);
+    }
+
     public async Task<IResultSet<CkEnum>> GetCkEnumAsync(IOctoSession session, IReadOnlyList<CkModelId> ckModelIds,
         RtEntityQueryOptions queryOptions,
         int? skip = null, int? take = null)
