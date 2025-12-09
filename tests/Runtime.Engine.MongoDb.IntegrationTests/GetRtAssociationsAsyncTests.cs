@@ -33,7 +33,7 @@ public class GetRtAssociationsAsyncTests(SampleRtModelDataFixture sampleRtModelD
 
         var rtEntityIds = result.Items.Select(x => x.ToRtEntityId()).ToList();
         var deep = await tenantRepository.GetRtAssociationsAsync(session, rtEntityIds,
-            RtAssociationQueryOptions.Create(GraphDirections.Inbound, 0, 5));
+            RtAssociationExtendedQueryOptions.Create(GraphDirections.Inbound, 0, 5));
 
         Assert.Equal(5, deep.Count);
         Assert.Single(deep["Test/District@66803ecf4aa85720dda96b01"].Items);

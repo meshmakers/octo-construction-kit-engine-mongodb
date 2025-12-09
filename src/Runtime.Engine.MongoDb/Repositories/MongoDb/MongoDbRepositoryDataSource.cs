@@ -169,7 +169,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     }
 
     public override async Task<IReadOnlyList<RtAssociation>> GetRtAssociationsAsync(IOctoSession session,
-        IEnumerable<RtOriginTargetPair> rtOriginTargetPair, RtAssociationQueryOptions queryOptions)
+        IEnumerable<RtOriginTargetPair> rtOriginTargetPair, RtAssociationBaseQueryOptions queryOptions)
     {
         List<FilterDefinition<RtAssociation>> filters = new();
         foreach (var pair in rtOriginTargetPair)
