@@ -39,7 +39,7 @@ public static class RuntimeEngineBuilderExtensions
         }
 
         // Add basic construction kits. Hopefully we can leave it at one.
-        builder.Services.AddCkModelSystem();
+        builder.Services.AddCkModelSystemV2();
 
         // Add services of Persistence module
         builder.Services.AddTransient<IDatabaseCkModelRepository, DatabaseCkModelRepository>();

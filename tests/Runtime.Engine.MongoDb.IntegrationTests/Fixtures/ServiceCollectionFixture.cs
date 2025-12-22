@@ -20,7 +20,7 @@ public abstract class ServiceCollectionFixture : ITestOutputHelperAccessor, IAsy
         Services = new ServiceCollection();
         Services.AddRuntimeEngine()
             .AddMongoDbRuntimeRepository();
-        Services.AddCkModelTest();
+        Services.AddCkModelTestV1();
         Services.AddLogging(loggingBuilder =>
         {
             loggingBuilder.ClearProviders();
