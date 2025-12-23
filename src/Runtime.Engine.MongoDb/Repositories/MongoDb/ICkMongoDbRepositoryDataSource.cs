@@ -21,6 +21,14 @@ public interface ICkMongoDbRepositoryDataSource
 
     Task UpdateCollectionsAsync(IOctoSession session);
     Task UpdateIndexAsync(IOctoSession session, bool includeModelsInStateImporting);
-    
+
     Task<IOctoSession> CreateSessionAsync();
+
+    /// <summary>
+    /// Acquires a distributed lock for importing a CK model.
+    /// The lock prevents multiple services from importing the same model simultaneously.
+    /// </summary>
+    /// <param name="modelName">The name of the model to lock (without version)</param>
+    /// <returns>An IAsyncDisposable that releases the lock when disposed</returns>
+    Task<IAsyncDisposable> AcquireModelImportLockAsync(string modelName);
 }

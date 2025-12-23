@@ -5,7 +5,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 
 internal static class CkIdExtensions
 {
-    public static string GetCkTypeCollectionName<TKey>(this CkId<TKey> ckKey) where TKey : IComparable<TKey>, ICkElementId
+    public static string GetCkTypeCollectionName<TKey>(this RtCkId<TKey> ckKey) where TKey : IComparable<TKey>, ICkElementId
     {
         var cleaned = Regex.Replace(ckKey.SemanticVersionedFullName, @"[^A-Za-z0-9]+", "");
         return cleaned;

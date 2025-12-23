@@ -1,4 +1,5 @@
 using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
@@ -81,6 +82,12 @@ internal class RepositoryDistributedLockService(
                     catch (MongoWriteException ex) when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
                     {
                         // Race condition: Ein anderer Service hat den Lock gerade erstellt
+                        logger.LogDebug("Lock '{LockId}' was just acquired by another service, retrying...", id);
+                    }
+                    catch (DuplicateKeyException)
+                    {
+                        // Race condition: Ein anderer Service hat den Lock gerade erstellt
+                        // (MongoDbDataSourceCollection wraps MongoWriteException in DuplicateKeyException)
                         logger.LogDebug("Lock '{LockId}' was just acquired by another service, retrying...", id);
                     }
                 }

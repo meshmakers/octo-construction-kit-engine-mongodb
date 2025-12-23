@@ -99,7 +99,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             throw OperationFailedException.CkTypeHasNoDefiningCollectionRoot(ckTypeGraph.CkTypeId);
         }
 
-        var suffix = ckTypeGraph.DefiningCollectionRootCkTypeId.GetCkTypeCollectionName();
+        var suffix = ckTypeGraph.DefiningCollectionRootCkTypeId.ToRtCkId().GetCkTypeCollectionName();
         var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
         return _repository.GetCollection(mapper, suffix);
     }
@@ -235,7 +235,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         foreach (var ckType in ckTypes)
         {
             _logger.LogDebug("Creating type root collection for '{CkTypeId}'", ckType.CkTypeId);
-            var suffix = ckType.CkTypeId.GetCkTypeCollectionName();
+            var suffix = ckType.CkTypeId.ToRtCkId().GetCkTypeCollectionName();
             await _repository.CreateCollectionIfNotExistsAsync(new RtEntityMongoDataSourceMapper<RtEntity>(),
                 ckType.EnableChangeStreamPreAndPostImages, suffix);
         }
@@ -350,7 +350,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
     private async Task UpdateIndexesForCollectionRoot(CkTypeInfo collectionRootType, List<CkType> baseTypes)
     {
-        var name = collectionRootType.CkTypeId.GetCkTypeCollectionName();
+        var name = collectionRootType.CkTypeId.ToRtCkId().GetCkTypeCollectionName();
         var mapper = new RtEntityMongoDataSourceMapper<RtEntity>();
         var collection = _repository.GetCollection(mapper, name);
 
@@ -538,7 +538,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         // For system indexes (like RtAssociation indexes) where no defining type exists,
         // fall back to collection name. Otherwise, use the type name for backward compatibility.
         var indexName = indexDefiningType != null
-            ? indexDefiningType.CkTypeId.GetCkTypeCollectionName() + "_" + uniqueIndexNumber
+            ? indexDefiningType.CkTypeId.ToRtCkId().GetCkTypeCollectionName() + "_" + uniqueIndexNumber
             : collectionName + "_" + uniqueIndexNumber;
 
         // We check if the index already exists in the repository,
@@ -628,7 +628,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     {
         // Generate index name using the same logic as CreateOrUpdateIndex for consistency
         var indexName = indexDefiningType != null
-            ? indexDefiningType.CkTypeId.GetCkTypeCollectionName() + "_" + uniqueIndexNumber
+            ? indexDefiningType.CkTypeId.ToRtCkId().GetCkTypeCollectionName() + "_" + uniqueIndexNumber
             : collectionName + "_" + uniqueIndexNumber;
 
         try
@@ -944,5 +944,17 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 "inheritedTypes.inheritorCkTypeId",
                 "_id",
                 "Inheritances");
+    }
+
+    /// <inheritdoc />
+    public async Task<IAsyncDisposable> AcquireModelImportLockAsync(string modelName)
+    {
+        var lockId = $"ck_model_import_{modelName}";
+        _logger.LogInformation("Acquiring model import lock for '{ModelName}' with lock ID '{LockId}'", modelName, lockId);
+
+        var lockService = new RepositoryDistributedLockService(_repositoryClient, _repository, _logger, lockId);
+        await lockService.AcquireLockAsync();
+
+        return lockService;
     }
 }
