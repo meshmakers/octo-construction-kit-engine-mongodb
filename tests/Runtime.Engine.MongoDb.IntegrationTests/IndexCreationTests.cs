@@ -114,7 +114,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
             await tenantContext.ImportCkModelAsync(modelWithoutIndex);
 
             // Step 2: Add Sample Data That Violates the Unique index constraints
-            var session = await tenantRepository.GetSessionAsync();
+            using var session = await tenantRepository.GetSessionAsync();
             session.StartTransaction();
 
             // Insert two entities with duplicate SimpleField values
@@ -193,7 +193,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
             var modelWithoutIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), hasUniqueIndex: false);
             await tenantContext.ImportCkModelAsync(modelWithoutIndex);
 
-            var session = await tenantRepository.GetSessionAsync();
+            using var session = await tenantRepository.GetSessionAsync();
             session.StartTransaction();
 
             var typeId = GetSimpleTypeId(modelName);
@@ -221,7 +221,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
             Assert.NotNull(failedIndex);
 
             // Step 3: Fix the data - update entity2 to have different value
-            var session3 = await tenantRepository.GetSessionAsync();
+            using var session3 = await tenantRepository.GetSessionAsync();
             session3.StartTransaction();
 
             entity2.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.UniqueValue);
@@ -280,7 +280,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
             await tenantContext.ImportCkModelAsync(modelWithoutIndex);
 
             // Step 2: Add duplicate data (both NOT deleted)
-            var session = await tenantRepository.GetSessionAsync();
+            using var session = await tenantRepository.GetSessionAsync();
             session.StartTransaction();
 
             var typeId = GetSimpleTypeId(modelName);
@@ -350,7 +350,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
             await tenantContext.ImportCkModelAsync(modelWithoutIndex);
 
             // Step 2: Add duplicate data
-            var session = await tenantRepository.GetSessionAsync();
+            using var session = await tenantRepository.GetSessionAsync();
             session.StartTransaction();
 
             var ckTypeId = GetSimpleTypeId(modelName);
@@ -368,7 +368,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
             await session.CommitTransactionAsync();
 
             // Step 3: Delete one of the duplicate entities
-            var session2 = await tenantRepository.GetSessionAsync();
+            using var session2 = await tenantRepository.GetSessionAsync();
             session2.StartTransaction();
 
             entity1.RtState = RtState.Archived;

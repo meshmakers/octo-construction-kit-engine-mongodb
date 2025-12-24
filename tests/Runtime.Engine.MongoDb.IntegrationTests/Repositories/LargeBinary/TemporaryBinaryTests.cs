@@ -16,7 +16,7 @@ public class LocalDirectoryRepositoryTemporaryBinaryTests(ImportTestCkModelFixtu
         var filePath = "testData/largeBinaries/Customers.xlsx";
         var stream = File.OpenRead(filePath);
 
-        var session = await tenantRepository.GetSessionAsync();
+        using var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
         var id = await tenantRepository.UploadTemporaryLargeBinaryAsync(session, "Customers.xlsx",
@@ -40,7 +40,7 @@ public class LocalDirectoryRepositoryTemporaryBinaryTests(ImportTestCkModelFixtu
         var filePath = "testData/largeBinaries/Customers.xlsx";
         var stream = File.OpenRead(filePath);
 
-        var session = await tenantRepository.GetSessionAsync();
+        using var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
         var id = await tenantRepository.UploadTemporaryLargeBinaryAsync(session, "Customers.xlsx",

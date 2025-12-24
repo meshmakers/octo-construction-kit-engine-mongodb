@@ -20,6 +20,75 @@ using MongoDB.Driver;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 /// <summary>
+///     Wrapper for session lifecycle management.
+///     Only disposes the session if it was created by this scope (not passed from outside).
+///     Also manages transactions - only starts/commits if we own the session.
+/// </summary>
+internal readonly struct SessionScope : IAsyncDisposable
+{
+    private readonly IOctoSession _session;
+    private readonly bool _ownsSession;
+
+    private SessionScope(IOctoSession session, bool ownsSession)
+    {
+        _session = session;
+        _ownsSession = ownsSession;
+    }
+
+    public IOctoSession Session => _session;
+
+    /// <summary>
+    ///     Indicates whether this scope owns the session (created it).
+    ///     If true, the session will be disposed when this scope is disposed.
+    ///     Transaction management should only be done when this is true.
+    /// </summary>
+    public bool OwnsSession => _ownsSession;
+
+    public static async Task<SessionScope> CreateAsync(TenantDatabaseSourceIdentifier sourceIdentifier)
+    {
+        if (sourceIdentifier.Session != null)
+        {
+            return new SessionScope(sourceIdentifier.Session, ownsSession: false);
+        }
+
+        var session = await sourceIdentifier.MongoDbRepositoryDataSource.CreateSessionAsync();
+        return new SessionScope(session, ownsSession: true);
+    }
+
+    /// <summary>
+    ///     Starts a transaction if this scope owns the session.
+    /// </summary>
+    public void StartTransactionIfOwned()
+    {
+        if (_ownsSession)
+        {
+            _session.StartTransaction();
+        }
+    }
+
+    /// <summary>
+    ///     Commits the transaction if this scope owns the session.
+    /// </summary>
+    public async Task CommitTransactionIfOwnedAsync()
+    {
+        if (_ownsSession)
+        {
+            await _session.CommitTransactionAsync();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_ownsSession)
+        {
+            _session.Dispose();
+        }
+
+        await ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>
 ///     Implements a CK model repository that stores the CK model in a (octo) database.
 /// </summary>
 public class DatabaseCkModelRepository : IDatabaseCkModelRepository
@@ -47,13 +116,11 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
                 sourceIdentifier);
 
-        using var session = await sourceIdentifierObject.MongoDbRepositoryDataSource.CreateSessionAsync();
-        session.StartTransaction();
+        await using var scope = await SessionScope.CreateAsync(sourceIdentifierObject);
+        var session = scope.Session;
 
         var ckModels = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels.FindManyAsync(session,
             e => e.ModelId == modelIdVersionRange.Name && e.ModelState == ModelState.Available);
-
-        await session.CommitTransactionAsync();
 
         var satisfiedModels = ckModels
             .Where(m => modelIdVersionRange.IsSatisfiedBy(m.Id))
@@ -79,12 +146,11 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
                 sourceIdentifier);
 
-        using var session = await sourceIdentifierObject.MongoDbRepositoryDataSource.CreateSessionAsync();
-        session.StartTransaction();
+        await using var scope = await SessionScope.CreateAsync(sourceIdentifierObject);
+        var session = scope.Session;
 
         var ckModel = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels
             .FindSingleOrDefaultAsync(session, e => e.Id == modelId && e.ModelState == ModelState.Available);
-        await session.CommitTransactionAsync();
 
         return ckModel != null;
     }
@@ -117,8 +183,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
                 sourceIdentifier);
 
-        using var session = await sourceIdentifierObject.MongoDbRepositoryDataSource.CreateSessionAsync();
-        session.StartTransaction();
+        await using var scope = await SessionScope.CreateAsync(sourceIdentifierObject);
+        var session = scope.Session;
 
         var ckModel = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels
             .FindSingleOrDefaultAsync(session, e => e.Id == ckModelId && e.ModelState == ModelState.Available);
@@ -143,8 +209,6 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             .FindManyAsync(session, e => e.CkModelId == ckModelId);
         var ckAssociationRoles = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkAssociationRoles
             .FindManyAsync(session, e => e.CkModelId == ckModelId);
-
-        await session.CommitTransactionAsync();
 
         var ckCompiledModelRoot = new CkCompiledModelRoot
         {
@@ -248,11 +312,12 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
                 sourceIdentifier);
 
-        using var session = await sourceIdentifierObject.MongoDbRepositoryDataSource.CreateSessionAsync();
+        await using var scope = await SessionScope.CreateAsync(sourceIdentifierObject);
+        var session = scope.Session;
 
         try
         {
-            session.StartTransaction();
+            scope.StartTransactionIfOwned();
             var dbCkEnum = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkEnums.FindSingleOrDefaultAsync(
                 session,
                 @enum => @enum.CkEnumId == ckEnumId);
@@ -330,7 +395,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             await sourceIdentifierObject.MongoDbRepositoryDataSource.CkEnums.UpdateOneAsync(session, ckEnumId,
                 updateDefinition);
 
-            await session.CommitTransactionAsync();
+            await scope.CommitTransactionIfOwnedAsync();
         }
         catch (Exception e)
         {
@@ -480,14 +545,13 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             using var sessionComplete = await mongoDbRepositoryDataSource.CreateSessionAsync();
             sessionComplete.StartTransaction();
 
-            _logger.LogDebug("Validating dependencies of other CK models");
-            await ValidateDependencies(sessionComplete, mongoDbRepositoryDataSource);
-            CheckCancellation(cancellationToken);
-
-
             _logger.LogDebug("Updating model state");
             await UpdateModelStateAsync(sessionComplete, mongoDbRepositoryDataSource, compiledModel.ModelId,
                 ModelState.Available);
+
+            _logger.LogDebug("Validating dependencies of other CK models");
+            await ValidateDependencies(sessionComplete, mongoDbRepositoryDataSource);
+            CheckCancellation(cancellationToken);
 
             await sessionComplete.CommitTransactionAsync();
 
@@ -545,7 +609,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     private async Task ValidateDependencies(IOctoSession session,
         ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
     {
-        var sourceIdentifier = new TenantDatabaseSourceIdentifier(mongoDbRepositoryDataSource);
+        var sourceIdentifier = new TenantDatabaseSourceIdentifier(session, mongoDbRepositoryDataSource);
         OperationResult operationResult = new();
         var ckModels =
             await mongoDbRepositoryDataSource.CkModels.FindManyAsync(session,

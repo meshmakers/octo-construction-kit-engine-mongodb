@@ -56,7 +56,7 @@ public class LinkedBinariesTests(ImportTestCkModelFixture fixture) : IClassFixtu
         var filePath = "testData/largeBinaries/Products.pdf";
         var stream = File.OpenRead(filePath);
 
-        var replaceSession = await tenantRepository.GetSessionAsync();
+        using var replaceSession = await tenantRepository.GetSessionAsync();
         replaceSession.StartTransaction();
 
         var replaceBinaryEntity = new RtBinaryEntity
@@ -96,7 +96,7 @@ public class LinkedBinariesTests(ImportTestCkModelFixture fixture) : IClassFixtu
         var filePath = "testData/largeBinaries/Products.pdf";
         var stream = File.OpenRead(filePath);
 
-        var replaceSession = await tenantRepository.GetSessionAsync();
+        using var replaceSession = await tenantRepository.GetSessionAsync();
         replaceSession.StartTransaction();
 
         var replaceBinaryEntity = new RtBinaryEntity
@@ -129,7 +129,7 @@ public class LinkedBinariesTests(ImportTestCkModelFixture fixture) : IClassFixtu
         var filePath = "testData/largeBinaries/Customers.xlsx";
         var stream = File.OpenRead(filePath);
 
-        var session = await tenantRepository.GetSessionAsync();
+        using var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
         RtBinaryEntity binaryEntity = new()
@@ -151,7 +151,7 @@ public class LinkedBinariesTests(ImportTestCkModelFixture fixture) : IClassFixtu
     private static async Task<RtBinaryEntity?> GetRtBinaryEntity(ITenantRepository tenantRepository,
         RtBinaryEntity binaryEntity)
     {
-        var sessionRead = await tenantRepository.GetSessionAsync();
+        using var sessionRead = await tenantRepository.GetSessionAsync();
         sessionRead.StartTransaction();
 
         var r = await tenantRepository.GetRtEntityByRtIdAsync<RtBinaryEntity>(sessionRead, binaryEntity.RtId);

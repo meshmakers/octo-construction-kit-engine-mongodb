@@ -174,7 +174,7 @@ public class TenantContext : ITenantContext
     protected async Task UpdateSystemCkModelAsync(string normalizedDatabaseName, bool isRepositoryInCreation = false)
     {
         var databaseContext = CreateRepositoryDataSourceAsAdmin(normalizedDatabaseName);
-        var databaseSourceIdentifier = new TenantDatabaseSourceIdentifier(databaseContext);
+        var databaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, databaseContext);
         OperationResult operationResult = new();
         if (await _ckModelRepositoryService.IsExistingAsync(SystemCkIds.CkModelId, databaseSourceIdentifier))
         {
@@ -629,7 +629,7 @@ public class TenantContext : ITenantContext
             await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
             var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
             await _ckModelRepositoryService.UpdateModelAsync(ckCompiledModelRoot,
-                new TenantDatabaseSourceIdentifier(repositoryDataSource));
+                new TenantDatabaseSourceIdentifier(null, repositoryDataSource));
 
             _logger.LogInformation("CK Model '{CkModelId}' imported into tenant '{TenantId}'",
                 ckCompiledModelRoot.ModelId, TenantId);
@@ -645,7 +645,7 @@ public class TenantContext : ITenantContext
         Guid correlationId = Guid.NewGuid();
 
         var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
-        var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(repositoryDataSource);
+        var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource);
         if (await _ckModelRepositoryService.IsExistingAsync(ckModelId, tenantDatabaseSourceIdentifier))
         {
             _logger.LogDebug("CK Model '{CkModelId}' already exists in tenant '{TenantId}', skipping import",
@@ -688,7 +688,7 @@ public class TenantContext : ITenantContext
 
         var r = await _ckModelRepositoryService.IsExistingAsync(
             ckModelId.ToVersionRange(),
-            new TenantDatabaseSourceIdentifier(repositoryDataSource));
+            new TenantDatabaseSourceIdentifier(null, repositoryDataSource));
         return r.Exists;
     }
 
@@ -704,7 +704,7 @@ public class TenantContext : ITenantContext
             await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
             await _ckModelRepositoryService.CustomizeCkEnumAsync(
                 ckEnumId,
-                ckEnumUpdates, new TenantDatabaseSourceIdentifier(repositoryDataSource), cancellationToken);
+                ckEnumUpdates, new TenantDatabaseSourceIdentifier(null, repositoryDataSource), cancellationToken);
         }
         finally
         {

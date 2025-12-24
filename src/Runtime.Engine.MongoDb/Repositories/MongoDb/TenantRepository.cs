@@ -35,7 +35,7 @@ internal class TenantRepository(
 
     protected override async Task RefreshCkCacheServiceAsync(ICkCacheService ckCacheService)
     {
-        var session = await mongoDbRepositoryDataSource.GetSessionAsync();
+        using var session = await mongoDbRepositoryDataSource.GetSessionAsync();
         session.StartTransaction();
 
         await modelLoaderService.LoadAsync(TenantId, session, mongoDbRepositoryDataSource);
