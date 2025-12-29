@@ -21,6 +21,7 @@ public class LinkedBinariesTests(ImportTestCkModelFixture fixture) : IClassFixtu
         var tenantRepository = systemContext.GetTenantRepository();
 
         var (session, binaryEntity) = await InsertCustomers(tenantRepository);
+        using var _ = session;
 
         await session.CommitTransactionAsync();
 
@@ -37,6 +38,7 @@ public class LinkedBinariesTests(ImportTestCkModelFixture fixture) : IClassFixtu
         var tenantRepository = systemContext.GetTenantRepository();
 
         var (session, binaryEntity) = await InsertCustomers(tenantRepository);
+        using var _ = session;
 
         await tenantRepository.DeleteOneRtEntityByRtIdAsync<RtBinaryEntity>(session, binaryEntity.RtId, DeleteOptions.Erase);
 
@@ -50,6 +52,7 @@ public class LinkedBinariesTests(ImportTestCkModelFixture fixture) : IClassFixtu
         var tenantRepository = systemContext.GetTenantRepository();
 
         var (session, binaryEntity) = await InsertCustomers(tenantRepository);
+        using var _ = session;
 
         await session.CommitTransactionAsync();
 
@@ -90,6 +93,7 @@ public class LinkedBinariesTests(ImportTestCkModelFixture fixture) : IClassFixtu
         var tenantRepository = systemContext.GetTenantRepository();
 
         var (session, binaryEntity) = await InsertCustomers(tenantRepository);
+        using var _ = session;
 
         await session.CommitTransactionAsync();
 
@@ -129,7 +133,7 @@ public class LinkedBinariesTests(ImportTestCkModelFixture fixture) : IClassFixtu
         var filePath = "testData/largeBinaries/Customers.xlsx";
         var stream = File.OpenRead(filePath);
 
-        using var session = await tenantRepository.GetSessionAsync();
+        var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
         RtBinaryEntity binaryEntity = new()

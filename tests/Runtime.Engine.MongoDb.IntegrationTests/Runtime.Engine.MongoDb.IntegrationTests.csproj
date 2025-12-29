@@ -51,8 +51,4 @@
         <ProjectReference Include="..\TestCkModel\TestCkModel.csproj" />
     </ItemGroup>
 
-    <ItemGroup>
-      <Folder Include="testData\backups\" />
-    </ItemGroup>
-
 </Project>

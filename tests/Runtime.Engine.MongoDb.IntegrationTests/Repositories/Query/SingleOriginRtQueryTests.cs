@@ -4,6 +4,7 @@ using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Metrics.Meters;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
@@ -184,6 +185,46 @@ public class SingleOriginRtQueryTests
         Assert.Contains(resultSet.Items, item => item.GetAttributeStringValue("Name") == "Leopoldskron-Moos");
         Assert.Contains(resultSet.Items, item => item.GetAttributeStringValue("Name") == "Fieberbrunn");
         Assert.Contains(resultSet.Items, item => item.GetAttributeStringValue("Name") == "Hochfilzen");
+    }
+
+    [Fact]
+    public async Task NavigationProperty_District_To_StateOrProvince_OK()
+    {
+        var systemContext = _systemFixture.GetSystemContext();
+        var ckCacheService = _systemFixture.GetService<ICkCacheService>();
+
+        // Query Districts with navigation property to parent StateOrProvince
+        var requestedFieldNames = new[]
+        {
+            "name",
+            "parent.testStateOrProvince->name"
+        };
+
+        var navigationPairs = RtPathEvaluator.TokenizeAndGetNavigationPairs(
+            ckCacheService,
+            systemContext.TenantId,
+            TestCkIds.CkDistrictTypeId,
+            requestedFieldNames);
+
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var queryOptions = RtEntityQueryOptions.Create();
+
+        var resultSet = await tenantRepository.GetRtEntitiesGraphByTypeAsync(
+            session,
+            TestCkIds.RtCkDistrictTypeId,
+            queryOptions,
+            navigationPairs);
+
+        Assert.NotEmpty(resultSet.Items);
+
+        // Verify that we got districts with their parent StateOrProvince names
+        var pinzgau = resultSet.Items.FirstOrDefault(d =>
+            d.GetAttributeStringValue("Name") == "Pinzgau / Zell am See");
+        Assert.NotNull(pinzgau);
     }
 
     private ISystemContext Prepare(CkId<CkTypeId> ckTypeId, bool includeArchivedEntities,

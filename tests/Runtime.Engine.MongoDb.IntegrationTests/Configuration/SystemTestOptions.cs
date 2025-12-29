@@ -11,6 +11,17 @@ public class SystemTestOptions
     public string AdminUser { get; set; } = "octo-system-admin";
     public string AdminUserPassword { get; set; } = null!;
     public string DatabaseUserPassword { get; set; } = null!;
-    
+
     public bool UseDirectConnection { get; set; }
+
+    /// <summary>
+    /// If true, uses a local MongoDB instance instead of Testcontainers.
+    /// Can also be set via environment variable USE_LOCAL_MONGODB=true
+    /// </summary>
+    public bool UseLocalDatabase { get; set; }
+
+    /// <summary>
+    /// The host:port of the local MongoDB instance (e.g. "localhost:27017")
+    /// </summary>
+    public string LocalDatabaseHost { get; set; } = "localhost:27017";
 }
