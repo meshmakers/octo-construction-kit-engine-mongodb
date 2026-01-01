@@ -3,11 +3,13 @@ using System.Diagnostics;
 using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.BlueprintCatalogs;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.Blueprints;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
@@ -168,6 +170,79 @@ public class TenantContext : ITenantContext
         {
             // Distribute updates (post) to inform other services.
             await _tenantNotifications.NotifyPosTenantCreateAsync(tenantId, correlationId);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<BlueprintApplicationResult?> CreateChildTenantAsync(IOctoAdminSession adminSession,
+        string databaseName, string tenantId, BlueprintId? blueprintId)
+    {
+        // First, create the tenant using the standard method
+        await CreateChildTenantAsync(adminSession, databaseName, tenantId);
+
+        // If no blueprint specified, return null
+        if (blueprintId == null)
+        {
+            return null;
+        }
+
+        // Apply the blueprint to the newly created tenant
+        _logger.LogInformation("Applying blueprint {BlueprintId} to new tenant {TenantId}",
+            blueprintId, tenantId);
+
+        try
+        {
+            var blueprintService = _serviceProvider.GetService<IBlueprintService>();
+            if (blueprintService == null)
+            {
+                _logger.LogWarning(
+                    "IBlueprintService is not registered. Blueprint {BlueprintId} will not be applied to tenant {TenantId}",
+                    blueprintId, tenantId);
+
+                var operationResult = new OperationResult();
+                operationResult.AddMessage(new ConstructionKit.Contracts.Messages.OperationMessage(
+                    ConstructionKit.Contracts.Messages.MessageLevel.Error, null, 1,
+                    "IBlueprintService is not registered. Use AddBlueprintSupport() to register blueprint services."));
+
+                return BlueprintApplicationResult.Failed(operationResult);
+            }
+
+            var result = await blueprintService.ApplyBlueprintAsync(tenantId, blueprintId);
+
+            if (!result.IsSuccess)
+            {
+                _logger.LogError("Failed to apply blueprint {BlueprintId} to tenant {TenantId}. Rolling back tenant creation.",
+                    blueprintId, tenantId);
+
+                // Rollback: Drop the tenant
+                await DropChildTenantAsync(adminSession, tenantId);
+
+                throw new InvalidOperationException(
+                    $"Failed to apply blueprint '{blueprintId}' to tenant '{tenantId}'. Tenant creation has been rolled back. " +
+                    $"Errors: {string.Join(", ", result.OperationResult.Messages.Select(m => m.MessageText))}");
+            }
+
+            _logger.LogInformation(
+                "Blueprint {BlueprintId} applied successfully to tenant {TenantId}: {EntitiesCreated} entities created",
+                blueprintId, tenantId, result.EntitiesCreated);
+
+            return result;
+        }
+        catch (InvalidOperationException)
+        {
+            throw; // Re-throw our custom exception
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error applying blueprint {BlueprintId} to tenant {TenantId}. Rolling back tenant creation.",
+                blueprintId, tenantId);
+
+            // Rollback: Drop the tenant
+            await DropChildTenantAsync(adminSession, tenantId);
+
+            throw new InvalidOperationException(
+                $"Failed to apply blueprint '{blueprintId}' to tenant '{tenantId}'. Tenant creation has been rolled back.",
+                ex);
         }
     }
 

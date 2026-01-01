@@ -332,3 +332,63 @@ public class RtAssociationMongoDataSourceMapper : IMongoDataSourceMapper<OctoObj
         return update.Combine(list);
     }
 }
+
+public class RtBlueprintHistoryMongoDataSourceMapper : IMongoDataSourceMapper<string, RtBlueprintHistory>
+{
+    public string CollectionNamePrefix => nameof(RtBlueprintHistory);
+
+    public string GetId(RtBlueprintHistory document)
+    {
+        return document.Id;
+    }
+
+    public UpdateDefinition<RtBlueprintHistory> ApplyUpdate(RtBlueprintHistory document)
+    {
+        var update = Builders<RtBlueprintHistory>.Update;
+        List<UpdateDefinition<RtBlueprintHistory>> list =
+        [
+            update.Set(p => p.TenantId, document.TenantId),
+            update.Set(p => p.BlueprintId, document.BlueprintId),
+            update.Set(p => p.BlueprintVersion, document.BlueprintVersion),
+            update.Set(p => p.AppliedAt, document.AppliedAt),
+            update.Set(p => p.ApplicationMode, document.ApplicationMode),
+            update.Set(p => p.PreviousBlueprintId, document.PreviousBlueprintId),
+            update.Set(p => p.PreviousVersion, document.PreviousVersion),
+            update.Set(p => p.EntitiesCreated, document.EntitiesCreated),
+            update.Set(p => p.EntitiesUpdated, document.EntitiesUpdated),
+            update.Set(p => p.EntitiesDeleted, document.EntitiesDeleted),
+            update.Set(p => p.SeedDataChecksum, document.SeedDataChecksum)
+        ];
+
+        return update.Combine(list);
+    }
+}
+
+public class RtBackupInfoMongoDataSourceMapper : IMongoDataSourceMapper<string, RtBackupInfo>
+{
+    public string CollectionNamePrefix => nameof(RtBackupInfo);
+
+    public string GetId(RtBackupInfo document)
+    {
+        return document.Id;
+    }
+
+    public UpdateDefinition<RtBackupInfo> ApplyUpdate(RtBackupInfo document)
+    {
+        var update = Builders<RtBackupInfo>.Update;
+        List<UpdateDefinition<RtBackupInfo>> list =
+        [
+            update.Set(p => p.BackupId, document.BackupId),
+            update.Set(p => p.TenantId, document.TenantId),
+            update.Set(p => p.CreatedAt, document.CreatedAt),
+            update.Set(p => p.Reason, document.Reason),
+            update.Set(p => p.BlueprintVersion, document.BlueprintVersion),
+            update.Set(p => p.StorageLocation, document.StorageLocation),
+            update.Set(p => p.SizeBytes, document.SizeBytes),
+            update.Set(p => p.EntityCount, document.EntityCount),
+            update.Set(p => p.BackupType, document.BackupType)
+        ];
+
+        return update.Combine(list);
+    }
+}
