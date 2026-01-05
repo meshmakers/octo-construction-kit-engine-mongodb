@@ -35,7 +35,7 @@ public class GetRtDeepGraphAsyncTests
 
         await session.CommitTransactionAsync();
 
-        Assert.Equal(21, resultSet.TotalCount);
+        Assert.Equal(23, resultSet.TotalCount); // +2 for Room and TechnicalRoom
     }
 
     [Fact]
@@ -55,7 +55,7 @@ public class GetRtDeepGraphAsyncTests
 
         await session.CommitTransactionAsync();
 
-        Assert.Equal(25, resultSet.TotalCount);
+        Assert.Equal(27, resultSet.TotalCount); // +2 for Room and TechnicalRoom
     }
 
     [Fact]
@@ -75,9 +75,11 @@ public class GetRtDeepGraphAsyncTests
 
         await session.CommitTransactionAsync();
 
-        Assert.Equal(2, resultSet.TotalCount);
+        Assert.Equal(4, resultSet.TotalCount); // +2 for Room and TechnicalRoom
         Assert.Contains(new OctoObjectId("66803ecf4aa85720dda96b09"), resultSet.Items.Select(x => x.Id.RtId));
         Assert.Contains(new OctoObjectId("66803ecf4aa85720dda96b11"), resultSet.Items.Select(x => x.Id.RtId));
+        Assert.Contains(new OctoObjectId("68fded922b85e5d74c05a567"), resultSet.Items.Select(x => x.Id.RtId)); // Room
+        Assert.Contains(new OctoObjectId("68fded922b85e5d74c05a568"), resultSet.Items.Select(x => x.Id.RtId)); // TechnicalRoom
     }
 
     [Fact]
@@ -97,7 +99,7 @@ public class GetRtDeepGraphAsyncTests
 
         await session.CommitTransactionAsync();
 
-        Assert.Equal(21, resultSet.TotalCount);
+        Assert.Equal(23, resultSet.TotalCount); // +2 for Room and TechnicalRoom
         Assert.Equal(2, resultSet.Items.Count());
     }
 
@@ -119,7 +121,7 @@ public class GetRtDeepGraphAsyncTests
 
         await session.CommitTransactionAsync();
 
-        Assert.Equal(9, resultSet.TotalCount);
+        Assert.Equal(11, resultSet.TotalCount); // +2 for Room and TechnicalRoom
     }
 
     [Fact]

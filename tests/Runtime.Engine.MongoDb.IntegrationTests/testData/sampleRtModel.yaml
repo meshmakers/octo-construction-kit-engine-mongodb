@@ -361,3 +361,30 @@ entities:
       - roleId: System/ParentChild
         targetRtId: 68fded922b85e5d74c05a564
         targetCkTypeId: Test/District
+
+  - rtId: 68fded922b85e5d74c05a567
+    ckTypeId: Test/Room
+    attributes:
+      - id: Test/Name
+        value: Kitchen
+      - id: Test/Tags
+        value: [
+          "LivingArea",
+        ]
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96b09
+        targetCkTypeId: Test/HouseHold
+  - rtId: 68fded922b85e5d74c05a568
+    ckTypeId: Test/TechnicalRoom
+    attributes:
+      - id: Test/Name
+        value: Technical Room Ground Floor
+      - id: Test/Tags
+        value: [
+          "Utility",
+        ]
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 66803ecf4aa85720dda96b09
+        targetCkTypeId: Test/HouseHold

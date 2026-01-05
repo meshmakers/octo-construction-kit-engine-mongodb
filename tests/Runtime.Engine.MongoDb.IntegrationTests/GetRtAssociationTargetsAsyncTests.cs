@@ -101,4 +101,147 @@ public class GetRtAssociationTargetsAsyncTests
         Assert.NotNull(deep[rtEntity.ToRtEntityId()]);
         Assert.Equal(2, deep[rtEntity.ToRtEntityId()].TotalCount);
     }
+
+    [Fact]
+    public async Task GetRtAssociationTargetsAsync_MultipleTargetTypes_OK()
+    {
+        // Arrange
+        var systemContext = _sampleRtModelDataFixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var queryOptions = RtEntityQueryOptions.Create();
+
+        // Get StateOrProvince entities (Salzburg, Tirol)
+        var stateProvinceResult = await tenantRepository.GetRtEntitiesByTypeAsync(session,
+            TestCkIds.RtCkStateOrProvinceTypeId, queryOptions, 0, 2);
+        Assert.True(stateProvinceResult.Items.Any(), "No StateOrProvince entities found");
+
+        var stateProvinceRtIds = stateProvinceResult.Items.Select(x => x.RtId).ToList();
+
+        // Act - Query for multiple target types (District AND Municipality)
+        var multipleTargetTypes = new[]
+        {
+            TestCkIds.RtCkDistrictTypeId,
+            TestCkIds.RtCkMunicipalityTypeId
+        };
+
+        var result = await tenantRepository.GetRtAssociationTargetsAsync(
+            session,
+            stateProvinceRtIds,
+            TestCkIds.RtCkStateOrProvinceTypeId,
+            SystemCkIds.RtCkParentChildRoleId,
+            multipleTargetTypes,
+            GraphDirections.Inbound,
+            null,
+            queryOptions);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.True(result.Count > 0, "Expected results for multiple target types query");
+
+        // Verify we get results (Districts and/or Municipalities)
+        var totalResults = result.Sum(r => r.Value.TotalCount);
+        Assert.True(totalResults > 0, "Expected to find at least some child entities");
+    }
+
+    [Fact]
+    public async Task GetRtAssociationTargetsAsync_MultipleTargetTypes_SingleOrigin_OK()
+    {
+        // Arrange
+        var systemContext = _sampleRtModelDataFixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var queryOptions = RtEntityQueryOptions.Create();
+
+        // Get first District
+        var districtResult = await tenantRepository.GetRtEntitiesByTypeAsync(session,
+            TestCkIds.RtCkDistrictTypeId, queryOptions, 0, 1);
+        Assert.True(districtResult.Items.Any(), "No District entities found");
+
+        var districtRtId = districtResult.Items.First().RtId;
+
+        // Act - Query for single target type (Municipality only)
+        var singleTargetResult = await tenantRepository.GetRtAssociationTargetsAsync(
+            session,
+            [districtRtId],
+            TestCkIds.RtCkDistrictTypeId,
+            SystemCkIds.RtCkParentChildRoleId,
+            TestCkIds.RtCkMunicipalityTypeId,
+            GraphDirections.Inbound,
+            null,
+            queryOptions);
+
+        // Query with multiple target types (only Municipality, but as array)
+        var multipleTargetResult = await tenantRepository.GetRtAssociationTargetsAsync(
+            session,
+            [districtRtId],
+            TestCkIds.RtCkDistrictTypeId,
+            SystemCkIds.RtCkParentChildRoleId,
+            [TestCkIds.RtCkMunicipalityTypeId],
+            GraphDirections.Inbound,
+            null,
+            queryOptions);
+
+        // Assert - Both queries should return the same results
+        Assert.Equal(singleTargetResult.Count, multipleTargetResult.Count);
+
+        foreach (var kvp in singleTargetResult)
+        {
+            Assert.True(multipleTargetResult.TryGetValue(kvp.Key, out var multiResult));
+            Assert.Equal(kvp.Value.TotalCount, multiResult.TotalCount);
+        }
+    }
+
+    [Fact]
+    public async Task GetRtAssociationTargetsAsync_Household_MultipleChildTypes_OK()
+    {
+        // Arrange
+        var systemContext = _sampleRtModelDataFixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var queryOptions = RtEntityQueryOptions.Create();
+
+        // Household "Zeller Fusch 153" - has children: Room (Kitchen), TechnicalRoom, MeasuringPoint
+        var householdRtId = new OctoObjectId("66803ecf4aa85720dda96b09");
+
+        // Expected child entity IDs
+        var expectedRoomId = new OctoObjectId("68fded922b85e5d74c05a567");        // Kitchen
+        var expectedTechnicalRoomId = new OctoObjectId("68fded922b85e5d74c05a568"); // Technical Room Ground Floor
+        var expectedMeasuringPointId = new OctoObjectId("66803ecf4aa85720dda96b11"); // Hauptzähler
+
+        // Act - Query for all child types (Room, TechnicalRoom, MeasuringPoint)
+        var result = await tenantRepository.GetRtAssociationTargetsAsync(
+            session,
+            [householdRtId],
+            TestCkIds.RtCkHouseHoldTypeId,
+            SystemCkIds.RtCkParentChildRoleId,
+            [TestCkIds.RtCkRoomTypeId, TestCkIds.RtCkTechnicalRoomTypeId, TestCkIds.RtCkMeasuringPointTypeId],
+            GraphDirections.Inbound,
+            null,
+            queryOptions);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Single(result); // One origin (the household)
+
+        var householdEntityId = new RtEntityId(TestCkIds.RtCkHouseHoldTypeId, householdRtId);
+        Assert.True(result.TryGetValue(householdEntityId, out var children));
+
+        // Should find all 3 children: Room, TechnicalRoom, MeasuringPoint
+        Assert.Equal(3, children.TotalCount);
+
+        var childRtIds = children.Items.Select(x => x.RtId).ToList();
+        Assert.Contains(expectedRoomId, childRtIds);
+        Assert.Contains(expectedTechnicalRoomId, childRtIds);
+        Assert.Contains(expectedMeasuringPointId, childRtIds);
+    }
 }

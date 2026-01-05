@@ -1,6 +1,7 @@
 using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
@@ -414,7 +415,7 @@ internal class TenantRepository(
 
         var result = await GetRtAssociationTargetsAsync<TTargetEntity>(session, [originRtId], originCkTypeId, roleId,
             graphDirection,
-            targetRtIds, targetCkTypeId, queryOptions, skip, take);
+            targetRtIds, [targetCkTypeId], queryOptions, skip, take);
 
         return result.First().Value;
     }
@@ -427,7 +428,18 @@ internal class TenantRepository(
         int? take = null)
     {
         return GetRtAssociationTargetsAsync<RtEntity>(session, originRtIds, originCkTypeId, roleId, graphDirection,
-            targetRtIds, targetCkTypeId, queryOptions, skip, take);
+            targetRtIds, [targetCkTypeId], queryOptions, skip, take);
+    }
+
+    public Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
+        IEnumerable<OctoObjectId> originRtIds, RtCkId<CkTypeId> originCkTypeId, RtCkId<CkAssociationRoleId> roleId,
+        IEnumerable<RtCkId<CkTypeId>> targetCkTypeIds,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, RtEntityQueryOptions queryOptions,
+        int? skip = null,
+        int? take = null)
+    {
+        return GetRtAssociationTargetsAsync<RtEntity>(session, originRtIds, originCkTypeId, roleId, graphDirection,
+            targetRtIds, targetCkTypeIds, queryOptions, skip, take);
     }
 
     public Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity,
@@ -444,14 +456,15 @@ internal class TenantRepository(
         var targetCkTypeId = RtEntityExtensions.GetRtCkTypeId<TTargetEntity>();
 
         return GetRtAssociationTargetsAsync<TTargetEntity>(session, originRtIds, originCkTypeId, roleId, graphDirection,
-            targetRtIds, targetCkTypeId, queryOptions, skip, take);
+            targetRtIds, [targetCkTypeId], queryOptions, skip, take);
     }
 
     private async Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<
         TTargetEntity>(
         IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds, RtCkId<CkTypeId> originCkTypeId, RtCkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds, RtCkId<CkTypeId> targetCkTypeId,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? targetRtIds,
+        IEnumerable<RtCkId<CkTypeId>> targetCkTypeIds,
         RtEntityQueryOptions queryOptions,
         int? skip = null,
         int? take = null)
@@ -459,14 +472,21 @@ internal class TenantRepository(
     {
         var ckCacheService = await GetCkCacheServiceAsync();
         var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
-        var targetTypeGraph = await GetCkTypeGraphAsync(targetCkTypeId);
+
+        // Build type graphs for all target types
+        var targetTypeGraphs = new List<CkTypeGraph>();
+        foreach (var targetCkTypeId in targetCkTypeIds)
+        {
+            var targetTypeGraph = await GetCkTypeGraphAsync(targetCkTypeId);
+            targetTypeGraphs.Add(targetTypeGraph);
+        }
 
         var originHierarchicalRtQuery =
             new MultipleOriginDirectAssociationsRtQuery<TTargetEntity>(ckCacheService, TenantId,
                 mongoDbRepositoryDataSource,
                 queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false,
                 originRtIds,
-                originTypeGraph, roleId, graphDirection, targetTypeGraph);
+                originTypeGraph, roleId, graphDirection, targetTypeGraphs);
 
         originHierarchicalRtQuery.AddFieldFilterCriteria(queryOptions);
         originHierarchicalRtQuery.AddIdFilter(targetRtIds);
