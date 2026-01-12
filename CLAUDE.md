@@ -109,6 +109,29 @@ Example:
 - `RtPathEvaluator` - Tokenizes and evaluates attribute paths including navigation properties
 - `NavigationEnd` - Represents the end of a navigation (association target)
 - `MongoRepositoryClient` - Base class that registers BSON conventions and class maps
+- `MongoRuntimeRepositoryProvider` - Provides tenant repositories for CK model migrations
+
+## CK Model Migration Support
+
+The MongoDB layer provides `MongoRuntimeRepositoryProvider` for CK model migrations.
+This is automatically registered when calling `AddMongoDbRuntimeRepository()`:
+
+```csharp
+// Migration support is automatically included
+services.AddRuntimeEngine()
+    .AddMongoDbRuntimeRepository();  // Automatically registers MongoRuntimeRepositoryProvider
+```
+
+This allows `ICkModelMigrationService` to access tenant repositories via `ISystemContext.TryFindTenantRepositoryAsync()`.
+When CK models are updated (e.g., System CK model), migrations are automatically detected and executed.
+
+### Key Components
+
+| Class | Description |
+|-------|-------------|
+| `MongoRuntimeRepositoryProvider` | Implements `IRuntimeRepositoryProvider` using `ISystemContext` |
+| `MongoTenantBlueprintHistory` | MongoDB-based blueprint history storage |
+| `MongoBlueprintBackupService` | MongoDB-specific backup implementation |
 
 ## Test Data Structure
 

@@ -45,7 +45,7 @@ internal class FieldFilterResolver<TEntity>
         return memberMap.ElementName;
     }
     
-    internal virtual object? ResolveSearchAttributeValue(string attributePath, object? searchTerm, out bool isEnum)
+    internal virtual object? ResolveSearchAttributeValue(string attributePath, object? searchTerm, FieldFilterOperator filterOperator, out bool isEnum)
     {
         if (searchTerm == null)
         {
@@ -185,14 +185,14 @@ internal class FieldFilterResolver<TEntity>
         {
             var resolvedAttributePath = ResolveAttributePath(fieldFilter.AttributePath);
             var resolvedValue = ResolveSearchAttributeValue(fieldFilter.AttributePath, fieldFilter.ComparisonValue,
-                out var isEnum);
+                fieldFilter.Operator, out var isEnum);
 
             // Resolve the secondary value if present
             object? resolvedSecondaryValue = null;
             if (fieldFilter.SecondaryValue != null)
             {
                 resolvedSecondaryValue = ResolveSearchAttributeValue(fieldFilter.AttributePath, fieldFilter.SecondaryValue,
-                    out _);
+                    fieldFilter.Operator, out _);
             }
 
             if (isEnum)
@@ -240,11 +240,9 @@ internal class FieldFilterResolver<TEntity>
             case FieldFilterOperator.GreaterEqualThan:
                 return Builders<TEntity>.Filter.Gte(attributePath, value);
             case FieldFilterOperator.Like:
-                return Builders<TEntity>.Filter.Regex(attributePath,
-                    new BsonRegularExpression(GetRegex(value?.ToString()), "i"));
+                return CreateRegexFilter(attributePath, GetRegex(value?.ToString()), "i");
             case FieldFilterOperator.MatchRegEx:
-                return Builders<TEntity>.Filter.Regex(attributePath,
-                    new BsonRegularExpression(value?.ToString()));
+                return CreateRegexFilter(attributePath, value?.ToString(), null);
             case FieldFilterOperator.AnyEq:
                 return Builders<TEntity>.Filter.AnyEq(attributePath, value);
             case FieldFilterOperator.AnyLike:
@@ -256,14 +254,11 @@ internal class FieldFilterResolver<TEntity>
                 }
                 throw OperationFailedException.MatchFilterValueNotSupported(value);
             case FieldFilterOperator.Contains:
-                return Builders<TEntity>.Filter.Regex(attributePath,
-                    new BsonRegularExpression($".*{Regex.Escape(value?.ToString() ?? string.Empty)}.*", "i"));
+                return CreateRegexFilter(attributePath, $".*{Regex.Escape(value?.ToString() ?? string.Empty)}.*", "i");
             case FieldFilterOperator.StartsWith:
-                return Builders<TEntity>.Filter.Regex(attributePath,
-                    new BsonRegularExpression($"^{Regex.Escape(value?.ToString() ?? string.Empty)}", "i"));
+                return CreateRegexFilter(attributePath, $"^{Regex.Escape(value?.ToString() ?? string.Empty)}", "i");
             case FieldFilterOperator.EndsWith:
-                return Builders<TEntity>.Filter.Regex(attributePath,
-                    new BsonRegularExpression($"{Regex.Escape(value?.ToString() ?? string.Empty)}$", "i"));
+                return CreateRegexFilter(attributePath, $"{Regex.Escape(value?.ToString() ?? string.Empty)}$", "i");
             case FieldFilterOperator.Between:
                 // If secondaryValue is provided, use it as the upper bound
                 if (secondaryValue != null)
@@ -349,5 +344,35 @@ internal class FieldFilterResolver<TEntity>
     private static string? GetRegex(string? value)
     {
         return value?.Replace("*", ".*");
+    }
+
+    /// <summary>
+    /// Creates a regex filter for the specified attribute path.
+    /// For the _id field (ObjectId), uses $expr with $regexMatch on $toString to enable regex matching.
+    /// For other fields, uses the standard regex filter.
+    /// </summary>
+    private static FilterDefinition<TEntity> CreateRegexFilter(string attributePath, string? pattern, string? options)
+    {
+        if (attributePath == Constants.IdField)
+        {
+            // For _id (ObjectId), use $expr with $regexMatch on { $toString: "$_id" }
+            var regexMatchDoc = new BsonDocument
+            {
+                { "input", new BsonDocument("$toString", "$_id") },
+                { "regex", pattern ?? string.Empty }
+            };
+
+            if (!string.IsNullOrEmpty(options))
+            {
+                regexMatchDoc.Add("options", options);
+            }
+
+            var exprDoc = new BsonDocument("$expr", new BsonDocument("$regexMatch", regexMatchDoc));
+            return new BsonDocumentFilterDefinition<TEntity>(exprDoc);
+        }
+
+        // For other fields, use the standard regex filter
+        return Builders<TEntity>.Filter.Regex(attributePath,
+            new BsonRegularExpression(pattern, options));
     }
 }

@@ -56,7 +56,7 @@ public class SystemContext : TenantContext, ISystemContext
             await CreateTenantInternalAsync(normalizedDatabaseName);
 
             // Restore the tenant system model on the newly created repository
-            var ckModelRepository = CreateRepositoryDataSourceAsAdmin(normalizedDatabaseName);
+            var ckModelRepository = CreateRepositoryDataSourceAsAdmin(normalizedDatabaseName, normalizedTenantId);
 
             OperationResult operationResult = new();
             var ckCompiledModelRoot =
@@ -193,13 +193,10 @@ public class SystemContext : TenantContext, ISystemContext
 
     public Task EnsureSystemCkModelAsync()
     {
-        return UpdateSystemCkModelAsync(DatabaseName);
+        return UpdateSystemCkModelAsync(DatabaseName, TenantId);
     }
 
     #endregion Construction Kit Model Handling
-
-
-
 
     #region Backup and Restore
 

@@ -97,8 +97,11 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
             if (_fieldFilterResolver.IsAttributePathValid(attributePath))
             {
                 var resolveAttributePath = _fieldFilterResolver.ResolveAttributePath(attributePath);
+                // For attribute search, the operator is determined after resolving the value:
+                // - String values use LIKE, non-string values use EQUALS
+                // We pass LIKE here as a hint for string-based fields like RtId
                 var resolvedValue = _fieldFilterResolver.ResolveSearchAttributeValue(attributePath,
-                    attributeSearchFilter.SearchTerm, out var isEnum);
+                    attributeSearchFilter.SearchTerm, FieldFilterOperator.Like, out var isEnum);
 
                 if (isEnum)
                 {

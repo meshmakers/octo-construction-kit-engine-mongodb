@@ -62,6 +62,9 @@ public static class RuntimeEngineBuilderExtensions
         // Add pre-document modification services
         builder.Services.AddTransient<IPreDocumentModification<RtEntity>, AutoIncrementModifier>();
 
+        // Register MongoDB-specific CK model migration support by default
+        // This enables automatic migration detection when CK models are updated
+        builder.Services.AddSingleton<IRuntimeRepositoryProvider, MongoRuntimeRepositoryProvider>();
 
         MongoRepositoryClient.RegisterSerializers();
 
@@ -95,6 +98,29 @@ public static class RuntimeEngineBuilderExtensions
         // Register MongoDB-specific blueprint implementations
         builder.Services.AddTransient<ITenantBlueprintHistory, MongoTenantBlueprintHistory>();
         builder.Services.AddTransient<IBlueprintBackupService, MongoBlueprintBackupService>();
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Adds MongoDB-specific CK model migration support to the runtime engine.
+    /// This enables migration of CK models across tenants using MongoDB persistence.
+    /// </summary>
+    /// <param name="builder">The runtime engine builder</param>
+    /// <returns>The builder for chaining</returns>
+    /// <remarks>
+    /// Note: This method is no longer required to be called explicitly.
+    /// The IRuntimeRepositoryProvider is now automatically registered by AddMongoDbRuntimeRepository().
+    /// This method is kept for backwards compatibility but is essentially a no-op.
+    ///
+    /// The ICkModelMigrationService, ICkMigrationParser, and ICkModelMigrationPathProvider
+    /// are already registered in Runtime.Engine.
+    /// </remarks>
+    [Obsolete("IRuntimeRepositoryProvider is now registered automatically by AddMongoDbRuntimeRepository(). This method is kept for backwards compatibility.")]
+    public static IRuntimeEngineBuilder AddMongoCkModelMigrationSupport(this IRuntimeEngineBuilder builder)
+    {
+        // Override the default RuntimeRepositoryProvider with MongoDB-specific implementation
+        builder.Services.AddSingleton<IRuntimeRepositoryProvider, MongoRuntimeRepositoryProvider>();
 
         return builder;
     }

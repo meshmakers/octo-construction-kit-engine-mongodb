@@ -154,7 +154,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
         return sb.ToString();
     }
 
-    internal override object? ResolveSearchAttributeValue(string attributePath, object? searchTerm, out bool isEnum)
+    internal override object? ResolveSearchAttributeValue(string attributePath, object? searchTerm, FieldFilterOperator filterOperator, out bool isEnum)
     {
         // Search for the correct attribute in the CkTypeAttributesGraph
         var pathTerms = RtPathEvaluator.TokenizePath(attributePath);
@@ -330,7 +330,7 @@ internal abstract class RtFieldFilterResolver<TEntity>(
             return AttributeValueConverter.ConvertAttributeValue(currentTypeAttributeGraph.ValueType, searchTerm);
         }
 
-        return base.ResolveSearchAttributeValue(attributePath, searchTerm, out isEnum);
+        return base.ResolveSearchAttributeValue(attributePath, searchTerm, filterOperator, out isEnum);
     }
 
     private static bool TryGetEnumKey(object searchTerm, CkEnumGraph ckEnumGraph, [NotNullWhen(true)] out int? key)
