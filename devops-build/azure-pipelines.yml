@@ -64,12 +64,12 @@ stages:
         inputs:
           command: 'build'
           projects:  $(SolutionFile)
-          arguments: '--configuration $(BuildConfiguration) /p:OctoNugetPrivateServer=$(nugetPrivateServer)'
+          arguments: '--configuration $(BuildConfiguration) --no-restore /p:OctoNugetPrivateServer=$(nugetPrivateServer)'
       - task: DotNetCoreCLI@2
         displayName: 'Test'
         inputs:
           command: 'test'
-          arguments: '--configuration $(buildConfiguration) /p:OctoNugetPrivateServer=$(nugetPrivateServer)'
+          arguments: '--configuration $(buildConfiguration) --no-restore /p:OctoNugetPrivateServer=$(nugetPrivateServer)'
           projects: |
             **/*Tests.csproj
           testRunTitle: 'CI'
