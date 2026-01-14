@@ -20,12 +20,79 @@ using MongoDB.Driver;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 /// <summary>
+///     Wrapper for session lifecycle management.
+///     Only disposes the session if it was created by this scope (not passed from outside).
+///     Also manages transactions - only starts/commits if we own the session.
+/// </summary>
+internal readonly struct SessionScope : IAsyncDisposable
+{
+    private readonly IOctoSession _session;
+    private readonly bool _ownsSession;
+
+    private SessionScope(IOctoSession session, bool ownsSession)
+    {
+        _session = session;
+        _ownsSession = ownsSession;
+    }
+
+    public IOctoSession Session => _session;
+
+    /// <summary>
+    ///     Indicates whether this scope owns the session (created it).
+    ///     If true, the session will be disposed when this scope is disposed.
+    ///     Transaction management should only be done when this is true.
+    /// </summary>
+    public bool OwnsSession => _ownsSession;
+
+    public static async Task<SessionScope> CreateAsync(TenantDatabaseSourceIdentifier sourceIdentifier)
+    {
+        if (sourceIdentifier.Session != null)
+        {
+            return new SessionScope(sourceIdentifier.Session, ownsSession: false);
+        }
+
+        var session = await sourceIdentifier.MongoDbRepositoryDataSource.CreateSessionAsync();
+        return new SessionScope(session, ownsSession: true);
+    }
+
+    /// <summary>
+    ///     Starts a transaction if this scope owns the session.
+    /// </summary>
+    public void StartTransactionIfOwned()
+    {
+        if (_ownsSession)
+        {
+            _session.StartTransaction();
+        }
+    }
+
+    /// <summary>
+    ///     Commits the transaction if this scope owns the session.
+    /// </summary>
+    public async Task CommitTransactionIfOwnedAsync()
+    {
+        if (_ownsSession)
+        {
+            await _session.CommitTransactionAsync();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_ownsSession)
+        {
+            _session.Dispose();
+        }
+
+        await ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>
 ///     Implements a CK model repository that stores the CK model in a (octo) database.
 /// </summary>
 public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 {
-    private const int MaxRetryAttempts = 60;
-    private const int DelayMilliseconds = 2000;
     private readonly IRepositoryModelResolver _repositoryModelResolver;
     private readonly ILogger<DatabaseCkModelRepository> _logger;
 
@@ -49,13 +116,11 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
                 sourceIdentifier);
 
-        using var session = await sourceIdentifierObject.MongoDbRepositoryDataSource.CreateSessionAsync();
-        session.StartTransaction();
+        await using var scope = await SessionScope.CreateAsync(sourceIdentifierObject);
+        var session = scope.Session;
 
         var ckModels = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels.FindManyAsync(session,
             e => e.ModelId == modelIdVersionRange.Name && e.ModelState == ModelState.Available);
-
-        await session.CommitTransactionAsync();
 
         var satisfiedModels = ckModels
             .Where(m => modelIdVersionRange.IsSatisfiedBy(m.Id))
@@ -81,12 +146,11 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
                 sourceIdentifier);
 
-        using var session = await sourceIdentifierObject.MongoDbRepositoryDataSource.CreateSessionAsync();
-        session.StartTransaction();
+        await using var scope = await SessionScope.CreateAsync(sourceIdentifierObject);
+        var session = scope.Session;
 
         var ckModel = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels
             .FindSingleOrDefaultAsync(session, e => e.Id == modelId && e.ModelState == ModelState.Available);
-        await session.CommitTransactionAsync();
 
         return ckModel != null;
     }
@@ -119,8 +183,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
                 sourceIdentifier);
 
-        using var session = await sourceIdentifierObject.MongoDbRepositoryDataSource.CreateSessionAsync();
-        session.StartTransaction();
+        await using var scope = await SessionScope.CreateAsync(sourceIdentifierObject);
+        var session = scope.Session;
 
         var ckModel = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels
             .FindSingleOrDefaultAsync(session, e => e.Id == ckModelId && e.ModelState == ModelState.Available);
@@ -145,8 +209,6 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             .FindManyAsync(session, e => e.CkModelId == ckModelId);
         var ckAssociationRoles = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkAssociationRoles
             .FindManyAsync(session, e => e.CkModelId == ckModelId);
-
-        await session.CommitTransactionAsync();
 
         var ckCompiledModelRoot = new CkCompiledModelRoot
         {
@@ -250,11 +312,12 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
                 sourceIdentifier);
 
-        using var session = await sourceIdentifierObject.MongoDbRepositoryDataSource.CreateSessionAsync();
+        await using var scope = await SessionScope.CreateAsync(sourceIdentifierObject);
+        var session = scope.Session;
 
         try
         {
-            session.StartTransaction();
+            scope.StartTransactionIfOwned();
             var dbCkEnum = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkEnums.FindSingleOrDefaultAsync(
                 session,
                 @enum => @enum.CkEnumId == ckEnumId);
@@ -332,7 +395,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             await sourceIdentifierObject.MongoDbRepositoryDataSource.CkEnums.UpdateOneAsync(session, ckEnumId,
                 updateDefinition);
 
-            await session.CommitTransactionAsync();
+            await scope.CommitTransactionIfOwnedAsync();
         }
         catch (Exception e)
         {
@@ -346,7 +409,12 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         CancellationToken? cancellationToken)
     {
         _logger.LogInformation("Executing import of CK model '{CkModelId}' to database", compiledModel.ModelId);
-        await CheckParallelModelImport(compiledModel, mongoDbRepositoryDataSource);
+
+        // Acquire distributed lock to prevent parallel imports of the same model
+        await using var importLock = await mongoDbRepositoryDataSource.AcquireModelImportLockAsync(compiledModel.ModelId.Name);
+
+        // Insert model with Importing state (now safe because we have the lock)
+        await InsertModelWithImportingState(compiledModel, mongoDbRepositoryDataSource);
 
         try
         {
@@ -477,14 +545,13 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             using var sessionComplete = await mongoDbRepositoryDataSource.CreateSessionAsync();
             sessionComplete.StartTransaction();
 
-            _logger.LogDebug("Validating dependencies of other CK models");
-            await ValidateDependencies(sessionComplete, mongoDbRepositoryDataSource);
-            CheckCancellation(cancellationToken);
-
-
             _logger.LogDebug("Updating model state");
             await UpdateModelStateAsync(sessionComplete, mongoDbRepositoryDataSource, compiledModel.ModelId,
                 ModelState.Available);
+
+            _logger.LogDebug("Validating dependencies of other CK models");
+            await ValidateDependencies(sessionComplete, mongoDbRepositoryDataSource);
+            CheckCancellation(cancellationToken);
 
             await sessionComplete.CommitTransactionAsync();
 
@@ -542,7 +609,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     private async Task ValidateDependencies(IOctoSession session,
         ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
     {
-        var sourceIdentifier = new TenantDatabaseSourceIdentifier(mongoDbRepositoryDataSource);
+        var sourceIdentifier = new TenantDatabaseSourceIdentifier(session, mongoDbRepositoryDataSource);
         OperationResult operationResult = new();
         var ckModels =
             await mongoDbRepositoryDataSource.CkModels.FindManyAsync(session,
@@ -565,56 +632,35 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         }
     }
 
-    private async Task CheckParallelModelImport(CkCompiledModelRoot compiledModel,
+    /// <summary>
+    /// Inserts the model with Importing state into the database.
+    /// This method should only be called after acquiring the distributed lock.
+    /// </summary>
+    private async Task InsertModelWithImportingState(CkCompiledModelRoot compiledModel,
         ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
     {
-        var queryable = await mongoDbRepositoryDataSource.CkModels.AsQueryableAsync();
+        _logger.LogInformation("Inserting CK model '{ModelId}' with Importing state", compiledModel.ModelId);
 
-        int retries = MaxRetryAttempts;
-        while (true)
-        {
-            _logger.LogInformation("Checking if CK model '{ModelId}' can be imported", compiledModel.ModelId);
-            var currentlyImportingCkModels =
-                queryable.Where(m => m.ModelState == ModelState.Importing && m.Id != compiledModel.ModelId);
-            if (currentlyImportingCkModels.Any())
+        using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
+        session.StartTransaction();
+
+        // Delete any existing model with the same name (regardless of version)
+        await mongoDbRepositoryDataSource.CkModels.TryDeleteOneAsync(session,
+            e => e.ModelId == compiledModel.ModelId.Name);
+
+        // Insert the new model with Importing state
+        await mongoDbRepositoryDataSource.CkModels.InsertOneAsync(session,
+            new CkModel
             {
-                Debug.Assert(currentlyImportingCkModels.Count() == 1, "currentlyImportingCkModels == 1");
+                Id = compiledModel.ModelId,
+                ModelId = compiledModel.ModelId.Name,
+                Dependencies = compiledModel.Dependencies?.ToArray(),
+                Description = compiledModel.Description,
+                ModelState = ModelState.Importing
+            });
 
-                var importingModels = currentlyImportingCkModels.Select(x => x.ModelId).ToList();
-                _logger.LogInformation(
-                    "CK model(s) '{Models}' are importing, waiting for 1 second (retries left: {Retries})",
-                    string.Join(", ", importingModels), retries);
-                Interlocked.Decrement(ref retries);
-                if (retries <= 0)
-                {
-                    throw OperationFailedException.ModelImportingWaitTimeout(importingModels,
-                        MaxRetryAttempts * DelayMilliseconds);
-                }
-
-                await Task.Delay(DelayMilliseconds);
-            }
-            else
-            {
-                _logger.LogInformation("No CK model is importing, continuing");
-                using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
-                session.StartTransaction();
-
-                await mongoDbRepositoryDataSource.CkModels.TryDeleteOneAsync(session,
-                    e => e.ModelId == compiledModel.ModelId.Name);
-                await mongoDbRepositoryDataSource.CkModels.InsertOneAsync(session,
-                    new CkModel
-                    {
-                        Id = compiledModel.ModelId,
-                        ModelId = compiledModel.ModelId.Name,
-                        Dependencies = compiledModel.Dependencies?.ToArray(),
-                        Description = compiledModel.Description,
-                        ModelState = ModelState.Importing
-                    });
-
-                await session.CommitTransactionAsync();
-                break;
-            }
-        }
+        await session.CommitTransactionAsync();
+        _logger.LogInformation("CK model '{ModelId}' inserted with Importing state", compiledModel.ModelId);
     }
 
     private void ProcessCkEnums(CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel)

@@ -4,6 +4,7 @@ using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Metrics.Meters;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
@@ -60,6 +61,24 @@ public class SingleOriginRtQueryTests
 
         query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
             .FieldEquals("RtId", ObjectId.Parse("66803ecf4aa85720dda96b15")));
+
+        var session = await systemContext.GetAdminSessionAsync();
+        session.StartTransaction();
+
+        var resultSet = await query.ExecuteQuery(session);
+        Assert.Equal(1, resultSet.TotalCount);
+        Assert.Equal("TestCustomer3", resultSet.Items.First().RtWellKnownName);
+        Assert.Equal(OctoObjectId.Parse("66803ecf4aa85720dda96b15"), resultSet.Items.First().RtId);
+    }
+
+    [Fact]
+    public async Task FieldFilter_SystemAttribute_RtId_Equals_AsString_OK()
+    {
+        var systemContext = Prepare(TestCkIds.CkCustomerTypeId, false, out var query);
+
+        // Test with string value instead of ObjectId - should still work
+        query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
+            .FieldEquals("RtId", "66803ecf4aa85720dda96b15"));
 
         var session = await systemContext.GetAdminSessionAsync();
         session.StartTransaction();
@@ -154,6 +173,102 @@ public class SingleOriginRtQueryTests
         Assert.Contains(resultSet.Items, item => item.RtId == OctoObjectId.Parse("66803ecf4aa85720dda96b15"));
     }
 
+    [Theory]
+    [InlineData(FieldFilterOperator.Like, "*96b15", 1)]
+    [InlineData(FieldFilterOperator.Like, "66803ecf4aa85720dda96b15", 1)]
+    [InlineData(FieldFilterOperator.Like, "66803ecf*", 3)] // All 3 customers match this prefix
+    [InlineData(FieldFilterOperator.Like, "*dda96b15*", 1)]
+    public async Task FieldFilter_SystemAttribute_RtId_Like_OK(FieldFilterOperator filterOperator, string pattern, int expectedCount)
+    {
+        var systemContext = Prepare(TestCkIds.CkCustomerTypeId, false, out var query);
+
+        query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
+            .Field("RtId", filterOperator, pattern));
+
+        var session = await systemContext.GetAdminSessionAsync();
+        session.StartTransaction();
+
+        var resultSet = await query.ExecuteQuery(session);
+        Assert.Equal(expectedCount, resultSet.TotalCount);
+        Assert.Contains(resultSet.Items, item => item.RtId == OctoObjectId.Parse("66803ecf4aa85720dda96b15"));
+    }
+
+    [Theory]
+    [InlineData(FieldFilterOperator.Contains, "dda96b15")]
+    [InlineData(FieldFilterOperator.Contains, "66803ecf")]
+    [InlineData(FieldFilterOperator.Contains, "4aa857")]
+    public async Task FieldFilter_SystemAttribute_RtId_Contains_OK(FieldFilterOperator filterOperator, string pattern)
+    {
+        var systemContext = Prepare(TestCkIds.CkCustomerTypeId, false, out var query);
+
+        query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
+            .Field("RtId", filterOperator, pattern));
+
+        var session = await systemContext.GetAdminSessionAsync();
+        session.StartTransaction();
+
+        var resultSet = await query.ExecuteQuery(session);
+        Assert.True(resultSet.TotalCount >= 1);
+        Assert.Contains(resultSet.Items, item => item.RtId == OctoObjectId.Parse("66803ecf4aa85720dda96b15"));
+    }
+
+    [Theory]
+    [InlineData(FieldFilterOperator.StartsWith, "66803ecf4aa85720dda96b15")]
+    [InlineData(FieldFilterOperator.StartsWith, "66803ecf")]
+    public async Task FieldFilter_SystemAttribute_RtId_StartsWith_OK(FieldFilterOperator filterOperator, string pattern)
+    {
+        var systemContext = Prepare(TestCkIds.CkCustomerTypeId, false, out var query);
+
+        query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
+            .Field("RtId", filterOperator, pattern));
+
+        var session = await systemContext.GetAdminSessionAsync();
+        session.StartTransaction();
+
+        var resultSet = await query.ExecuteQuery(session);
+        Assert.True(resultSet.TotalCount >= 1);
+        Assert.Contains(resultSet.Items, item => item.RtId == OctoObjectId.Parse("66803ecf4aa85720dda96b15"));
+    }
+
+    [Theory]
+    [InlineData(FieldFilterOperator.EndsWith, "96b15")]
+    [InlineData(FieldFilterOperator.EndsWith, "dda96b15")]
+    public async Task FieldFilter_SystemAttribute_RtId_EndsWith_OK(FieldFilterOperator filterOperator, string pattern)
+    {
+        var systemContext = Prepare(TestCkIds.CkCustomerTypeId, false, out var query);
+
+        query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
+            .Field("RtId", filterOperator, pattern));
+
+        var session = await systemContext.GetAdminSessionAsync();
+        session.StartTransaction();
+
+        var resultSet = await query.ExecuteQuery(session);
+        Assert.Equal(1, resultSet.TotalCount);
+        Assert.Equal("TestCustomer3", resultSet.Items.First().RtWellKnownName);
+        Assert.Equal(OctoObjectId.Parse("66803ecf4aa85720dda96b15"), resultSet.Items.First().RtId);
+    }
+
+    [Theory]
+    [InlineData(FieldFilterOperator.MatchRegEx, "66803ecf4aa85720dda96b15")]
+    [InlineData(FieldFilterOperator.MatchRegEx, "66803ecf.*96b15")]
+    [InlineData(FieldFilterOperator.MatchRegEx, ".*dda96b15$")]
+    public async Task FieldFilter_SystemAttribute_RtId_MatchRegEx_OK(FieldFilterOperator filterOperator, string pattern)
+    {
+        var systemContext = Prepare(TestCkIds.CkCustomerTypeId, false, out var query);
+
+        query.AddFieldFilterCriteria(FieldFilterCriteria.Create()
+            .Field("RtId", filterOperator, pattern));
+
+        var session = await systemContext.GetAdminSessionAsync();
+        session.StartTransaction();
+
+        var resultSet = await query.ExecuteQuery(session);
+        Assert.Equal(1, resultSet.TotalCount);
+        Assert.Equal("TestCustomer3", resultSet.Items.First().RtWellKnownName);
+        Assert.Equal(OctoObjectId.Parse("66803ecf4aa85720dda96b15"), resultSet.Items.First().RtId);
+    }
+
     [Fact]
     public async Task IgnoreDeletedByDefault_OK()
     {
@@ -184,6 +299,46 @@ public class SingleOriginRtQueryTests
         Assert.Contains(resultSet.Items, item => item.GetAttributeStringValue("Name") == "Leopoldskron-Moos");
         Assert.Contains(resultSet.Items, item => item.GetAttributeStringValue("Name") == "Fieberbrunn");
         Assert.Contains(resultSet.Items, item => item.GetAttributeStringValue("Name") == "Hochfilzen");
+    }
+
+    [Fact]
+    public async Task NavigationProperty_District_To_StateOrProvince_OK()
+    {
+        var systemContext = _systemFixture.GetSystemContext();
+        var ckCacheService = _systemFixture.GetService<ICkCacheService>();
+
+        // Query Districts with navigation property to parent StateOrProvince
+        var requestedFieldNames = new[]
+        {
+            "name",
+            "parent.testStateOrProvince->name"
+        };
+
+        var navigationPairs = RtPathEvaluator.TokenizeAndGetNavigationPairs(
+            ckCacheService,
+            systemContext.TenantId,
+            TestCkIds.CkDistrictTypeId,
+            requestedFieldNames);
+
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var queryOptions = RtEntityQueryOptions.Create();
+
+        var resultSet = await tenantRepository.GetRtEntitiesGraphByTypeAsync(
+            session,
+            TestCkIds.RtCkDistrictTypeId,
+            queryOptions,
+            navigationPairs);
+
+        Assert.NotEmpty(resultSet.Items);
+
+        // Verify that we got districts with their parent StateOrProvince names
+        var pinzgau = resultSet.Items.FirstOrDefault(d =>
+            d.GetAttributeStringValue("Name") == "Pinzgau / Zell am See");
+        Assert.NotNull(pinzgau);
     }
 
     private ISystemContext Prepare(CkId<CkTypeId> ckTypeId, bool includeArchivedEntities,

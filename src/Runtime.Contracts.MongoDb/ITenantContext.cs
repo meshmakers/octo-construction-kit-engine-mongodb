@@ -1,6 +1,8 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.BlueprintCatalogs;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
+using Meshmakers.Octo.Runtime.Contracts.Blueprints;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 
@@ -94,7 +96,24 @@ public interface ITenantContext
 
     #region Tenant Management
 
+    /// <summary>
+    /// Creates a new child tenant with the given database name and tenant id.
+    /// </summary>
+    /// <param name="adminSession">Admin session to perform the operation</param>
+    /// <param name="databaseName">The database name for the new tenant</param>
+    /// <param name="tenantId">The unique tenant identifier</param>
     Task CreateChildTenantAsync(IOctoAdminSession adminSession, string databaseName, string tenantId);
+
+    /// <summary>
+    /// Creates a new child tenant with the given database name, tenant id, and optionally applies a blueprint.
+    /// </summary>
+    /// <param name="adminSession">Admin session to perform the operation</param>
+    /// <param name="databaseName">The database name for the new tenant</param>
+    /// <param name="tenantId">The unique tenant identifier</param>
+    /// <param name="blueprintId">Optional blueprint to apply after creating the tenant</param>
+    /// <returns>The result of the blueprint application, or null if no blueprint was specified</returns>
+    Task<BlueprintApplicationResult?> CreateChildTenantAsync(IOctoAdminSession adminSession, string databaseName,
+        string tenantId, BlueprintId? blueprintId);
 
     Task AttachChildTenantAsync(IOctoAdminSession adminSession, string databaseName, string tenantId);
 

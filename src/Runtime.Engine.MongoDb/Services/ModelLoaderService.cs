@@ -36,7 +36,7 @@ internal class ModelLoaderService(
                 return;
             }
             
-            var sourceIdentifier = new TenantDatabaseSourceIdentifier(mongoDbRepositoryDataSource);
+            var sourceIdentifier = new TenantDatabaseSourceIdentifier(session, mongoDbRepositoryDataSource);
             OperationResult operationResult = new();
             var ckModels = await mongoDbRepositoryDataSource.CkModels.FindManyAsync(session, m=> m.ModelState == ModelState.Available);
             var originFileResolver = new OriginFileResolver("-");

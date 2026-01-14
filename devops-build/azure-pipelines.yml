@@ -1,5 +1,15 @@
 name: $(MajorVersion).$(MinorVersion).$(date:yyMM).$(DayOfMonth)$(rev:rrr)-$(Build.SourceBranchName)
 
+resources:
+  pipelines:
+    - pipeline: octo-construction-kit-engine
+      source: octo-construction-kit-engine-CI
+      trigger:
+        branches:
+          include:
+            - main
+            - test/*
+
 trigger:
   batch: true
   branches:
@@ -54,12 +64,12 @@ stages:
         inputs:
           command: 'build'
           projects:  $(SolutionFile)
-          arguments: '--configuration $(BuildConfiguration) /p:OctoNugetPrivateServer=$(nugetPrivateServer)'
+          arguments: '--configuration $(BuildConfiguration) --no-restore /p:OctoNugetPrivateServer=$(nugetPrivateServer)'
       - task: DotNetCoreCLI@2
         displayName: 'Test'
         inputs:
           command: 'test'
-          arguments: '--configuration $(buildConfiguration) /p:OctoNugetPrivateServer=$(nugetPrivateServer)'
+          arguments: '--configuration $(buildConfiguration) --no-restore /p:OctoNugetPrivateServer=$(nugetPrivateServer)'
           projects: |
             **/*Tests.csproj
           testRunTitle: 'CI'

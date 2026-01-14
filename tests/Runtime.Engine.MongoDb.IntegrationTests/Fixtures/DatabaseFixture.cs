@@ -11,29 +11,48 @@ public class DatabaseFixture : ConfigurationFixture
 {
     protected readonly SystemTestOptions _options;
     private MongoDbContainer? _mongoDbContainer;
+    private bool _useLocalDatabase;
 
     public DatabaseFixture()
     {
         _options = GetOptions<SystemTestOptions>("systemTest");
+
+        // Check environment variable first, then fall back to config
+        var envVar = Environment.GetEnvironmentVariable("USE_LOCAL_MONGODB");
+        _useLocalDatabase = !string.IsNullOrEmpty(envVar) &&
+                            (envVar.Equals("true", StringComparison.OrdinalIgnoreCase) || envVar == "1")
+                            || _options.UseLocalDatabase;
     }
 
     protected override async Task InitializeServicesAsync()
     {
-        // Start MongoDB test container with authentication
-        _mongoDbContainer = new MongoDbBuilder()
-            .WithImage(_options.MongoDbImage)
-            .WithReplicaSet()
-            .WithName($"mongodb-test-{Guid.NewGuid():N}")
-            .WithUsername(_options.AdminUser)
-            .WithPassword(_options.AdminUserPassword)
-            .Build();
+        string databaseHost;
 
-        await _mongoDbContainer.StartAsync();
+        if (_useLocalDatabase)
+        {
+            // Use local MongoDB instance
+            databaseHost = _options.LocalDatabaseHost;
+            Console.WriteLine($"Using local MongoDB at {databaseHost}");
+        }
+        else
+        {
+            // Start MongoDB test container with authentication
+            _mongoDbContainer = new MongoDbBuilder()
+                .WithImage(_options.MongoDbImage)
+                .WithReplicaSet()
+                .WithName($"mongodb-test-{Guid.NewGuid():N}")
+                .WithUsername(_options.AdminUser)
+                .WithPassword(_options.AdminUserPassword)
+                .Build();
 
-        var mappedPort = _mongoDbContainer.GetMappedPublicPort();
-        var databaseHost = $"localhost:{mappedPort}";
+            await _mongoDbContainer.StartAsync();
 
-        // Configure services with the test container connection
+            var mappedPort = _mongoDbContainer.GetMappedPublicPort();
+            databaseHost = $"localhost:{mappedPort}";
+            Console.WriteLine($"Using Testcontainer MongoDB at {databaseHost}");
+        }
+
+        // Configure services with the connection
         Services.Configure<OctoSystemConfiguration>(t =>
         {
             t.SystemDatabaseName = SystemDatabaseName;
@@ -41,7 +60,7 @@ public class DatabaseFixture : ConfigurationFixture
             t.AdminUser = _options.AdminUser;
             t.AdminUserPassword = _options.AdminUserPassword;
             t.DatabaseUserPassword = _options.DatabaseUserPassword;
-            t.UseDirectConnection = true; // For single-node replica set in tests
+            t.UseDirectConnection = _useLocalDatabase ? _options.UseDirectConnection : true;
         });
 
         await base.InitializeServicesAsync();
@@ -56,17 +75,4 @@ public class DatabaseFixture : ConfigurationFixture
             await _mongoDbContainer.DisposeAsync();
         }
     }
-
-
-    // public string GetConnectionString()
-    // {
-    //     EnsureInitialized();
-    //
-    //     if (_mongoDbContainer is null)
-    //     {
-    //         throw new InvalidOperationException("MongoDB container is not initialized. Call InitializeAsync first.");
-    //     }
-    //
-    //     return _mongoDbContainer.GetConnectionString();
-    // }
 }

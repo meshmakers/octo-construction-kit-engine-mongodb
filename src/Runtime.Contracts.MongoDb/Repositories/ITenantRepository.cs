@@ -257,6 +257,27 @@ public interface ITenantRepository : IRuntimeRepository
         int? skip = null,
         int? take = null);
 
+    /// <summary>
+    /// Gets association targets for multiple origin entities with multiple target types.
+    /// </summary>
+    /// <param name="session">The session</param>
+    /// <param name="originRtIds">The origin entity IDs</param>
+    /// <param name="originCkTypeId">The origin CK type ID</param>
+    /// <param name="roleId">The association role ID</param>
+    /// <param name="targetCkTypeIds">The target CK type IDs to filter by</param>
+    /// <param name="graphDirection">The graph direction (Inbound/Outbound)</param>
+    /// <param name="rtIds">Optional filter for specific target RtIds</param>
+    /// <param name="queryOptions">Query options including filters, sorting, etc.</param>
+    /// <param name="skip">Number of items to skip (pagination)</param>
+    /// <param name="take">Number of items to take (pagination)</param>
+    /// <returns>Result set grouped by origin entity</returns>
+    Task<IMultipleOriginResultSet<RtEntity>> GetRtAssociationTargetsAsync(IOctoSession session,
+        IEnumerable<OctoObjectId> originRtIds, RtCkId<CkTypeId> originCkTypeId, RtCkId<CkAssociationRoleId> roleId,
+        IEnumerable<RtCkId<CkTypeId>> targetCkTypeIds,
+        GraphDirections graphDirection, IReadOnlyList<OctoObjectId>? rtIds, RtEntityQueryOptions queryOptions,
+        int? skip = null,
+        int? take = null);
+
     Task<IMultipleOriginResultSet<TTargetEntity>> GetRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
         IOctoSession session,
         IEnumerable<OctoObjectId> originRtIds, RtCkId<CkAssociationRoleId> roleId,

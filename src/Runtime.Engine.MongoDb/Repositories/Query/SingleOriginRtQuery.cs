@@ -174,13 +174,13 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                 Builders<RtEntityGraphItem>.Filter.SizeGt("targets", 0)
             ),
             PipelineStageDefinitionBuilder.Project<TEntity, RtAssociationWithEntities>(
-                new BsonDocument { { "_id", 1 }, { "associationRoleId", 1 }, { "attributes", 1 }, { "targets", 1 } }),
+                new BsonDocument { { "_id", 1 }, { "rtAssociationRoleId", "$associationRoleId" }, { "attributes", 1 }, { "targets", 1 } }),
         };
 
-        var fieldTargetCkTypeId =
+        var fieldTargetRtCkTypeId =
             Tuple.Create<FieldDefinition<RtAssociationWithEntities, RtAssociationWithEntities>,
                 AggregateExpressionDefinition<RtAssociationWithEntities, RtAssociationWithEntities>>(
-                "targetCkTypeId",
+                "targetRtCkTypeId",
                 OctoBuilder<RtAssociationWithEntities, RtAssociationWithEntities>.AggregateOperators.String(
                     roleIdDirectionPair.TargetCkTypeId
                         .SemanticVersionedFullName));
@@ -194,7 +194,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         lookupPipelineStages.Add(
             OctoPipelineStageBuilder.AddFields<RtAssociationWithEntities, RtAssociationWithEntities>(
                 OctoBuilder<RtAssociationWithEntities, RtAssociationWithEntities>.Fields.SetMultiple(
-                    fieldTargetCkTypeId, fieldNavigationPropertyName)));
+                    fieldTargetRtCkTypeId, fieldNavigationPropertyName)));
 
         var lookupPipeline =
             PipelineDefinition<RtAssociation, RtAssociationWithEntities>.Create(lookupPipelineStages);

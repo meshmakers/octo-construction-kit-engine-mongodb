@@ -5,6 +5,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
@@ -56,12 +57,18 @@ internal class RtEntityFieldFilterResolver<TEntity>(
         };
     }
 
-    internal override object? ResolveSearchAttributeValue(string attributePath, object? searchTerm, out bool isEnum)
+    internal override object? ResolveSearchAttributeValue(string attributePath, object? searchTerm, FieldFilterOperator filterOperator, out bool isEnum)
     {
         isEnum = false;
         if (searchTerm == null)
         {
-            return base.ResolveSearchAttributeValue(attributePath, searchTerm, out isEnum);
+            return base.ResolveSearchAttributeValue(attributePath, searchTerm, filterOperator, out isEnum);
+        }
+
+        // For string-based operators (LIKE, CONTAINS, etc.), keep RtId as string for regex matching
+        if (attributePath.ToPascalCase() == nameof(RtEntity.RtId) && IsStringBasedOperator(filterOperator))
+        {
+            return Get(attributePath, searchTerm, GetAsString);
         }
 
         return attributePath.ToPascalCase() switch
@@ -72,8 +79,21 @@ internal class RtEntityFieldFilterResolver<TEntity>(
             nameof(RtEntity.RtChangedDateTime) => Get(attributePath, searchTerm, GetAsDateTime),
             nameof(RtEntity.RtVersion) => Get(attributePath, searchTerm, GetAsInteger),
             nameof(RtEntity.RtWellKnownName) => Get(attributePath, searchTerm, GetAsString),
-            _ => base.ResolveSearchAttributeValue(attributePath, searchTerm, out isEnum)
+            _ => base.ResolveSearchAttributeValue(attributePath, searchTerm, filterOperator, out isEnum)
         };
+    }
+
+    /// <summary>
+    /// Checks if the operator is a string-based operator that should not parse values as OctoObjectId.
+    /// </summary>
+    private static bool IsStringBasedOperator(FieldFilterOperator filterOperator)
+    {
+        return filterOperator is FieldFilterOperator.Like
+            or FieldFilterOperator.Contains
+            or FieldFilterOperator.StartsWith
+            or FieldFilterOperator.EndsWith
+            or FieldFilterOperator.MatchRegEx
+            or FieldFilterOperator.AnyLike;
     }
 
     private static object Get(string attributePath, object searchTeam, Func<string, object, object> f)

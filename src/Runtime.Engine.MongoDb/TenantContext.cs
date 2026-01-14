@@ -3,11 +3,13 @@ using System.Diagnostics;
 using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.BlueprintCatalogs;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
-using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v1;
+using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.Blueprints;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
@@ -101,7 +103,7 @@ public class TenantContext : ITenantContext
 
     public async Task CreateRtAssociationIndexesAsync()
     {
-        var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName);
+        var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName, TenantId);
         await repositoryDataSource.CreateRtAssociationIndexesAsync();
     }
 
@@ -110,7 +112,7 @@ public class TenantContext : ITenantContext
         _logger.LogInformation("Updating indexes for tenant {TenantId} in database {DatabaseName}", TenantId,
             DatabaseName);
 
-        var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName);
+        var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName, TenantId);
         await repositoryDataSource.UpdateIndexAsync(adminSession, false);
 
         _logger.LogInformation("Indexes updated for tenant {TenantId} in database {DatabaseName}", TenantId,
@@ -140,7 +142,7 @@ public class TenantContext : ITenantContext
             await CreateTenantInternalAsync(databaseName);
 
             // Restore the tenant system model on the newly created repository
-            await UpdateSystemCkModelAsync(normalizedDatabaseName, true);
+            await UpdateSystemCkModelAsync(normalizedDatabaseName, normalizedTenantId, true);
 
             // Add the new tenant as child tenant of the current one
             if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
@@ -171,10 +173,83 @@ public class TenantContext : ITenantContext
         }
     }
 
-    protected async Task UpdateSystemCkModelAsync(string normalizedDatabaseName, bool isRepositoryInCreation = false)
+    /// <inheritdoc />
+    public async Task<BlueprintApplicationResult?> CreateChildTenantAsync(IOctoAdminSession adminSession,
+        string databaseName, string tenantId, BlueprintId? blueprintId)
     {
-        var databaseContext = CreateRepositoryDataSourceAsAdmin(normalizedDatabaseName);
-        var databaseSourceIdentifier = new TenantDatabaseSourceIdentifier(databaseContext);
+        // First, create the tenant using the standard method
+        await CreateChildTenantAsync(adminSession, databaseName, tenantId);
+
+        // If no blueprint specified, return null
+        if (blueprintId == null)
+        {
+            return null;
+        }
+
+        // Apply the blueprint to the newly created tenant
+        _logger.LogInformation("Applying blueprint {BlueprintId} to new tenant {TenantId}",
+            blueprintId, tenantId);
+
+        try
+        {
+            var blueprintService = _serviceProvider.GetService<IBlueprintService>();
+            if (blueprintService == null)
+            {
+                _logger.LogWarning(
+                    "IBlueprintService is not registered. Blueprint {BlueprintId} will not be applied to tenant {TenantId}",
+                    blueprintId, tenantId);
+
+                var operationResult = new OperationResult();
+                operationResult.AddMessage(new ConstructionKit.Contracts.Messages.OperationMessage(
+                    ConstructionKit.Contracts.Messages.MessageLevel.Error, null, 1,
+                    "IBlueprintService is not registered. Use AddBlueprintSupport() to register blueprint services."));
+
+                return BlueprintApplicationResult.Failed(operationResult);
+            }
+
+            var result = await blueprintService.ApplyBlueprintAsync(tenantId, blueprintId);
+
+            if (!result.IsSuccess)
+            {
+                _logger.LogError("Failed to apply blueprint {BlueprintId} to tenant {TenantId}. Rolling back tenant creation",
+                    blueprintId, tenantId);
+
+                // Rollback: Drop the tenant
+                await DropChildTenantAsync(adminSession, tenantId);
+
+                throw new InvalidOperationException(
+                    $"Failed to apply blueprint '{blueprintId}' to tenant '{tenantId}'. Tenant creation has been rolled back. " +
+                    $"Errors: {string.Join(", ", result.OperationResult.Messages.Select(m => m.MessageText))}");
+            }
+
+            _logger.LogInformation(
+                "Blueprint {BlueprintId} applied successfully to tenant {TenantId}: {EntitiesCreated} entities created",
+                blueprintId, tenantId, result.EntitiesCreated);
+
+            return result;
+        }
+        catch (InvalidOperationException)
+        {
+            throw; // Re-throw our custom exception
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error applying blueprint {BlueprintId} to tenant {TenantId}. Rolling back tenant creation",
+                blueprintId, tenantId);
+
+            // Rollback: Drop the tenant
+            await DropChildTenantAsync(adminSession, tenantId);
+
+            throw new InvalidOperationException(
+                $"Failed to apply blueprint '{blueprintId}' to tenant '{tenantId}'. Tenant creation has been rolled back.",
+                ex);
+        }
+    }
+
+    protected async Task UpdateSystemCkModelAsync(string normalizedDatabaseName, string tenantId, bool isRepositoryInCreation = false)
+    {
+        var databaseContext = CreateRepositoryDataSourceAsAdmin(normalizedDatabaseName, tenantId);
+        var databaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, databaseContext);
         OperationResult operationResult = new();
         if (await _ckModelRepositoryService.IsExistingAsync(SystemCkIds.CkModelId, databaseSourceIdentifier))
         {
@@ -185,6 +260,15 @@ public class TenantContext : ITenantContext
         if (!isRepositoryInCreation && (!await IsDatabaseExistingAsync(normalizedDatabaseName)))
         {
             return;
+        }
+
+        // Capture schema versions BEFORE updating (for migration detection)
+        // Note: We read directly from the database to avoid recursion through IRuntimeRepositoryProvider
+        // which would call TryFindTenantContextAsync and trigger UpdateSystemCkModelAsync again
+        IReadOnlyDictionary<string, string>? previousSchemaVersions = null;
+        if (!isRepositoryInCreation)
+        {
+            previousSchemaVersions = await GetSchemaVersionsDirectAsync(databaseSourceIdentifier);
         }
 
         var correlationId = Guid.NewGuid();
@@ -209,8 +293,26 @@ public class TenantContext : ITenantContext
                 throw TenantException.ErrorDuringSystemModelLoad(operationResult);
             }
 
-            await _ckModelRepositoryService.UpdateModelAsync(
-                ckCompiledModelRoot, databaseSourceIdentifier);
+            try
+            {
+                await _ckModelRepositoryService.UpdateModelAsync(
+                    ckCompiledModelRoot, databaseSourceIdentifier);
+            }
+            catch (ModelValidationException ex)
+            {
+                // Gracefully handle missing dependencies - this can happen when services start
+                // in parallel and a dependent CK model is still being imported by another service.
+                // A RabbitMQ tenant update notification will be sent when the dependency is ready,
+                // allowing this update to succeed on the next attempt.
+                _logger.LogWarning(
+                    "Skipping System CK model update for tenant '{TenantId}' due to missing dependencies: {Message}. " +
+                    "This update will be retried when the dependent CK model becomes available.",
+                    TenantId, ex.Message);
+                return;
+            }
+
+            // Run migrations after updating the System CK model
+            await RunSystemCkModelMigrationsAsync(tenantId, previousSchemaVersions);
         }
         finally
         {
@@ -223,6 +325,91 @@ public class TenantContext : ITenantContext
         }
     }
 
+    /// <summary>
+    /// Runs CK model migrations for the System model after it has been updated.
+    /// </summary>
+    private async Task RunSystemCkModelMigrationsAsync(
+        string tenantId,
+        IReadOnlyDictionary<string, string>? previousSchemaVersions)
+    {
+        var ckModelUpgradeService = _serviceProvider.GetService<ICkModelUpgradeService>();
+        if (ckModelUpgradeService == null)
+        {
+            _logger.LogDebug("CK model upgrade service not available, skipping System CK model migrations");
+            return;
+        }
+
+        if (previousSchemaVersions == null || previousSchemaVersions.Count == 0)
+        {
+            _logger.LogDebug("No previous schema versions captured, skipping System CK model migrations");
+            return;
+        }
+
+        // Only migrate the System CK model
+        var systemModelRange = SystemCkIds.CkModelId.ToVersionRange();
+
+        _logger.LogInformation(
+            "Running System CK model migrations for tenant '{TenantId}'", tenantId);
+
+        var result = await ckModelUpgradeService.UpgradeModelsAsync(
+            tenantId,
+            new[] { systemModelRange },
+            new CkMigrationOptions { ContinueOnError = false },
+            previousSchemaVersions,
+            CancellationToken.None);
+
+        if (!result.Success)
+        {
+            _logger.LogError(
+                "System CK model migration failed for tenant '{TenantId}': {Errors}",
+                tenantId, string.Join("; ", result.Errors));
+        }
+        else if (result.TotalEntitiesAffected > 0)
+        {
+            _logger.LogInformation(
+                "System CK model migration completed for tenant '{TenantId}': {EntitiesAffected} entities affected",
+                tenantId, result.TotalEntitiesAffected);
+        }
+    }
+
+    /// <summary>
+    /// Gets schema versions directly from the database without going through IRuntimeRepositoryProvider.
+    /// This avoids recursion when called during UpdateSystemCkModelAsync.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, string>> GetSchemaVersionsDirectAsync(
+        TenantDatabaseSourceIdentifier databaseSourceIdentifier)
+    {
+        var versions = new Dictionary<string, string>();
+
+        try
+        {
+            var session = await databaseSourceIdentifier.MongoDbRepositoryDataSource.CreateSessionAsync();
+            try
+            {
+                // Query all available CK models directly from the database
+                var ckModels = await databaseSourceIdentifier.MongoDbRepositoryDataSource.CkModels
+                    .FindManyAsync(session, model => model.ModelState == ModelState.Available);
+
+                foreach (var model in ckModels)
+                {
+                    versions[model.ModelId] = model.Id.Version.ToString();
+                    _logger.LogDebug(
+                        "Found schema version {Version} for CK model {ModelName} (direct read)",
+                        model.Id.Version, model.ModelId);
+                }
+            }
+            finally
+            {
+                session.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error getting schema versions directly from database");
+        }
+
+        return versions;
+    }
 
     protected async Task CreateTenantInternalAsync(string databaseName)
     {
@@ -502,7 +689,7 @@ public class TenantContext : ITenantContext
         var context = new TenantContext(_loggerFactory, _systemConfiguration, _serviceProvider, tenantId,
             tenant.DatabaseName);
 
-        await UpdateSystemCkModelAsync(tenant.DatabaseName);
+        await UpdateSystemCkModelAsync(tenant.DatabaseName, tenant.TenantId);
 
         return context;
     }
@@ -628,11 +815,26 @@ public class TenantContext : ITenantContext
 
             await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
             var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
-            await _ckModelRepositoryService.UpdateModelAsync(ckCompiledModelRoot,
-                new TenantDatabaseSourceIdentifier(repositoryDataSource));
 
-            _logger.LogInformation("CK Model '{CkModelId}' imported into tenant '{TenantId}'",
-                ckCompiledModelRoot.ModelId, TenantId);
+            try
+            {
+                await _ckModelRepositoryService.UpdateModelAsync(ckCompiledModelRoot,
+                    new TenantDatabaseSourceIdentifier(null, repositoryDataSource));
+
+                _logger.LogInformation("CK Model '{CkModelId}' imported into tenant '{TenantId}'",
+                    ckCompiledModelRoot.ModelId, TenantId);
+            }
+            catch (ModelValidationException ex)
+            {
+                // Gracefully handle missing dependencies - this can happen when services start
+                // in parallel and a dependent CK model is still being imported by another service.
+                // A RabbitMQ tenant update notification will be sent when the dependency is ready,
+                // allowing this import to succeed on the next attempt.
+                _logger.LogWarning(
+                    "Skipping CK model '{CkModelId}' import for tenant '{TenantId}' due to missing dependencies: {Message}. " +
+                    "This import will be retried when the dependent CK model becomes available.",
+                    ckCompiledModelRoot.ModelId, TenantId, ex.Message);
+            }
         }
         finally
         {
@@ -645,7 +847,7 @@ public class TenantContext : ITenantContext
         Guid correlationId = Guid.NewGuid();
 
         var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
-        var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(repositoryDataSource);
+        var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource);
         if (await _ckModelRepositoryService.IsExistingAsync(ckModelId, tenantDatabaseSourceIdentifier))
         {
             _logger.LogDebug("CK Model '{CkModelId}' already exists in tenant '{TenantId}', skipping import",
@@ -672,9 +874,24 @@ public class TenantContext : ITenantContext
                 throw TenantException.ModelNotFoundInACatalog(ckModelId);
             }
 
-            await _ckModelRepositoryService.UpdateModelAsync(ckCompiledModelRoot, tenantDatabaseSourceIdentifier);
+            try
+            {
+                await _ckModelRepositoryService.UpdateModelAsync(ckCompiledModelRoot, tenantDatabaseSourceIdentifier);
 
-            _logger.LogInformation("CK Model '{CkModelId}' imported into tenant '{TenantId}'", ckModelId, TenantId);
+                _logger.LogInformation("CK Model '{CkModelId}' imported into tenant '{TenantId}'", ckModelId, TenantId);
+            }
+            catch (ModelValidationException ex)
+            {
+                // Gracefully handle missing dependencies - this can happen when services start
+                // in parallel and a dependent CK model is still being imported by another service.
+                // A RabbitMQ tenant update notification will be sent when the dependency is ready,
+                // allowing this import to succeed on the next attempt.
+                _logger.LogWarning(
+                    "Skipping CK model '{CkModelId}' import for tenant '{TenantId}' due to missing dependencies: {Message}. " +
+                    "This import will be retried when the dependent CK model becomes available.",
+                    ckModelId, TenantId, ex.Message);
+                // Don't add to operationResult as error - this is a transient condition that will resolve itself
+            }
         }
         finally
         {
@@ -688,7 +905,7 @@ public class TenantContext : ITenantContext
 
         var r = await _ckModelRepositoryService.IsExistingAsync(
             ckModelId.ToVersionRange(),
-            new TenantDatabaseSourceIdentifier(repositoryDataSource));
+            new TenantDatabaseSourceIdentifier(null, repositoryDataSource));
         return r.Exists;
     }
 
@@ -704,7 +921,7 @@ public class TenantContext : ITenantContext
             await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
             await _ckModelRepositoryService.CustomizeCkEnumAsync(
                 ckEnumId,
-                ckEnumUpdates, new TenantDatabaseSourceIdentifier(repositoryDataSource), cancellationToken);
+                ckEnumUpdates, new TenantDatabaseSourceIdentifier(null, repositoryDataSource), cancellationToken);
         }
         finally
         {
@@ -728,7 +945,7 @@ public class TenantContext : ITenantContext
 
     private ITenantRepository GetTenantRepositoryAsAdmin(string tenantId, string databaseName)
     {
-        var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(databaseName);
+        var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(databaseName, tenantId);
 
         var tenantRepository = new TenantRepository(tenantId, _metricsContext, _cacheService, _modelLoaderService,
             repositoryDataSource,
@@ -742,10 +959,10 @@ public class TenantContext : ITenantContext
             _serviceProvider.GetRequiredService<IUserRepositoryAccess>(), databaseName, TenantId);
     }
 
-    protected IMongoDbRepositoryDataSource CreateRepositoryDataSourceAsAdmin(string databaseName)
+    protected IMongoDbRepositoryDataSource CreateRepositoryDataSourceAsAdmin(string databaseName, string tenantId)
     {
         return new MongoDbRepositoryDataSource(_loggerFactory.CreateLogger<MongoDbRepositoryDataSource>(),
-            _adminRepositoryClient, databaseName, TenantId);
+            _adminRepositoryClient, databaseName, tenantId);
     }
 
     private async Task<RtTenant?> GetRtTenantAsync(IOctoAdminSession adminSession,

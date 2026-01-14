@@ -19,8 +19,8 @@ public class ParallelTransactionTests(SampleRtModelDataFixture sampleRtModelData
         var systemContext = sampleRtModelDataFixture.GetSystemContext();
         var tenantRepository = systemContext.GetTenantRepository();
         
-        var sessionA = await tenantRepository.GetSessionAsync();
-        var sessionB = await tenantRepository.GetSessionAsync();
+        using var sessionA = await tenantRepository.GetSessionAsync();
+        using var sessionB = await tenantRepository.GetSessionAsync();
         
         sessionA.StartTransaction();
         sessionB.StartTransaction();
@@ -46,7 +46,7 @@ public class ParallelTransactionTests(SampleRtModelDataFixture sampleRtModelData
 
     private async Task PrepareData(ITenantRepository tenantRepository, int count)
     {
-        var session = await tenantRepository.GetSessionAsync();
+        using var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
         for (var i = 0; i < count; i++)
         {
@@ -60,7 +60,7 @@ public class ParallelTransactionTests(SampleRtModelDataFixture sampleRtModelData
     
     private async Task<RtContinent> GetData(ITenantRepository tenantRepository, string prefix, int index)
     {
-        var session = await tenantRepository.GetSessionAsync();
+        using var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
 
         var queryOptions = RtEntityQueryOptions.Create()
@@ -94,8 +94,8 @@ public class ParallelTransactionTests(SampleRtModelDataFixture sampleRtModelData
         var rtContinentA = await GetData(tenantRepository, "test", 0);
         var rtContinentB = await GetData(tenantRepository, "test", 0);
 
-        var sessionA = await tenantRepository.GetSessionAsync();
-        var sessionB = await tenantRepository.GetSessionAsync();
+        using var sessionA = await tenantRepository.GetSessionAsync();
+        using var sessionB = await tenantRepository.GetSessionAsync();
         
         sessionA.StartTransaction();
         sessionB.StartTransaction();

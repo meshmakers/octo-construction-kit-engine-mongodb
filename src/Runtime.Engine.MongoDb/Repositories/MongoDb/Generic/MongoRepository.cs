@@ -79,6 +79,24 @@ public class MongoRepository(ILoggerFactory loggerFactory, IMongoDatabase mongoD
         });
     }
 
+    public async Task<IReadOnlyList<string>> ListCollectionNamesAsync(string prefix)
+    {
+        var filter = new BsonDocument("name", new BsonDocument("$regex", $"^{prefix}"));
+        var collections = await mongoDatabase.ListCollectionNamesAsync(new ListCollectionNamesOptions { Filter = filter });
+        return await collections.ToListAsync();
+    }
+
+    public async Task DropCollectionAsync(string collectionName)
+    {
+        await mongoDatabase.DropCollectionAsync(collectionName);
+    }
+
+    public async Task<long> GetCollectionDocumentCountAsync(string collectionName)
+    {
+        var collection = mongoDatabase.GetCollection<BsonDocument>(collectionName);
+        return await collection.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty);
+    }
+
     private async Task<bool> CollectionExistsAsync<TKey, TDocument>(
         IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
         string? suffix = null)

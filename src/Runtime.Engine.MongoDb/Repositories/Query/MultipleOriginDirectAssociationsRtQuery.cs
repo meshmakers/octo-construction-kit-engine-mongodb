@@ -12,6 +12,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic.Builde
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using MongoDB.Driver.GeoJsonObjectModel;
 
@@ -27,7 +28,19 @@ internal class MultipleOriginDirectAssociationsRtQuery : MultipleOriginDirectAss
         : base(ckCacheService, tenantId, mongoDbRepositoryDataSource, language, includeArchivedEntities, rtIds,
             originCkTypeGraph, roleId,
             graphDirection,
-            targetCkTypeGraph)
+            [targetCkTypeGraph])
+    {
+    }
+
+    internal MultipleOriginDirectAssociationsRtQuery(ICkCacheService ckCacheService, string tenantId,
+        IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
+        string language, bool includeArchivedEntities, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
+        RtCkId<CkAssociationRoleId> roleId,
+        GraphDirections graphDirection, IReadOnlyList<CkTypeGraph> targetCkTypeGraphs)
+        : base(ckCacheService, tenantId, mongoDbRepositoryDataSource, language, includeArchivedEntities, rtIds,
+            originCkTypeGraph, roleId,
+            graphDirection,
+            targetCkTypeGraphs)
     {
     }
 }
@@ -43,16 +56,22 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
     private readonly CkTypeGraph _originCkTypeGraph;
     private readonly RtCkId<CkAssociationRoleId> _roleId;
     private readonly IEnumerable<OctoObjectId> _rtIds;
-    private readonly CkTypeGraph _targetCkTypeGraph;
+    private readonly IReadOnlyList<CkTypeGraph> _targetCkTypeGraphs;
     private readonly List<IPipelineStageDefinition> _geospatialFilters;
 
     internal MultipleOriginDirectAssociationsRtQuery(ICkCacheService ckCacheService, string tenantId,
         IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
         string language, bool includeArchivedEntities, IEnumerable<OctoObjectId> rtIds, CkTypeGraph originCkTypeGraph,
         RtCkId<CkAssociationRoleId> roleId,
-        GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
-        : base(new RtEntityFieldFilterResolver<TTargetEntity>(ckCacheService, tenantId, targetCkTypeGraph), language)
+        GraphDirections graphDirection, IReadOnlyList<CkTypeGraph> targetCkTypeGraphs)
+        : base(new RtEntityFieldFilterResolver<TTargetEntity>(ckCacheService, tenantId, targetCkTypeGraphs[0]), language)
     {
+        ArgumentNullException.ThrowIfNull(targetCkTypeGraphs);
+        if (targetCkTypeGraphs.Count == 0)
+        {
+            throw new ArgumentException("At least one target type graph is required", nameof(targetCkTypeGraphs));
+        }
+
         _ckCacheService = ckCacheService;
         _tenantId = tenantId;
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
@@ -61,7 +80,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         _originCkTypeGraph = originCkTypeGraph;
         _roleId = roleId;
         _graphDirection = graphDirection;
-        _targetCkTypeGraph = targetCkTypeGraph;
+        _targetCkTypeGraphs = targetCkTypeGraphs;
         _geospatialFilters = new List<IPipelineStageDefinition>();
     }
 
@@ -117,14 +136,15 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
             throw OperationFailedException.PagingNeeded();
         }
 
-        var innerLocalFieldRtId = (FieldDefinition<RtAssociation>)"targetRtId";
+        // Field names for the association lookup - used in $let clause
+        var innerLocalFieldRtIdName = "targetRtId";
         var innerLocalFieldCkId = "targetCkTypeId";
         var connectToField = (FieldDefinition<RtAssociation, string>)"originRtId";
 
         switch (_graphDirection)
         {
             case GraphDirections.Inbound:
-                innerLocalFieldRtId = "originRtId";
+                innerLocalFieldRtIdName = "originRtId";
                 innerLocalFieldCkId = "originCkTypeId";
                 connectToField = "targetRtId";
                 break;
@@ -134,56 +154,155 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
                 throw OperationFailedException.GraphDirectionUnsupported(_graphDirection);
         }
 
-
-
-
-
         var connectFromField = (FieldDefinition<RtEntity, string[]>)"_id";
         var @as = (FieldDefinition<BsonDocument, TTargetEntity[]>)"_associations";
 
-        var targetCkIds = _targetCkTypeGraph.GetAllDerivedTypes(true).Select(t => t.ToRtCkId());
-        List<FilterDefinition<RtAssociation>> associationFilter = new();
-        associationFilter.AddRange(Builders<RtAssociation>.Filter.Eq("associationRoleId", _roleId),
-            Builders<RtAssociation>.Filter.In(innerLocalFieldCkId, targetCkIds));
+        // Collect all derived types from all target type graphs
+        var allTargetCkIds = _targetCkTypeGraphs
+            .SelectMany(graph => graph.GetAllDerivedTypes(true))
+            .Select(t => t.ToRtCkId())
+            .Distinct()
+            .ToList();
+
+        // Group target type graphs by their collection root
+        var collectionGroups = _targetCkTypeGraphs
+            .GroupBy(g => g.DefiningCollectionRootCkTypeId)
+            .ToList();
+
+        // Build the association filter (matches all target types across all collections)
+        List<FilterDefinition<RtAssociation>> associationFilter =
+        [
+            Builders<RtAssociation>.Filter.Eq("associationRoleId", _roleId),
+            Builders<RtAssociation>.Filter.In(innerLocalFieldCkId, allTargetCkIds)
+        ];
 
         if (!_includeArchivedEntities)
         {
             associationFilter.Add(Builders<RtAssociation>.Filter.Ne(ckType => ckType.RtState, RtState.Archived));
         }
 
-        var pipelineStageDefinitions = new List<IPipelineStageDefinition>([
-            PipelineStageDefinitionBuilder.Match(
-                Builders<RtAssociation>.Filter.And(associationFilter)),
-            PipelineStageDefinitionBuilder.Lookup(
-                _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TTargetEntity>(_targetCkTypeGraph)
-                    .GetMongoCollection(),
-                innerLocalFieldRtId,
-                "_id",
-                (FieldDefinition<BsonDocument>)"target"),
-            PipelineStageDefinitionBuilder.Unwind((FieldDefinition<BsonDocument>)"target"),
-            PipelineStageDefinitionBuilder.ReplaceRoot<BsonDocument, TTargetEntity>("$target"),
-        ]);
+        // Build the sub-pipeline using BsonDocument stages for flexibility with multiple lookups
+        var associationRenderArgs = new RenderArgs<RtAssociation>(
+            BsonSerializer.SerializerRegistry.GetSerializer<RtAssociation>(),
+            BsonSerializer.SerializerRegistry);
 
+        var pipelineStages = new List<BsonDocument>
+        {
+            // Match associations
+            new("$match", Builders<RtAssociation>.Filter.And(associationFilter).Render(associationRenderArgs))
+        };
 
-        AddPreStagesToPipelines(pipelineStageDefinitions);
+        // Add a $lookup for each collection group
+        var collectionIndex = 0;
+        foreach (var group in collectionGroups)
+        {
+            var groupGraphs = group.ToList();
+            var groupCkIds = groupGraphs
+                .SelectMany(g => g.GetAllDerivedTypes(true))
+                .Select(t => t.ToRtCkId())
+                .Distinct()
+                .ToList();
+
+            var targetFieldName = $"target{collectionIndex}";
+
+            // Build the inner pipeline for this collection's lookup
+            var innerPipeline = new BsonDocument("$match",
+                new BsonDocument("$expr",
+                    new BsonDocument("$and", new BsonArray
+                    {
+                        new BsonDocument("$eq", new BsonArray { "$_id", "$$targetId" }),
+                        new BsonDocument("$in", new BsonArray { "$$targetType", new BsonArray(groupCkIds.Select(id => id.ToString())) })
+                    })));
+
+            // Add lookup for this collection
+            pipelineStages.Add(new BsonDocument("$lookup", new BsonDocument
+            {
+                { "from", _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TTargetEntity>(groupGraphs[0]).GetMongoCollection().CollectionNamespace.CollectionName },
+                { "let", new BsonDocument
+                    {
+                        { "targetId", "$" + innerLocalFieldRtIdName },
+                        { "targetType", "$" + innerLocalFieldCkId }
+                    }
+                },
+                { "pipeline", new BsonArray { innerPipeline } },
+                { "as", targetFieldName }
+            }));
+
+            collectionIndex++;
+        }
+
+        // Combine all target arrays using $concatArrays
+        if (collectionGroups.Count > 1)
+        {
+            var concatArrays = new BsonArray();
+            for (var i = 0; i < collectionGroups.Count; i++)
+            {
+                concatArrays.Add($"$target{i}");
+            }
+
+            pipelineStages.Add(new BsonDocument("$addFields", new BsonDocument("target", new BsonDocument("$concatArrays", concatArrays))));
+        }
+        else
+        {
+            // Single collection - just rename target0 to target
+            pipelineStages.Add(new BsonDocument("$addFields", new BsonDocument("target", "$target0")));
+        }
+
+        // Unwind the combined targets and replace root
+        pipelineStages.Add(new BsonDocument("$unwind", "$target"));
+        pipelineStages.Add(new BsonDocument("$replaceRoot", new BsonDocument("newRoot", "$target")));
+
+        // Add archived filter if needed
+        if (!_includeArchivedEntities)
+        {
+            pipelineStages.Add(new BsonDocument("$match",
+                new BsonDocument("rtState", new BsonDocument("$ne", (int)RtState.Archived))));
+        }
+
+        // Add field filters if any
         var filterDefinitions = CreateFilterDefinitions();
         if (filterDefinitions != null)
         {
-            pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Match(filterDefinitions));
+            var filterRenderArgs = new RenderArgs<TTargetEntity>(
+                BsonSerializer.SerializerRegistry.GetSerializer<TTargetEntity>(),
+                BsonSerializer.SerializerRegistry);
+            pipelineStages.Add(new BsonDocument("$match", filterDefinitions.Render(filterRenderArgs)));
         }
 
-        AddPostStagesToPipeline(pipelineStageDefinitions);
+        // Create the pipeline from BsonDocuments with correct type chain:
+        // RtAssociation -> BsonDocument -> ... -> BsonDocument -> TTargetEntity
+        var typedStages = new List<IPipelineStageDefinition>();
 
+        // First stage takes RtAssociation as input
+        if (pipelineStages.Count > 0)
+        {
+            typedStages.Add(new BsonDocumentPipelineStageDefinition<RtAssociation, BsonDocument>(pipelineStages[0]));
+        }
+
+        // Middle stages are BsonDocument -> BsonDocument
+        for (var i = 1; i < pipelineStages.Count - 1; i++)
+        {
+            typedStages.Add(new BsonDocumentPipelineStageDefinition<BsonDocument, BsonDocument>(pipelineStages[i]));
+        }
+
+        // Last stage outputs TTargetEntity (the $replaceRoot stage)
+        if (pipelineStages.Count > 1)
+        {
+            typedStages.Add(new BsonDocumentPipelineStageDefinition<BsonDocument, TTargetEntity>(pipelineStages[^1]));
+        }
+
+        var pipelineDefinition = PipelineDefinition<RtAssociation, TTargetEntity>.Create(
+            typedStages,
+            BsonSerializer.LookupSerializer<TTargetEntity>());
 
         var aggregate = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph)
             .Aggregate(session)
-            .Match(
-                Builders<RtEntity>.Filter.And(Builders<RtEntity>.Filter.In(x => x.RtId, _rtIds)))
+            .Match(Builders<RtEntity>.Filter.In(x => x.RtId, _rtIds))
             .Lookup(
                 _mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations.GetMongoCollection(),
                 connectFromField,
                 connectToField,
-                PipelineDefinition<RtAssociation, TTargetEntity>.Create(pipelineStageDefinitions),
+                pipelineDefinition,
                 @as
             );
 

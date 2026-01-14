@@ -1,0 +1,19 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+types:
+- typeId: Room
+  derivedFromCkTypeId: ${System}/Entity
+  isFinal: false
+  isAbstract: false
+  attributes:
+  - id: ${this}/Name
+    name: Name
+  - id: ${this}/Tags
+    name: Tags
+    isOptional: true
+  associations:
+  - id: ${System}/ParentChild
+    targetCkTypeId: ${this}/HouseHold
+- typeId: TechnicalRoom
+  derivedFromCkTypeId: ${this}/Room
+  isFinal: false
+  isAbstract: false

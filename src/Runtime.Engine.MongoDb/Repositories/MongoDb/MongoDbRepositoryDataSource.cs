@@ -99,7 +99,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             throw OperationFailedException.CkTypeHasNoDefiningCollectionRoot(ckTypeGraph.CkTypeId);
         }
 
-        var suffix = ckTypeGraph.DefiningCollectionRootCkTypeId.GetCkTypeCollectionName();
+        var suffix = ckTypeGraph.DefiningCollectionRootCkTypeId.ToRtCkId().GetCkTypeCollectionName();
         var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
         return _repository.GetCollection(mapper, suffix);
     }
@@ -232,15 +232,58 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var ckTypes =
             (await CkTypes.FindManyAsync(session, t => t.IsCollectionRoot && t.ModelState == ModelState.Available))
             .ToList();
+
+        // Build set of valid collection suffixes for non-abstract collection roots
+        var validCollectionSuffixes = new HashSet<string>(
+            ckTypes.Select(t => t.CkTypeId.ToRtCkId().GetCkTypeCollectionName()));
+
         foreach (var ckType in ckTypes)
         {
             _logger.LogDebug("Creating type root collection for '{CkTypeId}'", ckType.CkTypeId);
-            var suffix = ckType.CkTypeId.GetCkTypeCollectionName();
+            var suffix = ckType.CkTypeId.ToRtCkId().GetCkTypeCollectionName();
             await _repository.CreateCollectionIfNotExistsAsync(new RtEntityMongoDataSourceMapper<RtEntity>(),
                 ckType.EnableChangeStreamPreAndPostImages, suffix);
         }
 
         _logger.LogDebug("Type root collections created for tenant '{TenantId}'", TenantId);
+
+        // Cleanup: Remove empty collections that were created for abstract types
+        await CleanupEmptyAbstractTypeCollectionsInternalAsync(validCollectionSuffixes);
+    }
+
+    private async Task CleanupEmptyAbstractTypeCollectionsInternalAsync(HashSet<string> validCollectionSuffixes)
+    {
+        const string rtEntityPrefix = "RtEntity_";
+
+        // Get all RtEntity collections
+        var allCollections = await _repository.ListCollectionNamesAsync(rtEntityPrefix);
+
+        // Find collections that don't correspond to valid (non-abstract) collection roots
+        foreach (var collectionName in allCollections)
+        {
+            var suffix = collectionName.Substring(rtEntityPrefix.Length);
+
+            // Skip if this is a valid collection root
+            if (validCollectionSuffixes.Contains(suffix))
+            {
+                continue;
+            }
+
+            // Check if this collection is empty
+            var documentCount = await _repository.GetCollectionDocumentCountAsync(collectionName);
+
+            if (documentCount > 0)
+            {
+                _logger.LogWarning(
+                    "Collection '{CollectionName}' is not a valid collection root but contains {DocumentCount} documents - skipping cleanup",
+                    collectionName, documentCount);
+                continue;
+            }
+
+            // Delete the empty orphaned collection
+            _logger.LogInformation("Deleting empty orphaned collection '{CollectionName}'", collectionName);
+            await _repository.DropCollectionAsync(collectionName);
+        }
     }
 
     public async Task UpdateIndexAsync(IOctoSession session, bool includeModelsInStateImporting)
@@ -252,9 +295,10 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         await lockService.AcquireLockAsync();
 
         var aggregate = _ckTypes.Aggregate(session);
-        aggregate = aggregate.Match(x => x.IsCollectionRoot == true && includeModelsInStateImporting
-            ? x.ModelState == ModelState.Available || x.ModelState == ModelState.Importing
-            : x.ModelState == ModelState.Available);
+        aggregate = aggregate.Match(x => x.IsCollectionRoot == true && !x.IsAbstract &&
+            (includeModelsInStateImporting
+                ? (x.ModelState == ModelState.Available || x.ModelState == ModelState.Importing)
+                : x.ModelState == ModelState.Available));
 
         var ckTypeInfoList = await AggregateCkTypeInfo(aggregate).ToListAsync();
         var collectionRootTypes = ckTypeInfoList.ToList();
@@ -350,7 +394,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
     private async Task UpdateIndexesForCollectionRoot(CkTypeInfo collectionRootType, List<CkType> baseTypes)
     {
-        var name = collectionRootType.CkTypeId.GetCkTypeCollectionName();
+        var name = collectionRootType.CkTypeId.ToRtCkId().GetCkTypeCollectionName();
         var mapper = new RtEntityMongoDataSourceMapper<RtEntity>();
         var collection = _repository.GetCollection(mapper, name);
 
@@ -538,7 +582,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         // For system indexes (like RtAssociation indexes) where no defining type exists,
         // fall back to collection name. Otherwise, use the type name for backward compatibility.
         var indexName = indexDefiningType != null
-            ? indexDefiningType.CkTypeId.GetCkTypeCollectionName() + "_" + uniqueIndexNumber
+            ? indexDefiningType.CkTypeId.ToRtCkId().GetCkTypeCollectionName() + "_" + uniqueIndexNumber
             : collectionName + "_" + uniqueIndexNumber;
 
         // We check if the index already exists in the repository,
@@ -628,7 +672,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     {
         // Generate index name using the same logic as CreateOrUpdateIndex for consistency
         var indexName = indexDefiningType != null
-            ? indexDefiningType.CkTypeId.GetCkTypeCollectionName() + "_" + uniqueIndexNumber
+            ? indexDefiningType.CkTypeId.ToRtCkId().GetCkTypeCollectionName() + "_" + uniqueIndexNumber
             : collectionName + "_" + uniqueIndexNumber;
 
         try
@@ -944,5 +988,85 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 "inheritedTypes.inheritorCkTypeId",
                 "_id",
                 "Inheritances");
+    }
+
+    /// <inheritdoc />
+    public async Task<IAsyncDisposable> AcquireModelImportLockAsync(string modelName)
+    {
+        var lockId = $"ck_model_import_{modelName}";
+        _logger.LogInformation("Acquiring model import lock for '{ModelName}' with lock ID '{LockId}'", modelName, lockId);
+
+        var lockService = new RepositoryDistributedLockService(_repositoryClient, _repository, _logger, lockId);
+        await lockService.AcquireLockAsync();
+
+        return lockService;
+    }
+
+    /// <inheritdoc />
+    public async Task<CollectionCleanupResult> CleanupEmptyAbstractTypeCollectionsAsync(IOctoSession session)
+    {
+        _logger.LogInformation("Starting cleanup of empty abstract type collections for tenant '{TenantId}'", TenantId);
+
+        var result = new CollectionCleanupResult();
+        const string rtEntityPrefix = "RtEntity_";
+
+        // Step 1: Get all RtEntity collections
+        var allCollections = await _repository.ListCollectionNamesAsync(rtEntityPrefix);
+        result.TotalAnalyzed = allCollections.Count;
+
+        _logger.LogDebug("Found {Count} RtEntity collections to analyze", allCollections.Count);
+
+        // Step 2: Build set of valid collection suffixes (non-abstract collection roots)
+        var validTypes = await _ckTypes.FindManyAsync(session,
+            t => t.IsCollectionRoot && !t.IsAbstract && t.ModelState == ModelState.Available);
+
+        var validCollectionSuffixes = new HashSet<string>(
+            validTypes.Select(t => t.CkTypeId.ToRtCkId().GetCkTypeCollectionName()));
+
+        _logger.LogDebug("Found {Count} valid collection root types", validTypes.Count);
+
+        // Step 3: Analyze each collection - find orphaned collections
+        foreach (var collectionName in allCollections)
+        {
+            var suffix = collectionName.Substring(rtEntityPrefix.Length);
+
+            // Skip if this is a valid collection root
+            if (validCollectionSuffixes.Contains(suffix))
+            {
+                continue;
+            }
+
+            _logger.LogDebug("Analyzing orphaned collection '{CollectionName}'", collectionName);
+
+            // Step 4: Check if the collection is empty
+            var documentCount = await _repository.GetCollectionDocumentCountAsync(collectionName);
+
+            if (documentCount > 0)
+            {
+                _logger.LogWarning(
+                    "Collection '{CollectionName}' is orphaned but contains {DocumentCount} documents - skipping",
+                    collectionName, documentCount);
+
+                result.SkippedCollections.Add(new CollectionSkipInfo
+                {
+                    CollectionName = collectionName,
+                    DocumentCount = documentCount,
+                    Reason = $"Collection contains {documentCount} documents"
+                });
+                continue;
+            }
+
+            // Step 5: Delete the empty orphaned collection
+            _logger.LogInformation("Deleting empty orphaned collection '{CollectionName}'", collectionName);
+
+            await _repository.DropCollectionAsync(collectionName);
+            result.DeletedCollections.Add(collectionName);
+        }
+
+        _logger.LogInformation(
+            "Cleanup completed for tenant '{TenantId}': Analyzed={Analyzed}, Deleted={Deleted}, Skipped={Skipped}",
+            TenantId, result.TotalAnalyzed, result.DeletedCollections.Count, result.SkippedCollections.Count);
+
+        return result;
     }
 }
