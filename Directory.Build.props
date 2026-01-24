@@ -22,9 +22,9 @@
         <TargetFramework>net10.0</TargetFramework>
         <MeshmakerVersion>4.1.31</MeshmakerVersion>
         <MeshmakerVersion Condition="'$(Configuration)'=='DebugL'">999.0.0</MeshmakerVersion>
-        <OctoVersion Condition="'$(Configuration)'=='DebugL'">999.0.0</OctoVersion>
-        <OctoVersion Condition="'$(OctoNugetPrivateServer)'!='' And '$(OctoVersion)'==''">0.1.*</OctoVersion>
-        <OctoVersion Condition="'$(OctoNugetPrivateServer)'=='' And '$(OctoVersion)'==''">3.3.*</OctoVersion>
+        <OctoVersion Condition="'$(Configuration)'=='DebugL'">3.3.8</OctoVersion>
+        <OctoVersion Condition="'$(OctoNugetPrivateServer)'!='' And '$(OctoVersion)'==''">3.3.8</OctoVersion>
+        <OctoVersion Condition="'$(OctoNugetPrivateServer)'=='' And '$(OctoVersion)'==''">3.3.8</OctoVersion>
         <Version Condition="'$(Configuration)'=='DebugL'">999.0.0</Version>
         <PackageVersion Condition="'$(Configuration)'=='DebugL'">999.0.0</PackageVersion>
         <RestoreSources Condition="'$(RestoreSources)'==''">https://api.nuget.org/v3/index.json</RestoreSources>
@@ -38,3 +38,4 @@
         <DefineConstants>DEBUG;TRACE</DefineConstants>
     </PropertyGroup>
 </Project>
+
