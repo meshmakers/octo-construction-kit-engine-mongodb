@@ -97,12 +97,18 @@ internal class RtEntityDiscriminatorConvention : IDiscriminatorConvention
                 // We ignore the discriminator for List`1 - we handle that on our side.
                 if (discriminator.AsString == "List`1")
                 {
-                    actualType =  typeof(List<object>);
+                    actualType = typeof(List<object>);
                 }
                 // We ignore the discriminator "RtEntity" - we handle that on our side.
                 else if (discriminator.AsString == "RtEntity" && nominalType.IsAssignableTo(typeof(RtEntity)))
                 {
                     actualType = nominalType;
+                }
+                // Handle RtRecord discriminators - the actual type is determined by CkRecordId, not by _t
+                // This provides backward compatibility for old data with discriminators like "RtUserClaimRecord"
+                else if (nominalType.IsAssignableTo(typeof(RtRecord)) || discriminator.AsString.EndsWith("Record"))
+                {
+                    actualType = typeof(RtRecord);
                 }
                 else
                 {
@@ -123,7 +129,13 @@ internal class RtEntityDiscriminatorConvention : IDiscriminatorConvention
         {
             return "RtEntity";
         }
-            
+
+        // Don't write discriminator for RtRecord types - the type is determined by CkRecordId
+        if (actualType.IsAssignableTo(typeof(RtRecord)))
+        {
+            return null!;
+        }
+
         return TypeNameDiscriminator.GetDiscriminator(actualType);
     }
 
