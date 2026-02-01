@@ -452,6 +452,10 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session);
             CheckCancellation(cancellationToken);
 
+            // Preserve extension values from extensible enums before deleting the old version
+            await PreserveExtensibleEnumValues(session, compiledModel.ModelId, mongoDbRepositoryDataSource, transientCkModel);
+            CheckCancellation(cancellationToken);
+
             _logger.LogDebug("Deleting previous version of CK model");
 
             // Delete the old version
@@ -843,6 +847,58 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         CheckCancellation(cancellationToken);
     }
 
+    /// <summary>
+    ///     Preserves extension values from extensible enums before the old version is deleted.
+    ///     Extension values (IsExtension = true) are custom values added via the API that should
+    ///     survive model imports/updates.
+    /// </summary>
+    private async Task PreserveExtensibleEnumValues(IOctoSession session, CkModelId ckModelId,
+        ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource, TransientCkModel transientCkModel)
+    {
+        // Find all existing extensible enums for this model
+        var existingEnums = await mongoDbRepositoryDataSource.CkEnums.FindManyAsync(session,
+            Builders<CkEnum>.Filter.And(
+                Builders<CkEnum>.Filter.Regex(nameof(CkEnum.CkModelId).ToCamelCase(), $"^{ckModelId.Name}-.*$"),
+                Builders<CkEnum>.Filter.Eq(x => x.IsExtensible, true)));
+
+        if (existingEnums.Count == 0)
+        {
+            return;
+        }
+
+        // Build a dictionary of extension values keyed by enum ID
+        var extensionValuesMap = existingEnums.ToDictionary(
+            e => e.CkEnumId,
+            e => e.Values.Where(v => v.IsExtension).ToList());
+
+        // Add preserved extension values to the new enums
+        foreach (var newEnum in transientCkModel.CkEnums.Where(e => e.IsExtensible))
+        {
+            if (extensionValuesMap.TryGetValue(newEnum.CkEnumId, out var extensionValues) && extensionValues.Count > 0)
+            {
+                // Get existing keys to avoid duplicates
+                var existingKeys = newEnum.Values.Select(v => v.Key).ToHashSet();
+
+                foreach (var extensionValue in extensionValues)
+                {
+                    // Only add if the key doesn't already exist in the new enum
+                    if (!existingKeys.Contains(extensionValue.Key))
+                    {
+                        newEnum.Values.Add(extensionValue);
+                        _logger.LogDebug(
+                            "Preserved extension enum value '{EnumValueName}' (key: {EnumValueKey}) for enum '{CkEnumId}'",
+                            extensionValue.Name, extensionValue.Key, newEnum.CkEnumId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "Extension enum value with key {EnumValueKey} for enum '{CkEnumId}' was not preserved because the key already exists in the new model",
+                            extensionValue.Key, newEnum.CkEnumId);
+                    }
+                }
+            }
+        }
+    }
 
     private static void CheckCancellation(CancellationToken? cancellationToken)
     {
