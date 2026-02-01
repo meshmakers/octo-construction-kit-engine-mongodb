@@ -47,20 +47,33 @@ public class OctoObjectListSerializer : SerializerBase<List<object>>
                     break;
                 case BsonType.Document:
                     var bookmark = bsonReader.GetBookmark();
- 
+
                     bsonReader.ReadStartDocument();
-                    if (bsonReader.FindElement("_t"))
+
+                    // Check if document has ckRecordId - if so, it's an RtRecord
+                    // The RtRecord type is determined by CkRecordId via RtRecordMapConvention, not by _t discriminator
+                    // This also handles backward compatibility for old data that has _t discriminator values
+                    // like "RtUserClaimRecord" which are no longer registered
+                    if (bsonReader.FindElement("ckRecordId"))
+                    {
+                        bsonReader.ReturnToBookmark(bookmark);
+                        var rtRecordSerializer = BsonSerializer.LookupSerializer(typeof(RtRecord));
+                        var context2 = BsonDeserializationContext.CreateRoot(bsonReader);
+                        var value = rtRecordSerializer.Deserialize(context2);
+                        list.Add(value);
+                    }
+                    else if (bsonReader.FindElement("_t"))
                     {
                         var discriminator = BsonValueSerializer.Instance.Deserialize(context);
                         if (discriminator.IsBsonArray)
                         {
                             discriminator = discriminator.AsBsonArray.Last(); // last item is leaf class discriminator
                         }
-                        
+
                         var actualType = BsonSerializer.LookupActualType(typeof(object), discriminator);
-                        
+
                         var serializer = BsonSerializer.LookupSerializer(actualType);
-                        
+
                         bsonReader.ReturnToBookmark(bookmark);
                         var context2 = BsonDeserializationContext.CreateRoot(bsonReader);
                         var value = serializer.Deserialize(context2);

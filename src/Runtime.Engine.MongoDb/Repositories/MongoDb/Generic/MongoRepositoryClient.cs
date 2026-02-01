@@ -448,6 +448,10 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.SetIsRootClass(true);
             cm.SetIgnoreExtraElements(true);
 
+            // Disable discriminator for RtRecord - the type is determined by CkRecordId, not by _t
+            // This prevents writing _t for derived RtRecord types
+            cm.SetDiscriminatorIsRequired(false);
+
             cm.MapMember(c => c.CkRecordId).SetElementName(nameof(RtRecord.CkRecordId).ToCamelCase())
                 .SetIsRequired(true);
         });
