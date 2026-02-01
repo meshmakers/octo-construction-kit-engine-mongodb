@@ -850,7 +850,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     /// <summary>
     ///     Preserves extension values from extensible enums before the old version is deleted.
     ///     Extension values (IsExtension = true) are custom values added via the API that should
-    ///     survive model imports/updates.
+    ///     survive model imports/updates. Custom values take precedence over construction kit
+    ///     defined values with the same key.
     /// </summary>
     private async Task PreserveExtensibleEnumValues(IOctoSession session, CkModelId ckModelId,
         ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource, TransientCkModel transientCkModel)
@@ -871,29 +872,33 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             e => e.CkEnumId,
             e => e.Values.Where(v => v.IsExtension).ToList());
 
-        // Add preserved extension values to the new enums
+        // Merge preserved extension values into the new enums
+        // Custom values (extensions) take precedence over CK-defined values with the same key
         foreach (var newEnum in transientCkModel.CkEnums.Where(e => e.IsExtensible))
         {
             if (extensionValuesMap.TryGetValue(newEnum.CkEnumId, out var extensionValues) && extensionValues.Count > 0)
             {
-                // Get existing keys to avoid duplicates
-                var existingKeys = newEnum.Values.Select(v => v.Key).ToHashSet();
-
                 foreach (var extensionValue in extensionValues)
                 {
-                    // Only add if the key doesn't already exist in the new enum
-                    if (!existingKeys.Contains(extensionValue.Key))
+                    // Check if CK model defines a value with the same key
+                    var existingValue = newEnum.Values.FirstOrDefault(v => v.Key == extensionValue.Key);
+
+                    if (existingValue != null)
                     {
+                        // Remove the CK-defined value and replace with the custom extension value
+                        newEnum.Values.Remove(existingValue);
                         newEnum.Values.Add(extensionValue);
                         _logger.LogDebug(
-                            "Preserved extension enum value '{EnumValueName}' (key: {EnumValueKey}) for enum '{CkEnumId}'",
+                            "Extension enum value '{EnumValueName}' (key: {EnumValueKey}) overrides CK-defined value for enum '{CkEnumId}'",
                             extensionValue.Name, extensionValue.Key, newEnum.CkEnumId);
                     }
                     else
                     {
-                        _logger.LogWarning(
-                            "Extension enum value with key {EnumValueKey} for enum '{CkEnumId}' was not preserved because the key already exists in the new model",
-                            extensionValue.Key, newEnum.CkEnumId);
+                        // Add new extension value
+                        newEnum.Values.Add(extensionValue);
+                        _logger.LogDebug(
+                            "Preserved extension enum value '{EnumValueName}' (key: {EnumValueKey}) for enum '{CkEnumId}'",
+                            extensionValue.Name, extensionValue.Key, newEnum.CkEnumId);
                     }
                 }
             }
