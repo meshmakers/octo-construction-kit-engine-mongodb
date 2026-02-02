@@ -1,6 +1,8 @@
 using FakeItEasy;
 
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
@@ -16,6 +18,7 @@ public class RtEntityFieldFilterResolverTests(ImportTestCkModelFixture systemFix
 {
     [Theory]
     [InlineData("RtId")]
+    [InlineData("CkTypeId")]
     [InlineData("RtWellKnownName")]
     [InlineData("Address")]
     [InlineData("Address.City")]
@@ -57,6 +60,7 @@ public class RtEntityFieldFilterResolverTests(ImportTestCkModelFixture systemFix
 
     [Theory]
     [InlineData("RtId", "_id")]
+    [InlineData("CkTypeId", "ckTypeId")]
     [InlineData("RtWellKnownName", "rtWellKnownName")]
     [InlineData("RtCreationDateTime", "rtCreationDateTime")]
     [InlineData("RtChangedDateTime", "rtChangedDateTime")]
@@ -65,6 +69,61 @@ public class RtEntityFieldFilterResolverTests(ImportTestCkModelFixture systemFix
         var resolver = await Prepare();
 
         Assert.Equal(expectedPath, resolver.ResolveAttributePath(attributePath));
+    }
+
+    [Fact]
+    public async Task ResolveSearchAttributeValue_CkTypeId_Equals_ReturnsRtCkId()
+    {
+        // Arrange
+        var resolver = await Prepare();
+        const string ckTypeIdValue = "Test/Customer";
+
+        // Act
+        var result = resolver.ResolveSearchAttributeValue("CkTypeId", ckTypeIdValue, FieldFilterOperator.Equals, out var isEnum);
+
+        // Assert
+        Assert.False(isEnum);
+        Assert.IsType<RtCkId<CkTypeId>>(result);
+        var rtCkId = (RtCkId<CkTypeId>)result!;
+        Assert.Equal("Test", rtCkId.ModelId);
+        Assert.Equal("Customer", rtCkId.ElementId.Name);
+    }
+
+    [Fact]
+    public async Task ResolveSearchAttributeValue_CkTypeId_Like_ReturnsString()
+    {
+        // Arrange
+        var resolver = await Prepare();
+        const string searchTerm = "Customer";
+
+        // Act
+        var result = resolver.ResolveSearchAttributeValue("CkTypeId", searchTerm, FieldFilterOperator.Like, out var isEnum);
+
+        // Assert
+        Assert.False(isEnum);
+        Assert.IsType<string>(result);
+        Assert.Equal(searchTerm, result);
+    }
+
+    [Theory]
+    [InlineData(FieldFilterOperator.Like)]
+    [InlineData(FieldFilterOperator.Contains)]
+    [InlineData(FieldFilterOperator.StartsWith)]
+    [InlineData(FieldFilterOperator.EndsWith)]
+    [InlineData(FieldFilterOperator.MatchRegEx)]
+    public async Task ResolveSearchAttributeValue_CkTypeId_StringBasedOperators_ReturnsString(FieldFilterOperator filterOperator)
+    {
+        // Arrange
+        var resolver = await Prepare();
+        const string searchTerm = "Customer";
+
+        // Act
+        var result = resolver.ResolveSearchAttributeValue("CkTypeId", searchTerm, filterOperator, out var isEnum);
+
+        // Assert
+        Assert.False(isEnum);
+        Assert.IsType<string>(result);
+        Assert.Equal(searchTerm, result);
     }
 
     private async Task<RtEntityFieldFilterResolver<RtCustomer>> Prepare()

@@ -65,10 +65,14 @@ internal class RtEntityFieldFilterResolver<TEntity>(
             return base.ResolveSearchAttributeValue(attributePath, searchTerm, filterOperator, out isEnum);
         }
 
-        // For string-based operators (LIKE, CONTAINS, etc.), keep RtId as string for regex matching
-        if (attributePath.ToPascalCase() == nameof(RtEntity.RtId) && IsStringBasedOperator(filterOperator))
+        // For string-based operators (LIKE, CONTAINS, etc.), keep RtId and CkTypeId as string for regex matching
+        if (IsStringBasedOperator(filterOperator))
         {
-            return Get(attributePath, searchTerm, GetAsString);
+            if (attributePath.ToPascalCase() == nameof(RtEntity.RtId) ||
+                attributePath.ToPascalCase() == nameof(RtEntity.CkTypeId))
+            {
+                return Get(attributePath, searchTerm, GetAsString);
+            }
         }
 
         return attributePath.ToPascalCase() switch
@@ -119,9 +123,11 @@ internal class RtEntityFieldFilterResolver<TEntity>(
 
     private static object GetAsCkTypeId(string attributePath, object searchTerm)
     {
-        return searchTerm is CkId<CkTypeId> ckTypeId
-            ? ckTypeId
-            : new CkId<CkTypeId>(GetAsString(attributePath, searchTerm));
+        // Use RtCkId<CkTypeId> because runtime entities store ckTypeId in unversioned format
+        // (e.g., "System/Person" not "System-1.0.0/Person-1")
+        return searchTerm is RtCkId<CkTypeId> rtCkTypeId
+            ? rtCkTypeId
+            : new RtCkId<CkTypeId>(GetAsString(attributePath, searchTerm));
     }
 
     private static object GetAsDateTime(string attributePath, object searchTerm)
