@@ -269,8 +269,19 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
             pipelineStages.Add(new BsonDocument("$match", filterDefinitions.Render(filterRenderArgs)));
         }
 
+        // Add sort stage if sort definitions are configured
+        var sortStage = GetSortStageBsonDocument();
+        if (sortStage != null)
+        {
+            pipelineStages.Add(sortStage);
+        }
+
         // Create the pipeline from BsonDocuments with correct type chain:
-        // RtAssociation -> BsonDocument -> ... -> BsonDocument -> TTargetEntity
+        // RtAssociation -> BsonDocument -> ... -> BsonDocument -> TTargetEntity -> TTargetEntity -> ...
+        // Find the $replaceRoot stage index - after this stage, documents are TTargetEntity type
+        var replaceRootIndex = pipelineStages.FindIndex(stage =>
+            stage.Contains("$replaceRoot") || stage.Contains("$replaceWith"));
+
         var typedStages = new List<IPipelineStageDefinition>();
 
         // First stage takes RtAssociation as input
@@ -279,16 +290,22 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
             typedStages.Add(new BsonDocumentPipelineStageDefinition<RtAssociation, BsonDocument>(pipelineStages[0]));
         }
 
-        // Middle stages are BsonDocument -> BsonDocument
-        for (var i = 1; i < pipelineStages.Count - 1; i++)
+        // Middle stages before $replaceRoot are BsonDocument -> BsonDocument
+        for (var i = 1; i < replaceRootIndex; i++)
         {
             typedStages.Add(new BsonDocumentPipelineStageDefinition<BsonDocument, BsonDocument>(pipelineStages[i]));
         }
 
-        // Last stage outputs TTargetEntity (the $replaceRoot stage)
-        if (pipelineStages.Count > 1)
+        // $replaceRoot stage outputs TTargetEntity
+        if (replaceRootIndex >= 0 && replaceRootIndex < pipelineStages.Count)
         {
-            typedStages.Add(new BsonDocumentPipelineStageDefinition<BsonDocument, TTargetEntity>(pipelineStages[^1]));
+            typedStages.Add(new BsonDocumentPipelineStageDefinition<BsonDocument, TTargetEntity>(pipelineStages[replaceRootIndex]));
+        }
+
+        // Stages after $replaceRoot are TTargetEntity -> TTargetEntity
+        for (var i = replaceRootIndex + 1; i < pipelineStages.Count; i++)
+        {
+            typedStages.Add(new BsonDocumentPipelineStageDefinition<TTargetEntity, TTargetEntity>(pipelineStages[i]));
         }
 
         var pipelineDefinition = PipelineDefinition<RtAssociation, TTargetEntity>.Create(

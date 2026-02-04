@@ -1,5 +1,7 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
@@ -59,6 +61,30 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
             pipelineStageDefinitions.Add(PipelineStageDefinitionBuilder.Sort(sortDefinition));
         }
     }
+
+    /// <summary>
+    /// Gets the sort stage as a BsonDocument for use in manually built pipelines.
+    /// Returns null if no sort definitions are configured.
+    /// </summary>
+    protected BsonDocument? GetSortStageBsonDocument()
+    {
+        if (!_sortDefinitions.Any())
+        {
+            return null;
+        }
+
+        var sortDefinition = Builders<TEntity>.Sort.Combine(_sortDefinitions);
+        var renderArgs = new RenderArgs<TEntity>(
+            BsonSerializer.SerializerRegistry.GetSerializer<TEntity>(),
+            BsonSerializer.SerializerRegistry);
+        var renderedSort = sortDefinition.Render(renderArgs);
+        return new BsonDocument("$sort", renderedSort);
+    }
+
+    /// <summary>
+    /// Indicates whether sort definitions have been configured.
+    /// </summary>
+    protected bool HasSortDefinitions => _sortDefinitions.Any();
 
     protected virtual (AggregationResult?, IEnumerable<FieldAggregationResult>?) CalculateAggregations(
         IEnumerable<TEntity> resultList)
