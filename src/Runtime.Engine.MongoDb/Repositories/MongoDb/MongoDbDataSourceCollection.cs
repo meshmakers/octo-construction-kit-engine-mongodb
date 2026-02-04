@@ -959,8 +959,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     {
         if (matchedCount == 0)
         {
-            var message = $"Operation failed because ID '{id}' is not existing for document type {nameof(T)}.";
-            throw EntityNotFoundException.IdNotFound(nameof(T), message);
+            throw EntityNotFoundException.IdNotFound(typeof(T).Name, id.ToString() ?? "unknown");
         }
     }
 
