@@ -1,6 +1,6 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
-using Meshmakers.Octo.Runtime.Contracts.Blueprints;
+using Meshmakers.Octo.Runtime.Contracts.CkModelMigrations;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
 using Xunit;
@@ -17,7 +17,8 @@ public class CkModelImportMigrationTests(CkModelImportMigrationFixture fixture)
     [Fact]
     public async Task ImportCkModel_HigherVersion_ShouldTriggerMigration()
     {
-        // Arrange: Import v1 first
+        // Arrange: Reset tenant state and import v1 first
+        await fixture.ResetTenantAsync();
         var systemContext = fixture.GetSystemContext();
         var operationResult = new OperationResult();
 
@@ -48,7 +49,8 @@ public class CkModelImportMigrationTests(CkModelImportMigrationFixture fixture)
     [Fact]
     public async Task ImportCkModel_SameVersion_ShouldNotTriggerMigration()
     {
-        // Arrange: Import v1
+        // Arrange: Reset tenant state and import v1
+        await fixture.ResetTenantAsync();
         var systemContext = fixture.GetSystemContext();
         var operationResult = new OperationResult();
         await systemContext.ImportCkModelAsync(TestV1ModelId, operationResult);
@@ -66,7 +68,8 @@ public class CkModelImportMigrationTests(CkModelImportMigrationFixture fixture)
     [Fact]
     public async Task ImportCkModel_FirstInstall_ShouldRecordVersionWithoutMigration()
     {
-        // Arrange: Fresh tenant (system tenant already created by fixture)
+        // Arrange: Reset tenant state for a truly fresh tenant
+        await fixture.ResetTenantAsync();
         var systemContext = fixture.GetSystemContext();
 
         // Act: Import v1 into fresh tenant (no previous version exists)
@@ -81,7 +84,8 @@ public class CkModelImportMigrationTests(CkModelImportMigrationFixture fixture)
     [Fact]
     public async Task ImportCkModel_WithCompiledModelRoot_HigherVersion_ShouldTriggerMigration()
     {
-        // Arrange: Import v1 first via CkModelId overload
+        // Arrange: Reset tenant state and import v1 first via CkModelId overload
+        await fixture.ResetTenantAsync();
         var systemContext = fixture.GetSystemContext();
         var operationResult = new OperationResult();
         await systemContext.ImportCkModelAsync(TestV1ModelId, operationResult);

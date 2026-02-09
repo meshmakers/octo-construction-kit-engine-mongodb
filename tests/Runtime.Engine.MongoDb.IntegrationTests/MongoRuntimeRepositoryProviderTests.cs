@@ -1,4 +1,4 @@
-using Meshmakers.Octo.Runtime.Contracts.Blueprints;
+using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Blueprints;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 

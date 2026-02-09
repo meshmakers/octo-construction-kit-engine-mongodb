@@ -1,5 +1,6 @@
 using Meshmakers.Common.Metrics.Context;
 using Meshmakers.Octo.ConstructionKit.Engine.ModelRepositories;
+using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.Blueprints;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;

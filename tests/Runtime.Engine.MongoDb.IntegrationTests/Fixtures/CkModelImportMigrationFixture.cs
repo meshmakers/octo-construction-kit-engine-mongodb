@@ -15,4 +15,14 @@ public class CkModelImportMigrationFixture : SystemFixture
         // Register TestCkModel v2 in addition to v1 (already registered in base)
         Services.AddCkModelTestV2();
     }
+
+    /// <summary>
+    /// Resets the system tenant to a clean state (no imported CK models).
+    /// Call at the start of each test to ensure test isolation.
+    /// </summary>
+    public async Task ResetTenantAsync()
+    {
+        var systemContext = GetSystemContext();
+        await systemContext.ClearSystemTenantAsync();
+    }
 }
