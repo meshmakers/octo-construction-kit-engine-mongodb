@@ -53,9 +53,10 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services.AddSingleton<ISystemContext, SystemContext>();
         builder.Services.AddSingleton<IModelLoaderService, ModelLoaderService>();
         builder.Services.AddSingleton<IMetricsContext, MetricsContext>();
-        builder.Services.TryAddSingleton<Meshmakers.Octo.Runtime.Contracts.MongoDb.Services.ITenantNotifications, DefaultTenantNotifications>();
+        builder.Services.TryAddSingleton<ITenantNotifications, DefaultTenantNotifications>();
         builder.Services.AddTransient<IRepositoryOpsService, RepositoryOpsService>();
         builder.Services.AddTransient<IMongoTenantBackupService, TenantBackupService>();
+        builder.Services.AddTransient<IBlueprintBackupService, MongoBlueprintBackupService>();
 
         builder.Services.AddSingleton<IUserRepositoryAccess, UserRepositoryAccess>();
         builder.Services.AddSingleton<IAdminRepositoryAccess, AdminRepositoryAccess>();
@@ -81,9 +82,11 @@ public static class RuntimeEngineBuilderExtensions
     /// <remarks>
     /// This method registers the following MongoDB-specific services:
     /// - ITenantBlueprintHistory: MongoDB implementation for tracking blueprint application history
-    /// - ITenantBackupService (from Blueprints): Adapter for MongoDB backup functionality
     ///
-    /// Note: You must also call AddBlueprints() from the Engine assembly to register
+    /// Note: ITenantBackupService (from Blueprints) is now registered automatically
+    /// by AddMongoDbRuntimeRepository().
+    ///
+    /// You must also call AddBlueprints() from the Engine assembly to register
     /// IBlueprintService and related services.
     ///
     /// Usage:
@@ -96,9 +99,7 @@ public static class RuntimeEngineBuilderExtensions
     /// </remarks>
     public static IRuntimeEngineBuilder AddMongoBlueprintSupport(this IRuntimeEngineBuilder builder)
     {
-        // Register MongoDB-specific blueprint implementations
         builder.Services.AddTransient<ITenantBlueprintHistory, MongoTenantBlueprintHistory>();
-        builder.Services.AddTransient<IBlueprintBackupService, MongoBlueprintBackupService>();
 
         return builder;
     }
