@@ -1,0 +1,12 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+attributes:
+  - id: DisplayName
+    description: Display name of an entity.
+    valueType: String
+  - id: Tags
+    valueType: StringArray
+    description: Tags of an entity.
+  - id: Binary
+    valueType: BinaryLinked
+  - id: DataCount
+    valueType: Int

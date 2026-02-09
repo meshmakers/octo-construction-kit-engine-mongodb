@@ -1,0 +1,15 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+types:
+  - typeId: Customer
+    derivedFromCkTypeId: ${System}/Entity
+    isFinal: false
+    attributes:
+    - id: ${this}/Contacts.Name
+      name: Name
+      isOptional: true
+    - id: ${this}/Contacts.Address
+      name: Address
+      isOptional: true
+    - id: ${this}/Contacts.EMailAddresses
+      name: EMailAddresses
+      isOptional: true

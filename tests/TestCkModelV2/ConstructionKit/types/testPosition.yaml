@@ -1,0 +1,11 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+types:
+- typeId: TestPosition
+  derivedFromCkTypeId: ${System}/Entity
+  isFinal: true
+  isAbstract: false
+  attributes:
+  - id: ${this}/DisplayName
+    name: DisplayName
+  - id: ${this}/GeoPosition
+    name: GeoPosition

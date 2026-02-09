@@ -1,0 +1,5 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+attributes:
+  - id: ISOCode
+    description: ISO code of a country.
+    valueType: String
