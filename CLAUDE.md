@@ -110,6 +110,7 @@ Example:
 - `NavigationEnd` - Represents the end of a navigation (association target)
 - `MongoRepositoryClient` - Base class that registers BSON conventions and class maps
 - `MongoRuntimeRepositoryProvider` - Provides tenant repositories for CK model migrations
+- `TenantContext` - Per-tenant context managing CK model imports and migration triggers
 
 ## CK Model Migration Support
 
@@ -124,6 +125,19 @@ services.AddRuntimeEngine()
 
 This allows `ICkModelMigrationService` to access tenant repositories via `ISystemContext.TryFindTenantRepositoryAsync()`.
 When CK models are updated (e.g., System CK model), migrations are automatically detected and executed.
+
+### Automatic Migration on Import
+
+When a CK model is imported (via `ImportCkModelAsync` in `TenantContext`), the system:
+1. Captures current schema versions before import (`GetSchemaVersionsDirectAsync`)
+2. Performs the import
+3. Compares versions — if changed, runs migrations via `ICkModelUpgradeService`
+
+This works for **any** CK model, not just the System model.
+
+**Embedded migrations:** CK models can carry migration scripts inline via `CkCompiledModelRoot.Migrations`. These are surfaced to `CompiledModelCkMigrationContentProvider` during import, eliminating the need for NuGet package dependencies on source CK models.
+
+**Design note:** `GetSchemaVersionsDirectAsync` queries the database directly (not through `IRuntimeRepositoryProvider`) to avoid recursion, since `TryFindTenantContextAsync` itself calls `UpdateSystemCkModelAsync`.
 
 ### Key Components
 
@@ -147,3 +161,11 @@ Europe (Continent)
         ├── Lienz, Landeck (Districts - active)
         └── Imst, Kitzbühel (Districts - Archived)
 ```
+
+### Migration Test Data
+
+`TestCkModelV2` provides a v2.0.0 variant of the test CK model with:
+- A migration script (`1.0.0-to-2.0.0.yaml`) that renames `Name` → `DisplayName`
+- Migration metadata (`migration-meta.yaml`)
+
+Used by `CkModelImportMigrationTests` to verify automatic migration on import.
