@@ -1,0 +1,19 @@
+$schema: https://schemas.meshmakers.cloud/ck-migration.schema.json
+sourceVersion: "1.0.0"
+targetVersion: "2.0.0"
+description: |
+  Rename the Name attribute to DisplayName on Location and related types.
+
+steps:
+  - stepId: rename-name-to-displayname-on-location
+    description: "Rename Name attribute to DisplayName on Location entities"
+    action: Transform
+    target:
+      ckTypeId: Test/Location
+      blueprintSourceOnly: false
+    transform:
+      type: RenameAttribute
+      sourceAttribute: Test/Name
+      targetAttribute: Test/DisplayName
+    onConflict: Skip
+    continueOnError: false

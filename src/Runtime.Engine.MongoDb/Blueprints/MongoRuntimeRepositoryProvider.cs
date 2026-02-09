@@ -1,5 +1,5 @@
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
-using Meshmakers.Octo.Runtime.Contracts.Blueprints;
+using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;

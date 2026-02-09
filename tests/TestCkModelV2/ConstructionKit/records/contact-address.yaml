@@ -1,0 +1,19 @@
+$schema: https://schemas.meshmakers.cloud/construction-kit-elements.schema.json
+records:
+  - recordId: ContactAddress
+    attributes:
+      - id: ${this}/Contacts.Street
+        name: Street
+        isOptional: true
+      - id: ${this}/Contacts.PostalCode
+        name: PostalCode
+        isOptional: true
+      - id: ${this}/Contacts.City
+        name: City
+        isOptional: true
+      - id: ${this}/Contacts.District
+        name: District
+        isOptional: true
+      - id: ${this}/Contacts.Country
+        name: Country
+        isOptional: true

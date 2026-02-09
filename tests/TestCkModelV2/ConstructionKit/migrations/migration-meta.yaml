@@ -1,0 +1,8 @@
+$schema: https://schemas.meshmakers.cloud/ck-migration-meta.schema.json
+ckModelId: Test-2.0.0
+migrations:
+  - fromVersion: "1.0.0"
+    toVersion: "2.0.0"
+    scriptPath: 1.0.0-to-2.0.0.yaml
+    description: "Rename Name attribute to DisplayName on Location and related types"
+    breaking: false

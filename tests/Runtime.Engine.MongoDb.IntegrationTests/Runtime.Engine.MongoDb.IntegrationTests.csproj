@@ -49,6 +49,7 @@
     <ItemGroup>
         <ProjectReference Include="..\..\src\Runtime.Engine.MongoDb\Runtime.Engine.MongoDb.csproj" />
         <ProjectReference Include="..\TestCkModel\TestCkModel.csproj" />
+        <ProjectReference Include="..\TestCkModelV2\TestCkModelV2.csproj" />
     </ItemGroup>
 
 </Project>

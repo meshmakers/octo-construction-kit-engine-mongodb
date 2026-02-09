@@ -1,0 +1,10 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+types:
+  - typeId: TagsItem
+    derivedFromCkTypeId: ${System}/Entity
+    isFinal: false
+    attributes:
+    - id: ${this}/DisplayName
+      name: DisplayName
+    - id: ${this}/Tags
+      name: Tags

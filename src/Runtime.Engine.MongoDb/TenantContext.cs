@@ -10,6 +10,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.Blueprints;
+using Meshmakers.Octo.Runtime.Contracts.CkModelMigrations;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
@@ -19,6 +20,8 @@ using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
+using Meshmakers.Octo.Runtime.Engine.Blueprints;
+using Meshmakers.Octo.Runtime.Engine.CkModelMigrations;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 
@@ -328,32 +331,45 @@ public class TenantContext : ITenantContext
     /// <summary>
     /// Runs CK model migrations for the System model after it has been updated.
     /// </summary>
-    private async Task RunSystemCkModelMigrationsAsync(
+    private Task RunSystemCkModelMigrationsAsync(
         string tenantId,
+        IReadOnlyDictionary<string, string>? previousSchemaVersions)
+    {
+        return RunCkModelMigrationsForImportAsync(tenantId, SystemCkIds.CkModelId, previousSchemaVersions);
+    }
+
+    /// <summary>
+    /// Runs CK model migrations for a specific model after it has been imported or updated.
+    /// </summary>
+    private async Task RunCkModelMigrationsForImportAsync(
+        string tenantId,
+        CkModelId importedModelId,
         IReadOnlyDictionary<string, string>? previousSchemaVersions)
     {
         var ckModelUpgradeService = _serviceProvider.GetService<ICkModelUpgradeService>();
         if (ckModelUpgradeService == null)
         {
-            _logger.LogDebug("CK model upgrade service not available, skipping System CK model migrations");
+            _logger.LogDebug("CK model upgrade service not available, skipping migrations for {CkModelId}",
+                importedModelId);
             return;
         }
 
         if (previousSchemaVersions == null || previousSchemaVersions.Count == 0)
         {
-            _logger.LogDebug("No previous schema versions captured, skipping System CK model migrations");
+            _logger.LogDebug("No previous schema versions captured, skipping migrations for {CkModelId}",
+                importedModelId);
             return;
         }
 
-        // Only migrate the System CK model
-        var systemModelRange = SystemCkIds.CkModelId.ToVersionRange();
+        var modelRange = importedModelId.ToVersionRange();
 
         _logger.LogInformation(
-            "Running System CK model migrations for tenant '{TenantId}'", tenantId);
+            "Running CK model migrations for '{CkModelId}' in tenant '{TenantId}'",
+            importedModelId, tenantId);
 
         var result = await ckModelUpgradeService.UpgradeModelsAsync(
             tenantId,
-            new[] { systemModelRange },
+            new[] { modelRange },
             new CkMigrationOptions { ContinueOnError = false },
             previousSchemaVersions,
             CancellationToken.None);
@@ -361,14 +377,14 @@ public class TenantContext : ITenantContext
         if (!result.Success)
         {
             _logger.LogError(
-                "System CK model migration failed for tenant '{TenantId}': {Errors}",
-                tenantId, string.Join("; ", result.Errors));
+                "CK model migration failed for '{CkModelId}' in tenant '{TenantId}': {Errors}",
+                importedModelId, tenantId, string.Join("; ", result.Errors));
         }
         else if (result.TotalEntitiesAffected > 0)
         {
             _logger.LogInformation(
-                "System CK model migration completed for tenant '{TenantId}': {EntitiesAffected} entities affected",
-                tenantId, result.TotalEntitiesAffected);
+                "CK model migration completed for '{CkModelId}' in tenant '{TenantId}': {EntitiesAffected} entities affected",
+                importedModelId, tenantId, result.TotalEntitiesAffected);
         }
     }
 
@@ -808,21 +824,40 @@ public class TenantContext : ITenantContext
     {
         Guid correlationId = Guid.NewGuid();
 
+        var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
+        var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource);
+
+        // Capture schema versions BEFORE importing (for migration detection)
+        var previousSchemaVersions = await GetSchemaVersionsDirectAsync(tenantDatabaseSourceIdentifier);
+
+        // If the compiled model contains inline migration data, make it available
+        // to the migration content provider so migrations can run without NuGet references
+        CompiledModelCkMigrationContentProvider? compiledMigrationProvider = null;
+        if (ckCompiledModelRoot.Migrations != null)
+        {
+            compiledMigrationProvider = _serviceProvider.GetService<CompiledModelCkMigrationContentProvider>();
+            compiledMigrationProvider?.SetMigrationData(
+                ckCompiledModelRoot.ModelId, ckCompiledModelRoot.Migrations);
+        }
+
         try
         {
             _logger.LogInformation("Importing CK Model '{CkModelId}' into tenant '{TenantId}'",
                 ckCompiledModelRoot.ModelId, TenantId);
 
             await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
-            var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
 
             try
             {
                 await _ckModelRepositoryService.UpdateModelAsync(ckCompiledModelRoot,
-                    new TenantDatabaseSourceIdentifier(null, repositoryDataSource));
+                    tenantDatabaseSourceIdentifier);
 
                 _logger.LogInformation("CK Model '{CkModelId}' imported into tenant '{TenantId}'",
                     ckCompiledModelRoot.ModelId, TenantId);
+
+                // Run migrations after successful import
+                await RunCkModelMigrationsForImportAsync(TenantId, ckCompiledModelRoot.ModelId,
+                    previousSchemaVersions);
             }
             catch (ModelValidationException ex)
             {
@@ -838,6 +873,7 @@ public class TenantContext : ITenantContext
         }
         finally
         {
+            compiledMigrationProvider?.ClearMigrationData(ckCompiledModelRoot.ModelId);
             await _tenantNotifications.NotifyPosTenantUpdateAsync(TenantId, correlationId);
         }
     }
@@ -854,6 +890,9 @@ public class TenantContext : ITenantContext
                 ckModelId, TenantId);
             return;
         }
+
+        // Capture schema versions BEFORE importing (for migration detection)
+        var previousSchemaVersions = await GetSchemaVersionsDirectAsync(tenantDatabaseSourceIdentifier);
 
         try
         {
@@ -879,6 +918,9 @@ public class TenantContext : ITenantContext
                 await _ckModelRepositoryService.UpdateModelAsync(ckCompiledModelRoot, tenantDatabaseSourceIdentifier);
 
                 _logger.LogInformation("CK Model '{CkModelId}' imported into tenant '{TenantId}'", ckModelId, TenantId);
+
+                // Run migrations after successful import
+                await RunCkModelMigrationsForImportAsync(TenantId, ckModelId, previousSchemaVersions);
             }
             catch (ModelValidationException ex)
             {
