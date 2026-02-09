@@ -40,9 +40,9 @@ public class CkModelImportMigrationTests(CkModelImportMigrationFixture fixture)
             tenantId, TestContext.Current.CancellationToken);
 
         // The installed version for "Test" should be 2.0.0
-        Assert.True(installedVersions.ContainsKey("Test"),
+        Assert.True(installedVersions.TryGetValue("Test", out var version),
             "Test model should be tracked in installed versions");
-        Assert.Equal("2.0.0", installedVersions["Test"]);
+        Assert.Equal("2.0.0", version);
     }
 
     [Fact]
