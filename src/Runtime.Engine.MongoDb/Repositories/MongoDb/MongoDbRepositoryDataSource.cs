@@ -958,6 +958,23 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     }
                 ]
             },
+            // Index 9: Optimizes $lookup with foreignField "targetRtId" + pipeline filter
+            new()
+            {
+                IndexType = IndexTypes.Ascending,
+                Fields =
+                [
+                    new CkIndexFields
+                    {
+                        AttributeNames =
+                        [
+                            nameof(RtAssociation.TargetRtId).ToCamelCase(),
+                            nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
+                            nameof(RtAssociation.OriginCkTypeId).ToCamelCase()
+                        ]
+                    }
+                ]
+            },
         };
 
         int uniqueIndexNumber = 0;
