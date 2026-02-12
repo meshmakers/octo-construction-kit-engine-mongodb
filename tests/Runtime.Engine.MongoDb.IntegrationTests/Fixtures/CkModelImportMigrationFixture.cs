@@ -8,6 +8,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 /// Fixture for CK model import migration tests.
 /// Registers both TestCkModel v1 and v2 to enable migration testing.
 /// </summary>
+// ReSharper disable once ClassNeverInstantiated.Global
 public class CkModelImportMigrationFixture : SystemFixture
 {
     public CkModelImportMigrationFixture()

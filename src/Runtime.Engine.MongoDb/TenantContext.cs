@@ -20,7 +20,6 @@ using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
-using Meshmakers.Octo.Runtime.Engine.Blueprints;
 using Meshmakers.Octo.Runtime.Engine.CkModelMigrations;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
@@ -43,7 +42,6 @@ public class TenantContext : ITenantContext
     private readonly IMetricsContext _metricsContext;
     private readonly IModelLoaderService _modelLoaderService;
     private readonly IServiceProvider _serviceProvider;
-    private readonly IAdminRepositoryAccess _adminRepositoryAccess;
 
     protected readonly IDatabaseCkModelRepository _ckModelRepositoryService;
     protected readonly ICatalogService _catalogService;
@@ -67,8 +65,8 @@ public class TenantContext : ITenantContext
         _cacheService = serviceProvider.GetRequiredService<ICkCacheService>();
         _modelLoaderService = serviceProvider.GetRequiredService<IModelLoaderService>();
         _bulkRtMutation = serviceProvider.GetRequiredService<IBulkRtMutation>();
-        _adminRepositoryAccess = serviceProvider.GetRequiredService<IAdminRepositoryAccess>();
-        _adminRepositoryClient = _adminRepositoryAccess.GetRepositoryClient(databaseName);
+        var adminRepositoryAccess = serviceProvider.GetRequiredService<IAdminRepositoryAccess>();
+        _adminRepositoryClient = adminRepositoryAccess.GetRepositoryClient(databaseName);
     }
 
     /// <summary>
@@ -316,6 +314,13 @@ public class TenantContext : ITenantContext
 
             // Run migrations after updating the System CK model
             await RunSystemCkModelMigrationsAsync(tenantId, previousSchemaVersions);
+
+            // Invalidate cache so the next access triggers a fresh load with all currently-available models.
+            // Use tenantId parameter (not TenantId property) because this method is called for child tenants too.
+            if (_cacheService.IsTenantLoaded(tenantId))
+            {
+                _cacheService.Unload(tenantId);
+            }
         }
         finally
         {
@@ -858,6 +863,12 @@ public class TenantContext : ITenantContext
                 // Run migrations after successful import
                 await RunCkModelMigrationsForImportAsync(TenantId, ckCompiledModelRoot.ModelId,
                     previousSchemaVersions);
+
+                // Invalidate cache so the next access triggers a fresh load with all currently-available models
+                if (_cacheService.IsTenantLoaded(TenantId))
+                {
+                    _cacheService.Unload(TenantId);
+                }
             }
             catch (ModelValidationException ex)
             {
@@ -921,6 +932,12 @@ public class TenantContext : ITenantContext
 
                 // Run migrations after successful import
                 await RunCkModelMigrationsForImportAsync(TenantId, ckModelId, previousSchemaVersions);
+
+                // Invalidate cache so the next access triggers a fresh load with all currently-available models
+                if (_cacheService.IsTenantLoaded(TenantId))
+                {
+                    _cacheService.Unload(TenantId);
+                }
             }
             catch (ModelValidationException ex)
             {
