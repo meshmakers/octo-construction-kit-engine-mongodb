@@ -276,6 +276,15 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
             pipelineStages.Add(sortStage);
         }
 
+        // When pagination is specified, limit results within the lookup pipeline
+        // to avoid materializing all associated entities. Fetch one extra beyond
+        // the requested page to enable correct hasNextPage detection.
+        if (take.HasValue)
+        {
+            var limitValue = (skip ?? 0) + take.Value + 1;
+            pipelineStages.Add(new BsonDocument("$limit", limitValue));
+        }
+
         // Create the pipeline from BsonDocuments with correct type chain:
         // RtAssociation -> BsonDocument -> ... -> BsonDocument -> TTargetEntity -> TTargetEntity -> ...
         // Find the $replaceRoot stage index - after this stage, documents are TTargetEntity type
