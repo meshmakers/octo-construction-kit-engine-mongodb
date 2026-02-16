@@ -136,16 +136,16 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
             throw OperationFailedException.PagingNeeded();
         }
 
-        // Field names for the association lookup - used in $let clause
+        // Field names for the association lookup
         var innerLocalFieldRtIdName = "targetRtId";
-        var innerLocalFieldCkId = "targetCkTypeId";
+        var innerLocalFieldCkIdName = "targetCkTypeId";
         var connectToField = (FieldDefinition<RtAssociation, string>)"originRtId";
 
         switch (_graphDirection)
         {
             case GraphDirections.Inbound:
                 innerLocalFieldRtIdName = "originRtId";
-                innerLocalFieldCkId = "originCkTypeId";
+                innerLocalFieldCkIdName = "originCkTypeId";
                 connectToField = "targetRtId";
                 break;
             case GraphDirections.Outbound:
@@ -173,7 +173,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         List<FilterDefinition<RtAssociation>> associationFilter =
         [
             Builders<RtAssociation>.Filter.Eq("associationRoleId", _roleId),
-            Builders<RtAssociation>.Filter.In(innerLocalFieldCkId, allTargetCkIds)
+            Builders<RtAssociation>.Filter.In(innerLocalFieldCkIdName, allTargetCkIds)
         ];
 
         if (!_includeArchivedEntities)
@@ -192,39 +192,23 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
             new("$match", Builders<RtAssociation>.Filter.And(associationFilter).Render(associationRenderArgs))
         };
 
-        // Add a $lookup for each collection group
+        // Add a $lookup for each collection group using localField/foreignField.
+        // This is faster than let/pipeline with $expr because MongoDB can use the
+        // _id index directly with its native join optimization. The type check that
+        // was previously in the inner pipeline ($in on targetType) is redundant because
+        // the outer $match already filters associations by targetCkTypeId, and each
+        // collection group maps to a distinct collection.
         var collectionIndex = 0;
         foreach (var group in collectionGroups)
         {
             var groupGraphs = group.ToList();
-            var groupCkIds = groupGraphs
-                .SelectMany(g => g.GetAllDerivedTypes(true))
-                .Select(t => t.ToRtCkId())
-                .Distinct()
-                .ToList();
-
             var targetFieldName = $"target{collectionIndex}";
 
-            // Build the inner pipeline for this collection's lookup
-            var innerPipeline = new BsonDocument("$match",
-                new BsonDocument("$expr",
-                    new BsonDocument("$and", new BsonArray
-                    {
-                        new BsonDocument("$eq", new BsonArray { "$_id", "$$targetId" }),
-                        new BsonDocument("$in", new BsonArray { "$$targetType", new BsonArray(groupCkIds.Select(id => id.ToString())) })
-                    })));
-
-            // Add lookup for this collection
             pipelineStages.Add(new BsonDocument("$lookup", new BsonDocument
             {
                 { "from", _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TTargetEntity>(groupGraphs[0]).GetMongoCollection().CollectionNamespace.CollectionName },
-                { "let", new BsonDocument
-                    {
-                        { "targetId", "$" + innerLocalFieldRtIdName },
-                        { "targetType", "$" + innerLocalFieldCkId }
-                    }
-                },
-                { "pipeline", new BsonArray { innerPipeline } },
+                { "localField", innerLocalFieldRtIdName },
+                { "foreignField", "_id" },
                 { "as", targetFieldName }
             }));
 
