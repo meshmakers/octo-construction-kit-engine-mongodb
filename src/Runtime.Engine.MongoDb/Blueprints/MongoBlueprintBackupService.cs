@@ -2,7 +2,6 @@ using Meshmakers.Octo.Runtime.Contracts.Blueprints;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
@@ -22,7 +21,6 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Blueprints;
 /// </summary>
 internal class MongoBlueprintBackupService : IBlueprintBackupService
 {
-    private const string CollectionName = "RtBackupInfo";
     private const string BackupDirectory = "blueprints/backups";
 
     private readonly ISystemContext _systemContext;
@@ -272,7 +270,7 @@ internal class MongoBlueprintBackupService : IBlueprintBackupService
 
     private IMongoCollection<RtBackupInfo> GetMongoCollection()
     {
-        var databaseName = _systemConfiguration.Value.SystemDatabaseName;
+        var databaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
         var repositoryClient = _adminRepositoryAccess.GetRepositoryClient(databaseName);
         var repository = repositoryClient.GetRepository(databaseName);
         var mapper = new RtBackupInfoMongoDataSourceMapper();
