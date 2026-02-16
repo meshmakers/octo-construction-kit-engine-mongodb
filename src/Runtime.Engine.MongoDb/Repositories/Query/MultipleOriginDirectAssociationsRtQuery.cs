@@ -192,81 +192,190 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
             new("$match", Builders<RtAssociation>.Filter.And(associationFilter).Render(associationRenderArgs))
         };
 
-        // Add a $lookup for each collection group using localField/foreignField.
-        // This is faster than let/pipeline with $expr because MongoDB can use the
-        // _id index directly with its native join optimization. The type check that
-        // was previously in the inner pipeline ($in on targetType) is redundant because
-        // the outer $match already filters associations by targetCkTypeId, and each
-        // collection group maps to a distinct collection.
-        var collectionIndex = 0;
-        foreach (var group in collectionGroups)
-        {
-            var groupGraphs = group.ToList();
-            var targetFieldName = $"target{collectionIndex}";
-
-            pipelineStages.Add(new BsonDocument("$lookup", new BsonDocument
-            {
-                { "from", _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TTargetEntity>(groupGraphs[0]).GetMongoCollection().CollectionNamespace.CollectionName },
-                { "localField", innerLocalFieldRtIdName },
-                { "foreignField", "_id" },
-                { "as", targetFieldName }
-            }));
-
-            collectionIndex++;
-        }
-
-        // Combine all target arrays using $concatArrays
-        if (collectionGroups.Count > 1)
-        {
-            var concatArrays = new BsonArray();
-            for (var i = 0; i < collectionGroups.Count; i++)
-            {
-                concatArrays.Add($"$target{i}");
-            }
-
-            pipelineStages.Add(new BsonDocument("$addFields", new BsonDocument("target", new BsonDocument("$concatArrays", concatArrays))));
-        }
-        else
-        {
-            // Single collection - just rename target0 to target
-            pipelineStages.Add(new BsonDocument("$addFields", new BsonDocument("target", "$target0")));
-        }
-
-        // Unwind the combined targets and replace root
-        pipelineStages.Add(new BsonDocument("$unwind", "$target"));
-        pipelineStages.Add(new BsonDocument("$replaceRoot", new BsonDocument("newRoot", "$target")));
-
-        // Add archived filter if needed
-        if (!_includeArchivedEntities)
-        {
-            pipelineStages.Add(new BsonDocument("$match",
-                new BsonDocument("rtState", new BsonDocument("$ne", (int)RtState.Archived))));
-        }
-
-        // Add field filters if any
+        // Pre-render field filters (used by both paths)
+        BsonDocument? renderedFieldFilter = null;
         var filterDefinitions = CreateFilterDefinitions();
         if (filterDefinitions != null)
         {
             var filterRenderArgs = new RenderArgs<TTargetEntity>(
                 BsonSerializer.SerializerRegistry.GetSerializer<TTargetEntity>(),
                 BsonSerializer.SerializerRegistry);
-            pipelineStages.Add(new BsonDocument("$match", filterDefinitions.Render(filterRenderArgs)));
+            renderedFieldFilter = filterDefinitions.Render(filterRenderArgs);
         }
 
-        // Add sort stage if sort definitions are configured
         var sortStage = GetSortStageBsonDocument();
-        if (sortStage != null)
-        {
-            pipelineStages.Add(sortStage);
-        }
 
-        // When pagination is specified, limit results within the lookup pipeline
-        // to avoid materializing all associated entities. Fetch one extra beyond
-        // the requested page to enable correct hasNextPage detection.
-        if (take.HasValue)
+        if (HasSortDefinitions && take.HasValue && _geospatialFilters.Count == 0)
         {
+            // OPTIMIZED PATH: Collect target IDs via $group, then batched $lookup with sort+limit.
+            // Instead of N individual $lookups (one per association), this uses a single $in query
+            // per collection group, which is significantly faster when there are many associations
+            // (e.g. 2000 associations with first:1 sort:startedAt DESC).
+
             var limitValue = (skip ?? 0) + take.Value + 1;
-            pipelineStages.Add(new BsonDocument("$limit", limitValue));
+
+            // $group: Collect unique target IDs and count associations
+            pipelineStages.Add(new BsonDocument("$group", new BsonDocument
+            {
+                { "_id", BsonNull.Value },
+                { "targetIds", new BsonDocument("$addToSet", $"${innerLocalFieldRtIdName}") },
+                { "assocCount", new BsonDocument("$sum", 1) }
+            }));
+
+            // Per collection group: $lookup with inner pipeline using $in for batched matching
+            var collectionIndex = 0;
+            foreach (var group in collectionGroups)
+            {
+                var groupGraphs = group.ToList();
+                var targetFieldName = $"target{collectionIndex}";
+                var collectionName = _mongoDbRepositoryDataSource
+                    .GetRtDatabaseCollection<TTargetEntity>(groupGraphs[0])
+                    .GetMongoCollection().CollectionNamespace.CollectionName;
+
+                var innerPipeline = new BsonArray();
+
+                // Match targets by ID using $in with the collected target IDs
+                innerPipeline.Add(new BsonDocument("$match", new BsonDocument("$expr",
+                    new BsonDocument("$in", new BsonArray { "$_id", "$$tids" }))));
+
+                // Archived filter on target entities
+                if (!_includeArchivedEntities)
+                {
+                    innerPipeline.Add(new BsonDocument("$match",
+                        new BsonDocument("rtState", new BsonDocument("$ne", (int)RtState.Archived))));
+                }
+
+                // Field filters
+                if (renderedFieldFilter != null)
+                {
+                    innerPipeline.Add(new BsonDocument("$match", renderedFieldFilter));
+                }
+
+                // Sort + Limit inside the lookup to avoid materializing all targets
+                if (sortStage != null)
+                {
+                    innerPipeline.Add(sortStage);
+                }
+
+                innerPipeline.Add(new BsonDocument("$limit", limitValue));
+
+                pipelineStages.Add(new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", collectionName },
+                    { "let", new BsonDocument("tids", "$targetIds") },
+                    { "pipeline", innerPipeline },
+                    { "as", targetFieldName }
+                }));
+
+                collectionIndex++;
+            }
+
+            // Combine target arrays from all collection groups
+            if (collectionGroups.Count > 1)
+            {
+                var concatArrays = new BsonArray();
+                for (var i = 0; i < collectionGroups.Count; i++)
+                {
+                    concatArrays.Add($"$target{i}");
+                }
+
+                pipelineStages.Add(new BsonDocument("$addFields",
+                    new BsonDocument("target", new BsonDocument("$concatArrays", concatArrays))));
+            }
+            else
+            {
+                pipelineStages.Add(new BsonDocument("$addFields",
+                    new BsonDocument("target", "$target0")));
+            }
+
+            // Unwind and replace root to produce flat target entity documents
+            pipelineStages.Add(new BsonDocument("$unwind", "$target"));
+            pipelineStages.Add(new BsonDocument("$replaceRoot", new BsonDocument("newRoot", "$target")));
+
+            // For multiple collections, re-sort and re-limit the combined results
+            if (collectionGroups.Count > 1)
+            {
+                if (sortStage != null)
+                {
+                    pipelineStages.Add(sortStage);
+                }
+
+                pipelineStages.Add(new BsonDocument("$limit", limitValue));
+            }
+        }
+        else
+        {
+            // STANDARD PATH: Individual target lookups per association using localField/foreignField.
+            // Used when no sort is defined, no take limit, or geospatial filters are active.
+            // This is faster than let/pipeline with $expr because MongoDB can use the
+            // _id index directly with its native join optimization.
+            var collectionIndex = 0;
+            foreach (var group in collectionGroups)
+            {
+                var groupGraphs = group.ToList();
+                var targetFieldName = $"target{collectionIndex}";
+
+                pipelineStages.Add(new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TTargetEntity>(groupGraphs[0]).GetMongoCollection().CollectionNamespace.CollectionName },
+                    { "localField", innerLocalFieldRtIdName },
+                    { "foreignField", "_id" },
+                    { "as", targetFieldName }
+                }));
+
+                collectionIndex++;
+            }
+
+            // Combine all target arrays using $concatArrays
+            if (collectionGroups.Count > 1)
+            {
+                var concatArrays = new BsonArray();
+                for (var i = 0; i < collectionGroups.Count; i++)
+                {
+                    concatArrays.Add($"$target{i}");
+                }
+
+                pipelineStages.Add(new BsonDocument("$addFields",
+                    new BsonDocument("target", new BsonDocument("$concatArrays", concatArrays))));
+            }
+            else
+            {
+                // Single collection - just rename target0 to target
+                pipelineStages.Add(new BsonDocument("$addFields",
+                    new BsonDocument("target", "$target0")));
+            }
+
+            // Unwind the combined targets and replace root
+            pipelineStages.Add(new BsonDocument("$unwind", "$target"));
+            pipelineStages.Add(new BsonDocument("$replaceRoot", new BsonDocument("newRoot", "$target")));
+
+            // Add archived filter if needed
+            if (!_includeArchivedEntities)
+            {
+                pipelineStages.Add(new BsonDocument("$match",
+                    new BsonDocument("rtState", new BsonDocument("$ne", (int)RtState.Archived))));
+            }
+
+            // Add field filters if any
+            if (renderedFieldFilter != null)
+            {
+                pipelineStages.Add(new BsonDocument("$match", renderedFieldFilter));
+            }
+
+            // Add sort stage if sort definitions are configured
+            if (sortStage != null)
+            {
+                pipelineStages.Add(sortStage);
+            }
+
+            // When pagination is specified, limit results within the lookup pipeline
+            // to avoid materializing all associated entities. Fetch one extra beyond
+            // the requested page to enable correct hasNextPage detection.
+            if (take.HasValue)
+            {
+                var limitValue = (skip ?? 0) + take.Value + 1;
+                pipelineStages.Add(new BsonDocument("$limit", limitValue));
+            }
         }
 
         // Create the pipeline from BsonDocuments with correct type chain:
