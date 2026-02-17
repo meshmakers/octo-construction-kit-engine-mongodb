@@ -257,15 +257,6 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
                     innerPipeline.Add(sortStage);
                 }
 
-                // Count total matching entities before applying limit for correct totalCount.
-                // Without this, totalCount would reflect the limited page size instead of the real total.
-                innerPipeline.Add(new BsonDocument("$setWindowFields", new BsonDocument("output",
-                    new BsonDocument("_assocCount", new BsonDocument
-                    {
-                        { "$sum", 1 },
-                        { "window", new BsonDocument("documents", new BsonArray { "unbounded", "unbounded" }) }
-                    }))));
-
                 innerPipeline.Add(new BsonDocument("$limit", limitValue));
 
                 pipelineStages.Add(new BsonDocument("$lookup", new BsonDocument
@@ -279,23 +270,6 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
                 collectionIndex++;
             }
 
-            // For multiple collection groups, compute combined total count across all collections
-            if (collectionGroups.Count > 1)
-            {
-                var addExpr = new BsonArray();
-                for (var i = 0; i < collectionGroups.Count; i++)
-                {
-                    addExpr.Add(new BsonDocument("$ifNull", new BsonArray
-                    {
-                        new BsonDocument("$arrayElemAt", new BsonArray { $"$target{i}._assocCount", 0 }),
-                        new BsonDocument("$size", $"$target{i}")
-                    }));
-                }
-
-                pipelineStages.Add(new BsonDocument("$addFields",
-                    new BsonDocument("_totalAssocCount", new BsonDocument("$add", addExpr))));
-            }
-
             // Combine target arrays from all collection groups
             if (collectionGroups.Count > 1)
             {
@@ -307,27 +281,29 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
 
                 pipelineStages.Add(new BsonDocument("$addFields",
                     new BsonDocument("target", new BsonDocument("$concatArrays", concatArrays))));
-
-                // Override per-collection _assocCount with combined total on each target element
-                pipelineStages.Add(new BsonDocument("$addFields", new BsonDocument("target",
-                    new BsonDocument("$map", new BsonDocument
-                    {
-                        { "input", "$target" },
-                        { "as", "t" },
-                        {
-                            "in", new BsonDocument("$mergeObjects", new BsonArray
-                            {
-                                "$$t",
-                                new BsonDocument("_assocCount", "$_totalAssocCount")
-                            })
-                        }
-                    }))));
             }
             else
             {
                 pipelineStages.Add(new BsonDocument("$addFields",
                     new BsonDocument("target", "$target0")));
             }
+
+            // Embed assocCount (from $group) into each target element for totalCount.
+            // This uses the association count which is already computed and avoids expensive
+            // $setWindowFields that would need to scan all target entities.
+            pipelineStages.Add(new BsonDocument("$addFields", new BsonDocument("target",
+                new BsonDocument("$map", new BsonDocument
+                {
+                    { "input", "$target" },
+                    { "as", "t" },
+                    {
+                        "in", new BsonDocument("$mergeObjects", new BsonArray
+                        {
+                            "$$t",
+                            new BsonDocument("_assocCount", "$assocCount")
+                        })
+                    }
+                }))));
 
             // Unwind and replace root to produce flat target entity documents
             pipelineStages.Add(new BsonDocument("$unwind", "$target"));
