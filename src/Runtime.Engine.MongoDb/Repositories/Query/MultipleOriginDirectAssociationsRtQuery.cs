@@ -251,11 +251,20 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
                     innerPipeline.Add(new BsonDocument("$match", renderedFieldFilter));
                 }
 
-                // Sort + Limit inside the lookup to avoid materializing all targets
+                // Sort inside the lookup
                 if (sortStage != null)
                 {
                     innerPipeline.Add(sortStage);
                 }
+
+                // Count total matching entities before applying limit for correct totalCount.
+                // Without this, totalCount would reflect the limited page size instead of the real total.
+                innerPipeline.Add(new BsonDocument("$setWindowFields", new BsonDocument("output",
+                    new BsonDocument("_assocCount", new BsonDocument
+                    {
+                        { "$sum", 1 },
+                        { "window", new BsonDocument("documents", new BsonArray { "unbounded", "unbounded" }) }
+                    }))));
 
                 innerPipeline.Add(new BsonDocument("$limit", limitValue));
 
@@ -270,6 +279,23 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
                 collectionIndex++;
             }
 
+            // For multiple collection groups, compute combined total count across all collections
+            if (collectionGroups.Count > 1)
+            {
+                var addExpr = new BsonArray();
+                for (var i = 0; i < collectionGroups.Count; i++)
+                {
+                    addExpr.Add(new BsonDocument("$ifNull", new BsonArray
+                    {
+                        new BsonDocument("$arrayElemAt", new BsonArray { $"$target{i}._assocCount", 0 }),
+                        new BsonDocument("$size", $"$target{i}")
+                    }));
+                }
+
+                pipelineStages.Add(new BsonDocument("$addFields",
+                    new BsonDocument("_totalAssocCount", new BsonDocument("$add", addExpr))));
+            }
+
             // Combine target arrays from all collection groups
             if (collectionGroups.Count > 1)
             {
@@ -281,6 +307,21 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
 
                 pipelineStages.Add(new BsonDocument("$addFields",
                     new BsonDocument("target", new BsonDocument("$concatArrays", concatArrays))));
+
+                // Override per-collection _assocCount with combined total on each target element
+                pipelineStages.Add(new BsonDocument("$addFields", new BsonDocument("target",
+                    new BsonDocument("$map", new BsonDocument
+                    {
+                        { "input", "$target" },
+                        { "as", "t" },
+                        {
+                            "in", new BsonDocument("$mergeObjects", new BsonArray
+                            {
+                                "$$t",
+                                new BsonDocument("_assocCount", "$_totalAssocCount")
+                            })
+                        }
+                    }))));
             }
             else
             {
@@ -374,6 +415,15 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
             if (take.HasValue)
             {
                 var limitValue = (skip ?? 0) + take.Value + 1;
+
+                // Count total matching entities before applying limit for correct totalCount
+                pipelineStages.Add(new BsonDocument("$setWindowFields", new BsonDocument("output",
+                    new BsonDocument("_assocCount", new BsonDocument
+                    {
+                        { "$sum", 1 },
+                        { "window", new BsonDocument("documents", new BsonArray { "unbounded", "unbounded" }) }
+                    }))));
+
                 pipelineStages.Add(new BsonDocument("$limit", limitValue));
             }
         }
@@ -425,23 +475,31 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
                 @as
             );
 
+        // Use _assocCount from $setWindowFields if available (when $limit is in the pipeline),
+        // otherwise fall back to array size (when no $limit, all entities are in the array)
+        var totalCountExpr = "{$ifNull: [{$arrayElemAt: ['$_associations._assocCount', 0]}, {$size: '$_associations'}]}";
+
+        // When pagination is active, strip the internal _assocCount field from target entities
+        // to prevent BSON deserialization errors (the field is only needed for totalCount calculation)
         var aggregate2 = aggregate.ReplaceWith(
             (AggregateExpressionDefinition<BsonDocument, QueryMultipleResult<TTargetEntity>>)
-            "{ _id: {'rtId': '$_id', 'ckTypeId': '$ckTypeId' }, totalCount: {$size: '$_associations' }, 'targets': '$_associations'}");
+            $"{{ _id: {{'rtId': '$_id', 'ckTypeId': '$ckTypeId' }}, totalCount: {totalCountExpr}, 'targets': '$_associations'}}");
 
         if (skip.HasValue)
         {
+            var targetsExpr =
+                $"{{$map: {{input: {{$slice: ['$_associations', {skip},{take}]}}, as: 'e', in: {{$unsetField: {{field: '_assocCount', input: '$$e'}}}}}}}}";
             var query =
-                "{ _id: {'rtId': '$_id', 'ckTypeId': '$ckTypeId' }, totalCount: {$size: '$_associations' }, 'targets': {'$slice': ['$_associations', " +
-                skip + "," + take + "]}}";
+                $"{{ _id: {{'rtId': '$_id', 'ckTypeId': '$ckTypeId' }}, totalCount: {totalCountExpr}, 'targets': {targetsExpr}}}";
             aggregate2 = aggregate.ReplaceWith(
                 (AggregateExpressionDefinition<BsonDocument, QueryMultipleResult<TTargetEntity>>)query);
         }
         else if (take.HasValue)
         {
+            var targetsExpr =
+                $"{{$map: {{input: {{$slice: ['$_associations', 0,{take}]}}, as: 'e', in: {{$unsetField: {{field: '_assocCount', input: '$$e'}}}}}}}}";
             var query =
-                "{ _id: {'rtId': '$_id', 'ckTypeId': '$ckTypeId' }, totalCount: {$size: '$_associations' }, 'targets': {'$slice': ['$_associations', 0," +
-                take + "]}}";
+                $"{{ _id: {{'rtId': '$_id', 'ckTypeId': '$ckTypeId' }}, totalCount: {totalCountExpr}, 'targets': {targetsExpr}}}";
             aggregate2 = aggregate.ReplaceWith(
                 (AggregateExpressionDefinition<BsonDocument, QueryMultipleResult<TTargetEntity>>)query);
         }
