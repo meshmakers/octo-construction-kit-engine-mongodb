@@ -15,7 +15,8 @@ internal class RepositoryDistributedLockService(
     string id)
     : IAsyncDisposable
 {
-    private const int MaxRetryAttempts = 60;
+    // Max retry attempts must exceed Lock TTL to handle stale locks from crashed processes
+    private const int MaxRetryAttempts = 330;
     private const int DelayMilliseconds = 2000;
 
     // Lock TTL: After this time the lock is considered "stale" and can be claimed by another service

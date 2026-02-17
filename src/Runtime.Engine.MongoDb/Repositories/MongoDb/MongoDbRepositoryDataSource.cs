@@ -490,6 +490,21 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 }
             }
 
+            // Create system-level index for rtState (supports filtering archived entities)
+            var rtStateIndex = new CkTypeIndex
+            {
+                IndexType = IndexTypes.Ascending,
+                Fields =
+                [
+                    new CkIndexFields
+                    {
+                        AttributeNames = [nameof(RtEntity.RtState).ToCamelCase()]
+                    }
+                ]
+            };
+            await CreateOrUpdateIndex(collection.CollectionName, rtStateIndex, repositoryIndices, collection,
+                uniqueIndexNumber: 9000);
+
             // Drop any remaining indexes that are no longer needed
             foreach (var repositoryIndex in repositoryIndices)
             {
@@ -971,6 +986,21 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                             nameof(RtAssociation.TargetRtId).ToCamelCase(),
                             nameof(RtAssociation.AssociationRoleId).ToCamelCase(),
                             nameof(RtAssociation.OriginCkTypeId).ToCamelCase()
+                        ]
+                    }
+                ]
+            },
+            // Index 10: Supports filtering archived associations (rtState != Archived)
+            new()
+            {
+                IndexType = IndexTypes.Ascending,
+                Fields =
+                [
+                    new CkIndexFields
+                    {
+                        AttributeNames =
+                        [
+                            nameof(RtAssociation.RtState).ToCamelCase()
                         ]
                     }
                 ]
