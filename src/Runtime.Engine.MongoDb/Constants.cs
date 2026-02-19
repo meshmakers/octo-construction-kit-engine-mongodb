@@ -59,6 +59,9 @@ public static class Constants
                 string.Compare(f, nameof(RtEntity.CkTypeId), StringComparison.InvariantCultureIgnoreCase) == 0 ||
                 string.Compare(f, nameof(RtEntity.RtVersion), StringComparison.InvariantCultureIgnoreCase) == 0 ||
                 string.Compare(f, nameof(RtEntity.RtWellKnownName), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                string.Compare(f, nameof(RtEntity.RtState), StringComparison.InvariantCultureIgnoreCase) == 0 ||
+                string.Compare(f, nameof(RtEntity.RtArchivedDateTime), StringComparison.InvariantCultureIgnoreCase) ==
+                0 ||
                 string.Compare(f, nameof(RtAssociation.OriginCkTypeId), StringComparison.InvariantCultureIgnoreCase) ==
                 0 ||
                 string.Compare(f, nameof(RtAssociation.OriginRtId), StringComparison.InvariantCultureIgnoreCase) == 0 ||

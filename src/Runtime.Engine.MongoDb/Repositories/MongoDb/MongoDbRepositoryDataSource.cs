@@ -571,6 +571,25 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             fields.AttributeNames = fieldAttributePaths.ToList();
         }
 
+        // Append rtState as last field to Ascending indexes to support the rtState != Archived filter
+        // that is used by all queries. rtState goes last because $ne filters have low selectivity.
+        if (ckTypeIndex.IndexType == IndexTypes.Ascending)
+        {
+            var rtStateFieldName = nameof(RtEntity.RtState).ToCamelCase();
+            var allAttributeNames = ckTypeIndex.Fields
+                .SelectMany(f => f.AttributeNames)
+                .ToList();
+
+            if (!allAttributeNames.Any(a =>
+                    string.Equals(a, rtStateFieldName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(a, nameof(RtEntity.RtState), StringComparison.OrdinalIgnoreCase)))
+            {
+                var lastFieldGroup = ckTypeIndex.Fields.Last();
+                lastFieldGroup.AttributeNames = lastFieldGroup.AttributeNames
+                    .Append(rtStateFieldName).ToList();
+            }
+        }
+
         await CreateOrUpdateIndexWithTracking(collection.CollectionName, ckTypeIndex, repositoryIndices,
             collection, uniqueIndexNumber, collectionRootType, indexDefiningType);
     }
