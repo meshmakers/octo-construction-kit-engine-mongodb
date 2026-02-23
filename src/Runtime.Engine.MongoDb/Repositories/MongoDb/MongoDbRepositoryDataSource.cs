@@ -571,15 +571,28 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             fields.AttributeNames = fieldAttributePaths.ToList();
         }
 
-        // Append rtState as last field to Ascending indexes to support the rtState != Archived filter
-        // that is used by all queries. rtState goes last because $ne filters have low selectivity.
+        // Prepend ckTypeId as first field and append rtState as last field to Ascending indexes.
+        // Queries always filter on ckTypeId (via $in) first, so it should lead the compound index
+        // for optimal selectivity. rtState goes last because $ne filters have low selectivity.
         if (ckTypeIndex.IndexType == IndexTypes.Ascending)
         {
+            var ckTypeIdFieldName = nameof(RtEntity.CkTypeId).ToCamelCase();
             var rtStateFieldName = nameof(RtEntity.RtState).ToCamelCase();
             var allAttributeNames = ckTypeIndex.Fields
                 .SelectMany(f => f.AttributeNames)
                 .ToList();
 
+            // Prepend ckTypeId as first field if not already present
+            if (!allAttributeNames.Any(a =>
+                    string.Equals(a, ckTypeIdFieldName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(a, nameof(RtEntity.CkTypeId), StringComparison.OrdinalIgnoreCase)))
+            {
+                var firstFieldGroup = ckTypeIndex.Fields.First();
+                firstFieldGroup.AttributeNames = firstFieldGroup.AttributeNames
+                    .Prepend(ckTypeIdFieldName).ToList();
+            }
+
+            // Append rtState as last field if not already present
             if (!allAttributeNames.Any(a =>
                     string.Equals(a, rtStateFieldName, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(a, nameof(RtEntity.RtState), StringComparison.OrdinalIgnoreCase)))
