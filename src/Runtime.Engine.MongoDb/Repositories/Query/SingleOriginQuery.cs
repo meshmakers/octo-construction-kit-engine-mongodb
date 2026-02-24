@@ -24,6 +24,13 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
         _mongoDbDataSourceCollection = mongoDbDataSourceCollection;
     }
 
+    /// <summary>
+    /// Returns enrichment pipeline stages that should be applied post-pagination.
+    /// Override in derived classes to provide navigation lookup stages for Include mode.
+    /// </summary>
+    internal virtual IReadOnlyList<IPipelineStageDefinition> GetEnrichmentStageDefinitions()
+        => Array.Empty<IPipelineStageDefinition>();
+
     public async Task<ResultSet<TEntity>> ExecuteQuery(IOctoSession octoSession, int? skip = null, int? take = null)
     {
         using var meter = _metricsContext.CreateRuntimeMeter();
@@ -41,6 +48,49 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
         AddPostStagesToPipeline(pipelineStageDefinitions);
 
         meter.SetCheckpoint("definitions created");
+
+        var enrichmentStages = GetEnrichmentStageDefinitions();
+
+        if (enrichmentStages.Count > 0 && (skip.HasValue || take.HasValue))
+        {
+            // Include mode with pagination: run separate count and page queries.
+            // Navigation lookups (enrichment) run only on the paginated subset
+            // instead of all matching documents, providing significant performance gains.
+
+            // Count pipeline: base stages → $count
+            var countPipelineStages = new List<IPipelineStageDefinition>(pipelineStageDefinitions);
+            countPipelineStages.Add(PipelineStageDefinitionBuilder.Count<TEntity>());
+            var countPipeline =
+                PipelineDefinition<TEntity, AggregateCountResult>.Create(countPipelineStages);
+
+            var countResult = await _mongoDbDataSourceCollection.Aggregate(octoSession, countPipeline)
+                .SingleOrDefaultAsync();
+
+            // Page pipeline: base stages → $skip → $limit → enrichment stages
+            var pagePipelineStages = new List<IPipelineStageDefinition>(pipelineStageDefinitions);
+            if (skip.HasValue)
+            {
+                pagePipelineStages.Add(PipelineStageDefinitionBuilder.Skip<TEntity>(skip.Value));
+            }
+
+            if (take.HasValue)
+            {
+                pagePipelineStages.Add(PipelineStageDefinitionBuilder.Limit<TEntity>(take.Value));
+            }
+
+            foreach (var stage in enrichmentStages)
+            {
+                pagePipelineStages.Add(stage);
+            }
+
+            var pagePipeline = PipelineDefinition<TEntity, TEntity>.Create(pagePipelineStages);
+            var pageResult = await _mongoDbDataSourceCollection.Aggregate(octoSession, pagePipeline)
+                .ToListAsync();
+
+            var aggregations = CalculateAggregations(pageResult);
+            return new ResultSet<TEntity>(pageResult, countResult?.Count ?? 0,
+                aggregations.Item1, aggregations.Item2);
+        }
 
         if (skip.HasValue || take.HasValue)
         {
@@ -79,6 +129,12 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
         }
         else // Return result directly if there is no paging enabled
         {
+            // Add enrichment stages for the non-paginated case
+            foreach (var stage in enrichmentStages)
+            {
+                pipelineStageDefinitions.Add(stage);
+            }
+
             var pipelineDefinition = PipelineDefinition<TEntity, TEntity>.Create(pipelineStageDefinitions);
 
             var aggregate = _mongoDbDataSourceCollection.Aggregate(octoSession, pipelineDefinition);

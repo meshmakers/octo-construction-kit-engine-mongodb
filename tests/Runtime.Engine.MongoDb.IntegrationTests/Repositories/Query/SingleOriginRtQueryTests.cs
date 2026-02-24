@@ -341,6 +341,109 @@ public class SingleOriginRtQueryTests
         Assert.NotNull(pinzgau);
     }
 
+    [Fact]
+    public async Task Pagination_WithoutNavigation_ReturnsCorrectSubset()
+    {
+        var systemContext = Prepare(TestCkIds.CkCustomerTypeId, false, out var query);
+
+        var session = await systemContext.GetAdminSessionAsync();
+        session.StartTransaction();
+
+        // Query with pagination: skip=0, take=2 (there are 3 test customers)
+        var pagedResultSet = await query.ExecuteQuery(session, 0, 2);
+
+        Assert.Equal(2, pagedResultSet.Items.Count());
+        Assert.Equal(3, pagedResultSet.TotalCount);
+    }
+
+    [Fact]
+    public async Task NavigationProperty_WithPagination_ReturnsCorrectPage()
+    {
+        var systemContext = _systemFixture.GetSystemContext();
+        var ckCacheService = _systemFixture.GetService<ICkCacheService>();
+
+        var requestedFieldNames = new[]
+        {
+            "name",
+            "parent.testStateOrProvince->name"
+        };
+
+        var navigationPairs = RtPathEvaluator.TokenizeAndGetNavigationPairs(
+            ckCacheService,
+            systemContext.TenantId,
+            TestCkIds.CkDistrictTypeId,
+            requestedFieldNames);
+
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var queryOptions = RtEntityQueryOptions.Create();
+
+        var resultSet = await tenantRepository.GetRtEntitiesGraphByTypeAsync(
+            session,
+            TestCkIds.RtCkDistrictTypeId,
+            queryOptions,
+            navigationPairs,
+            0, 3);
+
+        Assert.Equal(3, resultSet.Items.Count());
+        Assert.True(resultSet.TotalCount > 3,
+            $"TotalCount ({resultSet.TotalCount}) should reflect all matching entities, not just the page");
+    }
+
+    [Fact]
+    public async Task NavigationProperty_WithPagination_TotalCountCorrect()
+    {
+        var systemContext = _systemFixture.GetSystemContext();
+        var ckCacheService = _systemFixture.GetService<ICkCacheService>();
+
+        var requestedFieldNames = new[]
+        {
+            "name",
+            "parent.testStateOrProvince->name"
+        };
+
+        // Get full result set without pagination to know expected total
+        var fullNavigationPairs = RtPathEvaluator.TokenizeAndGetNavigationPairs(
+            ckCacheService,
+            systemContext.TenantId,
+            TestCkIds.CkDistrictTypeId,
+            requestedFieldNames);
+
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var fullResultSet = await tenantRepository.GetRtEntitiesGraphByTypeAsync(
+            session,
+            TestCkIds.RtCkDistrictTypeId,
+            RtEntityQueryOptions.Create(),
+            fullNavigationPairs);
+
+        var expectedTotalCount = fullResultSet.TotalCount;
+        Assert.True(expectedTotalCount > 3, "Need more than 3 items to meaningfully test pagination");
+
+        // Get paginated result and verify TotalCount matches unpaginated count
+        var pagedNavigationPairs = RtPathEvaluator.TokenizeAndGetNavigationPairs(
+            ckCacheService,
+            systemContext.TenantId,
+            TestCkIds.CkDistrictTypeId,
+            requestedFieldNames);
+
+        var pagedResultSet = await tenantRepository.GetRtEntitiesGraphByTypeAsync(
+            session,
+            TestCkIds.RtCkDistrictTypeId,
+            RtEntityQueryOptions.Create(),
+            pagedNavigationPairs,
+            0, 3);
+
+        Assert.Equal(expectedTotalCount, pagedResultSet.TotalCount);
+        Assert.Equal(3, pagedResultSet.Items.Count());
+    }
+
     private ISystemContext Prepare(CkId<CkTypeId> ckTypeId, bool includeArchivedEntities,
         out SingleOriginRtQuery<RtEntity> query)
     {

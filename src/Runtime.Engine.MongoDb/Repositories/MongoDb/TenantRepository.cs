@@ -690,7 +690,7 @@ internal class TenantRepository(
         query.AddFieldAggregation(queryOptions.FieldAggregation);
         query.AddResultAggregation(queryOptions.ResultAggregation);
         query.AddGeospatialFilters(queryOptions.GeospatialFilters);
-        query.AddNavigationProperties(navigationPairs);
+        query.AddNavigationProperties(navigationPairs, queryOptions.NavigationFilterMode);
 
         return await query.ExecuteQuery(session, skip, take);
     }
