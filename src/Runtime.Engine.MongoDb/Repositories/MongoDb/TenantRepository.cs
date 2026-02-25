@@ -692,6 +692,31 @@ internal class TenantRepository(
         query.AddGeospatialFilters(queryOptions.GeospatialFilters);
         query.AddNavigationProperties(navigationPairs, queryOptions.NavigationFilterMode);
 
+        // Use query result cache for Filter mode with navigation pairs and pagination
+        if (queryOptions.NavigationFilterMode == NavigationFilterMode.Filter
+            && navigationPairs.Count > 0 && (skip.HasValue || take.HasValue))
+        {
+            var cacheKey = QueryResultCacheService.ComputeCacheKey(ckTypeId, queryOptions, navigationPairs);
+            var cacheService = ((MongoDbRepositoryDataSource)mongoDbRepositoryDataSource).CreateQueryResultCacheService();
+
+            var cached = await cacheService.TryGetAsync(cacheKey);
+            if (cached == null)
+            {
+                // Cache miss: collect all matching IDs and store them
+                var allIds = await query.CollectMatchingEntityIds(session);
+                await cacheService.StoreAsync(cacheKey, allIds);
+                cached = (allIds, allIds.Count);
+            }
+
+            // Extract page from cached IDs
+            var pageIds = cached.Value.EntityIds
+                .Skip(skip ?? 0)
+                .Take(take ?? int.MaxValue)
+                .ToList();
+
+            return await query.ExecuteEnrichmentForIds(session, pageIds, cached.Value.TotalCount);
+        }
+
         return await query.ExecuteQuery(session, skip, take);
     }
 

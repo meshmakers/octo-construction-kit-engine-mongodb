@@ -434,6 +434,18 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         base.AddPostStagesToPipeline(pipelineStageDefinitions);
     }
 
+    protected override void AddPrePaginationPostStagesToPipeline(
+        IList<IPipelineStageDefinition> pipelineStageDefinitions)
+    {
+        _associationStageDefinitions.ForEach(pipelineStageDefinitions.Add);
+    }
+
+    protected override FilterDefinition<TEntity> CreateIdInFilter(IEnumerable<TEntity> entities)
+    {
+        var ids = entities.Cast<RtEntity>().Select(e => e.RtId).ToList();
+        return Builders<TEntity>.Filter.In("_id", ids);
+    }
+
     internal override IReadOnlyList<IPipelineStageDefinition> GetEnrichmentStageDefinitions()
         => _enrichmentStageDefinitions;
 

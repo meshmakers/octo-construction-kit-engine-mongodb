@@ -82,6 +82,20 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
     }
 
     /// <summary>
+    /// Returns sort stage definitions for use in sub-pipelines (e.g., $facet page branch).
+    /// </summary>
+    protected IReadOnlyList<IPipelineStageDefinition> CreateSortStageDefinitions()
+    {
+        if (!_sortDefinitions.Any())
+        {
+            return [];
+        }
+
+        var sortDefinition = Builders<TEntity>.Sort.Combine(_sortDefinitions);
+        return [PipelineStageDefinitionBuilder.Sort(sortDefinition)];
+    }
+
+    /// <summary>
     /// Indicates whether sort definitions have been configured.
     /// </summary>
     protected bool HasSortDefinitions => _sortDefinitions.Any();

@@ -1081,6 +1081,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return lockService;
     }
 
+    internal QueryResultCacheService CreateQueryResultCacheService()
+    {
+        return new QueryResultCacheService(_repository);
+    }
+
     /// <inheritdoc />
     public async Task<CollectionCleanupResult> CleanupEmptyAbstractTypeCollectionsAsync(IOctoSession session)
     {
