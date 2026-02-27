@@ -33,9 +33,6 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
 
     private static CkId<CkTypeId> GetSimpleTypeId(string modelName) => new($"{modelName}/{Constants.SimpleTypeName}");
 
-    private static CkId<CkAttributeId> GetSimpleFieldId(string modelName) =>
-        new($"{modelName}/{Constants.SimpleFieldName}");
-
     private static string GetModelVersion(string modelName, string version = "1.0.0") => $"{modelName}-{version}";
     [Fact]
     public async Task SuccessfulIndexCreation_ShouldBeTrackedInCkType()
@@ -444,7 +441,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
                     IsCollectionRoot = true,
                     Attributes =
                     [
-                        new() { CkAttributeId = GetSimpleFieldId(modelName), AttributeName = Constants.SimpleFieldName },
+                        new() { CkAttributeId = new CkId<CkAttributeId>($"{modelVersion}/{Constants.SimpleFieldName}"), AttributeName = Constants.SimpleFieldName },
                     ]
                 },
             ]
