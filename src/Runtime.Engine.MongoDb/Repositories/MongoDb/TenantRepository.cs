@@ -693,7 +693,8 @@ internal class TenantRepository(
         query.AddNavigationProperties(navigationPairs, queryOptions.NavigationFilterMode);
 
         // Use query result cache for Filter mode with navigation pairs and pagination
-        if (queryOptions.NavigationFilterMode == NavigationFilterMode.Filter
+        if (!queryOptions.DisableCaching
+            && queryOptions.NavigationFilterMode == NavigationFilterMode.Filter
             && navigationPairs.Count > 0 && (skip.HasValue || take.HasValue))
         {
             var cacheKey = QueryResultCacheService.ComputeCacheKey(ckTypeId, queryOptions, navigationPairs);

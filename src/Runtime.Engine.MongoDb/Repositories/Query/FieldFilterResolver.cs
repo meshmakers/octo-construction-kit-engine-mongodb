@@ -296,6 +296,10 @@ internal class FieldFilterResolver<TEntity>
             {
                 array = stringValue.Split(',').ToArray<object>();
             }
+            else
+            {
+                array = [stringValue];
+            }
         }
         else if (value is OctoObjectId octoObjectId)
         {
