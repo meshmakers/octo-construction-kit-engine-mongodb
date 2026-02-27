@@ -52,13 +52,13 @@ public class RepositoryOpsService(
     #region MongoDB Dump/Restore Operations
 
     public async Task<CommandResult> ExecuteMongoDumpAsync(MongoDumpOptions options,
-        CancellationToken? cancellationToken = null)
+        TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
     {
         var args = BuildMongoDumpArguments(options);
 
         logger.LogInformation("Executing mongodump with options: {Options}", args);
 
-        return await ExecuteCommandAsync("mongodump", args, null, null, cancellationToken);
+        return await ExecuteCommandAsync("mongodump", args, timeout: timeout, cancellationToken: cancellationToken);
     }
 
 

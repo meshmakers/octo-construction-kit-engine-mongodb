@@ -17,7 +17,7 @@ internal class TenantBackupService(
 {
     /// <inheritdoc />
     public async Task<CommandResult> BackupTenantAsync(string tenantId, string archiveFilePath,
-        bool detachTenant = false, CancellationToken? cancellationToken = null)
+        bool detachTenant = false, TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
     {
         try
         {
@@ -56,7 +56,7 @@ internal class TenantBackupService(
             logger.LogInformation("Executing mongodump for database '{DatabaseName}'",
                 tenantContext.DatabaseName);
             var dumpOptions = MongoDumpOptions.ForArchive(tenantContext.DatabaseName, archiveFilePath);
-            var result = await repositoryOpsService.ExecuteMongoDumpAsync(dumpOptions, cancellationToken);
+            var result = await repositoryOpsService.ExecuteMongoDumpAsync(dumpOptions, timeout, cancellationToken);
 
             if (result.Success)
             {

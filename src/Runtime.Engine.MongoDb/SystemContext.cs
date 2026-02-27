@@ -201,10 +201,10 @@ public class SystemContext : TenantContext, ISystemContext
     #region Backup and Restore
 
     public Task<CommandResult> BackupTenantAsync(string tenantId, string archiveFilePath,
-        bool detachTenant = false, CancellationToken? cancellationToken = null)
+        bool detachTenant = false, TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
     {
         var backupService = _serviceProvider.GetRequiredService<ITenantBackupService>();
-        return backupService.BackupTenantAsync(tenantId, archiveFilePath, detachTenant, cancellationToken);
+        return backupService.BackupTenantAsync(tenantId, archiveFilePath, detachTenant, timeout, cancellationToken);
     }
 
     public Task<CommandResult> RestoreTenantAsync(string tenantId, string databaseName, string archiveFilePath,

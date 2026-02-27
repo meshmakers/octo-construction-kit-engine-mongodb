@@ -12,10 +12,11 @@ internal interface ITenantBackupService
     /// <param name="tenantId">The tenant ID to backup</param>
     /// <param name="archiveFilePath">Path where the backup archive will be created</param>
     /// <param name="detachTenant">If true, detaches the tenant before backup (default: false)</param>
+    /// <param name="timeout">Timeout for dump operation</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Command result indicating success or failure of the backup operation</returns>
     Task<CommandResult> BackupTenantAsync(string tenantId, string archiveFilePath,
-        bool detachTenant = false, CancellationToken? cancellationToken = null);
+        bool detachTenant = false, TimeSpan? timeout = null, CancellationToken? cancellationToken = null);
 
     /// <summary>
     /// Restores a tenant's database from a gzipped archive file.
