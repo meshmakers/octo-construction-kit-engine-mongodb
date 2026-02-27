@@ -413,6 +413,22 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         // Acquire distributed lock to prevent parallel imports of the same model
         await using var importLock = await mongoDbRepositoryDataSource.AcquireModelImportLockAsync(compiledModel.ModelId.Name);
 
+        // Re-check after acquiring the lock: another service may have already imported
+        // the model while we were waiting for the lock
+        {
+            using var checkSession = await mongoDbRepositoryDataSource.CreateSessionAsync();
+            var existingModel = await mongoDbRepositoryDataSource.CkModels
+                .FindSingleOrDefaultAsync(checkSession,
+                    e => e.Id == compiledModel.ModelId && e.ModelState == ModelState.Available);
+            if (existingModel != null)
+            {
+                _logger.LogInformation(
+                    "CK model '{CkModelId}' was already imported by another service while waiting for the lock, skipping import",
+                    compiledModel.ModelId);
+                return;
+            }
+        }
+
         // Insert model with Importing state (now safe because we have the lock)
         await InsertModelWithImportingState(compiledModel, mongoDbRepositoryDataSource);
 

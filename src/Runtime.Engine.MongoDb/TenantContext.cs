@@ -321,15 +321,21 @@ public class TenantContext : ITenantContext
             {
                 _cacheService.Unload(tenantId);
             }
-        }
-        finally
-        {
+
+            // Only send the notification after a successful update.
+            // Sending this in a finally block would trigger other services to re-process
+            // even on failures, causing an import loop.
             if (!isRepositoryInCreation)
             {
                 await _tenantNotifications.NotifyPosTenantUpdateAsync(TenantId, correlationId);
             }
 
             _logger.LogInformation("System CK Model restored into tenant '{TenantId}'", TenantId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to restore system CK Model into tenant '{TenantId}'", TenantId);
+            throw;
         }
     }
 
@@ -881,11 +887,15 @@ public class TenantContext : ITenantContext
                     "This import will be retried when the dependent CK model becomes available.",
                     ckCompiledModelRoot.ModelId, TenantId, ex.Message);
             }
+
+            // Only send the notification after a successful import (not in finally).
+            // Sending this on failure would trigger other services to re-process unnecessarily,
+            // potentially causing an import loop.
+            await _tenantNotifications.NotifyPosTenantUpdateAsync(TenantId, correlationId);
         }
         finally
         {
             compiledMigrationProvider?.ClearMigrationData(ckCompiledModelRoot.ModelId);
-            await _tenantNotifications.NotifyPosTenantUpdateAsync(TenantId, correlationId);
         }
     }
 
@@ -905,57 +915,55 @@ public class TenantContext : ITenantContext
         // Capture schema versions BEFORE importing (for migration detection)
         var previousSchemaVersions = await GetSchemaVersionsDirectAsync(tenantDatabaseSourceIdentifier);
 
+        _logger.LogInformation("Importing CK Model '{CkModelId}' into tenant '{TenantId}'", ckModelId, TenantId);
+
+        await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
+
+        var ckCompiledModelRoot =
+            await _catalogService.GetAsync(ckModelId, operationResult);
+
+        if (operationResult.HasErrors || operationResult.HasFatalErrors)
+        {
+            throw TenantException.ErrorDuringSystemModelLoad(operationResult);
+        }
+
+        if (ckCompiledModelRoot == null)
+        {
+            throw TenantException.ModelNotFoundInACatalog(ckModelId);
+        }
+
         try
         {
-            _logger.LogInformation("Importing CK Model '{CkModelId}' into tenant '{TenantId}'", ckModelId, TenantId);
+            await _ckModelRepositoryService.UpdateModelAsync(ckCompiledModelRoot, tenantDatabaseSourceIdentifier);
 
-            await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
+            _logger.LogInformation("CK Model '{CkModelId}' imported into tenant '{TenantId}'", ckModelId, TenantId);
 
-            var ckCompiledModelRoot =
-                await _catalogService.GetAsync(ckModelId, operationResult);
+            // Run migrations after successful import
+            await RunCkModelMigrationsForImportAsync(TenantId, ckModelId, previousSchemaVersions);
 
-            if (operationResult.HasErrors || operationResult.HasFatalErrors)
+            // Invalidate cache so the next access triggers a fresh load with all currently-available models
+            if (_cacheService.IsTenantLoaded(TenantId))
             {
-                throw TenantException.ErrorDuringSystemModelLoad(operationResult);
-            }
-
-            if (ckCompiledModelRoot == null)
-            {
-                throw TenantException.ModelNotFoundInACatalog(ckModelId);
-            }
-
-            try
-            {
-                await _ckModelRepositoryService.UpdateModelAsync(ckCompiledModelRoot, tenantDatabaseSourceIdentifier);
-
-                _logger.LogInformation("CK Model '{CkModelId}' imported into tenant '{TenantId}'", ckModelId, TenantId);
-
-                // Run migrations after successful import
-                await RunCkModelMigrationsForImportAsync(TenantId, ckModelId, previousSchemaVersions);
-
-                // Invalidate cache so the next access triggers a fresh load with all currently-available models
-                if (_cacheService.IsTenantLoaded(TenantId))
-                {
-                    _cacheService.Unload(TenantId);
-                }
-            }
-            catch (ModelValidationException ex)
-            {
-                // Gracefully handle missing dependencies - this can happen when services start
-                // in parallel and a dependent CK model is still being imported by another service.
-                // A RabbitMQ tenant update notification will be sent when the dependency is ready,
-                // allowing this import to succeed on the next attempt.
-                _logger.LogWarning(
-                    "Skipping CK model '{CkModelId}' import for tenant '{TenantId}' due to missing dependencies: {Message}. " +
-                    "This import will be retried when the dependent CK model becomes available.",
-                    ckModelId, TenantId, ex.Message);
-                // Don't add to operationResult as error - this is a transient condition that will resolve itself
+                _cacheService.Unload(TenantId);
             }
         }
-        finally
+        catch (ModelValidationException ex)
         {
-            await _tenantNotifications.NotifyPosTenantUpdateAsync(TenantId, correlationId);
+            // Gracefully handle missing dependencies - this can happen when services start
+            // in parallel and a dependent CK model is still being imported by another service.
+            // A RabbitMQ tenant update notification will be sent when the dependency is ready,
+            // allowing this import to succeed on the next attempt.
+            _logger.LogWarning(
+                "Skipping CK model '{CkModelId}' import for tenant '{TenantId}' due to missing dependencies: {Message}. " +
+                "This import will be retried when the dependent CK model becomes available.",
+                ckModelId, TenantId, ex.Message);
+            // Don't add to operationResult as error - this is a transient condition that will resolve itself
         }
+
+        // Only send the notification after a successful import (not in finally).
+        // Sending this on failure would trigger other services to re-process unnecessarily,
+        // potentially causing an import loop.
+        await _tenantNotifications.NotifyPosTenantUpdateAsync(TenantId, correlationId);
     }
 
     public async Task<bool> IsCkModelExistingAsync(CkModelId ckModelId)
