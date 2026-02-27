@@ -135,7 +135,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
 
             // Assert - Verify a) It didn't fail b) the unique indices that failed are available via CkType
             var session2 = tenantRepository.GetSession();
-            var ckTypeId = GetSimpleTypeId(modelName);
+            var ckTypeId = GetSimpleTypeId(GetModelVersion(modelName, "2.0.0"));
             var result = await tenantRepository.GetCkTypeAsync(
                 session2,
                 new List<CkId<CkTypeId>> { ckTypeId },
@@ -210,8 +210,8 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
 
             // Verify index failed
             var session2 = tenantRepository.GetSession();
-            var ckTypeId = GetSimpleTypeId(modelName);
-            var result = await tenantRepository.GetCkTypeAsync(session2, new List<CkId<CkTypeId>> { ckTypeId }, RtEntityQueryOptions.Create());
+            var ckTypeIdV2 = GetSimpleTypeId(GetModelVersion(modelName, "2.0.0"));
+            var result = await tenantRepository.GetCkTypeAsync(session2, new List<CkId<CkTypeId>> { ckTypeIdV2 }, RtEntityQueryOptions.Create());
             var ckType = result.Items.FirstOrDefault();
             Assert.NotNull(ckType);
             var failedIndex = ckType.IndexStates?.FirstOrDefault(s => s.State == IndexState.Failed);
@@ -222,7 +222,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
             session3.StartTransaction();
 
             entity2.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.UniqueValue);
-            await tenantRepository.UpdateOneRtEntityByIdAsync(session3, ckTypeId.ToRtCkId(), entity2.RtId, entity2);
+            await tenantRepository.UpdateOneRtEntityByIdAsync(session3, ckTypeIdV2.ToRtCkId(), entity2.RtId, entity2);
 
             await session3.CommitTransactionAsync();
 
@@ -232,7 +232,8 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
 
             // Assert: Index should now be successfully applied
             var session4 = tenantRepository.GetSession();
-            var result2 = await tenantRepository.GetCkTypeAsync(session4, new List<CkId<CkTypeId>> { ckTypeId }, RtEntityQueryOptions.Create());
+            var ckTypeIdV3 = GetSimpleTypeId(GetModelVersion(modelName, "3.0.0"));
+            var result2 = await tenantRepository.GetCkTypeAsync(session4, new List<CkId<CkTypeId>> { ckTypeIdV3 }, RtEntityQueryOptions.Create());
             var ckType2 = result2.Items.FirstOrDefault();
             Assert.NotNull(ckType2);
             Assert.NotNull(ckType2.IndexStates);
@@ -300,7 +301,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
 
             // Assert: Index should fail due to duplicates
             var session2 = tenantRepository.GetSession();
-            var ckTypeId = GetSimpleTypeId(modelName);
+            var ckTypeId = GetSimpleTypeId(GetModelVersion(modelName, "2.0.0"));
             var result = await tenantRepository.GetCkTypeAsync(session2, new List<CkId<CkTypeId>> { ckTypeId }, RtEntityQueryOptions.Create());
 
             var ckType = result.Items.FirstOrDefault();
@@ -384,7 +385,8 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
 
             // Assert: Index should succeed because one entity is deleted
             var session3 = tenantRepository.GetSession();
-            var result = await tenantRepository.GetCkTypeAsync(session3, new List<CkId<CkTypeId>> { ckTypeId }, RtEntityQueryOptions.Create());
+            var ckTypeIdV2 = GetSimpleTypeId(GetModelVersion(modelName, "2.0.0"));
+            var result = await tenantRepository.GetCkTypeAsync(session3, new List<CkId<CkTypeId>> { ckTypeIdV2 }, RtEntityQueryOptions.Create());
 
             var ckType = result.Items.FirstOrDefault();
             Assert.NotNull(ckType);
