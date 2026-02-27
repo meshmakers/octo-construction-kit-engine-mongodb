@@ -36,7 +36,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
     private static CkId<CkAttributeId> GetSimpleFieldId(string modelName) =>
         new($"{modelName}/{Constants.SimpleFieldName}");
 
-    private static string GetModelVersion(string modelName) => $"{modelName}-1.0.0";
+    private static string GetModelVersion(string modelName, string version = "1.0.0") => $"{modelName}-{version}";
     [Fact]
     public async Task SuccessfulIndexCreation_ShouldBeTrackedInCkType()
     {
@@ -130,8 +130,8 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
             await session.CommitTransactionAsync();
 
             // Step 3: Modify the ConstructionKit to add the violating unique index
-            // Import the SAME model but with a unique index - this will update the existing model
-            var modelWithIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), hasUniqueIndex: true);
+            // Import a new version of the model with a unique index - this will update the existing model
+            var modelWithIndex = CreateSimpleModel(modelName, GetModelVersion(modelName, "2.0.0"), hasUniqueIndex: true);
 
             // Act - Apply this new ConstructionKit
             await tenantContext.ImportCkModelAsync(modelWithIndex);
@@ -208,7 +208,7 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
             await session.CommitTransactionAsync();
 
             // Step 2: Import with unique index - should fail
-            var modelWithIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), hasUniqueIndex: true);
+            var modelWithIndex = CreateSimpleModel(modelName, GetModelVersion(modelName, "2.0.0"), hasUniqueIndex: true);
             await tenantContext.ImportCkModelAsync(modelWithIndex);
 
             // Verify index failed
@@ -229,8 +229,9 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
 
             await session3.CommitTransactionAsync();
 
-            // Act: Re-import the model with unique index
-            await tenantContext.ImportCkModelAsync(modelWithIndex);
+            // Act: Re-import a new version of the model with unique index (after data fix)
+            var modelWithIndexRetry = CreateSimpleModel(modelName, GetModelVersion(modelName, "3.0.0"), hasUniqueIndex: true);
+            await tenantContext.ImportCkModelAsync(modelWithIndexRetry);
 
             // Assert: Index should now be successfully applied
             var session4 = tenantRepository.GetSession();
@@ -294,8 +295,8 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
 
             await session.CommitTransactionAsync();
 
-            // Step 3: Import with UniqueNotDeleted index
-            var modelWithIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), IndexTypeDto.UniqueNotDeleted);
+            // Step 3: Import new version with UniqueNotDeleted index
+            var modelWithIndex = CreateSimpleModel(modelName, GetModelVersion(modelName, "2.0.0"), IndexTypeDto.UniqueNotDeleted);
 
             // Act
             await tenantContext.ImportCkModelAsync(modelWithIndex);
@@ -378,8 +379,8 @@ public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
             await tenantRepository.UpdateOneRtEntityByIdAsync(session2, rtCkTypeId, entity1.RtId, u);
             await session2.CommitTransactionAsync();
 
-            // Step 4: Import with UniqueNotDeleted index
-            var modelWithIndex = CreateSimpleModel(modelName, GetModelVersion(modelName), IndexTypeDto.UniqueNotDeleted);
+            // Step 4: Import new version with UniqueNotDeleted index
+            var modelWithIndex = CreateSimpleModel(modelName, GetModelVersion(modelName, "2.0.0"), IndexTypeDto.UniqueNotDeleted);
 
             // Act
             await tenantContext.ImportCkModelAsync(modelWithIndex);
