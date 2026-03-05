@@ -58,4 +58,10 @@ public class OctoSystemConfiguration()
     /// When set to true, the MongoDB connection will be established directly to the database host, without using the other nodes in the replica set.
     /// </summary>
     public bool UseDirectConnection { get; set; } = false;
+
+    /// <summary>
+    /// The name of the MongoDB replica set. When set, the driver explicitly connects to the named replica set,
+    /// which is required for multi-document transactions to work correctly with MongoDB.Driver v3.x.
+    /// </summary>
+    public string? ReplicaSetName { get; set; }
 }

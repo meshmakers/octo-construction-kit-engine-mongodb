@@ -125,7 +125,12 @@ public class AdminMongoRepositoryClient(
         urlBuilder.RetryReads = true;
         urlBuilder.RetryWrites = true;
         urlBuilder.DirectConnection = systemConfiguration.UseDirectConnection;
-        
+
+        if (!string.IsNullOrWhiteSpace(systemConfiguration.ReplicaSetName))
+        {
+            urlBuilder.ReplicaSetName = systemConfiguration.ReplicaSetName;
+        }
+
         return urlBuilder.ToMongoUrl();
     }
 }
