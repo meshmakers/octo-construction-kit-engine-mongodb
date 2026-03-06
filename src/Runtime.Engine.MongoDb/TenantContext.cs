@@ -878,14 +878,12 @@ public class TenantContext : ITenantContext
             }
             catch (ModelValidationException ex)
             {
-                // Gracefully handle missing dependencies - this can happen when services start
-                // in parallel and a dependent CK model is still being imported by another service.
-                // A RabbitMQ tenant update notification will be sent when the dependency is ready,
-                // allowing this import to succeed on the next attempt.
-                _logger.LogWarning(
-                    "Skipping CK model '{CkModelId}' import for tenant '{TenantId}' due to missing dependencies: {Message}. " +
-                    "This import will be retried when the dependent CK model becomes available.",
+                // Re-throw for explicit imports (CLI / API). Unlike service startup (the CkModelId
+                // overload below), this overload is called by the user and must report failures.
+                _logger.LogError(
+                    "Import of CK model '{CkModelId}' for tenant '{TenantId}' failed due to missing dependencies: {Message}",
                     ckCompiledModelRoot.ModelId, TenantId, ex.Message);
+                throw;
             }
 
             // Only send the notification after a successful import (not in finally).
