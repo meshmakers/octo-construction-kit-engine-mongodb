@@ -371,6 +371,16 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.InheritorCkTypeId).SetIsRequired(true);
         });
 
+        BsonClassMap.RegisterClassMap<CkRecordInheritance>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.MapIdMember(c => c.InheritanceId).SetIdGenerator(new OctoObjectIdGenerator());
+            cm.AutoMap();
+
+            cm.MapMember(c => c.BaseCkRecordId).SetIsRequired(true);
+            cm.MapMember(c => c.InheritorCkRecordId).SetIsRequired(true);
+        });
+
         BsonClassMap.RegisterClassMap<CkTypeIndex>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
