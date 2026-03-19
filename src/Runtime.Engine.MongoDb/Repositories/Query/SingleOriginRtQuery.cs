@@ -88,7 +88,19 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
     {
         foreach (var roleIdDirectionPair in roleIdDirectionPairs)
         {
-            if (navigationFilterMode == NavigationFilterMode.Filter)
+            // Check if there's a real count filter (not the permissive default GreaterEqualThan 0)
+            var hasRealCountFilter = roleIdDirectionPair.AssociationCountFilter != null &&
+                !(roleIdDirectionPair.AssociationCountFilter.Operator == FieldFilterOperator.GreaterEqualThan &&
+                  roleIdDirectionPair.AssociationCountFilter.ComparisonValue == 0);
+
+            if (hasRealCountFilter)
+            {
+                // N:M association count filter: count associations and filter by count pre-pagination,
+                // then enrich with full associations post-pagination for the cell value
+                CreateAssociationCountNavigation(roleIdDirectionPair, _ckTypeGraph, _associationStageDefinitions);
+                CreateInnerNavigation(roleIdDirectionPair, _ckTypeGraph, _enrichmentStageDefinitions, false);
+            }
+            else if (navigationFilterMode == NavigationFilterMode.Filter)
             {
                 // Two-phase FILTER: lightweight existence check pre-pagination (for filtering + count),
                 // full data enrichment post-pagination (only on the paginated subset).
@@ -107,7 +119,6 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         List<IPipelineStageDefinition> stageDefinitions, bool filterEntitiesWithoutAssociations = true)
     {
         var targetCkTypeGraph = _ckCacheService.GetRtCkType(_tenantId, roleIdDirectionPair.TargetCkTypeId);
-        var targetCkTypeIds = targetCkTypeGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
 
         // We need to have a list of all ck type ids we should handle as a candidate for the association target ck type id.
         var baseCkTypeIds = targetCkTypeGraph.BaseTypes.Select(b => b.BaseCkTypeId).ToList();
@@ -115,12 +126,17 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
 
         var innerLocalFieldRtId = (FieldDefinition<RtAssociation, string>)"originRtId";
         var foreignFieldRtId = (FieldDefinition<RtAssociation>)"targetRtId";
-        var targetCkTypeIdField = (FieldDefinition<RtAssociation, RtCkId<CkTypeId>>)"originCkTypeId";
         // We ensure that the association role exists.
         // Because navigation properties are centralized in the definition, all
         // associations with the same role id have the same navigation property name.
         var association = originCkTypeGraph.Associations.In.All.FirstOrDefault(a =>
             baseCkTypeIds.Contains(a.TargetCkTypeId) && a.CkRoleId.Equals(roleIdDirectionPair.CkRoleId));
+
+        // For the association lookup filter, we need to match the correct CkTypeId field:
+        // Inbound: join on targetRtId, filter by originCkTypeId (the type that created the association)
+        // Outbound: join on originRtId, filter by targetCkTypeId
+        FieldDefinition<RtAssociation, RtCkId<CkTypeId>> ckTypeIdFilterField;
+        IEnumerable<RtCkId<CkTypeId>> ckTypeIdsToMatch;
 
         switch (roleIdDirectionPair.Direction)
         {
@@ -130,9 +146,17 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                 association = originCkTypeGraph.Associations.Out.All.FirstOrDefault(a =>
                     baseCkTypeIds.Contains(a.TargetCkTypeId) &&
                     a.CkRoleId.Equals(roleIdDirectionPair.CkRoleId));
-                targetCkTypeIdField = (FieldDefinition<RtAssociation, RtCkId<CkTypeId>>)"targetCkTypeId";
+                ckTypeIdFilterField = "targetCkTypeId";
+                ckTypeIdsToMatch = targetCkTypeGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
                 break;
             case GraphDirections.Inbound:
+                ckTypeIdFilterField = "originCkTypeId";
+                // For inbound, the originCkTypeId in the association document is the type that created
+                // the association (e.g., AccountingDocument), not the target type in the path.
+                var originOfAssociationGraph = _ckCacheService.GetCkType(_tenantId, association!.OriginCkTypeId);
+                ckTypeIdsToMatch = originOfAssociationGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
+                // Use the origin type's graph for the inner entity lookup collection
+                targetCkTypeGraph = originOfAssociationGraph;
                 break;
             default:
                 throw OperationFailedException.GraphDirectionUnsupported(roleIdDirectionPair.Direction);
@@ -176,7 +200,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
             PipelineStageDefinitionBuilder.Match(
                 Builders<RtAssociation>.Filter.And(
                     Builders<RtAssociation>.Filter.Eq(f => f.AssociationRoleId, roleIdDirectionPair.CkRoleId),
-                    Builders<RtAssociation>.Filter.In(targetCkTypeIdField, targetCkTypeIds)
+                    Builders<RtAssociation>.Filter.In(ckTypeIdFilterField, ckTypeIdsToMatch)
                 )
             ),
             OctoPipelineStageBuilder
@@ -273,16 +297,17 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         List<IPipelineStageDefinition> stageDefinitions)
     {
         var targetCkTypeGraph = _ckCacheService.GetRtCkType(_tenantId, roleIdDirectionPair.TargetCkTypeId);
-        var targetCkTypeIds = targetCkTypeGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
 
         var baseCkTypeIds = targetCkTypeGraph.BaseTypes.Select(b => b.BaseCkTypeId).ToList();
         baseCkTypeIds.Add(targetCkTypeGraph.CkTypeId);
 
         var innerLocalFieldRtId = (FieldDefinition<RtAssociation, string>)"originRtId";
         var foreignFieldRtId = (FieldDefinition<RtAssociation>)"targetRtId";
-        var targetCkTypeIdField = (FieldDefinition<RtAssociation, RtCkId<CkTypeId>>)"originCkTypeId";
         var association = originCkTypeGraph.Associations.In.All.FirstOrDefault(a =>
             baseCkTypeIds.Contains(a.TargetCkTypeId) && a.CkRoleId.Equals(roleIdDirectionPair.CkRoleId));
+
+        FieldDefinition<RtAssociation, RtCkId<CkTypeId>> ckTypeIdFilterField;
+        IEnumerable<RtCkId<CkTypeId>> ckTypeIdsToMatch;
 
         switch (roleIdDirectionPair.Direction)
         {
@@ -292,9 +317,14 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                 association = originCkTypeGraph.Associations.Out.All.FirstOrDefault(a =>
                     baseCkTypeIds.Contains(a.TargetCkTypeId) &&
                     a.CkRoleId.Equals(roleIdDirectionPair.CkRoleId));
-                targetCkTypeIdField = (FieldDefinition<RtAssociation, RtCkId<CkTypeId>>)"targetCkTypeId";
+                ckTypeIdFilterField = "targetCkTypeId";
+                ckTypeIdsToMatch = targetCkTypeGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
                 break;
             case GraphDirections.Inbound:
+                ckTypeIdFilterField = "originCkTypeId";
+                var originOfAssocGraph = _ckCacheService.GetCkType(_tenantId, association!.OriginCkTypeId);
+                ckTypeIdsToMatch = originOfAssocGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
+                targetCkTypeGraph = originOfAssocGraph;
                 break;
             default:
                 throw OperationFailedException.GraphDirectionUnsupported(roleIdDirectionPair.Direction);
@@ -342,7 +372,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
             PipelineStageDefinitionBuilder.Match(
                 Builders<RtAssociation>.Filter.And(
                     Builders<RtAssociation>.Filter.Eq(f => f.AssociationRoleId, roleIdDirectionPair.CkRoleId),
-                    Builders<RtAssociation>.Filter.In(targetCkTypeIdField, targetCkTypeIds)
+                    Builders<RtAssociation>.Filter.In(ckTypeIdFilterField, ckTypeIdsToMatch)
                 )
             ),
             OctoPipelineStageBuilder
@@ -385,6 +415,131 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         ));
 
         // Cleanup: project to keep entity fields, drop __associations
+        stageDefinitions.Add(PipelineStageDefinitionBuilder.Project(
+            OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.Fields(
+            [
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("_id",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("ckTypeId",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("attributes",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtChangedDateTime",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtCreationDateTime",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtVersion",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtWellKnownName",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+            ])));
+    }
+
+    /// <summary>
+    /// Creates association count navigation stages for N:M association meta queries.
+    /// Counts the number of matching associations and filters entities based on the count.
+    /// </summary>
+    private void CreateAssociationCountNavigation(NavigationPair roleIdDirectionPair, CkTypeGraph originCkTypeGraph,
+        List<IPipelineStageDefinition> stageDefinitions)
+    {
+        var targetCkTypeGraph = _ckCacheService.GetRtCkType(_tenantId, roleIdDirectionPair.TargetCkTypeId);
+
+        var baseCkTypeIds = targetCkTypeGraph.BaseTypes.Select(b => b.BaseCkTypeId).ToList();
+        baseCkTypeIds.Add(targetCkTypeGraph.CkTypeId);
+
+        var foreignFieldRtId = (FieldDefinition<RtAssociation>)"targetRtId";
+        var association = originCkTypeGraph.Associations.In.All.FirstOrDefault(a =>
+            baseCkTypeIds.Contains(a.TargetCkTypeId) && a.CkRoleId.Equals(roleIdDirectionPair.CkRoleId));
+
+        // For the count filter, we need to match the correct CkTypeId field in the association document.
+        // Inbound: we join on targetRtId, filter by originCkTypeId (the type that created the association)
+        // Outbound: we join on originRtId, filter by targetCkTypeId
+        FieldDefinition<RtAssociation, RtCkId<CkTypeId>> ckTypeIdFilterField;
+        IEnumerable<RtCkId<CkTypeId>> ckTypeIdsToMatch;
+
+        switch (roleIdDirectionPair.Direction)
+        {
+            case GraphDirections.Outbound:
+                foreignFieldRtId = "originRtId";
+                association = originCkTypeGraph.Associations.Out.All.FirstOrDefault(a =>
+                    baseCkTypeIds.Contains(a.TargetCkTypeId) &&
+                    a.CkRoleId.Equals(roleIdDirectionPair.CkRoleId));
+                // Outbound: filter by targetCkTypeId in association = the target type
+                ckTypeIdFilterField = "targetCkTypeId";
+                ckTypeIdsToMatch = targetCkTypeGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
+                break;
+            case GraphDirections.Inbound:
+                // Inbound: filter by originCkTypeId in association = the origin type (who created the association)
+                ckTypeIdFilterField = "originCkTypeId";
+                // The origin type is stored in the CkTypeAssociationGraph.OriginCkTypeId
+                var originOfAssociationGraph = _ckCacheService.GetCkType(_tenantId, association!.OriginCkTypeId);
+                ckTypeIdsToMatch = originOfAssociationGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
+                break;
+            default:
+                throw OperationFailedException.GraphDirectionUnsupported(roleIdDirectionPair.Direction);
+        }
+
+        if (association == null)
+        {
+            throw OperationFailedException.AssociationNotFound(roleIdDirectionPair.CkRoleId,
+                roleIdDirectionPair.TargetCkTypeId);
+        }
+
+        var countFilter = roleIdDirectionPair.AssociationCountFilter!;
+
+        // Lookup pipeline: match associations by role id and ck type, then count
+        var lookupPipelineStages = new List<IPipelineStageDefinition>
+        {
+            PipelineStageDefinitionBuilder.Match(
+                Builders<RtAssociation>.Filter.And(
+                    Builders<RtAssociation>.Filter.Eq(f => f.AssociationRoleId, roleIdDirectionPair.CkRoleId),
+                    Builders<RtAssociation>.Filter.In(ckTypeIdFilterField, ckTypeIdsToMatch)
+                )
+            ),
+            // Minimal projection — we only need the count
+            PipelineStageDefinitionBuilder.Project<RtAssociation, RtAssociationWithEntities>(
+                new BsonDocument { { "_id", 1 } }),
+        };
+
+        var lookupPipeline =
+            PipelineDefinition<RtAssociation, RtAssociationWithEntities>.Create(lookupPipelineStages);
+
+        // Outer lookup
+        stageDefinitions.Add(
+            OctoPipelineStageBuilder
+                .Lookup<TEntity, RtAssociation, RtAssociationWithEntities, IEnumerable<RtAssociationWithEntities>,
+                    RtAssociationWithEntities>(
+                    _mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations.GetMongoCollection(),
+                    "_id",
+                    foreignFieldRtId,
+                    (FieldDefinition<RtAssociationWithEntities, IEnumerable<RtAssociationWithEntities>>)
+                    "__assocCount",
+                    lookupPipeline));
+
+        // AddFields: compute count from __assocCount array size
+        stageDefinitions.Add(
+            new BsonDocumentPipelineStageDefinition<RtAssociationWithEntities, RtAssociationWithEntities>(
+                new BsonDocument("$addFields", new BsonDocument("__assocCountVal",
+                    new BsonDocument("$size", "$__assocCount")))));
+
+        // Match: filter by count using the operator from AssociationCountFilter
+        var compVal = new BsonInt32(countFilter.ComparisonValue);
+        BsonValue matchValue = countFilter.Operator switch
+        {
+            FieldFilterOperator.Equals => compVal,
+            FieldFilterOperator.NotEquals => new BsonDocument("$ne", compVal),
+            FieldFilterOperator.GreaterThan => new BsonDocument("$gt", compVal),
+            FieldFilterOperator.GreaterEqualThan => new BsonDocument("$gte", compVal),
+            FieldFilterOperator.LessThan => new BsonDocument("$lt", compVal),
+            FieldFilterOperator.LessEqualThan => new BsonDocument("$lte", compVal),
+            _ => throw OperationFailedException.OperatorNotSupported(countFilter.Operator)
+        };
+
+        stageDefinitions.Add(
+            new BsonDocumentPipelineStageDefinition<RtAssociationWithEntities, RtAssociationWithEntities>(
+                new BsonDocument("$match", new BsonDocument("__assocCountVal", matchValue))));
+
+        // Cleanup: remove temporary fields, keep entity fields
         stageDefinitions.Add(PipelineStageDefinitionBuilder.Project(
             OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.Fields(
             [

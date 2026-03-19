@@ -13,3 +13,6 @@ types:
     - id: ${this}/Contacts.EMailAddresses
       name: EMailAddresses
       isOptional: true
+    associations:
+    - id: ${this}/CustomerMeasuringPoint
+      targetCkTypeId: ${this}/MeasuringPoint

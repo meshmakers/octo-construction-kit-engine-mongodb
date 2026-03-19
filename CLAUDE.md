@@ -101,6 +101,19 @@ navigationPropertyName.targetTypeName->attributeName
 Example:
 - `parent.testStateOrProvince->name` - Navigate via "Parent" association to StateOrProvince and get its Name attribute
 
+### N:M Association Meta Properties
+
+N:M associations use `::` separator for meta-properties (count/existence) to avoid collision with `->` attribute navigation:
+```
+navigationPropertyName.targetTypeName::totalCount    → count of associations
+navigationPropertyName.targetTypeName::exists        → true if any association exists
+```
+
+Implementation in `SingleOriginRtQuery.CreateAssociationCountNavigation`:
+- Uses `$lookup` + `$addFields($size)` + `$match` to count and filter by association count
+- Triggered when `NavigationPair.AssociationCountFilter` is set
+- Runs pre-pagination in `_associationStageDefinitions`, then enriches post-pagination via `CreateInnerNavigation`
+
 ## Key Classes
 
 - `TenantRepository` - Main repository for tenant-specific data operations

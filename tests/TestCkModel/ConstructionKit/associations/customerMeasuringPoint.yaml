@@ -1,0 +1,8 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+associationRoles:
+  - id: CustomerMeasuringPoint
+    description: "Links a customer to their measuring points (N:M cross-type association)."
+    inboundName: AssignedCustomers
+    inboundMultiplicity: N
+    outboundName: AssignedMeasuringPoints
+    outboundMultiplicity: N

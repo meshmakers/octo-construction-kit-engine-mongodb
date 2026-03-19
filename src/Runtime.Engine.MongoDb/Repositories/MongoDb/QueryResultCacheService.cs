@@ -110,6 +110,13 @@ internal class QueryResultCacheService
             sb.Append(pair.Direction).Append(',');
             sb.Append(pair.TargetCkTypeId);
 
+            if (pair.AssociationCountFilter != null)
+            {
+                sb.Append(",acf:");
+                sb.Append(pair.AssociationCountFilter.Operator).Append(':');
+                sb.Append(pair.AssociationCountFilter.ComparisonValue);
+            }
+
             if (pair.FieldFilters != null)
             {
                 sb.Append(",ff:");
