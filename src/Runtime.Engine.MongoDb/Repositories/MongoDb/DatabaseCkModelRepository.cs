@@ -638,16 +638,32 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         var resolveResult = await _repositoryModelResolver.SoftResolveAsync(ckModels.Select(x => x.Id).ToList(),
             originFileResolver, operationResult, sourceIdentifier);
 
-        if (operationResult.HasErrors || operationResult.HasFatalErrors)
-        {
-            throw OperationFailedException.ValidateFailed(operationResult);
-        }
-
+        // Mark models that were skipped due to missing dependencies as ResolveFailed
         if (resolveResult.SkippedModelIds.Any())
         {
             foreach (CkModelId skippedModelId in resolveResult.SkippedModelIds)
             {
+                _logger.LogWarning(
+                    "CK model '{CkModelId}' has missing dependencies and will be marked as ResolveFailed. " +
+                    "It will be re-validated when the missing dependency becomes available",
+                    skippedModelId);
                 await UpdateModelStateAsync(session, mongoDbRepositoryDataSource, skippedModelId, ModelState.ResolveFailed);
+            }
+        }
+
+        // Mark models that failed inheritance resolution as ResolveFailed
+        // This happens when a dependency model was upgraded to a new major version and
+        // the dependent model still references types from the old version
+        if (resolveResult.FailedModelIds.Any())
+        {
+            foreach (CkModelId failedModelId in resolveResult.FailedModelIds)
+            {
+                _logger.LogWarning(
+                    "CK model '{CkModelId}' failed inheritance resolution and will be marked as ResolveFailed. " +
+                    "This typically happens after a dependency model major version upgrade. " +
+                    "The model will be re-validated when a compatible version is imported",
+                    failedModelId);
+                await UpdateModelStateAsync(session, mongoDbRepositoryDataSource, failedModelId, ModelState.ResolveFailed);
             }
         }
     }
