@@ -104,6 +104,68 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return _repository.GetCollection(mapper, suffix);
     }
 
+    /// <inheritdoc />
+    public IMongoDbDataSourceCollection<OctoObjectId, TEntity> GetRtDatabaseCollectionByTypeId<TEntity>(
+        RtCkId<CkTypeId> rtCkTypeId) where TEntity : RtEntity, new()
+    {
+        var suffix = rtCkTypeId.GetCkTypeCollectionName();
+        var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
+        return _repository.GetCollection(mapper, suffix);
+    }
+
+    /// <inheritdoc />
+    public IMongoDbDataSourceCollection<OctoObjectId, TEntity> GetRtDatabaseCollectionByCollectionSuffix<TEntity>(
+        string suffix) where TEntity : RtEntity, new()
+    {
+        var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
+        return _repository.GetCollection(mapper, suffix);
+    }
+
+    /// <inheritdoc />
+    public async Task DropRtDatabaseCollectionByTypeIdAsync(RtCkId<CkTypeId> rtCkTypeId)
+    {
+        var suffix = rtCkTypeId.GetCkTypeCollectionName();
+        var collectionName = $"RtEntity_{suffix}";
+        await _repository.DropCollectionAsync(collectionName);
+    }
+
+    /// <inheritdoc />
+    public async Task<(string CollectionName, IReadOnlyList<TEntity> Entities)> FindEntitiesInAllCollectionsByCkTypeIdAsync<TEntity>(
+        IOctoSession session, string ckTypeIdValue) where TEntity : RtEntity, new()
+    {
+        const string rtEntityPrefix = "RtEntity_";
+        var allCollections = await _repository.ListCollectionNamesAsync(rtEntityPrefix);
+
+        _logger.LogDebug(
+            "FindEntitiesInAllCollectionsByCkTypeIdAsync: Searching {Count} collections for ckTypeId '{CkTypeId}'",
+            allCollections.Count, ckTypeIdValue);
+
+        foreach (var collectionName in allCollections)
+        {
+            var suffix = collectionName.Substring(rtEntityPrefix.Length);
+            var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
+            var collection = _repository.GetCollection(mapper, suffix);
+
+            var filter = Builders<TEntity>.Filter.Eq("ckTypeId", ckTypeIdValue);
+            var entities = await collection.FindManyAsync(session, filter).ConfigureAwait(false);
+
+            _logger.LogDebug(
+                "FindEntitiesInAllCollectionsByCkTypeIdAsync: Collection '{CollectionName}' has {Count} matches",
+                collectionName, entities.Count);
+
+            if (entities.Count > 0)
+            {
+                return (collectionName, entities.ToList());
+            }
+        }
+
+        _logger.LogWarning(
+            "FindEntitiesInAllCollectionsByCkTypeIdAsync: No entities found with ckTypeId '{CkTypeId}' in any collection",
+            ckTypeIdValue);
+
+        return (string.Empty, Array.Empty<TEntity>());
+    }
+
     public override async Task<IReadOnlyList<RtAssociationsMultiplicityResult>> GetRtAssociationsMultiplicityAsync(
         IOctoSession session, IEnumerable<RtEntityRoleIdDirectionPair> entityRoleIdDirectionPairs)
     {

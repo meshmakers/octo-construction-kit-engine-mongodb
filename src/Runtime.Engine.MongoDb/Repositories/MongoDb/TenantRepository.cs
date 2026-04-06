@@ -960,4 +960,172 @@ internal class TenantRepository(
     }
 
     #endregion Advanced functionality
+
+    #region Migration support (CkCache-free)
+
+    /// <inheritdoc />
+    public override async Task<(IReadOnlyList<RtEntity> Entities, bool IsSharedCollection)> GetRtEntitiesByTypeForMigrationAsync(
+        IOctoSession session, RtCkId<CkTypeId> rtCkTypeId)
+    {
+        // First, try the type's own collection (for root types that have their own collection)
+        var collection = GetRtCollectionForMigration<RtEntity>(rtCkTypeId);
+        var entities = await collection.GetAsync(session).ConfigureAwait(false);
+        var result = entities.ToList();
+
+        if (result.Count > 0)
+        {
+            return (result, false);
+        }
+
+        // Fallback: For derived types, entities are stored in a parent type's collection
+        // with the ckTypeId field set to the derived type. Search all RtEntity collections.
+        // Note: The ckTypeId field in MongoDB uses the semantic versioned format "ModelId/TypeName"
+        // (e.g. "System.Communication/Adapter"), which omits the version suffix for version 1.
+        var ckTypeIdValue = rtCkTypeId.SemanticVersionedFullName;
+        var (collectionName, foundEntities) = await mongoDbRepositoryDataSource
+            .FindEntitiesInAllCollectionsByCkTypeIdAsync<RtEntity>(session, ckTypeIdValue)
+            .ConfigureAwait(false);
+
+        if (foundEntities.Count > 0)
+        {
+            // Store the collection name so operations know where these entities live
+            _derivedTypeCollectionMap[rtCkTypeId.FullName] = collectionName;
+        }
+
+        return (foundEntities, foundEntities.Count > 0);
+    }
+
+    /// <summary>
+    /// Tracks which collection derived type entities were found in, so delete operations
+    /// can target the correct collection.
+    /// </summary>
+    private readonly Dictionary<string, string> _derivedTypeCollectionMap = new();
+
+    /// <inheritdoc />
+    public override async Task DeleteOneRtEntityForMigrationAsync(
+        IOctoSession session, RtCkId<CkTypeId> rtCkTypeId, OctoObjectId rtId)
+    {
+        // If we previously found this type's entities in a parent collection, delete from there
+        if (_derivedTypeCollectionMap.TryGetValue(rtCkTypeId.FullName, out var parentCollectionName))
+        {
+            var parentCollection = GetRtCollectionByName<RtEntity>(parentCollectionName);
+            await parentCollection.DeleteOneAsync(session, rtId).ConfigureAwait(false);
+            return;
+        }
+
+        // Default: delete from the type's own collection
+        var collection = GetRtCollectionForMigration<RtEntity>(rtCkTypeId);
+        await collection.DeleteOneAsync(session, rtId).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public override async Task InsertOneRtEntityForMigrationAsync(
+        IOctoSession session, RtCkId<CkTypeId> rtCkTypeId, RtEntity rtEntity)
+    {
+        rtEntity.CkTypeId = rtCkTypeId;
+        rtEntity.RtCreationDateTime ??= DateTime.UtcNow;
+        rtEntity.RtChangedDateTime = DateTime.UtcNow;
+
+        var collection = GetRtCollectionForMigration<RtEntity>(rtCkTypeId);
+        await collection.InsertOneAsync(session, rtEntity).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public override async Task UpdateCkTypeIdForMigrationAsync(
+        IOctoSession session, OctoObjectId rtId, RtCkId<CkTypeId> newCkTypeId)
+    {
+        // Find which collection actually contains this entity by searching all known
+        // parent collections from the derived type map
+        IMongoDbDataSourceCollection<OctoObjectId, RtEntity>? collection = null;
+        var idFilter = Builders<RtEntity>.Filter.Eq("_id", rtId);
+        var checkedCollectionNames = new HashSet<string>();
+
+        foreach (var kvp in _derivedTypeCollectionMap)
+        {
+            if (!checkedCollectionNames.Add(kvp.Value))
+            {
+                continue;
+            }
+
+            var candidateCollection = GetRtCollectionByName<RtEntity>(kvp.Value);
+            var existsInCollection = await candidateCollection.GetTotalCountAsync(session, idFilter)
+                .ConfigureAwait(false);
+            if (existsInCollection > 0)
+            {
+                collection = candidateCollection;
+                break;
+            }
+        }
+
+        collection ??= GetRtCollectionForMigration<RtEntity>(newCkTypeId);
+
+        // Use semantic versioned format to match the MongoDB storage format
+        var update = Builders<RtEntity>.Update.Set("ckTypeId", newCkTypeId.SemanticVersionedFullName);
+        await collection.UpdateOneAsync(session, rtId, update).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public override async Task<int> UpdateAssociationCkTypeIdsForMigrationAsync(
+        IOctoSession session, RtCkId<CkTypeId> oldCkTypeId, RtCkId<CkTypeId> newCkTypeId)
+    {
+        var oldValue = oldCkTypeId.SemanticVersionedFullName;
+        var newValue = newCkTypeId.SemanticVersionedFullName;
+        var associations = mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations;
+        int totalUpdated = 0;
+
+        // Count matches before updating so the returned count reflects actually targeted rows
+        var originFilter = Builders<RtAssociation>.Filter.Eq("originCkTypeId", oldValue);
+        var originCount = await associations.GetTotalCountAsync(session, originFilter).ConfigureAwait(false);
+        var originUpdate = Builders<RtAssociation>.Update.Set("originCkTypeId", newValue);
+        await associations.UpdateManyAsync(session, originFilter, originUpdate).ConfigureAwait(false);
+
+        var targetFilter = Builders<RtAssociation>.Filter.Eq("targetCkTypeId", oldValue);
+        var targetCount = await associations.GetTotalCountAsync(session, targetFilter).ConfigureAwait(false);
+        var targetUpdate = Builders<RtAssociation>.Update.Set("targetCkTypeId", newValue);
+        await associations.UpdateManyAsync(session, targetFilter, targetUpdate).ConfigureAwait(false);
+
+        totalUpdated = (int)(originCount + targetCount);
+        return totalUpdated;
+    }
+
+    /// <inheritdoc />
+    public override async Task<bool> DropCollectionIfEmptyForMigrationAsync(RtCkId<CkTypeId> rtCkTypeId)
+    {
+        var collection = GetRtCollectionForMigration<RtEntity>(rtCkTypeId);
+        using var session = await mongoDbRepositoryDataSource.GetSessionAsync().ConfigureAwait(false);
+        var count = await collection.GetTotalCountAsync(session).ConfigureAwait(false);
+
+        if (count > 0)
+        {
+            return false;
+        }
+
+        await mongoDbRepositoryDataSource.DropRtDatabaseCollectionByTypeIdAsync(rtCkTypeId).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Gets a MongoDB collection for a CK type by directly constructing the collection name
+    /// from the type ID, without requiring a CkTypeGraph from the CK cache.
+    /// This assumes the type is a root collection type (not a derived type stored in a parent's collection).
+    /// </summary>
+    private IMongoDbDataSourceCollection<OctoObjectId, TEntity> GetRtCollectionForMigration<TEntity>(
+        RtCkId<CkTypeId> rtCkTypeId) where TEntity : RtEntity, new()
+    {
+        return mongoDbRepositoryDataSource.GetRtDatabaseCollectionByTypeId<TEntity>(rtCkTypeId);
+    }
+
+    /// <summary>
+    /// Gets a MongoDB collection by its full collection name (e.g. "RtEntity_SystemCommunicationDeployableEntity").
+    /// </summary>
+    private IMongoDbDataSourceCollection<OctoObjectId, TEntity> GetRtCollectionByName<TEntity>(
+        string collectionName) where TEntity : RtEntity, new()
+    {
+        var suffix = collectionName.StartsWith("RtEntity_")
+            ? collectionName.Substring("RtEntity_".Length)
+            : collectionName;
+        return mongoDbRepositoryDataSource.GetRtDatabaseCollectionByCollectionSuffix<TEntity>(suffix);
+    }
+
+    #endregion Migration support (CkCache-free)
 }
