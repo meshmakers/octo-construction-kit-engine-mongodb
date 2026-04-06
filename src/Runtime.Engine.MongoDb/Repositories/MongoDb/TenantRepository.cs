@@ -992,7 +992,7 @@ internal class TenantRepository(
             _derivedTypeCollectionMap[rtCkTypeId.FullName] = collectionName;
         }
 
-        return (foundEntities, true);
+        return (foundEntities, foundEntities.Count > 0);
     }
 
     /// <summary>
@@ -1034,15 +1034,27 @@ internal class TenantRepository(
     public override async Task UpdateCkTypeIdForMigrationAsync(
         IOctoSession session, OctoObjectId rtId, RtCkId<CkTypeId> newCkTypeId)
     {
-        // Find which collection contains this entity (from the derived type lookup)
-        // Try all known parent collections, then fall back to searching
+        // Find which collection actually contains this entity by searching all known
+        // parent collections from the derived type map
         IMongoDbDataSourceCollection<OctoObjectId, RtEntity>? collection = null;
+        var idFilter = Builders<RtEntity>.Filter.Eq("_id", rtId);
+        var checkedCollectionNames = new HashSet<string>();
 
         foreach (var kvp in _derivedTypeCollectionMap)
         {
+            if (!checkedCollectionNames.Add(kvp.Value))
+            {
+                continue;
+            }
+
             var candidateCollection = GetRtCollectionByName<RtEntity>(kvp.Value);
-            collection = candidateCollection;
-            break;
+            var existsInCollection = await candidateCollection.GetTotalCountAsync(session, idFilter)
+                .ConfigureAwait(false);
+            if (existsInCollection > 0)
+            {
+                collection = candidateCollection;
+                break;
+            }
         }
 
         collection ??= GetRtCollectionForMigration<RtEntity>(newCkTypeId);
@@ -1061,24 +1073,17 @@ internal class TenantRepository(
         var associations = mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations;
         int totalUpdated = 0;
 
-        // Update originCkTypeId
+        // Count matches before updating so the returned count reflects actually targeted rows
         var originFilter = Builders<RtAssociation>.Filter.Eq("originCkTypeId", oldValue);
+        var originCount = await associations.GetTotalCountAsync(session, originFilter).ConfigureAwait(false);
         var originUpdate = Builders<RtAssociation>.Update.Set("originCkTypeId", newValue);
         await associations.UpdateManyAsync(session, originFilter, originUpdate).ConfigureAwait(false);
 
-        // Count how many had the old originCkTypeId (UpdateManyAsync doesn't return count, so we estimate)
-        var originCount = await associations.GetTotalCountAsync(session,
-            Builders<RtAssociation>.Filter.Eq("originCkTypeId", newValue)).ConfigureAwait(false);
-
-        // Update targetCkTypeId
         var targetFilter = Builders<RtAssociation>.Filter.Eq("targetCkTypeId", oldValue);
+        var targetCount = await associations.GetTotalCountAsync(session, targetFilter).ConfigureAwait(false);
         var targetUpdate = Builders<RtAssociation>.Update.Set("targetCkTypeId", newValue);
         await associations.UpdateManyAsync(session, targetFilter, targetUpdate).ConfigureAwait(false);
 
-        var targetCount = await associations.GetTotalCountAsync(session,
-            Builders<RtAssociation>.Filter.Eq("targetCkTypeId", newValue)).ConfigureAwait(false);
-
-        // Return a rough count (some may have been updated in both origin and target)
         totalUpdated = (int)(originCount + targetCount);
         return totalUpdated;
     }
@@ -1087,7 +1092,7 @@ internal class TenantRepository(
     public override async Task<bool> DropCollectionIfEmptyForMigrationAsync(RtCkId<CkTypeId> rtCkTypeId)
     {
         var collection = GetRtCollectionForMigration<RtEntity>(rtCkTypeId);
-        var session = await mongoDbRepositoryDataSource.GetSessionAsync().ConfigureAwait(false);
+        using var session = await mongoDbRepositoryDataSource.GetSessionAsync().ConfigureAwait(false);
         var count = await collection.GetTotalCountAsync(session).ConfigureAwait(false);
 
         if (count > 0)
@@ -1119,7 +1124,6 @@ internal class TenantRepository(
         var suffix = collectionName.StartsWith("RtEntity_")
             ? collectionName.Substring("RtEntity_".Length)
             : collectionName;
-        var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
         return mongoDbRepositoryDataSource.GetRtDatabaseCollectionByCollectionSuffix<TEntity>(suffix);
     }
 
