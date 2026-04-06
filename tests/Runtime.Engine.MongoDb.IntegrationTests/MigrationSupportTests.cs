@@ -404,7 +404,10 @@ public class MigrationSupportTests(MigrationSupportFixture fixture)
         var systemContext = fixture.GetSystemContext();
         var repository = systemContext.GetTenantRepository();
         var newRtId = OctoObjectId.GenerateNewId();
-        var beforeInsert = DateTime.UtcNow;
+        // Truncate to millisecond precision since MongoDB stores DateTime with ms precision
+        var beforeInsert = new DateTime(
+            DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond * TimeSpan.TicksPerMillisecond,
+            DateTimeKind.Utc);
 
         using var session = await repository.GetSessionAsync();
         session.StartTransaction();
