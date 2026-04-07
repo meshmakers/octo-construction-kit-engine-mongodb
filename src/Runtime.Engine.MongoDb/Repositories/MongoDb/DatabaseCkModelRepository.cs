@@ -434,6 +434,18 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
         try
         {
+            // Pre-validate that all system CkTypeId references in the compiled model
+            // match actually installed system model versions.  Compiled models contain
+            // exact versioned references (e.g. System-2.0.7/Entity-1) that must exist
+            // in the database; a minor version mismatch will cause the import to fail.
+            // Skip this check for system models themselves (they are the root models
+            // being installed and don't depend on a previously installed version).
+            var modelName = compiledModel.ModelId.Name;
+            if (modelName != "System" && !modelName.StartsWith("System.", StringComparison.Ordinal))
+            {
+                await ValidateSystemReferencesAsync(compiledModel, mongoDbRepositoryDataSource);
+            }
+
             _logger.LogInformation("Validating of CK model '{CkModelId}'", compiledModel.ModelId);
             var originFileResolver = new OriginFileResolver("-");
             await _repositoryModelResolver.HardResolveAsync(compiledModel, originFileResolver, operationResult,
@@ -1054,6 +1066,61 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         if (bulkImportResult.HasError())
         {
             throw OperationFailedException.BulkImportError();
+        }
+    }
+
+    /// <summary>
+    ///     Validates that all system CkTypeId references in the compiled model's types
+    ///     match system models that are actually installed in the database.
+    ///     Compiled models contain exact versioned references (e.g. System-2.0.7/Entity-1);
+    ///     if the installed system model has a different version, the import would fail
+    ///     during inheritance resolution with a confusing "unknown CkTypeId" error.
+    /// </summary>
+    private async Task ValidateSystemReferencesAsync(
+        CkCompiledModelRoot compiledModel,
+        ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
+    {
+        if (compiledModel.Types == null) return;
+
+        // Collect all distinct system model versions referenced in the compiled types
+        var referencedSystemVersions = new Dictionary<string, CkModelId>();
+        foreach (var type in compiledModel.Types)
+        {
+            if (type.DerivedFromCkTypeId?.ModelId == null) continue;
+
+            var refModelId = type.DerivedFromCkTypeId.ModelId;
+            if (refModelId.Name == "System" || refModelId.Name.StartsWith("System.", StringComparison.Ordinal))
+            {
+                referencedSystemVersions.TryAdd(refModelId.Name, refModelId);
+            }
+        }
+
+        if (referencedSystemVersions.Count == 0) return;
+
+        // Check each referenced system model against the database.
+        // Query by exact CkModelId to avoid LINQ serializer issues with sub-properties.
+        using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
+        foreach (var (name, referencedId) in referencedSystemVersions)
+        {
+            // Try to find the exact referenced version first
+            var exactModel = await mongoDbRepositoryDataSource.CkModels
+                .FindSingleOrDefaultAsync(session,
+                    e => e.Id == referencedId && e.ModelState == ModelState.Available);
+
+            if (exactModel != null) continue; // Exact version is installed, all good
+
+            // Exact version not found — check if a different version is installed
+            // by looking for any available model with the same CkModelId
+            var anyModels = await mongoDbRepositoryDataSource.CkModels
+                .FindManyAsync(session, e => e.ModelState == ModelState.Available);
+            var installedModel = anyModels.FirstOrDefault(m => m.Id.Name == name);
+
+            if (installedModel == null) continue; // Not installed at all, let HardResolveAsync handle it
+
+            throw new ModelValidationException(
+                $"Model '{compiledModel.ModelId}' was compiled against '{referencedId.FullName}' " +
+                $"but '{name}-{installedModel.Id.Version}' is installed. " +
+                $"The model needs to be recompiled against the current system version.");
         }
     }
 }
