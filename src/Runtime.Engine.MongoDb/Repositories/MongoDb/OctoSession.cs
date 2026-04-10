@@ -74,19 +74,20 @@ internal abstract class OctoSession : IOctoSessionInternal
             throw SessionOperationException.SessionNotActive();
         }
 
-        _isSessionActive = false;
         await SessionHandle.CommitTransactionAsync();
+        _isSessionActive = false;
     }
 
     public async Task AbortTransactionAsync()
     {
-        _logger.LogDebug("[{ApplicationName}, txnNumber {Id}] Abort transaction", ApplicationName,
-            SessionHandle.WrappedCoreSession.CurrentTransaction.TransactionNumber);
-
         if (!_isSessionActive)
         {
-            throw SessionOperationException.SessionNotActive();
+            _logger.LogWarning("[{ApplicationName}] Abort requested but session is not active, skipping", ApplicationName);
+            return;
         }
+
+        _logger.LogDebug("[{ApplicationName}, txnNumber {Id}] Abort transaction", ApplicationName,
+            SessionHandle.WrappedCoreSession.CurrentTransaction.TransactionNumber);
 
         _isSessionActive = false;
         await SessionHandle.AbortTransactionAsync();

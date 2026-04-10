@@ -400,6 +400,47 @@ public class TenantContext : ITenantContext
     }
 
     /// <summary>
+    /// Checks for and retries any pending CK model migrations for an already-imported model.
+    /// This handles the case where a previous migration attempt failed (e.g., due to a transaction
+    /// error), leaving the MigrationHistory at an older version while the CkModel schema is already
+    /// at the target version. Without this check, the model would pass the IsExistingAsync gate
+    /// on subsequent startups and the failed migration would never be retried.
+    /// </summary>
+    private async Task RetryPendingMigrationsAsync(CkModelId ckModelId)
+    {
+        var ckModelUpgradeService = _serviceProvider.GetService<ICkModelUpgradeService>();
+        if (ckModelUpgradeService == null)
+        {
+            return;
+        }
+
+        var modelRange = ckModelId.ToVersionRange();
+
+        // Pass null for previousSchemaVersions so the upgrade service uses MigrationHistory
+        // as the source of truth. If we passed the current schema version, it would override
+        // the MigrationHistory version and skip the migration.
+        var result = await ckModelUpgradeService.UpgradeModelsAsync(
+            TenantId,
+            new[] { modelRange },
+            new CkMigrationOptions { ContinueOnError = false },
+            previouslyInstalledVersions: null,
+            CancellationToken.None);
+
+        if (!result.Success)
+        {
+            _logger.LogError(
+                "Retry of pending CK model migration failed for '{CkModelId}' in tenant '{TenantId}': {Errors}",
+                ckModelId, TenantId, string.Join("; ", result.Errors));
+        }
+        else if (result.TotalEntitiesAffected > 0)
+        {
+            _logger.LogInformation(
+                "Pending CK model migration completed for '{CkModelId}' in tenant '{TenantId}': {EntitiesAffected} entities affected",
+                ckModelId, TenantId, result.TotalEntitiesAffected);
+        }
+    }
+
+    /// <summary>
     /// Gets schema versions directly from the database without going through IRuntimeRepositoryProvider.
     /// This avoids recursion when called during UpdateSystemCkModelAsync.
     /// </summary>
@@ -907,6 +948,11 @@ public class TenantContext : ITenantContext
         {
             _logger.LogDebug("CK Model '{CkModelId}' already exists in tenant '{TenantId}', skipping import",
                 ckModelId, TenantId);
+
+            // Even though the model is already imported, check for pending migrations.
+            // A previous migration attempt may have failed, leaving the MigrationHistory
+            // at an older version while the CkModel schema is already at the target version.
+            await RetryPendingMigrationsAsync(ckModelId);
             return;
         }
 
