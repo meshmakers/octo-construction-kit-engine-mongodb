@@ -71,12 +71,9 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     {
         ArgumentValidation.ValidateString(nameof(name), name);
 
-        var indexKeys =
-            fields.Select(f =>
-                Constants.IsSystemAttribute(f)
-                    ? Builders<TDocument>.IndexKeys.Ascending(f)
-                    : Builders<TDocument>.IndexKeys.Ascending(Constants.AttributesName + "." + f.ToCamelCase()));
-
+        // Fields arrive already fully resolved (e.g. "attributes.timeRange.attributes.from")
+        // or as system attributes (e.g. "ckTypeId", "rtState")
+        var indexKeys = fields.Select(f => Builders<TDocument>.IndexKeys.Ascending(f));
 
         await _documentCollection.Indexes.CreateOneAsync(new CreateIndexModel<TDocument>(
             Builders<TDocument>.IndexKeys.Combine(indexKeys), new CreateIndexOptions { Background = true, Name = name }
@@ -92,9 +89,10 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         var weights = new Dictionary<string, int>();
 
         var fieldList = fields.ToList();
+        // Fields arrive already fully resolved
         var indexKeys =
             fieldList.SelectMany(f => f.AttributeNames).Distinct().Select(f =>
-                Builders<TDocument>.IndexKeys.Text(Constants.AttributesName + "." + f.ToCamelCase()));
+                Builders<TDocument>.IndexKeys.Text(f));
 
         HashSet<string> attributePaths = new();
         foreach (var field in fieldList.OrderBy(f => f.Weight))
@@ -106,8 +104,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                     continue; // Skip if already added
                 }
 
-                weights.Add(Constants.AttributesName + "." + attributePath.ToCamelCase(),
-                    field.Weight.GetValueOrDefault(1));
+                weights.Add(attributePath, field.Weight.GetValueOrDefault(1));
                 attributePaths.Add(attributePath.ToLower());
             }
         }
@@ -124,11 +121,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     {
         ArgumentValidation.ValidateString(nameof(name), name);
 
-        var indexKeys =
-            fields.Select(f =>
-                Constants.IsSystemAttribute(f)
-                    ? Builders<TDocument>.IndexKeys.Ascending(f)
-                    : Builders<TDocument>.IndexKeys.Ascending(Constants.AttributesName + "." + f.ToCamelCase()));
+        // Fields arrive already fully resolved
+        var indexKeys = fields.Select(f => Builders<TDocument>.IndexKeys.Ascending(f));
 
         // Create partial filter for specific type IDs
         var partialFilterExpression =
@@ -150,11 +144,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     {
         ArgumentValidation.ValidateString(nameof(name), name);
 
-        var indexKeys =
-            fields.Select(f =>
-                Constants.IsSystemAttribute(f)
-                    ? Builders<TDocument>.IndexKeys.Ascending(f)
-                    : Builders<TDocument>.IndexKeys.Ascending(Constants.AttributesName + "." + f.ToCamelCase()));
+        // Fields arrive already fully resolved
+        var indexKeys = fields.Select(f => Builders<TDocument>.IndexKeys.Ascending(f));
 
         // Create partial filter for active entities (not deleted) and specific type IDs
         var partialFilterExpression = Builders<TDocument>.Filter.And(
@@ -239,14 +230,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                                 {
                                     foreach (var elem in weightsDoc.Elements)
                                     {
-                                        var attributePath = elem.Name;
-                                        if (attributePath.StartsWith(Constants.AttributesName + "."))
-                                        {
-                                            attributePath =
-                                                attributePath.Substring(Constants.AttributesName.Length + 1);
-                                        }
-
-                                        fieldsDict.Add(new Tuple<string, int>(attributePath, elem.Value.AsInt32));
+                                        // Store the full MongoDB field path as-is
+                                        fieldsDict.Add(new Tuple<string, int>(elem.Name, elem.Value.AsInt32));
                                     }
                                 }
                             }
@@ -265,20 +250,9 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
                             foreach (var elem in keyDoc.Elements)
                             {
-                                var attributePath = elem.Name;
-
-                                if (attributePath.StartsWith(Constants.AttributesName + "."))
-                                {
-                                    var tmp = attributePath.Substring(Constants.AttributesName.Length + 1);
-                                    // Fix to ensure that we can wrongly create indexes with "attributes._id"
-                                    // or "attributes.rtWellKnownName"
-                                    if (!Constants.IsSystemAttribute(tmp))
-                                    {
-                                        attributePath = tmp;
-                                    }
-                                }
-
-                                fieldsDict.Add(new Tuple<string, int>(attributePath, elem.Value.AsInt32));
+                                // Store the full MongoDB field path as-is (e.g. "attributes.timeRange.attributes.from",
+                                // "ckTypeId", "rtState"). Paths are now fully resolved during index creation.
+                                fieldsDict.Add(new Tuple<string, int>(elem.Name, elem.Value.AsInt32));
                             }
                         }
                     }

@@ -396,10 +396,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var baseTypesMap =
             await CollectBaseTypesForCollectionRoots(session, collectionRootTypes, includeModelsInStateImporting);
 
+        // Pre-fetch attribute metadata for resolving index attribute paths
+        var (allCkAttributes, allCkRecords) = await FetchAttributeMetadataAsync();
+
         foreach (var ckTypeInfo in collectionRootTypes)
         {
             var baseTypes = baseTypesMap.TryGetValue(ckTypeInfo.CkTypeId, out var types) ? types : [];
-            await UpdateIndexesForCollectionRoot(ckTypeInfo, baseTypes);
+            await UpdateIndexesForCollectionRoot(ckTypeInfo, baseTypes, allCkAttributes, allCkRecords);
         }
 
         // Create indexes for RtAssociations collection (model-independent, only needed for full updates)
@@ -484,7 +487,28 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return result;
     }
 
-    private async Task UpdateIndexesForCollectionRoot(CkTypeInfo collectionRootType, List<CkType> baseTypes)
+    /// <summary>
+    /// Pre-fetches all CkAttributes and CkRecords needed for index attribute path resolution.
+    /// </summary>
+    private async Task<(IReadOnlyDictionary<CkId<CkAttributeId>, CkAttribute> attributes,
+        IReadOnlyDictionary<CkId<CkRecordId>, CkRecord> records)> FetchAttributeMetadataAsync()
+    {
+        using var session = await GetSessionAsync();
+
+        // Fetch all CkAttributes
+        var allAttributes = await CkAttributes.FindManyAsync(session, _ => true);
+        var attributeDict = allAttributes.ToDictionary(a => a.CkAttributeId, a => a);
+
+        // Fetch all CkRecords
+        var allRecords = await CkRecords.FindManyAsync(session, _ => true);
+        var recordDict = allRecords.ToDictionary(r => r.CkRecordId, r => r);
+
+        return (attributeDict, recordDict);
+    }
+
+    private async Task UpdateIndexesForCollectionRoot(CkTypeInfo collectionRootType, List<CkType> baseTypes,
+        IReadOnlyDictionary<CkId<CkAttributeId>, CkAttribute> allCkAttributes,
+        IReadOnlyDictionary<CkId<CkRecordId>, CkRecord> allCkRecords)
     {
         var name = collectionRootType.CkTypeId.ToRtCkId().GetCkTypeCollectionName();
         var mapper = new RtEntityMongoDataSourceMapper<RtEntity>();
@@ -553,7 +577,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 foreach (CkTypeIndex ckTypeIndex in keyValuePair.Value)
                 {
                     await PrepareAndCreateIndex(keyValuePair.Key, ckTypeIndex, repositoryIndices, collection,
-                        uniqueIndexNumber, collectionRootType);
+                        uniqueIndexNumber, collectionRootType, allCkAttributes, allCkRecords);
                     uniqueIndexNumber++;
                 }
 
@@ -563,7 +587,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     if (textIndex != null)
                     {
                         await PrepareAndCreateIndex(keyValuePair.Key, textIndex, repositoryIndices, collection,
-                            uniqueIndexNumber, collectionRootType);
+                            uniqueIndexNumber, collectionRootType, allCkAttributes, allCkRecords);
                     }
                     else
                     {
@@ -640,11 +664,43 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     private async Task PrepareAndCreateIndex(CkType indexDefiningType, CkTypeIndex ckTypeIndex,
         ICollection<CkTypeIndexWithName> repositoryIndices,
         IMongoDbDataSourceCollection<OctoObjectId, RtEntity> collection,
-        int uniqueIndexNumber, CkTypeInfo? collectionRootType = null)
+        int uniqueIndexNumber, CkTypeInfo? collectionRootType = null,
+        IReadOnlyDictionary<CkId<CkAttributeId>, CkAttribute>? allCkAttributes = null,
+        IReadOnlyDictionary<CkId<CkRecordId>, CkRecord>? allCkRecords = null)
     {
         if (ckTypeIndex.IndexType == IndexTypes.None)
         {
             return;
+        }
+
+        // Resolve attribute paths to fully qualified MongoDB field paths.
+        // e.g. "TimeRange.From" → "attributes.timeRange.attributes.from"
+        if (allCkAttributes != null && allCkRecords != null)
+        {
+            var metadataProvider = new DatabaseAttributeMetadataProvider(
+                indexDefiningType.Attributes, allCkAttributes, allCkRecords, isRecordContext: false);
+
+            foreach (var fields in ckTypeIndex.Fields)
+            {
+                fields.AttributeNames = fields.AttributeNames.Select(name =>
+                {
+                    if (Constants.IsSystemAttribute(name))
+                    {
+                        return name;
+                    }
+
+                    var resolved = MongoDbAttributePathResolver.ResolveToMongoDbFieldPath(name, metadataProvider);
+                    if (resolved != null)
+                    {
+                        return resolved;
+                    }
+
+                    _logger.LogWarning(
+                        "Could not resolve attribute path '{AttributePath}' for index on type '{CkTypeId}', using fallback",
+                        name, indexDefiningType.CkTypeId);
+                    return Constants.AttributesName + Constants.PathSeparator + name.ToCamelCase();
+                }).ToList();
+            }
         }
 
         // Ensure that attributes are not multiple times in the index. If an attribute is defined multiple times, we remove duplicates.

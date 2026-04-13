@@ -1,6 +1,5 @@
 using System.Collections;
 using System.Diagnostics.CodeAnalysis;
-using System.Text;
 
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
@@ -12,6 +11,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Formulas;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 using MongoDB.Driver;
 
@@ -29,129 +29,14 @@ internal abstract class RtFieldFilterResolver<TEntity>(
 
     internal override bool IsAttributePathValid(string attributePath)
     {
-        var pathTerms = RtPathEvaluator.TokenizePath(attributePath);
-
-        CkTypeWithAttributesGraph current = ckTypeWithAttributesGraph;
-        CkTypeAttributeGraph? ckTypeAttributeGraph = null;
-        foreach (var pathTerm in pathTerms)
-        {
-            switch (pathTerm.Type)
-            {
-                case PathType.Attribute:
-                    if (current.AllAttributesByName.TryGetValue(pathTerm.Value.ToPascalCase(),
-                            out ckTypeAttributeGraph))
-                    {
-                        switch (ckTypeAttributeGraph.ValueType)
-                        {
-                            case AttributeValueTypesDto.Record:
-                            case AttributeValueTypesDto.RecordArray:
-                                if (ckTypeAttributeGraph.ValueCkRecordId == null)
-                                {
-                                    throw OperationFailedException.CkRecordIdNotDefined(ckTypeAttributeGraph);
-                                }
-
-                                current = _ckCacheService.GetCkRecord(_tenantId, ckTypeAttributeGraph.ValueCkRecordId);
-                                continue;
-                            default:
-                                continue;
-                        }
-                    }
-
-                    return false;
-                case PathType.ArrayIndex:
-                    if (ckTypeAttributeGraph != null)
-                    {
-                        switch (ckTypeAttributeGraph.ValueType)
-                        {
-                            case AttributeValueTypesDto.StringArray:
-                            case AttributeValueTypesDto.IntArray:
-                            case AttributeValueTypesDto.RecordArray:
-                                continue;
-                            default:
-                                return false;
-                        }
-                    }
-
-                    return false;
-                default:
-                    throw OperationFailedException.PathTypeNotSupported(pathTerm);
-            }
-        }
-
-        return true;
+        var provider = new CkCacheAttributeMetadataProvider(_ckCacheService, _tenantId, ckTypeWithAttributesGraph);
+        return MongoDbAttributePathResolver.IsValidAttributePath(attributePath, provider);
     }
 
     internal override string? ResolveAttributePath(string attributePath)
     {
-        var pathTerms = RtPathEvaluator.TokenizePath(attributePath);
-
-        StringBuilder sb = new();
-        sb.Append(Constants.AttributesName);
-
-        CkTypeWithAttributesGraph current = ckTypeWithAttributesGraph;
-        CkTypeAttributeGraph? ckTypeAttributeGraph = null;
-        foreach (var pathTerm in pathTerms)
-        {
-            switch (pathTerm.Type)
-            {
-                case PathType.Attribute:
-
-                    if (current.AllAttributesByName.TryGetValue(pathTerm.Value.ToPascalCase(),
-                            out ckTypeAttributeGraph))
-                    {
-                        if (current is CkRecordGraph)
-                        {
-                            sb.Append(Constants.PathSeparator);
-                            sb.Append(Constants.AttributesName);
-                        }
-
-                        switch (ckTypeAttributeGraph.ValueType)
-                        {
-                            case AttributeValueTypesDto.Record:
-                            case AttributeValueTypesDto.RecordArray:
-                                if (ckTypeAttributeGraph.ValueCkRecordId == null)
-                                {
-                                    throw OperationFailedException.CkRecordIdNotDefined(ckTypeAttributeGraph);
-                                }
-
-                                current = _ckCacheService.GetCkRecord(_tenantId, ckTypeAttributeGraph.ValueCkRecordId);
-                                sb.Append(Constants.PathSeparator);
-                                sb.Append(pathTerm.Value.ToCamelCase());
-                                continue;
-                            default:
-                                sb.Append(Constants.PathSeparator);
-                                sb.Append(pathTerm.Value.ToCamelCase());
-                                continue;
-                        }
-                    }
-
-                    return null;
-                case PathType.ArrayIndex:
-                    if (ckTypeAttributeGraph != null)
-                    {
-                        switch (ckTypeAttributeGraph.ValueType)
-                        {
-                            case AttributeValueTypesDto.StringArray:
-                            case AttributeValueTypesDto.IntArray:
-                            case AttributeValueTypesDto.RecordArray:
-                                if (pathTerm.Value != "*")
-                                {
-                                    sb.Append(string.Format(Constants.IndexAccessor, pathTerm.Value));
-                                }
-
-                                continue;
-                            default:
-                                return null;
-                        }
-                    }
-
-                    return null;
-                default:
-                    throw OperationFailedException.PathTypeNotSupported(pathTerm);
-            }
-        }
-
-        return sb.ToString();
+        var provider = new CkCacheAttributeMetadataProvider(_ckCacheService, _tenantId, ckTypeWithAttributesGraph);
+        return MongoDbAttributePathResolver.ResolveToMongoDbFieldPath(attributePath, provider);
     }
 
     internal override object? ResolveSearchAttributeValue(string attributePath, object? searchTerm, FieldFilterOperator filterOperator, out bool isEnum)
