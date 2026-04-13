@@ -20,8 +20,8 @@ public interface ICkMongoDbRepositoryDataSource
     IMongoDbDataSourceCollection<OctoObjectId, CkTypeInheritance> CkTypeInheritances { get; }
     IMongoDbDataSourceCollection<OctoObjectId, CkRecordInheritance> CkRecordInheritances { get; }
 
-    Task UpdateCollectionsAsync(IOctoSession session);
-    Task UpdateIndexAsync(IOctoSession session, bool includeModelsInStateImporting);
+    Task UpdateCollectionsAsync(IOctoSession session, bool skipCleanup = false);
+    Task UpdateIndexAsync(IOctoSession session, bool includeModelsInStateImporting, CkModelId? scopeToModelId = null);
 
     Task<IOctoSession> CreateSessionAsync();
 

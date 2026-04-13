@@ -557,7 +557,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
             _logger.LogDebug("Updating collections");
             // This operation is critical. It forces an exclusive write lock on the database.
-            await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session);
+            // Skip cleanup on the second call - it was already done in the first call and is
+            // expensive on large tenants (counts documents in orphaned collections).
+            await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session, skipCleanup: true);
             CheckCancellation(cancellationToken);
 
             _logger.LogDebug("Committing model import transaction");
@@ -568,8 +570,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             indexUpdateSession.StartTransaction();
 
             // Attention! This operation is critical. It forces an exclusive write lock on the database.
+            // Scope to the imported model to avoid re-indexing all collection roots in the tenant.
             _logger.LogDebug("Updating index");
-            await mongoDbRepositoryDataSource.UpdateIndexAsync(indexUpdateSession,  true);
+            await mongoDbRepositoryDataSource.UpdateIndexAsync(indexUpdateSession, true, compiledModel.ModelId);
             CheckCancellation(cancellationToken);
 
             await indexUpdateSession.CommitTransactionAsync();

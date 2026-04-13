@@ -275,20 +275,20 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     public IMongoDbDataSourceCollection<OctoObjectId, CkTypeInheritance> CkTypeInheritances { get; }
     public IMongoDbDataSourceCollection<OctoObjectId, CkRecordInheritance> CkRecordInheritances { get; }
 
-    public async Task UpdateCollectionsAsync(IOctoSession session)
+    public async Task UpdateCollectionsAsync(IOctoSession session, bool skipCleanup = false)
     {
         _logger.LogDebug("Creating collections for tenant '{TenantId}'", TenantId);
-        await _repository.CreateCollectionIfNotExistsAsync(CkModels.MongoDataSourceMapper, false);
-        await _repository.CreateCollectionIfNotExistsAsync(CkTypes.MongoDataSourceMapper, false);
-        await _repository.CreateCollectionIfNotExistsAsync(CkRecords.MongoDataSourceMapper, false);
-        await _repository.CreateCollectionIfNotExistsAsync(CkEnums.MongoDataSourceMapper, false);
-        await _repository.CreateCollectionIfNotExistsAsync(CkAttributes.MongoDataSourceMapper, false);
-        await _repository.CreateCollectionIfNotExistsAsync(CkTypeAssociations.MongoDataSourceMapper, false);
-        await _repository.CreateCollectionIfNotExistsAsync(CkAssociationRoles.MongoDataSourceMapper, false);
-        await _repository.CreateCollectionIfNotExistsAsync(CkTypeAssociations.MongoDataSourceMapper, false);
-        await _repository.CreateCollectionIfNotExistsAsync(CkTypeInheritances.MongoDataSourceMapper, false);
-        await _repository.CreateCollectionIfNotExistsAsync(CkRecordInheritances.MongoDataSourceMapper, false);
-        await _repository.CreateCollectionIfNotExistsAsync(RtMongoDbDataSourceAssociations.MongoDataSourceMapper, true);
+        await Task.WhenAll(
+            _repository.CreateCollectionIfNotExistsAsync(CkModels.MongoDataSourceMapper, false),
+            _repository.CreateCollectionIfNotExistsAsync(CkTypes.MongoDataSourceMapper, false),
+            _repository.CreateCollectionIfNotExistsAsync(CkRecords.MongoDataSourceMapper, false),
+            _repository.CreateCollectionIfNotExistsAsync(CkEnums.MongoDataSourceMapper, false),
+            _repository.CreateCollectionIfNotExistsAsync(CkAttributes.MongoDataSourceMapper, false),
+            _repository.CreateCollectionIfNotExistsAsync(CkTypeAssociations.MongoDataSourceMapper, false),
+            _repository.CreateCollectionIfNotExistsAsync(CkAssociationRoles.MongoDataSourceMapper, false),
+            _repository.CreateCollectionIfNotExistsAsync(CkTypeInheritances.MongoDataSourceMapper, false),
+            _repository.CreateCollectionIfNotExistsAsync(CkRecordInheritances.MongoDataSourceMapper, false),
+            _repository.CreateCollectionIfNotExistsAsync(RtMongoDbDataSourceAssociations.MongoDataSourceMapper, true));
 
         _logger.LogDebug("Creating type root collections for tenant '{TenantId}'", TenantId);
         var ckTypes =
@@ -309,8 +309,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         _logger.LogDebug("Type root collections created for tenant '{TenantId}'", TenantId);
 
-        // Cleanup: Remove empty collections that were created for abstract types
-        await CleanupEmptyAbstractTypeCollectionsInternalAsync(validCollectionSuffixes);
+        if (!skipCleanup)
+        {
+            // Cleanup: Remove empty collections that were created for abstract types
+            await CleanupEmptyAbstractTypeCollectionsInternalAsync(validCollectionSuffixes);
+        }
     }
 
     private async Task CleanupEmptyAbstractTypeCollectionsInternalAsync(HashSet<string> validCollectionSuffixes)
@@ -331,14 +334,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 continue;
             }
 
-            // Check if this collection is empty
-            var documentCount = await _repository.GetCollectionDocumentCountAsync(collectionName);
+            // Check if this collection has any documents (fast check using Find+Limit(1)
+            // instead of CountDocumentsAsync which is very slow on large collections)
+            var hasDocuments = await _repository.CollectionHasDocumentsAsync(collectionName);
 
-            if (documentCount > 0)
+            if (hasDocuments)
             {
                 _logger.LogWarning(
-                    "Collection '{CollectionName}' is not a valid collection root but contains {DocumentCount} documents - skipping cleanup",
-                    collectionName, documentCount);
+                    "Collection '{CollectionName}' is not a valid collection root but contains documents - skipping cleanup",
+                    collectionName);
                 continue;
             }
 
@@ -348,9 +352,18 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
     }
 
-    public async Task UpdateIndexAsync(IOctoSession session, bool includeModelsInStateImporting)
+    public async Task UpdateIndexAsync(IOctoSession session, bool includeModelsInStateImporting,
+        CkModelId? scopeToModelId = null)
     {
-        _logger.LogInformation("Updating indexes of tenant '{TenantId}'", TenantId);
+        if (scopeToModelId != null)
+        {
+            _logger.LogInformation(
+                "Updating indexes of tenant '{TenantId}' scoped to model '{ModelId}'", TenantId, scopeToModelId);
+        }
+        else
+        {
+            _logger.LogInformation("Updating indexes of tenant '{TenantId}'", TenantId);
+        }
 
         await using var lockService =
             new RepositoryDistributedLockService(_repositoryClient, _repository, _logger, "index_update_lock");
@@ -365,6 +378,20 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var ckTypeInfoList = await AggregateCkTypeInfo(aggregate).ToListAsync();
         var collectionRootTypes = ckTypeInfoList.ToList();
 
+        // When scoped to a specific model, only process collection roots belonging to that model.
+        // This significantly reduces index update time on large tenants.
+        if (scopeToModelId != null)
+        {
+            var modelName = scopeToModelId.Name;
+            collectionRootTypes = collectionRootTypes
+                .Where(t => t.CkModelId.Name == modelName)
+                .ToList();
+
+            _logger.LogInformation(
+                "Scoped index update: processing {Count} collection roots for model '{ModelId}'",
+                collectionRootTypes.Count, scopeToModelId);
+        }
+
         // Pre-fetch all base types for all collection roots to avoid long transactions
         var baseTypesMap =
             await CollectBaseTypesForCollectionRoots(session, collectionRootTypes, includeModelsInStateImporting);
@@ -375,8 +402,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             await UpdateIndexesForCollectionRoot(ckTypeInfo, baseTypes);
         }
 
-        // Create indexes for RtAssociations collection
-        await CreateRtAssociationIndexesAsync();
+        // Create indexes for RtAssociations collection (model-independent, only needed for full updates)
+        if (scopeToModelId == null)
+        {
+            await CreateRtAssociationIndexesAsync();
+        }
 
         _logger.LogInformation("Updating indexes of tenant '{TenantId}' completed", TenantId);
     }

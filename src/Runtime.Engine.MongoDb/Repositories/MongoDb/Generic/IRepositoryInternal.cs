@@ -30,4 +30,12 @@ internal interface IRepositoryInternal : IRepository
     /// <param name="collectionName">The name of the collection</param>
     /// <returns>The number of documents in the collection</returns>
     Task<long> GetCollectionDocumentCountAsync(string collectionName);
+
+    /// <summary>
+    /// Checks whether a collection contains any documents. Uses Find with Limit(1) which is
+    /// significantly faster than CountDocumentsAsync on large collections.
+    /// </summary>
+    /// <param name="collectionName">The name of the collection</param>
+    /// <returns>True if the collection contains at least one document</returns>
+    Task<bool> CollectionHasDocumentsAsync(string collectionName);
 }

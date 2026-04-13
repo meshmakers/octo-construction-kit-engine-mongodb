@@ -35,7 +35,14 @@ internal abstract class OctoSession : IOctoSessionInternal
         {
             if (_isSessionActive)
             {
-                SessionHandle.AbortTransaction();
+                try
+                {
+                    SessionHandle.AbortTransaction();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[{ApplicationName}] Failed to abort transaction during session disposal", ApplicationName);
+                }
             }
 
             SessionHandle.Dispose();

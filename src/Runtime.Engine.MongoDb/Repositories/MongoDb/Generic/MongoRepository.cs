@@ -97,6 +97,16 @@ public class MongoRepository(ILoggerFactory loggerFactory, IMongoDatabase mongoD
         return await collection.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty);
     }
 
+    public async Task<bool> CollectionHasDocumentsAsync(string collectionName)
+    {
+        var collection = mongoDatabase.GetCollection<BsonDocument>(collectionName);
+        var result = await collection.Find(FilterDefinition<BsonDocument>.Empty)
+            .Limit(1)
+            .Project(Builders<BsonDocument>.Projection.Include("_id"))
+            .FirstOrDefaultAsync();
+        return result != null;
+    }
+
     private async Task<bool> CollectionExistsAsync<TKey, TDocument>(
         IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
         string? suffix = null)
