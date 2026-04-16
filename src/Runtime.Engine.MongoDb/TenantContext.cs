@@ -17,7 +17,9 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
+using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.CkModelMigrations;
@@ -791,6 +793,113 @@ public class TenantContext : ITenantContext
     {
         var result = GetTenantRepositoryAsAdmin(TenantId, DatabaseName);
         return result;
+    }
+
+    private IStreamDataRepository? _streamDataRepository;
+    private bool _streamDataRepositoryResolved;
+
+    /// <inheritdoc />
+    public async Task EnableStreamDataAsync()
+    {
+        _logger.LogInformation("Enabling stream data for tenant '{TenantId}'", TenantId);
+
+        using var session = await GetAdminSessionAsync();
+        session.StartTransaction();
+        try
+        {
+            await SetConfigurationAsync(session,
+                StreamDataConfigurationKeys.StreamDataEnabledKey,
+                StreamDataGlobalSettings.Enabled);
+            await session.CommitTransactionAsync();
+        }
+        catch
+        {
+            await session.AbortTransactionAsync();
+            throw;
+        }
+
+        // Ensure the CrateDB table exists
+        var repository = GetStreamDataRepository();
+        if (repository != null)
+        {
+            await repository.EnsureDatabaseCreatedAsync();
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Stream data repository not available in DI. Table creation skipped for tenant '{TenantId}'. " +
+                "Ensure AddCrateDbStreamDataRepository() was called during startup.",
+                TenantId);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task DisableStreamDataAsync()
+    {
+        _logger.LogInformation("Disabling stream data for tenant '{TenantId}'", TenantId);
+
+        using var session = await GetAdminSessionAsync();
+        session.StartTransaction();
+        try
+        {
+            await SetConfigurationAsync(session,
+                StreamDataConfigurationKeys.StreamDataEnabledKey,
+                StreamDataGlobalSettings.Disabled);
+            await session.CommitTransactionAsync();
+        }
+        catch
+        {
+            await session.AbortTransactionAsync();
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> IsStreamDataEnabledAsync()
+    {
+        using var session = await GetAdminSessionAsync();
+        session.StartTransaction();
+        try
+        {
+            var settings = await GetConfigurationAsync<StreamDataGlobalSettings>(
+                session, StreamDataConfigurationKeys.StreamDataEnabledKey, null);
+            await session.CommitTransactionAsync();
+            return settings is { IsEnabled: true };
+        }
+        catch
+        {
+            await session.AbortTransactionAsync();
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public IStreamDataRepository? GetStreamDataRepository()
+    {
+        if (_streamDataRepositoryResolved)
+        {
+            return _streamDataRepository;
+        }
+
+        // Resolve stream data services from DI. If they're not registered
+        // (caller didn't call AddCrateDbStreamDataRepository), return null.
+        var databaseClient = _serviceProvider.GetService<IStreamDataDatabaseClient>();
+        var managementClient = _serviceProvider.GetService<IStreamDataDatabaseManagementClient>();
+
+        if (databaseClient == null || managementClient == null)
+        {
+            _streamDataRepositoryResolved = true;
+            return null;
+        }
+
+        _streamDataRepository = new CrateDbStreamDataRepository(
+            _loggerFactory.CreateLogger<CrateDbStreamDataRepository>(),
+            _cacheService,
+            databaseClient,
+            managementClient,
+            TenantId);
+        _streamDataRepositoryResolved = true;
+        return _streamDataRepository;
     }
 
     #endregion Access management

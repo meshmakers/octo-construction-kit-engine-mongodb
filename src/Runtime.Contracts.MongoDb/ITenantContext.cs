@@ -5,6 +5,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.Runtime.Contracts.Blueprints;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
+using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 
@@ -91,6 +92,28 @@ public interface ITenantContext
     /// </summary>
     /// <returns></returns>
     Task LoadCacheForTenantAsync();
+
+    /// <summary>
+    /// Returns the stream data repository for this tenant, or null if stream data is not enabled.
+    /// </summary>
+    IStreamDataRepository? GetStreamDataRepository();
+
+    /// <summary>
+    /// Enables stream data for this tenant: sets the configuration flag and
+    /// creates the CrateDB table if needed.
+    /// </summary>
+    Task EnableStreamDataAsync();
+
+    /// <summary>
+    /// Disables stream data for this tenant: sets the configuration flag to disabled.
+    /// Does not delete the existing data table.
+    /// </summary>
+    Task DisableStreamDataAsync();
+
+    /// <summary>
+    /// Returns true if stream data is enabled for this tenant.
+    /// </summary>
+    Task<bool> IsStreamDataEnabledAsync();
 
     #endregion Access Management
 
