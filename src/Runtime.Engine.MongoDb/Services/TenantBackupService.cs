@@ -97,10 +97,19 @@ internal class TenantBackupService(
                 return CommandResult.Failure(errorMessage);
             }
 
-            // Check if archive file exists
+            // Check if archive file exists and has content
             if (!File.Exists(archiveFilePath))
             {
                 var errorMessage = $"Archive file not found: {archiveFilePath}";
+                logger.LogError(errorMessage);
+                return CommandResult.Failure(errorMessage);
+            }
+
+            var archiveFileInfo = new FileInfo(archiveFilePath);
+            if (archiveFileInfo.Length == 0)
+            {
+                var errorMessage =
+                    $"Archive file is empty (0 bytes): {archiveFilePath}. The upload may not have completed successfully.";
                 logger.LogError(errorMessage);
                 return CommandResult.Failure(errorMessage);
             }
