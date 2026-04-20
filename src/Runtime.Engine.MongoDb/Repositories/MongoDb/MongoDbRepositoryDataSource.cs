@@ -675,14 +675,17 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         // Resolve attribute paths to fully qualified MongoDB field paths.
         // e.g. "TimeRange.From" → "attributes.timeRange.attributes.from"
+        // Clone the fields to avoid mutating shared CkTypeIndex objects — the same CkTypeIndex
+        // instances from base types (e.g. Entity) are reused across multiple collection roots.
         if (allCkAttributes != null && allCkRecords != null)
         {
             var metadataProvider = new DatabaseAttributeMetadataProvider(
                 indexDefiningType.Attributes, allCkAttributes, allCkRecords, isRecordContext: false);
 
-            foreach (var fields in ckTypeIndex.Fields)
+            ckTypeIndex.Fields = ckTypeIndex.Fields.Select(fields => new CkIndexFields
             {
-                fields.AttributeNames = fields.AttributeNames.Select(name =>
+                Weight = fields.Weight,
+                AttributeNames = fields.AttributeNames.Select(name =>
                 {
                     if (Constants.IsSystemAttribute(name))
                     {
@@ -699,8 +702,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                         "Could not resolve attribute path '{AttributePath}' for index on type '{CkTypeId}', using fallback",
                         name, indexDefiningType.CkTypeId);
                     return Constants.AttributesName + Constants.PathSeparator + name.ToCamelCase();
-                }).ToList();
-            }
+                }).ToList()
+            }).ToList();
         }
 
         // Ensure that attributes are not multiple times in the index. If an attribute is defined multiple times, we remove duplicates.
