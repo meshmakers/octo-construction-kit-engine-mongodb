@@ -776,6 +776,17 @@ internal class TenantRepository(
     {
         var ckCacheService = await GetCkCacheServiceAsync();
         var ckTypeGraph = await GetCkTypeGraphAsync(ckTypeId);
+
+        if (watchStreamFilter.BeforeFieldFilterCriteria != null)
+        {
+            var rootCkTypeId = ckTypeGraph.DefiningCollectionRootCkTypeId ?? ckTypeGraph.CkTypeId;
+            var rootGraph = ckCacheService.GetCkType(TenantId, rootCkTypeId);
+            if (!rootGraph.EnableChangeStreamPreAndPostImages)
+            {
+                throw OperationFailedException.PreImageCaptureNotEnabled(rootCkTypeId);
+            }
+        }
+
         var subscription = new Subscription<TEntity>(ckCacheService, TenantId, ckTypeGraph,
             mongoDbRepositoryDataSource);
 

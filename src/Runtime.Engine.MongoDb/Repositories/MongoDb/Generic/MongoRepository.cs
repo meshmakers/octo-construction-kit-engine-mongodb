@@ -14,6 +14,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 public class MongoRepository(ILoggerFactory loggerFactory, IMongoDatabase mongoDatabase) : IRepositoryInternal
 {
     private readonly ConcurrentDictionary<Type, string> _collectionNameMapping = new();
+    private readonly ILogger<MongoRepository> _logger = loggerFactory.CreateLogger<MongoRepository>();
 
     // Do not do here any commands that access the database. At initial
     // setups, the user might not have yet created.
@@ -24,18 +25,41 @@ public class MongoRepository(ILoggerFactory loggerFactory, IMongoDatabase mongoD
         where TKey : notnull
         where TDocument : class, new()
     {
-        if (!await CollectionExistsAsync(mongoDataSourceMapper, suffix))
+        var name = GetCollectionName(mongoDataSourceMapper, suffix);
+        var existingInfo = await TryGetCollectionInfoAsync(name);
+
+        if (existingInfo == null)
         {
-            var name = GetCollectionName(mongoDataSourceMapper, suffix);
             var options = new CreateCollectionOptions();
-            if (IsVersionGreaterOrEqual(5))
+            // changeStreamPreAndPostImages requires MongoDB 6.0+; the option is silently
+            // unsupported on earlier versions, so we gate the option to skip 5.x clusters.
+            if (IsVersionGreaterOrEqual(6))
                 options.ChangeStreamPreAndPostImagesOptions = new ChangeStreamPreAndPostImagesOptions
                 {
                     Enabled = enableChangeStreamPreAndPostImages
                 };
 
             await mongoDatabase.CreateCollectionAsync(name, options);
+            return;
         }
+
+        // Collection already exists. Reconcile changeStreamPreAndPostImages.enabled with the
+        // CK type's flag: the create-time option is ignored once the collection is present,
+        // so without this collMod the flag can only ever be set on the very first creation.
+        if (!IsVersionGreaterOrEqual(6)) return;
+
+        var currentEnabled = GetChangeStreamPreAndPostImagesEnabled(existingInfo);
+        if (currentEnabled == enableChangeStreamPreAndPostImages) return;
+
+        _logger.LogInformation(
+            "Reconciling changeStreamPreAndPostImages on '{Collection}' from {Current} to {Desired}",
+            name, currentEnabled, enableChangeStreamPreAndPostImages);
+        var collMod = new BsonDocument
+        {
+            { "collMod", name },
+            { "changeStreamPreAndPostImages", new BsonDocument("enabled", enableChangeStreamPreAndPostImages) }
+        };
+        await mongoDatabase.RunCommandAsync<BsonDocument>(collMod);
     }
 
     public IMongoDbDataSourceCollection<TKey, TDocument> GetCollection<TKey, TDocument>(
@@ -107,19 +131,30 @@ public class MongoRepository(ILoggerFactory loggerFactory, IMongoDatabase mongoD
         return result != null;
     }
 
-    private async Task<bool> CollectionExistsAsync<TKey, TDocument>(
-        IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
-        string? suffix = null)
-        where TKey : notnull
-        where TDocument : class, new()
+    /// <summary>
+    ///     Returns the <c>listCollections</c> info document for the given collection name, or
+    ///     <c>null</c> if the collection does not exist. Used by <see cref="CreateCollectionIfNotExistsAsync{TKey,TDocument}"/>
+    ///     to read the current <c>changeStreamPreAndPostImages</c> option for reconciliation.
+    /// </summary>
+    private async Task<BsonDocument?> TryGetCollectionInfoAsync(string collectionName)
     {
-        var name = GetCollectionName(mongoDataSourceMapper, suffix);
-
-        var filter = new BsonDocument("name", name);
-        //filter by collection name
+        var filter = new BsonDocument("name", collectionName);
         var collections = await mongoDatabase.ListCollectionsAsync(new ListCollectionsOptions { Filter = filter });
-        //check for existence
-        return await collections.AnyAsync();
+        return await collections.FirstOrDefaultAsync();
+    }
+
+    /// <summary>
+    ///     Reads <c>options.changeStreamPreAndPostImages.enabled</c> from a <c>listCollections</c>
+    ///     info document. Returns <c>false</c> if the option is absent (the MongoDB default).
+    /// </summary>
+    private static bool GetChangeStreamPreAndPostImagesEnabled(BsonDocument collectionInfo)
+    {
+        if (!collectionInfo.TryGetValue("options", out var optionsValue) || !optionsValue.IsBsonDocument)
+            return false;
+        var options = optionsValue.AsBsonDocument;
+        if (!options.TryGetValue("changeStreamPreAndPostImages", out var csValue) || !csValue.IsBsonDocument)
+            return false;
+        return csValue.AsBsonDocument.GetValue("enabled", BsonBoolean.False).ToBoolean();
     }
 
     private bool IsVersionGreaterOrEqual(int majorVersion)

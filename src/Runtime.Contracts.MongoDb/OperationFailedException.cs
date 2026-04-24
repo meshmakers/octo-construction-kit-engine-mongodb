@@ -75,6 +75,14 @@ public class OperationFailedException : PersistenceException
         return new OperationFailedException($"CkType '{ckTypeId}' has no defining collection root.");
     }
 
+    public static Exception PreImageCaptureNotEnabled(CkId<CkTypeId> rootCkTypeId)
+    {
+        return new OperationFailedException(
+            $"CK type '{rootCkTypeId}' does not have EnableChangeStreamPreAndPostImages enabled; " +
+            $"BeforeFieldFilterCriteria cannot be evaluated. " +
+            $"Enable the flag on the collection-root CK type.");
+    }
+
     public static Exception IndexTypeNotSupported(IndexTypes indexIndexType)
     {
         return new OperationFailedException($"Index type '{indexIndexType}' not supported with MongoDB.");

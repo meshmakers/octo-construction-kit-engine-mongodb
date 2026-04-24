@@ -11,22 +11,30 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 internal static class BuildExtensions
 {
     /// <summary>
-    /// Injects an existing FilterDefinition<TEntity> into a FilterDefinition<ChangeStreamDocument<TEntity>>
-    /// by prefixing all field names with "fullDocument.".
+    /// Injects an existing <see cref="FilterDefinition{TInnerDocument}"/> into a
+    /// <see cref="FilterDefinition{TDocument}"/> by prefixing every field name with
+    /// <paramref name="fieldName"/> + ".".
+    /// Used to re-target a filter written against an entity type onto a wrapper
+    /// document (e.g. a MongoDB change-stream document's <c>fullDocument</c> or
+    /// <c>fullDocumentBeforeChange</c> member).
     /// </summary>
-    /// <typeparam name="TEntity">Die Entitätstyp.</typeparam>
-    /// <param name="filter">Der ursprüngliche Filter.</param>
-    /// <returns>Ein neuer Filter, der auf fullDocument angewendet wird.</returns>
-    internal static FilterDefinition<TDocument> Inject<TDocument, TInnerDocument>(this FilterDefinitionBuilder<TDocument> @this, string fieldName, FilterDefinition<TInnerDocument> filter)
+    /// <typeparam name="TDocument">Outer document type (e.g. ChangeStreamDocument&lt;T&gt;).</typeparam>
+    /// <typeparam name="TInnerDocument">Inner document type the filter was built for.</typeparam>
+    /// <param name="this">Filter builder for <typeparamref name="TDocument"/>.</param>
+    /// <param name="fieldName">Non-empty field path to prefix (e.g. "fullDocument" or "fullDocumentBeforeChange").</param>
+    /// <param name="filter">The inner filter to re-target.</param>
+    internal static FilterDefinition<TDocument> Inject<TDocument, TInnerDocument>(
+        this FilterDefinitionBuilder<TDocument> @this, string fieldName, FilterDefinition<TInnerDocument> filter)
     {
-        // Rendern des ursprünglichen Filters zu einem BsonDocument
-        var renderArgs = new RenderArgs<TInnerDocument>(BsonSerializer.SerializerRegistry.GetSerializer<TInnerDocument>(), BsonSerializer.SerializerRegistry);
+        ArgumentException.ThrowIfNullOrWhiteSpace(fieldName);
+
+        var renderArgs = new RenderArgs<TInnerDocument>(
+            BsonSerializer.SerializerRegistry.GetSerializer<TInnerDocument>(),
+            BsonSerializer.SerializerRegistry);
         var renderedFilter = filter.Render(renderArgs);
 
-        // Rekursive Methode zum Prefixen der Feldnamen
-        var prefixedFilter = PrefixFieldNames(renderedFilter, "fullDocument.");
+        var prefixedFilter = PrefixFieldNames(renderedFilter, fieldName + ".");
 
-        // Rückgabe des neuen Filters als FilterDefinition<ChangeStreamDocument<TEntity>>
         return new BsonDocumentFilterDefinition<TDocument>(prefixedFilter);
     }
     
@@ -88,6 +96,26 @@ internal static class BuildExtensions
         return modified;
     }
     
+    /// <summary>
+    /// Composes optional post-image and pre-image change-stream filters into a single
+    /// filter. When both are set they are combined with <c>$and</c> — the pre- and
+    /// post-image constraints are independent and must both hold for an event to pass.
+    /// </summary>
+    internal static FilterDefinition<ChangeStreamDocument<TDocument>>? ComposeWatchFilter<TDocument>(
+        FilterDefinition<ChangeStreamDocument<TDocument>>? afterFilter,
+        FilterDefinition<ChangeStreamDocument<TDocument>>? beforeFilter)
+    {
+        var filters = new List<FilterDefinition<ChangeStreamDocument<TDocument>>>();
+        if (afterFilter != null) filters.Add(afterFilter);
+        if (beforeFilter != null) filters.Add(beforeFilter);
+        return filters.Count switch
+        {
+            0 => null,
+            1 => filters[0],
+            _ => Builders<ChangeStreamDocument<TDocument>>.Filter.And(filters),
+        };
+    }
+
     /// <summary>
     /// Creates a filter for the id field.
     /// </summary>

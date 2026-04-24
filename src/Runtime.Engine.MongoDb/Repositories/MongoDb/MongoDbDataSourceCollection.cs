@@ -821,18 +821,10 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             documentBeforeFilter = documentBeforeFilterFunc();
         }
 
-        if (documentFilter != null && documentBeforeFilter != null)
+        var combinedFilter = BuildExtensions.ComposeWatchFilter(documentFilter, documentBeforeFilter);
+        if (combinedFilter != null)
         {
-            pipeline = pipeline.Match(Builders<ChangeStreamDocument<TDocument>>
-                .Filter.Or(documentFilter, documentBeforeFilter));
-        }
-        else if (documentFilter != null)
-        {
-            pipeline = pipeline.Match(documentFilter);
-        }
-        else if (documentBeforeFilter != null)
-        {
-            pipeline = pipeline.Match(documentBeforeFilter);
+            pipeline = pipeline.Match(combinedFilter);
         }
 
         updateStream.Watch(_documentCollection, pipeline, cancellationToken);

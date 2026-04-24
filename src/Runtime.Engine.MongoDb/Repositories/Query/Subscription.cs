@@ -4,6 +4,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+using Meshmakers.Octo.Runtime.Engine.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using MongoDB.Driver;
@@ -36,10 +37,10 @@ internal class Subscription<TEntity>(
         return rtCollection.WatchAsync(updateTypes,
             filterDefinitions == null
                 ? null
-                : () => Builders<ChangeStreamDocument<TEntity>>.Filter.Inject("fullDocument", filterDefinitions),
+                : () => Builders<ChangeStreamDocument<TEntity>>.Filter.Inject(Constants.ChangeStreamFullDocument, filterDefinitions),
             beforeFilterDefinitions == null
                 ? null
-                : () => Builders<ChangeStreamDocument<TEntity>>.Filter.Inject("fullDocumentBeforeChange", beforeFilterDefinitions),
+                : () => Builders<ChangeStreamDocument<TEntity>>.Filter.Inject(Constants.ChangeStreamFullDocumentBeforeChange, beforeFilterDefinitions),
             cancellationToken);
     }
 

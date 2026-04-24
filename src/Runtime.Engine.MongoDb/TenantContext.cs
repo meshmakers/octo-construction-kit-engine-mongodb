@@ -985,7 +985,11 @@ public class TenantContext : ITenantContext
     {
         Guid correlationId = Guid.NewGuid();
 
-        var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
+        // Use the admin data source for the import flow: UpdateCollectionsAsync may need to run
+        // `collMod` to reconcile the changeStreamPreAndPostImages option on existing collections,
+        // which requires the `collMod` action — not granted to the tenant `readWrite` user.
+        // This matches the pattern used by UpdateIndexesAsync (schema-level ops run as admin).
+        var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName, TenantId);
         var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource);
 
         // Capture schema versions BEFORE importing (for migration detection)
@@ -1051,7 +1055,11 @@ public class TenantContext : ITenantContext
     {
         Guid correlationId = Guid.NewGuid();
 
-        var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
+        // Use the admin data source for the import flow: UpdateCollectionsAsync may need to run
+        // `collMod` to reconcile the changeStreamPreAndPostImages option on existing collections,
+        // which requires the `collMod` action — not granted to the tenant `readWrite` user.
+        // This matches the pattern used by UpdateIndexesAsync (schema-level ops run as admin).
+        var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName, TenantId);
         var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource);
         if (await _ckModelRepositoryService.IsExistingAsync(ckModelId, tenantDatabaseSourceIdentifier))
         {

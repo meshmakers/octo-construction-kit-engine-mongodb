@@ -48,6 +48,22 @@ public static class Constants
 
     internal static readonly string[] TextAnalyzerFeatures = { "frequency", "norm", "position" };
 
+    // ********************************************************************
+    // MongoDB change-stream document field names
+    // ********************************************************************
+
+    /// <summary>
+    /// Name of the post-image field in a MongoDB change-stream document
+    /// (<c>ChangeStreamDocument.FullDocument</c>).
+    /// </summary>
+    public const string ChangeStreamFullDocument = "fullDocument";
+
+    /// <summary>
+    /// Name of the pre-image field in a MongoDB change-stream document
+    /// (<c>ChangeStreamDocument.FullDocumentBeforeChange</c>). Only populated when the
+    /// collection has <c>changeStreamPreAndPostImages: { enabled: true }</c>.
+    /// </summary>
+    public const string ChangeStreamFullDocumentBeforeChange = "fullDocumentBeforeChange";
 
     public static bool IsSystemAttribute(string f)
     {

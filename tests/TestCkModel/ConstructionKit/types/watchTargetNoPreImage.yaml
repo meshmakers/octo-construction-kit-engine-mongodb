@@ -1,0 +1,9 @@
+$schema: "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+types:
+  - typeId: WatchTargetNoPreImage
+    description: Root type without pre-image capture. Used to verify that BeforeFieldFilterCriteria is rejected with OperationFailedException.PreImageCaptureNotEnabled.
+    derivedFromCkTypeId: ${System}/Entity
+    attributes:
+    - id: ${this}/Name
+      name: Name
+      isOptional: true

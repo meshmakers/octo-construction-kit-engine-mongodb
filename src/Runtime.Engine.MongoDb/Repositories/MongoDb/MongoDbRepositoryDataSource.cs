@@ -275,7 +275,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     public IMongoDbDataSourceCollection<OctoObjectId, CkTypeInheritance> CkTypeInheritances { get; }
     public IMongoDbDataSourceCollection<OctoObjectId, CkRecordInheritance> CkRecordInheritances { get; }
 
-    public async Task UpdateCollectionsAsync(IOctoSession session, bool skipCleanup = false)
+    public async Task UpdateCollectionsAsync(IOctoSession session, bool includeModelsInStateImporting = false,
+        bool skipCleanup = false)
     {
         _logger.LogDebug("Creating collections for tenant '{TenantId}'", TenantId);
         await Task.WhenAll(
@@ -291,8 +292,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             _repository.CreateCollectionIfNotExistsAsync(RtMongoDbDataSourceAssociations.MongoDataSourceMapper, true));
 
         _logger.LogDebug("Creating type root collections for tenant '{TenantId}'", TenantId);
+        // Mirrors UpdateIndexAsync: when called from inside an active import, the new CkTypes
+        // are still in ModelState.Importing — they only flip to Available after the transaction
+        // commits. Opt in via `includeModelsInStateImporting: true` so those types' collections
+        // are created (with the right changeStreamPreAndPostImages option) during the import.
         var ckTypes =
-            (await CkTypes.FindManyAsync(session, t => t.IsCollectionRoot && t.ModelState == ModelState.Available))
+            (await CkTypes.FindManyAsync(session, t => t.IsCollectionRoot &&
+                (includeModelsInStateImporting
+                    ? (t.ModelState == ModelState.Available || t.ModelState == ModelState.Importing)
+                    : t.ModelState == ModelState.Available)))
             .ToList();
 
         // Build set of valid collection suffixes for non-abstract collection roots

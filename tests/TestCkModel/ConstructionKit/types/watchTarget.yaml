@@ -1,0 +1,21 @@
+$schema: "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+types:
+  - typeId: WatchTarget
+    description: Root type used for FromWatchRtEntity change-stream integration tests. Pre-image capture is enabled so fullDocumentBeforeChange filters work.
+    derivedFromCkTypeId: ${System}/Entity
+    enableChangeStreamPreAndPostImages: true
+    attributes:
+    - id: ${this}/Name
+      name: Name
+      isOptional: true
+    - id: ${this}/Status
+      name: Status
+      isOptional: true
+
+  - typeId: WatchTargetDerived
+    description: Derived from WatchTarget. Shares the collection and therefore inherits pre-image capture.
+    derivedFromCkTypeId: ${this}/WatchTarget
+    attributes:
+    - id: ${this}/Extra
+      name: Extra
+      isOptional: true

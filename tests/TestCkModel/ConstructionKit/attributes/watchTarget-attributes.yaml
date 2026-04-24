@@ -1,0 +1,8 @@
+$schema: "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+attributes:
+  - id: Status
+    description: Status of a watch target entity.
+    valueType: String
+  - id: Extra
+    description: Extra field for derived watch target entities.
+    valueType: String

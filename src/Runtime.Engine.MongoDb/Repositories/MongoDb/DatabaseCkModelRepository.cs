@@ -559,7 +559,13 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             // This operation is critical. It forces an exclusive write lock on the database.
             // Skip cleanup on the second call - it was already done in the first call and is
             // expensive on large tenants (counts documents in orphaned collections).
-            await mongoDbRepositoryDataSource.UpdateCollectionsAsync(session, skipCleanup: true);
+            // includeModelsInStateImporting: the types we just bulk-inserted are still in
+            // ModelState.Importing — they flip to Available later in sessionComplete. Without
+            // opting in, UpdateCollectionsAsync would filter them out and their RtEntity_*
+            // collections would only be auto-created by MongoDB on first insert, without the
+            // changeStreamPreAndPostImages option applied.
+            await mongoDbRepositoryDataSource.UpdateCollectionsAsync(
+                session, includeModelsInStateImporting: true, skipCleanup: true);
             CheckCancellation(cancellationToken);
 
             _logger.LogDebug("Committing model import transaction");
