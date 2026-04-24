@@ -311,7 +311,12 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         {
             _logger.LogDebug("Creating type root collection for '{CkTypeId}'", ckType.CkTypeId);
             var suffix = ckType.CkTypeId.ToRtCkId().GetCkTypeCollectionName();
-            await _repository.CreateCollectionIfNotExistsAsync(new RtEntityMongoDataSourceMapper<RtEntity>(),
+            var mapper = new RtEntityMongoDataSourceMapper<RtEntity>();
+            await _repository.CreateCollectionIfNotExistsAsync(mapper,
+                ckType.EnableChangeStreamPreAndPostImages, suffix);
+            // Reconcile the option on collections that already existed from a prior import,
+            // since CreateCollectionIfNotExistsAsync no longer mutates existing collections.
+            await _repository.ReconcileChangeStreamPreAndPostImagesAsync(mapper,
                 ckType.EnableChangeStreamPreAndPostImages, suffix);
         }
 

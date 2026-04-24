@@ -27,26 +27,31 @@ public class MongoRepository(ILoggerFactory loggerFactory, IMongoDatabase mongoD
     {
         var name = GetCollectionName(mongoDataSourceMapper, suffix);
         var existingInfo = await TryGetCollectionInfoAsync(name);
+        if (existingInfo != null) return;
 
-        if (existingInfo == null)
-        {
-            var options = new CreateCollectionOptions();
-            // changeStreamPreAndPostImages requires MongoDB 6.0+; the option is silently
-            // unsupported on earlier versions, so we gate the option to skip 5.x clusters.
-            if (IsVersionGreaterOrEqual(6))
-                options.ChangeStreamPreAndPostImagesOptions = new ChangeStreamPreAndPostImagesOptions
-                {
-                    Enabled = enableChangeStreamPreAndPostImages
-                };
+        var options = new CreateCollectionOptions();
+        // changeStreamPreAndPostImages requires MongoDB 6.0+; the option is silently
+        // unsupported on earlier versions, so we gate the option to skip 5.x clusters.
+        if (IsVersionGreaterOrEqual(6))
+            options.ChangeStreamPreAndPostImagesOptions = new ChangeStreamPreAndPostImagesOptions
+            {
+                Enabled = enableChangeStreamPreAndPostImages
+            };
 
-            await mongoDatabase.CreateCollectionAsync(name, options);
-            return;
-        }
+        await mongoDatabase.CreateCollectionAsync(name, options);
+    }
 
-        // Collection already exists. Reconcile changeStreamPreAndPostImages.enabled with the
-        // CK type's flag: the create-time option is ignored once the collection is present,
-        // so without this collMod the flag can only ever be set on the very first creation.
+    public async Task ReconcileChangeStreamPreAndPostImagesAsync<TKey, TDocument>(
+        IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
+        bool enableChangeStreamPreAndPostImages, string? suffix = null)
+        where TKey : notnull
+        where TDocument : class, new()
+    {
         if (!IsVersionGreaterOrEqual(6)) return;
+
+        var name = GetCollectionName(mongoDataSourceMapper, suffix);
+        var existingInfo = await TryGetCollectionInfoAsync(name);
+        if (existingInfo == null) return;
 
         var currentEnabled = GetChangeStreamPreAndPostImagesEnabled(existingInfo);
         if (currentEnabled == enableChangeStreamPreAndPostImages) return;
@@ -133,8 +138,10 @@ public class MongoRepository(ILoggerFactory loggerFactory, IMongoDatabase mongoD
 
     /// <summary>
     ///     Returns the <c>listCollections</c> info document for the given collection name, or
-    ///     <c>null</c> if the collection does not exist. Used by <see cref="CreateCollectionIfNotExistsAsync{TKey,TDocument}"/>
-    ///     to read the current <c>changeStreamPreAndPostImages</c> option for reconciliation.
+    ///     <c>null</c> if the collection does not exist. Used by
+    ///     <see cref="CreateCollectionIfNotExistsAsync{TKey,TDocument}"/> to detect presence
+    ///     and by <see cref="ReconcileChangeStreamPreAndPostImagesAsync{TKey,TDocument}"/> to
+    ///     read the current <c>changeStreamPreAndPostImages</c> option.
     /// </summary>
     private async Task<BsonDocument?> TryGetCollectionInfoAsync(string collectionName)
     {
