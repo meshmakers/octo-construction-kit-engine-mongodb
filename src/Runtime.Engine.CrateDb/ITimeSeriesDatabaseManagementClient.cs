@@ -19,4 +19,10 @@ public interface IStreamDataDatabaseManagementClient
     /// <returns></returns>
     Task DeleteStreamDataDatabaseAsync(string tenantId);
 
+    /// <summary>
+    /// Returns the table names present in the tenant's CrateDB schema, queried via
+    /// <c>information_schema.tables</c>. Used by the startup reconciliation job (concept §11) to
+    /// detect orphan tables and Activated archives that lost their backing storage.
+    /// </summary>
+    Task<IReadOnlyList<string>> ListTablesInTenantSchemaAsync(string tenantId);
 }
