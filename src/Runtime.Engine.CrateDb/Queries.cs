@@ -18,6 +18,13 @@ internal static class Queries
     
     public const string DeleteTableIfExists = "drop table if exists {0};";
 
+    /// <summary>
+    /// CrateDB applies inserts asynchronously to the storage layer; readers see them only after
+    /// the next refresh (default ~1s). Production code that needs strict read-after-write
+    /// consistency must call this explicitly after a bulk insert. Concept §15.
+    /// </summary>
+    public const string RefreshTable = "REFRESH TABLE {0};";
+
     public const string InsertStreamDataEntry =
         """
         INSERT INTO {0} ("RtId", "CkTypeId", "Timestamp", "RtWellKnownName", data)
