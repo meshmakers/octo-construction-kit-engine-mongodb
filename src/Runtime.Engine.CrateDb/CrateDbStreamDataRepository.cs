@@ -18,6 +18,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     private readonly ICkCacheService _ckCacheService;
     private readonly IStreamDataDatabaseClient _databaseClient;
     private readonly IStreamDataDatabaseManagementClient _managementClient;
+    private readonly ICkArchiveRuntimeStore? _archiveStore;
     private readonly string _tenantId;
 
     public CrateDbStreamDataRepository(
@@ -25,12 +26,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         ICkCacheService ckCacheService,
         IStreamDataDatabaseClient databaseClient,
         IStreamDataDatabaseManagementClient managementClient,
-        string tenantId)
+        string tenantId,
+        ICkArchiveRuntimeStore? archiveStore = null)
     {
         _logger = logger;
         _ckCacheService = ckCacheService;
         _databaseClient = databaseClient;
         _managementClient = managementClient;
+        _archiveStore = archiveStore;
         _tenantId = tenantId;
     }
 
@@ -44,20 +47,48 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         return _managementClient.DeleteStreamDataDatabaseAsync(_tenantId);
     }
 
-    public Task InsertAsync(StreamDataPoint datapoint)
+    /// <inheritdoc />
+    /// <remarks>
+    /// T7-stage implementation: delegates to the legacy tenant-level table creation. Real
+    /// per-archive table provisioning (using <c>ArchiveDdlGenerator</c> against the resolved
+    /// CkArchive columns) lands in a follow-up once the <c>ICkArchiveRuntimeStore</c> →
+    /// CK-model path resolution chain is wired through.
+    /// </remarks>
+    public Task EnsureArchiveCreatedAsync(OctoObjectId archiveRtId)
     {
+        _logger.LogDebug(
+            "EnsureArchiveCreatedAsync({ArchiveRtId}) — currently delegates to legacy tenant-level table; per-archive DDL pending.",
+            archiveRtId);
+        return _managementClient.CreateStreamDataTableIfNotExistAsync(_tenantId);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>T7-stage: same caveat as <see cref="EnsureArchiveCreatedAsync"/>.</remarks>
+    public Task DeleteArchiveAsync(OctoObjectId archiveRtId)
+    {
+        _logger.LogDebug(
+            "DeleteArchiveAsync({ArchiveRtId}) — currently delegates to legacy tenant-level drop.",
+            archiveRtId);
+        return _managementClient.DeleteStreamDataDatabaseAsync(_tenantId);
+    }
+
+    public async Task InsertAsync(OctoObjectId archiveRtId, StreamDataPoint datapoint)
+    {
+        await EnsureArchiveActivatedAsync(archiveRtId);
         var dto = MapToDataPointDto(datapoint);
-        return _databaseClient.InsertDataAsync(_tenantId, dto);
+        await _databaseClient.InsertDataAsync(_tenantId, dto);
     }
 
-    public Task InsertAsync(IEnumerable<StreamDataPoint> datapoints)
+    public async Task InsertAsync(OctoObjectId archiveRtId, IEnumerable<StreamDataPoint> datapoints)
     {
+        await EnsureArchiveActivatedAsync(archiveRtId);
         var dtos = datapoints.Select(MapToDataPointDto);
-        return _databaseClient.InsertDataAsync(_tenantId, dtos);
+        await _databaseClient.InsertDataAsync(_tenantId, dtos);
     }
 
-    public async Task<StreamDataQueryResult> ExecuteQueryAsync(StreamDataQueryOptions options)
+    public async Task<StreamDataQueryResult> ExecuteQueryAsync(OctoObjectId archiveRtId, StreamDataQueryOptions options)
     {
+        await EnsureArchiveActivatedAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(options.CkTypeId);
 
         var q = new CrateQueryBuilder(_tenantId);
@@ -91,8 +122,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     }
 
     public async Task<StreamDataQueryResult> ExecuteAggregationQueryAsync(
-        StreamDataAggregationQueryOptions options)
+        OctoObjectId archiveRtId, StreamDataAggregationQueryOptions options)
     {
+        await EnsureArchiveActivatedAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(options.CkTypeId);
 
         var q = new CrateQueryBuilder(_tenantId);
@@ -137,8 +169,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     }
 
     public async Task<StreamDataQueryResult> ExecuteGroupedAggregationQueryAsync(
-        StreamDataGroupedAggregationQueryOptions options)
+        OctoObjectId archiveRtId, StreamDataGroupedAggregationQueryOptions options)
     {
+        await EnsureArchiveActivatedAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(options.CkTypeId);
 
         var q = new CrateQueryBuilder(_tenantId);
@@ -193,8 +226,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     }
 
     public async Task<StreamDataQueryResult> ExecuteDownsamplingQueryAsync(
-        StreamDataDownsamplingQueryOptions options)
+        OctoObjectId archiveRtId, StreamDataDownsamplingQueryOptions options)
     {
+        await EnsureArchiveActivatedAsync(archiveRtId);
         if (options.From is null || options.To is null || options.Limit is null)
         {
             throw StreamDataException.InvalidQueryParameters(
@@ -293,6 +327,32 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     }
 
     #region Private helpers
+
+    /// <summary>
+    /// Verifies that the archive identified by <paramref name="archiveRtId"/> exists and is in
+    /// status <see cref="CkArchiveStatus.Activated"/>; throws otherwise. When no
+    /// <see cref="ICkArchiveRuntimeStore"/> has been wired (transitional T7 state) the check is
+    /// skipped with a warning log so that legacy callers keep working until the per-tenant store
+    /// implementation lands.
+    /// </summary>
+    private async Task EnsureArchiveActivatedAsync(OctoObjectId archiveRtId)
+    {
+        if (_archiveStore is null)
+        {
+            _logger.LogWarning(
+                "Archive status check skipped for {ArchiveRtId}: no ICkArchiveRuntimeStore wired (transitional T7 state).",
+                archiveRtId);
+            return;
+        }
+
+        var snapshot = await _archiveStore.GetAsync(archiveRtId)
+            ?? throw new ArchiveNotFoundException(archiveRtId);
+
+        if (snapshot.Status != CkArchiveStatus.Activated)
+        {
+            throw new ArchiveNotActivatedException(archiveRtId, snapshot.Status);
+        }
+    }
 
     private StreamDataFieldResolver CreateFieldResolver(RtCkId<CkTypeId> ckTypeId)
     {

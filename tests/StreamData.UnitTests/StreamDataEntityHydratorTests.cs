@@ -3,10 +3,10 @@ using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb.UnitTests;
 
-public class SdEntityHydratorTests
+public class StreamDataEntityHydratorTests
 {
-    // Minimal local SdEntity subclass — real ones come from the source generator
-    private class SdTestEntity : SdEntity
+    // Minimal local StreamDataEntity subclass — real ones come from the source generator
+    private class SdTestEntity : StreamDataEntity
     {
         public double? Voltage { get; set; }
         public double? Current { get; set; }
@@ -26,7 +26,7 @@ public class SdEntityHydratorTests
             RtChangedDateTime = new DateTime(2025, 12, 15, 0, 0, 0, DateTimeKind.Utc),
             Values = new Dictionary<string, object?>()
         };
-        var e = SdEntityHydrator.Hydrate<SdTestEntity>(row);
+        var e = StreamDataEntityHydrator.Hydrate<SdTestEntity>(row);
         Assert.Equal(rtId, e.RtId);
         Assert.Equal("Test/Type", e.CkTypeId!.ToString());
         Assert.Equal(row.Timestamp, e.Timestamp);
@@ -45,7 +45,7 @@ public class SdEntityHydratorTests
             Timestamp = DateTime.UtcNow,
             Values = new Dictionary<string, object?> { ["Voltage"] = 220.5, ["Current"] = 10.2 }
         };
-        var e = SdEntityHydrator.Hydrate<SdTestEntity>(row);
+        var e = StreamDataEntityHydrator.Hydrate<SdTestEntity>(row);
         Assert.Equal(220.5, e.Voltage);
         Assert.Equal(10.2, e.Current);
     }
@@ -60,7 +60,7 @@ public class SdEntityHydratorTests
             Timestamp = DateTime.UtcNow,
             Values = new Dictionary<string, object?> { ["UnknownAttr"] = "xyz" }
         };
-        var e = SdEntityHydrator.Hydrate<SdTestEntity>(row);
+        var e = StreamDataEntityHydrator.Hydrate<SdTestEntity>(row);
         Assert.True(e.Attributes.ContainsKey("UnknownAttr"));
         Assert.Equal("xyz", e.Attributes["UnknownAttr"]);
     }
@@ -76,7 +76,7 @@ public class SdEntityHydratorTests
             Timestamp = DateTime.UtcNow,
             Values = new Dictionary<string, object?> { ["Voltage"] = 220 }  // int, not double
         };
-        var e = SdEntityHydrator.Hydrate<SdTestEntity>(row);
+        var e = StreamDataEntityHydrator.Hydrate<SdTestEntity>(row);
         Assert.Equal(220.0, e.Voltage);
     }
 
@@ -90,7 +90,7 @@ public class SdEntityHydratorTests
             Timestamp = DateTime.UtcNow,
             Values = new Dictionary<string, object?> { ["Voltage"] = null }
         };
-        var e = SdEntityHydrator.Hydrate<SdTestEntity>(row);
+        var e = StreamDataEntityHydrator.Hydrate<SdTestEntity>(row);
         Assert.Null(e.Voltage);
         Assert.True(e.Attributes.ContainsKey("Voltage"));
         Assert.Null(e.Attributes["Voltage"]);

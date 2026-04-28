@@ -4,14 +4,14 @@ using Meshmakers.Octo.Runtime.Contracts.StreamData;
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 
 /// <summary>
-///     Populates typed <see cref="SdEntity"/> subclasses from the untyped
+///     Populates typed <see cref="StreamDataEntity"/> subclasses from the untyped
 ///     <see cref="StreamDataRow"/> values that come back from the CrateDB repository.
 ///     Built-in fields (RtId, CkTypeId, Timestamp, RtWellKnownName, RtCreationDateTime,
 ///     RtChangedDateTime) are copied from the row's typed members. Data-stream attribute
 ///     values are copied into typed subclass properties via reflection; every value also
 ///     flows into the inherited <c>Attributes</c> bag so unknown keys remain accessible.
 /// </summary>
-public static class SdEntityHydrator
+public static class StreamDataEntityHydrator
 {
     private static readonly Dictionary<Type, PropertyInfo[]> PropertyCache = new();
     private static readonly object PropertyCacheLock = new();
@@ -20,7 +20,7 @@ public static class SdEntityHydrator
     ///     Creates a new <typeparamref name="TEntity"/> populated from <paramref name="row"/>.
     /// </summary>
     public static TEntity Hydrate<TEntity>(StreamDataRow row)
-        where TEntity : SdEntity, new()
+        where TEntity : StreamDataEntity, new()
     {
         var entity = new TEntity
         {
