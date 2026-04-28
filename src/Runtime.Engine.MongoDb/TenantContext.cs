@@ -935,6 +935,7 @@ public class TenantContext : ITenantContext
         var audit = _serviceProvider.GetService<IArchiveAuditTrail>()
                     ?? new LoggingArchiveAuditTrail(_loggerFactory.CreateLogger<LoggingArchiveAuditTrail>());
         _archiveLifecycleService = new ArchiveLifecycleService(
+            TenantId,
             GetCkArchiveRuntimeStore(),
             streamData,
             audit,
