@@ -174,6 +174,16 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             string.Format(Queries.RefreshTable, TenantSchema.QualifiedLegacyTable(tenantId)));
     }
 
+    public async Task<IReadOnlyList<string>> ListTablesInTenantSchemaAsync(string tenantId)
+    {
+        var schema = TenantSchema.SchemaName(tenantId);
+        await using var connection = CreateConnection(tenantId);
+        var rows = await connection.QueryAsync<string>(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = @schema",
+            new { schema });
+        return rows.AsList();
+    }
+
     public async Task DeleteStreamDataDatabaseAsync(string tenantId)
     {
         await using var connection = CreateConnection(tenantId);
