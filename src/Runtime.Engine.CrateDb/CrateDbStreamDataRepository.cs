@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
@@ -75,15 +76,50 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     public async Task InsertAsync(OctoObjectId archiveRtId, StreamDataPoint datapoint)
     {
         await EnsureArchiveActivatedAsync(archiveRtId);
+
+        using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.insert");
+        activity?.SetTag("streamdata.tenant", _tenantId);
+        activity?.SetTag("streamdata.archive.rtid", archiveRtId.ToString());
+
+        var sw = Stopwatch.StartNew();
         var dto = MapToDataPointDto(datapoint);
         await _databaseClient.InsertDataAsync(_tenantId, dto);
+        sw.Stop();
+
+        CrateDbDiagnostics.InsertDurationMs.Record(sw.Elapsed.TotalMilliseconds,
+            new("tenant", _tenantId),
+            new("archive", archiveRtId.ToString()),
+            new("batch_size_bucket", CrateDbDiagnostics.BatchSizeBucket(1)));
+        CrateDbDiagnostics.InsertedPoints.Add(1,
+            new("tenant", _tenantId),
+            new("archive", archiveRtId.ToString()));
     }
 
     public async Task InsertAsync(OctoObjectId archiveRtId, IEnumerable<StreamDataPoint> datapoints)
     {
         await EnsureArchiveActivatedAsync(archiveRtId);
-        var dtos = datapoints.Select(MapToDataPointDto);
+
+        // Materialise once so we can both count and pass to the client.
+        var materialised = datapoints as IReadOnlyList<StreamDataPoint> ?? datapoints.ToList();
+
+        using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.insert");
+        activity?.SetTag("streamdata.tenant", _tenantId);
+        activity?.SetTag("streamdata.archive.rtid", archiveRtId.ToString());
+        activity?.SetTag("streamdata.batch_size", materialised.Count);
+
+        var sw = Stopwatch.StartNew();
+        var dtos = materialised.Select(MapToDataPointDto);
         await _databaseClient.InsertDataAsync(_tenantId, dtos);
+        sw.Stop();
+
+        var bucket = CrateDbDiagnostics.BatchSizeBucket(materialised.Count);
+        CrateDbDiagnostics.InsertDurationMs.Record(sw.Elapsed.TotalMilliseconds,
+            new("tenant", _tenantId),
+            new("archive", archiveRtId.ToString()),
+            new("batch_size_bucket", bucket));
+        CrateDbDiagnostics.InsertedPoints.Add(materialised.Count,
+            new("tenant", _tenantId),
+            new("archive", archiveRtId.ToString()));
     }
 
     public async Task<StreamDataQueryResult> ExecuteQueryAsync(OctoObjectId archiveRtId, StreamDataQueryOptions options)
