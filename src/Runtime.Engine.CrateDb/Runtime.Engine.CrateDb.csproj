@@ -15,6 +15,7 @@
         <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="$(OctoVersion)" />
         <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.2" />
         <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.2" />
+        <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.2" />
         <PackageReference Include="Dapper" Version="2.1.72" />
         <PackageReference Include="Npgsql" Version="10.0.2" />
     </ItemGroup>
