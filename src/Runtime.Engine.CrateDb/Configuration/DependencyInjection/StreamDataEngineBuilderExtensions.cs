@@ -37,6 +37,11 @@ public static class StreamDataEngineBuilderExtensions
         builder.Services.AddOptions<StreamDataInstanceConfiguration>()
             .BindConfiguration(StreamDataInstanceConfiguration.SectionName);
 
+        // Concept §8 T13: bind tunables for the resilience pipeline (timeout → retry → circuit
+        // breaker) so operations can override defaults from config without touching code.
+        builder.Services.AddOptions<CrateResilienceOptions>()
+            .BindConfiguration("StreamData:Resilience");
+
         // Register CrateDatabaseClient as singleton, exposed via multiple interfaces
         builder.Services.AddSingleton<CrateDatabaseClient>();
         builder.Services.AddSingleton<IStreamDataDatabaseClient>(p => p.GetRequiredService<CrateDatabaseClient>());

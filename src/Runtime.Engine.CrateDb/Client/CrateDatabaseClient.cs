@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
+using Polly;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 
@@ -20,6 +21,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     private readonly ILogger<CrateDatabaseClient> _logger;
     private readonly ICrateDbConnectionAccess _connectionAccess;
     private readonly StreamDataConfiguration _configuration;
+    private readonly ResiliencePipeline _resilience;
 
     /// <summary>
     /// Constructor.
@@ -27,12 +29,15 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     /// <param name="logger"></param>
     /// <param name="connectionAccess"></param>
     /// <param name="configuration"></param>
+    /// <param name="resilienceOptions">Tunables for the timeout/retry/circuit-breaker pipeline (concept §8 T13).</param>
     public CrateDatabaseClient(ILogger<CrateDatabaseClient> logger, ICrateDbConnectionAccess connectionAccess,
-        IOptions<StreamDataConfiguration> configuration)
+        IOptions<StreamDataConfiguration> configuration,
+        IOptions<CrateResilienceOptions> resilienceOptions)
     {
         _logger = logger;
         _connectionAccess = connectionAccess;
         _configuration = configuration.Value;
+        _resilience = CrateResiliencePipeline.Build(resilienceOptions.Value);
 
         SqlMapper.AddTypeHandler(new JsonTypeHandler<Dictionary<string, object>>());
         SqlMapper.AddTypeHandler(new CkIdTypeHandler());
@@ -40,6 +45,11 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     }
 
     public async Task<List<DataPointDto>> GetDataAsync(string tenantId, string query)
+    {
+        return await _resilience.ExecuteAsync(async _ => await GetDataInternalAsync(tenantId, query));
+    }
+
+    private async Task<List<DataPointDto>> GetDataInternalAsync(string tenantId, string query)
     {
         await using var connection = CreateConnection(tenantId);
 
@@ -100,16 +110,22 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
     public async Task<long> GetCountAsync(string tenantId, string countQuery)
     {
-        await using var connection = CreateConnection(tenantId);
-        var result = await connection.ExecuteScalarAsync<long>(countQuery);
-        return result;
+        return await _resilience.ExecuteAsync(async _ =>
+        {
+            await using var connection = CreateConnection(tenantId);
+            return await connection.ExecuteScalarAsync<long>(countQuery);
+        });
     }
 
     public async Task InsertDataAsync(string tenantId, IEnumerable<DataPointDto> datapoints)
     {
-        await using var connection = CreateConnection(tenantId);
-
         var d = datapoints.ToArray();
+        await _resilience.ExecuteAsync(async _ => await InsertDataInternalAsync(tenantId, d));
+    }
+
+    private async Task InsertDataInternalAsync(string tenantId, DataPointDto[] d)
+    {
+        await using var connection = CreateConnection(tenantId);
 
         var command = new NpgsqlCommand(
             string.Format(Queries.InsertStreamDataBulk, TenantSchema.QualifiedLegacyTable(tenantId)),
@@ -136,63 +152,78 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
     public async Task InsertDataAsync(string tenantId, DataPointDto datapoint)
     {
-        var query = string.Format(Queries.InsertStreamDataEntry, TenantSchema.QualifiedLegacyTable(tenantId));
-        await using var connection = CreateConnection(tenantId);
+        await _resilience.ExecuteAsync(async _ =>
+        {
+            var query = string.Format(Queries.InsertStreamDataEntry, TenantSchema.QualifiedLegacyTable(tenantId));
+            await using var connection = CreateConnection(tenantId);
 
-        var data = new Json<Dictionary<string, object?>>(datapoint.Attributes.ToDictionary());
+            var data = new Json<Dictionary<string, object?>>(datapoint.Attributes.ToDictionary());
 
-        var result = await connection.ExecuteAsync(query,
-            new
-            {
-                datapoint.RtId,
-                datapoint.CkTypeId,
-                datapoint.Timestamp,
-                data
-            });
+            await connection.ExecuteAsync(query,
+                new
+                {
+                    datapoint.RtId,
+                    datapoint.CkTypeId,
+                    datapoint.Timestamp,
+                    data
+                });
+        });
     }
 
     public async Task CreateStreamDataTableIfNotExistAsync(string tenantId)
     {
-        await using var connection = CreateConnection(tenantId);
+        await _resilience.ExecuteAsync(async _ =>
+        {
+            await using var connection = CreateConnection(tenantId);
 
-        var replicaClause = _configuration.NumberOfReplicas >= 0
-            ? $"WITH (number_of_replicas = {_configuration.NumberOfReplicas})"
-            : "";
+            var replicaClause = _configuration.NumberOfReplicas >= 0
+                ? $"WITH (number_of_replicas = {_configuration.NumberOfReplicas})"
+                : "";
 
-        var result = await connection.ExecuteAsync(
-            string.Format(
-                Queries.CreateTableIfNotExists,
-                TenantSchema.QualifiedLegacyTable(tenantId),
-                _configuration.NumberOfShards,
-                replicaClause));
+            await connection.ExecuteAsync(
+                string.Format(
+                    Queries.CreateTableIfNotExists,
+                    TenantSchema.QualifiedLegacyTable(tenantId),
+                    _configuration.NumberOfShards,
+                    replicaClause));
+        });
     }
 
     public async Task RefreshLegacyTableAsync(string tenantId)
     {
-        await using var connection = CreateConnection(tenantId);
-        await connection.ExecuteAsync(
-            string.Format(Queries.RefreshTable, TenantSchema.QualifiedLegacyTable(tenantId)));
+        await _resilience.ExecuteAsync(async _ =>
+        {
+            await using var connection = CreateConnection(tenantId);
+            await connection.ExecuteAsync(
+                string.Format(Queries.RefreshTable, TenantSchema.QualifiedLegacyTable(tenantId)));
+        });
     }
 
     public async Task<IReadOnlyList<string>> ListTablesInTenantSchemaAsync(string tenantId)
     {
-        var schema = TenantSchema.SchemaName(tenantId);
-        await using var connection = CreateConnection(tenantId);
-        var rows = await connection.QueryAsync<string>(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = @schema",
-            new { schema });
-        return rows.AsList();
+        return await _resilience.ExecuteAsync(async _ =>
+        {
+            var schema = TenantSchema.SchemaName(tenantId);
+            await using var connection = CreateConnection(tenantId);
+            var rows = await connection.QueryAsync<string>(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = @schema",
+                new { schema });
+            return (IReadOnlyList<string>)rows.AsList();
+        });
     }
 
     public async Task DeleteStreamDataDatabaseAsync(string tenantId)
     {
-        await using var connection = CreateConnection(tenantId);
+        await _resilience.ExecuteAsync(async _ =>
+        {
+            await using var connection = CreateConnection(tenantId);
 
-        // CrateDB has no explicit DROP SCHEMA. Dropping every table this project owns inside the
-        // tenant schema (currently just the legacy stream-data table) is sufficient: CrateDB
-        // implicitly drops the schema once its last table is gone.
-        var result = await connection.ExecuteAsync(
-            string.Format(Queries.DeleteTableIfExists, TenantSchema.QualifiedLegacyTable(tenantId)));
+            // CrateDB has no explicit DROP SCHEMA. Dropping every table this project owns inside the
+            // tenant schema (currently just the legacy stream-data table) is sufficient: CrateDB
+            // implicitly drops the schema once its last table is gone.
+            await connection.ExecuteAsync(
+                string.Format(Queries.DeleteTableIfExists, TenantSchema.QualifiedLegacyTable(tenantId)));
+        });
     }
 
     private NpgsqlConnection CreateConnection(string tenantId)
