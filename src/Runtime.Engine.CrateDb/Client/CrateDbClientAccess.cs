@@ -16,6 +16,21 @@ internal interface ICrateDbConnectionAccess
     NpgsqlConnection CreateConnection(string tenantId);
 }
 
+/// <remarks>
+/// Concept §8 T14 — connection-cache decision after T4 (schema-per-tenant) and pending T12 (pooling rework):
+/// <list type="bullet">
+///   <item>The cache currently keeps a long-lived <see cref="NpgsqlDataSource"/> per tenant
+///         under a 5-min sliding expiration. The data source itself is the unit of disposal —
+///         on eviction we call <c>Dispose</c> in <see cref="DisposeCallback"/> so any connections
+///         it holds are released promptly even with pooling currently disabled.</item>
+///   <item>With <c>Pooling = false</c> (CrateDB ROLLBACK workaround) the data source does not
+///         retain physical connections, so the cache primarily saves the
+///         <c>NpgsqlDataSourceBuilder</c> setup cost rather than reducing socket usage.</item>
+///   <item>Decision: keep the cache. Once T12 enables real pooling, the same shape works
+///         (the data source becomes the pool root) and the sliding expiration becomes the
+///         pool-eviction window. No behaviour change in this commit.</item>
+/// </list>
+/// </remarks>
 internal class CrateDbConnectionAccess(
     IOptions<StreamDataConfiguration> options,
     ILogger<CrateDbConnectionAccess> logger)
