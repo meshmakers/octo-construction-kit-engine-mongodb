@@ -49,7 +49,7 @@ public class ArchiveReconcilerTests
         await NewSut().ReconcileTenantAsync(Tenant, TestContext.Current.CancellationToken);
 
         A.CallTo(() => _store.SetStatusAsync(A<OctoObjectId>._, A<CkArchiveStatus>._)).MustNotHaveHappened();
-        A.CallTo(() => _audit.RecordTransitionAsync(A<OctoObjectId>._, A<CkArchiveStatus>._, A<CkArchiveStatus>._, A<string?>._))
+        A.CallTo(() => _audit.RecordTransitionAsync(A<string>._, A<OctoObjectId>._, A<CkArchiveStatus>._, A<CkArchiveStatus>._, A<string?>._))
             .MustNotHaveHappened();
     }
 
@@ -63,7 +63,7 @@ public class ArchiveReconcilerTests
         await NewSut().ReconcileTenantAsync(Tenant, TestContext.Current.CancellationToken);
 
         A.CallTo(() => _store.SetStatusAsync(A<OctoObjectId>._, A<CkArchiveStatus>._)).MustNotHaveHappened();
-        A.CallTo(() => _audit.RecordTransitionAsync(A<OctoObjectId>._, A<CkArchiveStatus>._, A<CkArchiveStatus>._, A<string?>._))
+        A.CallTo(() => _audit.RecordTransitionAsync(A<string>._, A<OctoObjectId>._, A<CkArchiveStatus>._, A<CkArchiveStatus>._, A<string?>._))
             .MustNotHaveHappened();
     }
 
@@ -78,7 +78,7 @@ public class ArchiveReconcilerTests
 
         A.CallTo(() => _store.SetStatusAsync(rt, CkArchiveStatus.Failed)).MustHaveHappenedOnceExactly();
         A.CallTo(() => _audit.RecordTransitionAsync(
-            rt, CkArchiveStatus.Activated, CkArchiveStatus.Failed,
+            Tenant, rt, CkArchiveStatus.Activated, CkArchiveStatus.Failed,
             A<string?>.That.Matches(s => s != null && s.Contains("missing", StringComparison.OrdinalIgnoreCase))))
             .MustHaveHappenedOnceExactly();
     }

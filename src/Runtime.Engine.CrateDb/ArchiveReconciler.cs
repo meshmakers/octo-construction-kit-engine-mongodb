@@ -84,7 +84,7 @@ internal sealed class ArchiveReconciler : IArchiveReconciler
                 tenantId, snapshot.RtId);
 
             await _store.SetStatusAsync(snapshot.RtId, CkArchiveStatus.Failed);
-            await _audit.RecordTransitionAsync(snapshot.RtId, CkArchiveStatus.Activated, CkArchiveStatus.Failed,
+            await _audit.RecordTransitionAsync(tenantId, snapshot.RtId, CkArchiveStatus.Activated, CkArchiveStatus.Failed,
                 "reconciliation: backing CrateDB table missing");
             driftCount++;
         }
