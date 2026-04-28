@@ -111,7 +111,9 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
         var d = datapoints.ToArray();
 
-        var command = new NpgsqlCommand(string.Format(Queries.InsertStreamDataBulk, tenantId), connection);
+        var command = new NpgsqlCommand(
+            string.Format(Queries.InsertStreamDataBulk, TenantSchema.QualifiedLegacyTable(tenantId)),
+            connection);
 
 
         var dataParameter = new NpgsqlParameter("@data", NpgsqlDbType.Array | NpgsqlDbType.Json)
@@ -134,7 +136,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
     public async Task InsertDataAsync(string tenantId, DataPointDto datapoint)
     {
-        var query = string.Format(Queries.InsertStreamDataEntry, tenantId);
+        var query = string.Format(Queries.InsertStreamDataEntry, TenantSchema.QualifiedLegacyTable(tenantId));
         await using var connection = CreateConnection(tenantId);
 
         var data = new Json<Dictionary<string, object?>>(datapoint.Attributes.ToDictionary());
@@ -158,14 +160,22 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             : "";
 
         var result = await connection.ExecuteAsync(
-            string.Format(Queries.CreateTableIfNotExists, tenantId, _configuration.NumberOfShards, replicaClause));
+            string.Format(
+                Queries.CreateTableIfNotExists,
+                TenantSchema.QualifiedLegacyTable(tenantId),
+                _configuration.NumberOfShards,
+                replicaClause));
     }
 
     public async Task DeleteStreamDataDatabaseAsync(string tenantId)
     {
         await using var connection = CreateConnection(tenantId);
 
-        var result = await connection.ExecuteAsync(string.Format(Queries.DeleteTableIfExists, tenantId));
+        // CrateDB has no explicit DROP SCHEMA. Dropping every table this project owns inside the
+        // tenant schema (currently just the legacy stream-data table) is sufficient: CrateDB
+        // implicitly drops the schema once its last table is gone.
+        var result = await connection.ExecuteAsync(
+            string.Format(Queries.DeleteTableIfExists, TenantSchema.QualifiedLegacyTable(tenantId)));
     }
 
     private NpgsqlConnection CreateConnection(string tenantId)

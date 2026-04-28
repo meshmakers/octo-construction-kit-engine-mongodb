@@ -16,7 +16,7 @@ public class CrateQueryBuilderTests
 
         var query = compiler.CompileQuery(queryBuilder);
 
-        Assert.Equal("""SELECT "data['Voltage']" FROM meshtest""", query);
+        Assert.Equal("SELECT \"data['Voltage']\" FROM \"meshtest\".\"streamData\"", query);
     }
 
     [Fact]
@@ -28,7 +28,7 @@ public class CrateQueryBuilderTests
         var compiler = new CrateQueryCompiler();
         var query = compiler.CompileQuery(queryBuilder);
 
-        Assert.Equal("""SELECT "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime" FROM meshtest""", query);
+        Assert.Equal("SELECT \"Timestamp\", \"RtId\", \"CkTypeId\", \"RtWellKnownName\", \"RtCreationDateTime\", \"RtChangedDateTime\" FROM \"meshtest\".\"streamData\"", query);
     }
 
     [Fact]
@@ -41,7 +41,7 @@ public class CrateQueryBuilderTests
         var compiler = new CrateQueryCompiler();
         var query = compiler.CompileQuery(queryBuilder);
 
-        Assert.Equal("""SELECT "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime", "data['Voltage']" FROM meshtest""", query);
+        Assert.Equal("SELECT \"Timestamp\", \"RtId\", \"CkTypeId\", \"RtWellKnownName\", \"RtCreationDateTime\", \"RtChangedDateTime\", \"data['Voltage']\" FROM \"meshtest\".\"streamData\"", query);
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public class CrateQueryBuilderTests
         var query = compiler.CompileQuery(queryBuilder);
 
         Assert.Equal(
-            """SELECT "data['Voltage']" FROM meshtest WHERE "Timestamp" >= '2022-01-01 00:00:00.000Z' AND "Timestamp" <= '2022-12-31 23:59:59.999Z'""",
+            """SELECT "data['Voltage']" FROM "meshtest"."streamData" WHERE "Timestamp" >= '2022-01-01 00:00:00.000Z' AND "Timestamp" <= '2022-12-31 23:59:59.999Z'""",
             query);
     }
 
@@ -73,7 +73,7 @@ public class CrateQueryBuilderTests
         var compiler = new CrateQueryCompiler();
         var query = compiler.CompileQuery(queryBuilder);
 
-        Assert.Equal("""SELECT "data['Voltage']" AS "V" FROM meshtest""", query);
+        Assert.Equal("SELECT \"data['Voltage']\" AS \"V\" FROM \"meshtest\".\"streamData\"", query);
     }
 
     [Fact]
@@ -94,7 +94,7 @@ public class CrateQueryBuilderTests
         var query = compiler.CompileQuery(queryBuilder);
 
         Assert.Equal(
-            """SELECT "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime", "data['Voltage']" AS "V" FROM meshtest WHERE "Timestamp" >= '2022-01-01 00:00:00.000Z' AND "Timestamp" <= '2022-12-31 23:59:59.999Z'""",
+            """SELECT "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime", "data['Voltage']" AS "V" FROM "meshtest"."streamData" WHERE "Timestamp" >= '2022-01-01 00:00:00.000Z' AND "Timestamp" <= '2022-12-31 23:59:59.999Z'""",
             query);
     }
 
@@ -110,7 +110,7 @@ public class CrateQueryBuilderTests
 
         Assert.Equal(
             """
-            SELECT "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime", AVG("data['Voltage']") AS "Avg_Voltage" FROM meshtest GROUP BY "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime"
+            SELECT "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime", AVG("data['Voltage']") AS "Avg_Voltage" FROM "meshtest"."streamData" GROUP BY "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime"
             """,
             query);
     }
@@ -127,7 +127,7 @@ public class CrateQueryBuilderTests
         var query = compiler.CompileQuery(queryBuilder);
 
         Assert.Equal(
-            """SELECT "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime", AVG("data['Voltage']") AS "Avg_Voltage" FROM meshtest GROUP BY "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime" ORDER BY "Timestamp" ASC""",
+            """SELECT "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime", AVG("data['Voltage']") AS "Avg_Voltage" FROM "meshtest"."streamData" GROUP BY "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime" ORDER BY "Timestamp" ASC""",
             query);
     }
 
@@ -143,7 +143,7 @@ public class CrateQueryBuilderTests
         var query = compiler.CompileQuery(queryBuilder);
 
         Assert.Equal(
-            """SELECT "Timestamp" AS "T", AVG("data['Voltage']") AS "V" FROM meshtest GROUP BY "T" ORDER BY "T" ASC""",
+            """SELECT "Timestamp" AS "T", AVG("data['Voltage']") AS "V" FROM "meshtest"."streamData" GROUP BY "T" ORDER BY "T" ASC""",
             query);
     }
 
@@ -162,7 +162,7 @@ public class CrateQueryBuilderTests
         var query = compiler.CompileQuery(queryBuilder);
 
         Assert.Equal(
-            """SELECT "Timestamp" AS "T", AVG("data['Voltage']") AS "V", MIN("data['Voltage']") AS "MinV", MAX("data['Voltage']") AS "MaxV" FROM meshtest GROUP BY "T" ORDER BY "T" DESC, "MaxV" ASC""",
+            """SELECT "Timestamp" AS "T", AVG("data['Voltage']") AS "V", MIN("data['Voltage']") AS "MinV", MAX("data['Voltage']") AS "MaxV" FROM "meshtest"."streamData" GROUP BY "T" ORDER BY "T" DESC, "MaxV" ASC""",
             query);
     }
     
@@ -177,7 +177,7 @@ public class CrateQueryBuilderTests
         var query = compiler.CompileQuery(queryBuilder);
 
         Assert.Equal(
-            """SELECT "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime" FROM meshtest WHERE "CkTypeId" = 'Test/123'""",
+            """SELECT "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime" FROM "meshtest"."streamData" WHERE "CkTypeId" = 'Test/123'""",
             query);
     }
 
@@ -192,7 +192,7 @@ public class CrateQueryBuilderTests
         var query = compiler.CompileQuery(queryBuilder);
 
         Assert.Equal(
-            """SELECT "data['Voltage']" FROM meshtest WHERE "data['Voltage']" > '220'""",
+            """SELECT "data['Voltage']" FROM "meshtest"."streamData" WHERE "data['Voltage']" > '220'""",
             query);
     }
 
@@ -207,7 +207,7 @@ public class CrateQueryBuilderTests
         var query = compiler.CompileQuery(queryBuilder);
 
         Assert.Equal(
-            """SELECT "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime" FROM meshtest WHERE "RtId" = 'abc123'""",
+            """SELECT "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime" FROM "meshtest"."streamData" WHERE "RtId" = 'abc123'""",
             query);
     }
 
@@ -223,7 +223,7 @@ public class CrateQueryBuilderTests
         var query = compiler.CompileQuery(queryBuilder);
 
         Assert.Equal(
-            """SELECT "data['Voltage']" FROM meshtest WHERE "data['Voltage']" >= '200' AND "data['Voltage']" < '240'""",
+            """SELECT "data['Voltage']" FROM "meshtest"."streamData" WHERE "data['Voltage']" >= '200' AND "data['Voltage']" < '240'""",
             query);
     }
 
@@ -244,7 +244,7 @@ public class CrateQueryBuilderTests
         var query = compiler.CompileQuery(queryBuilder);
 
         Assert.Equal(
-            """SELECT "data['Voltage']" FROM meshtest WHERE "Timestamp" >= '2022-01-01 00:00:00.000Z' AND "Timestamp" <= '2022-12-31 23:59:59.999Z' AND "data['Voltage']" = '220'""",
+            """SELECT "data['Voltage']" FROM "meshtest"."streamData" WHERE "Timestamp" >= '2022-01-01 00:00:00.000Z' AND "Timestamp" <= '2022-12-31 23:59:59.999Z' AND "data['Voltage']" = '220'""",
             query);
     }
 
@@ -267,7 +267,7 @@ public class CrateQueryBuilderTests
         var query = compiler.CompileQuery(queryBuilder);
 
         Assert.Equal(
-            """SELECT "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime", "data['Voltage']" FROM meshtest WHERE "CkTypeId" = 'Test/123' AND "Timestamp" >= '2022-01-01 00:00:00.000Z' AND "Timestamp" <= '2022-12-31 23:59:59.999Z' AND "data['Voltage']" != '0'""",
+            """SELECT "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime", "data['Voltage']" FROM "meshtest"."streamData" WHERE "CkTypeId" = 'Test/123' AND "Timestamp" >= '2022-01-01 00:00:00.000Z' AND "Timestamp" <= '2022-12-31 23:59:59.999Z' AND "data['Voltage']" != '0'""",
             query);
     }
 
@@ -282,7 +282,7 @@ public class CrateQueryBuilderTests
         var query = compiler.CompileQuery(queryBuilder);
 
         Assert.Equal(
-            """SELECT "data['Status']" FROM meshtest WHERE "data['Status']" LIKE '%active%'""",
+            """SELECT "data['Status']" FROM "meshtest"."streamData" WHERE "data['Status']" LIKE '%active%'""",
             query);
     }
 
@@ -298,7 +298,7 @@ public class CrateQueryBuilderTests
         var query = compiler.CompileQuery(queryBuilder);
 
         Assert.Equal(
-            """SELECT "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime" FROM meshtest WHERE "CkTypeId" = 'Test/123' AND "RtId" = 'entity-1'""",
+            """SELECT "Timestamp", "RtId", "CkTypeId", "RtWellKnownName", "RtCreationDateTime", "RtChangedDateTime" FROM "meshtest"."streamData" WHERE "CkTypeId" = 'Test/123' AND "RtId" = 'entity-1'""",
             query);
     }
 
@@ -406,7 +406,7 @@ public class CrateQueryBuilderTests
         var countQuery = compiler.CompileCountQuery(queryBuilder);
 
         Assert.Equal(
-            """SELECT COUNT(*) FROM meshtest WHERE "CkTypeId" = 'Test/123' AND "Timestamp" >= '2022-01-01 00:00:00.000Z' AND "Timestamp" <= '2022-12-31 23:59:59.999Z'""",
+            """SELECT COUNT(*) FROM "meshtest"."streamData" WHERE "CkTypeId" = 'Test/123' AND "Timestamp" >= '2022-01-01 00:00:00.000Z' AND "Timestamp" <= '2022-12-31 23:59:59.999Z'""",
             countQuery);
     }
 
@@ -422,7 +422,7 @@ public class CrateQueryBuilderTests
         var countQuery = compiler.CompileCountQuery(queryBuilder);
 
         Assert.Equal(
-            """SELECT COUNT(*) FROM meshtest WHERE "data['Voltage']" > '220'""",
+            """SELECT COUNT(*) FROM "meshtest"."streamData" WHERE "data['Voltage']" > '220'""",
             countQuery);
         Assert.DoesNotContain("ORDER BY", countQuery);
         Assert.DoesNotContain("LIMIT", countQuery);
@@ -440,7 +440,7 @@ public class CrateQueryBuilderTests
         var compiler = new CrateQueryCompiler();
         var countQuery = compiler.CompileCountQuery(queryBuilder);
 
-        Assert.StartsWith("SELECT COUNT(*) FROM meshtest WHERE", countQuery);
+        Assert.StartsWith("SELECT COUNT(*) FROM \"meshtest\".\"streamData\" WHERE", countQuery);
         Assert.Contains("\"RtId\" IN ('id1', 'id2')", countQuery);
     }
 
@@ -457,7 +457,7 @@ public class CrateQueryBuilderTests
         var compiler = new CrateQueryCompiler();
         var countQuery = compiler.CompileCountQuery(queryBuilder);
 
-        Assert.StartsWith("SELECT COUNT(*) FROM meshtest", countQuery);
+        Assert.StartsWith("SELECT COUNT(*) FROM \"meshtest\".\"streamData\"", countQuery);
         Assert.DoesNotContain("GROUP BY", countQuery);
         Assert.DoesNotContain("ORDER BY", countQuery);
         Assert.DoesNotContain("LIMIT", countQuery);
@@ -528,7 +528,7 @@ public class CrateQueryBuilderTests
         Assert.Contains("COUNT(d.\"Timestamp\") AS \"__binCount\"", sql);
         // generate_series upper bound: From + (Limit-1) * 360s = 00:00 + 9*360s = 00:54:00
         Assert.Contains("FROM generate_series('2024-01-01 00:00:00.000Z'::TIMESTAMP, '2024-01-01 00:54:00.000Z'::TIMESTAMP, '360 seconds'::INTERVAL) AS bins(ts)", sql);
-        Assert.Contains("LEFT JOIN meshtest AS d ON DATE_BIN('360 seconds'::INTERVAL, d.\"Timestamp\", '2024-01-01 00:00:00.000Z'::TIMESTAMP) = bins.ts", sql);
+        Assert.Contains("LEFT JOIN \"meshtest\".\"streamData\" AS d ON DATE_BIN('360 seconds'::INTERVAL, d.\"Timestamp\", '2024-01-01 00:00:00.000Z'::TIMESTAMP) = bins.ts", sql);
         Assert.Contains("d.\"CkTypeId\" = 'Test/123'", sql);
         Assert.Contains("GROUP BY bins.ts ORDER BY bins.ts ASC", sql);
         Assert.DoesNotContain("LIMIT", sql); // No LIMIT needed — generate_series produces exactly Limit bins
@@ -555,7 +555,7 @@ public class CrateQueryBuilderTests
         Assert.Contains("MIN(d.\"data['Power']\") AS \"Min_Power\"", sql);
         Assert.Contains("MAX(d.\"data['Power']\") AS \"Max_Power\"", sql);
         Assert.Contains("FROM generate_series('2024-01-01 00:00:00.000Z'::TIMESTAMP", sql);
-        Assert.Contains("LEFT JOIN meshtest AS d ON DATE_BIN('600 seconds'::INTERVAL", sql);
+        Assert.Contains("LEFT JOIN \"meshtest\".\"streamData\" AS d ON DATE_BIN('600 seconds'::INTERVAL", sql);
         Assert.Contains("GROUP BY bins.ts ORDER BY bins.ts ASC", sql);
     }
 
@@ -595,7 +595,7 @@ public class CrateQueryBuilderTests
         var sql = compiler.CompileQuery(queryBuilder);
 
         // Field filter should be in the ON clause, not WHERE
-        Assert.Contains("LEFT JOIN meshtest AS d ON", sql);
+        Assert.Contains("LEFT JOIN \"meshtest\".\"streamData\" AS d ON", sql);
         Assert.Contains("d.\"data['Voltage']\" > '0'", sql);
         Assert.DoesNotContain(" WHERE ", sql);
         Assert.Contains("GROUP BY bins.ts ORDER BY bins.ts ASC", sql);
@@ -617,7 +617,7 @@ public class CrateQueryBuilderTests
         var compiler = new CrateQueryCompiler();
         var sql = compiler.CompileQuery(queryBuilder);
 
-        Assert.Contains("LEFT JOIN meshtest AS d ON", sql);
+        Assert.Contains("LEFT JOIN \"meshtest\".\"streamData\" AS d ON", sql);
         Assert.Contains("d.\"RtId\" IN ('id1', 'id2')", sql);
     }
 }

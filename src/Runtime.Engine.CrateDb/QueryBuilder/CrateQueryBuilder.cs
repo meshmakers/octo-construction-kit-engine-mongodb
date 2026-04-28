@@ -26,7 +26,9 @@ internal class CrateQueryBuilder
     internal IQueryVariable? TimeStampVariable => Variables.FirstOrDefault(x => x.Name == "Timestamp");
 
     /// <summary>
-    /// Tenant Id
+    /// Schema-qualified, double-quoted legacy stream-data table identifier for this tenant
+    /// (e.g. <c>"acmecorp"."streamData"</c>). Embedded directly into <c>FROM</c> and
+    /// <c>LEFT JOIN</c> clauses by <see cref="CrateQueryCompiler"/>.
     /// </summary>
     internal string TenantId { get; }
 
@@ -68,12 +70,13 @@ internal class CrateQueryBuilder
     internal RtCkId<CkTypeId>? CkTypeId { get; private set; }
 
     /// <summary>
-    /// Constructor
+    /// Constructor. <paramref name="tenantId"/> is converted to the schema-qualified legacy
+    /// stream-data table identifier (e.g. <c>"acmecorp"."streamData"</c>) and exposed via
+    /// <see cref="QualifiedTableName"/>.
     /// </summary>
-    /// <param name="tenantId"></param>
     public CrateQueryBuilder(string tenantId)
     {
-        TenantId = tenantId;
+        TenantId = TenantSchema.QualifiedLegacyTable(tenantId);
     }
 
     /// <summary>
