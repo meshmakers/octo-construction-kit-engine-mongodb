@@ -842,6 +842,20 @@ public class TenantContext : ITenantContext
                 "Ensure AddCrateDbStreamDataRepository() was called during startup.",
                 TenantId);
         }
+
+        // Concept §5: the StreamData CK model is loaded only on tenants that opt into stream
+        // data. Importing it here keeps the model lifecycle aligned with the feature flag —
+        // disabling stream data later does NOT remove the model (entities and history are
+        // preserved), but enabling brings everything required for archive management UI to work.
+        // Idempotent: ImportCkModelAsync detects a model that's already present and short-circuits.
+        var streamDataModelImportResult = new OperationResult();
+        await ImportCkModelAsync(new CkModelId("System.StreamData-1.0.0"), streamDataModelImportResult);
+        if (streamDataModelImportResult.HasErrors || streamDataModelImportResult.HasFatalErrors)
+        {
+            _logger.LogError(
+                "Failed to import StreamData CK model into tenant '{TenantId}'. Stream data is enabled but archive management features may not be available until the model is imported.",
+                TenantId);
+        }
     }
 
     /// <inheritdoc />
