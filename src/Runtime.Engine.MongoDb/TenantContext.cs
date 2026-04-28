@@ -19,7 +19,6 @@ using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
-using Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.CkModelMigrations;
@@ -881,23 +880,16 @@ public class TenantContext : ITenantContext
             return _streamDataRepository;
         }
 
-        // Resolve stream data services from DI. If they're not registered
+        // Resolve the stream data factory from DI. If not registered
         // (caller didn't call AddCrateDbStreamDataRepository), return null.
-        var databaseClient = _serviceProvider.GetService<IStreamDataDatabaseClient>();
-        var managementClient = _serviceProvider.GetService<IStreamDataDatabaseManagementClient>();
-
-        if (databaseClient == null || managementClient == null)
+        var factory = _serviceProvider.GetService<IStreamDataRepositoryFactory>();
+        if (factory == null)
         {
             _streamDataRepositoryResolved = true;
             return null;
         }
 
-        _streamDataRepository = new CrateDbStreamDataRepository(
-            _loggerFactory.CreateLogger<CrateDbStreamDataRepository>(),
-            _cacheService,
-            databaseClient,
-            managementClient,
-            TenantId);
+        _streamDataRepository = factory.Create(TenantId);
         _streamDataRepositoryResolved = true;
         return _streamDataRepository;
     }

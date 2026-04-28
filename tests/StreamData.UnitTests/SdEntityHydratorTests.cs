@@ -1,7 +1,7 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
-namespace Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.UnitTests;
+namespace Meshmakers.Octo.Runtime.Engine.CrateDb.UnitTests;
 
 public class SdEntityHydratorTests
 {

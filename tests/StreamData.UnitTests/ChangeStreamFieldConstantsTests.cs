@@ -1,6 +1,6 @@
 using MongoDbConstants = Meshmakers.Octo.Runtime.Engine.MongoDb.Constants;
 
-namespace Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.UnitTests;
+namespace Meshmakers.Octo.Runtime.Engine.CrateDb.UnitTests;
 
 public class ChangeStreamFieldConstantsTests
 {
