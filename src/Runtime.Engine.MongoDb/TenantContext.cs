@@ -22,8 +22,10 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.CkModelMigrations;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
+using Meshmakers.Octo.Runtime.Engine.StreamData;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -902,6 +904,43 @@ public class TenantContext : ITenantContext
         _streamDataRepository = factory.Create(TenantId);
         _streamDataRepositoryResolved = true;
         return _streamDataRepository;
+    }
+
+    private ICkArchiveRuntimeStore? _ckArchiveRuntimeStore;
+
+    /// <inheritdoc />
+    public ICkArchiveRuntimeStore GetCkArchiveRuntimeStore()
+    {
+        return _ckArchiveRuntimeStore ??= new MongoCkArchiveRuntimeStore(GetTenantRepository());
+    }
+
+    private IArchiveLifecycleService? _archiveLifecycleService;
+    private bool _archiveLifecycleServiceResolved;
+
+    /// <inheritdoc />
+    public IArchiveLifecycleService? GetArchiveLifecycleService()
+    {
+        if (_archiveLifecycleServiceResolved)
+        {
+            return _archiveLifecycleService;
+        }
+
+        var streamData = GetStreamDataRepository();
+        if (streamData is null)
+        {
+            _archiveLifecycleServiceResolved = true;
+            return null;
+        }
+
+        var audit = _serviceProvider.GetService<IArchiveAuditTrail>()
+                    ?? new LoggingArchiveAuditTrail(_loggerFactory.CreateLogger<LoggingArchiveAuditTrail>());
+        _archiveLifecycleService = new ArchiveLifecycleService(
+            GetCkArchiveRuntimeStore(),
+            streamData,
+            audit,
+            _loggerFactory.CreateLogger<ArchiveLifecycleService>());
+        _archiveLifecycleServiceResolved = true;
+        return _archiveLifecycleService;
     }
 
     #endregion Access management

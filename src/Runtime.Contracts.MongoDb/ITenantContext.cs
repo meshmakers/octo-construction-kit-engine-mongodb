@@ -99,6 +99,20 @@ public interface ITenantContext
     IStreamDataRepository? GetStreamDataRepository();
 
     /// <summary>
+    /// Returns the archive runtime store for this tenant. Reads and writes <c>CkArchive</c>
+    /// entities through MongoDB. Used by the archive lifecycle service (concept §11).
+    /// </summary>
+    ICkArchiveRuntimeStore GetCkArchiveRuntimeStore();
+
+    /// <summary>
+    /// Returns the archive lifecycle service for this tenant, or null if stream data is not
+    /// enabled (no <see cref="IStreamDataRepository"/> available). Composes the tenant-scoped
+    /// dependencies (<see cref="ICkArchiveRuntimeStore"/>, <see cref="IStreamDataRepository"/>,
+    /// <see cref="IArchiveAuditTrail"/>) so callers don't have to.
+    /// </summary>
+    IArchiveLifecycleService? GetArchiveLifecycleService();
+
+    /// <summary>
     /// Enables stream data for this tenant: sets the configuration flag and
     /// creates the CrateDB table if needed.
     /// </summary>
