@@ -18,10 +18,14 @@
         <PackageReference Include="Meshmakers.Octo.ConstructionKit.Models.System" Version="$(OctoVersion)" />
         <PackageReference Include="Meshmakers.Octo.ConstructionKit.Models.StreamData" Version="$(OctoVersion)" />
         <PackageReference Include="MathParser.org-mXparser" Version="6.1.0" />
-        <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.2" />
+        <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.7" />
         <PackageReference Include="System.Reactive" Version="6.1.0" />
-        <PackageReference Include="MongoDB.Bson" Version="3.5.2" />
-        <PackageReference Include="MongoDB.Driver" Version="3.5.2" />
+        <PackageReference Include="MongoDB.Bson" Version="3.8.0" />
+        <PackageReference Include="MongoDB.Driver" Version="3.8.0" />
+        <PackageReference Include="Snappier" Version="1.3.1" />
+        <!-- Dapper / Npgsql were temporarily added on main for the StreamData consolidation
+             (AB#3864) but are no longer needed here: T3 extracted CrateDB code into the
+             dedicated Runtime.Engine.CrateDb project, which carries those references itself. -->
     </ItemGroup>
 
     <ItemGroup>
