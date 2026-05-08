@@ -761,6 +761,7 @@ public class TenantContext : ITenantContext
             tenant.DatabaseName);
 
         await UpdateSystemCkModelAsync(tenant.DatabaseName, tenant.TenantId);
+        await context.EnsureStreamDataCkModelIfEnabledAsync();
 
         return context;
     }
@@ -847,15 +848,52 @@ public class TenantContext : ITenantContext
         // data. Importing it here keeps the model lifecycle aligned with the feature flag —
         // disabling stream data later does NOT remove the model (entities and history are
         // preserved), but enabling brings everything required for archive management UI to work.
-        // Idempotent: ImportCkModelAsync detects a model that's already present and short-circuits.
-        var streamDataModelImportResult = new OperationResult();
-        await ImportCkModelAsync(new CkModelId("System.StreamData-1.0.0"), streamDataModelImportResult);
-        if (streamDataModelImportResult.HasErrors || streamDataModelImportResult.HasFatalErrors)
+        await EnsureStreamDataCkModelImportedAsync();
+    }
+
+    /// <summary>
+    /// Imports the StreamData CK model into the tenant. Idempotent — ImportCkModelAsync detects
+    /// a model already present and short-circuits. Caller must verify the tenant flag first;
+    /// the public entry point is <see cref="EnsureStreamDataCkModelIfEnabledAsync"/>.
+    /// </summary>
+    private async Task EnsureStreamDataCkModelImportedAsync()
+    {
+        var operationResult = new OperationResult();
+        await ImportCkModelAsync(new CkModelId("System.StreamData-1.0.0"), operationResult);
+        if (operationResult.HasErrors || operationResult.HasFatalErrors)
         {
             _logger.LogError(
-                "Failed to import StreamData CK model into tenant '{TenantId}'. Stream data is enabled but archive management features may not be available until the model is imported.",
-                TenantId);
+                "Failed to import StreamData CK model into tenant '{TenantId}'. Stream data is enabled but archive management features may not be available until the model is imported. Operation result: {Messages}",
+                TenantId,
+                string.Join("; ", operationResult.Messages.Select(m => $"{m.MessageNumber}: {m.MessageText}")));
         }
+    }
+
+    /// <summary>
+    /// Idempotent reconciliation hook for the tenant-resolve path: when a tenant has the
+    /// StreamData feature flag set to <c>Enabled</c> AND the deployment instance flag is on,
+    /// make sure the StreamData CK model is in its catalog. Lets a deploy that newly introduces
+    /// the model auto-promote it to previously-enabled tenants without requiring an explicit
+    /// EnableStreamData call (concept §5). No-op when either flag is off.
+    /// </summary>
+    internal async Task EnsureStreamDataCkModelIfEnabledAsync()
+    {
+        var instanceConfig = _serviceProvider.GetService<IOptions<StreamDataInstanceConfiguration>>();
+        if (instanceConfig?.Value.Enabled != true) return;
+
+        try
+        {
+            if (!await IsStreamDataEnabledAsync()) return;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Could not read stream-data tenant flag for '{TenantId}'; skipping StreamData CK model auto-import.",
+                TenantId);
+            return;
+        }
+
+        await EnsureStreamDataCkModelImportedAsync();
     }
 
     /// <inheritdoc />
