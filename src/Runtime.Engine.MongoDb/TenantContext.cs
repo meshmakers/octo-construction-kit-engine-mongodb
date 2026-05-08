@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 
 using Meshmakers.Common.Metrics.Context;
@@ -870,14 +871,27 @@ public class TenantContext : ITenantContext
     }
 
     /// <summary>
+    /// Per-process guard that prevents the auto-import hook from re-entering during the
+    /// tenant-resolve recursion triggered by ImportCkModelAsync's pending-migrations check.
+    /// Once a tenant has been auto-reconciled in this process, subsequent resolves skip the
+    /// hook (manual EnableStreamDataAsync calls bypass this guard).
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, bool> _streamDataAutoImportAttempted = new();
+
+    /// <summary>
     /// Idempotent reconciliation hook for the tenant-resolve path: when a tenant has the
     /// StreamData feature flag set to <c>Enabled</c> AND the deployment instance flag is on,
     /// make sure the StreamData CK model is in its catalog. Lets a deploy that newly introduces
     /// the model auto-promote it to previously-enabled tenants without requiring an explicit
-    /// EnableStreamData call (concept §5). No-op when either flag is off.
+    /// EnableStreamData call (concept §5). No-op when either flag is off, or when the tenant
+    /// has already been reconciled in this process.
     /// </summary>
     internal async Task EnsureStreamDataCkModelIfEnabledAsync()
     {
+        // First-pass guard avoids the recursion through ImportCkModelAsync ->
+        // RetryPendingMigrationsAsync -> CkModelUpgradeService -> tenant resolve -> here.
+        if (!_streamDataAutoImportAttempted.TryAdd(TenantId, true)) return;
+
         var instanceConfig = _serviceProvider.GetService<IOptions<StreamDataInstanceConfiguration>>();
         if (instanceConfig?.Value.Enabled != true) return;
 
