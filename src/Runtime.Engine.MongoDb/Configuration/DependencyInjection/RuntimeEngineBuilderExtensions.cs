@@ -47,6 +47,12 @@ public static class RuntimeEngineBuilderExtensions
         // Add basic construction kits. Hopefully we can leave it at one.
         builder.Services.AddCkModelSystemV2();
 
+        // StreamData CK model (concept §5). The package reference brings the embedded model in,
+        // but it only enters the catalog once the source-generated extension method is invoked.
+        // Without this call, EnableStreamDataAsync's ImportCkModelAsync(System.StreamData-1.0.0)
+        // surfaces as ResolveFailed because the catalog never sees it.
+        builder.Services.AddCkModelSystemStreamDataV1();
+
         // Add services of Persistence module
         builder.Services.AddTransient<IDatabaseCkModelRepository, DatabaseCkModelRepository>();
         builder.Services.AddTransient<IModelRepository>(sp => sp.GetRequiredService<IDatabaseCkModelRepository>());
