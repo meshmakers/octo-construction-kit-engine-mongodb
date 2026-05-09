@@ -25,6 +25,10 @@
         <!-- Stream data (CrateDB) dependencies - moved from octo-common-services/StreamData -->
         <PackageReference Include="Dapper" Version="2.1.72" />
         <PackageReference Include="Npgsql" Version="10.0.2" />
+        <PackageReference Include="SharpCompress" Version="1.0.0" />
+        <!-- Dapper / Npgsql were temporarily added on main for the StreamData consolidation
+             (AB#3864) but are no longer needed here: T3 extracted CrateDB code into the
+             dedicated Runtime.Engine.CrateDb project, which carries those references itself. -->
     </ItemGroup>
 
     <ItemGroup>
