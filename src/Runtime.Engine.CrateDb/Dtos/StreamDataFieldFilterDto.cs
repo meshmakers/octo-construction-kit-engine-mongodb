@@ -45,16 +45,14 @@ public enum StreamDataFieldFilterOperator
 /// <summary>
 /// A single field filter condition for stream data queries
 /// </summary>
-/// <param name="FieldName">Column name</param>
+/// <param name="FieldName">CamelCase column name on the per-archive table.</param>
 /// <param name="Operator">Comparison operator</param>
 /// <param name="Value">Primary comparison value</param>
-/// <param name="IsDataField">Whether the field is a dynamic data column (data['name'] syntax)</param>
 /// <param name="SecondaryValue">Upper bound for Between operator</param>
 /// <param name="ValueList">List of values for In/NotIn operators</param>
 public record StreamDataFieldFilterDto(
     string FieldName,
     StreamDataFieldFilterOperator Operator,
     string Value,
-    bool IsDataField,
     string? SecondaryValue = null,
     IReadOnlyList<string>? ValueList = null);

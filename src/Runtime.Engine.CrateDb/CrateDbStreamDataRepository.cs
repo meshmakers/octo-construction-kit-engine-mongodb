@@ -3,9 +3,11 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 
@@ -20,6 +22,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     private readonly IStreamDataDatabaseClient _databaseClient;
     private readonly IStreamDataDatabaseManagementClient _managementClient;
     private readonly ICkArchiveRuntimeStore? _archiveStore;
+    private readonly StreamDataConfiguration _configuration;
     private readonly string _tenantId;
 
     public CrateDbStreamDataRepository(
@@ -27,6 +30,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         ICkCacheService ckCacheService,
         IStreamDataDatabaseClient databaseClient,
         IStreamDataDatabaseManagementClient managementClient,
+        IOptions<StreamDataConfiguration> configuration,
         string tenantId,
         ICkArchiveRuntimeStore? archiveStore = null)
     {
@@ -35,12 +39,16 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         _databaseClient = databaseClient;
         _managementClient = managementClient;
         _archiveStore = archiveStore;
+        _configuration = configuration.Value;
         _tenantId = tenantId;
     }
 
     public Task EnsureDatabaseCreatedAsync()
     {
-        return _managementClient.CreateStreamDataTableIfNotExistAsync(_tenantId);
+        // After T17 there is no per-tenant control plane table — schemas are created implicitly
+        // by CrateDB the first time an archive table inside them is provisioned. Keep the method
+        // as a no-op so the callsite that opts a tenant into stream data still has a hook.
+        return Task.CompletedTask;
     }
 
     public Task DeleteDatabaseAsync()
@@ -49,41 +57,55 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     }
 
     /// <inheritdoc />
-    /// <remarks>
-    /// T7-stage implementation: delegates to the legacy tenant-level table creation. Real
-    /// per-archive table provisioning (using <c>ArchiveDdlGenerator</c> against the resolved
-    /// CkArchive columns) lands in a follow-up once the <c>ICkArchiveRuntimeStore</c> →
-    /// CK-model path resolution chain is wired through.
-    /// </remarks>
-    public Task EnsureArchiveCreatedAsync(OctoObjectId archiveRtId)
+    public async Task EnsureArchiveCreatedAsync(CkArchiveSnapshot snapshot)
     {
+        // The tenant schema is implicit in the qualified table identifier — CrateDB creates the
+        // schema on first table inside it, so no separate `CREATE SCHEMA` step is needed.
+        var resolvedColumns = ArchivePathTypeResolver.Resolve(
+            _ckCacheService, _tenantId, snapshot.TargetCkTypeId, snapshot.Columns);
+
+        var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString());
+        var sql = ArchiveDdlGenerator.GenerateCreateTable(
+            qualifiedTable, resolvedColumns, _configuration.NumberOfShards, _configuration.NumberOfReplicas);
+
         _logger.LogDebug(
-            "EnsureArchiveCreatedAsync({ArchiveRtId}) — currently delegates to legacy tenant-level table; per-archive DDL pending.",
-            archiveRtId);
-        return _managementClient.CreateStreamDataTableIfNotExistAsync(_tenantId);
+            "Provisioning archive table {Table} with {ColumnCount} user columns for tenant {TenantId}",
+            qualifiedTable, resolvedColumns.Count, _tenantId);
+        await _managementClient.ExecuteDdlAsync(_tenantId, sql);
     }
 
     /// <inheritdoc />
-    /// <remarks>T7-stage: same caveat as <see cref="EnsureArchiveCreatedAsync"/>.</remarks>
-    public Task DeleteArchiveAsync(OctoObjectId archiveRtId)
+    public async Task DeleteArchiveAsync(OctoObjectId archiveRtId)
     {
-        _logger.LogDebug(
-            "DeleteArchiveAsync({ArchiveRtId}) — currently delegates to legacy tenant-level drop.",
-            archiveRtId);
-        return _managementClient.DeleteStreamDataDatabaseAsync(_tenantId);
+        var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString());
+        var sql = ArchiveDdlGenerator.GenerateDropTable(qualifiedTable);
+        _logger.LogDebug("Dropping archive table {Table} for tenant {TenantId}", qualifiedTable, _tenantId);
+        await _managementClient.ExecuteDdlAsync(_tenantId, sql);
     }
 
     public async Task InsertAsync(OctoObjectId archiveRtId, StreamDataPoint datapoint)
     {
-        await EnsureArchiveActivatedAsync(archiveRtId);
+        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
+
+        // See the bulk overload for the rationale; per-archive tables only accept rows of the
+        // archive's own TargetCkTypeId.
+        if (snapshot != null && datapoint.CkTypeId != snapshot.TargetCkTypeId)
+        {
+            _logger.LogDebug(
+                "Archive {ArchiveRtId} (target {TargetCkTypeId}): skipped 1 datapoint with mismatched CkTypeId {ActualCkTypeId}",
+                archiveRtId, snapshot.TargetCkTypeId, datapoint.CkTypeId);
+            return;
+        }
 
         using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.insert");
         activity?.SetTag("streamdata.tenant", _tenantId);
         activity?.SetTag("streamdata.archive.rtid", archiveRtId.ToString());
 
+        var (qualifiedTable, userColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
+
         var sw = Stopwatch.StartNew();
         var dto = MapToDataPointDto(datapoint);
-        await _databaseClient.InsertDataAsync(_tenantId, dto);
+        await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dto);
         sw.Stop();
 
         CrateDbDiagnostics.InsertDurationMs.Record(sw.Elapsed.TotalMilliseconds,
@@ -97,29 +119,68 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
 
     public async Task InsertAsync(OctoObjectId archiveRtId, IEnumerable<StreamDataPoint> datapoints)
     {
-        await EnsureArchiveActivatedAsync(archiveRtId);
+        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
 
         // Materialise once so we can both count and pass to the client.
         var materialised = datapoints as IReadOnlyList<StreamDataPoint> ?? datapoints.ToList();
 
+        // Filter to items whose CkTypeId matches the archive's TargetCkTypeId. An archive is
+        // schema-bound to one CkType: its user columns come from that type's attribute graph and
+        // none of the others. Heterogeneous callers (e.g. the Loxone pipeline that flattens both
+        // Control updates and EnergyIQ/Space mapping updates into a single _updateItems list)
+        // would otherwise push rows of the wrong type into the table — semantically meaningless
+        // and a frequent root cause of CrateDB connection-state pollution after a failed insert.
+        var filtered = snapshot != null
+            ? materialised.Where(p => p.CkTypeId == snapshot.TargetCkTypeId).ToList()
+            : (IReadOnlyList<StreamDataPoint>)materialised;
+        var skipped = materialised.Count - filtered.Count;
+        if (skipped > 0)
+        {
+            _logger.LogDebug(
+                "Archive {ArchiveRtId} (target {TargetCkTypeId}): skipped {Skipped} of {Total} datapoints with mismatched CkTypeId",
+                archiveRtId, snapshot?.TargetCkTypeId, skipped, materialised.Count);
+        }
+        if (filtered.Count == 0)
+        {
+            return;
+        }
+
         using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.insert");
         activity?.SetTag("streamdata.tenant", _tenantId);
         activity?.SetTag("streamdata.archive.rtid", archiveRtId.ToString());
-        activity?.SetTag("streamdata.batch_size", materialised.Count);
+        activity?.SetTag("streamdata.batch_size", filtered.Count);
+
+        var (qualifiedTable, userColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
 
         var sw = Stopwatch.StartNew();
-        var dtos = materialised.Select(MapToDataPointDto);
-        await _databaseClient.InsertDataAsync(_tenantId, dtos);
+        var dtos = filtered.Select(MapToDataPointDto);
+        await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos);
         sw.Stop();
 
-        var bucket = CrateDbDiagnostics.BatchSizeBucket(materialised.Count);
+        var bucket = CrateDbDiagnostics.BatchSizeBucket(filtered.Count);
         CrateDbDiagnostics.InsertDurationMs.Record(sw.Elapsed.TotalMilliseconds,
             new("tenant", _tenantId),
             new("archive", archiveRtId.ToString()),
             new("batch_size_bucket", bucket));
-        CrateDbDiagnostics.InsertedPoints.Add(materialised.Count,
+        CrateDbDiagnostics.InsertedPoints.Add(filtered.Count,
             new("tenant", _tenantId),
             new("archive", archiveRtId.ToString()));
+    }
+
+    /// <summary>
+    /// Computes the qualified per-archive table name and the camelCase user-column list from the
+    /// archive snapshot. Returns an empty user-column list when the snapshot is null (no
+    /// <see cref="ICkArchiveRuntimeStore"/> wired in tests / transitional setups) — inserts in
+    /// that case carry only the standard columns.
+    /// </summary>
+    private (string qualifiedTable, IReadOnlyList<string> userColumnNames) ResolveTableAndColumns(
+        CkArchiveSnapshot? snapshot, OctoObjectId archiveRtId)
+    {
+        var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString());
+        var userColumnNames = snapshot is null
+            ? (IReadOnlyList<string>)Array.Empty<string>()
+            : snapshot.Columns.Select(c => ColumnNameMapper.PathToColumnName(c.Path)).ToList();
+        return (qualifiedTable, userColumnNames);
     }
 
     public async Task<StreamDataQueryResult> ExecuteQueryAsync(OctoObjectId archiveRtId, StreamDataQueryOptions options)
@@ -127,7 +188,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         await EnsureArchiveActivatedAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(options.CkTypeId);
 
-        var q = new CrateQueryBuilder(_tenantId);
+        var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
         q.IncludeDefaultVariables();
         q.WithCkTypeIdFilter(options.CkTypeId);
 
@@ -163,7 +224,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         await EnsureArchiveActivatedAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(options.CkTypeId);
 
-        var q = new CrateQueryBuilder(_tenantId);
+        var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
         q.WithCkTypeIdFilter(options.CkTypeId);
 
         // Add aggregation columns. SQL aliases need to be unique (to support e.g. AVG+MAX
@@ -179,7 +240,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
 
             var aggFunc = MapAggregationFunction(col.Function);
             var sqlAlias = $"{aggFunc}_{resolved.CrateDbName}";
-            q.AddAggregationVariable(resolved.CrateDbName, aggFunc, sqlAlias, resolved.IsDataField);
+            q.AddAggregationVariable(resolved.CrateDbName, aggFunc, sqlAlias);
 
             outputColumnNames.Add(resolved.CrateDbName);
             outputNameBySqlAlias[sqlAlias] = resolved.CrateDbName;
@@ -210,7 +271,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         await EnsureArchiveActivatedAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(options.CkTypeId);
 
-        var q = new CrateQueryBuilder(_tenantId);
+        var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
         q.WithCkTypeIdFilter(options.CkTypeId);
 
         // Group-by columns as non-aggregation variables. The CrateQueryCompiler automatically
@@ -223,7 +284,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             var resolved = fieldResolver.Resolve(groupCol);
             if (resolved == null) continue;
 
-            q.AddVariable(resolved.CrateDbName, resolved.CrateDbName, null, resolved.IsDataField);
+            q.AddVariable(resolved.CrateDbName, resolved.CrateDbName, null);
             outputColumnNames.Add(resolved.CrateDbName);
             // Grouping columns use CrateDbName as SQL alias — identity mapping
             outputNameBySqlAlias[resolved.CrateDbName] = resolved.CrateDbName;
@@ -237,7 +298,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
 
             var aggFunc = MapAggregationFunction(col.Function);
             var sqlAlias = $"{aggFunc}_{resolved.CrateDbName}";
-            q.AddAggregationVariable(resolved.CrateDbName, aggFunc, sqlAlias, resolved.IsDataField);
+            q.AddAggregationVariable(resolved.CrateDbName, aggFunc, sqlAlias);
 
             outputColumnNames.Add(resolved.CrateDbName);
             outputNameBySqlAlias[sqlAlias] = resolved.CrateDbName;
@@ -273,13 +334,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
 
         var fieldResolver = CreateFieldResolver(options.CkTypeId);
 
-        var q = new CrateQueryBuilder(_tenantId);
+        var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
         q.WithCkTypeIdFilter(options.CkTypeId);
         q.WithDownsampling(options.Limit.Value, options.From.Value, options.To.Value);
 
         // Timestamp is always first in the output for downsampling (the bin start time).
         // It maps from the "T" alias set by the downsampling SQL generator.
-        q.AddVariable("Timestamp", "T", null, false);
+        q.AddVariable(Constants.Timestamp, "T", null);
 
         var outputColumnNames = new List<string> { Constants.Timestamp };
         var outputNameBySqlAlias = new Dictionary<string, string>();
@@ -291,7 +352,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
 
             var aggFunc = MapAggregationFunction(col.Function);
             var sqlAlias = $"{aggFunc}_{resolved.CrateDbName}";
-            q.AddAggregationVariable(resolved.CrateDbName, aggFunc, sqlAlias, resolved.IsDataField);
+            q.AddAggregationVariable(resolved.CrateDbName, aggFunc, sqlAlias);
 
             outputColumnNames.Add(resolved.CrateDbName);
             outputNameBySqlAlias[sqlAlias] = resolved.CrateDbName;
@@ -371,14 +432,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     /// skipped with a warning log so that legacy callers keep working until the per-tenant store
     /// implementation lands.
     /// </summary>
-    private async Task EnsureArchiveActivatedAsync(OctoObjectId archiveRtId)
+    private async Task<CkArchiveSnapshot?> EnsureArchiveActivatedAsync(OctoObjectId archiveRtId)
     {
         if (_archiveStore is null)
         {
             _logger.LogWarning(
-                "Archive status check skipped for {ArchiveRtId}: no ICkArchiveRuntimeStore wired (transitional T7 state).",
+                "Archive status check skipped for {ArchiveRtId}: no ICkArchiveRuntimeStore wired (transitional state).",
                 archiveRtId);
-            return;
+            return null;
         }
 
         var snapshot = await _archiveStore.GetAsync(archiveRtId)
@@ -388,6 +449,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         {
             throw new ArchiveNotActivatedException(archiveRtId, snapshot.Status);
         }
+
+        return snapshot;
     }
 
     private StreamDataFieldResolver CreateFieldResolver(RtCkId<CkTypeId> ckTypeId)
@@ -420,7 +483,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             }
 
             // SQL alias = CrateDbName so CrateDB returns the column already in canonical form.
-            q.AddVariable(resolved.CrateDbName, resolved.CrateDbName, null, true);
+            q.AddVariable(resolved.CrateDbName, resolved.CrateDbName, null);
         }
 
         return resolvedColumnNames;
@@ -478,7 +541,6 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
                 case FieldFilterOperator.Between:
                     q.AddFieldFilter(resolved.CrateDbName, op,
                         filter.ComparisonValue?.ToString() ?? "",
-                        resolved.IsDataField,
                         secondaryValue: filter.SecondaryValue?.ToString());
                     break;
 
@@ -491,19 +553,17 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
                         IEnumerable<object> objects => objects.Select(o => o.ToString() ?? "").ToList(),
                         _ => new List<string> { filter.ComparisonValue?.ToString() ?? "" }
                     };
-                    q.AddFieldFilter(resolved.CrateDbName, op, "",
-                        resolved.IsDataField,
-                        valueList: valueList);
+                    q.AddFieldFilter(resolved.CrateDbName, op, "", valueList: valueList);
                     break;
                 }
 
                 case FieldFilterOperator.IsNull:
                 case FieldFilterOperator.IsNotNull:
-                    q.AddFieldFilter(resolved.CrateDbName, op, "", resolved.IsDataField);
+                    q.AddFieldFilter(resolved.CrateDbName, op, "");
                     break;
 
                 default:
-                    q.AddFieldFilter(resolved.CrateDbName, op, filter.ComparisonValue!.ToString()!, resolved.IsDataField);
+                    q.AddFieldFilter(resolved.CrateDbName, op, filter.ComparisonValue!.ToString()!);
                     break;
             }
         }
@@ -521,7 +581,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         var countSql = compiler.CompileCountQuery(q);
 
         // Add Timestamp tiebreaker for deterministic pagination
-        q.AddOrderByTiebreaker("Timestamp", SortOrderDto.Ascending);
+        q.AddOrderByTiebreaker(Constants.Timestamp, SortOrderDto.Ascending);
 
         var effectiveOffset = offset.GetValueOrDefault(0);
 
@@ -610,7 +670,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
 
     private static DataPointDto MapToDataPointDto(StreamDataPoint point)
     {
-        var attributes = new Dictionary<string, object?>(point.Attributes);
+        // Re-key attributes from raw CK paths (e.g. "sensor.reading.value") to the camelCase
+        // column names that exist on the per-archive table — the data plane no longer carries a
+        // dynamic `data` blob, so the dictionary must align with the table schema directly.
+        var attributes = new Dictionary<string, object?>(point.Attributes.Count);
+        foreach (var kvp in point.Attributes)
+        {
+            attributes[ColumnNameMapper.PathToColumnName(kvp.Key)] = kvp.Value;
+        }
         return new DataPointDto(attributes)
         {
             RtId = point.RtId,

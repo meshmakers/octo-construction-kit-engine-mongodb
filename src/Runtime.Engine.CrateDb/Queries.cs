@@ -1,21 +1,12 @@
-﻿
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 
 internal static class Queries
 {
-    public const string CreateTableIfNotExists = """
-                                                 CREATE TABLE IF NOT EXISTS {0} (
-                                                   "CkTypeId" TEXT NOT NULL,
-                                                   "RtId" TEXT NOT NULL,
-                                                   "Timestamp" TIMESTAMP WITH TIME ZONE NOT NULL,
-                                                   "RtCreationDateTime" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                                                   "RtChangedDateTime" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                                                   "RtWellKnownName" TEXT,
-                                                   "data" OBJECT(DYNAMIC),
-                                                   PRIMARY KEY ("Timestamp", "RtId", "CkTypeId")
-                                                 ) CLUSTERED INTO {1} SHARDS {2};
-                                                 """;
-    
+    /// <summary>
+    /// Drop-table template used for both archive tables and any leftover legacy table when the
+    /// management client is asked to remove storage for a tenant. CrateDB has no <c>DROP SCHEMA</c>;
+    /// the schema goes away once its last table is dropped.
+    /// </summary>
     public const string DeleteTableIfExists = "drop table if exists {0};";
 
     /// <summary>
@@ -24,26 +15,4 @@ internal static class Queries
     /// consistency must call this explicitly after a bulk insert. Concept §15.
     /// </summary>
     public const string RefreshTable = "REFRESH TABLE {0};";
-
-    public const string InsertStreamDataEntry =
-        """
-        INSERT INTO {0} ("RtId", "CkTypeId", "Timestamp", "RtWellKnownName", data)
-        VALUES (@RtId, @CkTypeId, @Timestamp, @WellKnownName, @data)
-        ON CONFLICT ("Timestamp", "RtId", "CkTypeId")
-        DO UPDATE SET
-            "data" = "data" || EXCLUDED."data",
-            "RtChangedDateTime" = CURRENT_TIMESTAMP,
-            "RtCreationDateTime" = "RtCreationDateTime"
-        """;
-
-    public const string InsertStreamDataBulk =
-        """
-        INSERT INTO {0} ("RtId", "CkTypeId", "Timestamp", "RtWellKnownName", "data")
-        SELECT * FROM unnest(@rtIds, @ckTypeIds, @timestamps, @rtWellKnownNames, @data)
-        ON CONFLICT ("Timestamp", "RtId", "CkTypeId")
-        DO UPDATE SET
-            "data" = "data" || EXCLUDED."data",
-            "RtChangedDateTime" = CURRENT_TIMESTAMP,
-            "RtCreationDateTime" = "RtCreationDateTime"
-        """;
 }

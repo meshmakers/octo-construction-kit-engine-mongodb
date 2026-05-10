@@ -51,7 +51,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
     private async Task<List<DataPointDto>> GetDataInternalAsync(string tenantId, string query)
     {
-        await using var connection = CreateConnection(tenantId);
+        await using var connection = await CreateConnectionAsync(tenantId);
 
         var queryResult = await connection.QueryAsync(query);
 
@@ -112,90 +112,98 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     {
         return await _resilience.ExecuteAsync(async _ =>
         {
-            await using var connection = CreateConnection(tenantId);
+            await using var connection = await CreateConnectionAsync(tenantId);
             return await connection.ExecuteScalarAsync<long>(countQuery);
         });
     }
 
-    public async Task InsertDataAsync(string tenantId, IEnumerable<DataPointDto> datapoints)
+    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints)
     {
         var d = datapoints.ToArray();
-        await _resilience.ExecuteAsync(async _ => await InsertDataInternalAsync(tenantId, d));
+        if (d.Length == 0) return;
+
+        // Per-archive tables have a typed schema (one CrateDB column per archive column with the
+        // CK-derived primitive type), so the legacy `unnest(@arr,...)` bulk path no longer fits:
+        // it required `NpgsqlDbType.Array|Json` for the dynamic `data` blob, but typed columns
+        // need their own native param types and silently drop values when forced through JSON.
+        // Looping single-row inserts trades raw throughput for correct typing across heterogeneous
+        // column sets — fine for the volumes the pipeline produces; revisit if profiling flags
+        // this as a hot spot.
+        await _resilience.ExecuteAsync(async _ =>
+        {
+            await using var connection = await CreateConnectionAsync(tenantId);
+            var sql = BuildSingleRowInsertSql(qualifiedTable, userColumnNames);
+            foreach (var dto in d)
+            {
+                await ExecuteSingleInsertAsync(connection, sql, dto, userColumnNames);
+            }
+        });
     }
 
-    private async Task InsertDataInternalAsync(string tenantId, DataPointDto[] d)
+    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint)
     {
-        await using var connection = CreateConnection(tenantId);
-
-        var command = new NpgsqlCommand(
-            string.Format(Queries.InsertStreamDataBulk, TenantSchema.QualifiedLegacyTable(tenantId)),
-            connection);
-
-
-        var dataParameter = new NpgsqlParameter("@data", NpgsqlDbType.Array | NpgsqlDbType.Json)
+        await _resilience.ExecuteAsync(async _ =>
         {
-            Value = d.Select(x => x.Attributes).ToArray()
+            await using var connection = await CreateConnectionAsync(tenantId);
+            var sql = BuildSingleRowInsertSql(qualifiedTable, userColumnNames);
+            await ExecuteSingleInsertAsync(connection, sql, datapoint, userColumnNames);
+        });
+    }
+
+    /// <summary>
+    /// Executes a single per-archive INSERT using the raw Npgsql command API. We bind parameters
+    /// directly rather than going through Dapper because Dapper's <c>DynamicParameters</c> erases
+    /// the runtime CLR type when it serialises the value, causing CrateDB to receive every
+    /// user-column value as a TEXT literal — fine for strings but corrupts doubles, ints, and
+    /// timestamps the moment a typed CrateDB column is on the receiving end.
+    /// </summary>
+    private static async Task ExecuteSingleInsertAsync(
+        NpgsqlConnection connection, string sql, DataPointDto dto, IReadOnlyList<string> userColumnNames)
+    {
+        await using var cmd = new NpgsqlCommand(sql, connection);
+        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.RtId}", (object?)dto.RtId?.ToString() ?? DBNull.Value));
+        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.CkTypeId}", (object?)dto.CkTypeId?.ToString() ?? DBNull.Value));
+        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.Timestamp}", dto.Timestamp));
+        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.RtWellKnownName}", (object?)dto.RtWellKnownName ?? DBNull.Value));
+        foreach (var col in userColumnNames)
+        {
+            var value = dto.Attributes != null && dto.Attributes.TryGetValue(col, out var v) ? v : null;
+            cmd.Parameters.Add(new NpgsqlParameter($"@{col}", value ?? (object)DBNull.Value));
+        }
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private static string BuildSingleRowInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames)
+    {
+        // Column-explicit INSERT against a per-archive table. Columns = standard time-series set
+        // (rtId, ckTypeId, timestamp, rtWellKnownName) plus the user-defined columns. Unknown
+        // attributes on the data point are dropped: DDL would have rejected them at activation, so
+        // the data plane stays permissive against outdated callers.
+        var allColumns = new List<string>(4 + userColumnNames.Count)
+        {
+            Constants.RtId, Constants.CkTypeId, Constants.Timestamp, Constants.RtWellKnownName
         };
+        allColumns.AddRange(userColumnNames);
 
-        command.Parameters.Add(new NpgsqlParameter<string[]>("@rtIds",
-            d.Select(x => x.RtId.ToString()!).ToArray()));
-        command.Parameters.Add(new NpgsqlParameter<string[]>("@ckTypeIds",
-            d.Select(x => x.CkTypeId!.ToString()).ToArray()));
-        command.Parameters.Add(new NpgsqlParameter<DateTime[]>("@timestamps",
-            d.Select(x => x.Timestamp).ToArray()));
-        command.Parameters.Add(new NpgsqlParameter<string?[]>("@rtWellKnownNames",
-            d.Select(x => x.RtWellKnownName).ToArray()));
-        command.Parameters.Add(dataParameter);
+        var columnList = string.Join(", ", allColumns.Select(c => $"\"{c}\""));
+        var paramList = string.Join(", ", allColumns.Select(c => $"@{c}"));
+        var conflictUpdates = userColumnNames.Count == 0
+            ? string.Empty
+            : ", " + string.Join(", ", userColumnNames.Select(c => $"\"{c}\" = EXCLUDED.\"{c}\""));
 
-        await command.ExecuteNonQueryAsync();
+        return $"INSERT INTO {qualifiedTable} ({columnList}) VALUES ({paramList}) "
+             + $"ON CONFLICT (\"{Constants.Timestamp}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\") "
+             + $"DO UPDATE SET \"{Constants.RtChangedDateTime}\" = CURRENT_TIMESTAMP, "
+             + $"\"{Constants.RtCreationDateTime}\" = \"{Constants.RtCreationDateTime}\""
+             + conflictUpdates;
     }
 
-    public async Task InsertDataAsync(string tenantId, DataPointDto datapoint)
+    public async Task RefreshArchiveTableAsync(string tenantId, string qualifiedTable)
     {
         await _resilience.ExecuteAsync(async _ =>
         {
-            var query = string.Format(Queries.InsertStreamDataEntry, TenantSchema.QualifiedLegacyTable(tenantId));
-            await using var connection = CreateConnection(tenantId);
-
-            var data = new Json<Dictionary<string, object?>>(datapoint.Attributes.ToDictionary());
-
-            await connection.ExecuteAsync(query,
-                new
-                {
-                    datapoint.RtId,
-                    datapoint.CkTypeId,
-                    datapoint.Timestamp,
-                    data
-                });
-        });
-    }
-
-    public async Task CreateStreamDataTableIfNotExistAsync(string tenantId)
-    {
-        await _resilience.ExecuteAsync(async _ =>
-        {
-            await using var connection = CreateConnection(tenantId);
-
-            var replicaClause = _configuration.NumberOfReplicas >= 0
-                ? $"WITH (number_of_replicas = {_configuration.NumberOfReplicas})"
-                : "";
-
-            await connection.ExecuteAsync(
-                string.Format(
-                    Queries.CreateTableIfNotExists,
-                    TenantSchema.QualifiedLegacyTable(tenantId),
-                    _configuration.NumberOfShards,
-                    replicaClause));
-        });
-    }
-
-    public async Task RefreshLegacyTableAsync(string tenantId)
-    {
-        await _resilience.ExecuteAsync(async _ =>
-        {
-            await using var connection = CreateConnection(tenantId);
-            await connection.ExecuteAsync(
-                string.Format(Queries.RefreshTable, TenantSchema.QualifiedLegacyTable(tenantId)));
+            await using var connection = await CreateConnectionAsync(tenantId);
+            await connection.ExecuteAsync(string.Format(Queries.RefreshTable, qualifiedTable));
         });
     }
 
@@ -204,7 +212,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         return await _resilience.ExecuteAsync(async _ =>
         {
             var schema = TenantSchema.SchemaName(tenantId);
-            await using var connection = CreateConnection(tenantId);
+            await using var connection = await CreateConnectionAsync(tenantId);
             var rows = await connection.QueryAsync<string>(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = @schema",
                 new { schema });
@@ -216,26 +224,48 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     {
         await _resilience.ExecuteAsync(async _ =>
         {
-            await using var connection = CreateConnection(tenantId);
+            await using var connection = await CreateConnectionAsync(tenantId);
+            var schema = TenantSchema.SchemaName(tenantId);
 
-            // CrateDB has no explicit DROP SCHEMA. Dropping every table this project owns inside the
-            // tenant schema (currently just the legacy stream-data table) is sufficient: CrateDB
-            // implicitly drops the schema once its last table is gone.
-            await connection.ExecuteAsync(
-                string.Format(Queries.DeleteTableIfExists, TenantSchema.QualifiedLegacyTable(tenantId)));
+            // CrateDB has no explicit DROP SCHEMA. Drop every table the project owns inside the
+            // tenant schema; CrateDB implicitly drops the schema once its last table is gone.
+            // Each archive owns its own table after T17, so we enumerate them via
+            // information_schema rather than hardcoding a single legacy table name.
+            var tables = (await connection.QueryAsync<string>(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = @schema",
+                new { schema })).ToList();
+
+            foreach (var table in tables)
+            {
+                await connection.ExecuteAsync(string.Format(Queries.DeleteTableIfExists, $"\"{schema}\".\"{table}\""));
+            }
         });
     }
 
-    private NpgsqlConnection CreateConnection(string tenantId)
+    public async Task ExecuteDdlAsync(string tenantId, string sql)
     {
-        return _connectionAccess.CreateConnection(tenantId);
+        if (string.IsNullOrWhiteSpace(sql))
+        {
+            throw new ArgumentException("sql must not be empty.", nameof(sql));
+        }
+
+        await _resilience.ExecuteAsync(async _ =>
+        {
+            await using var connection = await CreateConnectionAsync(tenantId);
+            await connection.ExecuteAsync(sql);
+        });
+    }
+
+    private Task<NpgsqlConnection> CreateConnectionAsync(string tenantId, CancellationToken cancellationToken = default)
+    {
+        return _connectionAccess.CreateConnectionAsync(tenantId, cancellationToken);
     }
 
     public async Task<HealthCheckResult> CheckHealthAsync()
     {
         try
         {
-            await using var connection = CreateConnection("default");
+            await using var connection = await CreateConnectionAsync("default");
             await connection.ExecuteAsync("SELECT 1");
             return HealthCheckResult.Healthy("CrateDB is healthy");
         }

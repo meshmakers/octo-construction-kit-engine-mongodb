@@ -24,10 +24,10 @@ public class ArchiveReconcilerTests
         new(_store, _mgmt, _audit, NullLogger<ArchiveReconciler>.Instance);
 
     private static CkArchiveSnapshot Activated(OctoObjectId rt) =>
-        new(rt, new RtCkId<CkTypeId>("Test", new CkTypeId("X")), CkArchiveStatus.Activated, null);
+        new(rt, new RtCkId<CkTypeId>("Test", new CkTypeId("X")), CkArchiveStatus.Activated, null, Array.Empty<CkArchiveColumnSpec>());
 
     private static CkArchiveSnapshot Created(OctoObjectId rt) =>
-        new(rt, new RtCkId<CkTypeId>("Test", new CkTypeId("X")), CkArchiveStatus.Created, null);
+        new(rt, new RtCkId<CkTypeId>("Test", new CkTypeId("X")), CkArchiveStatus.Created, null, Array.Empty<CkArchiveColumnSpec>());
 
     private void StubStore(params CkArchiveSnapshot[] snapshots)
     {

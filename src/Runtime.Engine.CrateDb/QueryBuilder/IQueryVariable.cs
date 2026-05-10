@@ -43,11 +43,6 @@ internal interface IQueryVariable
     /// Name
     /// </summary>
     string Name { get; }
-    
-    /// <summary>
-    /// Indicates whether the variable is a data variable (stored in dynamic data column)
-    /// </summary>
-    bool IsDataVariable { get; }
 
     /// <summary>
     /// Adds items to the VariableIn collection

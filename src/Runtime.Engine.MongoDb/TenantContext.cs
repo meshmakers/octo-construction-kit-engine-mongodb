@@ -967,7 +967,11 @@ public class TenantContext : ITenantContext
             return null;
         }
 
-        _streamDataRepository = factory.Create(TenantId);
+        // Wire the per-tenant archive store into the repository so the per-archive status guard
+        // (T14) and column-list lookup at insert time (T17) work. Both are no-ops when the
+        // factory was registered without StreamData enabled, but with a tenant context in scope
+        // the store is always available — we own its lifetime here.
+        _streamDataRepository = factory.Create(TenantId, GetCkArchiveRuntimeStore());
         _streamDataRepositoryResolved = true;
         return _streamDataRepository;
     }

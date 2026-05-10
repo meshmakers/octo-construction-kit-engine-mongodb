@@ -9,14 +9,14 @@ public class ArchiveDdlGeneratorTests
 
     private const string ExpectedStandardPrefix =
         "CREATE TABLE IF NOT EXISTS \"acmecorp\".\"tempSensor_telemetry\" ( " +
-        "\"rtId\" TEXT NOT NULL, " +
+        "\"rtid\" TEXT NOT NULL, " +
         "\"timestamp\" TIMESTAMP WITH TIME ZONE NOT NULL, " +
-        "\"ckTypeId\" TEXT NOT NULL, " +
-        "\"rtCreationDateTime\" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, " +
-        "\"rtChangedDateTime\" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, " +
-        "\"rtWellKnownName\" TEXT,";
+        "\"cktypeid\" TEXT NOT NULL, " +
+        "\"rtcreationdatetime\" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, " +
+        "\"rtchangeddatetime\" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, " +
+        "\"rtwellknownname\" TEXT,";
 
-    private const string ExpectedTrailingPk = " PRIMARY KEY (\"timestamp\", \"rtId\", \"ckTypeId\")";
+    private const string ExpectedTrailingPk = " PRIMARY KEY (\"timestamp\", \"rtid\", \"cktypeid\")";
 
     [Fact]
     public void NoArchiveColumns_EmitsStandardColumnsAndPk()
@@ -79,7 +79,7 @@ public class ArchiveDdlGeneratorTests
             },
             3, 1);
 
-        Assert.Contains("\"errorText\" TEXT INDEX OFF,", ddl);
+        Assert.Contains("\"errortext\" TEXT INDEX OFF,", ddl);
     }
 
     [Fact]
@@ -99,6 +99,9 @@ public class ArchiveDdlGeneratorTests
     [Fact]
     public void NestedScalarPath_KeptAsQuotedColumnName()
     {
+        // Multi-segment paths get concatenated and lower-cased: `sensor.reading.value` →
+        // `sensorreadingvalue`. Lower-case storage avoids CrateDB's case-preservation quirks
+        // for quoted mixed-case identifiers in some contexts.
         var ddl = ArchiveDdlGenerator.GenerateCreateTable(
             Table,
             new[]
@@ -111,7 +114,7 @@ public class ArchiveDdlGeneratorTests
             },
             3, 1);
 
-        Assert.Contains("\"sensor.reading.value\" DOUBLE PRECISION NOT NULL,", ddl);
+        Assert.Contains("\"sensorreadingvalue\" DOUBLE PRECISION NOT NULL,", ddl);
     }
 
     [Fact]
@@ -139,12 +142,14 @@ public class ArchiveDdlGeneratorTests
     [Fact]
     public void ScalarArrayPath_EmitsArray()
     {
+        // The path picker strips bracket syntax before reaching the DDL generator; this test now
+        // checks the typical case of a flat array path being emitted as ARRAY(<primitive>).
         var ddl = ArchiveDdlGenerator.GenerateCreateTable(
             Table,
             new[]
             {
                 new ArchiveColumnDdl(
-                    "readings[*].value",
+                    "readings",
                     new CrateColumnType.Array(new CrateColumnType.Primitive("DOUBLE PRECISION")),
                     Required: true,
                     Indexed: true),
@@ -152,7 +157,7 @@ public class ArchiveDdlGeneratorTests
             3, 1);
 
         // Array column: NOT NULL applies to the array itself; element gaps are still allowed.
-        Assert.Contains("\"readings[*].value\" ARRAY(DOUBLE PRECISION) NOT NULL,", ddl);
+        Assert.Contains("\"readings\" ARRAY(DOUBLE PRECISION) NOT NULL,", ddl);
     }
 
     [Fact]
@@ -220,7 +225,7 @@ public class ArchiveDdlGeneratorTests
                 Table,
                 new[]
                 {
-                    new ArchiveColumnDdl("rtId", new CrateColumnType.Primitive("TEXT"), Required: true, Indexed: true),
+                    new ArchiveColumnDdl("rtid", new CrateColumnType.Primitive("TEXT"), Required: true, Indexed: true),
                 },
                 3, 1));
     }

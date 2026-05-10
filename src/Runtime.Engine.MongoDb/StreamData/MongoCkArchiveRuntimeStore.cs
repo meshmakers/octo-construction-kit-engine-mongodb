@@ -34,16 +34,27 @@ public sealed class MongoCkArchiveRuntimeStore : ICkArchiveRuntimeStore
             return null;
         }
 
+        return MapToSnapshot(entity);
+    }
+
+    private static CkArchiveSnapshot MapToSnapshot(RtCkArchive entity)
+    {
         var status = (CkArchiveStatus)(int)entity.Status;
         var targetCkTypeId = entity.TargetCkTypeId is null
             ? new RtCkId<CkTypeId>(string.Empty)
             : new RtCkId<CkTypeId>(entity.TargetCkTypeId);
 
+        var columns = (entity.Columns ?? Enumerable.Empty<RtCkArchiveColumnRecord>())
+            .Where(c => c.Path is not null)
+            .Select(c => new CkArchiveColumnSpec(c.Path!, c.Indexed, c.Required))
+            .ToList();
+
         return new CkArchiveSnapshot(
             entity.RtId,
             targetCkTypeId,
             status,
-            entity.RtWellKnownName);
+            entity.RtWellKnownName,
+            columns);
     }
 
     /// <inheritdoc />
@@ -82,17 +93,7 @@ public sealed class MongoCkArchiveRuntimeStore : ICkArchiveRuntimeStore
         foreach (var entity in result.Items)
         {
             if (entity.RtState == RtState.Archived) continue;
-
-            var status = (CkArchiveStatus)(int)entity.Status;
-            var targetCkTypeId = entity.TargetCkTypeId is null
-                ? new RtCkId<CkTypeId>(string.Empty)
-                : new RtCkId<CkTypeId>(entity.TargetCkTypeId);
-
-            yield return new CkArchiveSnapshot(
-                entity.RtId,
-                targetCkTypeId,
-                status,
-                entity.RtWellKnownName);
+            yield return MapToSnapshot(entity);
         }
     }
 }

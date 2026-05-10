@@ -38,7 +38,7 @@ internal class CrateQueryCompiler
             var interval = queryBuilder.To!.Value - queryBuilder.From!.Value;
             var intervalSeconds = (int)interval.TotalSeconds / queryBuilder.Limit;
 
-            query.Append($"DATE_BIN('{intervalSeconds} seconds'::INTERVAL, \"Timestamp\", 0) AS \"T\", ");
+            query.Append($"DATE_BIN('{intervalSeconds} seconds'::INTERVAL, \"{Constants.Timestamp}\", 0) AS \"T\", ");
         }
         else if(queryBuilder.TimeStampVariable != null)
         {
@@ -96,18 +96,19 @@ internal class CrateQueryCompiler
         var seriesEnd = queryBuilder.From.Value.AddSeconds(intervalSeconds * (queryBuilder.Limit!.Value - 1));
         var seriesEndLiteral = $"'{seriesEnd.ToString(Constants.DateTimeFormat)}'::TIMESTAMP";
 
-        // SELECT bins.ts AS "T", AGG(d."data['col']") AS "alias", COUNT(d."Timestamp") AS "__binCount"
+        // After T17 every attribute is a first-class typed column on the per-archive table — no
+        // more `data['x']` indirection — so each variable becomes a qualified column reference.
+        // SELECT bins.ts AS "T", AGG(d."voltage") AS "alias", COUNT(d."timestamp") AS "__binCount"
         query.Append("SELECT bins.ts AS \"T\"");
 
         foreach (var variable in queryBuilder.QueryVariablesWithoutTimestamp)
         {
             query.Append(", ");
-            // Add d. table alias prefix for data references in the LEFT JOIN
             if (variable.AggregationFunction != null)
             {
-                // Aggregation: AVG("data['Voltage']") -> AVG(d."data['Voltage']")
+                // Aggregation: AVG("voltage") -> AVG(d."voltage")
                 var selectStr = variable.ToSelectString();
-                query.Append(selectStr.Replace("\"data[", "d.\"data["));
+                query.Append(selectStr.Replace("(\"", "(d.\""));
             }
             else
             {
@@ -115,24 +116,24 @@ internal class CrateQueryCompiler
             }
         }
 
-        query.Append(", COUNT(d.\"Timestamp\") AS \"__binCount\"");
+        query.Append(", COUNT(d.\"timestamp\") AS \"__binCount\"");
 
         // FROM generate_series(from, seriesEnd, interval) — exactly Limit bins
         query.Append($" FROM generate_series({fromLiteral}, {seriesEndLiteral}, {intervalLiteral}) AS bins(ts)");
 
-        // LEFT JOIN "tenant" AS d ON DATE_BIN(interval, d."Timestamp", from) = bins.ts — align data to From origin
-        query.Append($" LEFT JOIN {queryBuilder.TenantId} AS d ON DATE_BIN({intervalLiteral}, d.\"Timestamp\", {fromLiteral}) = bins.ts");
+        // LEFT JOIN "archive_<rtId>" AS d ON DATE_BIN(interval, d."timestamp", from) = bins.ts
+        query.Append($" LEFT JOIN {queryBuilder.TenantId} AS d ON DATE_BIN({intervalLiteral}, d.\"timestamp\", {fromLiteral}) = bins.ts");
 
         // All filter conditions go into the ON clause (not WHERE, since LEFT JOIN)
         if (queryBuilder.CkTypeId != null)
         {
-            query.Append($" AND d.\"CkTypeId\" = '{queryBuilder.CkTypeId.SemanticVersionedFullName}'");
+            query.Append($" AND d.\"{Constants.CkTypeId}\" = '{queryBuilder.CkTypeId.SemanticVersionedFullName}'");
         }
 
         if (queryBuilder is { From: not null, To: not null })
         {
-            query.Append($" AND d.\"Timestamp\" >= '{queryBuilder.From.Value.ToString(Constants.DateTimeFormat)}'");
-            query.Append($" AND d.\"Timestamp\" <= '{queryBuilder.To.Value.ToString(Constants.DateTimeFormat)}'");
+            query.Append($" AND d.\"{Constants.Timestamp}\" >= '{queryBuilder.From.Value.ToString(Constants.DateTimeFormat)}'");
+            query.Append($" AND d.\"{Constants.Timestamp}\" <= '{queryBuilder.To.Value.ToString(Constants.DateTimeFormat)}'");
         }
 
         if (queryBuilder.VariableInListVariables.Any())
@@ -178,7 +179,7 @@ internal class CrateQueryCompiler
 
         if(queryBuilder.CkTypeId != null)
         {
-            query.Append($"\"CkTypeId\" = '{queryBuilder.CkTypeId.SemanticVersionedFullName}'");
+            query.Append($"\"{Constants.CkTypeId}\" = '{queryBuilder.CkTypeId.SemanticVersionedFullName}'");
 
             if (queryBuilder.VariableInListVariables.Any() || queryBuilder is { From: not null, To: not null } || queryBuilder.HasFieldFilters)
             {
@@ -201,7 +202,7 @@ internal class CrateQueryCompiler
         if (queryBuilder is { From: not null, To: not null })
         {
             query.Append(
-                $"\"Timestamp\" >= '{queryBuilder.From.Value.ToString(Constants.DateTimeFormat)}' AND \"Timestamp\" <= '{queryBuilder.To.Value.ToString(Constants.DateTimeFormat)}'");
+                $"\"{Constants.Timestamp}\" >= '{queryBuilder.From.Value.ToString(Constants.DateTimeFormat)}' AND \"{Constants.Timestamp}\" <= '{queryBuilder.To.Value.ToString(Constants.DateTimeFormat)}'");
 
             if (queryBuilder.HasFieldFilters)
             {
@@ -218,9 +219,8 @@ internal class CrateQueryCompiler
 
     private static string CompileFieldFilter(StreamDataFieldFilterDto filter)
     {
-        var fieldRef = filter.IsDataField
-            ? $"\"data['{filter.FieldName}']\""
-            : $"\"{filter.FieldName}\"";
+        // Direct camelCase column reference — the legacy `data['x']` indirection is gone.
+        var fieldRef = $"\"{filter.FieldName}\"";
 
         switch (filter.Operator)
         {

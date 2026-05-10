@@ -3,7 +3,9 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Meshmakers.Octo.Runtime.Engine.UnitTests;
 
@@ -23,14 +25,17 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
     private readonly ICkCacheService _cache = A.Fake<ICkCacheService>();
     private readonly ICkArchiveRuntimeStore _store = A.Fake<ICkArchiveRuntimeStore>();
 
+    private static readonly IOptions<StreamDataConfiguration> Config =
+        Options.Create(new StreamDataConfiguration { ConnectionString = "Host=ignored" });
+
     private CrateDbStreamDataRepository NewSut(bool withStore = true) =>
         new(NullLogger<CrateDbStreamDataRepository>.Instance,
-            _cache, _db, _mgmt, "tenant-x",
+            _cache, _db, _mgmt, Config, "tenant-x",
             withStore ? _store : null);
 
     private void Stub(CkArchiveStatus status) =>
         A.CallTo(() => _store.GetAsync(Archive))
-            .Returns(new CkArchiveSnapshot(Archive, SomeType, status, null));
+            .Returns(new CkArchiveSnapshot(Archive, SomeType, status, null, Array.Empty<CkArchiveColumnSpec>()));
 
     [Theory]
     [InlineData(CkArchiveStatus.Created)]
@@ -43,7 +48,7 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
             () => NewSut().InsertAsync(Archive, NewPoint()));
         Assert.Equal(status, ex.ActualStatus);
         // No DB call leaked through.
-        A.CallTo(() => _db.InsertDataAsync(A<string>._, A<Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.DataPointDto>._)).MustNotHaveHappened();
+        A.CallTo(() => _db.InsertDataAsync(A<string>._, A<string>._, A<IReadOnlyList<string>>._, A<Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.DataPointDto>._)).MustNotHaveHappened();
     }
 
     [Fact]
@@ -63,7 +68,12 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
 
         await NewSut().InsertAsync(Archive, NewPoint());
 
-        A.CallTo(() => _db.InsertDataAsync("tenant-x", A<Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.DataPointDto>._)).MustHaveHappenedOnceExactly();
+        A.CallTo(() => _db.InsertDataAsync(
+                "tenant-x",
+                A<string>.That.Matches(t => t.Contains($"archive_{Archive}")),
+                A<IReadOnlyList<string>>._,
+                A<Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.DataPointDto>._))
+            .MustHaveHappenedOnceExactly();
     }
 
     [Fact]
@@ -72,7 +82,10 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
         await NewSut(withStore: false).InsertAsync(Archive, NewPoint());
 
         A.CallTo(() => _store.GetAsync(A<OctoObjectId>._)).MustNotHaveHappened();
-        A.CallTo(() => _db.InsertDataAsync("tenant-x", A<Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.DataPointDto>._)).MustHaveHappenedOnceExactly();
+        A.CallTo(() => _db.InsertDataAsync(
+                "tenant-x", A<string>._, A<IReadOnlyList<string>>._,
+                A<Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.DataPointDto>._))
+            .MustHaveHappenedOnceExactly();
     }
 
     [Fact]
@@ -82,25 +95,40 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
 
         await Assert.ThrowsAsync<ArchiveNotActivatedException>(
             () => NewSut().InsertAsync(Archive, new[] { NewPoint() }));
-        A.CallTo(() => _db.InsertDataAsync(A<string>._, A<IEnumerable<Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.DataPointDto>>._))
+        A.CallTo(() => _db.InsertDataAsync(
+                A<string>._, A<string>._, A<IReadOnlyList<string>>._,
+                A<IEnumerable<Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.DataPointDto>>._))
             .MustNotHaveHappened();
     }
 
     [Fact]
-    public async Task EnsureArchiveCreated_DelegatesToManagementClient()
+    public async Task EnsureArchiveCreated_EmitsCreateTableDdlForPerArchiveTable()
     {
-        await NewSut().EnsureArchiveCreatedAsync(Archive);
+        // Empty columns list: the DDL should still emit the standard time-series columns and
+        // generate a `CREATE TABLE IF NOT EXISTS "tenantx"."archive_<rtId>"` against the per-tenant
+        // schema rather than the legacy single-table-per-tenant path.
+        var snapshot = new CkArchiveSnapshot(Archive, SomeType, CkArchiveStatus.Created, null, Array.Empty<CkArchiveColumnSpec>());
 
-        A.CallTo(() => _mgmt.CreateStreamDataTableIfNotExistAsync("tenant-x"))
+        await NewSut().EnsureArchiveCreatedAsync(snapshot);
+
+        A.CallTo(() => _mgmt.ExecuteDdlAsync(
+                "tenant-x",
+                A<string>.That.Matches(sql =>
+                    sql.Contains("CREATE TABLE IF NOT EXISTS")
+                    && sql.Contains($"archive_{Archive}"))))
             .MustHaveHappenedOnceExactly();
     }
 
     [Fact]
-    public async Task DeleteArchive_DelegatesToManagementClient()
+    public async Task DeleteArchive_EmitsDropTableDdlForPerArchiveTable()
     {
         await NewSut().DeleteArchiveAsync(Archive);
 
-        A.CallTo(() => _mgmt.DeleteStreamDataDatabaseAsync("tenant-x"))
+        A.CallTo(() => _mgmt.ExecuteDdlAsync(
+                "tenant-x",
+                A<string>.That.Matches(sql =>
+                    sql.Contains("DROP TABLE IF EXISTS")
+                    && sql.Contains($"archive_{Archive}"))))
             .MustHaveHappenedOnceExactly();
     }
 
