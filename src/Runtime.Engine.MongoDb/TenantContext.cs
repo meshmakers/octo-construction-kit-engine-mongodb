@@ -1018,22 +1018,11 @@ public class TenantContext : ITenantContext
     }
 
     private ICkRollupArchiveRuntimeStore? _rollupStore;
-    private bool _rollupStoreResolved;
 
     /// <inheritdoc />
     public ICkRollupArchiveRuntimeStore? GetCkRollupArchiveRuntimeStore()
     {
-        if (_rollupStoreResolved)
-        {
-            return _rollupStore;
-        }
-
-        // No default Mongo implementation lives in this assembly yet — the rollup store must be
-        // registered explicitly by composition roots that opt into rollups. Returning null keeps
-        // the rollup-free path zero-cost (no extra Mongo queries on archive operations).
-        _rollupStore = _serviceProvider.GetService<ICkRollupArchiveRuntimeStore>();
-        _rollupStoreResolved = true;
-        return _rollupStore;
+        return _rollupStore ??= new MongoCkRollupArchiveRuntimeStore(GetTenantRepository());
     }
 
     private IRollupArchiveLifecycleService? _rollupLifecycleService;
