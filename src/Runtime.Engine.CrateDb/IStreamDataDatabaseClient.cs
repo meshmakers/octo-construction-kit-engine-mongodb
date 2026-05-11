@@ -38,4 +38,12 @@ public interface IStreamDataDatabaseClient
     /// <param name="countQuery"></param>
     /// <returns></returns>
     Task<long> GetCountAsync(string tenantId, string countQuery);
+
+    /// <summary>
+    /// Forces CrateDB to apply pending inserts to the read path immediately. CrateDB applies
+    /// inserts asynchronously (~1s default) so callers that need strict read-after-write
+    /// consistency must invoke this after the bulk insert. Concept §15: callers opt in;
+    /// repository does NOT call it after every insert because it is expensive under load.
+    /// </summary>
+    Task RefreshLegacyTableAsync(string tenantId);
 }
