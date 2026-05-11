@@ -830,6 +830,27 @@ public class TenantContext : ITenantContext
                 "Ensure AddCrateDbStreamDataRepository() was called during startup.",
                 TenantId);
         }
+
+        // Ensure the StreamData CK model is installed at the version the host ships. The host
+        // registers an IStreamDataCkModelDescriptor with the CkModelId that was compiled in;
+        // ImportCkModelAsync is idempotent (skips when the version already matches) and runs
+        // auto-bridged migrations when the host has shipped a newer version.
+        var streamDataCkModelDescriptor = _serviceProvider.GetService<IStreamDataCkModelDescriptor>();
+        if (streamDataCkModelDescriptor != null)
+        {
+            var importOperationResult = new OperationResult();
+            await ImportCkModelAsync(streamDataCkModelDescriptor.CkModelId, importOperationResult);
+            if (importOperationResult.HasErrors || importOperationResult.HasFatalErrors)
+            {
+                throw TenantException.ErrorDuringSystemModelLoad(importOperationResult);
+            }
+        }
+        else
+        {
+            _logger.LogDebug(
+                "No IStreamDataCkModelDescriptor registered; skipping StreamData CK model import for tenant '{TenantId}'",
+                TenantId);
+        }
     }
 
     /// <inheritdoc />
