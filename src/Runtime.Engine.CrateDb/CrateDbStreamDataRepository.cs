@@ -60,8 +60,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     {
         // The tenant schema is implicit in the qualified table identifier — CrateDB creates the
         // schema on first table inside it, so no separate `CREATE SCHEMA` step is needed.
-        var resolvedColumns = ArchivePathTypeResolver.Resolve(
-            _ckCacheService, _tenantId, snapshot.TargetCkTypeId, snapshot.Columns);
+        //
+        // Rollups branch: their columns are derived storage names (temperature_avg_sum, etc.) — not
+        // CK-type attribute paths — so ArchivePathTypeResolver would fail to resolve them against
+        // the source CK type. The type is determined by the aggregation function instead.
+        var resolvedColumns = snapshot.RollupAggregations is { } aggs
+            ? RollupColumnTypeResolver.Resolve(snapshot.Columns, aggs)
+            : ArchivePathTypeResolver.Resolve(
+                _ckCacheService, _tenantId, snapshot.TargetCkTypeId, snapshot.Columns);
 
         var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString());
         var sql = ArchiveDdlGenerator.GenerateCreateTable(

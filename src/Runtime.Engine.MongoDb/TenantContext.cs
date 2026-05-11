@@ -863,11 +863,32 @@ public class TenantContext : ITenantContext
     /// auto-upgrades previously-enabled tenants on the next tenant-resolve, no manual
     /// EnableStreamData call needed. When no descriptor is registered we fall back to the
     /// minimum version 1.0.0 to preserve the previous behaviour.
+    ///
+    /// Includes a downgrade guard: if the tenant already has a higher version installed than
+    /// the descriptor's target, the import is skipped. Without this guard, a service that ships
+    /// an older descriptor (or the bare 1.0.0 fallback) would silently overwrite the higher
+    /// version — ImportCkModelAsync.DeletePreviousVersion strips every previous record of the
+    /// model name before inserting, and IsExistingAsync only matches on exact version so it
+    /// can't catch the downgrade case.
     /// </remarks>
     private async Task EnsureStreamDataCkModelImportedAsync()
     {
         var descriptor = _serviceProvider.GetService<IStreamDataCkModelDescriptor>();
         var modelId = descriptor?.CkModelId ?? new CkModelId("System.StreamData-1.0.0");
+
+        var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName, TenantId);
+        var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource);
+        var anyVersionRange = new CkModelIdVersionRange(modelId.Name, "0.0.0");
+        var installed = await _ckModelRepositoryService.IsExistingAsync(anyVersionRange, tenantDatabaseSourceIdentifier);
+        if (installed.Exists && installed.ModelId is { } installedModelId &&
+            installedModelId.Version.CompareTo(modelId.Version) > 0)
+        {
+            _logger.LogInformation(
+                "Skipping StreamData CK model import for tenant '{TenantId}': installed version '{InstalledVersion}' is newer than our descriptor's target '{TargetVersion}'. " +
+                "Another deploy with a newer descriptor has already upgraded the model; downgrade prevented.",
+                TenantId, installedModelId, modelId);
+            return;
+        }
 
         var operationResult = new OperationResult();
         await ImportCkModelAsync(modelId, operationResult);
@@ -1053,11 +1074,16 @@ public class TenantContext : ITenantContext
             return null;
         }
 
+        // The create path resolves the source archive's TargetCkTypeId through the shared
+        // CkArchive store. Always available — GetCkArchiveRuntimeStore is non-nullable.
+        var archiveStore = GetCkArchiveRuntimeStore();
+
         var audit = _serviceProvider.GetService<IArchiveAuditTrail>()
                     ?? new LoggingArchiveAuditTrail(_loggerFactory.CreateLogger<LoggingArchiveAuditTrail>());
         _rollupLifecycleService = new RollupArchiveLifecycleService(
             TenantId,
             rollupStore,
+            archiveStore,
             audit,
             _loggerFactory.CreateLogger<RollupArchiveLifecycleService>());
         _rollupLifecycleServiceResolved = true;

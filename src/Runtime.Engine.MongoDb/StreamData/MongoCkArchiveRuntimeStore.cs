@@ -46,29 +46,40 @@ public sealed class MongoCkArchiveRuntimeStore : ICkArchiveRuntimeStore
 
         // Rollup-archives concept §4: when the entity is a CkRollupArchive (Mongo polymorphism
         // surfaces it as a RtCkRollupArchive subclass instance), derive the columns from the
-        // user-defined aggregations rather than the unused inherited Columns slot. This lets the
-        // shared DDL / activate / delete code paths consume a rollup the same way as a raw
-        // archive — there is no rollup-specific Crate path.
-        var columns = entity is RtCkRollupArchive rollup
-            ? RollupColumnGenerator.Generate(
-                (rollup.Aggregations ?? Enumerable.Empty<RtCkRollupAggregationRecord>())
-                    .Where(a => a.SourcePath is not null)
-                    .Select(a => new CkRollupAggregationSpec(
-                        a.SourcePath!,
-                        (CkRollupFunction)(int)a.Function,
-                        a.TargetColumnName))
-                    .ToList())
-            : (entity.Columns ?? Enumerable.Empty<RtCkArchiveColumnRecord>())
+        // user-defined aggregations rather than the unused inherited Columns slot. The aggregations
+        // themselves are also carried on the snapshot so the DDL path can derive the SQL column
+        // type from each function (the derived column names are storage identifiers, not paths into
+        // the CK type, so ArchivePathTypeResolver cannot resolve them).
+        IReadOnlyList<CkRollupAggregationSpec>? rollupAggregations = null;
+        IReadOnlyList<CkArchiveColumnSpec> columns;
+        if (entity is RtCkRollupArchive rollup)
+        {
+            rollupAggregations = (rollup.Aggregations ?? Enumerable.Empty<RtCkRollupAggregationRecord>())
+                .Where(a => a.SourcePath is not null)
+                .Select(a => new CkRollupAggregationSpec(
+                    a.SourcePath!,
+                    (CkRollupFunction)(int)a.Function,
+                    a.TargetColumnName))
+                .ToList();
+            columns = RollupColumnGenerator.Generate(rollupAggregations);
+        }
+        else
+        {
+            columns = (entity.Columns ?? Enumerable.Empty<RtCkArchiveColumnRecord>())
                 .Where(c => c.Path is not null)
                 .Select(c => new CkArchiveColumnSpec(c.Path!, c.Indexed, c.Required))
                 .ToList();
+        }
 
         return new CkArchiveSnapshot(
             entity.RtId,
             targetCkTypeId,
             status,
             entity.RtWellKnownName,
-            columns);
+            columns)
+        {
+            RollupAggregations = rollupAggregations,
+        };
     }
 
     /// <inheritdoc />

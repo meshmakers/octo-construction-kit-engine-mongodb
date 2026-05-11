@@ -38,6 +38,54 @@ public sealed class MongoCkRollupArchiveRuntimeStore : ICkRollupArchiveRuntimeSt
     }
 
     /// <inheritdoc />
+    public async Task<OctoObjectId> InsertAsync(
+        string? rtWellKnownName,
+        RtCkId<CkTypeId> targetCkTypeId,
+        OctoObjectId sourceArchiveRtId,
+        TimeSpan bucketSize,
+        TimeSpan watermarkLag,
+        IReadOnlyList<CkRollupAggregationSpec> aggregations,
+        IReadOnlyList<CkArchiveColumnSpec> columns)
+    {
+        var columnList = new AttributeRecordValueList<RtCkArchiveColumnRecord>();
+        columnList.AddRange(columns.Select(c => new RtCkArchiveColumnRecord
+        {
+            Path = c.Path,
+            Indexed = c.Indexed,
+            Required = c.Required,
+        }));
+
+        var aggregationList = new AttributeRecordValueList<RtCkRollupAggregationRecord>();
+        aggregationList.AddRange(aggregations.Select(a => new RtCkRollupAggregationRecord
+        {
+            SourcePath = a.SourcePath,
+            Function = (RtCkRollupFunctionEnum)(int)a.Function,
+            TargetColumnName = a.TargetColumnName,
+        }));
+
+        var entity = new RtCkRollupArchive
+        {
+            RtWellKnownName = rtWellKnownName,
+            TargetCkTypeId = targetCkTypeId.ToString(),
+            Status = RtCkArchiveStatusEnum.Created,
+            SourceArchiveRtId = sourceArchiveRtId.ToString(),
+            BucketSizeMs = (int)bucketSize.TotalMilliseconds,
+            WatermarkLagMs = (int)watermarkLag.TotalMilliseconds,
+            // LastAggregatedBucketEnd starts null — set by ArchiveLifecycleService.ActivateAsync to
+            // the activation timestamp (truncated to the bucket boundary). The orchestrator then
+            // advances it forward, never backwards (except via rewindRollupWatermark). Concept §5.
+            LastAggregatedBucketEnd = null,
+            FrozenUntil = null,
+            Columns = columnList,
+            Aggregations = aggregationList,
+        };
+
+        var session = await _tenantRepository.GetSessionAsync();
+        await _tenantRepository.InsertOneRtEntityAsync(session, entity);
+        return entity.RtId;
+    }
+
+    /// <inheritdoc />
     public async Task ArchiveEntityAsync(OctoObjectId rollupRtId)
     {
         var session = await _tenantRepository.GetSessionAsync();
