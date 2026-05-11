@@ -1,7 +1,7 @@
-using Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.Dtos;
-using Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.QueryBuilder;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 
-namespace Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.UnitTests;
+namespace Meshmakers.Octo.Runtime.Engine.CrateDb.UnitTests;
 
 public class CrateQueryBuilderFilterOperatorTests
 {

@@ -1,6 +1,6 @@
-using Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData;
+using Meshmakers.Octo.Runtime.Engine.CrateDb;
 
-namespace Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.UnitTests;
+namespace Meshmakers.Octo.Runtime.Engine.CrateDb.UnitTests;
 
 public class StreamDataFieldResolverTests
 {

@@ -5,7 +5,7 @@ using MongoDB.Driver;
 
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
-namespace Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.UnitTests;
+namespace Meshmakers.Octo.Runtime.Engine.CrateDb.UnitTests;
 
 public class WatchFilterCompositionTests
 {

@@ -1,27 +1,22 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <Description>Octo Mesh Runtime Engine for MongoDB.</Description>
+        <Description>Octo Mesh Runtime Engine StreamData implementation for CrateDB.</Description>
         <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-        <AssemblyName>Meshmakers.Octo.Runtime.Engine.MongoDb</AssemblyName>
-        <RootNamespace>Meshmakers.Octo.Runtime.Engine.MongoDb</RootNamespace>
+        <AssemblyName>Meshmakers.Octo.Runtime.Engine.CrateDb</AssemblyName>
+        <RootNamespace>Meshmakers.Octo.Runtime.Engine.CrateDb</RootNamespace>
         <Configurations>Debug;Release;DebugL</Configurations>
         <Platforms>AnyCPU</Platforms>
         <OutputPath>..\..\bin\$(Configuration)\</OutputPath>
         <NoWarn>1701;1702;CS8002</NoWarn>
-        <UserSecretsId>70885029-9ede-466f-9f04-5edf2648ba2a</UserSecretsId>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Meshmakers.Common.Metrics" Version="$(MeshmakerVersion)" />
         <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="$(OctoVersion)" />
-        <PackageReference Include="Meshmakers.Octo.ConstructionKit.Models.System" Version="$(OctoVersion)" />
-        <PackageReference Include="MathParser.org-mXparser" Version="6.1.0" />
-        <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.7" />
-        <PackageReference Include="System.Reactive" Version="6.1.0" />
-        <PackageReference Include="MongoDB.Bson" Version="3.8.0" />
-        <PackageReference Include="MongoDB.Driver" Version="3.8.0" />
-        <PackageReference Include="Snappier" Version="1.3.1" />
+        <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.2" />
+        <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.2" />
+        <PackageReference Include="Dapper" Version="2.1.72" />
+        <PackageReference Include="Npgsql" Version="10.0.2" />
     </ItemGroup>
 
     <ItemGroup>
