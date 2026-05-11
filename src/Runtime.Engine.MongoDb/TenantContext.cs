@@ -857,15 +857,25 @@ public class TenantContext : ITenantContext
     /// a model already present and short-circuits. Caller must verify the tenant flag first;
     /// the public entry point is <see cref="EnsureStreamDataCkModelIfEnabledAsync"/>.
     /// </summary>
+    /// <remarks>
+    /// The exact version comes from the registered <see cref="IStreamDataCkModelDescriptor"/> so
+    /// a deploy that ships a newer model version (e.g. 1.0.0 → 1.1.0 adding CkRollupArchive)
+    /// auto-upgrades previously-enabled tenants on the next tenant-resolve, no manual
+    /// EnableStreamData call needed. When no descriptor is registered we fall back to the
+    /// minimum version 1.0.0 to preserve the previous behaviour.
+    /// </remarks>
     private async Task EnsureStreamDataCkModelImportedAsync()
     {
+        var descriptor = _serviceProvider.GetService<IStreamDataCkModelDescriptor>();
+        var modelId = descriptor?.CkModelId ?? new CkModelId("System.StreamData-1.0.0");
+
         var operationResult = new OperationResult();
-        await ImportCkModelAsync(new CkModelId("System.StreamData-1.0.0"), operationResult);
+        await ImportCkModelAsync(modelId, operationResult);
         if (operationResult.HasErrors || operationResult.HasFatalErrors)
         {
             _logger.LogError(
-                "Failed to import StreamData CK model into tenant '{TenantId}'. Stream data is enabled but archive management features may not be available until the model is imported. Operation result: {Messages}",
-                TenantId,
+                "Failed to import StreamData CK model '{CkModelId}' into tenant '{TenantId}'. Stream data is enabled but archive management features may not be available until the model is imported. Operation result: {Messages}",
+                modelId, TenantId,
                 string.Join("; ", operationResult.Messages.Select(m => $"{m.MessageNumber}: {m.MessageText}")));
         }
     }
