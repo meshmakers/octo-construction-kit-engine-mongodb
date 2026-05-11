@@ -132,4 +132,29 @@ public static class RuntimeEngineBuilderExtensions
 
         return builder;
     }
+
+    /// <summary>
+    /// Registers the rollup orchestrator background service (rollup-archives concept §5) and a
+    /// default <see cref="IRollupTenantSource"/> backed by
+    /// <see cref="RollupOrchestratorOptions.TenantIds"/>. Composition roots that need dynamic
+    /// tenant discovery (Mongo-driven, RabbitMQ-event-cached) should call this method and then
+    /// register their own <see cref="IRollupTenantSource"/> after it — the last registration wins
+    /// because the default uses <see cref="ServiceLifetime.Singleton"/> with
+    /// <c>TryAddSingleton</c>.
+    /// </summary>
+    /// <remarks>
+    /// Bind options from your configuration root like
+    /// <c>configuration.GetSection("StreamData:Rollup")</c> before calling this method, or rely
+    /// on the defaults (30 s tick, 30 s startup delay, empty tenant list).
+    /// </remarks>
+    public static IRuntimeEngineBuilder AddRollupOrchestratorBackgroundService(this IRuntimeEngineBuilder builder)
+    {
+        builder.Services.AddOptions<Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.RollupOrchestratorOptions>();
+        builder.Services.TryAddSingleton<
+            Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.IRollupTenantSource,
+            Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.ConfigBasedRollupTenantSource>();
+        builder.Services.AddHostedService<Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.RollupOrchestratorHostedService>();
+
+        return builder;
+    }
 }
