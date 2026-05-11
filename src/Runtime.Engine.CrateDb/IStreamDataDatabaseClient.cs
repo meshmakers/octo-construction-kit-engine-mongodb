@@ -34,6 +34,13 @@ public interface IStreamDataDatabaseClient
     Task<long> GetCountAsync(string tenantId, string countQuery);
 
     /// <summary>
+    /// Executes a non-query SQL statement (INSERT / UPDATE / DELETE / upsert) and returns the
+    /// number of affected rows. Used by the rollup orchestrator for the bucket-aggregation upsert
+    /// (rollup-archives concept §5).
+    /// </summary>
+    Task<int> ExecuteNonQueryAsync(string tenantId, string sql, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Forces CrateDB to apply pending inserts to the read path immediately for the given archive
     /// table. CrateDB applies inserts asynchronously (~1s default) so callers that need strict
     /// read-after-write consistency must invoke this after a bulk insert. Concept §15: callers opt

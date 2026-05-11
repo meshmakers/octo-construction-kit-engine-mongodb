@@ -54,6 +54,17 @@ internal static class CrateDbDiagnostics
             description: "Inserts rejected because a required CkArchiveColumn path was missing on the incoming point.");
 
     /// <summary>
+    /// Counter of rows written by a rollup bucket aggregation upsert. Tags: <c>tenant</c>,
+    /// <c>rollup</c>. Sum of <c>RollupBucketUpserts</c> divided by the count of audit events
+    /// gives the average rollup rows-per-bucket.
+    /// </summary>
+    public static readonly Counter<long> RollupBucketUpserts =
+        Meter.CreateCounter<long>(
+            "streamdata.crate.rollup_bucket_upserts",
+            unit: "{row}",
+            description: "Cumulative count of rollup rows upserted by AggregateBucketAsync.");
+
+    /// <summary>
     /// Histogram of query duration in milliseconds. Tags: <c>tenant</c>, <c>archive</c>,
     /// <c>query_type</c> (simple/aggregation/grouped/downsampling).
     /// </summary>

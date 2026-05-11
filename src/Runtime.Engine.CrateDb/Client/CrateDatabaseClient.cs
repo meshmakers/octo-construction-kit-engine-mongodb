@@ -207,6 +207,22 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         });
     }
 
+    public async Task<int> ExecuteNonQueryAsync(string tenantId, string sql, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(sql))
+        {
+            throw new ArgumentException("sql must not be empty.", nameof(sql));
+        }
+
+        return await _resilience.ExecuteAsync(async _ =>
+        {
+            await using var connection = await CreateConnectionAsync(tenantId, cancellationToken);
+            // Dapper's ExecuteAsync returns the number of affected rows (Npgsql surfaces the
+            // CrateDB `INSERT 0 N` / `UPDATE N` row count via NpgsqlCommand.ExecuteNonQuery).
+            return await connection.ExecuteAsync(sql);
+        });
+    }
+
     public async Task<IReadOnlyList<string>> ListTablesInTenantSchemaAsync(string tenantId)
     {
         return await _resilience.ExecuteAsync(async _ =>

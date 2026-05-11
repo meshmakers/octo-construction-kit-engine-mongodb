@@ -417,25 +417,35 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     }
 
     /// <inheritdoc />
-    /// <remarks>
-    /// T-stage stub: the CrateDB-side rollup-aggregation SQL generator (concept §5) is not yet
-    /// wired through. Returning 0 keeps the orchestrator's bucket loop, watermark advance, and
-    /// audit-trail flow intact for integration without writing any rows. Real implementation
-    /// will emit
-    /// <c>INSERT INTO {rollup_table} (...) SELECT {bucketEnd}, rtId, ckTypeId, MAX(rtWellKnownName), {agg_columns} FROM {source_table} WHERE timestamp &gt;= {bucketStart} AND timestamp &lt; {bucketEnd} GROUP BY rtId, ckTypeId ON CONFLICT (timestamp, rtId) DO UPDATE SET ...</c>
-    /// with AVG materialised as SUM + COUNT columns.
-    /// </remarks>
-    public Task<int> AggregateBucketAsync(
+    public async Task<int> AggregateBucketAsync(
         CkArchiveSnapshot sourceArchive,
         CkRollupArchiveSnapshot rollup,
         DateTime bucketStart,
         DateTime bucketEnd,
         CancellationToken cancellationToken)
     {
-        _logger.LogWarning(
-            "AggregateBucketAsync({SourceArchiveRtId} → {RollupRtId}, [{BucketStart:O}, {BucketEnd:O})) — CrateDB-side SQL generator pending; no-op upsert, 0 rows.",
-            sourceArchive.RtId, rollup.RtId, bucketStart, bucketEnd);
-        return Task.FromResult(0);
+        var sourceTable = TenantSchema.QualifiedArchiveTable(_tenantId, sourceArchive.RtId.ToString());
+        var targetTable = TenantSchema.QualifiedArchiveTable(_tenantId, rollup.RtId.ToString());
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            sourceTable,
+            targetTable,
+            rollup.TargetCkTypeId.FullName,
+            rollup.Aggregations,
+            bucketStart,
+            bucketEnd);
+
+        _logger.LogDebug(
+            "Rollup aggregation SQL for {RollupRtId} bucket [{BucketStart:O}, {BucketEnd:O}): {Sql}",
+            rollup.RtId, bucketStart, bucketEnd, sql);
+
+        var affected = await _databaseClient.ExecuteNonQueryAsync(_tenantId, sql, cancellationToken);
+
+        CrateDbDiagnostics.RollupBucketUpserts.Add(affected,
+            new("tenant", _tenantId),
+            new("rollup", rollup.RtId.ToString()));
+
+        return affected;
     }
 
     #region Private helpers
