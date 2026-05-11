@@ -1004,14 +1004,65 @@ public class TenantContext : ITenantContext
 
         var audit = _serviceProvider.GetService<IArchiveAuditTrail>()
                     ?? new LoggingArchiveAuditTrail(_loggerFactory.CreateLogger<LoggingArchiveAuditTrail>());
+        // Pass the (optional) rollup store so DeleteAsync's source-in-use guard is active when
+        // rollup support is wired in this deployment. Null = guard self-disables.
         _archiveLifecycleService = new ArchiveLifecycleService(
             TenantId,
             GetCkArchiveRuntimeStore(),
             streamData,
             audit,
-            _loggerFactory.CreateLogger<ArchiveLifecycleService>());
+            _loggerFactory.CreateLogger<ArchiveLifecycleService>(),
+            GetCkRollupArchiveRuntimeStore());
         _archiveLifecycleServiceResolved = true;
         return _archiveLifecycleService;
+    }
+
+    private ICkRollupArchiveRuntimeStore? _rollupStore;
+    private bool _rollupStoreResolved;
+
+    /// <inheritdoc />
+    public ICkRollupArchiveRuntimeStore? GetCkRollupArchiveRuntimeStore()
+    {
+        if (_rollupStoreResolved)
+        {
+            return _rollupStore;
+        }
+
+        // No default Mongo implementation lives in this assembly yet — the rollup store must be
+        // registered explicitly by composition roots that opt into rollups. Returning null keeps
+        // the rollup-free path zero-cost (no extra Mongo queries on archive operations).
+        _rollupStore = _serviceProvider.GetService<ICkRollupArchiveRuntimeStore>();
+        _rollupStoreResolved = true;
+        return _rollupStore;
+    }
+
+    private IRollupArchiveLifecycleService? _rollupLifecycleService;
+    private bool _rollupLifecycleServiceResolved;
+
+    /// <inheritdoc />
+    public IRollupArchiveLifecycleService? GetRollupArchiveLifecycleService()
+    {
+        if (_rollupLifecycleServiceResolved)
+        {
+            return _rollupLifecycleService;
+        }
+
+        var rollupStore = GetCkRollupArchiveRuntimeStore();
+        if (rollupStore is null)
+        {
+            _rollupLifecycleServiceResolved = true;
+            return null;
+        }
+
+        var audit = _serviceProvider.GetService<IArchiveAuditTrail>()
+                    ?? new LoggingArchiveAuditTrail(_loggerFactory.CreateLogger<LoggingArchiveAuditTrail>());
+        _rollupLifecycleService = new RollupArchiveLifecycleService(
+            TenantId,
+            rollupStore,
+            audit,
+            _loggerFactory.CreateLogger<RollupArchiveLifecycleService>());
+        _rollupLifecycleServiceResolved = true;
+        return _rollupLifecycleService;
     }
 
     #endregion Access management

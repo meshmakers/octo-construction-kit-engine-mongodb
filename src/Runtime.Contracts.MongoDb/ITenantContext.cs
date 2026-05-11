@@ -113,6 +113,21 @@ public interface ITenantContext
     IArchiveLifecycleService? GetArchiveLifecycleService();
 
     /// <summary>
+    /// Returns the rollup-archive runtime store for this tenant, or null if no rollup store is
+    /// wired up (deployments without rollup support). Reads and writes <c>CkRollupArchive</c>
+    /// entities through MongoDB. Used by the rollup lifecycle service and orchestrator
+    /// (rollup-archives concept §3, §5).
+    /// </summary>
+    ICkRollupArchiveRuntimeStore? GetCkRollupArchiveRuntimeStore();
+
+    /// <summary>
+    /// Returns the rollup lifecycle service for this tenant, or null if no rollup support is
+    /// wired (no <see cref="ICkRollupArchiveRuntimeStore"/> available). Backs the rollup-only
+    /// mutations from rollup-archives concept §9 (freeze / unfreeze / rewind).
+    /// </summary>
+    IRollupArchiveLifecycleService? GetRollupArchiveLifecycleService();
+
+    /// <summary>
     /// Enables stream data for this tenant: sets the configuration flag and
     /// creates the CrateDB table if needed.
     /// </summary>
