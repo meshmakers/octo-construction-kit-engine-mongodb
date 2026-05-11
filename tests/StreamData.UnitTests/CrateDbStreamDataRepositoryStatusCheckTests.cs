@@ -1,3 +1,4 @@
+using System;
 using FakeItEasy;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
@@ -30,7 +31,7 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
 
     private void Stub(CkArchiveStatus status) =>
         A.CallTo(() => _store.GetAsync(Archive))
-            .Returns(new CkArchiveSnapshot(Archive, SomeType, status, null));
+            .Returns(new CkArchiveSnapshot(Archive, SomeType, status, null, Array.Empty<CkArchiveColumnSpec>()));
 
     [Theory]
     [InlineData(CkArchiveStatus.Created)]
@@ -89,7 +90,9 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
     [Fact]
     public async Task EnsureArchiveCreated_DelegatesToManagementClient()
     {
-        await NewSut().EnsureArchiveCreatedAsync(Archive);
+        var snapshot = new CkArchiveSnapshot(
+            Archive, SomeType, CkArchiveStatus.Created, null, Array.Empty<CkArchiveColumnSpec>());
+        await NewSut().EnsureArchiveCreatedAsync(snapshot);
 
         A.CallTo(() => _mgmt.CreateStreamDataTableIfNotExistAsync("tenant-x"))
             .MustHaveHappenedOnceExactly();

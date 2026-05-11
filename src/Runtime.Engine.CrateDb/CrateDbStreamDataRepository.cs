@@ -54,11 +54,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     /// CkArchive columns) lands in a follow-up once the <c>ICkArchiveRuntimeStore</c> →
     /// CK-model path resolution chain is wired through.
     /// </remarks>
-    public Task EnsureArchiveCreatedAsync(OctoObjectId archiveRtId)
+    public Task EnsureArchiveCreatedAsync(CkArchiveSnapshot snapshot)
     {
         _logger.LogDebug(
             "EnsureArchiveCreatedAsync({ArchiveRtId}) — currently delegates to legacy tenant-level table; per-archive DDL pending.",
-            archiveRtId);
+            snapshot.RtId);
         return _managementClient.CreateStreamDataTableIfNotExistAsync(_tenantId);
     }
 
@@ -356,11 +356,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
 
     private StreamDataFieldResolver CreateFieldResolver(RtCkId<CkTypeId> ckTypeId)
     {
+        // Post-T17 (ck-engine 298f1df): IsDataStream / IsStreamType flags were removed; archives
+        // are CK-type-agnostic and any captured attribute is a queryable column. Until the resolver
+        // is rewired to project the archive's Columns list, surface every attribute of the type.
         var requestedType = _ckCacheService.GetRtCkType(_tenantId, ckTypeId);
-        var dataStreamAttributeNames = requestedType.AllAttributes
-            .Where(x => x.Value.IsDataStream)
+        var attributeNames = requestedType.AllAttributes
             .Select(x => x.Value.AttributeName);
-        return new StreamDataFieldResolver(dataStreamAttributeNames);
+        return new StreamDataFieldResolver(attributeNames);
     }
 
     private static List<string> ResolveAndAddColumns(
