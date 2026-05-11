@@ -34,7 +34,7 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
         _configuration = configuration;
     }
 
-    public IStreamDataRepository Create(string tenantId, ICkArchiveRuntimeStore? archiveStore = null)
+    public IStreamDataRepository Create(string tenantId, ICkArchiveRuntimeStore archiveStore)
     {
         return new CrateDbStreamDataRepository(
             _loggerFactory.CreateLogger<CrateDbStreamDataRepository>(),

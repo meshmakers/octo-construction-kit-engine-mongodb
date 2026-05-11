@@ -21,7 +21,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     private readonly ICkCacheService _ckCacheService;
     private readonly IStreamDataDatabaseClient _databaseClient;
     private readonly IStreamDataDatabaseManagementClient _managementClient;
-    private readonly ICkArchiveRuntimeStore? _archiveStore;
+    private readonly ICkArchiveRuntimeStore _archiveStore;
     private readonly StreamDataConfiguration _configuration;
     private readonly string _tenantId;
 
@@ -32,7 +32,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         IStreamDataDatabaseManagementClient managementClient,
         IOptions<StreamDataConfiguration> configuration,
         string tenantId,
-        ICkArchiveRuntimeStore? archiveStore = null)
+        ICkArchiveRuntimeStore archiveStore)
     {
         _logger = logger;
         _ckCacheService = ckCacheService;
@@ -89,7 +89,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
 
         // See the bulk overload for the rationale; per-archive tables only accept rows of the
         // archive's own TargetCkTypeId.
-        if (snapshot != null && datapoint.CkTypeId != snapshot.TargetCkTypeId)
+        if (datapoint.CkTypeId != snapshot.TargetCkTypeId)
         {
             _logger.LogDebug(
                 "Archive {ArchiveRtId} (target {TargetCkTypeId}): skipped 1 datapoint with mismatched CkTypeId {ActualCkTypeId}",
@@ -130,15 +130,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         // Control updates and EnergyIQ/Space mapping updates into a single _updateItems list)
         // would otherwise push rows of the wrong type into the table — semantically meaningless
         // and a frequent root cause of CrateDB connection-state pollution after a failed insert.
-        var filtered = snapshot != null
-            ? materialised.Where(p => p.CkTypeId == snapshot.TargetCkTypeId).ToList()
-            : (IReadOnlyList<StreamDataPoint>)materialised;
+        var filtered = materialised.Where(p => p.CkTypeId == snapshot.TargetCkTypeId).ToList();
         var skipped = materialised.Count - filtered.Count;
         if (skipped > 0)
         {
             _logger.LogDebug(
                 "Archive {ArchiveRtId} (target {TargetCkTypeId}): skipped {Skipped} of {Total} datapoints with mismatched CkTypeId",
-                archiveRtId, snapshot?.TargetCkTypeId, skipped, materialised.Count);
+                archiveRtId, snapshot.TargetCkTypeId, skipped, materialised.Count);
         }
         if (filtered.Count == 0)
         {
@@ -169,24 +167,20 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
 
     /// <summary>
     /// Computes the qualified per-archive table name and the camelCase user-column list from the
-    /// archive snapshot. Returns an empty user-column list when the snapshot is null (no
-    /// <see cref="ICkArchiveRuntimeStore"/> wired in tests / transitional setups) — inserts in
-    /// that case carry only the standard columns.
+    /// archive snapshot.
     /// </summary>
     private (string qualifiedTable, IReadOnlyList<string> userColumnNames) ResolveTableAndColumns(
-        CkArchiveSnapshot? snapshot, OctoObjectId archiveRtId)
+        CkArchiveSnapshot snapshot, OctoObjectId archiveRtId)
     {
         var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString());
-        var userColumnNames = snapshot is null
-            ? (IReadOnlyList<string>)Array.Empty<string>()
-            : snapshot.Columns.Select(c => ColumnNameMapper.PathToColumnName(c.Path)).ToList();
+        var userColumnNames = snapshot.Columns.Select(c => ColumnNameMapper.PathToColumnName(c.Path)).ToList();
         return (qualifiedTable, userColumnNames);
     }
 
     public async Task<StreamDataQueryResult> ExecuteQueryAsync(OctoObjectId archiveRtId, StreamDataQueryOptions options)
     {
-        await EnsureArchiveActivatedAsync(archiveRtId);
-        var fieldResolver = CreateFieldResolver(options.CkTypeId);
+        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
+        var fieldResolver = CreateFieldResolver(snapshot);
 
         var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
         q.IncludeDefaultVariables();
@@ -221,8 +215,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     public async Task<StreamDataQueryResult> ExecuteAggregationQueryAsync(
         OctoObjectId archiveRtId, StreamDataAggregationQueryOptions options)
     {
-        await EnsureArchiveActivatedAsync(archiveRtId);
-        var fieldResolver = CreateFieldResolver(options.CkTypeId);
+        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
+        var fieldResolver = CreateFieldResolver(snapshot);
 
         var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
         q.WithCkTypeIdFilter(options.CkTypeId);
@@ -268,8 +262,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     public async Task<StreamDataQueryResult> ExecuteGroupedAggregationQueryAsync(
         OctoObjectId archiveRtId, StreamDataGroupedAggregationQueryOptions options)
     {
-        await EnsureArchiveActivatedAsync(archiveRtId);
-        var fieldResolver = CreateFieldResolver(options.CkTypeId);
+        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
+        var fieldResolver = CreateFieldResolver(snapshot);
 
         var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
         q.WithCkTypeIdFilter(options.CkTypeId);
@@ -325,14 +319,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     public async Task<StreamDataQueryResult> ExecuteDownsamplingQueryAsync(
         OctoObjectId archiveRtId, StreamDataDownsamplingQueryOptions options)
     {
-        await EnsureArchiveActivatedAsync(archiveRtId);
+        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
         if (options.From is null || options.To is null || options.Limit is null)
         {
             throw StreamDataException.InvalidQueryParameters(
                 "Downsampling queries require From, To, and Limit (bucket count).");
         }
 
-        var fieldResolver = CreateFieldResolver(options.CkTypeId);
+        var fieldResolver = CreateFieldResolver(snapshot);
 
         var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
         q.WithCkTypeIdFilter(options.CkTypeId);
@@ -427,21 +421,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
 
     /// <summary>
     /// Verifies that the archive identified by <paramref name="archiveRtId"/> exists and is in
-    /// status <see cref="CkArchiveStatus.Activated"/>; throws otherwise. When no
-    /// <see cref="ICkArchiveRuntimeStore"/> has been wired (transitional T7 state) the check is
-    /// skipped with a warning log so that legacy callers keep working until the per-tenant store
-    /// implementation lands.
+    /// status <see cref="CkArchiveStatus.Activated"/>; throws otherwise.
     /// </summary>
-    private async Task<CkArchiveSnapshot?> EnsureArchiveActivatedAsync(OctoObjectId archiveRtId)
+    private async Task<CkArchiveSnapshot> EnsureArchiveActivatedAsync(OctoObjectId archiveRtId)
     {
-        if (_archiveStore is null)
-        {
-            _logger.LogWarning(
-                "Archive status check skipped for {ArchiveRtId}: no ICkArchiveRuntimeStore wired (transitional state).",
-                archiveRtId);
-            return null;
-        }
-
         var snapshot = await _archiveStore.GetAsync(archiveRtId)
             ?? throw new ArchiveNotFoundException(archiveRtId);
 
@@ -453,13 +436,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         return snapshot;
     }
 
-    private StreamDataFieldResolver CreateFieldResolver(RtCkId<CkTypeId> ckTypeId)
+    private static StreamDataFieldResolver CreateFieldResolver(CkArchiveSnapshot snapshot)
     {
-        var requestedType = _ckCacheService.GetRtCkType(_tenantId, ckTypeId);
-        var dataStreamAttributeNames = requestedType.AllAttributes
-            .Where(x => x.Value.IsDataStream)
-            .Select(x => x.Value.AttributeName);
-        return new StreamDataFieldResolver(dataStreamAttributeNames);
+        // T17 archives are CK-type-agnostic: the queryable column set is exactly the columns the
+        // archive was configured to capture.
+        return new StreamDataFieldResolver(snapshot.Columns.Select(c => c.Path));
     }
 
     private static List<string> ResolveAndAddColumns(

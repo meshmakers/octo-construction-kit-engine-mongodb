@@ -28,10 +28,10 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
     private static readonly IOptions<StreamDataConfiguration> Config =
         Options.Create(new StreamDataConfiguration { ConnectionString = "Host=ignored" });
 
-    private CrateDbStreamDataRepository NewSut(bool withStore = true) =>
+    private CrateDbStreamDataRepository NewSut() =>
         new(NullLogger<CrateDbStreamDataRepository>.Instance,
             _cache, _db, _mgmt, Config, "tenant-x",
-            withStore ? _store : null);
+            _store);
 
     private void Stub(CkArchiveStatus status) =>
         A.CallTo(() => _store.GetAsync(Archive))
@@ -72,18 +72,6 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
                 "tenant-x",
                 A<string>.That.Matches(t => t.Contains($"archive_{Archive}")),
                 A<IReadOnlyList<string>>._,
-                A<Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.DataPointDto>._))
-            .MustHaveHappenedOnceExactly();
-    }
-
-    [Fact]
-    public async Task Insert_NoStoreWired_SkipsCheckAndStillCallsDb()
-    {
-        await NewSut(withStore: false).InsertAsync(Archive, NewPoint());
-
-        A.CallTo(() => _store.GetAsync(A<OctoObjectId>._)).MustNotHaveHappened();
-        A.CallTo(() => _db.InsertDataAsync(
-                "tenant-x", A<string>._, A<IReadOnlyList<string>>._,
                 A<Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.DataPointDto>._))
             .MustHaveHappenedOnceExactly();
     }
