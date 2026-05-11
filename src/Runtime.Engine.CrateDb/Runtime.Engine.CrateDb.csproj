@@ -18,6 +18,7 @@
         <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.7" />
         <PackageReference Include="Dapper" Version="2.1.72" />
         <PackageReference Include="Npgsql" Version="10.0.2" />
+        <PackageReference Include="Polly.Core" Version="8.5.2" />
     </ItemGroup>
 
     <ItemGroup>

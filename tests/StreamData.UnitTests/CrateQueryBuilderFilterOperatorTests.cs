@@ -3,78 +3,80 @@ using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb.UnitTests;
 
+// After T17 every column is a first-class identifier on the per-archive table — these tests
+// assert the field-filter SQL uses the camelCase column name directly with no `data[...]`
+// indirection. The query builder also takes a fully qualified table identifier (schema.table)
+// rather than a raw tenant id.
 public class CrateQueryBuilderFilterOperatorTests
 {
+    private const string Table = "\"meshtest\".\"archive_a1\"";
+
     [Fact]
     public void Between_EmitsSqlWithBothValues()
     {
-        var queryBuilder = new CrateQueryBuilder("meshtest");
-        queryBuilder.AddVariable("Voltage", null, null, true);
-        queryBuilder.AddFieldFilter("Timestamp", StreamDataFieldFilterOperator.Between,
-            "2026-01-01 00:00:00.000Z", isDataField: false,
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.AddVariable("voltage", null, null);
+        queryBuilder.AddFieldFilter("timestamp", StreamDataFieldFilterOperator.Between,
+            "2026-01-01 00:00:00.000Z",
             secondaryValue: "2026-01-02 00:00:00.000Z");
 
         var compiler = new CrateQueryCompiler();
         var query = compiler.CompileQuery(queryBuilder);
 
-        Assert.Contains("\"Timestamp\" BETWEEN '2026-01-01 00:00:00.000Z' AND '2026-01-02 00:00:00.000Z'", query);
+        Assert.Contains("\"timestamp\" BETWEEN '2026-01-01 00:00:00.000Z' AND '2026-01-02 00:00:00.000Z'", query);
     }
 
     [Fact]
     public void In_EmitsSqlWithCommaSeparatedValues()
     {
-        var queryBuilder = new CrateQueryBuilder("meshtest");
+        var queryBuilder = new CrateQueryBuilder(Table);
         queryBuilder.IncludeDefaultVariables();
-        queryBuilder.AddFieldFilter("RtId", StreamDataFieldFilterOperator.In, "",
-            isDataField: false,
+        queryBuilder.AddFieldFilter("rtid", StreamDataFieldFilterOperator.In, "",
             valueList: ["id1", "id2", "id3"]);
 
         var compiler = new CrateQueryCompiler();
         var query = compiler.CompileQuery(queryBuilder);
 
-        Assert.Contains("\"RtId\" IN ('id1', 'id2', 'id3')", query);
+        Assert.Contains("\"rtid\" IN ('id1', 'id2', 'id3')", query);
     }
 
     [Fact]
     public void NotIn_EmitsSqlWithNotInKeyword()
     {
-        var queryBuilder = new CrateQueryBuilder("meshtest");
+        var queryBuilder = new CrateQueryBuilder(Table);
         queryBuilder.IncludeDefaultVariables();
-        queryBuilder.AddFieldFilter("RtId", StreamDataFieldFilterOperator.NotIn, "",
-            isDataField: false,
+        queryBuilder.AddFieldFilter("rtid", StreamDataFieldFilterOperator.NotIn, "",
             valueList: ["id1", "id2"]);
 
         var compiler = new CrateQueryCompiler();
         var query = compiler.CompileQuery(queryBuilder);
 
-        Assert.Contains("\"RtId\" NOT IN ('id1', 'id2')", query);
+        Assert.Contains("\"rtid\" NOT IN ('id1', 'id2')", query);
     }
 
     [Fact]
     public void IsNull_EmitsIsNullCheck()
     {
-        var queryBuilder = new CrateQueryBuilder("meshtest");
-        queryBuilder.AddVariable("Voltage", null, null, true);
-        queryBuilder.AddFieldFilter("Voltage", StreamDataFieldFilterOperator.IsNull, "",
-            isDataField: true);
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.AddVariable("voltage", null, null);
+        queryBuilder.AddFieldFilter("voltage", StreamDataFieldFilterOperator.IsNull, "");
 
         var compiler = new CrateQueryCompiler();
         var query = compiler.CompileQuery(queryBuilder);
 
-        Assert.Contains("\"data['Voltage']\" IS NULL", query);
+        Assert.Contains("\"voltage\" IS NULL", query);
     }
 
     [Fact]
     public void IsNotNull_EmitsIsNotNullCheck()
     {
-        var queryBuilder = new CrateQueryBuilder("meshtest");
-        queryBuilder.AddVariable("Voltage", null, null, true);
-        queryBuilder.AddFieldFilter("Voltage", StreamDataFieldFilterOperator.IsNotNull, "",
-            isDataField: true);
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.AddVariable("voltage", null, null);
+        queryBuilder.AddFieldFilter("voltage", StreamDataFieldFilterOperator.IsNotNull, "");
 
         var compiler = new CrateQueryCompiler();
         var query = compiler.CompileQuery(queryBuilder);
 
-        Assert.Contains("\"data['Voltage']\" IS NOT NULL", query);
+        Assert.Contains("\"voltage\" IS NOT NULL", query);
     }
 }

@@ -11,7 +11,10 @@ namespace Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 public interface IStreamDataRepositoryFactory
 {
     /// <summary>
-    /// Creates a stream data repository scoped to the given tenant id.
+    /// Creates a stream data repository scoped to the given tenant id. The
+    /// <paramref name="archiveStore"/> is consulted by the repository to enforce per-archive
+    /// status guards (T14) and to resolve the user-defined column list at insert and query time
+    /// (T17).
     /// </summary>
-    IStreamDataRepository Create(string tenantId);
+    IStreamDataRepository Create(string tenantId, ICkArchiveRuntimeStore archiveStore);
 }

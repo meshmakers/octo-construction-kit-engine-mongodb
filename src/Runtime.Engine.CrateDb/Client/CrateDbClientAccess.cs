@@ -1,101 +1,114 @@
-﻿using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
-using Microsoft.Extensions.Caching.Memory;
+using System.Collections.Concurrent;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 
-internal interface ICrateDbConnectionAccess
+internal interface ICrateDbConnectionAccess : IAsyncDisposable
 {
     /// <summary>
-    /// Returns a connection to the crate db.
+    /// Opens a pooled connection to CrateDB for the given tenant. Honors cancellation.
     /// </summary>
-    /// <param name="tenantId"></param>
-    /// <returns></returns>
-    NpgsqlConnection CreateConnection(string tenantId);
+    Task<NpgsqlConnection> CreateConnectionAsync(string tenantId, CancellationToken cancellationToken = default);
 }
 
 /// <remarks>
-/// Concept §8 T14 — connection-cache decision after T4 (schema-per-tenant) and pending T12 (pooling rework):
-/// <list type="bullet">
-///   <item>The cache currently keeps a long-lived <see cref="NpgsqlDataSource"/> per tenant
-///         under a 5-min sliding expiration. The data source itself is the unit of disposal —
-///         on eviction we call <c>Dispose</c> in <see cref="DisposeCallback"/> so any connections
-///         it holds are released promptly even with pooling currently disabled.</item>
-///   <item>With <c>Pooling = false</c> (CrateDB ROLLBACK workaround) the data source does not
-///         retain physical connections, so the cache primarily saves the
-///         <c>NpgsqlDataSourceBuilder</c> setup cost rather than reducing socket usage.</item>
-///   <item>Decision: keep the cache. Once T12 enables real pooling, the same shape works
-///         (the data source becomes the pool root) and the sliding expiration becomes the
-///         pool-eviction window. No behaviour change in this commit.</item>
-/// </list>
+/// Per-tenant <see cref="NpgsqlDataSource"/> cache: a lock-free
+/// <see cref="ConcurrentDictionary{TKey,TValue}"/> keyed by tenant id, with each entry wrapped in
+/// a <see cref="Lazy{T}"/> so concurrent first-access requests share a single data-source build
+/// instead of racing to construct duplicates.
+///
+/// <para>Pooling is intentionally disabled (<c>Pooling = false</c>) as a workaround for CrateDB
+/// rejecting the <c>ROLLBACK</c> Npgsql sends during connector reset (concept §8 T14). The cache
+/// therefore primarily saves the <c>NpgsqlDataSourceBuilder</c> setup cost rather than reducing
+/// socket usage; once a future Npgsql/CrateDB combination allows pool resets, the same shape works
+/// and the data source becomes the pool root with no API change.</para>
+///
+/// <para>Disposal: the access object is registered as a singleton; <see cref="DisposeAsync"/> tears
+/// down every cached data source so the host shuts down cleanly without leaking sockets. Tenant
+/// removal at runtime is not modeled here — tenants are stable for the process lifetime in the
+/// services that consume this. If that changes, surface a per-tenant <c>EvictAsync</c>.</para>
 /// </remarks>
 internal class CrateDbConnectionAccess(
     IOptions<StreamDataConfiguration> options,
     ILogger<CrateDbConnectionAccess> logger)
     : ICrateDbConnectionAccess
 {
-    private readonly IMemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
-    private readonly SemaphoreSlim _semaphore = new(1, 1);
+    private readonly ConcurrentDictionary<string, Lazy<NpgsqlDataSource>> _dataSources = new();
+    private int _disposed;
 
-    public NpgsqlConnection CreateConnection(string tenantId)
+    public Task<NpgsqlConnection> CreateConnectionAsync(string tenantId, CancellationToken cancellationToken = default)
     {
-        var cacheKey = NormalizeTenantId(tenantId);
-        _semaphore.Wait();
-
-        var dataSource = _cache.GetOrCreate<NpgsqlDataSource>(cacheKey, f =>
+        if (Volatile.Read(ref _disposed) == 1)
         {
-            var datasourceId = Guid.NewGuid();
-
-            f.SlidingExpiration = options.Value.ConnectionCacheDuration;
-            f.RegisterPostEvictionCallback(DisposeCallback, datasourceId);
-
-            var connectionString = options.Value.ConnectionString;
-
-            logger.LogInformation("Creating database datasource '{DatasourceId}' for tenant {TenantId}",
-                datasourceId,
-                tenantId);
-            logger.LogDebug("Connection string: {ConnectionString}", connectionString);
-
-            var csb = new NpgsqlConnectionStringBuilder(connectionString)
-            {
-                // CrateDB does not support ROLLBACK which Npgsql sends during pooled connection
-                // reset (NpgsqlConnector.Reset). NoResetOnClose only prevents DISCARD ALL but NOT
-                // the ROLLBACK that Npgsql unconditionally sends when TransactionStatus != Idle.
-                // Disabling pooling prevents Reset from being called entirely on connection close.
-                NoResetOnClose = true,
-                Pooling = false
-            };
-            var dataSourceBuilder = new NpgsqlDataSourceBuilder(csb.ConnectionString);
-            dataSourceBuilder.EnableDynamicJson([typeof(IReadOnlyDictionary<string, object?>)]);
-            var dataSource = dataSourceBuilder.Build();
-
-            return dataSource;
-        });
-        
-        _semaphore.Release();
-        
-        if (dataSource == null)
-        {
-            throw StreamDataException.CouldNotCreateDatabaseConnection();
+            throw new ObjectDisposedException(nameof(CrateDbConnectionAccess));
         }
 
-        return dataSource.OpenConnection();
+        var key = NormalizeTenantId(tenantId);
+        var dataSource = _dataSources.GetOrAdd(key, k => new Lazy<NpgsqlDataSource>(
+            () => BuildDataSource(k),
+            LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+
+        return dataSource.OpenConnectionAsync(cancellationToken).AsTask();
     }
 
-    private void DisposeCallback(object key, object? value, EvictionReason reason, object? state)
+    private NpgsqlDataSource BuildDataSource(string tenantId)
     {
-        if (state is not Guid datasourceId || value is not NpgsqlDataSource datasource)
+        var config = options.Value;
+        var datasourceId = Guid.NewGuid();
+
+        logger.LogInformation(
+            "Building CrateDB datasource '{DatasourceId}' for tenant '{TenantId}' (pooling=false; CrateDB protocol mismatch with Npgsql connector reset)",
+            datasourceId, tenantId);
+        logger.LogDebug("Connection string: {ConnectionString}", config.ConnectionString);
+
+        var csb = new NpgsqlConnectionStringBuilder(config.ConnectionString)
         {
-            throw new InvalidOperationException("Invalid state");
+            // CrateDB rejects ROLLBACK that Npgsql sends during connector reset on connection
+            // close. NoResetOnClose only suppresses DISCARD ALL — the rollback path inside
+            // Npgsql.Internal.NpgsqlConnector.Reset() still fires when the connector's tracked
+            // TransactionStatus is anything other than Idle, which CrateDB's Postgres protocol
+            // implementation can leave it in even after a successful auto-commit INSERT (observed
+            // on Npgsql 10.x against CrateDB 5.x). With Pooling disabled, NpgsqlConnection.Close()
+            // physically closes the socket instead of going through the pool reset path, so the
+            // ROLLBACK is never sent. NoResetOnClose stays true belt-and-braces in case the pool
+            // is ever re-enabled by config in a future Npgsql/CrateDB combination.
+            //
+            // Trade-off: every CrateDB call pays a fresh TCP/TLS handshake + auth round-trip.
+            // Acceptable for the per-archive insert paths the engine drives (poll-rate event
+            // streams, batched ingest); revisit with a custom connector-reset hook if a future
+            // hot path needs sub-millisecond CrateDB latency.
+            NoResetOnClose = true,
+            Pooling = false,
+            ConnectionIdleLifetime = (int)Math.Max(1, config.ConnectionIdleLifetime.TotalSeconds)
+        };
+
+        var dataSourceBuilder = new NpgsqlDataSourceBuilder(csb.ConnectionString);
+        dataSourceBuilder.EnableDynamicJson([typeof(IReadOnlyDictionary<string, object?>)]);
+        return dataSourceBuilder.Build();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+
+        foreach (var entry in _dataSources)
+        {
+            if (!entry.Value.IsValueCreated) continue;
+
+            try
+            {
+                await entry.Value.Value.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to dispose CrateDB datasource for tenant '{TenantId}'", entry.Key);
+            }
         }
 
-        logger.LogInformation("Disposing datasource '{DatasourceId}' for tenant '{TenantId}'", 
-            datasourceId,
-            key);
-
-        datasource.Dispose();
+        _dataSources.Clear();
     }
 
     private static string NormalizeTenantId(string tenantId) => tenantId.ToLowerInvariant();

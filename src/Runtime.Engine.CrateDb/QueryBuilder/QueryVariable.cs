@@ -10,37 +10,23 @@ internal record QueryVariable : IQueryVariable
     private readonly List<string> _variableContainedInList = [];
 
     /// <summary>
-    /// Query Variable
+    /// Query Variable. After the T17 hard cut every attribute is a first-class column on the
+    /// per-archive table, so the legacy <c>data['x']</c> indirection is gone — <paramref name="name"/>
+    /// is taken as the camelCase column name verbatim.
     /// </summary>
-    /// <param name="name"></param>
-    /// <param name="alias"></param>
-    /// <param name="AggregationFunction"></param>
-    /// <param name="isDataVariable"></param>
     public QueryVariable(string name,
         string? alias,
-        AggregationFunctionDto? AggregationFunction,
-        bool isDataVariable = false)
+        AggregationFunctionDto? AggregationFunction)
     {
-
         this.AggregationFunction = AggregationFunction;
-        Name = isDataVariable ? $"data['{name}']" : name;
-        IsDataVariable = isDataVariable;
-        
+        Name = name;
+
         if (AggregationFunction != null)
         {
             Name = $"{AggregationFunction.ToString()!.ToUpper()}(\"{Name}\")";
         }
 
-        if (alias == null)
-        {
-            Alias = Name;
-        }
-        else
-        {
-            Alias = alias;
-        }
-            
-        
+        Alias = alias ?? Name;
     }
 
     /// <summary>
@@ -73,10 +59,6 @@ internal record QueryVariable : IQueryVariable
     /// <summary></summary>
     public AggregationFunctionDto? AggregationFunction { get; init; }
 
-    /// <summary></summary>
-    public bool IsDataVariable { get; init; }
-
-
     /// <inheritdoc />
 
     public string ToSelectString()
@@ -104,11 +86,10 @@ internal record QueryVariable : IQueryVariable
         return SortOrder == SortOrderDto.Descending ? "DESC" : "ASC";
     }
 
-    public void Deconstruct(out string name, out string? alias, out AggregationFunctionDto? aggregationFunction, out bool isDataVariable)
+    public void Deconstruct(out string name, out string? alias, out AggregationFunctionDto? aggregationFunction)
     {
         name = Name;
         alias = Alias;
         aggregationFunction = AggregationFunction;
-        isDataVariable = IsDataVariable;
     }
 }

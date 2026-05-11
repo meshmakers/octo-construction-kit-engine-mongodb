@@ -154,9 +154,16 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             ConventionRegistry.Remove(OctoRtEntityConvention);
             ConventionRegistry.Remove(OctoRtRecordConvention);
 
-            // Register convention
+            // Register convention. The IgnoreExtraElementsConvention applies to ALL types and
+            // makes the deserializer silently skip BSON elements that have no matching property —
+            // mandatory for forward-compat across schema evolution (e.g. when a property is
+            // removed from a CK metadata class but legacy documents in the database still carry it).
             ConventionRegistry.Register(OctoConventionCamelCase,
-                new ConventionPack { new CamelCaseElementNameConvention() }, _ => true);
+                new ConventionPack
+                {
+                    new CamelCaseElementNameConvention(),
+                    new IgnoreExtraElementsConvention(true)
+                }, _ => true);
 
             // Ensure that class maps are registered after generic conventions!
             // Otherwise, for example, CamelCaseElementName is not executed during mapping.
@@ -322,7 +329,6 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.ValueCkEnumId).SetIgnoreIfDefault(true);
             cm.MapMember(c => c.ValueCkRecordId).SetIgnoreIfDefault(true);
             cm.MapMember(c => c.MetaData).SetIgnoreIfDefault(true);
-            cm.MapMember(c => c.IsDataStream).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkAssociationRole>(cm =>

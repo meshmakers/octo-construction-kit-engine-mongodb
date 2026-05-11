@@ -49,12 +49,7 @@ public class CkAttribute
     ///     An optional description of the attribute
     /// </summary>
     public string? Description { get; set; }
-    
-    /// <summary>
-    ///     Optional flag that tells if an attribute is a data stream.
-    /// </summary>
-    public bool? IsDataStream { get; set; }
-    
+
     /// <summary>
     ///     Optional meta data of the attribute
     /// </summary>

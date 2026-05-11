@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 
 using Meshmakers.Common.Metrics.Context;
@@ -22,8 +23,10 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.CkModelMigrations;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
+using Meshmakers.Octo.Runtime.Engine.StreamData;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -759,6 +762,7 @@ public class TenantContext : ITenantContext
             tenant.DatabaseName);
 
         await UpdateSystemCkModelAsync(tenant.DatabaseName, tenant.TenantId);
+        await context.EnsureStreamDataCkModelIfEnabledAsync();
 
         return context;
     }
@@ -841,26 +845,69 @@ public class TenantContext : ITenantContext
                 TenantId);
         }
 
-        // Ensure the StreamData CK model is installed at the version the host ships. The host
-        // registers an IStreamDataCkModelDescriptor with the CkModelId that was compiled in;
-        // ImportCkModelAsync is idempotent (skips when the version already matches) and runs
-        // auto-bridged migrations when the host has shipped a newer version.
-        var streamDataCkModelDescriptor = _serviceProvider.GetService<IStreamDataCkModelDescriptor>();
-        if (streamDataCkModelDescriptor != null)
+        // Concept §5: the StreamData CK model is loaded only on tenants that opt into stream
+        // data. Importing it here keeps the model lifecycle aligned with the feature flag —
+        // disabling stream data later does NOT remove the model (entities and history are
+        // preserved), but enabling brings everything required for archive management UI to work.
+        await EnsureStreamDataCkModelImportedAsync();
+    }
+
+    /// <summary>
+    /// Imports the StreamData CK model into the tenant. Idempotent — ImportCkModelAsync detects
+    /// a model already present and short-circuits. Caller must verify the tenant flag first;
+    /// the public entry point is <see cref="EnsureStreamDataCkModelIfEnabledAsync"/>.
+    /// </summary>
+    private async Task EnsureStreamDataCkModelImportedAsync()
+    {
+        var operationResult = new OperationResult();
+        await ImportCkModelAsync(new CkModelId("System.StreamData-1.0.0"), operationResult);
+        if (operationResult.HasErrors || operationResult.HasFatalErrors)
         {
-            var importOperationResult = new OperationResult();
-            await ImportCkModelAsync(streamDataCkModelDescriptor.CkModelId, importOperationResult);
-            if (importOperationResult.HasErrors || importOperationResult.HasFatalErrors)
-            {
-                throw TenantException.ErrorDuringSystemModelLoad(importOperationResult);
-            }
+            _logger.LogError(
+                "Failed to import StreamData CK model into tenant '{TenantId}'. Stream data is enabled but archive management features may not be available until the model is imported. Operation result: {Messages}",
+                TenantId,
+                string.Join("; ", operationResult.Messages.Select(m => $"{m.MessageNumber}: {m.MessageText}")));
         }
-        else
+    }
+
+    /// <summary>
+    /// Per-process guard that prevents the auto-import hook from re-entering during the
+    /// tenant-resolve recursion triggered by ImportCkModelAsync's pending-migrations check.
+    /// Once a tenant has been auto-reconciled in this process, subsequent resolves skip the
+    /// hook (manual EnableStreamDataAsync calls bypass this guard).
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, bool> _streamDataAutoImportAttempted = new();
+
+    /// <summary>
+    /// Idempotent reconciliation hook for the tenant-resolve path: when a tenant has the
+    /// StreamData feature flag set to <c>Enabled</c> AND the deployment instance flag is on,
+    /// make sure the StreamData CK model is in its catalog. Lets a deploy that newly introduces
+    /// the model auto-promote it to previously-enabled tenants without requiring an explicit
+    /// EnableStreamData call (concept §5). No-op when either flag is off, or when the tenant
+    /// has already been reconciled in this process.
+    /// </summary>
+    internal async Task EnsureStreamDataCkModelIfEnabledAsync()
+    {
+        // First-pass guard avoids the recursion through ImportCkModelAsync ->
+        // RetryPendingMigrationsAsync -> CkModelUpgradeService -> tenant resolve -> here.
+        if (!_streamDataAutoImportAttempted.TryAdd(TenantId, true)) return;
+
+        var instanceConfig = _serviceProvider.GetService<IOptions<StreamDataInstanceConfiguration>>();
+        if (instanceConfig?.Value.Enabled != true) return;
+
+        try
         {
-            _logger.LogDebug(
-                "No IStreamDataCkModelDescriptor registered; skipping StreamData CK model import for tenant '{TenantId}'",
+            if (!await IsStreamDataEnabledAsync()) return;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Could not read stream-data tenant flag for '{TenantId}'; skipping StreamData CK model auto-import.",
                 TenantId);
+            return;
         }
+
+        await EnsureStreamDataCkModelImportedAsync();
     }
 
     /// <inheritdoc />
@@ -920,9 +967,51 @@ public class TenantContext : ITenantContext
             return null;
         }
 
-        _streamDataRepository = factory.Create(TenantId);
+        // Wire the per-tenant archive store into the repository so the per-archive status guard
+        // (T14) and column-list lookup at insert time (T17) work. Both are no-ops when the
+        // factory was registered without StreamData enabled, but with a tenant context in scope
+        // the store is always available — we own its lifetime here.
+        _streamDataRepository = factory.Create(TenantId, GetCkArchiveRuntimeStore());
         _streamDataRepositoryResolved = true;
         return _streamDataRepository;
+    }
+
+    private ICkArchiveRuntimeStore? _ckArchiveRuntimeStore;
+
+    /// <inheritdoc />
+    public ICkArchiveRuntimeStore GetCkArchiveRuntimeStore()
+    {
+        return _ckArchiveRuntimeStore ??= new MongoCkArchiveRuntimeStore(GetTenantRepository());
+    }
+
+    private IArchiveLifecycleService? _archiveLifecycleService;
+    private bool _archiveLifecycleServiceResolved;
+
+    /// <inheritdoc />
+    public IArchiveLifecycleService? GetArchiveLifecycleService()
+    {
+        if (_archiveLifecycleServiceResolved)
+        {
+            return _archiveLifecycleService;
+        }
+
+        var streamData = GetStreamDataRepository();
+        if (streamData is null)
+        {
+            _archiveLifecycleServiceResolved = true;
+            return null;
+        }
+
+        var audit = _serviceProvider.GetService<IArchiveAuditTrail>()
+                    ?? new LoggingArchiveAuditTrail(_loggerFactory.CreateLogger<LoggingArchiveAuditTrail>());
+        _archiveLifecycleService = new ArchiveLifecycleService(
+            TenantId,
+            GetCkArchiveRuntimeStore(),
+            streamData,
+            audit,
+            _loggerFactory.CreateLogger<ArchiveLifecycleService>());
+        _archiveLifecycleServiceResolved = true;
+        return _archiveLifecycleService;
     }
 
     #endregion Access management

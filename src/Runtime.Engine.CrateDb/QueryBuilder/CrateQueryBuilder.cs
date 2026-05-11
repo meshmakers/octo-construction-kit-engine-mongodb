@@ -13,7 +13,7 @@ internal class CrateQueryBuilder
     /// </summary>
     internal List<IQueryVariable> Variables { get; } = new();
     
-    internal IEnumerable<IQueryVariable> QueryVariablesWithoutTimestamp => Variables.Where(x => x.Name != "Timestamp");
+    internal IEnumerable<IQueryVariable> QueryVariablesWithoutTimestamp => Variables.Where(x => x.Name != Constants.Timestamp);
 
     /// <summary>
     /// All variables to ordered by
@@ -23,7 +23,7 @@ internal class CrateQueryBuilder
     /// <summary>
     /// Time Stamp Variable
     /// </summary>
-    internal IQueryVariable? TimeStampVariable => Variables.FirstOrDefault(x => x.Name == "Timestamp");
+    internal IQueryVariable? TimeStampVariable => Variables.FirstOrDefault(x => x.Name == Constants.Timestamp);
 
     /// <summary>
     /// Schema-qualified, double-quoted legacy stream-data table identifier for this tenant
@@ -70,13 +70,14 @@ internal class CrateQueryBuilder
     internal RtCkId<CkTypeId>? CkTypeId { get; private set; }
 
     /// <summary>
-    /// Constructor. <paramref name="tenantId"/> is converted to the schema-qualified legacy
-    /// stream-data table identifier (e.g. <c>"acmecorp"."streamData"</c>) and exposed via
-    /// <see cref="QualifiedTableName"/>.
+    /// Constructor. <paramref name="qualifiedTable"/> is the schema-qualified, double-quoted
+    /// archive table identifier (e.g. <c>"acmecorp"."archive_65d5..."</c>) — typically obtained
+    /// via <see cref="TenantSchema.QualifiedArchiveTable"/>. After the T17 hard cut every query
+    /// targets a per-archive table; the legacy single-tenant table is gone.
     /// </summary>
-    public CrateQueryBuilder(string tenantId)
+    public CrateQueryBuilder(string qualifiedTable)
     {
-        TenantId = TenantSchema.QualifiedLegacyTable(tenantId);
+        TenantId = qualifiedTable;
     }
 
     /// <summary>
@@ -104,17 +105,13 @@ internal class CrateQueryBuilder
     }
 
     /// <summary>
-    /// Adds a normal variable to the query
+    /// Adds a normal variable to the query. <paramref name="variableName"/> is taken verbatim as
+    /// the camelCase column name on the per-archive table.
     /// </summary>
-    /// <param name="variableName"></param>
-    /// <param name="alias"></param>
-    /// <param name="aggregationFunction"></param>
-    /// <param name="isDataVariable"></param>
-    /// <returns></returns>
-    public CrateQueryBuilder AddVariable(string variableName, string? alias = null, AggregationFunctionDto? aggregationFunction = null, bool isDataVariable = false)
+    public CrateQueryBuilder AddVariable(string variableName, string? alias = null, AggregationFunctionDto? aggregationFunction = null)
     {
-        IQueryVariable variable = new QueryVariable(variableName, alias, aggregationFunction, isDataVariable);
-        
+        IQueryVariable variable = new QueryVariable(variableName, alias, aggregationFunction);
+
         var idx = Variables.FindIndex(x => x.Name == variable.Name || x.Alias == variable.Alias);
         if (idx != -1)
         {
@@ -124,9 +121,7 @@ internal class CrateQueryBuilder
         Variables.Add(variable);
         return this;
     }
-    
-    
-    
+
     /// <summary>
     /// Includes all default variables that are available for every type
     /// </summary>
@@ -134,26 +129,21 @@ internal class CrateQueryBuilder
     {
         foreach(var streamDataField in Constants.DefaultStreamDataFields)
         {
-            IQueryVariable variable = new QueryVariable(streamDataField, null, null, false);
+            IQueryVariable variable = new QueryVariable(streamDataField, null, null);
             Variables.Add(variable);
         }
-        
+
         return this;
     }
 
 
     /// <summary>
-    /// Adds an aggregation variable to the query
+    /// Adds an aggregation variable to the query.
     /// </summary>
-    /// <param name="name"></param>
-    /// <param name="aggregate"></param>
-    /// <param name="alias"></param>
-    /// <param name="isDataVariable"></param>
-    /// <returns></returns>
-    public CrateQueryBuilder AddAggregationVariable(string name, AggregationFunctionDto aggregate, string? alias = null, bool isDataVariable = false)
+    public CrateQueryBuilder AddAggregationVariable(string name, AggregationFunctionDto aggregate, string? alias = null)
     {
         var variableAlias = alias ?? $"{aggregate.ToString()}_{name}";
-        IQueryVariable variable = new QueryVariable(name, variableAlias, aggregate, isDataVariable);
+        IQueryVariable variable = new QueryVariable(name, variableAlias, aggregate);
         Variables.Add(variable);
         return this;
     }
@@ -228,14 +218,12 @@ internal class CrateQueryBuilder
     /// <param name="fieldName">Column name</param>
     /// <param name="op">Comparison operator</param>
     /// <param name="value">Primary comparison value</param>
-    /// <param name="isDataField">Whether the field is in the dynamic data column</param>
     /// <param name="secondaryValue">Upper bound value for the Between operator</param>
     /// <param name="valueList">List of values for In/NotIn operators</param>
-    /// <returns></returns>
     public CrateQueryBuilder AddFieldFilter(string fieldName, StreamDataFieldFilterOperator op, string value,
-        bool isDataField = false, string? secondaryValue = null, IReadOnlyList<string>? valueList = null)
+        string? secondaryValue = null, IReadOnlyList<string>? valueList = null)
     {
-        FieldFilters.Add(new StreamDataFieldFilterDto(fieldName, op, value, isDataField, secondaryValue, valueList));
+        FieldFilters.Add(new StreamDataFieldFilterDto(fieldName, op, value, secondaryValue, valueList));
         return this;
     }
 

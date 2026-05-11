@@ -14,18 +14,19 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 internal static class ArchiveDdlGenerator
 {
     /// <summary>
-    /// Standard columns emitted on every archive table (concept §4). Camel-cased to match the
-    /// MongoDB BSON convention (concept §9). PK columns are <c>NOT NULL</c> by definition;
-    /// timestamp columns default to <c>CURRENT_TIMESTAMP</c> for the standard trio.
+    /// Standard columns emitted on every archive table (concept §4). Lower-cased to sidestep
+    /// CrateDB's case-preservation quirks for quoted mixed-case identifiers (notably
+    /// <c>EXCLUDED."Col"</c> inside <c>ON CONFLICT DO UPDATE</c>). PK columns are <c>NOT NULL</c>
+    /// by definition; timestamp columns default to <c>CURRENT_TIMESTAMP</c> for the standard trio.
     /// </summary>
     public static IReadOnlyList<(string Name, string Definition)> StandardColumns { get; } = new (string, string)[]
     {
-        ("rtId", "TEXT NOT NULL"),
-        ("timestamp", "TIMESTAMP WITH TIME ZONE NOT NULL"),
-        ("ckTypeId", "TEXT NOT NULL"),
-        ("rtCreationDateTime", "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"),
-        ("rtChangedDateTime", "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"),
-        ("rtWellKnownName", "TEXT"),
+        (Constants.RtId, "TEXT NOT NULL"),
+        (Constants.Timestamp, "TIMESTAMP WITH TIME ZONE NOT NULL"),
+        (Constants.CkTypeId, "TEXT NOT NULL"),
+        (Constants.RtCreationDateTime, "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"),
+        (Constants.RtChangedDateTime, "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"),
+        (Constants.RtWellKnownName, "TEXT"),
     };
 
     /// <summary>
@@ -57,10 +58,10 @@ internal static class ArchiveDdlGenerator
             throw new ArgumentOutOfRangeException(nameof(numberOfShards), "numberOfShards must be >= 1");
         }
 
-        var seenPaths = new HashSet<string>(StringComparer.Ordinal);
+        var seenColumnNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (name, _) in StandardColumns)
         {
-            seenPaths.Add(name);
+            seenColumnNames.Add(name);
         }
 
         var sb = new StringBuilder();
@@ -77,21 +78,27 @@ internal static class ArchiveDdlGenerator
             {
                 throw new ArgumentException("Archive column path must not be empty.", nameof(columns));
             }
-            if (!seenPaths.Add(col.Path))
+
+            // Convert dotted attribute path to a camelCase column identifier so per-archive
+            // tables match the MongoDB BSON convention (concept §9). Two distinct paths can in
+            // principle collapse to the same column name (e.g. `temp.celsius` and `tempCelsius`),
+            // which we surface as a hard error rather than silently overwriting.
+            var columnName = ColumnNameMapper.PathToColumnName(col.Path);
+            if (!seenColumnNames.Add(columnName))
             {
                 throw new ArgumentException(
-                    $"Duplicate column path '{col.Path}' (would collide with another archive column or a standard column).",
+                    $"Column name '{columnName}' (from path '{col.Path}') collides with another archive column or a standard column.",
                     nameof(columns));
             }
 
-            sb.Append(' ').Append('"').Append(col.Path).Append("\" ");
+            sb.Append(' ').Append('"').Append(columnName).Append("\" ");
             col.Type.AppendTo(sb);
             if (col.Required) sb.Append(" NOT NULL");
             if (!col.Indexed) sb.Append(" INDEX OFF");
             sb.Append(',');
         }
 
-        sb.Append(" PRIMARY KEY (\"timestamp\", \"rtId\", \"ckTypeId\")");
+        sb.Append($" PRIMARY KEY (\"{Constants.Timestamp}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\")");
         sb.Append(") CLUSTERED INTO ")
           .Append(numberOfShards.ToString(CultureInfo.InvariantCulture))
           .Append(" SHARDS");

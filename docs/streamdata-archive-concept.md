@@ -1,7 +1,8 @@
 # StreamData Archive — Concept & Implementation Plan
 
-**Status:** Draft
+**Status:** Implemented (T1–T17 of the plan + UI/Authz/Observability follow-ups, see §20)
 **Created:** 2026-04-28
+**Last update:** 2026-05-08
 **Owner:** TBD
 **Scope:** Redesign of the CrateDB-backed StreamData subsystem across `octo-construction-kit-engine`, `octo-construction-kit-engine-mongodb`, `octo-asset-repo-services`, `octo-mesh-adapter`, `octo-sdk`.
 
@@ -30,11 +31,11 @@ Goals of the redesign:
 | D3 | Multiple archives per CkType | **Yes.** |
 | D4 | Inheritance | Archive defined on CkType A applies to all derived types; **separate table per concrete type**. |
 | D5 | Path → column mapping | Scalar path → flat column. Record path → `OBJECT(STRICT)` column. Array path with `[*]` → `ARRAY(<elem>)` column. |
-| D6 | Column name for nested paths | Use **quoted identifier** preserving dots: `"sensor.reading.value"`. Verify at implementation that this does not collide with CrateDB OBJECT subscripting. |
+| D6 | Column name for nested paths | **camelCase concatenation** via `ColumnNameMapper.PathToColumnName`: `sensor.reading.value` → `sensorReadingValue`. (Original draft kept the dotted form quoted, but during T17 implementation we switched to camelCase to avoid CrateDB OBJECT-subscript collisions and to match the BSON convention used in MongoDB.) |
 | D7 | Required scalar missing on insert | Throw exception. |
 | D8 | Required array element missing path value | `null` allowed in resulting array (no exception). |
 | D9 | Archive evolution | Archive is immutable once activated. New version = new archive (new RtId / new well-known-name). |
-| D10 | Mesh-adapter ingestion | Archive ID configured **per `SaveInTimeSeries` pipeline node**. No auto-fan-out. |
+| D10 | Mesh-adapter ingestion | Archive ID configured **per `SaveStreamDataInArchive` pipeline node**. No auto-fan-out. |
 | D11 | Bestand migration | **Hard cut.** No automated migration of legacy data. |
 | D12 | Archive identifier in API | `OctoObjectId` (the `RtId` of the `CkArchive` instance). |
 | D13 | Activation layers | **Three levels, AND-coupled:** instance-flag (appsettings) → tenant-flag (existing) → archive-status. All three must be active. |
@@ -256,7 +257,7 @@ Mapping to API surface:
 - **GraphQL `availableArchivePaths`**: admin (used by archive create/edit flow).
 - **REST `/streamdata/enable|disable`**: admin only.
 - **REST `/streamdata/status`**: any authenticated role (reader+writer+admin).
-- **`SaveInTimeSeries` pipeline node**: runs under a service account that holds `StreamDataWriter`.
+- **`SaveStreamDataInArchive` pipeline node**: runs under a service account that holds `StreamDataWriter`.
 
 Authorization is enforced **server-side**. The studio uses route-level guards only (no component-level role checks in this iteration — see §17). Buttons may appear for users without write rights; if clicked, the server returns the corresponding `ArchiveNotActivatedException`/`Forbidden` and the studio surfaces it as a notification.
 
@@ -306,7 +307,7 @@ Future extension (not in this iteration): `BulkInsertOptions { ContinueOnError: 
 
 ### Pipeline node
 
-`SaveInTimeSeries` gains a required property `ArchiveRtId : OctoObjectId`.
+`SaveStreamDataInArchive` gains a required property `ArchiveRtId : OctoObjectId`.
 
 ### GraphQL
 
@@ -426,19 +427,19 @@ Tasks are ordered for sequential execution. Each task is self-contained with acc
 
 ### Phase 1 — Foundations
 
-#### [ ] T1. Define `StreamData` CK model
+#### [x] T1. Define `StreamData` CK model
 - Create new CK model project `StreamData` (YAML + generated services).
 - Define `CkArchiveStatus` enum, `CkArchiveColumn` record, `CkArchive` type as in §3.
 - Embed migration metadata (initial v1.0.0).
 - **Acceptance**: model compiles via existing CK compiler, source-generated service classes available, model can be imported into a tenant.
 
-#### [ ] T2. Move DB-agnostic StreamData artifacts to `octo-construction-kit-engine`
+#### [x] T2. Move DB-agnostic StreamData artifacts to `octo-construction-kit-engine`
 - Move `RtCkId` cleaning helper (today `internal` in `CkIdExtensions`) to a public namespace in `Runtime.Contracts` (or similar).
 - Update `IStreamDataRepository` signatures to accept `OctoObjectId archiveRtId` (will compile-fail on the mongodb repo until T7 lands — acceptable; track via temporary stubs if needed).
 - Add new contracts: `IArchiveLifecycleService`, `IArchiveSchemaResolver`, `IArchiveBackend`.
 - **Acceptance**: `octo-construction-kit-engine` builds; new contracts in place; existing engine tests green.
 
-#### [ ] T3. Extract CrateDB code into `Runtime.Engine.CrateDb` project
+#### [x] T3. Extract CrateDB code into `Runtime.Engine.CrateDb` project
 - Create new `.csproj` under `octo-construction-kit-engine-mongodb/src/Runtime.Engine.CrateDb`.
 - Move `StreamData/` content from `Runtime.Engine.MongoDb` to new project (Client/, QueryBuilder/, Dapper/, repository, configuration).
 - Ensure `Runtime.Engine.MongoDb.csproj` no longer references CrateDB code.
@@ -448,12 +449,12 @@ Tasks are ordered for sequential execution. Each task is self-contained with acc
 
 ### Phase 2 — Core infrastructure
 
-#### [ ] T4. Schema-per-tenant in CrateDB
+#### [x] T4. Schema-per-tenant in CrateDB
 - DDL: `CREATE SCHEMA {tenantSchema}` on tenant create; `DROP SCHEMA … CASCADE` on delete.
 - All archive operations use `{schema}.{table}` qualified names.
 - **Acceptance**: integration test creates two tenants, verifies isolation (each tenant sees only own tables); tenant deletion removes schema.
 
-#### [ ] T5. Archive DDL generator
+#### [x] T5. Archive DDL generator
 - Implement `IArchiveBackend` for CrateDB: produces `CREATE TABLE` from a `CkArchive` instance + CkType metadata.
 - Standard columns + per-`CkArchiveColumn` typed columns, with nullability per `required`.
 - Quoted identifier with dots for nested paths; verify against OBJECT subscripting collision.
@@ -461,13 +462,13 @@ Tasks are ordered for sequential execution. Each task is self-contained with acc
 - Array paths → `ARRAY(...)`.
 - **Acceptance**: unit tests cover scalar, record, array-of-scalar, array-of-record, required vs optional combinations.
 
-#### [ ] T6. Archive lifecycle service
+#### [x] T6. Archive lifecycle service
 - Implement state machine in `IArchiveLifecycleService` (DB-neutral) with hooks into `IArchiveBackend`.
 - Transitions: Created→Activated (DDL), Activated↔Disabled (status only), *→Failed on activation error, Failed→Activated (retry DDL), Delete (DROP + rtState=Archived).
 - Validation hook on `CkArchive` updates: reject schema changes after activation.
 - **Acceptance**: unit tests cover all transitions + immutability rejection; integration test full happy-path.
 
-#### [ ] T7. Update `IStreamDataRepository` signatures
+#### [x] T7. Update `IStreamDataRepository` signatures
 - All methods take `OctoObjectId archiveRtId` first.
 - Repository resolves `archiveRtId` → CkArchive → tenant schema + table.
 - Throws `ArchiveNotActivatedException` if status ≠ Activated.
@@ -476,25 +477,25 @@ Tasks are ordered for sequential execution. Each task is self-contained with acc
 
 ### Phase 3 — Integration
 
-#### [ ] T8. Three-tier activation
+#### [x] T8. Three-tier activation
 - Add `StreamData:Enabled` to appsettings (instance-level).
 - DI registration of CrateDB stack guarded by instance flag.
 - `EnableStreamDataAsync` (tenant) throws if instance flag false.
 - Archive activate throws if tenant flag false.
 - **Acceptance**: integration test toggles each level and verifies expected exceptions/successes.
 
-#### [ ] T9. `SaveInTimeSeries` pipeline node
+#### [x] T9. `SaveStreamDataInArchive` pipeline node
 - Add required `ArchiveRtId : OctoObjectId` property.
 - Insert call routes through new repository signature.
 - **Acceptance**: pipeline integration test inserts to a specific archive; targeting an inactive archive raises a clear pipeline error.
 
-#### [ ] T10. GraphQL & REST API updates
+#### [x] T10. GraphQL & REST API updates
 - GraphQL: `archiveRtId: ID!` required on `StreamDataQuery` and `StreamDataTransientQuery`.
 - SDK client (`octo-sdk`) updated.
 - REST: tenant enable/disable unchanged; CkArchive lifecycle via standard entity CRUD.
 - **Acceptance**: SDK contract tests + GraphQL schema test pass; REST happy-path E2E green.
 
-#### [ ] T11. Hard cut of legacy StreamData
+#### [x] T11. Hard cut of legacy StreamData
 - Remove old generic `OBJECT(DYNAMIC)` table and codepaths.
 - Document in release notes that legacy data is discarded.
 - Deployment runbook: drop legacy tables in target environments.
@@ -502,22 +503,22 @@ Tasks are ordered for sequential execution. Each task is self-contained with acc
 
 ### Phase 4 — Pre-existing pain points (validate against new code)
 
-#### [ ] T12. Connection pooling rework
+#### [x] T12. Connection pooling rework
 Existing `Pooling=false` + `NoResetOnClose=true` workaround for ROLLBACK incompatibility. Evaluate whether new Npgsql/CrateDB combo allows pooling, or implement own pool with manual lifecycle.
 
-#### [ ] T13. Resilience policies
+#### [x] T13. Resilience policies
 Polly-based pipeline (retry with backoff, circuit breaker, timeout) around `CrateDatabaseClient` operations.
 
-#### [ ] T14. Tenant connection cache review
+#### [x] T14. Tenant connection cache review
 With schema-per-tenant the per-tenant connection cache may simplify or disappear. Decide based on T4/T12 outcome.
 
-#### [ ] T15. REFRESH TABLE strategy
+#### [x] T15. REFRESH TABLE strategy
 Decide between: explicit refresh after bulk-insert in production code, query-side tolerance, or write-through cache. Document chosen pattern.
 
-#### [ ] T16. Dapper TypeHandler review
+#### [x] T16. Dapper TypeHandler review
 With typed columns, most JSON handlers are unnecessary. Keep only `CkId`/`OctoId` handlers. Evaluate source-generator alternative.
 
-#### [ ] T17. Retention & downsampling per archive
+#### [x] T17. Retention & downsampling per archive
 `IStreamDataRepository.ExecuteDownsamplingQueryAsync` exists but no retention policy. Define per-archive retention (TTL on data, optional auto-rollup) — design first, implement later.
 
 ---
@@ -731,7 +732,7 @@ No StreamData-specific retention. Events are kept per the platform-wide event re
 | Integration | Three-tier activation: each flag toggled, expected exception class observed. | `AssetRepositoryServices.IntegrationTests/StreamData/` |
 | Integration | Bulk insert with mixed valid/required-violation points: whole batch rejected. | same |
 | Integration | Concurrency: parallel Activate idempotent; Disable mid-insert; Delete mid-insert. | same |
-| E2E | GraphQL `streamData` query and `SaveInTimeSeries` pipeline node against a configured asset-repo service. | `AssetRepositoryServices.IntegrationTests/` |
+| E2E | GraphQL `streamData` query and `SaveStreamDataInArchive` pipeline node against a configured asset-repo service. | `AssetRepositoryServices.IntegrationTests/` |
 
 Existing fixture (`StreamDataFixture`) is the starting point — adapt to the archive model and split per scope. The fixture already uses `crate:5.10.10` Testcontainers; that stays.
 
@@ -841,3 +842,27 @@ Until implemented, breakage manifests as runtime exceptions on the data plane.
 - Path tokenizer: `RtPathEvaluator` in `octo-construction-kit-engine/Runtime.Contracts/`.
 - Current Crate stack: `octo-construction-kit-engine-mongodb/src/Runtime.Engine.MongoDb/StreamData/`.
 - Mongo collection naming helper to share: `octo-construction-kit-engine-mongodb/src/Runtime.Engine.MongoDb/CkIdExtensions.cs`.
+
+---
+
+## 20. Implementation Summary (post-rollout)
+
+The plan in §8 was executed in full (T1–T17). The following follow-ups landed in the same scope but are not part of the original task list:
+
+| Topic | What | Where |
+|---|---|---|
+| Observability | OpenTelemetry counters/histograms for inserts, query latency, archive lifecycle transitions; ActivitySource `crate.*`. | `Runtime.Engine.CrateDb/CrateDbDiagnostics.cs` |
+| Authorization | Roles `StreamDataAdmin`, `StreamDataWriter`, `StreamDataReader` registered in identity service; archive lifecycle endpoints gated on `StreamDataAdmin`. | `octo-identity-services/.../DefaultConfigurationCreatorService.cs`, `octo-asset-repo-services/.../StreamDataMutation.cs` |
+| Identity ApiResource | `role` claim added to `octoAPI` `Claims` so the access token actually carries roles (not just the scope). | `octo-identity-services/.../DefaultConfigurationCreatorService.cs` |
+| Startup reconciliation | `ArchiveReconciler` enumerates `Activated` archives at startup and (re-)provisions any missing CrateDB tables. | `Runtime.Engine.CrateDb/ArchiveReconciler.cs` |
+| Refinery Studio — archive picker | `mm-entity-select-input`-based component used inside the query editor for stream-data queries. | `octo-frontend-refinery-studio/.../components/archive-selector/` |
+| Refinery Studio — archive admin | List view with state-aware lifecycle actions (Activate / Enable / Disable / Retry / Copy ID), sidebar entry "Stream Data Archives". | `octo-frontend-refinery-studio/.../tenants/repository/archives/` |
+| Refinery Studio — `AttributePathPicker` | Row-based editor (mirrors `mm-field-filter-editor`) consuming `availableArchivePaths` to drive the archive create form. | `octo-frontend-refinery-studio/.../archives/components/attribute-path-picker/` |
+| Custom GraphQL resolver | `availableArchivePaths(ckTypeId, maxDepth)` query backing the picker. | `octo-asset-repo-services/.../GraphQL/AvailableArchivePathsResolver.cs` |
+| REST status endpoint | `GET /streamData/archives/{rtId}` returns current status without going through GraphQL. | `octo-asset-repo-services/.../StreamDataController.cs` |
+
+### Open / deferred
+
+- Connection-pool tuning per environment (defaults from §8 T12 implementation are conservative).
+- Migration tooling for existing legacy data is intentionally absent (D11 — hard cut).
+- Retention/downsampling **policy** is implemented in code paths (T17 of original plan) but lacks an admin UI and a per-archive default; tracked separately.

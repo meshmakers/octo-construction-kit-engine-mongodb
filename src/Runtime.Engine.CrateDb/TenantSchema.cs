@@ -76,6 +76,22 @@ internal static class TenantSchema
         return $"\"{SchemaName(tenantId)}\"";
     }
 
+    /// <summary>
+    /// Returns the fully-qualified, double-quoted identifier for the per-archive table, e.g.
+    /// <c>"acmecorp"."archive_65d5c447b420da3fb12381bc"</c>. Naming uses the archive runtime id so
+    /// the table name is stable across renames of the archive's well-known name and unique even
+    /// when two archives target the same CK type. Concept §4: archives live alongside the legacy
+    /// table in the same tenant schema until the hard cut (T17) removes the legacy table.
+    /// </summary>
+    public static string QualifiedArchiveTable(string tenantId, string archiveRtId)
+    {
+        if (string.IsNullOrWhiteSpace(archiveRtId))
+        {
+            throw new ArgumentException("archiveRtId must not be empty.", nameof(archiveRtId));
+        }
+        return $"\"{SchemaName(tenantId)}\".\"archive_{archiveRtId}\"";
+    }
+
     private static string ShortHash(string value)
     {
 #if NETSTANDARD2_0
