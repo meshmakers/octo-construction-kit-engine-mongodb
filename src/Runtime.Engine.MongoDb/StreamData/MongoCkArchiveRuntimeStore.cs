@@ -44,10 +44,24 @@ public sealed class MongoCkArchiveRuntimeStore : ICkArchiveRuntimeStore
             ? new RtCkId<CkTypeId>(string.Empty)
             : new RtCkId<CkTypeId>(entity.TargetCkTypeId);
 
-        var columns = (entity.Columns ?? Enumerable.Empty<RtCkArchiveColumnRecord>())
-            .Where(c => c.Path is not null)
-            .Select(c => new CkArchiveColumnSpec(c.Path!, c.Indexed, c.Required))
-            .ToList();
+        // Rollup-archives concept §4: when the entity is a CkRollupArchive (Mongo polymorphism
+        // surfaces it as a RtCkRollupArchive subclass instance), derive the columns from the
+        // user-defined aggregations rather than the unused inherited Columns slot. This lets the
+        // shared DDL / activate / delete code paths consume a rollup the same way as a raw
+        // archive — there is no rollup-specific Crate path.
+        var columns = entity is RtCkRollupArchive rollup
+            ? RollupColumnGenerator.Generate(
+                (rollup.Aggregations ?? Enumerable.Empty<RtCkRollupAggregationRecord>())
+                    .Where(a => a.SourcePath is not null)
+                    .Select(a => new CkRollupAggregationSpec(
+                        a.SourcePath!,
+                        (CkRollupFunction)(int)a.Function,
+                        a.TargetColumnName))
+                    .ToList())
+            : (entity.Columns ?? Enumerable.Empty<RtCkArchiveColumnRecord>())
+                .Where(c => c.Path is not null)
+                .Select(c => new CkArchiveColumnSpec(c.Path!, c.Indexed, c.Required))
+                .ToList();
 
         return new CkArchiveSnapshot(
             entity.RtId,
