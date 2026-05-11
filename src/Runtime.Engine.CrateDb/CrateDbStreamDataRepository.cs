@@ -416,6 +416,28 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         return new StreamDataQueryResult { Rows = rows, TotalCount = rows.Count };
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// T-stage stub: the CrateDB-side rollup-aggregation SQL generator (concept §5) is not yet
+    /// wired through. Returning 0 keeps the orchestrator's bucket loop, watermark advance, and
+    /// audit-trail flow intact for integration without writing any rows. Real implementation
+    /// will emit
+    /// <c>INSERT INTO {rollup_table} (...) SELECT {bucketEnd}, rtId, ckTypeId, MAX(rtWellKnownName), {agg_columns} FROM {source_table} WHERE timestamp &gt;= {bucketStart} AND timestamp &lt; {bucketEnd} GROUP BY rtId, ckTypeId ON CONFLICT (timestamp, rtId) DO UPDATE SET ...</c>
+    /// with AVG materialised as SUM + COUNT columns.
+    /// </remarks>
+    public Task<int> AggregateBucketAsync(
+        CkArchiveSnapshot sourceArchive,
+        CkRollupArchiveSnapshot rollup,
+        DateTime bucketStart,
+        DateTime bucketEnd,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogWarning(
+            "AggregateBucketAsync({SourceArchiveRtId} → {RollupRtId}, [{BucketStart:O}, {BucketEnd:O})) — CrateDB-side SQL generator pending; no-op upsert, 0 rows.",
+            sourceArchive.RtId, rollup.RtId, bucketStart, bucketEnd);
+        return Task.FromResult(0);
+    }
+
     #region Private helpers
 
     /// <summary>

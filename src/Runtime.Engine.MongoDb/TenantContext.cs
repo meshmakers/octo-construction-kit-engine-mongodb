@@ -1054,6 +1054,38 @@ public class TenantContext : ITenantContext
         return _rollupLifecycleService;
     }
 
+    private IRollupOrchestrator? _rollupOrchestrator;
+    private bool _rollupOrchestratorResolved;
+
+    /// <inheritdoc />
+    public IRollupOrchestrator? GetRollupOrchestrator()
+    {
+        if (_rollupOrchestratorResolved)
+        {
+            return _rollupOrchestrator;
+        }
+
+        var streamData = GetStreamDataRepository();
+        var rollupStore = GetCkRollupArchiveRuntimeStore();
+        if (streamData is null || rollupStore is null)
+        {
+            _rollupOrchestratorResolved = true;
+            return null;
+        }
+
+        var audit = _serviceProvider.GetService<IArchiveAuditTrail>()
+                    ?? new LoggingArchiveAuditTrail(_loggerFactory.CreateLogger<LoggingArchiveAuditTrail>());
+        _rollupOrchestrator = new RollupOrchestrator(
+            TenantId,
+            GetCkArchiveRuntimeStore(),
+            rollupStore,
+            streamData,
+            audit,
+            _loggerFactory.CreateLogger<RollupOrchestrator>());
+        _rollupOrchestratorResolved = true;
+        return _rollupOrchestrator;
+    }
+
     #endregion Access management
 
     #region Configuration

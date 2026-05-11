@@ -128,6 +128,15 @@ public interface ITenantContext
     IRollupArchiveLifecycleService? GetRollupArchiveLifecycleService();
 
     /// <summary>
+    /// Returns the rollup orchestrator for this tenant, or null when stream data is not enabled
+    /// (no <see cref="IStreamDataRepository"/> available). Tick-based: callers (background
+    /// hosted services, manual triggers) drive <c>TickAsync</c>; the orchestrator walks every
+    /// Activated rollup, processes due buckets, and advances watermarks. Rollup-archives
+    /// concept §5.
+    /// </summary>
+    IRollupOrchestrator? GetRollupOrchestrator();
+
+    /// <summary>
     /// Enables stream data for this tenant: sets the configuration flag and
     /// creates the CrateDB table if needed.
     /// </summary>
