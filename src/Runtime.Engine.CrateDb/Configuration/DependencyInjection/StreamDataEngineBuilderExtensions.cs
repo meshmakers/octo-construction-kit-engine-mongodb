@@ -1,8 +1,10 @@
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.Configuration.DependencyInjection;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 
 // ReSharper disable once CheckNamespace
@@ -27,6 +29,13 @@ public static class StreamDataEngineBuilderExtensions
         where TConfigureOptions : class, IConfigureNamedOptions<StreamDataConfiguration>
     {
         builder.Services.ConfigureOptions(typeof(TConfigureOptions));
+
+        // Bind the instance-level kill switch (concept §5). Default value
+        // (StreamDataInstanceConfiguration.Enabled = false) keeps the feature opt-in: tenants
+        // can only call EnableStreamDataAsync once StreamData:Enabled is set to true in
+        // appsettings.
+        builder.Services.AddOptions<StreamDataInstanceConfiguration>()
+            .BindConfiguration(StreamDataInstanceConfiguration.SectionName);
 
         // Register CrateDatabaseClient as singleton, exposed via multiple interfaces
         builder.Services.AddSingleton<CrateDatabaseClient>();

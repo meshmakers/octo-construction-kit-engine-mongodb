@@ -800,6 +800,16 @@ public class TenantContext : ITenantContext
     /// <inheritdoc />
     public async Task EnableStreamDataAsync()
     {
+        // Concept §5 instance-level gate: tenants can only opt in if the deployment has
+        // StreamData:Enabled = true. Without the gate, EnableStreamDataAsync would silently
+        // proceed even on instances that haven't been configured for the CrateDB stack at all.
+        var instanceConfig = _serviceProvider.GetService<IOptions<StreamDataInstanceConfiguration>>();
+        if (instanceConfig?.Value.Enabled != true)
+        {
+            throw new StreamDataNotEnabledException(
+                $"Cannot enable stream data for tenant '{TenantId}': StreamData is disabled at the instance level (set 'StreamData:Enabled' to true in appsettings).");
+        }
+
         _logger.LogInformation("Enabling stream data for tenant '{TenantId}'", TenantId);
 
         using var session = await GetAdminSessionAsync();
