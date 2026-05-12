@@ -45,7 +45,8 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
         TimeSpan bucketSize,
         TimeSpan watermarkLag,
         IReadOnlyList<CkRollupAggregationSpec> aggregations,
-        IReadOnlyList<CkArchiveColumnSpec> columns)
+        IReadOnlyList<CkArchiveColumnSpec> columns,
+        BucketAlignment bucketAlignment = BucketAlignment.FixedSize)
     {
         var columnList = new AttributeRecordValueList<RtCkArchiveColumnRecord>();
         columnList.AddRange(columns.Select(c => new RtCkArchiveColumnRecord
@@ -76,6 +77,7 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             // advances it forward, never backwards (except via rewindRollupWatermark). Concept §5.
             LastAggregatedBucketEnd = null,
             FrozenUntil = null,
+            BucketAlignment = (RtBucketAlignmentEnum)(int)bucketAlignment,
             Columns = columnList,
             Aggregations = aggregationList,
         };
@@ -191,6 +193,13 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
                 a.TargetColumnName))
             .ToList();
 
+        // BucketAlignment is an optional CK attribute, so the generated property is nullable.
+        // Pre-1.4.0 entities never wrote the field; treat absence as FixedSize (the same default
+        // every new 1.4.0 entity gets via the attribute's defaultValues).
+        var bucketAlignment = entity.BucketAlignment is { } a
+            ? (BucketAlignment)(int)a
+            : BucketAlignment.FixedSize;
+
         return new RollupArchiveSnapshot(
             entity.RtId,
             targetCkTypeId,
@@ -201,6 +210,9 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             TimeSpan.FromMilliseconds(entity.WatermarkLagMs),
             entity.LastAggregatedBucketEnd,
             aggregations,
-            entity.FrozenUntil);
+            entity.FrozenUntil)
+        {
+            BucketAlignment = bucketAlignment,
+        };
     }
 }
