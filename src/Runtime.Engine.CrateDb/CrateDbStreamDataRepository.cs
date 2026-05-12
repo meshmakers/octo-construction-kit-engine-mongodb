@@ -594,7 +594,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             rollup.TargetCkTypeId.FullName,
             rollup.Aggregations,
             bucketStart,
-            bucketEnd);
+            bucketEnd,
+            sourceArchive.UsesWindowedStorage);
 
         _logger.LogDebug(
             "Rollup aggregation SQL for {RollupRtId} bucket [{BucketStart:O}, {BucketEnd:O}): {Sql}",

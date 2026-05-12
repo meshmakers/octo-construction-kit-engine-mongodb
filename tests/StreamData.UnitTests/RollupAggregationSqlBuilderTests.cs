@@ -21,7 +21,8 @@ public class RollupAggregationSqlBuilderTests
         var aggregations = new[] { new CkRollupAggregationSpec("voltage", CkRollupFunction.Avg, null) };
 
         var sql = RollupAggregationSqlBuilder.Build(
-            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd);
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
 
         // AVG → two stored columns: voltage_avg_sum (SUM) + voltage_avg_count (COUNT).
         Assert.Contains("\"voltage_avg_sum\"", sql);
@@ -42,7 +43,8 @@ public class RollupAggregationSqlBuilderTests
         var aggregations = new[] { new CkRollupAggregationSpec("voltage", fn, null) };
 
         var sql = RollupAggregationSqlBuilder.Build(
-            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd);
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
 
         Assert.Contains($"\"{columnName}\"", sql);
         Assert.Contains($"{sqlFn}(\"voltage\") AS \"{columnName}\"", sql);
@@ -54,7 +56,8 @@ public class RollupAggregationSqlBuilderTests
         var aggregations = new[] { new CkRollupAggregationSpec("voltage", CkRollupFunction.Max, "vmax") };
 
         var sql = RollupAggregationSqlBuilder.Build(
-            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd);
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
 
         Assert.Contains("MAX(\"voltage\") AS \"vmax\"", sql);
         Assert.DoesNotContain("\"voltage_max\"", sql);
@@ -66,7 +69,8 @@ public class RollupAggregationSqlBuilderTests
         var aggregations = new[] { new CkRollupAggregationSpec("sensor.reading.value", CkRollupFunction.Sum, null) };
 
         var sql = RollupAggregationSqlBuilder.Build(
-            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd);
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
 
         Assert.Contains("SUM(\"sensorreadingvalue\")", sql);
         Assert.Contains("AS \"sensorreadingvalue_sum\"", sql);
@@ -83,7 +87,8 @@ public class RollupAggregationSqlBuilderTests
         };
 
         var sql = RollupAggregationSqlBuilder.Build(
-            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd);
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
 
         Assert.Contains("SUM(\"voltage\") AS \"voltage_avg_sum\"", sql);
         Assert.Contains("COUNT(\"voltage\") AS \"voltage_avg_count\"", sql);
@@ -92,16 +97,16 @@ public class RollupAggregationSqlBuilderTests
     }
 
     [Fact]
-    public void Build_StatementShape_HasInsertSelectGroupByOnConflict()
+    public void Build_RawSource_StatementShape_HasInsertSelectGroupByOnConflict()
     {
         var aggregations = new[] { new CkRollupAggregationSpec("voltage", CkRollupFunction.Sum, null) };
 
         var sql = RollupAggregationSqlBuilder.Build(
-            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd);
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
 
-        // Phase 7 unification: rollup tables share the windowed (window_start, window_end)
-        // shape with TimeRangeArchive; the source side is still a raw single-`timestamp`
-        // archive in this build.
+        // Phase 7: target table always uses windowed (window_start, window_end) shape.
+        // Phase 8: raw source ⇒ WHERE on single `timestamp` column, no was_updated propagation.
         Assert.StartsWith("INSERT INTO \"acmecorp\".\"archive_target\"", sql);
         Assert.Contains("\"window_start\"", sql);
         Assert.Contains("\"window_end\"", sql);
@@ -112,7 +117,42 @@ public class RollupAggregationSqlBuilderTests
         Assert.Contains("ON CONFLICT (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\") DO UPDATE SET", sql);
         Assert.Contains("\"voltage_sum\" = EXCLUDED.\"voltage_sum\"", sql);
         Assert.Contains("\"was_updated\" = TRUE", sql);
+        // No source.was_updated propagation for a raw source — column does not exist there.
+        Assert.DoesNotContain("MAX(\"was_updated\")", sql);
         Assert.EndsWith(";", sql);
+    }
+
+    [Fact]
+    public void Build_WindowedSource_UsesFullyContainedWindowPredicate()
+    {
+        var aggregations = new[] { new CkRollupAggregationSpec("voltage", CkRollupFunction.Sum, null) };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: true);
+
+        // Phase 8 / concept §7: fully-contained predicate over (window_start, window_end).
+        Assert.Contains("WHERE \"window_start\" >= '", sql);
+        Assert.Contains("AND \"window_end\" <= '", sql);
+        // Single-`timestamp` predicate must not appear when source is windowed.
+        Assert.DoesNotContain("WHERE \"timestamp\"", sql);
+        Assert.DoesNotContain("AND \"timestamp\" <", sql);
+    }
+
+    [Fact]
+    public void Build_WindowedSource_PropagatesWasUpdatedFromSource()
+    {
+        var aggregations = new[] { new CkRollupAggregationSpec("voltage", CkRollupFunction.Sum, null) };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: true);
+
+        // Insert side: was_updated is in the target column list and SELECT MAX(was_updated).
+        Assert.Contains("\"was_updated\"", sql);
+        Assert.Contains("MAX(\"was_updated\") AS \"was_updated\"", sql);
+        // Conflict side still flips to TRUE — re-aggregation is itself a correction.
+        Assert.Contains("\"was_updated\" = TRUE", sql);
     }
 
     [Fact]
@@ -123,7 +163,8 @@ public class RollupAggregationSqlBuilderTests
         var bucketEnd = new DateTime(2026, 5, 11, 14, 5, 0, DateTimeKind.Utc);
 
         var sql = RollupAggregationSqlBuilder.Build(
-            SourceTable, TargetTable, RollupCkTypeId, aggregations, bucketStart, bucketEnd);
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, bucketStart, bucketEnd,
+            sourceUsesWindowedStorage: false);
 
         // Phase 7: bucketStart → window_start, bucketEnd → window_end.
         Assert.Contains("'2026-05-11T14:00:00.0000000Z'::timestamp AS \"window_start\"", sql);
@@ -136,7 +177,8 @@ public class RollupAggregationSqlBuilderTests
         var aggregations = new[] { new CkRollupAggregationSpec("v", CkRollupFunction.Sum, null) };
 
         var sql = RollupAggregationSqlBuilder.Build(
-            SourceTable, TargetTable, "weird'name", aggregations, BucketStart, BucketEnd);
+            SourceTable, TargetTable, "weird'name", aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
 
         // Single quote in the CK type id is doubled per SQL escaping rules.
         Assert.Contains("'weird''name'", sql);
@@ -152,7 +194,8 @@ public class RollupAggregationSqlBuilderTests
         };
 
         Assert.Throws<ArgumentException>(() => RollupAggregationSqlBuilder.Build(
-            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd));
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false));
     }
 
     [Fact]
@@ -160,7 +203,8 @@ public class RollupAggregationSqlBuilderTests
     {
         Assert.Throws<ArgumentException>(() => RollupAggregationSqlBuilder.Build(
             SourceTable, TargetTable, RollupCkTypeId,
-            Array.Empty<CkRollupAggregationSpec>(), BucketStart, BucketEnd));
+            Array.Empty<CkRollupAggregationSpec>(), BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false));
     }
 
     [Fact]
@@ -168,6 +212,7 @@ public class RollupAggregationSqlBuilderTests
     {
         var aggregations = new[] { new CkRollupAggregationSpec("v", CkRollupFunction.Sum, null) };
         Assert.Throws<ArgumentException>(() => RollupAggregationSqlBuilder.Build(
-            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketEnd, BucketStart));
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketEnd, BucketStart,
+            sourceUsesWindowedStorage: false));
     }
 }

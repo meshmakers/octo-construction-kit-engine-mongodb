@@ -33,13 +33,23 @@ internal static class RollupAggregationSqlBuilder
     /// <param name="aggregations">User-defined aggregation specs. Must contain at least one entry.</param>
     /// <param name="bucketStart">Inclusive start of the source row range.</param>
     /// <param name="bucketEnd">Exclusive end of the source row range; also written as the target row's timestamp.</param>
+    /// <param name="sourceUsesWindowedStorage">
+    /// True when the source archive uses the windowed <c>(window_start, window_end)</c> storage
+    /// layout (either a <c>TimeRangeArchive</c> or a <c>RollupArchive</c>). In that case the time
+    /// predicate is the fully-contained rule <c>window_start &gt;= B_start AND window_end &lt;= B_end</c>
+    /// and <c>was_updated</c> from the source is propagated via <c>MAX(was_updated)</c> so retro-
+    /// corrections cascade. False ⇒ raw archive with the single <c>timestamp</c> column and the
+    /// half-open <c>timestamp &gt;= B_start AND timestamp &lt; B_end</c> predicate. Phase 8 / concept-time-
+    /// range §7.
+    /// </param>
     public static string Build(
         string sourceTable,
         string targetTable,
         string rollupCkTypeId,
         IReadOnlyList<CkRollupAggregationSpec> aggregations,
         DateTime bucketStart,
-        DateTime bucketEnd)
+        DateTime bucketEnd,
+        bool sourceUsesWindowedStorage)
     {
         if (string.IsNullOrWhiteSpace(sourceTable)) throw new ArgumentException("sourceTable must not be empty.", nameof(sourceTable));
         if (string.IsNullOrWhiteSpace(targetTable)) throw new ArgumentException("targetTable must not be empty.", nameof(targetTable));
@@ -70,15 +80,20 @@ internal static class RollupAggregationSqlBuilder
         var bucketStartLiteral = bucketStart.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
 
         // ---- INSERT INTO target (...columns...) ----
-        // Phase-7 unification: rollup tables now use the windowed (window_start, window_end)
-        // shape shared with TimeRangeArchive. The source side is still a raw single-`timestamp`
-        // archive in this build — chained rollup-over-time-range source is Phase 8.
+        // Phase-7 unification: rollup tables use the windowed (window_start, window_end) shape
+        // shared with TimeRangeArchive. The source side now also branches (Phase 8 / concept §7):
+        // raw archive ⇒ single `timestamp` column, windowed source ⇒ (window_start, window_end)
+        // with `was_updated` propagation.
         sb.Append("INSERT INTO ").Append(targetTable).Append(" (")
           .Append('"').Append(Constants.WindowStart).Append("\", ")
           .Append('"').Append(Constants.WindowEnd).Append("\", ")
           .Append('"').Append(Constants.RtId).Append("\", ")
           .Append('"').Append(Constants.CkTypeId).Append("\", ")
           .Append('"').Append(Constants.RtWellKnownName).Append('"');
+        if (sourceUsesWindowedStorage)
+        {
+            sb.Append(", \"").Append(Constants.WasUpdated).Append('"');
+        }
         foreach (var (_, targets) in resolved)
         {
             foreach (var t in targets)
@@ -88,12 +103,19 @@ internal static class RollupAggregationSqlBuilder
         }
         sb.AppendLine(")");
 
-        // ---- SELECT ... FROM source WHERE timestamp ∈ bucket GROUP BY rtId ----
+        // ---- SELECT ... FROM source WHERE <time-predicate> GROUP BY rtId ----
         sb.Append("SELECT '").Append(bucketStartLiteral).Append("'::timestamp AS \"").Append(Constants.WindowStart).Append("\", ")
           .Append('\'').Append(bucketEndLiteral).Append("'::timestamp AS \"").Append(Constants.WindowEnd).Append("\", ")
           .Append('"').Append(Constants.RtId).Append("\", ")
           .Append('\'').Append(EscapeLiteral(rollupCkTypeId)).Append("' AS \"").Append(Constants.CkTypeId).Append("\", ")
           .Append("MAX(\"").Append(Constants.RtWellKnownName).Append("\") AS \"").Append(Constants.RtWellKnownName).Append('"');
+        if (sourceUsesWindowedStorage)
+        {
+            // Inherit retro-correction flag from source — any flagged source row taints the rollup
+            // row. Concept §6 + §7. The conflict branch below additionally flips to TRUE on every
+            // re-aggregation regardless of source state.
+            sb.Append(", MAX(\"").Append(Constants.WasUpdated).Append("\") AS \"").Append(Constants.WasUpdated).Append('"');
+        }
         foreach (var (sourceColumn, targets) in resolved)
         {
             foreach (var t in targets)
@@ -102,8 +124,19 @@ internal static class RollupAggregationSqlBuilder
             }
         }
         sb.AppendLine().Append("FROM ").AppendLine(sourceTable);
-        sb.Append("WHERE \"").Append(Constants.Timestamp).Append("\" >= '").Append(bucketStartLiteral).Append("'::timestamp ")
-          .Append("AND \"").Append(Constants.Timestamp).Append("\" < '").Append(bucketEndLiteral).AppendLine("'::timestamp");
+        if (sourceUsesWindowedStorage)
+        {
+            // Fully-contained window predicate (concept §7): source windows must fit entirely
+            // inside the target bucket. Straddling source rows drop out — operators must size
+            // target buckets as multiples of the source window length.
+            sb.Append("WHERE \"").Append(Constants.WindowStart).Append("\" >= '").Append(bucketStartLiteral).Append("'::timestamp ")
+              .Append("AND \"").Append(Constants.WindowEnd).Append("\" <= '").Append(bucketEndLiteral).AppendLine("'::timestamp");
+        }
+        else
+        {
+            sb.Append("WHERE \"").Append(Constants.Timestamp).Append("\" >= '").Append(bucketStartLiteral).Append("'::timestamp ")
+              .Append("AND \"").Append(Constants.Timestamp).Append("\" < '").Append(bucketEndLiteral).AppendLine("'::timestamp");
+        }
         sb.Append("GROUP BY \"").Append(Constants.RtId).AppendLine("\"");
 
         // ---- ON CONFLICT (window_start, window_end, rtId, ckTypeId) DO UPDATE SET ... ----
