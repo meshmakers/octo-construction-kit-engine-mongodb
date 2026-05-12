@@ -6,12 +6,12 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb.UnitTests;
 // key (window_start, window_end, rtid, ckTypeId) and the was_updated flag column are the load-
 // bearing parts; if either changes accidentally, every existing TimeRangeArchive table breaks on
 // the next activation.
-public class ArchiveDdlGeneratorTimeRangeTests
+public class ArchiveDdlGeneratorWindowedTests
 {
     [Fact]
     public void GenerateCreateTimeRangeTable_EmitsTwoTimestampColumns_AndCompositePrimaryKey()
     {
-        var sql = ArchiveDdlGenerator.GenerateCreateTimeRangeTable(
+        var sql = ArchiveDdlGenerator.GenerateCreateWindowedTable(
             qualifiedTableName: "\"loxone\".\"archive_eda\"",
             columns: new[]
             {
@@ -31,7 +31,7 @@ public class ArchiveDdlGeneratorTimeRangeTests
     [Fact]
     public void GenerateCreateTimeRangeTable_EmitsWasUpdatedFlag_DefaultFalse()
     {
-        var sql = ArchiveDdlGenerator.GenerateCreateTimeRangeTable(
+        var sql = ArchiveDdlGenerator.GenerateCreateWindowedTable(
             qualifiedTableName: "\"loxone\".\"archive_eda\"",
             columns: System.Array.Empty<ArchiveColumnDdl>(),
             numberOfShards: 1,
@@ -43,7 +43,7 @@ public class ArchiveDdlGeneratorTimeRangeTests
     [Fact]
     public void GenerateCreateTimeRangeTable_EmitsUserColumnsAfterStandardColumns()
     {
-        var sql = ArchiveDdlGenerator.GenerateCreateTimeRangeTable(
+        var sql = ArchiveDdlGenerator.GenerateCreateWindowedTable(
             qualifiedTableName: "\"loxone\".\"archive_eda\"",
             columns: new[]
             {
@@ -64,7 +64,7 @@ public class ArchiveDdlGeneratorTimeRangeTests
     public void GenerateCreateTimeRangeTable_RejectsEmptyQualifiedTable()
     {
         Assert.Throws<System.ArgumentException>(() =>
-            ArchiveDdlGenerator.GenerateCreateTimeRangeTable(
+            ArchiveDdlGenerator.GenerateCreateWindowedTable(
                 qualifiedTableName: "",
                 columns: System.Array.Empty<ArchiveColumnDdl>(),
                 numberOfShards: 1,
@@ -75,7 +75,7 @@ public class ArchiveDdlGeneratorTimeRangeTests
     public void GenerateCreateTimeRangeTable_RejectsZeroShards()
     {
         Assert.Throws<System.ArgumentOutOfRangeException>(() =>
-            ArchiveDdlGenerator.GenerateCreateTimeRangeTable(
+            ArchiveDdlGenerator.GenerateCreateWindowedTable(
                 qualifiedTableName: "\"loxone\".\"archive_eda\"",
                 columns: System.Array.Empty<ArchiveColumnDdl>(),
                 numberOfShards: 0,
@@ -88,7 +88,7 @@ public class ArchiveDdlGeneratorTimeRangeTests
         // Two paths that collide on the camelCase mapping (here: same path twice) must surface
         // as a hard error — silently overwriting one is a footgun.
         Assert.Throws<System.ArgumentException>(() =>
-            ArchiveDdlGenerator.GenerateCreateTimeRangeTable(
+            ArchiveDdlGenerator.GenerateCreateWindowedTable(
                 qualifiedTableName: "\"loxone\".\"archive_eda\"",
                 columns: new[]
                 {

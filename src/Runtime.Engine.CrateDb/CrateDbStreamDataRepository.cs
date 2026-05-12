@@ -74,17 +74,78 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
                 _ckCacheService, _tenantId, snapshot.TargetCkTypeId, snapshot.Columns);
 
         var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString());
-        var sql = snapshot.IsTimeRange
-            ? ArchiveDdlGenerator.GenerateCreateTimeRangeTable(
-                qualifiedTable, resolvedColumns, _configuration.NumberOfShards, _configuration.NumberOfReplicas)
-            : ArchiveDdlGenerator.GenerateCreateTable(
-                qualifiedTable, resolvedColumns, _configuration.NumberOfShards, _configuration.NumberOfReplicas);
+        var shape = snapshot.RollupAggregations is not null ? "rollup"
+            : snapshot.IsTimeRange ? "time-range"
+            : "raw";
 
-        _logger.LogDebug(
-            "Provisioning archive table {Table} with {ColumnCount} user columns for tenant {TenantId} (shape: {Shape})",
-            qualifiedTable, resolvedColumns.Count, _tenantId,
-            snapshot.RollupAggregations is not null ? "rollup" : snapshot.IsTimeRange ? "time-range" : "raw");
-        await _managementClient.ExecuteDdlAsync(_tenantId, sql);
+        if (snapshot.UsesWindowedStorage)
+        {
+            // Drop the table if a pre-Phase-7 single-timestamp shape is sitting in CrateDB —
+            // RollupArchive tables provisioned before the storage unification have a `timestamp`
+            // column instead of `(window_start, window_end)`. The orchestrator's new aggregation
+            // SQL would fail with column-not-found; recreating loses already-aggregated data, but
+            // the orchestrator will backfill on the next watermark advance (concept-time-range §6).
+            await EnsureWindowedTableShapeAsync(snapshot.RtId.ToString());
+
+            var sql = ArchiveDdlGenerator.GenerateCreateWindowedTable(
+                qualifiedTable, resolvedColumns, _configuration.NumberOfShards, _configuration.NumberOfReplicas);
+            _logger.LogDebug(
+                "Provisioning windowed archive table {Table} with {ColumnCount} user columns for tenant {TenantId} (shape: {Shape})",
+                qualifiedTable, resolvedColumns.Count, _tenantId, shape);
+            await _managementClient.ExecuteDdlAsync(_tenantId, sql);
+        }
+        else
+        {
+            var sql = ArchiveDdlGenerator.GenerateCreateTable(
+                qualifiedTable, resolvedColumns, _configuration.NumberOfShards, _configuration.NumberOfReplicas);
+            _logger.LogDebug(
+                "Provisioning raw archive table {Table} with {ColumnCount} user columns for tenant {TenantId}",
+                qualifiedTable, resolvedColumns.Count, _tenantId);
+            await _managementClient.ExecuteDdlAsync(_tenantId, sql);
+        }
+    }
+
+    /// <summary>
+    /// Phase-7 migration helper. If a CrateDB table exists for the given archive but lacks the
+    /// new <c>window_start</c> column, drop it so the subsequent <c>CREATE TABLE IF NOT EXISTS</c>
+    /// recreates it with the windowed shape. Pre-Phase-7 RollupArchive tables had a single
+    /// <c>timestamp</c> column; without the drop, the new aggregation SQL would fail. No-op for
+    /// fresh activations (no table exists) and for tables already in the windowed shape.
+    /// </summary>
+    private async Task EnsureWindowedTableShapeAsync(string archiveRtId)
+    {
+        var schemaName = TenantSchema.SchemaName(_tenantId);
+        var tableName = "archive_" + archiveRtId;
+        var quotedTable = $"\"{schemaName}\".\"{tableName}\"";
+
+        // information_schema.columns is the cheapest portable shape probe. CrateDB returns 1 if
+        // window_start exists on the table, 0 if the table is missing OR has the legacy single-
+        // timestamp shape. Distinguish by also checking whether the table itself exists.
+        var hasWindowStartCol = await _databaseClient.GetCountAsync(_tenantId,
+            $"SELECT count(*) FROM information_schema.columns " +
+            $"WHERE table_schema = '{schemaName.Replace("'", "''")}' " +
+            $"AND table_name = '{tableName.Replace("'", "''")}' " +
+            $"AND column_name = '{Constants.WindowStart}'");
+        if (hasWindowStartCol > 0)
+        {
+            return; // already on the new shape
+        }
+
+        var tableExists = await _databaseClient.GetCountAsync(_tenantId,
+            $"SELECT count(*) FROM information_schema.tables " +
+            $"WHERE table_schema = '{schemaName.Replace("'", "''")}' " +
+            $"AND table_name = '{tableName.Replace("'", "''")}'");
+        if (tableExists == 0)
+        {
+            return; // fresh activation, nothing to migrate
+        }
+
+        _logger.LogWarning(
+            "Migrating archive table {Table} from pre-Phase-7 single-timestamp shape to windowed shape: " +
+            "dropping the existing table; the orchestrator will re-aggregate on the next watermark advance " +
+            "(any persisted bucket rows are lost in this drop).",
+            quotedTable);
+        await _managementClient.ExecuteDdlAsync(_tenantId, ArchiveDdlGenerator.GenerateDropTable(quotedTable));
     }
 
     /// <inheritdoc />

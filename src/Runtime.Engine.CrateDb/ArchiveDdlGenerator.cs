@@ -18,7 +18,7 @@ internal static class ArchiveDdlGenerator
     /// sidestep CrateDB's case-preservation quirks for quoted mixed-case identifiers (notably
     /// <c>EXCLUDED."Col"</c> inside <c>ON CONFLICT DO UPDATE</c>). PK columns are <c>NOT NULL</c>
     /// by definition; timestamp columns default to <c>CURRENT_TIMESTAMP</c> for the standard trio.
-    /// Time-range archives use <see cref="TimeRangeStandardColumns"/> instead.
+    /// Time-range archives use <see cref="WindowedStandardColumns"/> instead.
     /// </summary>
     public static IReadOnlyList<(string Name, string Definition)> StandardColumns { get; } = new (string, string)[]
     {
@@ -31,12 +31,14 @@ internal static class ArchiveDdlGenerator
     };
 
     /// <summary>
-    /// Standard columns for time-range archive tables (concept-time-range §4): two timestamp
-    /// columns covering the half-open <c>[window_start, window_end)</c>, the entity identity
-    /// trio, plus the <c>was_updated</c> flag set by ON CONFLICT upserts. The natural primary
-    /// key is <c>(window_start, window_end, rtid, ckTypeId)</c>.
+    /// Standard columns for archive tables that store half-open <c>[window_start, window_end)</c>
+    /// windows — both <c>TimeRangeArchive</c> (external pre-aggregated data) and
+    /// <c>RollupArchive</c> (system-orchestrated bucket aggregation, Phase 7 unification, concept-
+    /// time-range §6). The natural primary key is <c>(window_start, window_end, rtid, ckTypeId)</c>;
+    /// the <c>was_updated</c> flag is set to TRUE on every ON CONFLICT upsert so dashboards can
+    /// detect retro-corrections without log-diving.
     /// </summary>
-    public static IReadOnlyList<(string Name, string Definition)> TimeRangeStandardColumns { get; } = new (string, string)[]
+    public static IReadOnlyList<(string Name, string Definition)> WindowedStandardColumns { get; } = new (string, string)[]
     {
         (Constants.WindowStart, "TIMESTAMP WITH TIME ZONE NOT NULL"),
         (Constants.WindowEnd, "TIMESTAMP WITH TIME ZONE NOT NULL"),
@@ -134,12 +136,13 @@ internal static class ArchiveDdlGenerator
     }
 
     /// <summary>
-    /// Builds <c>CREATE TABLE IF NOT EXISTS …</c> for a <c>TimeRangeArchive</c>: emits the
-    /// <c>(window_start, window_end, rtid, ckTypeId)</c> primary key and the standard
-    /// <c>was_updated</c> flag column, plus the user-defined data columns. Same shard/replica
-    /// knobs as the raw/rollup overload.
+    /// Builds <c>CREATE TABLE IF NOT EXISTS …</c> for any archive flavor that uses the windowed
+    /// storage shape: <c>TimeRangeArchive</c> (external pre-aggregated data) or <c>RollupArchive</c>
+    /// (system-orchestrated bucket aggregation, Phase 7 unification). Emits the
+    /// <c>(window_start, window_end, rtid, ckTypeId)</c> primary key, the <c>was_updated</c> flag
+    /// column, plus the user-defined data columns. Same shard/replica knobs as the raw overload.
     /// </summary>
-    public static string GenerateCreateTimeRangeTable(
+    public static string GenerateCreateWindowedTable(
         string qualifiedTableName,
         IReadOnlyList<ArchiveColumnDdl> columns,
         int numberOfShards,
@@ -155,7 +158,7 @@ internal static class ArchiveDdlGenerator
         }
 
         var seenColumnNames = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (name, _) in TimeRangeStandardColumns)
+        foreach (var (name, _) in WindowedStandardColumns)
         {
             seenColumnNames.Add(name);
         }
@@ -163,7 +166,7 @@ internal static class ArchiveDdlGenerator
         var sb = new StringBuilder();
         sb.Append("CREATE TABLE IF NOT EXISTS ").Append(qualifiedTableName).Append(" (");
 
-        foreach (var (name, definition) in TimeRangeStandardColumns)
+        foreach (var (name, definition) in WindowedStandardColumns)
         {
             sb.Append(' ').Append('"').Append(name).Append("\" ").Append(definition).Append(',');
         }

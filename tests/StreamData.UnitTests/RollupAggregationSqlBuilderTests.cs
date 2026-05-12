@@ -99,18 +99,24 @@ public class RollupAggregationSqlBuilderTests
         var sql = RollupAggregationSqlBuilder.Build(
             SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd);
 
+        // Phase 7 unification: rollup tables share the windowed (window_start, window_end)
+        // shape with TimeRangeArchive; the source side is still a raw single-`timestamp`
+        // archive in this build.
         Assert.StartsWith("INSERT INTO \"acmecorp\".\"archive_target\"", sql);
+        Assert.Contains("\"window_start\"", sql);
+        Assert.Contains("\"window_end\"", sql);
         Assert.Contains("FROM \"acmecorp\".\"archive_source\"", sql);
         Assert.Contains("WHERE \"timestamp\" >= '", sql);
         Assert.Contains("AND \"timestamp\" < '", sql);
         Assert.Contains("GROUP BY \"rtid\"", sql);
-        Assert.Contains("ON CONFLICT (\"timestamp\", \"rtid\", \"cktypeid\") DO UPDATE SET", sql);
+        Assert.Contains("ON CONFLICT (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\") DO UPDATE SET", sql);
         Assert.Contains("\"voltage_sum\" = EXCLUDED.\"voltage_sum\"", sql);
+        Assert.Contains("\"was_updated\" = TRUE", sql);
         Assert.EndsWith(";", sql);
     }
 
     [Fact]
-    public void Build_EmitsBucketEndAsTimestampLiteral()
+    public void Build_EmitsBucketBoundariesAsWindowedTimestampLiterals()
     {
         var aggregations = new[] { new CkRollupAggregationSpec("v", CkRollupFunction.Sum, null) };
         var bucketStart = new DateTime(2026, 5, 11, 14, 0, 0, DateTimeKind.Utc);
@@ -119,8 +125,9 @@ public class RollupAggregationSqlBuilderTests
         var sql = RollupAggregationSqlBuilder.Build(
             SourceTable, TargetTable, RollupCkTypeId, aggregations, bucketStart, bucketEnd);
 
-        Assert.Contains("'2026-05-11T14:05:00.0000000Z'::timestamp AS \"timestamp\"", sql);
-        Assert.Contains("'2026-05-11T14:00:00.0000000Z'::timestamp", sql);
+        // Phase 7: bucketStart → window_start, bucketEnd → window_end.
+        Assert.Contains("'2026-05-11T14:00:00.0000000Z'::timestamp AS \"window_start\"", sql);
+        Assert.Contains("'2026-05-11T14:05:00.0000000Z'::timestamp AS \"window_end\"", sql);
     }
 
     [Fact]

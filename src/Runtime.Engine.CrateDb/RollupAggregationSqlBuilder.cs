@@ -70,8 +70,12 @@ internal static class RollupAggregationSqlBuilder
         var bucketStartLiteral = bucketStart.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
 
         // ---- INSERT INTO target (...columns...) ----
+        // Phase-7 unification: rollup tables now use the windowed (window_start, window_end)
+        // shape shared with TimeRangeArchive. The source side is still a raw single-`timestamp`
+        // archive in this build — chained rollup-over-time-range source is Phase 8.
         sb.Append("INSERT INTO ").Append(targetTable).Append(" (")
-          .Append('"').Append(Constants.Timestamp).Append("\", ")
+          .Append('"').Append(Constants.WindowStart).Append("\", ")
+          .Append('"').Append(Constants.WindowEnd).Append("\", ")
           .Append('"').Append(Constants.RtId).Append("\", ")
           .Append('"').Append(Constants.CkTypeId).Append("\", ")
           .Append('"').Append(Constants.RtWellKnownName).Append('"');
@@ -85,7 +89,8 @@ internal static class RollupAggregationSqlBuilder
         sb.AppendLine(")");
 
         // ---- SELECT ... FROM source WHERE timestamp ∈ bucket GROUP BY rtId ----
-        sb.Append("SELECT '").Append(bucketEndLiteral).Append("'::timestamp AS \"").Append(Constants.Timestamp).Append("\", ")
+        sb.Append("SELECT '").Append(bucketStartLiteral).Append("'::timestamp AS \"").Append(Constants.WindowStart).Append("\", ")
+          .Append('\'').Append(bucketEndLiteral).Append("'::timestamp AS \"").Append(Constants.WindowEnd).Append("\", ")
           .Append('"').Append(Constants.RtId).Append("\", ")
           .Append('\'').Append(EscapeLiteral(rollupCkTypeId)).Append("' AS \"").Append(Constants.CkTypeId).Append("\", ")
           .Append("MAX(\"").Append(Constants.RtWellKnownName).Append("\") AS \"").Append(Constants.RtWellKnownName).Append('"');
@@ -101,8 +106,11 @@ internal static class RollupAggregationSqlBuilder
           .Append("AND \"").Append(Constants.Timestamp).Append("\" < '").Append(bucketEndLiteral).AppendLine("'::timestamp");
         sb.Append("GROUP BY \"").Append(Constants.RtId).AppendLine("\"");
 
-        // ---- ON CONFLICT (timestamp, rtId, ckTypeId) DO UPDATE SET ... ----
-        sb.Append("ON CONFLICT (\"").Append(Constants.Timestamp).Append("\", \"").Append(Constants.RtId).Append("\", \"").Append(Constants.CkTypeId).AppendLine("\") DO UPDATE SET");
+        // ---- ON CONFLICT (window_start, window_end, rtId, ckTypeId) DO UPDATE SET ... ----
+        // Same conflict key as TimeRangeArchive — same was_updated semantics: the orchestrator
+        // re-running a bucket (after rewind, or a crash that didn't commit the watermark) is a
+        // correction; flip the flag to signal "this row was rewritten at some point".
+        sb.Append("ON CONFLICT (\"").Append(Constants.WindowStart).Append("\", \"").Append(Constants.WindowEnd).Append("\", \"").Append(Constants.RtId).Append("\", \"").Append(Constants.CkTypeId).AppendLine("\") DO UPDATE SET");
         sb.Append("    \"").Append(Constants.RtWellKnownName).Append("\" = EXCLUDED.\"").Append(Constants.RtWellKnownName).Append('"');
         foreach (var (_, targets) in resolved)
         {
@@ -111,6 +119,7 @@ internal static class RollupAggregationSqlBuilder
                 sb.Append(",\n    \"").Append(t.ColumnName).Append("\" = EXCLUDED.\"").Append(t.ColumnName).Append('"');
             }
         }
+        sb.Append(",\n    \"").Append(Constants.WasUpdated).Append("\" = TRUE");
         sb.Append(",\n    \"").Append(Constants.RtChangedDateTime).Append("\" = CURRENT_TIMESTAMP;");
 
         return sb.ToString();
