@@ -8,27 +8,27 @@ using Meshmakers.Octo.Runtime.Contracts.StreamData;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData;
 
 /// <summary>
-/// MongoDB-backed implementation of <see cref="ICkArchiveRuntimeStore"/>. Reads and writes
+/// MongoDB-backed implementation of <see cref="IArchiveRuntimeStore"/>. Reads and writes
 /// <c>CkArchive</c> entities through the tenant repository's generic Rt API. Concept §11 — paired
 /// with the CrateDB <c>IStreamDataRepository</c> by <see cref="ArchiveLifecycleService"/>: Crate
 /// updates always run before Mongo writes so a transient Mongo failure can be retried without
 /// leaving partial state visible to callers.
 /// </summary>
-public sealed class MongoCkArchiveRuntimeStore : ICkArchiveRuntimeStore
+public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
 {
     private readonly ITenantRepository _tenantRepository;
 
     /// <summary>Constructs the store for a given tenant repository.</summary>
-    public MongoCkArchiveRuntimeStore(ITenantRepository tenantRepository)
+    public MongoArchiveRuntimeStore(ITenantRepository tenantRepository)
     {
         _tenantRepository = tenantRepository;
     }
 
     /// <inheritdoc />
-    public async Task<CkArchiveSnapshot?> GetAsync(OctoObjectId archiveRtId)
+    public async Task<ArchiveSnapshot?> GetAsync(OctoObjectId archiveRtId)
     {
         var session = await _tenantRepository.GetSessionAsync();
-        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtCkArchive>(session, archiveRtId);
+        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtArchive>(session, archiveRtId);
         if (entity is null || entity.RtState == RtState.Archived)
         {
             return null;
@@ -37,7 +37,7 @@ public sealed class MongoCkArchiveRuntimeStore : ICkArchiveRuntimeStore
         return MapToSnapshot(entity);
     }
 
-    private static CkArchiveSnapshot MapToSnapshot(RtCkArchive entity)
+    private static ArchiveSnapshot MapToSnapshot(RtArchive entity)
     {
         var status = (CkArchiveStatus)(int)entity.Status;
         var targetCkTypeId = entity.TargetCkTypeId is null
@@ -45,14 +45,14 @@ public sealed class MongoCkArchiveRuntimeStore : ICkArchiveRuntimeStore
             : new RtCkId<CkTypeId>(entity.TargetCkTypeId);
 
         // Rollup-archives concept §4: when the entity is a CkRollupArchive (Mongo polymorphism
-        // surfaces it as a RtCkRollupArchive subclass instance), derive the columns from the
+        // surfaces it as a RtRollupArchive subclass instance), derive the columns from the
         // user-defined aggregations rather than the unused inherited Columns slot. The aggregations
         // themselves are also carried on the snapshot so the DDL path can derive the SQL column
         // type from each function (the derived column names are storage identifiers, not paths into
         // the CK type, so ArchivePathTypeResolver cannot resolve them).
         IReadOnlyList<CkRollupAggregationSpec>? rollupAggregations = null;
         IReadOnlyList<CkArchiveColumnSpec> columns;
-        if (entity is RtCkRollupArchive rollup)
+        if (entity is RtRollupArchive rollup)
         {
             rollupAggregations = (rollup.Aggregations ?? Enumerable.Empty<RtCkRollupAggregationRecord>())
                 .Where(a => a.SourcePath is not null)
@@ -71,7 +71,7 @@ public sealed class MongoCkArchiveRuntimeStore : ICkArchiveRuntimeStore
                 .ToList();
         }
 
-        return new CkArchiveSnapshot(
+        return new ArchiveSnapshot(
             entity.RtId,
             targetCkTypeId,
             status,
@@ -86,18 +86,18 @@ public sealed class MongoCkArchiveRuntimeStore : ICkArchiveRuntimeStore
     public async Task SetStatusAsync(OctoObjectId archiveRtId, CkArchiveStatus newStatus)
     {
         var session = await _tenantRepository.GetSessionAsync();
-        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtCkArchive>(session, archiveRtId)
+        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtArchive>(session, archiveRtId)
             ?? throw new ArchiveNotFoundException(archiveRtId);
 
         entity.Status = (RtCkArchiveStatusEnum)(int)newStatus;
-        await _tenantRepository.UpdateOneRtEntityByIdAsync<RtCkArchive>(session, archiveRtId, entity);
+        await _tenantRepository.UpdateOneRtEntityByIdAsync<RtArchive>(session, archiveRtId, entity);
     }
 
     /// <inheritdoc />
     public async Task ArchiveEntityAsync(OctoObjectId archiveRtId)
     {
         var session = await _tenantRepository.GetSessionAsync();
-        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtCkArchive>(session, archiveRtId);
+        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtArchive>(session, archiveRtId);
         if (entity is null || entity.RtState == RtState.Archived)
         {
             return; // idempotent: already deleted (or never existed)
@@ -105,15 +105,15 @@ public sealed class MongoCkArchiveRuntimeStore : ICkArchiveRuntimeStore
 
         entity.RtState = RtState.Archived;
         entity.RtArchivedDateTime = DateTime.UtcNow;
-        await _tenantRepository.UpdateOneRtEntityByIdAsync<RtCkArchive>(session, archiveRtId, entity);
+        await _tenantRepository.UpdateOneRtEntityByIdAsync<RtArchive>(session, archiveRtId, entity);
     }
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<CkArchiveSnapshot> EnumerateAsync()
+    public async IAsyncEnumerable<ArchiveSnapshot> EnumerateAsync()
     {
         var session = await _tenantRepository.GetSessionAsync();
         var queryOptions = RtEntityQueryOptions.Create();
-        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtCkArchive>(session, queryOptions);
+        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtArchive>(session, queryOptions);
 
         foreach (var entity in result.Items)
         {

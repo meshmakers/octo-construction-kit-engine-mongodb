@@ -16,20 +16,20 @@ public class ArchiveReconcilerTests
     private const string Tenant = "tenant-x";
     private const string LegacyTable = "streamData";
 
-    private readonly ICkArchiveRuntimeStore _store = A.Fake<ICkArchiveRuntimeStore>();
+    private readonly IArchiveRuntimeStore _store = A.Fake<IArchiveRuntimeStore>();
     private readonly IStreamDataDatabaseManagementClient _mgmt = A.Fake<IStreamDataDatabaseManagementClient>();
     private readonly IArchiveAuditTrail _audit = A.Fake<IArchiveAuditTrail>();
 
     private ArchiveReconciler NewSut() =>
         new(_store, _mgmt, _audit, NullLogger<ArchiveReconciler>.Instance);
 
-    private static CkArchiveSnapshot Activated(OctoObjectId rt) =>
+    private static ArchiveSnapshot Activated(OctoObjectId rt) =>
         new(rt, new RtCkId<CkTypeId>("Test", new CkTypeId("X")), CkArchiveStatus.Activated, null, Array.Empty<CkArchiveColumnSpec>());
 
-    private static CkArchiveSnapshot Created(OctoObjectId rt) =>
+    private static ArchiveSnapshot Created(OctoObjectId rt) =>
         new(rt, new RtCkId<CkTypeId>("Test", new CkTypeId("X")), CkArchiveStatus.Created, null, Array.Empty<CkArchiveColumnSpec>());
 
-    private void StubStore(params CkArchiveSnapshot[] snapshots)
+    private void StubStore(params ArchiveSnapshot[] snapshots)
     {
         A.CallTo(() => _store.EnumerateAsync()).Returns(ToAsync(snapshots));
     }
@@ -123,7 +123,7 @@ public class ArchiveReconcilerTests
         A.CallTo(() => _store.SetStatusAsync(A<OctoObjectId>._, A<CkArchiveStatus>._)).MustNotHaveHappened();
     }
 
-    private static async IAsyncEnumerable<CkArchiveSnapshot> ToAsync(CkArchiveSnapshot[] items)
+    private static async IAsyncEnumerable<ArchiveSnapshot> ToAsync(ArchiveSnapshot[] items)
     {
         foreach (var item in items)
         {

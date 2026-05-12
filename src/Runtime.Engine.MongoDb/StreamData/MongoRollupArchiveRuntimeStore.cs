@@ -8,27 +8,27 @@ using Meshmakers.Octo.Runtime.Contracts.StreamData;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData;
 
 /// <summary>
-/// MongoDB-backed implementation of <see cref="ICkRollupArchiveRuntimeStore"/>. Reads and writes
+/// MongoDB-backed implementation of <see cref="IRollupArchiveRuntimeStore"/>. Reads and writes
 /// <c>CkRollupArchive</c> entities through the tenant repository's generic Rt API. Rollup-
 /// archives concept §3, §5, §6. Pairs with the CrateDB orchestrator (not implemented yet): the
 /// orchestrator advances <see cref="AdvanceWatermarkAsync"/> after each committed bucket; the
 /// lifecycle service writes <see cref="SetFrozenUntilAsync"/> from the freeze / unfreeze mutations.
 /// </summary>
-public sealed class MongoCkRollupArchiveRuntimeStore : ICkRollupArchiveRuntimeStore
+public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
 {
     private readonly ITenantRepository _tenantRepository;
 
     /// <summary>Constructs the store for a given tenant repository.</summary>
-    public MongoCkRollupArchiveRuntimeStore(ITenantRepository tenantRepository)
+    public MongoRollupArchiveRuntimeStore(ITenantRepository tenantRepository)
     {
         _tenantRepository = tenantRepository;
     }
 
     /// <inheritdoc />
-    public async Task<CkRollupArchiveSnapshot?> GetAsync(OctoObjectId rollupRtId)
+    public async Task<RollupArchiveSnapshot?> GetAsync(OctoObjectId rollupRtId)
     {
         var session = await _tenantRepository.GetSessionAsync();
-        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtCkRollupArchive>(session, rollupRtId);
+        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtRollupArchive>(session, rollupRtId);
         if (entity is null || entity.RtState == RtState.Archived)
         {
             return null;
@@ -63,7 +63,7 @@ public sealed class MongoCkRollupArchiveRuntimeStore : ICkRollupArchiveRuntimeSt
             TargetColumnName = a.TargetColumnName,
         }));
 
-        var entity = new RtCkRollupArchive
+        var entity = new RtRollupArchive
         {
             RtWellKnownName = rtWellKnownName,
             TargetCkTypeId = targetCkTypeId.ToString(),
@@ -89,7 +89,7 @@ public sealed class MongoCkRollupArchiveRuntimeStore : ICkRollupArchiveRuntimeSt
     public async Task ArchiveEntityAsync(OctoObjectId rollupRtId)
     {
         var session = await _tenantRepository.GetSessionAsync();
-        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtCkRollupArchive>(session, rollupRtId);
+        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtRollupArchive>(session, rollupRtId);
         if (entity is null || entity.RtState == RtState.Archived)
         {
             return; // idempotent: already deleted (or never existed)
@@ -97,14 +97,14 @@ public sealed class MongoCkRollupArchiveRuntimeStore : ICkRollupArchiveRuntimeSt
 
         entity.RtState = RtState.Archived;
         entity.RtArchivedDateTime = DateTime.UtcNow;
-        await _tenantRepository.UpdateOneRtEntityByIdAsync<RtCkRollupArchive>(session, rollupRtId, entity);
+        await _tenantRepository.UpdateOneRtEntityByIdAsync<RtRollupArchive>(session, rollupRtId, entity);
     }
 
     /// <inheritdoc />
     public async Task AdvanceWatermarkAsync(OctoObjectId rollupRtId, DateTime bucketEnd, bool allowRewind = false)
     {
         var session = await _tenantRepository.GetSessionAsync();
-        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtCkRollupArchive>(session, rollupRtId)
+        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtRollupArchive>(session, rollupRtId)
             ?? throw new ArchiveNotFoundException(rollupRtId);
 
         // Enforce monotonicity unless the caller explicitly opts into a rewind (the
@@ -119,28 +119,28 @@ public sealed class MongoCkRollupArchiveRuntimeStore : ICkRollupArchiveRuntimeSt
         }
 
         entity.LastAggregatedBucketEnd = bucketEnd;
-        await _tenantRepository.UpdateOneRtEntityByIdAsync<RtCkRollupArchive>(session, rollupRtId, entity);
+        await _tenantRepository.UpdateOneRtEntityByIdAsync<RtRollupArchive>(session, rollupRtId, entity);
     }
 
     /// <inheritdoc />
     public async Task SetFrozenUntilAsync(OctoObjectId rollupRtId, DateTime? frozenUntil)
     {
         var session = await _tenantRepository.GetSessionAsync();
-        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtCkRollupArchive>(session, rollupRtId)
+        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtRollupArchive>(session, rollupRtId)
             ?? throw new ArchiveNotFoundException(rollupRtId);
 
         // Monotonicity for the set-forward path is enforced by the lifecycle service before it
         // calls in; clearing (frozenUntil == null) is the unfreeze path and is always allowed.
         entity.FrozenUntil = frozenUntil;
-        await _tenantRepository.UpdateOneRtEntityByIdAsync<RtCkRollupArchive>(session, rollupRtId, entity);
+        await _tenantRepository.UpdateOneRtEntityByIdAsync<RtRollupArchive>(session, rollupRtId, entity);
     }
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<CkRollupArchiveSnapshot> EnumerateAsync()
+    public async IAsyncEnumerable<RollupArchiveSnapshot> EnumerateAsync()
     {
         var session = await _tenantRepository.GetSessionAsync();
         var queryOptions = RtEntityQueryOptions.Create();
-        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtCkRollupArchive>(session, queryOptions);
+        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtRollupArchive>(session, queryOptions);
 
         foreach (var entity in result.Items)
         {
@@ -157,7 +157,7 @@ public sealed class MongoCkRollupArchiveRuntimeStore : ICkRollupArchiveRuntimeSt
         // source) so this is fine; revisit if it ever shows up in a hot path.
         var session = await _tenantRepository.GetSessionAsync();
         var queryOptions = RtEntityQueryOptions.Create();
-        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtCkRollupArchive>(session, queryOptions);
+        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtRollupArchive>(session, queryOptions);
 
         var sourceId = sourceArchiveRtId.ToString();
         var count = 0;
@@ -172,7 +172,7 @@ public sealed class MongoCkRollupArchiveRuntimeStore : ICkRollupArchiveRuntimeSt
         return count;
     }
 
-    private static CkRollupArchiveSnapshot MapToSnapshot(RtCkRollupArchive entity)
+    private static RollupArchiveSnapshot MapToSnapshot(RtRollupArchive entity)
     {
         var status = (CkArchiveStatus)(int)entity.Status;
         var targetCkTypeId = entity.TargetCkTypeId is null
@@ -191,7 +191,7 @@ public sealed class MongoCkRollupArchiveRuntimeStore : ICkRollupArchiveRuntimeSt
                 a.TargetColumnName))
             .ToList();
 
-        return new CkRollupArchiveSnapshot(
+        return new RollupArchiveSnapshot(
             entity.RtId,
             targetCkTypeId,
             status,

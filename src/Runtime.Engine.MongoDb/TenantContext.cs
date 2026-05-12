@@ -1002,17 +1002,17 @@ public class TenantContext : ITenantContext
         // (T14) and column-list lookup at insert time (T17) work. Both are no-ops when the
         // factory was registered without StreamData enabled, but with a tenant context in scope
         // the store is always available — we own its lifetime here.
-        _streamDataRepository = factory.Create(TenantId, GetCkArchiveRuntimeStore());
+        _streamDataRepository = factory.Create(TenantId, GetArchiveRuntimeStore());
         _streamDataRepositoryResolved = true;
         return _streamDataRepository;
     }
 
-    private ICkArchiveRuntimeStore? _ckArchiveRuntimeStore;
+    private IArchiveRuntimeStore? _ckArchiveRuntimeStore;
 
     /// <inheritdoc />
-    public ICkArchiveRuntimeStore GetCkArchiveRuntimeStore()
+    public IArchiveRuntimeStore GetArchiveRuntimeStore()
     {
-        return _ckArchiveRuntimeStore ??= new MongoCkArchiveRuntimeStore(GetTenantRepository());
+        return _ckArchiveRuntimeStore ??= new MongoArchiveRuntimeStore(GetTenantRepository());
     }
 
     private IArchiveLifecycleService? _archiveLifecycleService;
@@ -1039,21 +1039,21 @@ public class TenantContext : ITenantContext
         // rollup support is wired in this deployment. Null = guard self-disables.
         _archiveLifecycleService = new ArchiveLifecycleService(
             TenantId,
-            GetCkArchiveRuntimeStore(),
+            GetArchiveRuntimeStore(),
             streamData,
             audit,
             _loggerFactory.CreateLogger<ArchiveLifecycleService>(),
-            GetCkRollupArchiveRuntimeStore());
+            GetRollupArchiveRuntimeStore());
         _archiveLifecycleServiceResolved = true;
         return _archiveLifecycleService;
     }
 
-    private ICkRollupArchiveRuntimeStore? _rollupStore;
+    private IRollupArchiveRuntimeStore? _rollupStore;
 
     /// <inheritdoc />
-    public ICkRollupArchiveRuntimeStore? GetCkRollupArchiveRuntimeStore()
+    public IRollupArchiveRuntimeStore? GetRollupArchiveRuntimeStore()
     {
-        return _rollupStore ??= new MongoCkRollupArchiveRuntimeStore(GetTenantRepository());
+        return _rollupStore ??= new MongoRollupArchiveRuntimeStore(GetTenantRepository());
     }
 
     private IRollupArchiveLifecycleService? _rollupLifecycleService;
@@ -1067,7 +1067,7 @@ public class TenantContext : ITenantContext
             return _rollupLifecycleService;
         }
 
-        var rollupStore = GetCkRollupArchiveRuntimeStore();
+        var rollupStore = GetRollupArchiveRuntimeStore();
         if (rollupStore is null)
         {
             _rollupLifecycleServiceResolved = true;
@@ -1075,8 +1075,8 @@ public class TenantContext : ITenantContext
         }
 
         // The create path resolves the source archive's TargetCkTypeId through the shared
-        // CkArchive store. Always available — GetCkArchiveRuntimeStore is non-nullable.
-        var archiveStore = GetCkArchiveRuntimeStore();
+        // CkArchive store. Always available — GetArchiveRuntimeStore is non-nullable.
+        var archiveStore = GetArchiveRuntimeStore();
 
         var audit = _serviceProvider.GetService<IArchiveAuditTrail>()
                     ?? new LoggingArchiveAuditTrail(_loggerFactory.CreateLogger<LoggingArchiveAuditTrail>());
@@ -1102,7 +1102,7 @@ public class TenantContext : ITenantContext
         }
 
         var streamData = GetStreamDataRepository();
-        var rollupStore = GetCkRollupArchiveRuntimeStore();
+        var rollupStore = GetRollupArchiveRuntimeStore();
         if (streamData is null || rollupStore is null)
         {
             _rollupOrchestratorResolved = true;
@@ -1113,7 +1113,7 @@ public class TenantContext : ITenantContext
                     ?? new LoggingArchiveAuditTrail(_loggerFactory.CreateLogger<LoggingArchiveAuditTrail>());
         _rollupOrchestrator = new RollupOrchestrator(
             TenantId,
-            GetCkArchiveRuntimeStore(),
+            GetArchiveRuntimeStore(),
             rollupStore,
             streamData,
             audit,

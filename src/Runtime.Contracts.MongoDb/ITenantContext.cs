@@ -102,12 +102,12 @@ public interface ITenantContext
     /// Returns the archive runtime store for this tenant. Reads and writes <c>CkArchive</c>
     /// entities through MongoDB. Used by the archive lifecycle service (concept §11).
     /// </summary>
-    ICkArchiveRuntimeStore GetCkArchiveRuntimeStore();
+    IArchiveRuntimeStore GetArchiveRuntimeStore();
 
     /// <summary>
     /// Returns the archive lifecycle service for this tenant, or null if stream data is not
     /// enabled (no <see cref="IStreamDataRepository"/> available). Composes the tenant-scoped
-    /// dependencies (<see cref="ICkArchiveRuntimeStore"/>, <see cref="IStreamDataRepository"/>,
+    /// dependencies (<see cref="IArchiveRuntimeStore"/>, <see cref="IStreamDataRepository"/>,
     /// <see cref="IArchiveAuditTrail"/>) so callers don't have to.
     /// </summary>
     IArchiveLifecycleService? GetArchiveLifecycleService();
@@ -118,11 +118,11 @@ public interface ITenantContext
     /// entities through MongoDB. Used by the rollup lifecycle service and orchestrator
     /// (rollup-archives concept §3, §5).
     /// </summary>
-    ICkRollupArchiveRuntimeStore? GetCkRollupArchiveRuntimeStore();
+    IRollupArchiveRuntimeStore? GetRollupArchiveRuntimeStore();
 
     /// <summary>
     /// Returns the rollup lifecycle service for this tenant, or null if no rollup support is
-    /// wired (no <see cref="ICkRollupArchiveRuntimeStore"/> available). Backs the rollup-only
+    /// wired (no <see cref="IRollupArchiveRuntimeStore"/> available). Backs the rollup-only
     /// mutations from rollup-archives concept §9 (freeze / unfreeze / rewind).
     /// </summary>
     IRollupArchiveLifecycleService? GetRollupArchiveLifecycleService();

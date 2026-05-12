@@ -13,7 +13,7 @@ namespace Meshmakers.Octo.Runtime.Engine.UnitTests;
 /// <summary>
 /// Verifies the per-archive status guard added in T7. Each data-plane method must reject calls on
 /// archives that don't exist or aren't in <see cref="CkArchiveStatus.Activated"/>; the guard is
-/// skipped only when the repository is constructed without an <see cref="ICkArchiveRuntimeStore"/>
+/// skipped only when the repository is constructed without an <see cref="IArchiveRuntimeStore"/>
 /// (transitional T7 wiring state).
 /// </summary>
 public class CrateDbStreamDataRepositoryStatusCheckTests
@@ -24,7 +24,7 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
     private readonly IStreamDataDatabaseClient _db = A.Fake<IStreamDataDatabaseClient>();
     private readonly IStreamDataDatabaseManagementClient _mgmt = A.Fake<IStreamDataDatabaseManagementClient>();
     private readonly ICkCacheService _cache = A.Fake<ICkCacheService>();
-    private readonly ICkArchiveRuntimeStore _store = A.Fake<ICkArchiveRuntimeStore>();
+    private readonly IArchiveRuntimeStore _store = A.Fake<IArchiveRuntimeStore>();
 
     private static readonly IOptions<StreamDataConfiguration> Config =
         Options.Create(new StreamDataConfiguration { ConnectionString = "Host=ignored" });
@@ -36,7 +36,7 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
 
     private void Stub(CkArchiveStatus status) =>
         A.CallTo(() => _store.GetAsync(Archive))
-            .Returns(new CkArchiveSnapshot(Archive, SomeType, status, null, Array.Empty<CkArchiveColumnSpec>()));
+            .Returns(new ArchiveSnapshot(Archive, SomeType, status, null, Array.Empty<CkArchiveColumnSpec>()));
 
     [Theory]
     [InlineData(CkArchiveStatus.Created)]
@@ -56,7 +56,7 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
     public async Task Insert_NoSnapshot_ThrowsArchiveNotFoundException()
     {
         A.CallTo(() => _store.GetAsync(Archive))
-            .Returns(Task.FromResult<CkArchiveSnapshot?>(null));
+            .Returns(Task.FromResult<ArchiveSnapshot?>(null));
 
         await Assert.ThrowsAsync<ArchiveNotFoundException>(
             () => NewSut().InsertAsync(Archive, NewPoint()));
@@ -96,7 +96,7 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
         // Empty columns list: the DDL should still emit the standard time-series columns and
         // generate a `CREATE TABLE IF NOT EXISTS "tenantx"."archive_<rtId>"` against the per-tenant
         // schema rather than the legacy single-table-per-tenant path.
-        var snapshot = new CkArchiveSnapshot(Archive, SomeType, CkArchiveStatus.Created, null, Array.Empty<CkArchiveColumnSpec>());
+        var snapshot = new ArchiveSnapshot(Archive, SomeType, CkArchiveStatus.Created, null, Array.Empty<CkArchiveColumnSpec>());
 
         await NewSut().EnsureArchiveCreatedAsync(snapshot);
 

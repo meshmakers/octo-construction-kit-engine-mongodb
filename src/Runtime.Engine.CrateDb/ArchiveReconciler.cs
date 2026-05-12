@@ -21,19 +21,19 @@ public interface IArchiveReconciler
 
 /// <summary>
 /// Default <see cref="IArchiveReconciler"/> implementation. Pulls archives via
-/// <see cref="ICkArchiveRuntimeStore.EnumerateAsync"/>, lists tables via
+/// <see cref="IArchiveRuntimeStore.EnumerateAsync"/>, lists tables via
 /// <see cref="IStreamDataDatabaseManagementClient.ListTablesInTenantSchemaAsync"/>, and reports
 /// drift via the logger and the audit trail.
 /// </summary>
 internal sealed class ArchiveReconciler : IArchiveReconciler
 {
-    private readonly ICkArchiveRuntimeStore _store;
+    private readonly IArchiveRuntimeStore _store;
     private readonly IStreamDataDatabaseManagementClient _managementClient;
     private readonly IArchiveAuditTrail _audit;
     private readonly ILogger<ArchiveReconciler> _logger;
 
     public ArchiveReconciler(
-        ICkArchiveRuntimeStore store,
+        IArchiveRuntimeStore store,
         IStreamDataDatabaseManagementClient managementClient,
         IArchiveAuditTrail audit,
         ILogger<ArchiveReconciler> logger)

@@ -16,5 +16,5 @@ public interface IStreamDataRepositoryFactory
     /// status guards (T14) and to resolve the user-defined column list at insert and query time
     /// (T17).
     /// </summary>
-    IStreamDataRepository Create(string tenantId, ICkArchiveRuntimeStore archiveStore);
+    IStreamDataRepository Create(string tenantId, IArchiveRuntimeStore archiveStore);
 }

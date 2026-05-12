@@ -21,7 +21,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     private readonly ICkCacheService _ckCacheService;
     private readonly IStreamDataDatabaseClient _databaseClient;
     private readonly IStreamDataDatabaseManagementClient _managementClient;
-    private readonly ICkArchiveRuntimeStore _archiveStore;
+    private readonly IArchiveRuntimeStore _archiveStore;
     private readonly StreamDataConfiguration _configuration;
     private readonly string _tenantId;
 
@@ -32,7 +32,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         IStreamDataDatabaseManagementClient managementClient,
         IOptions<StreamDataConfiguration> configuration,
         string tenantId,
-        ICkArchiveRuntimeStore archiveStore)
+        IArchiveRuntimeStore archiveStore)
     {
         _logger = logger;
         _ckCacheService = ckCacheService;
@@ -56,7 +56,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         return _managementClient.DeleteStreamDataDatabaseAsync(_tenantId);
     }
 
-    public async Task EnsureArchiveCreatedAsync(CkArchiveSnapshot snapshot)
+    public async Task EnsureArchiveCreatedAsync(ArchiveSnapshot snapshot)
     {
         // The tenant schema is implicit in the qualified table identifier — CrateDB creates the
         // schema on first table inside it, so no separate `CREATE SCHEMA` step is needed.
@@ -175,7 +175,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     /// archive snapshot.
     /// </summary>
     private (string qualifiedTable, IReadOnlyList<string> userColumnNames) ResolveTableAndColumns(
-        CkArchiveSnapshot snapshot, OctoObjectId archiveRtId)
+        ArchiveSnapshot snapshot, OctoObjectId archiveRtId)
     {
         var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString());
         var userColumnNames = snapshot.Columns.Select(c => ColumnNameMapper.PathToColumnName(c.Path)).ToList();
@@ -424,8 +424,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
 
     /// <inheritdoc />
     public async Task<int> AggregateBucketAsync(
-        CkArchiveSnapshot sourceArchive,
-        CkRollupArchiveSnapshot rollup,
+        ArchiveSnapshot sourceArchive,
+        RollupArchiveSnapshot rollup,
         DateTime bucketStart,
         DateTime bucketEnd,
         CancellationToken cancellationToken)
@@ -460,7 +460,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     /// Verifies that the archive identified by <paramref name="archiveRtId"/> exists and is in
     /// status <see cref="CkArchiveStatus.Activated"/>; throws otherwise.
     /// </summary>
-    private async Task<CkArchiveSnapshot> EnsureArchiveActivatedAsync(OctoObjectId archiveRtId)
+    private async Task<ArchiveSnapshot> EnsureArchiveActivatedAsync(OctoObjectId archiveRtId)
     {
         var snapshot = await _archiveStore.GetAsync(archiveRtId)
             ?? throw new ArchiveNotFoundException(archiveRtId);
@@ -473,7 +473,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         return snapshot;
     }
 
-    private static StreamDataFieldResolver CreateFieldResolver(CkArchiveSnapshot snapshot)
+    private static StreamDataFieldResolver CreateFieldResolver(ArchiveSnapshot snapshot)
     {
         // T17 archives are CK-type-agnostic: the queryable column set is exactly the columns the
         // archive was configured to capture.
