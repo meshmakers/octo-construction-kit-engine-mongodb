@@ -49,6 +49,35 @@ public sealed class MongoTimeRangeArchiveRuntimeStore : ITimeRangeArchiveRuntime
     }
 
     /// <inheritdoc />
+    public async Task<OctoObjectId> InsertAsync(
+        string? rtWellKnownName,
+        RtCkId<CkTypeId> targetCkTypeId,
+        IReadOnlyList<CkArchiveColumnSpec> columns,
+        TimeSpan? period)
+    {
+        var columnList = new AttributeRecordValueList<RtCkArchiveColumnRecord>();
+        columnList.AddRange(columns.Select(c => new RtCkArchiveColumnRecord
+        {
+            Path = c.Path,
+            Indexed = c.Indexed,
+            Required = c.Required,
+        }));
+
+        var entity = new RtTimeRangeArchive
+        {
+            RtWellKnownName = rtWellKnownName,
+            TargetCkTypeId = targetCkTypeId.ToString(),
+            Status = RtCkArchiveStatusEnum.Created,
+            Columns = columnList,
+            Period = period,
+        };
+
+        var session = await _tenantRepository.GetSessionAsync();
+        await _tenantRepository.InsertOneRtEntityAsync(session, entity);
+        return entity.RtId;
+    }
+
+    /// <inheritdoc />
     public async Task ArchiveEntityAsync(OctoObjectId archiveRtId)
     {
         var session = await _tenantRepository.GetSessionAsync();
