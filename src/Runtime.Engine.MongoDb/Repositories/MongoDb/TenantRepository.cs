@@ -978,10 +978,21 @@ internal class TenantRepository(
     public override async Task<(IReadOnlyList<RtEntity> Entities, bool IsSharedCollection)> GetRtEntitiesByTypeForMigrationAsync(
         IOctoSession session, RtCkId<CkTypeId> rtCkTypeId)
     {
-        // First, try the type's own collection (for root types that have their own collection)
+        // First, try the type's own collection (for root types that have their own collection).
+        // Filter to entities whose `ckTypeId` field matches exactly: a pre-migration collection
+        // root that's about to be split may hold derived-type entities in the same physical
+        // collection (e.g. before the StreamData 1.1.0 → 1.2.0 split, the concrete `CkArchive`
+        // collection root also stored `CkRollupArchive` entities because the latter derived from
+        // the former). A bare `GetAsync` would return both kinds → the ChangeCkType migration
+        // would silently mass-relabel the derived entities to the source-type's renamed target,
+        // corrupting them. Filtering here preserves the user's intent that
+        // `target: ckTypeId: X` means "entities tagged X", not "everything in X's collection".
         var collection = GetRtCollectionForMigration<RtEntity>(rtCkTypeId);
-        var entities = await collection.GetAsync(session).ConfigureAwait(false);
-        var result = entities.ToList();
+        var allEntities = await collection.GetAsync(session).ConfigureAwait(false);
+        var ckTypeIdValue = rtCkTypeId.SemanticVersionedFullName;
+        var result = allEntities
+            .Where(e => e.CkTypeId?.SemanticVersionedFullName == ckTypeIdValue)
+            .ToList();
 
         if (result.Count > 0)
         {
@@ -992,7 +1003,6 @@ internal class TenantRepository(
         // with the ckTypeId field set to the derived type. Search all RtEntity collections.
         // Note: The ckTypeId field in MongoDB uses the semantic versioned format "ModelId/TypeName"
         // (e.g. "System.Communication/Adapter"), which omits the version suffix for version 1.
-        var ckTypeIdValue = rtCkTypeId.SemanticVersionedFullName;
         var (collectionName, foundEntities) = await mongoDbRepositoryDataSource
             .FindEntitiesInAllCollectionsByCkTypeIdAsync<RtEntity>(session, ckTypeIdValue)
             .ConfigureAwait(false);
@@ -1036,6 +1046,28 @@ internal class TenantRepository(
         rtEntity.CkTypeId = rtCkTypeId;
         rtEntity.RtCreationDateTime ??= DateTime.UtcNow;
         rtEntity.RtChangedDateTime = DateTime.UtcNow;
+
+        // Route to the target type's defining collection root if the CkCache has the target type
+        // loaded. This matters when a ChangeCkType migration renames a former collection-root
+        // type (e.g. `CkArchive`) to a derived subtype (`RawArchive`) under a newly-introduced
+        // abstract base (`Archive`): the runtime collection-name convention now puts every
+        // derived archive into `RtEntity_SystemStreamDataArchive`, not the per-concrete-type
+        // collection that the legacy `GetRtCollectionForMigration` would target. Writing to the
+        // wrong physical collection silently hides the migrated entities from the regular query
+        // path (which goes through `DefiningCollectionRootCkTypeId`). If the cache is mid-import
+        // and doesn't have the target type yet, fall back to the per-type collection — that's
+        // the legacy behaviour and covers the common case where the target type IS its own
+        // collection root.
+        var ckCacheService = await GetCkCacheServiceAsync().ConfigureAwait(false);
+        if (ckCacheService.TryGetRtCkType(TenantId, rtCkTypeId, out var graph)
+            && graph.DefiningCollectionRootCkTypeId is { } collectionRoot
+            && collectionRoot.SemanticVersionedFullName != rtCkTypeId.SemanticVersionedFullName)
+        {
+            var rootCollection = mongoDbRepositoryDataSource
+                .GetRtDatabaseCollectionByTypeId<RtEntity>(collectionRoot.ToRtCkId());
+            await rootCollection.InsertOneAsync(session, rtEntity).ConfigureAwait(false);
+            return;
+        }
 
         var collection = GetRtCollectionForMigration<RtEntity>(rtCkTypeId);
         await collection.InsertOneAsync(session, rtEntity).ConfigureAwait(false);
