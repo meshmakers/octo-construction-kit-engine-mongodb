@@ -160,6 +160,60 @@ This works for **any** CK model, not just the System model.
 | `MongoTenantBlueprintHistory` | MongoDB-based blueprint history storage |
 | `MongoBlueprintBackupService` | MongoDB-specific backup implementation |
 
+## StreamData: Archives and Rollups
+
+### Storage Layout
+
+Per-tenant CrateDB schemas hold one table per `CkArchive` (and per `CkRollupArchive`). The Mongo
+side carries:
+- `RtCkArchive` entities (raw archives) — `Columns[]` paths are CK-type attribute paths.
+- `RtCkRollupArchive` entities (rollup archives) — inherit `CkArchive`. The `Aggregations[]`
+  list is the authoritative spec; `Columns[]` is a derived projection produced by
+  `RollupColumnGenerator.Generate` so the inherited mandatory-attribute validation passes.
+
+### Snapshot Mapping (`MongoCkArchiveRuntimeStore.MapToSnapshot`)
+
+The shared `CkArchiveSnapshot` covers both subtypes. When the loaded entity is an
+`RtCkRollupArchive`, the mapper:
+1. Projects the runtime `Aggregations` to `CkRollupAggregationSpec` and re-runs
+   `RollupColumnGenerator.Generate` to fill `CkArchiveSnapshot.Columns` (the on-disk Columns
+   slot is treated as a dehydrated cache; the spec list is authoritative).
+2. Sets `CkArchiveSnapshot.RollupAggregations` so the activation / DDL path can branch.
+
+### Activation DDL Branch (`CrateDbStreamDataRepository.EnsureArchiveCreatedAsync`)
+
+- Raw archive snapshots → `ArchivePathTypeResolver` walks the CK type tree to resolve each
+  attribute path to a `CrateColumnType`.
+- Rollup snapshots → `RollupColumnTypeResolver` derives the SQL type from the aggregation
+  function:
+  - `COUNT` → `BIGINT`
+  - `AVG` → `{base}_sum DOUBLE PRECISION`, `{base}_count BIGINT`
+  - `SUM` / `MIN` / `MAX` → `DOUBLE PRECISION`
+
+  Rollup column names are storage identifiers (e.g. `temperature_avg_sum`), not CK-type
+  attribute paths — the path-resolver would fail to resolve them.
+
+### Rollup Lifecycle
+
+- `MongoCkRollupArchiveRuntimeStore` extends the runtime-store contract with:
+  - `InsertAsync(...)` — builds the `RtCkRollupArchive` entity (Created status,
+    `Columns` + `Aggregations` via `AttributeRecordValueList<T>`) and persists.
+  - `AdvanceWatermarkAsync` / `SetFrozenUntilAsync` — orchestrator + lifecycle writes.
+  - `EnumerateAsync` / `CountActiveRollupsForSourceAsync` — orchestrator tick + source-delete guard.
+- `TenantContext.GetRollupArchiveLifecycleService` wires both the rollup store and the shared
+  archive store into `RollupArchiveLifecycleService`; the archive store is needed by
+  `CreateAsync` to look up the source archive's `TargetCkTypeId`.
+
+### Auto-import Downgrade Guard
+
+`TenantContext.EnsureStreamDataCkModelImportedAsync` checks the currently-installed
+`System.StreamData` version before importing the descriptor's version. If the installed
+version is **strictly greater** than the descriptor's target, the import is skipped — this
+prevents a service that ships an older `IStreamDataCkModelDescriptor` (or the bare 1.0.0
+fallback for services that register no descriptor) from overwriting a higher version that a
+sibling service already installed. Without this guard `DeletePreviousVersion` would strip the
+newer model's CK records and the `CkCache` reload would lose the newer types.
+
 ## Test Data Structure
 
 The test CK model includes this hierarchy:
