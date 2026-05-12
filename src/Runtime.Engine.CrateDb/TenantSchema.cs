@@ -92,6 +92,21 @@ internal static class TenantSchema
         return $"\"{SchemaName(tenantId)}\".\"archive_{archiveRtId}\"";
     }
 
+    /// <summary>
+    /// Returns the unqualified per-archive table name (without schema prefix or quoting), e.g.
+    /// <c>archive_65d5c447b420da3fb12381bc</c>. Used by introspection queries against system
+    /// tables where the table name has to be passed as a plain parameter value rather than a SQL
+    /// identifier.
+    /// </summary>
+    public static string ArchiveTableName(string archiveRtId)
+    {
+        if (string.IsNullOrWhiteSpace(archiveRtId))
+        {
+            throw new ArgumentException("archiveRtId must not be empty.", nameof(archiveRtId));
+        }
+        return $"archive_{archiveRtId}";
+    }
+
     private static string ShortHash(string value)
     {
 #if NETSTANDARD2_0

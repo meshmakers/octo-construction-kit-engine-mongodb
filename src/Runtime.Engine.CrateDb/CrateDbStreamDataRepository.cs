@@ -610,6 +610,66 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         return affected;
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<OctoObjectId, ArchiveStorageStats>> GetArchiveStatsAsync(
+        IReadOnlyList<OctoObjectId> archiveRtIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (archiveRtIds.Count == 0)
+        {
+            return new Dictionary<OctoObjectId, ArchiveStorageStats>();
+        }
+
+        // Map every requested rtId to its CrateDB table name and remember the reverse direction
+        // so the result-set lookup is O(1) regardless of how many tables CrateDB returned.
+        var tableNameToRtId = archiveRtIds.ToDictionary(
+            rtId => TenantSchema.ArchiveTableName(rtId.ToString()),
+            rtId => rtId);
+
+        var rows = await _databaseClient
+            .GetTableStatsAsync(_tenantId, tableNameToRtId.Keys.ToList(), cancellationToken)
+            .ConfigureAwait(false);
+
+        var result = new Dictionary<OctoObjectId, ArchiveStorageStats>(archiveRtIds.Count);
+
+        // Pre-populate with "does not exist" placeholders so callers always get an entry per
+        // input rtId. The CrateDB query only returns rows for tables that actually have shards.
+        foreach (var rtId in archiveRtIds)
+        {
+            result[rtId] = new ArchiveStorageStats(rtId, TableExists: false, RecordCount: 0, SizeBytes: 0, Health: ArchiveStorageHealth.Unknown);
+        }
+
+        foreach (var row in rows)
+        {
+            if (!tableNameToRtId.TryGetValue(row.TableName, out var rtId))
+            {
+                continue; // shouldn't happen — query was scoped to our tables — but be defensive.
+            }
+            result[rtId] = new ArchiveStorageStats(
+                ArchiveRtId: rtId,
+                TableExists: true,
+                RecordCount: row.NumDocs,
+                SizeBytes: row.SizeBytes,
+                Health: MapHealth(row.Health));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Maps CrateDB's <c>sys.health.health</c> string (GREEN / YELLOW / RED) onto the backend-
+    /// agnostic <see cref="ArchiveStorageHealth"/>. Null / unknown values become
+    /// <see cref="ArchiveStorageHealth.Unknown"/> — UIs should render that visibly different from
+    /// the green Good state rather than treating absence as "everything OK".
+    /// </summary>
+    private static ArchiveStorageHealth MapHealth(string? crateHealth) => crateHealth switch
+    {
+        "GREEN" => ArchiveStorageHealth.Good,
+        "YELLOW" => ArchiveStorageHealth.Warning,
+        "RED" => ArchiveStorageHealth.Critical,
+        _ => ArchiveStorageHealth.Unknown,
+    };
+
     #region Private helpers
 
     /// <summary>

@@ -55,4 +55,16 @@ public interface IStreamDataDatabaseClient
     /// in; the repository does NOT call it after every insert because it is expensive under load.
     /// </summary>
     Task RefreshArchiveTableAsync(string tenantId, string qualifiedTable);
+
+    /// <summary>
+    /// Returns per-table storage stats (row count, on-disk size, health) for every entry in
+    /// <paramref name="tableNames"/> that exists in the tenant's schema. Tables not found in
+    /// <c>sys.shards</c> are omitted from the result — callers handle the "not provisioned yet"
+    /// case at the next layer up. One round-trip per call; CrateDB's <c>sys.shards</c> +
+    /// <c>sys.health</c> are cheap to query under load.
+    /// </summary>
+    Task<IReadOnlyList<Dtos.CrateTableStatsRow>> GetTableStatsAsync(
+        string tenantId,
+        IReadOnlyList<string> tableNames,
+        CancellationToken cancellationToken = default);
 }

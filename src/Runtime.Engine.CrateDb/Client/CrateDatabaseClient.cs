@@ -300,6 +300,64 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         });
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<Dtos.CrateTableStatsRow>> GetTableStatsAsync(
+        string tenantId,
+        IReadOnlyList<string> tableNames,
+        CancellationToken cancellationToken = default)
+    {
+        if (tableNames.Count == 0)
+        {
+            return Array.Empty<Dtos.CrateTableStatsRow>();
+        }
+
+        return await _resilience.ExecuteAsync(async _ =>
+        {
+            var schema = TenantSchema.SchemaName(tenantId);
+            await using var connection = await CreateConnectionAsync(tenantId, cancellationToken);
+
+            // Two single-round-trip queries against the introspection surface, then merged in
+            // memory by table name. We do NOT join sys.shards with sys.health server-side because
+            // sys.health rows are per-partition and the join would multiply shard rows on
+            // partitioned tables (none of ours are partitioned today, but the join would silently
+            // misreport totals the first time someone partitions an archive).
+            //
+            // primary = true filter ensures replica copies aren't double-counted.
+            var shardRows = (await connection.QueryAsync<(string TableName, long NumDocs, long SizeBytes)>(
+                @"SELECT table_name AS TableName,
+                         COALESCE(SUM(num_docs), 0) AS NumDocs,
+                         COALESCE(SUM(size), 0) AS SizeBytes
+                  FROM sys.shards
+                  WHERE schema_name = @schema
+                    AND table_name = ANY(@tables)
+                    AND ""primary"" = true
+                  GROUP BY table_name",
+                new { schema, tables = tableNames.ToArray() })).ToDictionary(r => r.TableName);
+
+            var healthRows = (await connection.QueryAsync<(string TableName, string Health)>(
+                @"SELECT table_name AS TableName, health AS Health
+                  FROM sys.health
+                  WHERE table_schema = @schema
+                    AND table_name = ANY(@tables)",
+                new { schema, tables = tableNames.ToArray() })).ToDictionary(r => r.TableName);
+
+            // Only return rows for tables we actually saw shards for — callers treat missing
+            // entries as "table doesn't exist yet". Health may be missing even when shards exist
+            // (rare race during partition rebalance) → null health → Unknown on the caller side.
+            var result = new List<Dtos.CrateTableStatsRow>(shardRows.Count);
+            foreach (var (tableName, shardData) in shardRows)
+            {
+                healthRows.TryGetValue(tableName, out var healthData);
+                result.Add(new Dtos.CrateTableStatsRow(
+                    tableName,
+                    healthData.Health,
+                    shardData.NumDocs,
+                    shardData.SizeBytes));
+            }
+            return (IReadOnlyList<Dtos.CrateTableStatsRow>)result;
+        });
+    }
+
     public async Task DeleteStreamDataDatabaseAsync(string tenantId)
     {
         await _resilience.ExecuteAsync(async _ =>
