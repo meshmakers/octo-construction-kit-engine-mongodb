@@ -1056,6 +1056,14 @@ public class TenantContext : ITenantContext
         return _rollupStore ??= new MongoRollupArchiveRuntimeStore(GetTenantRepository());
     }
 
+    private ITimeRangeArchiveRuntimeStore? _timeRangeStore;
+
+    /// <inheritdoc />
+    public ITimeRangeArchiveRuntimeStore? GetTimeRangeArchiveRuntimeStore()
+    {
+        return _timeRangeStore ??= new MongoTimeRangeArchiveRuntimeStore(GetTenantRepository());
+    }
+
     private IRollupArchiveLifecycleService? _rollupLifecycleService;
     private bool _rollupLifecycleServiceResolved;
 

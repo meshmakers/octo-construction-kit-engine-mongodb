@@ -150,6 +150,70 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         });
     }
 
+    public async Task InsertTimeRangeDataAsync(
+        string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<TimeRangeDataPointDto> datapoints)
+    {
+        var d = datapoints.ToArray();
+        if (d.Length == 0) return;
+
+        // Same single-row loop rationale as InsertDataAsync — typed columns need their own
+        // native param types per row, the bulk-unnest path can't carry that information.
+        await _resilience.ExecuteAsync(async _ =>
+        {
+            await using var connection = await CreateConnectionAsync(tenantId);
+            var sql = BuildTimeRangeInsertSql(qualifiedTable, userColumnNames);
+            foreach (var dto in d)
+            {
+                await ExecuteSingleTimeRangeInsertAsync(connection, sql, dto, userColumnNames);
+            }
+        });
+    }
+
+    private static async Task ExecuteSingleTimeRangeInsertAsync(
+        NpgsqlConnection connection, string sql, TimeRangeDataPointDto dto, IReadOnlyList<string> userColumnNames)
+    {
+        await using var cmd = new NpgsqlCommand(sql, connection);
+        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.WindowStart}", dto.From));
+        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.WindowEnd}", dto.To));
+        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.RtId}", (object?)dto.RtId?.ToString() ?? DBNull.Value));
+        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.CkTypeId}", (object?)dto.CkTypeId?.ToString() ?? DBNull.Value));
+        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.RtWellKnownName}", (object?)dto.RtWellKnownName ?? DBNull.Value));
+        foreach (var col in userColumnNames)
+        {
+            var value = dto.Attributes != null && dto.Attributes.TryGetValue(col, out var v) ? v : null;
+            cmd.Parameters.Add(new NpgsqlParameter($"@{col}", value ?? (object)DBNull.Value));
+        }
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private static string BuildTimeRangeInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames)
+    {
+        // Column order matches the DDL emitted by GenerateCreateTimeRangeTable: window_start,
+        // window_end, rtid, ckTypeId, rtWellKnownName, then user columns. The CONFLICT clause's
+        // natural key is the full window (start, end) + entity (rtid, ckTypeId) — a re-delivery
+        // of the same window for the same entity upserts; different windows even for the same
+        // entity are independent rows. was_updated flips to TRUE on any conflict, regardless of
+        // whether the user-column values actually changed (concept §5: "ever updated" signal,
+        // not value-change detection).
+        var allColumns = new List<string>(5 + userColumnNames.Count)
+        {
+            Constants.WindowStart, Constants.WindowEnd, Constants.RtId, Constants.CkTypeId, Constants.RtWellKnownName
+        };
+        allColumns.AddRange(userColumnNames);
+
+        var columnList = string.Join(", ", allColumns.Select(c => $"\"{c}\""));
+        var paramList = string.Join(", ", allColumns.Select(c => $"@{c}"));
+        var conflictUpdates = userColumnNames.Count == 0
+            ? string.Empty
+            : ", " + string.Join(", ", userColumnNames.Select(c => $"\"{c}\" = EXCLUDED.\"{c}\""));
+
+        return $"INSERT INTO {qualifiedTable} ({columnList}) VALUES ({paramList}) "
+             + $"ON CONFLICT (\"{Constants.WindowStart}\", \"{Constants.WindowEnd}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\") "
+             + $"DO UPDATE SET \"{Constants.RtChangedDateTime}\" = CURRENT_TIMESTAMP, "
+             + $"\"{Constants.WasUpdated}\" = TRUE"
+             + conflictUpdates;
+    }
+
     /// <summary>
     /// Executes a single per-archive INSERT using the raw Npgsql command API. We bind parameters
     /// directly rather than going through Dapper because Dapper's <c>DynamicParameters</c> erases

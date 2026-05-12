@@ -14,10 +14,11 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 internal static class ArchiveDdlGenerator
 {
     /// <summary>
-    /// Standard columns emitted on every archive table (concept §4). Lower-cased to sidestep
-    /// CrateDB's case-preservation quirks for quoted mixed-case identifiers (notably
+    /// Standard columns emitted on every raw or rollup archive table (concept §4). Lower-cased to
+    /// sidestep CrateDB's case-preservation quirks for quoted mixed-case identifiers (notably
     /// <c>EXCLUDED."Col"</c> inside <c>ON CONFLICT DO UPDATE</c>). PK columns are <c>NOT NULL</c>
     /// by definition; timestamp columns default to <c>CURRENT_TIMESTAMP</c> for the standard trio.
+    /// Time-range archives use <see cref="TimeRangeStandardColumns"/> instead.
     /// </summary>
     public static IReadOnlyList<(string Name, string Definition)> StandardColumns { get; } = new (string, string)[]
     {
@@ -30,9 +31,27 @@ internal static class ArchiveDdlGenerator
     };
 
     /// <summary>
-    /// Builds <c>CREATE TABLE IF NOT EXISTS {table} ( … ) CLUSTERED INTO N SHARDS [WITH (number_of_replicas = M)]</c>.
-    /// <paramref name="qualifiedTableName"/> is expected to be already quoted (e.g.
-    /// <c>"acmecorp"."tempSensor_telemetry"</c>); callers obtain it via
+    /// Standard columns for time-range archive tables (concept-time-range §4): two timestamp
+    /// columns covering the half-open <c>[window_start, window_end)</c>, the entity identity
+    /// trio, plus the <c>was_updated</c> flag set by ON CONFLICT upserts. The natural primary
+    /// key is <c>(window_start, window_end, rtid, ckTypeId)</c>.
+    /// </summary>
+    public static IReadOnlyList<(string Name, string Definition)> TimeRangeStandardColumns { get; } = new (string, string)[]
+    {
+        (Constants.WindowStart, "TIMESTAMP WITH TIME ZONE NOT NULL"),
+        (Constants.WindowEnd, "TIMESTAMP WITH TIME ZONE NOT NULL"),
+        (Constants.RtId, "TEXT NOT NULL"),
+        (Constants.CkTypeId, "TEXT NOT NULL"),
+        (Constants.RtCreationDateTime, "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"),
+        (Constants.RtChangedDateTime, "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"),
+        (Constants.RtWellKnownName, "TEXT"),
+        (Constants.WasUpdated, "BOOLEAN NOT NULL DEFAULT FALSE"),
+    };
+
+    /// <summary>
+    /// Builds <c>CREATE TABLE IF NOT EXISTS {table} ( … ) CLUSTERED INTO N SHARDS [WITH (number_of_replicas = M)]</c>
+    /// for a raw or rollup archive. <paramref name="qualifiedTableName"/> is expected to be
+    /// already quoted (e.g. <c>"acmecorp"."tempSensor_telemetry"</c>); callers obtain it via
     /// <see cref="TenantSchema.QualifiedLegacyTable"/> or the equivalent archive helper.
     /// </summary>
     /// <param name="qualifiedTableName">Already-quoted schema-qualified table identifier.</param>
@@ -99,6 +118,79 @@ internal static class ArchiveDdlGenerator
         }
 
         sb.Append($" PRIMARY KEY (\"{Constants.Timestamp}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\")");
+        sb.Append(") CLUSTERED INTO ")
+          .Append(numberOfShards.ToString(CultureInfo.InvariantCulture))
+          .Append(" SHARDS");
+
+        if (numberOfReplicas >= 0)
+        {
+            sb.Append(" WITH (number_of_replicas = ")
+              .Append(numberOfReplicas.ToString(CultureInfo.InvariantCulture))
+              .Append(')');
+        }
+
+        sb.Append(';');
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Builds <c>CREATE TABLE IF NOT EXISTS …</c> for a <c>TimeRangeArchive</c>: emits the
+    /// <c>(window_start, window_end, rtid, ckTypeId)</c> primary key and the standard
+    /// <c>was_updated</c> flag column, plus the user-defined data columns. Same shard/replica
+    /// knobs as the raw/rollup overload.
+    /// </summary>
+    public static string GenerateCreateTimeRangeTable(
+        string qualifiedTableName,
+        IReadOnlyList<ArchiveColumnDdl> columns,
+        int numberOfShards,
+        int numberOfReplicas)
+    {
+        if (string.IsNullOrWhiteSpace(qualifiedTableName))
+        {
+            throw new ArgumentException("qualifiedTableName must not be empty", nameof(qualifiedTableName));
+        }
+        if (numberOfShards < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(numberOfShards), "numberOfShards must be >= 1");
+        }
+
+        var seenColumnNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (name, _) in TimeRangeStandardColumns)
+        {
+            seenColumnNames.Add(name);
+        }
+
+        var sb = new StringBuilder();
+        sb.Append("CREATE TABLE IF NOT EXISTS ").Append(qualifiedTableName).Append(" (");
+
+        foreach (var (name, definition) in TimeRangeStandardColumns)
+        {
+            sb.Append(' ').Append('"').Append(name).Append("\" ").Append(definition).Append(',');
+        }
+
+        foreach (var col in columns)
+        {
+            if (string.IsNullOrWhiteSpace(col.Path))
+            {
+                throw new ArgumentException("Archive column path must not be empty.", nameof(columns));
+            }
+
+            var columnName = ColumnNameMapper.PathToColumnName(col.Path);
+            if (!seenColumnNames.Add(columnName))
+            {
+                throw new ArgumentException(
+                    $"Column name '{columnName}' (from path '{col.Path}') collides with another archive column or a standard column.",
+                    nameof(columns));
+            }
+
+            sb.Append(' ').Append('"').Append(columnName).Append("\" ");
+            col.Type.AppendTo(sb);
+            if (col.Required) sb.Append(" NOT NULL");
+            if (!col.Indexed) sb.Append(" INDEX OFF");
+            sb.Append(',');
+        }
+
+        sb.Append($" PRIMARY KEY (\"{Constants.WindowStart}\", \"{Constants.WindowEnd}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\")");
         sb.Append(") CLUSTERED INTO ")
           .Append(numberOfShards.ToString(CultureInfo.InvariantCulture))
           .Append(" SHARDS");

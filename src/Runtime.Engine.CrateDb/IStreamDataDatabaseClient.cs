@@ -24,6 +24,14 @@ public interface IStreamDataDatabaseClient
     Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints);
 
     /// <summary>
+    /// Inserts time-range data points into a <c>TimeRangeArchive</c> table. Schema is the
+    /// <c>(window_start, window_end, rtid, ckTypeId)</c>-keyed variant emitted by
+    /// <see cref="ArchiveDdlGenerator.GenerateCreateTimeRangeTable"/>; ON CONFLICT on the natural
+    /// key overwrites user columns and flips <c>was_updated</c> to TRUE.
+    /// </summary>
+    Task InsertTimeRangeDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<TimeRangeDataPointDto> datapoints);
+
+    /// <summary>
     /// Get data from the stream data database.
     /// </summary>
     Task<List<DataPointDto>> GetDataAsync(string tenantId, string query);

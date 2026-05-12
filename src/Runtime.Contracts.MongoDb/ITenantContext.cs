@@ -121,6 +121,13 @@ public interface ITenantContext
     IRollupArchiveRuntimeStore? GetRollupArchiveRuntimeStore();
 
     /// <summary>
+    /// Returns the time-range archive runtime store for this tenant, or null if not wired.
+    /// Loads <c>TimeRangeArchive</c> metadata snapshots from MongoDB; data inserts go through
+    /// <see cref="IStreamDataRepository.InsertTimeRangeAsync"/> directly. Time-range concept §3.
+    /// </summary>
+    ITimeRangeArchiveRuntimeStore? GetTimeRangeArchiveRuntimeStore();
+
+    /// <summary>
     /// Returns the rollup lifecycle service for this tenant, or null if no rollup support is
     /// wired (no <see cref="IRollupArchiveRuntimeStore"/> available). Backs the rollup-only
     /// mutations from rollup-archives concept §9 (freeze / unfreeze / rewind).

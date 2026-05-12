@@ -61,21 +61,29 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         // The tenant schema is implicit in the qualified table identifier — CrateDB creates the
         // schema on first table inside it, so no separate `CREATE SCHEMA` step is needed.
         //
-        // Rollups branch: their columns are derived storage names (temperature_avg_sum, etc.) — not
-        // CK-type attribute paths — so ArchivePathTypeResolver would fail to resolve them against
-        // the source CK type. The type is determined by the aggregation function instead.
+        // Subtype branches:
+        // - Rollup: columns are derived storage names (temperature_avg_sum, etc.); SQL type from
+        //   the aggregation function (RollupColumnTypeResolver).
+        // - Time-range: columns are CK-type attribute paths (resolved like raw archives), but the
+        //   table shape uses (window_start, window_end) + was_updated instead of a single
+        //   timestamp. See ArchiveDdlGenerator.GenerateCreateTimeRangeTable.
+        // - Raw: columns are CK-type attribute paths; standard (timestamp, rtid, ckTypeId) PK.
         var resolvedColumns = snapshot.RollupAggregations is { } aggs
             ? RollupColumnTypeResolver.Resolve(snapshot.Columns, aggs)
             : ArchivePathTypeResolver.Resolve(
                 _ckCacheService, _tenantId, snapshot.TargetCkTypeId, snapshot.Columns);
 
         var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString());
-        var sql = ArchiveDdlGenerator.GenerateCreateTable(
-            qualifiedTable, resolvedColumns, _configuration.NumberOfShards, _configuration.NumberOfReplicas);
+        var sql = snapshot.IsTimeRange
+            ? ArchiveDdlGenerator.GenerateCreateTimeRangeTable(
+                qualifiedTable, resolvedColumns, _configuration.NumberOfShards, _configuration.NumberOfReplicas)
+            : ArchiveDdlGenerator.GenerateCreateTable(
+                qualifiedTable, resolvedColumns, _configuration.NumberOfShards, _configuration.NumberOfReplicas);
 
         _logger.LogDebug(
-            "Provisioning archive table {Table} with {ColumnCount} user columns for tenant {TenantId}",
-            qualifiedTable, resolvedColumns.Count, _tenantId);
+            "Provisioning archive table {Table} with {ColumnCount} user columns for tenant {TenantId} (shape: {Shape})",
+            qualifiedTable, resolvedColumns.Count, _tenantId,
+            snapshot.RollupAggregations is not null ? "rollup" : snapshot.IsTimeRange ? "time-range" : "raw");
         await _managementClient.ExecuteDdlAsync(_tenantId, sql);
     }
 
@@ -180,6 +188,92 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString());
         var userColumnNames = snapshot.Columns.Select(c => ColumnNameMapper.PathToColumnName(c.Path)).ToList();
         return (qualifiedTable, userColumnNames);
+    }
+
+    public async Task InsertTimeRangeAsync(
+        OctoObjectId archiveRtId,
+        IEnumerable<TimeRangeStreamDataPoint> datapoints,
+        CancellationToken cancellationToken = default)
+    {
+        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
+
+        // The repository serves any Archive subtype; refuse a TimeRange insert into a non-
+        // TimeRange archive — the storage shape doesn't have window columns, so the SQL would
+        // fail with a column-not-found error anyway. Surface the mismatch as a clear ArgumentException.
+        if (!snapshot.IsTimeRange)
+        {
+            throw new ArgumentException(
+                $"Archive '{archiveRtId}' is not a TimeRangeArchive; use InsertAsync instead.",
+                nameof(archiveRtId));
+        }
+
+        var materialised = datapoints as IReadOnlyList<TimeRangeStreamDataPoint> ?? datapoints.ToList();
+
+        // Same CkTypeId-binding rule as raw archive inserts: each per-archive table holds one CkType.
+        var filtered = materialised.Where(p => p.CkTypeId == snapshot.TargetCkTypeId).ToList();
+        var skipped = materialised.Count - filtered.Count;
+        if (skipped > 0)
+        {
+            _logger.LogDebug(
+                "Time-range archive {ArchiveRtId} (target {TargetCkTypeId}): skipped {Skipped} of {Total} datapoints with mismatched CkTypeId",
+                archiveRtId, snapshot.TargetCkTypeId, skipped, materialised.Count);
+        }
+        if (filtered.Count == 0)
+        {
+            return;
+        }
+
+        // Validate windows up front so an entire batch is rejected (consistent with raw bulk insert
+        // semantics: pre-validate, then commit, never partial). A single bad window aborts the call.
+        foreach (var p in filtered)
+        {
+            if (p.To <= p.From)
+            {
+                throw new ArgumentException(
+                    $"TimeRangeStreamDataPoint for entity '{p.RtId}': To ({p.To:O}) must be strictly greater than From ({p.From:O}).",
+                    nameof(datapoints));
+            }
+        }
+
+        using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.insertTimeRange");
+        activity?.SetTag("streamdata.tenant", _tenantId);
+        activity?.SetTag("streamdata.archive.rtid", archiveRtId.ToString());
+        activity?.SetTag("streamdata.batch_size", filtered.Count);
+
+        var (qualifiedTable, userColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
+
+        var sw = Stopwatch.StartNew();
+        var dtos = filtered.Select(MapToTimeRangeDataPointDto);
+        await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos);
+        sw.Stop();
+
+        var bucket = CrateDbDiagnostics.BatchSizeBucket(filtered.Count);
+        CrateDbDiagnostics.InsertDurationMs.Record(sw.Elapsed.TotalMilliseconds,
+            new("tenant", _tenantId),
+            new("archive", archiveRtId.ToString()),
+            new("batch_size_bucket", bucket));
+        CrateDbDiagnostics.InsertedPoints.Add(filtered.Count,
+            new("tenant", _tenantId),
+            new("archive", archiveRtId.ToString()));
+    }
+
+    private static Dtos.TimeRangeDataPointDto MapToTimeRangeDataPointDto(TimeRangeStreamDataPoint point)
+    {
+        // Normalise to UTC: the storage column is TIMESTAMP WITH TIME ZONE so Npgsql writes the
+        // offset; downstream queries always read UTC. Matches MapToDataPointDto's behaviour for
+        // single-timestamp archives.
+        var attributes = point.Attributes.ToDictionary(
+            kv => ColumnNameMapper.PathToColumnName(kv.Key),
+            kv => kv.Value,
+            StringComparer.Ordinal);
+        return new Dtos.TimeRangeDataPointDto(attributes)
+        {
+            RtId = point.RtId,
+            CkTypeId = point.CkTypeId,
+            RtWellKnownName = point.RtWellKnownName,
+            From = point.From.ToUniversalTime(),
+            To = point.To.ToUniversalTime(),
+        };
     }
 
     public async Task<StreamDataQueryResult> ExecuteQueryAsync(OctoObjectId archiveRtId, StreamDataQueryOptions options)

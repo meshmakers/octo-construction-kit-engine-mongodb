@@ -14,8 +14,25 @@ public static class Constants
     /// <summary>rtId column name</summary>
     public const string RtId = "rtid";
 
-    /// <summary>timestamp column name</summary>
+    /// <summary>timestamp column name (raw + rollup archive tables only)</summary>
     public const string Timestamp = "timestamp";
+
+    /// <summary>
+    /// Inclusive window-start column for time-range archive tables. Mutually exclusive with
+    /// <see cref="Timestamp"/>: raw and rollup tables emit <c>timestamp</c>, time-range tables
+    /// emit <c>window_start</c> + <see cref="WindowEnd"/>.
+    /// </summary>
+    public const string WindowStart = "window_start";
+
+    /// <summary>Exclusive window-end column for time-range archive tables.</summary>
+    public const string WindowEnd = "window_end";
+
+    /// <summary>
+    /// Boolean flag on time-range rows that flips to <c>TRUE</c> on every conflict-upsert. Lets
+    /// dashboards detect retro-corrections of externally-aggregated values without log-diving.
+    /// Monotonic — once <c>true</c>, stays <c>true</c>.
+    /// </summary>
+    public const string WasUpdated = "was_updated";
 
     /// <summary>ckTypeId column name</summary>
     public const string CkTypeId = "cktypeid";

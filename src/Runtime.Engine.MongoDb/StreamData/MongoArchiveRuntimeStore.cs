@@ -37,6 +37,15 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
         return MapToSnapshot(entity);
     }
 
+    /// <summary>
+    /// Shared mapping from a runtime archive entity (any subtype: <c>RtArchive</c> base,
+    /// <c>RtRollupArchive</c>, <c>RtTimeRangeArchive</c>) to the read-only snapshot consumed by
+    /// the lifecycle / DDL paths. Made internal so subtype-specific stores
+    /// (e.g. <c>MongoTimeRangeArchiveRuntimeStore</c>) can reuse it instead of duplicating the
+    /// per-subtype branches.
+    /// </summary>
+    internal static ArchiveSnapshot MapToSnapshotPublic(RtArchive entity) => MapToSnapshot(entity);
+
     private static ArchiveSnapshot MapToSnapshot(RtArchive entity)
     {
         var status = (CkArchiveStatus)(int)entity.Status;
@@ -44,14 +53,16 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
             ? new RtCkId<CkTypeId>(string.Empty)
             : new RtCkId<CkTypeId>(entity.TargetCkTypeId);
 
-        // Rollup-archives concept §4: when the entity is a CkRollupArchive (Mongo polymorphism
-        // surfaces it as a RtRollupArchive subclass instance), derive the columns from the
-        // user-defined aggregations rather than the unused inherited Columns slot. The aggregations
-        // themselves are also carried on the snapshot so the DDL path can derive the SQL column
-        // type from each function (the derived column names are storage identifiers, not paths into
-        // the CK type, so ArchivePathTypeResolver cannot resolve them).
+        // Subtype detection drives both the column mapping and the DDL branch downstream:
+        // - RollupArchive: columns are derived storage names; aggregations are the authoritative
+        //   spec (column types come from the function).
+        // - TimeRangeArchive: columns are CK-type attribute paths (like raw archives), but the
+        //   storage shape uses (window_start, window_end) + was_updated. Period is advisory.
+        // - RawArchive / abstract Archive (legacy): plain attribute-path columns.
         IReadOnlyList<CkRollupAggregationSpec>? rollupAggregations = null;
         IReadOnlyList<CkArchiveColumnSpec> columns;
+        var isTimeRange = false;
+        System.TimeSpan? period = null;
         if (entity is RtRollupArchive rollup)
         {
             rollupAggregations = (rollup.Aggregations ?? Enumerable.Empty<RtCkRollupAggregationRecord>())
@@ -62,6 +73,17 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
                     a.TargetColumnName))
                 .ToList();
             columns = RollupColumnGenerator.Generate(rollupAggregations);
+        }
+        else if (entity is RtTimeRangeArchive timeRange)
+        {
+            isTimeRange = true;
+            // Period attribute is optional and advisory; the generated record exposes it as
+            // a nullable TimeSpan via the inherited attribute machinery.
+            period = timeRange.Period;
+            columns = (entity.Columns ?? Enumerable.Empty<RtCkArchiveColumnRecord>())
+                .Where(c => c.Path is not null)
+                .Select(c => new CkArchiveColumnSpec(c.Path!, c.Indexed, c.Required))
+                .ToList();
         }
         else
         {
@@ -79,6 +101,8 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
             columns)
         {
             RollupAggregations = rollupAggregations,
+            IsTimeRange = isTimeRange,
+            Period = period,
         };
     }
 
