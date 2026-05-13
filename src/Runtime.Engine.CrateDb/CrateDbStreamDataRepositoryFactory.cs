@@ -34,7 +34,10 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
         _configuration = configuration;
     }
 
-    public IStreamDataRepository Create(string tenantId, IArchiveRuntimeStore archiveStore)
+    public IStreamDataRepository Create(
+        string tenantId,
+        IArchiveRuntimeStore archiveStore,
+        IRollupArchiveRuntimeStore? rollupArchiveStore = null)
     {
         return new CrateDbStreamDataRepository(
             _loggerFactory.CreateLogger<CrateDbStreamDataRepository>(),
@@ -43,6 +46,7 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
             _managementClient,
             _configuration,
             tenantId,
-            archiveStore);
+            archiveStore,
+            rollupArchiveStore);
     }
 }

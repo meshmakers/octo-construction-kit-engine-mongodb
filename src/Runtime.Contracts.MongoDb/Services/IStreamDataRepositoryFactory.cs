@@ -14,7 +14,13 @@ public interface IStreamDataRepositoryFactory
     /// Creates a stream data repository scoped to the given tenant id. The
     /// <paramref name="archiveStore"/> is consulted by the repository to enforce per-archive
     /// status guards (T14) and to resolve the user-defined column list at insert and query time
-    /// (T17).
+    /// (T17). The optional <paramref name="rollupArchiveStore"/> is consulted by the chain-aware
+    /// aggregation resolver when querying a cascade rollup (rollup-over-rollup) — null when the
+    /// tenant has no rollup support configured, in which case cascade chain resolution falls
+    /// back to the 1-level resolver.
     /// </summary>
-    IStreamDataRepository Create(string tenantId, IArchiveRuntimeStore archiveStore);
+    IStreamDataRepository Create(
+        string tenantId,
+        IArchiveRuntimeStore archiveStore,
+        IRollupArchiveRuntimeStore? rollupArchiveStore = null);
 }

@@ -23,6 +23,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     private readonly IStreamDataDatabaseClient _databaseClient;
     private readonly IStreamDataDatabaseManagementClient _managementClient;
     private readonly IArchiveRuntimeStore _archiveStore;
+    private readonly IRollupArchiveRuntimeStore? _rollupArchiveStore;
     private readonly StreamDataConfiguration _configuration;
     private readonly string _tenantId;
 
@@ -33,13 +34,15 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         IStreamDataDatabaseManagementClient managementClient,
         IOptions<StreamDataConfiguration> configuration,
         string tenantId,
-        IArchiveRuntimeStore archiveStore)
+        IArchiveRuntimeStore archiveStore,
+        IRollupArchiveRuntimeStore? rollupArchiveStore = null)
     {
         _logger = logger;
         _ckCacheService = ckCacheService;
         _databaseClient = databaseClient;
         _managementClient = managementClient;
         _archiveStore = archiveStore;
+        _rollupArchiveStore = rollupArchiveStore;
         _configuration = configuration.Value;
         _tenantId = tenantId;
     }
@@ -447,17 +450,24 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         {
             // Chain-aware path for RollupArchive: the operator queries a logical source path
             // (e.g. "Temperature") and we rewrite to the materialised _sum/_count columns per
-            // concept-time-range §7. Falls through to the standard resolver when the rollup
-            // can't chain the requested function or when the archive isn't a rollup at all.
+            // concept-time-range §7. The chain walker handles arbitrary cascade depths (rollup-
+            // over-rollup-…); falls through to the standard resolver when the rollup can't
+            // chain the requested function or when the archive isn't a rollup at all.
             if (snapshot.RollupAggregations is { } rollupSpecs)
             {
                 var targetFunc = MapAggregationFunction(col.Function);
-                var chained = RollupQueryAggregationResolver.Resolve(rollupSpecs, col.AttributePath, targetFunc);
+                var chained = await ResolveRollupChainAggregationAsync(
+                    snapshot, rollupSpecs, col.AttributePath, targetFunc, CancellationToken.None);
                 if (chained != null)
                 {
+                    // The chain resolver's OutputColumnName echoes the operator's dotted input
+                    // (e.g. "amount.value"). The wire-format cell mapping looks up row values by
+                    // the BSON camelCase form ("amountvalue"), so normalise here for parity with
+                    // the non-chain fallback below — otherwise the result column is empty.
+                    var outputName = ColumnNameMapper.PathToColumnName(chained.OutputColumnName);
                     q.AddRawAggregationExpression(chained.SqlExpression, chained.SqlAlias);
-                    outputColumnNames.Add(chained.OutputColumnName);
-                    outputNameBySqlAlias[chained.SqlAlias] = chained.OutputColumnName;
+                    outputColumnNames.Add(outputName);
+                    outputNameBySqlAlias[chained.SqlAlias] = outputName;
                     continue;
                 }
             }
@@ -531,12 +541,18 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             if (snapshot.RollupAggregations is { } rollupSpecs)
             {
                 var targetFunc = MapAggregationFunction(col.Function);
-                var chained = RollupQueryAggregationResolver.Resolve(rollupSpecs, col.AttributePath, targetFunc);
+                var chained = await ResolveRollupChainAggregationAsync(
+                    snapshot, rollupSpecs, col.AttributePath, targetFunc, CancellationToken.None);
                 if (chained != null)
                 {
+                    // The chain resolver's OutputColumnName echoes the operator's dotted input
+                    // (e.g. "amount.value"). The wire-format cell mapping looks up row values by
+                    // the BSON camelCase form ("amountvalue"), so normalise here for parity with
+                    // the non-chain fallback below — otherwise the result column is empty.
+                    var outputName = ColumnNameMapper.PathToColumnName(chained.OutputColumnName);
                     q.AddRawAggregationExpression(chained.SqlExpression, chained.SqlAlias);
-                    outputColumnNames.Add(chained.OutputColumnName);
-                    outputNameBySqlAlias[chained.SqlAlias] = chained.OutputColumnName;
+                    outputColumnNames.Add(outputName);
+                    outputNameBySqlAlias[chained.SqlAlias] = outputName;
                     continue;
                 }
             }
@@ -610,12 +626,18 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             if (snapshot.RollupAggregations is { } rollupSpecs)
             {
                 var targetFunc = MapAggregationFunction(col.Function);
-                var chained = RollupQueryAggregationResolver.Resolve(rollupSpecs, col.AttributePath, targetFunc);
+                var chained = await ResolveRollupChainAggregationAsync(
+                    snapshot, rollupSpecs, col.AttributePath, targetFunc, CancellationToken.None);
                 if (chained != null)
                 {
+                    // The chain resolver's OutputColumnName echoes the operator's dotted input
+                    // (e.g. "amount.value"). The wire-format cell mapping looks up row values by
+                    // the BSON camelCase form ("amountvalue"), so normalise here for parity with
+                    // the non-chain fallback below — otherwise the result column is empty.
+                    var outputName = ColumnNameMapper.PathToColumnName(chained.OutputColumnName);
                     q.AddRawAggregationExpression(chained.SqlExpression, chained.SqlAlias);
-                    outputColumnNames.Add(chained.OutputColumnName);
-                    outputNameBySqlAlias[chained.SqlAlias] = chained.OutputColumnName;
+                    outputColumnNames.Add(outputName);
+                    outputNameBySqlAlias[chained.SqlAlias] = outputName;
                     continue;
                 }
             }
@@ -819,6 +841,45 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         return new StreamDataFieldResolver(
             snapshot.Columns.Select(c => c.Path),
             usesWindowedStorage: snapshot.UsesWindowedStorage);
+    }
+
+    /// <summary>
+    /// Chain-aware aggregation resolution for a rollup archive. Loads the rollup snapshot from
+    /// the rollup store (required for chain walking — null store ⇒ falls back to the 1-level
+    /// resolver), then asks <see cref="RollupChainAggregationResolver"/> to map the (logical
+    /// path, function) onto the right physical column on the *current* rollup. Used by the
+    /// aggregation / grouped-aggregation / downsampling code paths.
+    /// </summary>
+    private async Task<RollupQueryAggregation?> ResolveRollupChainAggregationAsync(
+        ArchiveSnapshot snapshot,
+        IReadOnlyList<CkRollupAggregationSpec> rollupSpecs,
+        string attributePath,
+        AggregationFunctionDto targetFunc,
+        CancellationToken cancellationToken)
+    {
+        // Always try the cascade walker first when we have access to the rollup store — it
+        // also handles the 1-level case correctly.
+        if (_rollupArchiveStore is not null)
+        {
+            var rollup = await _rollupArchiveStore.GetAsync(snapshot.RtId).ConfigureAwait(false);
+            if (rollup is not null)
+            {
+                var chained = await RollupChainAggregationResolver.ResolveAsync(
+                    rollup,
+                    attributePath,
+                    targetFunc,
+                    id => _archiveStore.GetAsync(id),
+                    id => _rollupArchiveStore.GetAsync(id),
+                    cancellationToken).ConfigureAwait(false);
+                if (chained is not null)
+                {
+                    return chained;
+                }
+            }
+        }
+
+        // Fallback: the 1-level resolver inspects only the current rollup's specs.
+        return RollupQueryAggregationResolver.Resolve(rollupSpecs, attributePath, targetFunc);
     }
 
     private static List<string> ResolveAndAddColumns(

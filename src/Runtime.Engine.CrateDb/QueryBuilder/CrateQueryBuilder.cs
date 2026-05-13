@@ -74,9 +74,15 @@ internal class CrateQueryBuilder
     internal bool HasOrderBy => OrderByVariables.Count > 0;
 
     /// <summary>
-    /// Variables to be included in the group by clause
+    /// Variables to be included in the group by clause. Excludes both classical aggregation
+    /// variables (those carry <see cref="IQueryVariable.AggregationFunction"/>) and raw-expression
+    /// variables — the latter are SELECT-clause SQL fragments built by the chain-aware rollup
+    /// resolver and contain aggregate calls like <c>SUM("voltage_avg_sum")</c>; putting them
+    /// into GROUP BY would have CrateDB reject the query with "Aggregate functions are not
+    /// allowed in GROUP BY".
     /// </summary>
-    internal IEnumerable<IQueryVariable> Groupings => Variables.Where(x => x.AggregationFunction == null);
+    internal IEnumerable<IQueryVariable> Groupings =>
+        Variables.Where(x => x.AggregationFunction == null && !x.IsRawExpression);
 
     internal IEnumerable<IQueryVariable> VariableInListVariables => Variables.Where(x => x.HasVariableInListVariables);
 
