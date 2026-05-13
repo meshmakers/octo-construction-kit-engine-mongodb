@@ -47,22 +47,43 @@ public static class Constants
     public const string RtChangedDateTime = "rtchangeddatetime";
 
     /// <summary>
-    /// Default stream data fields. Order matters where this is iterated to build SELECT lists or
-    /// PK clauses — keep timestamp first for the primary key, the rest follow.
+    /// Default stream data fields for raw archives. Order matters where this is iterated to build
+    /// SELECT lists or PK clauses — keep timestamp first for the primary key, the rest follow.
     /// </summary>
     public static readonly string[] DefaultStreamDataFields = [Timestamp, RtId, CkTypeId, RtWellKnownName, RtCreationDateTime, RtChangedDateTime];
 
     /// <summary>
-    /// Checks if the given field name is a default stream data field (case-insensitive).
+    /// Default stream data fields for windowed (rollup + time-range) archives. Replaces the single
+    /// <see cref="Timestamp"/> column with the <c>(window_start, window_end, was_updated)</c>
+    /// triple. The Rt* columns are identical to <see cref="DefaultStreamDataFields"/>. Order
+    /// matches the windowed table's PK ordering (window_start first).
     /// </summary>
-    public static bool IsDefaultField(string fieldName)
-        => DefaultStreamDataFields.Any(f => string.Equals(f, fieldName, StringComparison.OrdinalIgnoreCase));
+    public static readonly string[] DefaultWindowedStreamDataFields =
+        [WindowStart, WindowEnd, WasUpdated, RtId, CkTypeId, RtWellKnownName, RtCreationDateTime, RtChangedDateTime];
 
     /// <summary>
-    /// Returns the canonical camelCase name of a default field, or null if not a default.
+    /// Returns the appropriate default-fields set for the given storage shape. Pass
+    /// <paramref name="usesWindowedStorage"/>=true for rollup and time-range archives.
+    /// </summary>
+    public static IReadOnlyList<string> GetDefaultStreamDataFields(bool usesWindowedStorage)
+        => usesWindowedStorage ? DefaultWindowedStreamDataFields : DefaultStreamDataFields;
+
+    /// <summary>
+    /// Checks if the given field name is a default stream data field (case-insensitive). Considers
+    /// both raw and windowed defaults — used by code that has to be agnostic to the archive shape
+    /// (e.g. data-stream attribute registration, which must not shadow any potential default).
+    /// </summary>
+    public static bool IsDefaultField(string fieldName)
+        => DefaultStreamDataFields.Any(f => string.Equals(f, fieldName, StringComparison.OrdinalIgnoreCase))
+        || DefaultWindowedStreamDataFields.Any(f => string.Equals(f, fieldName, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Returns the canonical camelCase name of a default field, or null if not a default. Searches
+    /// both raw and windowed default sets.
     /// </summary>
     public static string? GetDefaultFieldName(string fieldName)
-        => DefaultStreamDataFields.FirstOrDefault(f => string.Equals(f, fieldName, StringComparison.OrdinalIgnoreCase));
+        => DefaultStreamDataFields.FirstOrDefault(f => string.Equals(f, fieldName, StringComparison.OrdinalIgnoreCase))
+        ?? DefaultWindowedStreamDataFields.FirstOrDefault(f => string.Equals(f, fieldName, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Date time format

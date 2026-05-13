@@ -45,16 +45,22 @@ public class StreamDataFieldResolver
 
     /// <summary>
     /// Creates a new resolver with the given data stream attribute paths. Default fields are
-    /// always registered from <see cref="Constants.DefaultStreamDataFields"/>.
+    /// registered from <see cref="Constants.GetDefaultStreamDataFields"/> based on the storage
+    /// shape — raw archives get the <c>timestamp</c>-based defaults, windowed (rollup +
+    /// time-range) archives get <c>window_start</c> / <c>window_end</c> / <c>was_updated</c>.
     /// </summary>
     /// <param name="dataStreamAttributePaths">
     /// Attribute paths from the CK model. May be dotted (e.g. <c>sensor.reading.value</c>); each
     /// path is mapped to its column name via <see cref="ColumnNameMapper.PathToColumnName"/>.
     /// </param>
-    public StreamDataFieldResolver(IEnumerable<string> dataStreamAttributePaths)
+    /// <param name="usesWindowedStorage">
+    /// True for rollup and time-range archives (windowed storage shape), false for raw archives.
+    /// Mirrors <see cref="ArchiveSnapshot.UsesWindowedStorage"/>.
+    /// </param>
+    public StreamDataFieldResolver(IEnumerable<string> dataStreamAttributePaths, bool usesWindowedStorage = false)
     {
         // Register default fields from Constants (single source of truth, already camelCase).
-        foreach (var defaultField in Constants.DefaultStreamDataFields)
+        foreach (var defaultField in Constants.GetDefaultStreamDataFields(usesWindowedStorage))
         {
             _fields[defaultField] = new ResolvedField(
                 StreamDataFieldCategory.Default,
@@ -80,9 +86,9 @@ public class StreamDataFieldResolver
     }
 
     /// <summary>
-    /// Creates a resolver with no data stream attributes (only default fields).
+    /// Creates a resolver with no data stream attributes (only the raw-archive default fields).
     /// </summary>
-    public StreamDataFieldResolver() : this([])
+    public StreamDataFieldResolver() : this([], usesWindowedStorage: false)
     {
     }
 

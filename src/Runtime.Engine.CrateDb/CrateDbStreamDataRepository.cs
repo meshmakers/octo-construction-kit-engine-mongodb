@@ -710,7 +710,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         var sql = RollupAggregationSqlBuilder.Build(
             sourceTable,
             targetTable,
-            rollup.TargetCkTypeId.FullName,
+            // The query side filters by SemanticVersionedFullName (which drops the "-1" suffix
+            // for type version 1). Raw + time-range archives write the same form via
+            // RtCkId<CkTypeId>.ToString(); rollups have to match or the query never finds rows.
+            rollup.TargetCkTypeId.SemanticVersionedFullName,
             rollup.Aggregations,
             bucketStart,
             bucketEnd,
@@ -811,8 +814,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     private static StreamDataFieldResolver CreateFieldResolver(ArchiveSnapshot snapshot)
     {
         // T17 archives are CK-type-agnostic: the queryable column set is exactly the columns the
-        // archive was configured to capture.
-        return new StreamDataFieldResolver(snapshot.Columns.Select(c => c.Path));
+        // archive was configured to capture. Windowed (rollup + time-range) archives swap the
+        // single `timestamp` default for the `window_start` / `window_end` / `was_updated` triple.
+        return new StreamDataFieldResolver(
+            snapshot.Columns.Select(c => c.Path),
+            usesWindowedStorage: snapshot.UsesWindowedStorage);
     }
 
     private static List<string> ResolveAndAddColumns(

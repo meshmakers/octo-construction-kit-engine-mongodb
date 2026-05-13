@@ -129,4 +129,53 @@ public class StreamDataFieldResolverTests
         Assert.NotNull(result);
         Assert.Equal(StreamDataFieldCategory.Default, result.Category);
     }
+
+    [Theory]
+    [InlineData("window_start")]
+    [InlineData("window_end")]
+    [InlineData("was_updated")]
+    public void WindowedResolver_AcceptsWindowedDefaultFields(string fieldName)
+    {
+        // Windowed archives expose (window_start, window_end, was_updated) instead of timestamp.
+        var resolver = new StreamDataFieldResolver([], usesWindowedStorage: true);
+
+        var result = resolver.Resolve(fieldName);
+
+        Assert.NotNull(result);
+        Assert.Equal(StreamDataFieldCategory.Default, result.Category);
+        Assert.Equal(fieldName, result.CrateDbName);
+    }
+
+    [Fact]
+    public void WindowedResolver_DoesNotRegisterTimestampDefault()
+    {
+        // The single-timestamp column doesn't exist on windowed tables.
+        var resolver = new StreamDataFieldResolver([], usesWindowedStorage: true);
+
+        Assert.Null(resolver.Resolve("timestamp"));
+    }
+
+    [Fact]
+    public void RawResolver_DoesNotRegisterWindowedDefaults()
+    {
+        // The window_* / was_updated columns don't exist on raw archive tables.
+        var resolver = new StreamDataFieldResolver([], usesWindowedStorage: false);
+
+        Assert.Null(resolver.Resolve("window_start"));
+        Assert.Null(resolver.Resolve("window_end"));
+        Assert.Null(resolver.Resolve("was_updated"));
+    }
+
+    [Fact]
+    public void WindowedResolver_KeepsSharedRtDefaults()
+    {
+        // Rt* columns are present on both shapes — only the time-axis columns differ.
+        var resolver = new StreamDataFieldResolver([], usesWindowedStorage: true);
+
+        Assert.NotNull(resolver.Resolve("rtId"));
+        Assert.NotNull(resolver.Resolve("ckTypeId"));
+        Assert.NotNull(resolver.Resolve("rtWellKnownName"));
+        Assert.NotNull(resolver.Resolve("rtCreationDateTime"));
+        Assert.NotNull(resolver.Resolve("rtChangedDateTime"));
+    }
 }
