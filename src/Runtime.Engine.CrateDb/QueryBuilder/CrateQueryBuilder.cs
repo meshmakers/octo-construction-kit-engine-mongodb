@@ -175,9 +175,16 @@ internal class CrateQueryBuilder
         if (TimeColumn == Constants.WindowEnd)
         {
             // Logical "timestamp" surface for windowed storage. SQL output:
-            //   "window_end" AS "timestamp", "window_start", "rtid", "cktypeid", ...
+            //   "window_end" AS "timestamp", "window_start", "window_end", "was_updated",
+            //   "rtid", "cktypeid", ...
+            // The `window_end AS timestamp` alias keeps consumers reading dp.Timestamp working;
+            // the un-aliased `window_end` + `was_updated` cover operators picking them as
+            // explicit columns (ResolveAndAddColumns skips already-registered defaults and
+            // would otherwise leave the row.Values keys unpopulated).
             Variables.Add(new QueryVariable(Constants.WindowEnd, Constants.Timestamp, null));
             Variables.Add(new QueryVariable(Constants.WindowStart, null, null));
+            Variables.Add(new QueryVariable(Constants.WindowEnd, null, null));
+            Variables.Add(new QueryVariable(Constants.WasUpdated, null, null));
             foreach (var f in new[] { Constants.RtId, Constants.CkTypeId, Constants.RtWellKnownName, Constants.RtCreationDateTime, Constants.RtChangedDateTime })
             {
                 Variables.Add(new QueryVariable(f, null, null));
