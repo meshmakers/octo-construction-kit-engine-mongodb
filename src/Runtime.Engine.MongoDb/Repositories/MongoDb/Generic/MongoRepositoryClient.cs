@@ -221,6 +221,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             BsonSerializer.RegisterSerializer(new OctoObjectIdSerializer());
             BsonSerializer.RegisterDiscriminator(typeof(DateTimeOffset), "datetimeoffset");
             BsonSerializer.RegisterSerializer(new DateTimeOffsetSerializer());
+            BsonSerializer.RegisterSerializer(new Serialization.TimeSpanSerializer());
 
             BsonSerializer.RegisterSerializer(new CkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
             BsonSerializer.RegisterSerializer(new CkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>());

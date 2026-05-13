@@ -114,7 +114,10 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
             ?? throw new ArchiveNotFoundException(archiveRtId);
 
         entity.Status = (RtCkArchiveStatusEnum)(int)newStatus;
-        await _tenantRepository.UpdateOneRtEntityByIdAsync<RtArchive>(session, archiveRtId, entity);
+        // Update via the entity's *concrete* CkTypeId (TimeRangeArchive / RollupArchive / RawArchive).
+        // Going through the <RtArchive> generic would pass the abstract base CkTypeId to the rule
+        // engine, which rejects abstract types.
+        await _tenantRepository.UpdateOneRtEntityByIdAsync(session, entity.CkTypeId!, archiveRtId, entity);
     }
 
     /// <inheritdoc />
@@ -129,7 +132,8 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
 
         entity.RtState = RtState.Archived;
         entity.RtArchivedDateTime = DateTime.UtcNow;
-        await _tenantRepository.UpdateOneRtEntityByIdAsync<RtArchive>(session, archiveRtId, entity);
+        // Same reason as SetStatusAsync: use the concrete CkTypeId carried on the entity.
+        await _tenantRepository.UpdateOneRtEntityByIdAsync(session, entity.CkTypeId!, archiveRtId, entity);
     }
 
     /// <inheritdoc />
