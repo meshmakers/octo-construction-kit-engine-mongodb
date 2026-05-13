@@ -90,10 +90,15 @@ internal class CrateQueryCompiler
         var interval = queryBuilder.To!.Value - queryBuilder.From!.Value;
         var intervalSeconds = (int)interval.TotalSeconds / queryBuilder.Limit!.Value;
         var intervalLiteral = $"'{intervalSeconds} seconds'::INTERVAL";
-        var fromLiteral = $"'{queryBuilder.From.Value.ToString(Constants.DateTimeFormat)}'::TIMESTAMP";
+        // Normalise to UTC before formatting — Constants.DateTimeFormat appends a literal `Z`
+        // suffix, so a Kind=Local DateTime would otherwise have its local-time digits stamped
+        // with `Z` and end up off by the local offset on the CrateDB side. See the WHERE-clause
+        // branch lower down for the full rationale.
+        var fromUtc = queryBuilder.From.Value.ToUniversalTime();
+        var fromLiteral = $"'{fromUtc.ToString(Constants.DateTimeFormat)}'::TIMESTAMP";
         // Compute exclusive upper bound: From + (Limit - 1) * interval
         // generate_series is inclusive on both ends, so we use Limit-1 intervals to get exactly Limit bins
-        var seriesEnd = queryBuilder.From.Value.AddSeconds(intervalSeconds * (queryBuilder.Limit!.Value - 1));
+        var seriesEnd = fromUtc.AddSeconds(intervalSeconds * (queryBuilder.Limit!.Value - 1));
         var seriesEndLiteral = $"'{seriesEnd.ToString(Constants.DateTimeFormat)}'::TIMESTAMP";
 
         // Windowed-storage downsampling: source is a rollup or time-range archive whose time
@@ -155,8 +160,9 @@ internal class CrateQueryCompiler
 
         if (queryBuilder is { From: not null, To: not null })
         {
-            query.Append($" AND d.\"{timeColumn}\" >= '{queryBuilder.From.Value.ToString(Constants.DateTimeFormat)}'");
-            query.Append($" AND d.\"{timeColumn}\" <= '{queryBuilder.To.Value.ToString(Constants.DateTimeFormat)}'");
+            // UTC-normalised — see the comment in the WHERE-clause section for why.
+            query.Append($" AND d.\"{timeColumn}\" >= '{queryBuilder.From.Value.ToUniversalTime().ToString(Constants.DateTimeFormat)}'");
+            query.Append($" AND d.\"{timeColumn}\" <= '{queryBuilder.To.Value.ToUniversalTime().ToString(Constants.DateTimeFormat)}'");
         }
 
         if (queryBuilder.VariableInListVariables.Any())
@@ -227,8 +233,18 @@ internal class CrateQueryCompiler
             // Use the QueryBuilder's TimeColumn — defaults to `timestamp` for raw archives,
             // becomes `window_end` for windowed-storage archives (rollup / time-range) so the
             // WHERE clause references a column that actually exists on the per-archive table.
+            // Normalise to UTC before formatting: Constants.DateTimeFormat has a literal `Z`
+            // suffix, so CrateDB will read the rendered string as UTC. Without ToUniversalTime()
+            // a DateTime whose Kind is Local (or Unspecified that defaulted to Local) would have
+            // its local-time digits stamped with `Z`, putting the filter off by the local offset.
+            // Convert.ToDateTime parses ISO `…Z` strings into Kind=Local on read, so persisted
+            // SD-queries hitting this path are the typical victim — the GraphQL input arrives
+            // as Kind=Utc but the value round-trips through Mongo `_attributes` and comes back
+            // as Local. ToUniversalTime() is a no-op for Kind=Utc values.
+            var fromUtc = queryBuilder.From.Value.ToUniversalTime();
+            var toUtc = queryBuilder.To.Value.ToUniversalTime();
             query.Append(
-                $"\"{queryBuilder.TimeColumn}\" >= '{queryBuilder.From.Value.ToString(Constants.DateTimeFormat)}' AND \"{queryBuilder.TimeColumn}\" <= '{queryBuilder.To.Value.ToString(Constants.DateTimeFormat)}'");
+                $"\"{queryBuilder.TimeColumn}\" >= '{fromUtc.ToString(Constants.DateTimeFormat)}' AND \"{queryBuilder.TimeColumn}\" <= '{toUtc.ToString(Constants.DateTimeFormat)}'");
 
             if (queryBuilder.HasFieldFilters)
             {
