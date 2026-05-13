@@ -59,9 +59,14 @@ internal class CrateQueryBuilder
     internal DateTime? To { get; private set; }
 
     /// <summary>
-    /// 
+    /// True when the variable list contains at least one aggregation — either a classical one
+    /// (<see cref="QueryVariable.AggregationFunction"/> set) or a raw-expression variable from
+    /// the chain-aware rollup path which already carries the aggregation inside its SQL fragment
+    /// (e.g. <c>SUM(_sum) / NULLIF(SUM(_count), 0)</c>). Drives the downsampling SELECT-shape
+    /// branch in the compiler — without recognising raw expressions a downsampling query with
+    /// only chain-aware aggregations would silently fall through to the non-aggregating path.
     /// </summary>
-    internal bool HasAggregations => Variables.Any(x => x.AggregationFunction != null);
+    internal bool HasAggregations => Variables.Any(x => x.AggregationFunction != null || x.IsRawExpression);
     
     /// <summary>
     /// 

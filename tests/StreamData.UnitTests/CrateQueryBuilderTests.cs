@@ -259,6 +259,51 @@ public class CrateQueryBuilderTests
     }
 
     [Fact]
+    public void DownsamplingWithAggregation_WindowedTimeAxis_KeysOnWindowEndAndAddsContainmentCheck()
+    {
+        var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var to = DateTime.Parse("2024-01-01T01:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.UseWindowedTimeAxis();
+        queryBuilder.WithDownsampling(6, from, to);
+        queryBuilder.AddAggregationVariable("voltage", AggregationFunctionDto.Max, "Max_voltage");
+
+        var compiler = new CrateQueryCompiler();
+        var sql = compiler.CompileQuery(queryBuilder);
+
+        // DATE_BIN, LEFT-JOIN time-range bounds, and __binCount all target window_end.
+        Assert.Contains("DATE_BIN('600 seconds'::INTERVAL, d.\"window_end\"", sql);
+        Assert.Contains("d.\"window_end\" >= '2024-01-01", sql);
+        Assert.Contains("COUNT(d.\"window_end\") AS \"__binCount\"", sql);
+        // Concept-time-range §7 fully-contained predicate: source windows that straddle a bin
+        // boundary are dropped, not pro-rated.
+        Assert.Contains("d.\"window_start\" >= bins.ts", sql);
+        Assert.Contains("d.\"window_end\" <= bins.ts +", sql);
+        // No reference to the non-existent `timestamp` column on a windowed table.
+        Assert.DoesNotContain("d.\"timestamp\"", sql);
+    }
+
+    [Fact]
+    public void Downsampling_RawAggregationExpression_GetsTableAliasPrefixed()
+    {
+        var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var to = DateTime.Parse("2024-01-01T01:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.UseWindowedTimeAxis();
+        queryBuilder.WithDownsampling(4, from, to);
+        // Chain-aware AVG expression — every quoted column inside the call must get the d. alias
+        // so the SQL references the joined source rows rather than the bins CTE.
+        queryBuilder.AddRawAggregationExpression(
+            "SUM(\"voltage_avg_sum\") / NULLIF(SUM(\"voltage_avg_count\"), 0)",
+            "voltage_avg");
+
+        var compiler = new CrateQueryCompiler();
+        var sql = compiler.CompileQuery(queryBuilder);
+
+        Assert.Contains("SUM(d.\"voltage_avg_sum\") / NULLIF(SUM(d.\"voltage_avg_count\"), 0) AS \"voltage_avg\"", sql);
+    }
+
+    [Fact]
     public void DownsamplingWithAggregation_AndFieldFilter_EmitsFilterInOnClause()
     {
         var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);

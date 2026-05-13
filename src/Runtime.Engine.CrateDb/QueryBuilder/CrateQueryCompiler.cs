@@ -96,6 +96,14 @@ internal class CrateQueryCompiler
         var seriesEnd = queryBuilder.From.Value.AddSeconds(intervalSeconds * (queryBuilder.Limit!.Value - 1));
         var seriesEndLiteral = $"'{seriesEnd.ToString(Constants.DateTimeFormat)}'::TIMESTAMP";
 
+        // Windowed-storage downsampling: source is a rollup or time-range archive whose time
+        // axis is `(window_start, window_end)`. The DATE_BIN expression and the bucket-membership
+        // predicate target `window_end`; an extra fully-contained check (`window_start >= bin`)
+        // drops source windows that straddle target bucket boundaries — concept-time-range §7
+        // says straddling windows are dropped from the target rather than pro-rated.
+        var isWindowed = queryBuilder.TimeColumn == Constants.WindowEnd;
+        var timeColumn = queryBuilder.TimeColumn;
+
         // After T17 every attribute is a first-class typed column on the per-archive table — no
         // more `data['x']` indirection — so each variable becomes a qualified column reference.
         // SELECT bins.ts AS "T", AGG(d."voltage") AS "alias", COUNT(d."timestamp") AS "__binCount"
@@ -104,9 +112,13 @@ internal class CrateQueryCompiler
         foreach (var variable in queryBuilder.QueryVariablesWithoutTimestamp)
         {
             query.Append(", ");
-            if (variable.AggregationFunction != null)
+            if (variable.AggregationFunction != null || variable.IsRawExpression)
             {
-                // Aggregation: AVG("voltage") -> AVG(d."voltage")
+                // Both classical aggregations (`AVG("col")`) and raw chain-aware expressions
+                // (`SUM("col_sum") / NULLIF(SUM("col_count"), 0)`) embed column references the
+                // same way: `<func>("<col>")`. The `(\"` → `(d.\"` rewrite pins every column to
+                // the joined table alias `d` without having to teach the resolver about the
+                // join-side prefix.
                 var selectStr = variable.ToSelectString();
                 query.Append(selectStr.Replace("(\"", "(d.\""));
             }
@@ -116,13 +128,24 @@ internal class CrateQueryCompiler
             }
         }
 
-        query.Append(", COUNT(d.\"timestamp\") AS \"__binCount\"");
+        query.Append($", COUNT(d.\"{timeColumn}\") AS \"__binCount\"");
 
         // FROM generate_series(from, seriesEnd, interval) — exactly Limit bins
         query.Append($" FROM generate_series({fromLiteral}, {seriesEndLiteral}, {intervalLiteral}) AS bins(ts)");
 
-        // LEFT JOIN "archive_<rtId>" AS d ON DATE_BIN(interval, d."timestamp", from) = bins.ts
-        query.Append($" LEFT JOIN {queryBuilder.TenantId} AS d ON DATE_BIN({intervalLiteral}, d.\"timestamp\", {fromLiteral}) = bins.ts");
+        // LEFT JOIN — bin membership keyed on the appropriate time column (timestamp for raw
+        // archives, window_end for windowed archives).
+        query.Append($" LEFT JOIN {queryBuilder.TenantId} AS d ON DATE_BIN({intervalLiteral}, d.\"{timeColumn}\", {fromLiteral}) = bins.ts");
+
+        // Fully-contained predicate (concept-time-range §7): a windowed source row contributes
+        // to bin B only when its entire [window_start, window_end) fits inside B. Without this,
+        // a source window that crosses a bin boundary would land in whichever bin its
+        // window_end falls into and silently double-count or misattribute values.
+        if (isWindowed)
+        {
+            query.Append($" AND d.\"{Constants.WindowStart}\" >= bins.ts");
+            query.Append($" AND d.\"{Constants.WindowEnd}\" <= bins.ts + {intervalLiteral}");
+        }
 
         // All filter conditions go into the ON clause (not WHERE, since LEFT JOIN)
         if (queryBuilder.CkTypeId != null)
@@ -132,8 +155,8 @@ internal class CrateQueryCompiler
 
         if (queryBuilder is { From: not null, To: not null })
         {
-            query.Append($" AND d.\"{Constants.Timestamp}\" >= '{queryBuilder.From.Value.ToString(Constants.DateTimeFormat)}'");
-            query.Append($" AND d.\"{Constants.Timestamp}\" <= '{queryBuilder.To.Value.ToString(Constants.DateTimeFormat)}'");
+            query.Append($" AND d.\"{timeColumn}\" >= '{queryBuilder.From.Value.ToString(Constants.DateTimeFormat)}'");
+            query.Append($" AND d.\"{timeColumn}\" <= '{queryBuilder.To.Value.ToString(Constants.DateTimeFormat)}'");
         }
 
         if (queryBuilder.VariableInListVariables.Any())

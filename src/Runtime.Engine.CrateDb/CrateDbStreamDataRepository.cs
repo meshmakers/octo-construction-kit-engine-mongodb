@@ -544,6 +544,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         var fieldResolver = CreateFieldResolver(snapshot);
 
         var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
+        // Windowed-storage downsampling: the LEFT JOIN must key on window_end (not the
+        // non-existent `timestamp` column). The compiler's downsampling path adds an extra
+        // fully-contained predicate when TimeColumn=window_end so source windows that straddle
+        // target bin boundaries are dropped (concept-time-range §7).
+        if (snapshot.UsesWindowedStorage)
+        {
+            q.UseWindowedTimeAxis();
+        }
         q.WithCkTypeIdFilter(options.CkTypeId);
         q.WithDownsampling(options.Limit.Value, options.From.Value, options.To.Value);
 
@@ -556,6 +564,23 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
 
         foreach (var col in options.AggregationColumns)
         {
+            // Chain-aware path for rollups — same logic as ExecuteAggregationQueryAsync.
+            // The downsampling SQL generator d.-prefixes column references inside aggregate
+            // calls regardless of whether they came from AddAggregationVariable or
+            // AddRawAggregationExpression (both share the `<func>("<col>")` shape).
+            if (snapshot.RollupAggregations is { } rollupSpecs)
+            {
+                var targetFunc = MapAggregationFunction(col.Function);
+                var chained = RollupQueryAggregationResolver.Resolve(rollupSpecs, col.AttributePath, targetFunc);
+                if (chained != null)
+                {
+                    q.AddRawAggregationExpression(chained.SqlExpression, chained.SqlAlias);
+                    outputColumnNames.Add(chained.OutputColumnName);
+                    outputNameBySqlAlias[chained.SqlAlias] = chained.OutputColumnName;
+                    continue;
+                }
+            }
+
             var resolved = fieldResolver.Resolve(col.AttributePath);
             if (resolved == null) continue;
 

@@ -32,12 +32,17 @@ public sealed class MongoTimeRangeArchiveRuntimeStore : ITimeRangeArchiveRuntime
     public async Task<ArchiveSnapshot?> GetAsync(OctoObjectId archiveRtId)
     {
         var session = await _tenantRepository.GetSessionAsync();
-        // Load through the concrete subtype: Mongo polymorphism returns a RtTimeRangeArchive if
-        // the document's ckTypeId is System.StreamData/TimeRangeArchive. Asking for the abstract
-        // base would also work, but typing the request narrows the result so a caller that ends
-        // up with a different subtype (rollup, raw) sees null.
-        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtTimeRangeArchive>(session, archiveRtId);
+        // Load via the abstract base — querying directly against RtTimeRangeArchive triggers a
+        // Bson down-cast exception on the deserialiser when the document is actually a rollup or
+        // raw archive. Callers treat null as "not a time-range archive", which is correct when
+        // the RtId belongs to a sibling subtype.
+        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtArchive>(session, archiveRtId);
         if (entity is null || entity.RtState == RtState.Archived)
+        {
+            return null;
+        }
+
+        if (entity is not RtTimeRangeArchive)
         {
             return null;
         }

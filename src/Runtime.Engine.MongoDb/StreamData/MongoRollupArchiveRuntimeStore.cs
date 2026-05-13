@@ -28,13 +28,24 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
     public async Task<RollupArchiveSnapshot?> GetAsync(OctoObjectId rollupRtId)
     {
         var session = await _tenantRepository.GetSessionAsync();
-        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtRollupArchive>(session, rollupRtId);
+        // Load via the abstract base — the same RtId may resolve to RtTimeRangeArchive or
+        // RtRawArchive in the unified Archive collection, and querying directly against
+        // RtRollupArchive triggers a Bson down-cast exception on the deserialiser. Callers
+        // (ArchiveLifecycleService.ValidateRollupForActivationAsync) treat a null result as
+        // "not a rollup", which is exactly the semantic we want when the RtId belongs to a
+        // sibling subtype.
+        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtArchive>(session, rollupRtId);
         if (entity is null || entity.RtState == RtState.Archived)
         {
             return null;
         }
 
-        return MapToSnapshot(entity);
+        if (entity is not RtRollupArchive rollup)
+        {
+            return null;
+        }
+
+        return MapToSnapshot(rollup);
     }
 
     /// <inheritdoc />
