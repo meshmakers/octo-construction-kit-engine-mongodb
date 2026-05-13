@@ -74,6 +74,14 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             {
                 dp.Timestamp = (DateTime)ts!;
             }
+            else if (result.TryGetValue(Constants.WindowEnd, out var winEnd))
+            {
+                // Windowed-storage rows (rollup / time-range) — the query usually aliases
+                // window_end as "timestamp" (see CrateQueryBuilder.UseWindowedTimeAxis) so the
+                // first branch already catches it. This fallback covers queries that select
+                // window_end directly without aliasing.
+                dp.Timestamp = (DateTime)winEnd!;
+            }
 
             if (result.TryGetValue(Constants.RtId, out var rtIdValue) &&
                 OctoObjectId.TryParse(rtIdValue as string ?? "", out var octoRtId))

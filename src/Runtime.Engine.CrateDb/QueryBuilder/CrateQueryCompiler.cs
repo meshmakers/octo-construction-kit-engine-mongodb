@@ -38,7 +38,7 @@ internal class CrateQueryCompiler
             var interval = queryBuilder.To!.Value - queryBuilder.From!.Value;
             var intervalSeconds = (int)interval.TotalSeconds / queryBuilder.Limit;
 
-            query.Append($"DATE_BIN('{intervalSeconds} seconds'::INTERVAL, \"{Constants.Timestamp}\", 0) AS \"T\", ");
+            query.Append($"DATE_BIN('{intervalSeconds} seconds'::INTERVAL, \"{queryBuilder.TimeColumn}\", 0) AS \"T\", ");
         }
         else if(queryBuilder.TimeStampVariable != null)
         {
@@ -201,8 +201,11 @@ internal class CrateQueryCompiler
 
         if (queryBuilder is { From: not null, To: not null })
         {
+            // Use the QueryBuilder's TimeColumn — defaults to `timestamp` for raw archives,
+            // becomes `window_end` for windowed-storage archives (rollup / time-range) so the
+            // WHERE clause references a column that actually exists on the per-archive table.
             query.Append(
-                $"\"{Constants.Timestamp}\" >= '{queryBuilder.From.Value.ToString(Constants.DateTimeFormat)}' AND \"{Constants.Timestamp}\" <= '{queryBuilder.To.Value.ToString(Constants.DateTimeFormat)}'");
+                $"\"{queryBuilder.TimeColumn}\" >= '{queryBuilder.From.Value.ToString(Constants.DateTimeFormat)}' AND \"{queryBuilder.TimeColumn}\" <= '{queryBuilder.To.Value.ToString(Constants.DateTimeFormat)}'");
 
             if (queryBuilder.HasFieldFilters)
             {

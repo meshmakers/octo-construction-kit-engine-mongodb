@@ -343,6 +343,15 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         var fieldResolver = CreateFieldResolver(snapshot);
 
         var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
+        // Windowed-storage archives (rollup / time-range, Phase 7+) have no `timestamp` column —
+        // their time axis is `(window_start, window_end)`. Wire the query builder to use the
+        // window_end column for time filtering / sorting and alias it as `timestamp` in the
+        // result set so downstream row-mapping stays archive-flavor-agnostic (concept-time-range
+        // §6 read-compatibility layer).
+        if (snapshot.UsesWindowedStorage)
+        {
+            q.UseWindowedTimeAxis();
+        }
         q.IncludeDefaultVariables();
         q.WithCkTypeIdFilter(options.CkTypeId);
 

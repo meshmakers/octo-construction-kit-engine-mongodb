@@ -83,6 +83,45 @@ public class CrateQueryBuilderTests
     }
 
     [Fact]
+    public void UseWindowedTimeAxis_AliasesWindowEndAsTimestampInSelect()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.UseWindowedTimeAxis();
+        queryBuilder.IncludeDefaultVariables();
+
+        var compiler = new CrateQueryCompiler();
+        var query = compiler.CompileQuery(queryBuilder);
+
+        // Phase-A read-compatibility layer: window_end surfaces as "timestamp" to keep downstream
+        // consumers archive-flavor-agnostic, with window_start exposed as a separate column for
+        // callers that want the full half-open interval.
+        Assert.Contains("\"window_end\" AS \"timestamp\"", query);
+        Assert.Contains("\"window_start\"", query);
+    }
+
+    [Fact]
+    public void UseWindowedTimeAxis_TimeFilterUsesWindowEndColumn()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.UseWindowedTimeAxis();
+        queryBuilder.AddVariable("voltage_avg_sum", null, null);
+
+        var startDate = DateTime.Parse("2022-01-01T00:00Z", CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal);
+        var endDate = DateTime.Parse("2022-12-31T23:59:59.999Z", CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal);
+        queryBuilder.WithTimeFilter(startDate, endDate);
+
+        var compiler = new CrateQueryCompiler();
+        var query = compiler.CompileQuery(queryBuilder);
+
+        // WHERE clause targets the physical column that actually exists on the windowed table.
+        Assert.Contains("\"window_end\" >= '2022-01-01 00:00:00.000Z'", query);
+        Assert.Contains("\"window_end\" <= '2022-12-31 23:59:59.999Z'", query);
+        Assert.DoesNotContain("\"timestamp\" >=", query);
+    }
+
+    [Fact]
     public void IncludeSingleVariableWithAggregationFunctionAndDefaultVariables_ReturnsValidQuery()
     {
         var queryBuilder = new CrateQueryBuilder(Table);

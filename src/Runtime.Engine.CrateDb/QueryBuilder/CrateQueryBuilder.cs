@@ -13,7 +13,16 @@ internal class CrateQueryBuilder
     /// </summary>
     internal List<IQueryVariable> Variables { get; } = new();
     
-    internal IEnumerable<IQueryVariable> QueryVariablesWithoutTimestamp => Variables.Where(x => x.Name != Constants.Timestamp);
+    /// <summary>
+    /// Physical column name to filter / sort / DATE_BIN against for the time axis. Defaults to
+    /// the raw-archive <c>timestamp</c> column; <see cref="UseWindowedTimeAxis"/> switches to the
+    /// <c>window_end</c> column for rollup / time-range archives that store half-open
+    /// <c>[window_start, window_end)</c> rows instead of point-in-time measurements.
+    /// </summary>
+    internal string TimeColumn { get; private set; } = Constants.Timestamp;
+
+    internal IEnumerable<IQueryVariable> QueryVariablesWithoutTimestamp =>
+        Variables.Where(x => x.Name != Constants.Timestamp && x.Alias != Constants.Timestamp);
 
     /// <summary>
     /// All variables to ordered by
@@ -23,7 +32,14 @@ internal class CrateQueryBuilder
     /// <summary>
     /// Time Stamp Variable
     /// </summary>
-    internal IQueryVariable? TimeStampVariable => Variables.FirstOrDefault(x => x.Name == Constants.Timestamp);
+    /// <summary>
+    /// Finds the variable that represents the result-set's logical <c>timestamp</c> column. For
+    /// raw archives this is the actual <c>timestamp</c> column; for windowed-storage archives
+    /// the variable is aliased as <c>timestamp</c> over the physical <c>window_end</c> column,
+    /// so the lookup matches either the name or the alias.
+    /// </summary>
+    internal IQueryVariable? TimeStampVariable =>
+        Variables.FirstOrDefault(x => x.Name == Constants.Timestamp || x.Alias == Constants.Timestamp);
 
     /// <summary>
     /// Schema-qualified, double-quoted legacy stream-data table identifier for this tenant
@@ -123,10 +139,41 @@ internal class CrateQueryBuilder
     }
 
     /// <summary>
-    /// Includes all default variables that are available for every type
+    /// Switches the query's time axis from the default <c>timestamp</c> column to the
+    /// <c>window_end</c> column used by rollup / time-range archive tables. Must be called
+    /// *before* <see cref="IncludeDefaultVariables"/> so the default-variable set picks up the
+    /// windowed shape (window_end aliased as timestamp, plus window_start as an extra column).
+    /// Concept-time-range §6 read-compatibility layer.
+    /// </summary>
+    public CrateQueryBuilder UseWindowedTimeAxis()
+    {
+        TimeColumn = Constants.WindowEnd;
+        return this;
+    }
+
+    /// <summary>
+    /// Includes all default variables that are available for every type. Branches on
+    /// <see cref="TimeColumn"/>: for raw archives the canonical six (timestamp + identity +
+    /// audit), for windowed archives <c>window_end</c> is aliased as <c>timestamp</c> so
+    /// downstream consumers (StreamDataRow.Timestamp, MapToDataPointDto's Timestamp lookup)
+    /// keep working with no code change, plus <c>window_start</c> as a separate extra column
+    /// so callers that want the full window can request it explicitly.
     /// </summary>
     public CrateQueryBuilder IncludeDefaultVariables()
     {
+        if (TimeColumn == Constants.WindowEnd)
+        {
+            // Logical "timestamp" surface for windowed storage. SQL output:
+            //   "window_end" AS "timestamp", "window_start", "rtid", "cktypeid", ...
+            Variables.Add(new QueryVariable(Constants.WindowEnd, Constants.Timestamp, null));
+            Variables.Add(new QueryVariable(Constants.WindowStart, null, null));
+            foreach (var f in new[] { Constants.RtId, Constants.CkTypeId, Constants.RtWellKnownName, Constants.RtCreationDateTime, Constants.RtChangedDateTime })
+            {
+                Variables.Add(new QueryVariable(f, null, null));
+            }
+            return this;
+        }
+
         foreach(var streamDataField in Constants.DefaultStreamDataFields)
         {
             IQueryVariable variable = new QueryVariable(streamDataField, null, null);
