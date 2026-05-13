@@ -30,6 +30,23 @@ internal record QueryVariable : IQueryVariable
     }
 
     /// <summary>
+    /// Factory for "raw expression" variables — the SELECT clause emits <paramref name="expression"/>
+    /// verbatim with <paramref name="alias"/> as the column header. Used by the chain-aware
+    /// rollup-query path which composes non-trivial aggregation SQL like
+    /// <c>SUM("voltage_avg_sum") / NULLIF(SUM("voltage_avg_count"), 0)</c>. Callers must build
+    /// the expression safely; the value is not escaped.
+    /// </summary>
+    public static QueryVariable RawExpression(string expression, string alias)
+        => new(expression, alias, AggregationFunction: null) { IsRawExpression = true };
+
+    /// <summary>
+    /// When true, <see cref="ToSelectString"/> emits the <see cref="Name"/> verbatim (no quoting),
+    /// aliased by <see cref="Alias"/>. The default false branch wraps the name in identifier
+    /// quotes for safe single-column references.
+    /// </summary>
+    public bool IsRawExpression { get; init; }
+
+    /// <summary>
     /// Adds items to the VariableIn collection
     /// </summary>
     /// <param name="items"></param>
@@ -63,6 +80,12 @@ internal record QueryVariable : IQueryVariable
 
     public string ToSelectString()
     {
+        if (IsRawExpression)
+        {
+            // Emit the SQL fragment verbatim — the caller built it (chain-aware rollup
+            // aggregation, etc.) and we must not wrap it in identifier quotes.
+            return Alias == Name ? Name : $"{Name} AS \"{Alias}\"";
+        }
         if (AggregationFunction == null)
         {
             return Alias == Name ? $"\"{Name}\"" : $"\"{Name}\" AS \"{Alias}\"";

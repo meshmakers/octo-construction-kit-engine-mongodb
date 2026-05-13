@@ -57,4 +57,11 @@ internal interface IQueryVariable
     string ToVariableInListString();
     
     bool HasVariableInListVariables { get; }
+
+    /// <summary>
+    /// When true, the variable represents a caller-built SQL fragment (see
+    /// <see cref="QueryVariable.RawExpression"/>); <see cref="ToSelectString"/> emits the
+    /// fragment verbatim instead of quoting it as an identifier. Defaults to false.
+    /// </summary>
+    bool IsRawExpression { get; }
 }

@@ -196,6 +196,21 @@ internal class CrateQueryBuilder
     }
 
     /// <summary>
+    /// Adds an aggregation column whose SELECT-clause SQL is a caller-provided raw expression.
+    /// Used by the chain-aware rollup-query path which derives non-trivial expressions like
+    /// <c>SUM("voltage_avg_sum") / NULLIF(SUM("voltage_avg_count"), 0)</c> from a target
+    /// (path, function) pair. The expression is taken verbatim — callers must build it safely
+    /// (no operator-supplied strings).
+    /// </summary>
+    /// <param name="rawExpression">The SQL fragment that goes into SELECT (without alias).</param>
+    /// <param name="alias">Alias used for the column header + ORDER BY / GROUP BY referencing.</param>
+    public CrateQueryBuilder AddRawAggregationExpression(string rawExpression, string alias)
+    {
+        Variables.Add(QueryVariable.RawExpression(rawExpression, alias));
+        return this;
+    }
+
+    /// <summary>
     /// Adds a 
     /// </summary>
     /// <param name="nameOrAlias"></param>

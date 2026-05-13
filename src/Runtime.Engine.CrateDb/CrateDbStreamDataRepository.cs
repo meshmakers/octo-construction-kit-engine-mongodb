@@ -388,6 +388,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         var fieldResolver = CreateFieldResolver(snapshot);
 
         var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
+        // Rollup + time-range archives use the windowed (window_start, window_end) shape — the
+        // time-filter / sort needs to target window_end, not the nonexistent `timestamp`. Pure-
+        // aggregation SELECTs project no row-level time column, so only the WHERE clause is
+        // affected, but the toggle has to land before the filter is added.
+        if (snapshot.UsesWindowedStorage)
+        {
+            q.UseWindowedTimeAxis();
+        }
         q.WithCkTypeIdFilter(options.CkTypeId);
 
         // Add aggregation columns. SQL aliases need to be unique (to support e.g. AVG+MAX
@@ -398,6 +406,23 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
 
         foreach (var col in options.AggregationColumns)
         {
+            // Chain-aware path for RollupArchive: the operator queries a logical source path
+            // (e.g. "Temperature") and we rewrite to the materialised _sum/_count columns per
+            // concept-time-range §7. Falls through to the standard resolver when the rollup
+            // can't chain the requested function or when the archive isn't a rollup at all.
+            if (snapshot.RollupAggregations is { } rollupSpecs)
+            {
+                var targetFunc = MapAggregationFunction(col.Function);
+                var chained = RollupQueryAggregationResolver.Resolve(rollupSpecs, col.AttributePath, targetFunc);
+                if (chained != null)
+                {
+                    q.AddRawAggregationExpression(chained.SqlExpression, chained.SqlAlias);
+                    outputColumnNames.Add(chained.OutputColumnName);
+                    outputNameBySqlAlias[chained.SqlAlias] = chained.OutputColumnName;
+                    continue;
+                }
+            }
+
             var resolved = fieldResolver.Resolve(col.AttributePath);
             if (resolved == null) continue;
 
@@ -435,6 +460,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         var fieldResolver = CreateFieldResolver(snapshot);
 
         var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
+        // Windowed-storage time-axis (rollup / time-range) — see ExecuteAggregationQueryAsync
+        // for the same rationale.
+        if (snapshot.UsesWindowedStorage)
+        {
+            q.UseWindowedTimeAxis();
+        }
         q.WithCkTypeIdFilter(options.CkTypeId);
 
         // Group-by columns as non-aggregation variables. The CrateQueryCompiler automatically
@@ -453,9 +484,24 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             outputNameBySqlAlias[resolved.CrateDbName] = resolved.CrateDbName;
         }
 
-        // Aggregation columns with unique SQL aliases
+        // Aggregation columns with unique SQL aliases — same chain-aware rewrite as the non-
+        // grouped aggregation path. Falls through to the standard simple aggregate when no
+        // matching rollup spec exists or the function combination isn't chainable.
         foreach (var col in options.AggregationColumns)
         {
+            if (snapshot.RollupAggregations is { } rollupSpecs)
+            {
+                var targetFunc = MapAggregationFunction(col.Function);
+                var chained = RollupQueryAggregationResolver.Resolve(rollupSpecs, col.AttributePath, targetFunc);
+                if (chained != null)
+                {
+                    q.AddRawAggregationExpression(chained.SqlExpression, chained.SqlAlias);
+                    outputColumnNames.Add(chained.OutputColumnName);
+                    outputNameBySqlAlias[chained.SqlAlias] = chained.OutputColumnName;
+                    continue;
+                }
+            }
+
             var resolved = fieldResolver.Resolve(col.AttributePath);
             if (resolved == null) continue;
 
