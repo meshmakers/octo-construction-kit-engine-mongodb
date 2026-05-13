@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
@@ -323,7 +324,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         // Normalise to UTC: the storage column is TIMESTAMP WITH TIME ZONE so Npgsql writes the
         // offset; downstream queries always read UTC. Matches MapToDataPointDto's behaviour for
         // single-timestamp archives.
-        var attributes = point.Attributes.ToDictionary(
+        // Expand any nested RtRecord values into dotted attribute paths so an entity attribute
+        // like Amount → RtRecord{Value, Unit} ends up as "Amount.Value" / "Amount.Unit" — that's
+        // the same key shape the archive's Columns[] use, so the per-archive table's
+        // user-column lookup picks them up. Without this, the Amount column stays NULL because
+        // the dict has "Amount" → record instead of the leaf "Amount.Value".
+        var flattened = FlattenRecordValues(point.Attributes);
+        var attributes = flattened.ToDictionary(
             kv => ColumnNameMapper.PathToColumnName(kv.Key),
             kv => kv.Value,
             StringComparer.Ordinal);
@@ -335,6 +342,38 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             From = point.From.ToUniversalTime(),
             To = point.To.ToUniversalTime(),
         };
+    }
+
+    /// <summary>
+    /// Walks an attribute dictionary and replaces every <see cref="RtRecord"/> value with one
+    /// dotted-path entry per leaf attribute (recursively for nested records). Non-record values
+    /// are passed through unchanged. Used by the archive insert paths so callers can pass the
+    /// RtEntity attributes as-is, no pre-flattening needed in the pipeline node.
+    /// </summary>
+    private static IReadOnlyDictionary<string, object?> FlattenRecordValues(
+        IReadOnlyDictionary<string, object?> attrs)
+    {
+        var result = new Dictionary<string, object?>(attrs.Count, StringComparer.Ordinal);
+        foreach (var kv in attrs)
+        {
+            FlattenInto(result, kv.Key, kv.Value);
+        }
+        return result;
+    }
+
+    private static void FlattenInto(Dictionary<string, object?> result, string prefix, object? value)
+    {
+        if (value is RtRecord record && record.Attributes.Count > 0)
+        {
+            foreach (var sub in record.Attributes)
+            {
+                FlattenInto(result, $"{prefix}.{sub.Key}", sub.Value);
+            }
+        }
+        else
+        {
+            result[prefix] = value;
+        }
     }
 
     public async Task<StreamDataQueryResult> ExecuteQueryAsync(OctoObjectId archiveRtId, StreamDataQueryOptions options)
