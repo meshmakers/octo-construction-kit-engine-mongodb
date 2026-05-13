@@ -305,12 +305,16 @@ public static class RollupChainAggregationResolver
             }
             case AggregationFunctionDto.Avg:
             {
-                // Try the materialised AVG pair first.
-                var sumOrigin = FindAvgRole(matching, LogicalAvgRole.Numerator);
-                var countOrigin = FindAvgRole(matching, LogicalAvgRole.Denominator);
-                // Fall back to a separately materialised SUM + COUNT pair.
-                sumOrigin ??= FindSingle(matching, CkRollupFunction.Sum);
-                countOrigin ??= FindSingle(matching, CkRollupFunction.Count);
+                // Prefer the separately materialised SUM + COUNT pair over the materialised
+                // AVG pair: mathematically equivalent, but historically more reliable. The
+                // AVG-pair columns can be null on real-world rollups (e.g. when the AVG spec
+                // was added after the table was first populated and a re-aggregation never
+                // happened), whereas the basic SUM + COUNT specs are typically present from
+                // the rollup's first orchestrator tick.
+                var sumOrigin = FindSingle(matching, CkRollupFunction.Sum)
+                    ?? FindAvgRole(matching, LogicalAvgRole.Numerator);
+                var countOrigin = FindSingle(matching, CkRollupFunction.Count)
+                    ?? FindAvgRole(matching, LogicalAvgRole.Denominator);
                 if (sumOrigin is null || countOrigin is null) return null;
                 return new RollupQueryAggregation(
                     SqlExpression: $"SUM(\"{sumOrigin.PhysicalColumnName}\") / NULLIF(SUM(\"{countOrigin.PhysicalColumnName}\"), 0)",

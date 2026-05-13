@@ -100,7 +100,7 @@ public class CrateQueryBuilderTests
     }
 
     [Fact]
-    public void UseWindowedTimeAxis_TimeFilterUsesWindowEndColumn()
+    public void UseWindowedTimeAxis_TimeFilterUsesOverlapPredicate()
     {
         var queryBuilder = new CrateQueryBuilder(Table);
         queryBuilder.UseWindowedTimeAxis();
@@ -115,9 +115,13 @@ public class CrateQueryBuilderTests
         var compiler = new CrateQueryCompiler();
         var query = compiler.CompileQuery(queryBuilder);
 
-        // WHERE clause targets the physical column that actually exists on the windowed table.
-        Assert.Contains("\"window_end\" >= '2022-01-01 00:00:00.000Z'", query);
-        Assert.Contains("\"window_end\" <= '2022-12-31 23:59:59.999Z'", query);
+        // WHERE clause uses bucket-overlap semantics: window_start < to AND window_end > from.
+        // Captures any bucket whose [start, end) interval intersects the requested range —
+        // matches operator intent better than the previous single-column window_end IN [from, to]
+        // which silently dropped buckets ending exactly at the range boundary (e.g. a Monthly
+        // bucket ending 2026-02-01 is excluded from a Jan-1..Jan-31 filter).
+        Assert.Contains("\"window_start\" < '2022-12-31 23:59:59.999Z'", query);
+        Assert.Contains("\"window_end\" > '2022-01-01 00:00:00.000Z'", query);
         Assert.DoesNotContain("\"timestamp\" >=", query);
     }
 
@@ -271,10 +275,13 @@ public class CrateQueryBuilderTests
         var compiler = new CrateQueryCompiler();
         var sql = compiler.CompileQuery(queryBuilder);
 
-        // DATE_BIN, LEFT-JOIN time-range bounds, and __binCount all target window_end.
+        // DATE_BIN keys on window_end (single time axis for bin assignment); __binCount also.
         Assert.Contains("DATE_BIN('600 seconds'::INTERVAL, d.\"window_end\"", sql);
-        Assert.Contains("d.\"window_end\" >= '2024-01-01", sql);
         Assert.Contains("COUNT(d.\"window_end\") AS \"__binCount\"", sql);
+        // Outer range filter uses bucket-overlap semantics — buckets whose body overlaps
+        // [from, to] participate. Strict bin-containment (§7) is enforced separately below.
+        Assert.Contains("d.\"window_start\" < '2024-01-01", sql);
+        Assert.Contains("d.\"window_end\" > '2024-01-01", sql);
         // Concept-time-range §7 fully-contained predicate: source windows that straddle a bin
         // boundary are dropped, not pro-rated.
         Assert.Contains("d.\"window_start\" >= bins.ts", sql);

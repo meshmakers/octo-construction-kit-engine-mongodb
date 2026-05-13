@@ -460,11 +460,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
                     snapshot, rollupSpecs, col.AttributePath, targetFunc, CancellationToken.None);
                 if (chained != null)
                 {
-                    // The chain resolver's OutputColumnName echoes the operator's dotted input
-                    // (e.g. "amount.value"). The wire-format cell mapping looks up row values by
-                    // the BSON camelCase form ("amountvalue"), so normalise here for parity with
-                    // the non-chain fallback below — otherwise the result column is empty.
-                    var outputName = ColumnNameMapper.PathToColumnName(chained.OutputColumnName);
+                    // Output key must be unique per (path, function) — two aggregations on the
+                    // same attribute (MIN + MAX of amount.value) would otherwise collide on the
+                    // same row.Values key and the wire would surface duplicate cells. The chain
+                    // resolver's SqlAlias already has the function suffix ("amount.value_min");
+                    // normalise via PathToColumnName so the key matches the camelCase form the
+                    // wire mapping uses ("amountvalue_min").
+                    var outputName = ColumnNameMapper.PathToColumnName(chained.SqlAlias);
                     q.AddRawAggregationExpression(chained.SqlExpression, chained.SqlAlias);
                     outputColumnNames.Add(outputName);
                     outputNameBySqlAlias[chained.SqlAlias] = outputName;
@@ -479,8 +481,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             var sqlAlias = $"{aggFunc}_{resolved.CrateDbName}";
             q.AddAggregationVariable(resolved.CrateDbName, aggFunc, sqlAlias);
 
-            outputColumnNames.Add(resolved.CrateDbName);
-            outputNameBySqlAlias[sqlAlias] = resolved.CrateDbName;
+            // Same unique-output rule as the chain path: suffix the column name with the
+            // lowercase function so MIN+MAX (or COUNT+SUM, etc.) of the same column don't
+            // overwrite each other in row.Values.
+            var outputName2 = $"{resolved.CrateDbName}_{aggFunc.ToString().ToLowerInvariant()}";
+            outputColumnNames.Add(outputName2);
+            outputNameBySqlAlias[sqlAlias] = outputName2;
         }
 
         // Time filter
@@ -545,11 +551,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
                     snapshot, rollupSpecs, col.AttributePath, targetFunc, CancellationToken.None);
                 if (chained != null)
                 {
-                    // The chain resolver's OutputColumnName echoes the operator's dotted input
-                    // (e.g. "amount.value"). The wire-format cell mapping looks up row values by
-                    // the BSON camelCase form ("amountvalue"), so normalise here for parity with
-                    // the non-chain fallback below — otherwise the result column is empty.
-                    var outputName = ColumnNameMapper.PathToColumnName(chained.OutputColumnName);
+                    // Output key must be unique per (path, function) — two aggregations on the
+                    // same attribute (MIN + MAX of amount.value) would otherwise collide on the
+                    // same row.Values key and the wire would surface duplicate cells. The chain
+                    // resolver's SqlAlias already has the function suffix ("amount.value_min");
+                    // normalise via PathToColumnName so the key matches the camelCase form the
+                    // wire mapping uses ("amountvalue_min").
+                    var outputName = ColumnNameMapper.PathToColumnName(chained.SqlAlias);
                     q.AddRawAggregationExpression(chained.SqlExpression, chained.SqlAlias);
                     outputColumnNames.Add(outputName);
                     outputNameBySqlAlias[chained.SqlAlias] = outputName;
@@ -564,8 +572,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             var sqlAlias = $"{aggFunc}_{resolved.CrateDbName}";
             q.AddAggregationVariable(resolved.CrateDbName, aggFunc, sqlAlias);
 
-            outputColumnNames.Add(resolved.CrateDbName);
-            outputNameBySqlAlias[sqlAlias] = resolved.CrateDbName;
+            // Same unique-output rule as the chain path: suffix the column name with the
+            // lowercase function so MIN+MAX (or COUNT+SUM, etc.) of the same column don't
+            // overwrite each other in row.Values.
+            var outputName2 = $"{resolved.CrateDbName}_{aggFunc.ToString().ToLowerInvariant()}";
+            outputColumnNames.Add(outputName2);
+            outputNameBySqlAlias[sqlAlias] = outputName2;
         }
 
         if (options.From is not null && options.To is not null)
@@ -630,11 +642,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
                     snapshot, rollupSpecs, col.AttributePath, targetFunc, CancellationToken.None);
                 if (chained != null)
                 {
-                    // The chain resolver's OutputColumnName echoes the operator's dotted input
-                    // (e.g. "amount.value"). The wire-format cell mapping looks up row values by
-                    // the BSON camelCase form ("amountvalue"), so normalise here for parity with
-                    // the non-chain fallback below — otherwise the result column is empty.
-                    var outputName = ColumnNameMapper.PathToColumnName(chained.OutputColumnName);
+                    // Output key must be unique per (path, function) — two aggregations on the
+                    // same attribute (MIN + MAX of amount.value) would otherwise collide on the
+                    // same row.Values key and the wire would surface duplicate cells. The chain
+                    // resolver's SqlAlias already has the function suffix ("amount.value_min");
+                    // normalise via PathToColumnName so the key matches the camelCase form the
+                    // wire mapping uses ("amountvalue_min").
+                    var outputName = ColumnNameMapper.PathToColumnName(chained.SqlAlias);
                     q.AddRawAggregationExpression(chained.SqlExpression, chained.SqlAlias);
                     outputColumnNames.Add(outputName);
                     outputNameBySqlAlias[chained.SqlAlias] = outputName;
@@ -649,8 +663,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             var sqlAlias = $"{aggFunc}_{resolved.CrateDbName}";
             q.AddAggregationVariable(resolved.CrateDbName, aggFunc, sqlAlias);
 
-            outputColumnNames.Add(resolved.CrateDbName);
-            outputNameBySqlAlias[sqlAlias] = resolved.CrateDbName;
+            // Same unique-output rule as the chain path: suffix the column name with the
+            // lowercase function so MIN+MAX (or COUNT+SUM, etc.) of the same column don't
+            // overwrite each other in row.Values.
+            var outputName2 = $"{resolved.CrateDbName}_{aggFunc.ToString().ToLowerInvariant()}";
+            outputColumnNames.Add(outputName2);
+            outputNameBySqlAlias[sqlAlias] = outputName2;
         }
 
         AddRtIdFilter(q, options.RtIds);

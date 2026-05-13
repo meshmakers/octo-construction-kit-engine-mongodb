@@ -161,8 +161,22 @@ internal class CrateQueryCompiler
         if (queryBuilder is { From: not null, To: not null })
         {
             // UTC-normalised — see the comment in the WHERE-clause section for why.
-            query.Append($" AND d.\"{timeColumn}\" >= '{queryBuilder.From.Value.ToUniversalTime().ToString(Constants.DateTimeFormat)}'");
-            query.Append($" AND d.\"{timeColumn}\" <= '{queryBuilder.To.Value.ToUniversalTime().ToString(Constants.DateTimeFormat)}'");
+            var fromIso = queryBuilder.From.Value.ToUniversalTime().ToString(Constants.DateTimeFormat);
+            var toIso = queryBuilder.To.Value.ToUniversalTime().ToString(Constants.DateTimeFormat);
+            if (isWindowed)
+            {
+                // Windowed-storage downsampling source filter: bucket overlaps the range —
+                // window_start < To AND window_end > From. Captures any source bucket whose
+                // [start, end) interval intersects the requested time range, including buckets
+                // that end exactly at To or start exactly at From.
+                query.Append($" AND d.\"{Constants.WindowStart}\" < '{toIso}'");
+                query.Append($" AND d.\"{Constants.WindowEnd}\" > '{fromIso}'");
+            }
+            else
+            {
+                query.Append($" AND d.\"{timeColumn}\" >= '{fromIso}'");
+                query.Append($" AND d.\"{timeColumn}\" <= '{toIso}'");
+            }
         }
 
         if (queryBuilder.VariableInListVariables.Any())
@@ -243,8 +257,25 @@ internal class CrateQueryCompiler
             // as Local. ToUniversalTime() is a no-op for Kind=Utc values.
             var fromUtc = queryBuilder.From.Value.ToUniversalTime();
             var toUtc = queryBuilder.To.Value.ToUniversalTime();
-            query.Append(
-                $"\"{queryBuilder.TimeColumn}\" >= '{fromUtc.ToString(Constants.DateTimeFormat)}' AND \"{queryBuilder.TimeColumn}\" <= '{toUtc.ToString(Constants.DateTimeFormat)}'");
+            var fromIso = fromUtc.ToString(Constants.DateTimeFormat);
+            var toIso = toUtc.ToString(Constants.DateTimeFormat);
+            if (queryBuilder.TimeColumn == Constants.WindowEnd)
+            {
+                // Windowed-storage time filter: bucket overlaps the requested range —
+                // `window_start < to AND window_end > from`. Using the natural single-column
+                // semantic (`window_end IN [from, to]`) would exclude any bucket whose end
+                // falls exactly on or after `to` even though its body overlaps the range
+                // (e.g. a Monthly bucket [2026-01-01, 2026-02-01) with the operator's filter
+                // [2026-01-01, 2026-01-31] would be dropped). Overlap mirrors how operators
+                // think about time ranges over bucketed data.
+                query.Append(
+                    $"\"{Constants.WindowStart}\" < '{toIso}' AND \"{Constants.WindowEnd}\" > '{fromIso}'");
+            }
+            else
+            {
+                query.Append(
+                    $"\"{queryBuilder.TimeColumn}\" >= '{fromIso}' AND \"{queryBuilder.TimeColumn}\" <= '{toIso}'");
+            }
 
             if (queryBuilder.HasFieldFilters)
             {
