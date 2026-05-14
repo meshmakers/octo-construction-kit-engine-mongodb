@@ -1,6 +1,5 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.BlueprintCatalogs;
-using Meshmakers.Octo.ConstructionKit.Contracts.BlueprintCatalogs.Serialization;
 using Meshmakers.Octo.ConstructionKit.Engine.BlueprintCatalogs;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.Blueprints;
@@ -34,125 +33,37 @@ public class BlueprintServiceFixture : ImportTestCkModelFixture
         Services.AddTransient<ITenantBlueprintHistory, MongoTenantBlueprintHistory>();
 
         var rootPath = Path.Combine(AppContext.BaseDirectory, TestBlueprintsRelativePath);
-        var catalogV1 = Path.Combine(rootPath, "blueprints", "v1");
 
-        // CI diagnostic: surface the directory layout immediately. If the
-        // <Content Include> glob did not copy the test blueprints into
-        // bin/<config>/<tfm>/TestBlueprints/, every blueprint test fails
-        // with an opaque "Blueprint 'TestBp-1.0.0' could not be loaded from
-        // any catalog" — the engine swallows the catalog's own error in
-        // BlueprintResolutionConflict.AdditionalContext. Throwing here makes
-        // the real cause visible in the test output.
-        if (!Directory.Exists(catalogV1))
-        {
-            var baseContents = Directory.Exists(AppContext.BaseDirectory)
-                ? string.Join(", ", Directory.EnumerateFileSystemEntries(AppContext.BaseDirectory)
-                    .Select(Path.GetFileName).Take(50))
-                : "(BaseDirectory does not exist)";
-            var rootContents = Directory.Exists(rootPath)
-                ? string.Join(", ", Directory.EnumerateFileSystemEntries(rootPath, "*", SearchOption.AllDirectories)
-                    .Select(p => Path.GetRelativePath(rootPath, p)).Take(50))
-                : "(TestBlueprints root missing)";
-            throw new InvalidOperationException(
-                $"TestBlueprints catalog directory not found at '{catalogV1}'. " +
-                $"AppContext.BaseDirectory='{AppContext.BaseDirectory}'. " +
-                $"BaseDirectory contents: {baseContents}. " +
-                $"TestBlueprints contents: {rootContents}");
-        }
+        // Use a fixture-local catalog cache directory. The default
+        // CacheDirectory (~/.octo/blueprint-catalog/cache) is shared across
+        // every test class in the process. A different test class's fixture
+        // — e.g. BlueprintFixture, which doesn't configure RootPath and
+        // therefore points the catalog at the non-existent default
+        // ~/.octo/local-blueprint-catalog — writes an empty cache file there
+        // on its first IBlueprintCatalogManager access. ReadCacheAsync only
+        // refreshes when the cache file does not exist, so when this fixture
+        // later resolves the catalog, it reads the poisoned empty snapshot
+        // and never re-scans the populated TestBlueprints directory.
+        // Isolating CacheDirectory per-fixture removes the cross-class
+        // pollution. The path also lives under bin/, so `git clean` resets it.
+        var cacheDir = Path.Combine(AppContext.BaseDirectory, "TestBlueprintsCache",
+            Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(cacheDir);
 
         Services.Configure<LocalFileSystemBlueprintCatalogOptions>(opts =>
         {
             opts.RootPath = rootPath;
             opts.IsEnabled = true;
+            opts.CacheDirectory = cacheDir;
         });
-    }
-
-    protected override async Task InitializeServicesAsync()
-    {
-        await base.InitializeServicesAsync();
-
-        // Deeper diagnostic: the catalog's RefreshCatalogAsync silently swallows
-        // any blueprint.yaml that fails to parse (`catch { /* Skip */ }`), so
-        // even with the directory present, a serialiser or schema-validator
-        // failure surfaces only as "Blueprint 'X' could not be loaded". Eagerly
-        // deserialise every manifest under blueprints/v1/ via the same
-        // BlueprintYamlSerializer the catalog uses, and throw with the actual
-        // operation messages if any fail.
-        var rootPath = Path.Combine(AppContext.BaseDirectory, TestBlueprintsRelativePath);
-        var catalogV1 = Path.Combine(rootPath, "blueprints", "v1");
-        var serializer = GetService<IBlueprintSerializer>();
-
-        var manifestPaths = Directory.EnumerateFiles(catalogV1, "blueprint.yaml", SearchOption.AllDirectories).ToList();
-        if (manifestPaths.Count == 0)
+        Services.Configure<PublicGitHubBlueprintCatalogOptions>(opts =>
         {
-            throw new InvalidOperationException(
-                $"No blueprint.yaml files found under '{catalogV1}'. " +
-                $"Subdirectories: {string.Join(", ", Directory.EnumerateDirectories(catalogV1).Select(Path.GetFileName))}");
-        }
-
-        var parseFailures = new List<string>();
-        foreach (var manifestPath in manifestPaths)
+            opts.CacheDirectory = cacheDir;
+        });
+        Services.Configure<PrivateGitHubBlueprintCatalogOptions>(opts =>
         {
-            await using var stream = File.OpenRead(manifestPath);
-            var opResult = new OperationResult();
-            try
-            {
-                var blueprint = await serializer.DeserializeBlueprintMetaAsync(stream, manifestPath, opResult);
-                if (opResult.HasErrors || blueprint == null)
-                {
-                    parseFailures.Add(
-                        $"{manifestPath}: {string.Join(" | ", opResult.Messages.Select(m => $"[{m.MessageLevel}] {m.MessageText}"))}");
-                }
-            }
-            catch (Exception ex)
-            {
-                parseFailures.Add($"{manifestPath}: threw {ex.GetType().Name}: {ex.Message}");
-            }
-        }
-
-        if (parseFailures.Count > 0)
-        {
-            throw new InvalidOperationException(
-                $"Blueprint manifest(s) under '{catalogV1}' failed to deserialise: " +
-                string.Join(" ;; ", parseFailures));
-        }
-
-        // Final diagnostic: actually exercise the catalog manager. The
-        // production code path during ApplyBlueprintAsync calls GetAsync,
-        // which internally does IsExistingAsync → ReadCacheAsync(true) →
-        // RefreshCatalogAsync on first use. If this throws, we capture the
-        // real exception instead of the swallowed "could not be loaded".
-        var catalogManager = GetService<IBlueprintCatalogManager>();
-
-        var probeOp = new OperationResult();
-        try
-        {
-            var probe = await catalogManager.GetAsync(new BlueprintId("TestBp", "1.0.0"), probeOp);
-            if (probeOp.HasErrors || probe == null)
-            {
-                throw new InvalidOperationException(
-                    $"IBlueprintCatalogManager.GetAsync(TestBp-1.0.0) returned without throwing but " +
-                    $"probe is null or operationResult has errors. Messages: " +
-                    string.Join(" | ", probeOp.Messages.Select(m => $"[{m.MessageLevel}] {m.MessageText}")));
-            }
-        }
-        catch (Exception ex) when (ex is not InvalidOperationException invOp || !invOp.Message.StartsWith("IBlueprintCatalogManager"))
-        {
-            // Capture cache state on failure so we know whether the catalog
-            // even built a cache and what it contains.
-            var cacheDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".octo/blueprint-catalog/cache");
-            var cacheState = Directory.Exists(cacheDir)
-                ? string.Join(", ", Directory.EnumerateFiles(cacheDir).Select(p =>
-                    $"{Path.GetFileName(p)}({new FileInfo(p).Length}B)"))
-                : "(cache dir missing)";
-            throw new InvalidOperationException(
-                $"IBlueprintCatalogManager.GetAsync(TestBp-1.0.0) threw {ex.GetType().FullName}: {ex.Message}. " +
-                $"Probe-OperationResult messages: " +
-                string.Join(" | ", probeOp.Messages.Select(m => $"[{m.MessageLevel}] {m.MessageText}")) +
-                $". Cache state: {cacheState}", ex);
-        }
+            opts.CacheDirectory = cacheDir;
+        });
     }
 
     public IBlueprintService GetBlueprintService() => GetService<IBlueprintService>();
