@@ -116,6 +116,43 @@ public class BlueprintServiceFixture : ImportTestCkModelFixture
                 $"Blueprint manifest(s) under '{catalogV1}' failed to deserialise: " +
                 string.Join(" ;; ", parseFailures));
         }
+
+        // Final diagnostic: actually exercise the catalog manager. The
+        // production code path during ApplyBlueprintAsync calls GetAsync,
+        // which internally does IsExistingAsync → ReadCacheAsync(true) →
+        // RefreshCatalogAsync on first use. If this throws, we capture the
+        // real exception instead of the swallowed "could not be loaded".
+        var catalogManager = GetService<IBlueprintCatalogManager>();
+
+        var probeOp = new OperationResult();
+        try
+        {
+            var probe = await catalogManager.GetAsync(new BlueprintId("TestBp", "1.0.0"), probeOp);
+            if (probeOp.HasErrors || probe == null)
+            {
+                throw new InvalidOperationException(
+                    $"IBlueprintCatalogManager.GetAsync(TestBp-1.0.0) returned without throwing but " +
+                    $"probe is null or operationResult has errors. Messages: " +
+                    string.Join(" | ", probeOp.Messages.Select(m => $"[{m.MessageLevel}] {m.MessageText}")));
+            }
+        }
+        catch (Exception ex) when (ex is not InvalidOperationException invOp || !invOp.Message.StartsWith("IBlueprintCatalogManager"))
+        {
+            // Capture cache state on failure so we know whether the catalog
+            // even built a cache and what it contains.
+            var cacheDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".octo/blueprint-catalog/cache");
+            var cacheState = Directory.Exists(cacheDir)
+                ? string.Join(", ", Directory.EnumerateFiles(cacheDir).Select(p =>
+                    $"{Path.GetFileName(p)}({new FileInfo(p).Length}B)"))
+                : "(cache dir missing)";
+            throw new InvalidOperationException(
+                $"IBlueprintCatalogManager.GetAsync(TestBp-1.0.0) threw {ex.GetType().FullName}: {ex.Message}. " +
+                $"Probe-OperationResult messages: " +
+                string.Join(" | ", probeOp.Messages.Select(m => $"[{m.MessageLevel}] {m.MessageText}")) +
+                $". Cache state: {cacheState}", ex);
+        }
     }
 
     public IBlueprintService GetBlueprintService() => GetService<IBlueprintService>();
