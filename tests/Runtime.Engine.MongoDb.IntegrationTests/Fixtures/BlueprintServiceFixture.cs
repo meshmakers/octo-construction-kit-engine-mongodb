@@ -1,5 +1,6 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.BlueprintCatalogs;
+using Meshmakers.Octo.ConstructionKit.Contracts.BlueprintCatalogs.Serialization;
 using Meshmakers.Octo.ConstructionKit.Engine.BlueprintCatalogs;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.Blueprints;
@@ -64,6 +65,57 @@ public class BlueprintServiceFixture : ImportTestCkModelFixture
             opts.RootPath = rootPath;
             opts.IsEnabled = true;
         });
+    }
+
+    protected override async Task InitializeServicesAsync()
+    {
+        await base.InitializeServicesAsync();
+
+        // Deeper diagnostic: the catalog's RefreshCatalogAsync silently swallows
+        // any blueprint.yaml that fails to parse (`catch { /* Skip */ }`), so
+        // even with the directory present, a serialiser or schema-validator
+        // failure surfaces only as "Blueprint 'X' could not be loaded". Eagerly
+        // deserialise every manifest under blueprints/v1/ via the same
+        // BlueprintYamlSerializer the catalog uses, and throw with the actual
+        // operation messages if any fail.
+        var rootPath = Path.Combine(AppContext.BaseDirectory, TestBlueprintsRelativePath);
+        var catalogV1 = Path.Combine(rootPath, "blueprints", "v1");
+        var serializer = GetService<IBlueprintSerializer>();
+
+        var manifestPaths = Directory.EnumerateFiles(catalogV1, "blueprint.yaml", SearchOption.AllDirectories).ToList();
+        if (manifestPaths.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"No blueprint.yaml files found under '{catalogV1}'. " +
+                $"Subdirectories: {string.Join(", ", Directory.EnumerateDirectories(catalogV1).Select(Path.GetFileName))}");
+        }
+
+        var parseFailures = new List<string>();
+        foreach (var manifestPath in manifestPaths)
+        {
+            await using var stream = File.OpenRead(manifestPath);
+            var opResult = new OperationResult();
+            try
+            {
+                var blueprint = await serializer.DeserializeBlueprintMetaAsync(stream, manifestPath, opResult);
+                if (opResult.HasErrors || blueprint == null)
+                {
+                    parseFailures.Add(
+                        $"{manifestPath}: {string.Join(" | ", opResult.Messages.Select(m => $"[{m.MessageLevel}] {m.MessageText}"))}");
+                }
+            }
+            catch (Exception ex)
+            {
+                parseFailures.Add($"{manifestPath}: threw {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        if (parseFailures.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"Blueprint manifest(s) under '{catalogV1}' failed to deserialise: " +
+                string.Join(" ;; ", parseFailures));
+        }
     }
 
     public IBlueprintService GetBlueprintService() => GetService<IBlueprintService>();
