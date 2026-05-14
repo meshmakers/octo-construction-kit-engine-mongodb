@@ -452,6 +452,149 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
         }
     }
 
+    [Fact]
+    public async Task Uninstall_BlueprintWithoutDependents_RemovesLockedEntitiesAndInstallationRow()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var installations = _fixture.GetService<ITenantBlueprintInstallations>();
+        var tenantId = await _fixture.CreateTestTenantAsync("uninst-leaf");
+
+        try
+        {
+            await blueprintService.ApplyBlueprintAsync(tenantId, TestBpV1, force: false, ct);
+
+            (await QueryAllCustomersAsync(tenantId)).Should().HaveCount(2);
+
+            var result = await blueprintService.UninstallAsync(tenantId, "TestBp", cascade: false, ct);
+
+            result.Success.Should().BeTrue();
+            result.EntitiesDeleted.Should().Be(2, "both Alpha and Beta are locked-by-default");
+            result.UninstalledBlueprintId.Should().Be(TestBpV1);
+
+            (await installations.GetByBlueprintNameAsync(tenantId, "TestBp", ct))
+                .Should().BeNull("installation row removed");
+
+            (await QueryAllCustomersAsync(tenantId)).Should().BeEmpty("locked owned entities erased");
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task Uninstall_BlueprintWithDependents_RefusesWithoutCascade()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var installations = _fixture.GetService<ITenantBlueprintInstallations>();
+        var tenantId = await _fixture.CreateTestTenantAsync("uninst-refuse");
+
+        try
+        {
+            await blueprintService.ApplyBlueprintAsync(
+                tenantId, new BlueprintId("TestRootBp", "1.0.0"), force: false, ct);
+
+            // Attempt to uninstall the dep — TestRootBp still depends on it.
+            var result = await blueprintService.UninstallAsync(tenantId, "TestDepBp", cascade: false, ct);
+
+            result.Success.Should().BeFalse();
+            result.BlockingDependents.Should().ContainSingle()
+                .Which.Name.Should().Be("TestRootBp");
+
+            // Nothing should have changed.
+            (await installations.GetInstalledAsync(tenantId, ct)).Should().HaveCount(2);
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task Uninstall_Cascade_RemovesDependentsAndOrphanDependencies()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var installations = _fixture.GetService<ITenantBlueprintInstallations>();
+        var tenantId = await _fixture.CreateTestTenantAsync("uninst-cascade");
+
+        try
+        {
+            await blueprintService.ApplyBlueprintAsync(
+                tenantId, new BlueprintId("TestRootBp", "1.0.0"), force: false, ct);
+
+            (await installations.GetInstalledAsync(tenantId, ct)).Should().HaveCount(2);
+
+            // Cascade-uninstall the dep — root depends on it, so root gets removed first,
+            // then the dep itself.
+            var result = await blueprintService.UninstallAsync(tenantId, "TestDepBp", cascade: true, ct);
+
+            result.Success.Should().BeTrue();
+            // The dependent (TestRootBp) was cascaded away.
+            result.CascadedDependencies.Should()
+                .Contain(d => d.Name == "TestRootBp", "TestRootBp depended on TestDepBp");
+
+            (await installations.GetInstalledAsync(tenantId, ct)).Should().BeEmpty(
+                "cascade removed both blueprints");
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task Uninstall_Root_CascadesOrphanedDependency()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var installations = _fixture.GetService<ITenantBlueprintInstallations>();
+        var tenantId = await _fixture.CreateTestTenantAsync("uninst-orphan");
+
+        try
+        {
+            await blueprintService.ApplyBlueprintAsync(
+                tenantId, new BlueprintId("TestRootBp", "1.0.0"), force: false, ct);
+
+            // Uninstall the root with cascade — TestDepBp was pulled in as IsDependency=true
+            // and has no other referrers, so cascade should auto-clean it up.
+            var result = await blueprintService.UninstallAsync(tenantId, "TestRootBp", cascade: true, ct);
+
+            result.Success.Should().BeTrue();
+            result.CascadedDependencies.Should()
+                .Contain(d => d.Name == "TestDepBp", "TestDepBp orphaned, IsDependency=true");
+
+            (await installations.GetInstalledAsync(tenantId, ct)).Should().BeEmpty();
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task Uninstall_NonexistentBlueprint_ReturnsFailure()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var tenantId = await _fixture.CreateTestTenantAsync("uninst-missing");
+
+        try
+        {
+            var result = await blueprintService.UninstallAsync(tenantId, "NoSuchBp", cascade: false, ct);
+
+            result.Success.Should().BeFalse();
+            result.UninstalledBlueprintId.Should().BeNull();
+            result.Errors.Should().NotBeEmpty();
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
     private async Task<List<RtEntity>> QueryAllCustomersAsync(string tenantId)
     {
         var repository = await _fixture.GetRuntimeRepositoryProvider()
