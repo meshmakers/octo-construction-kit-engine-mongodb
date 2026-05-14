@@ -342,6 +342,111 @@ public class BlueprintIntegrationTests(BlueprintFixture fixture)
 
     #endregion
 
+    #region MongoTenantBlueprintInstallations Tests
+
+    [Fact]
+    public async Task BlueprintInstallations_Upsert_CreatesNewInstallation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var installations = _fixture.GetBlueprintInstallations();
+        var tenantId = $"install-test-{Guid.NewGuid():N}";
+        var blueprintId = new BlueprintId("TestBlueprint", "1.0.0");
+
+        await installations.UpsertAsync(tenantId, new BlueprintInstallation
+        {
+            BlueprintId = blueprintId,
+            InstalledAt = DateTime.UtcNow,
+            LastUpdatedAt = DateTime.UtcNow,
+            IsDependency = false
+        }, ct);
+
+        var installed = await installations.GetByBlueprintNameAsync(tenantId, "TestBlueprint", ct);
+
+        Assert.NotNull(installed);
+        Assert.Equal(blueprintId.FullName, installed.BlueprintId.FullName);
+        Assert.False(installed.IsDependency);
+    }
+
+    [Fact]
+    public async Task BlueprintInstallations_Upsert_ReplacesExistingForSameName()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var installations = _fixture.GetBlueprintInstallations();
+        var tenantId = $"install-replace-{Guid.NewGuid():N}";
+
+        await installations.UpsertAsync(tenantId, new BlueprintInstallation
+        {
+            BlueprintId = new BlueprintId("MyBp", "1.0.0"),
+            InstalledAt = DateTime.UtcNow.AddHours(-1),
+            LastUpdatedAt = DateTime.UtcNow.AddHours(-1)
+        }, ct);
+
+        await installations.UpsertAsync(tenantId, new BlueprintInstallation
+        {
+            BlueprintId = new BlueprintId("MyBp", "2.0.0"),
+            InstalledAt = DateTime.UtcNow.AddHours(-1),
+            LastUpdatedAt = DateTime.UtcNow
+        }, ct);
+
+        var all = await installations.GetInstalledAsync(tenantId, ct);
+        Assert.Single(all);
+        Assert.Equal("2.0.0", all[0].BlueprintId.Version.ToString());
+    }
+
+    [Fact]
+    public async Task BlueprintInstallations_MultipleBlueprints_AllReturnedByList()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var installations = _fixture.GetBlueprintInstallations();
+        var tenantId = $"install-multi-{Guid.NewGuid():N}";
+
+        await installations.UpsertAsync(tenantId, new BlueprintInstallation
+        {
+            BlueprintId = new BlueprintId("BaseBp", "1.0.0"),
+            InstalledAt = DateTime.UtcNow,
+            LastUpdatedAt = DateTime.UtcNow,
+            IsDependency = true
+        }, ct);
+
+        await installations.UpsertAsync(tenantId, new BlueprintInstallation
+        {
+            BlueprintId = new BlueprintId("AppBp", "2.0.0"),
+            InstalledAt = DateTime.UtcNow,
+            LastUpdatedAt = DateTime.UtcNow,
+            ResolvedDependencies = [new BlueprintId("BaseBp", "1.0.0")]
+        }, ct);
+
+        var all = await installations.GetInstalledAsync(tenantId, ct);
+
+        Assert.Equal(2, all.Count);
+        Assert.Contains(all, i => i.BlueprintId.Name == "BaseBp" && i.IsDependency);
+        Assert.Contains(all, i => i.BlueprintId.Name == "AppBp"
+            && i.ResolvedDependencies.Count == 1
+            && i.ResolvedDependencies[0].FullName == "BaseBp-1.0.0");
+    }
+
+    [Fact]
+    public async Task BlueprintInstallations_Remove_DropsRow()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var installations = _fixture.GetBlueprintInstallations();
+        var tenantId = $"install-remove-{Guid.NewGuid():N}";
+
+        await installations.UpsertAsync(tenantId, new BlueprintInstallation
+        {
+            BlueprintId = new BlueprintId("ToRemove", "1.0.0"),
+            InstalledAt = DateTime.UtcNow,
+            LastUpdatedAt = DateTime.UtcNow
+        }, ct);
+
+        var removed = await installations.RemoveAsync(tenantId, "ToRemove", ct);
+
+        Assert.True(removed);
+        Assert.Null(await installations.GetByBlueprintNameAsync(tenantId, "ToRemove", ct));
+    }
+
+    #endregion
+
     #region TenantContext Blueprint Integration Tests
 
     [Fact]

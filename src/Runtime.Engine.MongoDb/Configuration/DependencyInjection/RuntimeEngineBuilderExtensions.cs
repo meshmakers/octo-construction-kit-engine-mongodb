@@ -106,6 +106,7 @@ public static class RuntimeEngineBuilderExtensions
     public static IRuntimeEngineBuilder AddMongoBlueprintSupport(this IRuntimeEngineBuilder builder)
     {
         builder.Services.AddTransient<ITenantBlueprintHistory, MongoTenantBlueprintHistory>();
+        builder.Services.AddTransient<ITenantBlueprintInstallations, MongoTenantBlueprintInstallations>();
 
         return builder;
     }
