@@ -332,6 +332,92 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
     }
 
     [Fact]
+    public async Task ApplyUpdate_KeepBlueprint_PromotesUserModifiedConflictInCall()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var tenantId = await _fixture.CreateTestTenantAsync("apply-keepbp-um");
+
+        try
+        {
+            await blueprintService.ApplyBlueprintAsync(tenantId, TestBpV1, force: false, ct);
+            await UnlockCustomerAsync(tenantId, "Alpha");
+
+            var alphaBefore = (await QueryAllCustomersAsync(tenantId))
+                .Single(c => c.RtWellKnownName == "Alpha");
+            var alphaRtId = alphaBefore.RtId.ToString();
+
+            var result = await blueprintService.ApplyUpdateAsync(
+                tenantId, TestBpV2, BlueprintUpdateMode.Merge,
+                new BlueprintUpdateOptions
+                {
+                    ConflictResolutions = new Dictionary<string, ConflictResolution>
+                    {
+                        [alphaRtId!] = ConflictResolution.KeepBlueprint
+                    }
+                }, ct);
+
+            result.Success.Should().BeTrue();
+            result.EntitiesUpdated.Should().Be(1, "Alpha is promoted via KeepBlueprint");
+            result.EntitiesSkipped.Should().Be(0, "no remaining Skip resolutions");
+
+            var alphaAfter = (await QueryAllCustomersAsync(tenantId))
+                .Single(c => c.RtWellKnownName == "Alpha");
+            alphaAfter.GetAttributeStringValueOrDefault("RtBlueprintSource")
+                .Should().Be(TestBpV2.FullName, "Alpha is re-stamped with v2");
+            alphaAfter.GetAttributeValueOrDefault<bool>("RtBlueprintLocked")
+                .Should().BeTrue("KeepBlueprint re-locks the entity");
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyUpdate_KeepBlueprint_PromotesDeleteModifiedConflictInFullMode()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var tenantId = await _fixture.CreateTestTenantAsync("apply-keepbp-dm");
+
+        try
+        {
+            await blueprintService.ApplyBlueprintAsync(tenantId, TestBpV1, force: false, ct);
+            // Beta is missing from v2 — unlocking makes the v2 update raise a
+            // DeleteModified conflict instead of erasing the orphan outright.
+            await UnlockCustomerAsync(tenantId, "Beta");
+
+            var betaBefore = (await QueryAllCustomersAsync(tenantId))
+                .Single(c => c.RtWellKnownName == "Beta");
+            var betaRtId = betaBefore.RtId.ToString();
+
+            var result = await blueprintService.ApplyUpdateAsync(
+                tenantId, TestBpV2, BlueprintUpdateMode.Full,
+                new BlueprintUpdateOptions
+                {
+                    ConflictResolutions = new Dictionary<string, ConflictResolution>
+                    {
+                        [betaRtId!] = ConflictResolution.KeepBlueprint
+                    }
+                }, ct);
+
+            result.Success.Should().BeTrue();
+            result.EntitiesDeleted.Should().Be(1, "Beta is promoted to delete via KeepBlueprint");
+
+            var customers = await QueryAllCustomersAsync(tenantId);
+            customers.Should().NotContain(c => c.RtWellKnownName == "Beta",
+                "DeleteModified + KeepBlueprint erases the entity");
+            customers.Should().Contain(c => c.RtWellKnownName == "Alpha");
+            customers.Should().Contain(c => c.RtWellKnownName == "Gamma");
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    [Fact]
     public async Task Rollback_AfterUpdate_RestoresPreviousState()
     {
         var ct = TestContext.Current.CancellationToken;
