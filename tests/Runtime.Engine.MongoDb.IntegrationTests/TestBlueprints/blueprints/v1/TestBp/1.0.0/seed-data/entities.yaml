@@ -19,3 +19,15 @@ entities:
         value: Beta Customer
       - id: Test/Contacts.Address
         value: Street 2
+  - rtId: 507f1f77bcf86cd799439010
+    ckTypeId: Test/Continent
+    rtWellKnownName: Europe
+    attributes:
+      - id: Test/Name
+        value: Europe
+  - rtId: 507f1f77bcf86cd799439011
+    ckTypeId: Test/Continent
+    rtWellKnownName: Asia
+    attributes:
+      - id: Test/Name
+        value: Asia
