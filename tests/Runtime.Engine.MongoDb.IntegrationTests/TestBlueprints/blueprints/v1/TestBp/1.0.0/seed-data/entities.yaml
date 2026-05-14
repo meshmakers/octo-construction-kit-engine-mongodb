@@ -3,15 +3,19 @@ dependencies:
   - System-2.0.0
   - Test-1.0.0
 entities:
-  - ckTypeId: Test-1.0.0/Customer
-    rtId: 507f1f77bcf86cd799439001
+  - rtId: 507f1f77bcf86cd799439001
+    ckTypeId: Test/Customer
     rtWellKnownName: Alpha
     attributes:
-      Name: Alpha Customer
-      Address: Street 1
-  - ckTypeId: Test-1.0.0/Customer
-    rtId: 507f1f77bcf86cd799439002
+      - id: Test/Contacts.Name
+        value: Alpha Customer
+      - id: Test/Contacts.Address
+        value: Street 1
+  - rtId: 507f1f77bcf86cd799439002
+    ckTypeId: Test/Customer
     rtWellKnownName: Beta
     attributes:
-      Name: Beta Customer
-      Address: Street 2
+      - id: Test/Contacts.Name
+        value: Beta Customer
+      - id: Test/Contacts.Address
+        value: Street 2
