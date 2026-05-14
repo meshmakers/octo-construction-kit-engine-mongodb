@@ -364,6 +364,34 @@ public class RtBlueprintHistoryMongoDataSourceMapper : IMongoDataSourceMapper<st
     }
 }
 
+public class RtBlueprintInstallationMongoDataSourceMapper : IMongoDataSourceMapper<string, RtBlueprintInstallation>
+{
+    public string CollectionNamePrefix => nameof(RtBlueprintInstallation);
+
+    public string GetId(RtBlueprintInstallation document)
+    {
+        return document.Id;
+    }
+
+    public UpdateDefinition<RtBlueprintInstallation> ApplyUpdate(RtBlueprintInstallation document)
+    {
+        var update = Builders<RtBlueprintInstallation>.Update;
+        List<UpdateDefinition<RtBlueprintInstallation>> list =
+        [
+            update.Set(p => p.TenantId, document.TenantId),
+            update.Set(p => p.BlueprintName, document.BlueprintName),
+            update.Set(p => p.BlueprintVersion, document.BlueprintVersion),
+            update.Set(p => p.InstalledAt, document.InstalledAt),
+            update.Set(p => p.LastUpdatedAt, document.LastUpdatedAt),
+            update.Set(p => p.SeedDataChecksum, document.SeedDataChecksum),
+            update.Set(p => p.ResolvedDependencies, document.ResolvedDependencies),
+            update.Set(p => p.IsDependency, document.IsDependency)
+        ];
+
+        return update.Combine(list);
+    }
+}
+
 public class RtBackupInfoMongoDataSourceMapper : IMongoDataSourceMapper<string, RtBackupInfo>
 {
     public string CollectionNamePrefix => nameof(RtBackupInfo);
