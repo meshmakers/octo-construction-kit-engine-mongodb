@@ -1,0 +1,21 @@
+$schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+dependencies:
+  - System-2.0.0
+  - Test-1.0.0
+entities:
+  - rtId: 507f1f77bcf86cd799439001
+    ckTypeId: Test/Customer
+    rtWellKnownName: Alpha
+    attributes:
+      - id: Test/Contacts.Name
+        value: Alpha Customer
+      - id: Test/Contacts.Address
+        value: Street 1
+  - rtId: 507f1f77bcf86cd799439002
+    ckTypeId: Test/Customer
+    rtWellKnownName: Beta
+    attributes:
+      - id: Test/Contacts.Name
+        value: Beta Customer
+      - id: Test/Contacts.Address
+        value: Street 2
