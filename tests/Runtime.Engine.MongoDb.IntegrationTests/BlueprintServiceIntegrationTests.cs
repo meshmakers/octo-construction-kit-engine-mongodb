@@ -373,6 +373,85 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
         }
     }
 
+    [Fact]
+    public async Task ApplyBlueprint_WithDependency_InstallsBothInOrderWithCorrectFlags()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var installations = _fixture.GetService<ITenantBlueprintInstallations>();
+        var tenantId = await _fixture.CreateTestTenantAsync("multi");
+
+        var rootId = new BlueprintId("TestRootBp", "1.0.0");
+        var depId = new BlueprintId("TestDepBp", "1.0.0");
+
+        try
+        {
+            // Apply the root — the resolver should pull in TestDepBp transitively.
+            var result = await blueprintService.ApplyBlueprintAsync(tenantId, rootId, force: false, ct);
+            result.IsSuccess.Should().BeTrue();
+
+            // Both installations are recorded.
+            var rows = await installations.GetInstalledAsync(tenantId, ct);
+            rows.Should().HaveCount(2);
+
+            var depRow = rows.Single(r => r.BlueprintId.Name == "TestDepBp");
+            var rootRow = rows.Single(r => r.BlueprintId.Name == "TestRootBp");
+
+            depRow.IsDependency.Should().BeTrue("transitive dep must be flagged as such");
+            depRow.BlueprintId.Should().Be(depId);
+
+            rootRow.IsDependency.Should().BeFalse("the explicitly-applied root is not a dependency");
+            rootRow.BlueprintId.Should().Be(rootId);
+            rootRow.ResolvedDependencies.Should().ContainSingle()
+                .Which.Should().Be(depId);
+
+            // Both seed entities are present in the tenant.
+            var customers = await QueryAllCustomersAsync(tenantId);
+            customers.Should().Contain(c => c.RtWellKnownName == "DepCustomer");
+            customers.Should().Contain(c => c.RtWellKnownName == "RootCustomer");
+
+            // Each customer carries the provenance of its OWN blueprint, not the root.
+            customers.Single(c => c.RtWellKnownName == "DepCustomer")
+                .GetAttributeStringValueOrDefault("RtBlueprintSource")
+                .Should().Be(depId.FullName);
+            customers.Single(c => c.RtWellKnownName == "RootCustomer")
+                .GetAttributeStringValueOrDefault("RtBlueprintSource")
+                .Should().Be(rootId.FullName);
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyBlueprint_ReApply_DependencyAlreadyInstalled_StaysIdempotent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var installations = _fixture.GetService<ITenantBlueprintInstallations>();
+        var tenantId = await _fixture.CreateTestTenantAsync("multi-idem");
+
+        var rootId = new BlueprintId("TestRootBp", "1.0.0");
+
+        try
+        {
+            // First apply pulls in both rows.
+            await blueprintService.ApplyBlueprintAsync(tenantId, rootId, force: false, ct);
+            var firstRows = await installations.GetInstalledAsync(tenantId, ct);
+            firstRows.Should().HaveCount(2);
+
+            // Second apply without --force must not duplicate installation rows.
+            await blueprintService.ApplyBlueprintAsync(tenantId, rootId, force: false, ct);
+            var secondRows = await installations.GetInstalledAsync(tenantId, ct);
+            secondRows.Should().HaveCount(2);
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
     private async Task<List<RtEntity>> QueryAllCustomersAsync(string tenantId)
     {
         var repository = await _fixture.GetRuntimeRepositoryProvider()

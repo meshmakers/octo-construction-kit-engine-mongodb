@@ -1,0 +1,13 @@
+$schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+dependencies:
+  - System-2.0.0
+  - Test-1.0.0
+entities:
+  - rtId: 507f1f77bcf86cd7994390f2
+    ckTypeId: Test/Customer
+    rtWellKnownName: RootCustomer
+    attributes:
+      - id: Test/Contacts.Name
+        value: Root Customer
+      - id: Test/Contacts.Address
+        value: Root Street
