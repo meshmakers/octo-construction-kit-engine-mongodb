@@ -32,9 +32,36 @@ public class BlueprintServiceFixture : ImportTestCkModelFixture
         // We register the Mongo blueprint history directly to avoid that race.
         Services.AddTransient<ITenantBlueprintHistory, MongoTenantBlueprintHistory>();
 
+        var rootPath = Path.Combine(AppContext.BaseDirectory, TestBlueprintsRelativePath);
+        var catalogV1 = Path.Combine(rootPath, "blueprints", "v1");
+
+        // CI diagnostic: surface the directory layout immediately. If the
+        // <Content Include> glob did not copy the test blueprints into
+        // bin/<config>/<tfm>/TestBlueprints/, every blueprint test fails
+        // with an opaque "Blueprint 'TestBp-1.0.0' could not be loaded from
+        // any catalog" — the engine swallows the catalog's own error in
+        // BlueprintResolutionConflict.AdditionalContext. Throwing here makes
+        // the real cause visible in the test output.
+        if (!Directory.Exists(catalogV1))
+        {
+            var baseContents = Directory.Exists(AppContext.BaseDirectory)
+                ? string.Join(", ", Directory.EnumerateFileSystemEntries(AppContext.BaseDirectory)
+                    .Select(Path.GetFileName).Take(50))
+                : "(BaseDirectory does not exist)";
+            var rootContents = Directory.Exists(rootPath)
+                ? string.Join(", ", Directory.EnumerateFileSystemEntries(rootPath, "*", SearchOption.AllDirectories)
+                    .Select(p => Path.GetRelativePath(rootPath, p)).Take(50))
+                : "(TestBlueprints root missing)";
+            throw new InvalidOperationException(
+                $"TestBlueprints catalog directory not found at '{catalogV1}'. " +
+                $"AppContext.BaseDirectory='{AppContext.BaseDirectory}'. " +
+                $"BaseDirectory contents: {baseContents}. " +
+                $"TestBlueprints contents: {rootContents}");
+        }
+
         Services.Configure<LocalFileSystemBlueprintCatalogOptions>(opts =>
         {
-            opts.RootPath = Path.Combine(AppContext.BaseDirectory, TestBlueprintsRelativePath);
+            opts.RootPath = rootPath;
             opts.IsEnabled = true;
         });
     }
