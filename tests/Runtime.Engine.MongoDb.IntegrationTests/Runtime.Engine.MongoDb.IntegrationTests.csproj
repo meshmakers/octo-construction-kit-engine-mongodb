@@ -44,9 +44,10 @@
         <None Update="testData\largeBinaries\Products.pdf">
           <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </None>
-        <None Update="TestBlueprints\**\*.yaml">
+        <Content Include="TestBlueprints/**/*.yaml">
           <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        </None>
+          <Pack>false</Pack>
+        </Content>
     </ItemGroup>
 
     <ItemGroup>
