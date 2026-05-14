@@ -32,10 +32,37 @@ public class BlueprintServiceFixture : ImportTestCkModelFixture
         // We register the Mongo blueprint history directly to avoid that race.
         Services.AddTransient<ITenantBlueprintHistory, MongoTenantBlueprintHistory>();
 
+        var rootPath = Path.Combine(AppContext.BaseDirectory, TestBlueprintsRelativePath);
+
+        // Use a fixture-local catalog cache directory. The default
+        // CacheDirectory (~/.octo/blueprint-catalog/cache) is shared across
+        // every test class in the process. A different test class's fixture
+        // — e.g. BlueprintFixture, which doesn't configure RootPath and
+        // therefore points the catalog at the non-existent default
+        // ~/.octo/local-blueprint-catalog — writes an empty cache file there
+        // on its first IBlueprintCatalogManager access. ReadCacheAsync only
+        // refreshes when the cache file does not exist, so when this fixture
+        // later resolves the catalog, it reads the poisoned empty snapshot
+        // and never re-scans the populated TestBlueprints directory.
+        // Isolating CacheDirectory per-fixture removes the cross-class
+        // pollution. The path also lives under bin/, so `git clean` resets it.
+        var cacheDir = Path.Combine(AppContext.BaseDirectory, "TestBlueprintsCache",
+            Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(cacheDir);
+
         Services.Configure<LocalFileSystemBlueprintCatalogOptions>(opts =>
         {
-            opts.RootPath = Path.Combine(AppContext.BaseDirectory, TestBlueprintsRelativePath);
+            opts.RootPath = rootPath;
             opts.IsEnabled = true;
+            opts.CacheDirectory = cacheDir;
+        });
+        Services.Configure<PublicGitHubBlueprintCatalogOptions>(opts =>
+        {
+            opts.CacheDirectory = cacheDir;
+        });
+        Services.Configure<PrivateGitHubBlueprintCatalogOptions>(opts =>
+        {
+            opts.CacheDirectory = cacheDir;
         });
     }
 
