@@ -27,15 +27,11 @@ public class BlueprintMigrationExecutorIntegrationTests(BlueprintServiceFixture 
 
     private static readonly BlueprintId TestBpV1 = new("TestBp", "1.0.0");
     private static readonly RtCkId<CkTypeId> CustomerCkType = new("Test/Customer");
+    private static readonly RtCkId<CkTypeId> ContinentCkType = new("Test/Continent");
     private const string CustomerTypeIdString = "Test/Customer";
+    private const string ContinentTypeIdString = "Test/Continent";
 
-    // The Customer attributes on Test/Customer are record-typed
-    // (valueType=10, valueCkRecordId=Test-1.0.0/ContactAddress-1). SetAttributeRawValue
-    // accepts a raw string, but ReplaceOneRtEntityByIdAsync then casts to RtRecord
-    // and throws. Updating record-typed attributes from a migration script needs
-    // a richer attribute-value resolver in the engine; that fix is independent of
-    // the migration executor itself and is filed as a Phase 4 follow-up.
-    [Fact(Skip = "Phase 4 follow-up: Migration Update against record-typed attributes needs RtRecord conversion in ReplaceOneRtEntityByIdAsync")]
+    [Fact]
     public async Task ExecuteAsync_UpdateStep_ChangesAttributeOnMatchingEntity()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -53,28 +49,19 @@ public class BlueprintMigrationExecutorIntegrationTests(BlueprintServiceFixture 
                 [
                     new MigrationStepDto
                     {
-                        StepId = "rename-alpha-address",
+                        StepId = "rename-europe",
                         Action = MigrationActionType.Update,
                         Target = new EntityTargetDto
                         {
-                            CkTypeId = CustomerTypeIdString,
-                            RtWellKnownName = "Alpha",
+                            CkTypeId = ContinentTypeIdString,
+                            RtWellKnownName = "Europe",
                             BlueprintSourceOnly = true
                         },
-                        Data = JsonSerializer.SerializeToElement(new
-                        {
-                            Contacts_Address = "Migrated Street"
-                        })
+                        Data = JsonSerializer.SerializeToElement(
+                            new Dictionary<string, object> { ["Name"] = "Europe (renamed)" })
                     }
                 ]
             };
-
-            // The attribute key in entity.Attributes is the attributeName (PascalCase)
-            // from the compiled CK model. For Test/Contacts.Address the name is "Address".
-            // The migration DTO carries underscores instead because JSON property names
-            // cannot use dots; the executor uses the key verbatim. Rewrite to a stable form.
-            migration.Steps[0].Data = JsonSerializer.SerializeToElement(
-                new Dictionary<string, object> { ["Address"] = "Migrated Street" });
 
             var executor = _fixture.GetService<IBlueprintMigrationExecutor>();
             var result = await executor.ExecuteAsync(tenantId, migration,
@@ -88,10 +75,10 @@ public class BlueprintMigrationExecutorIntegrationTests(BlueprintServiceFixture 
             result.Success.Should().BeTrue($"messages: {string.Join("; ", result.Errors.Concat(result.Warnings))}");
             result.CompletedSteps.Should().Be(1);
 
-            var alpha = (await QueryCustomersAsync(tenantId))
-                .Single(c => c.RtWellKnownName == "Alpha");
-            alpha.GetAttributeStringValueOrDefault("Address")
-                .Should().Be("Migrated Street");
+            var europe = (await QueryContinentsAsync(tenantId))
+                .Single(c => c.RtWellKnownName == "Europe");
+            europe.GetAttributeStringValueOrDefault("Name")
+                .Should().Be("Europe (renamed)");
         }
         finally
         {
@@ -201,7 +188,7 @@ public class BlueprintMigrationExecutorIntegrationTests(BlueprintServiceFixture 
         }
     }
 
-    [Fact(Skip = "Phase 4 follow-up: Migration Update against record-typed attributes needs RtRecord conversion in ReplaceOneRtEntityByIdAsync")]
+    [Fact]
     public async Task ExecuteAsync_TransformSetValue_OverwritesAttribute()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -219,18 +206,18 @@ public class BlueprintMigrationExecutorIntegrationTests(BlueprintServiceFixture 
                 [
                     new MigrationStepDto
                     {
-                        StepId = "stamp-address",
+                        StepId = "stamp-continent-name",
                         Action = MigrationActionType.Transform,
                         Target = new EntityTargetDto
                         {
-                            CkTypeId = CustomerTypeIdString,
+                            CkTypeId = ContinentTypeIdString,
                             BlueprintSourceOnly = true
                         },
                         Transform = new TransformConfigDto
                         {
                             Type = TransformType.SetValue,
-                            TargetAttribute = "Address",
-                            Value = "Standardised Street"
+                            TargetAttribute = "Name",
+                            Value = "Standardised"
                         }
                     }
                 ]
@@ -247,10 +234,10 @@ public class BlueprintMigrationExecutorIntegrationTests(BlueprintServiceFixture 
 
             result.Success.Should().BeTrue();
 
-            foreach (var customer in await QueryCustomersAsync(tenantId))
+            foreach (var continent in await QueryContinentsAsync(tenantId))
             {
-                customer.GetAttributeStringValueOrDefault("Address")
-                    .Should().Be("Standardised Street");
+                continent.GetAttributeStringValueOrDefault("Name")
+                    .Should().Be("Standardised");
             }
         }
         finally
@@ -384,6 +371,14 @@ public class BlueprintMigrationExecutorIntegrationTests(BlueprintServiceFixture 
         var repo = await _fixture.GetRuntimeRepositoryProvider().GetRepositoryAsync(tenantId);
         var session = await repo!.GetSessionAsync();
         var rs = await repo.GetRtEntitiesByTypeAsync(session, CustomerCkType, RtEntityQueryOptions.Create());
+        return rs.Items.ToList();
+    }
+
+    private async Task<List<Meshmakers.Octo.Runtime.Contracts.RepositoryEntities.RtEntity>> QueryContinentsAsync(string tenantId)
+    {
+        var repo = await _fixture.GetRuntimeRepositoryProvider().GetRepositoryAsync(tenantId);
+        var session = await repo!.GetSessionAsync();
+        var rs = await repo.GetRtEntitiesByTypeAsync(session, ContinentCkType, RtEntityQueryOptions.Create());
         return rs.Items.ToList();
     }
 }

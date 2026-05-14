@@ -99,7 +99,7 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
 
             result.AppliedSeedDataFiles.Should().HaveCount(1,
                 $"messages: {allMessages}");
-            result.EntitiesCreated.Should().Be(2, "TestBp-1.0.0 has two customers");
+            result.EntitiesCreated.Should().Be(4, "TestBp-1.0.0 seeds two customers and two continents");
 
             var current = await history.GetCurrentAsync(tenantId, ct);
             current.Should().NotBeNull();
@@ -469,7 +469,7 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
             var result = await blueprintService.UninstallAsync(tenantId, "TestBp", cascade: false, ct);
 
             result.Success.Should().BeTrue();
-            result.EntitiesDeleted.Should().Be(2, "both Alpha and Beta are locked-by-default");
+            result.EntitiesDeleted.Should().Be(4, "two locked customers plus two locked continents");
             result.UninstalledBlueprintId.Should().Be(TestBpV1);
 
             (await installations.GetByBlueprintNameAsync(tenantId, "TestBp", ct))
