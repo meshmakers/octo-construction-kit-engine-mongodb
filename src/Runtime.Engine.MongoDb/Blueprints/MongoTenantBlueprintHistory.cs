@@ -110,7 +110,12 @@ internal class MongoTenantBlueprintHistory : ITenantBlueprintHistory
 
     private IMongoCollection<RtBlueprintHistory> GetMongoCollection()
     {
-        var databaseName = _systemConfiguration.Value.SystemDatabaseName;
+        // Lower-case SystemDatabaseName to match TenantContext's normalisation
+        // (and MongoTenantBlueprintInstallations.GetMongoCollection). Without
+        // this, MongoDB rejects collection access with WriteError 13297 when
+        // an existing "octosystem" DB conflicts with the raw "OctoSystem"
+        // default casing.
+        var databaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
         var repositoryClient = _adminRepositoryAccess.GetRepositoryClient(databaseName);
         var repository = repositoryClient.GetRepository(databaseName);
         var mapper = new RtBlueprintHistoryMongoDataSourceMapper();
