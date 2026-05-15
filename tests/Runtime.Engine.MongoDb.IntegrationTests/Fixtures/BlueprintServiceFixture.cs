@@ -4,7 +4,7 @@ using Meshmakers.Octo.ConstructionKit.Engine.BlueprintCatalogs;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.Blueprints;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
-using Meshmakers.Octo.Runtime.Engine.MongoDb.Blueprints;
+using Meshmakers.Octo.Runtime.Engine.Blueprints;
 
 using Microsoft.Extensions.DependencyInjection;
 
@@ -29,8 +29,10 @@ public class BlueprintServiceFixture : ImportTestCkModelFixture
         // NOTE: Calling AddRuntimeEngine() here would re-register the in-memory
         // RuntimeRepositoryProvider on top of the MongoRuntimeRepositoryProvider
         // that ServiceCollectionFixture installed via AddMongoDbRuntimeRepository().
-        // We register the Mongo blueprint history directly to avoid that race.
-        Services.AddTransient<ITenantBlueprintHistory, MongoTenantBlueprintHistory>();
+        // Register the CK-entity-backed blueprint history directly to avoid that race;
+        // it uses IRuntimeRepositoryProvider, which is already wired by the parent fixture.
+        Services.AddTransient<ITenantBlueprintHistory, EntityTenantBlueprintHistory>();
+        Services.AddTransient<ITenantBlueprintInstallations, EntityTenantBlueprintInstallations>();
 
         var rootPath = Path.Combine(AppContext.BaseDirectory, TestBlueprintsRelativePath);
 

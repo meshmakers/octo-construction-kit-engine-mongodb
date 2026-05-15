@@ -7,6 +7,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+using Meshmakers.Octo.Runtime.Engine.Blueprints;
 using Meshmakers.Octo.Runtime.Engine.Configuration.DependencyInjection;
 using Meshmakers.Octo.Runtime.Engine.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Blueprints;
@@ -86,14 +87,20 @@ public static class RuntimeEngineBuilderExtensions
     /// <param name="builder">The runtime engine builder</param>
     /// <returns>The builder for chaining</returns>
     /// <remarks>
-    /// This method registers the following MongoDB-specific services:
-    /// - ITenantBlueprintHistory: MongoDB implementation for tracking blueprint application history
+    /// Replaces the default in-memory <see cref="ITenantBlueprintHistory"/> and
+    /// <see cref="ITenantBlueprintInstallations"/> registrations with the
+    /// CK-entity-backed implementations from the Engine assembly. Those store
+    /// blueprint registry rows as <c>System/BlueprintHistory</c> and
+    /// <c>System/BlueprintInstallation</c> entities inside the tenant's own
+    /// runtime repository, so the rows live in the same Mongo database as the
+    /// seed entities they describe (no cross-tenant writes to the system DB).
     ///
-    /// Note: ITenantBackupService (from Blueprints) is now registered automatically
-    /// by AddMongoDbRuntimeRepository().
+    /// The MongoDb-specific full-database backup service
+    /// (<see cref="IBlueprintBackupService"/>) is registered separately by
+    /// <see cref="AddMongoDbRuntimeRepository"/>.
     ///
-    /// You must also call AddBlueprints() from the Engine assembly to register
-    /// IBlueprintService and related services.
+    /// You must also call <c>AddBlueprints()</c> from the Engine assembly to
+    /// register <c>IBlueprintService</c> and related services.
     ///
     /// Usage:
     /// <code>
@@ -105,8 +112,8 @@ public static class RuntimeEngineBuilderExtensions
     /// </remarks>
     public static IRuntimeEngineBuilder AddMongoBlueprintSupport(this IRuntimeEngineBuilder builder)
     {
-        builder.Services.AddTransient<ITenantBlueprintHistory, MongoTenantBlueprintHistory>();
-        builder.Services.AddTransient<ITenantBlueprintInstallations, MongoTenantBlueprintInstallations>();
+        builder.Services.AddTransient<ITenantBlueprintHistory, EntityTenantBlueprintHistory>();
+        builder.Services.AddTransient<ITenantBlueprintInstallations, EntityTenantBlueprintInstallations>();
 
         return builder;
     }
