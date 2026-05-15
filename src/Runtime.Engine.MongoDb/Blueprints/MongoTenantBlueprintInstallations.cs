@@ -129,7 +129,12 @@ internal class MongoTenantBlueprintInstallations : ITenantBlueprintInstallations
 
     private IMongoCollection<RtBlueprintInstallation> GetMongoCollection()
     {
-        var databaseName = _systemConfiguration.Value.SystemDatabaseName;
+        // Match TenantContext's normalisation: SystemDatabaseName must be
+        // lower-cased before it reaches MongoDB. On macOS the filesystem is
+        // case-insensitive but MongoDB stores DB names case-sensitively;
+        // passing the raw default ("OctoSystem") when an existing "octosystem"
+        // DB is around triggers WriteError 13297.
+        var databaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
         var repositoryClient = _adminRepositoryAccess.GetRepositoryClient(databaseName);
         var repository = repositoryClient.GetRepository(databaseName);
         var mapper = new RtBlueprintInstallationMongoDataSourceMapper();
