@@ -1101,12 +1101,14 @@ public class TenantContext : ITenantContext
     }
 
     private IRollupOrchestrator? _rollupOrchestrator;
-    private bool _rollupOrchestratorResolved;
+
+    private static readonly RtCkId<CkTypeId> RollupArchiveRtCkTypeId =
+        new("System.StreamData", "RollupArchive");
 
     /// <inheritdoc />
     public IRollupOrchestrator? GetRollupOrchestrator()
     {
-        if (_rollupOrchestratorResolved)
+        if (_rollupOrchestrator != null)
         {
             return _rollupOrchestrator;
         }
@@ -1115,7 +1117,19 @@ public class TenantContext : ITenantContext
         var rollupStore = GetRollupArchiveRuntimeStore();
         if (streamData is null || rollupStore is null)
         {
-            _rollupOrchestratorResolved = true;
+            // Service-level wiring is missing — orchestrator stays disabled for every tenant.
+            return null;
+        }
+
+        // Tenant-level gate: the orchestrator's tick calls IRollupArchiveRuntimeStore.EnumerateAsync,
+        // which delegates to GetRtEntitiesByTypeAsync<RtRollupArchive>(). That lookup throws
+        // CkCacheException if the tenant has not imported the System.StreamData CK model
+        // (i.e. the tenant has not opted into stream data). The cache check has to run again on
+        // every call rather than being memoised because EnsureStreamDataCkModelIfEnabledAsync can
+        // auto-import the model later in this same process — and at that point the next tick
+        // should wire the orchestrator without requiring a restart.
+        if (!_cacheService.TryGetRtCkType(TenantId, RollupArchiveRtCkTypeId, out _))
+        {
             return null;
         }
 
@@ -1128,7 +1142,6 @@ public class TenantContext : ITenantContext
             streamData,
             audit,
             _loggerFactory.CreateLogger<RollupOrchestrator>());
-        _rollupOrchestratorResolved = true;
         return _rollupOrchestrator;
     }
 
