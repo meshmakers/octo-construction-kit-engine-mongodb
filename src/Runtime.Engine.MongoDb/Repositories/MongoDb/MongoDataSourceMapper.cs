@@ -333,65 +333,6 @@ public class RtAssociationMongoDataSourceMapper : IMongoDataSourceMapper<OctoObj
     }
 }
 
-public class RtBlueprintHistoryMongoDataSourceMapper : IMongoDataSourceMapper<string, RtBlueprintHistory>
-{
-    public string CollectionNamePrefix => nameof(RtBlueprintHistory);
-
-    public string GetId(RtBlueprintHistory document)
-    {
-        return document.Id;
-    }
-
-    public UpdateDefinition<RtBlueprintHistory> ApplyUpdate(RtBlueprintHistory document)
-    {
-        var update = Builders<RtBlueprintHistory>.Update;
-        List<UpdateDefinition<RtBlueprintHistory>> list =
-        [
-            update.Set(p => p.TenantId, document.TenantId),
-            update.Set(p => p.BlueprintId, document.BlueprintId),
-            update.Set(p => p.BlueprintVersion, document.BlueprintVersion),
-            update.Set(p => p.AppliedAt, document.AppliedAt),
-            update.Set(p => p.ApplicationMode, document.ApplicationMode),
-            update.Set(p => p.PreviousBlueprintId, document.PreviousBlueprintId),
-            update.Set(p => p.PreviousVersion, document.PreviousVersion),
-            update.Set(p => p.EntitiesCreated, document.EntitiesCreated),
-            update.Set(p => p.EntitiesUpdated, document.EntitiesUpdated),
-            update.Set(p => p.EntitiesDeleted, document.EntitiesDeleted),
-            update.Set(p => p.SeedDataChecksum, document.SeedDataChecksum)
-        ];
-
-        return update.Combine(list);
-    }
-}
-
-public class RtBlueprintInstallationMongoDataSourceMapper : IMongoDataSourceMapper<string, RtBlueprintInstallation>
-{
-    public string CollectionNamePrefix => nameof(RtBlueprintInstallation);
-
-    public string GetId(RtBlueprintInstallation document)
-    {
-        return document.Id;
-    }
-
-    public UpdateDefinition<RtBlueprintInstallation> ApplyUpdate(RtBlueprintInstallation document)
-    {
-        var update = Builders<RtBlueprintInstallation>.Update;
-        List<UpdateDefinition<RtBlueprintInstallation>> list =
-        [
-            update.Set(p => p.TenantId, document.TenantId),
-            update.Set(p => p.BlueprintName, document.BlueprintName),
-            update.Set(p => p.BlueprintVersion, document.BlueprintVersion),
-            update.Set(p => p.InstalledAt, document.InstalledAt),
-            update.Set(p => p.LastUpdatedAt, document.LastUpdatedAt),
-            update.Set(p => p.SeedDataChecksum, document.SeedDataChecksum),
-            update.Set(p => p.ResolvedDependencies, document.ResolvedDependencies),
-            update.Set(p => p.IsDependency, document.IsDependency)
-        ];
-
-        return update.Combine(list);
-    }
-}
-
 public class RtBackupInfoMongoDataSourceMapper : IMongoDataSourceMapper<string, RtBackupInfo>
 {
     public string CollectionNamePrefix => nameof(RtBackupInfo);
