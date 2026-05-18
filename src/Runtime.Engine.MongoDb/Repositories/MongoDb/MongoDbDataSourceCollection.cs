@@ -422,6 +422,34 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
     }
 
+    public async Task<bool> UpdateOneIfGuardMatchesAsync(IOctoSession session, TDocument document,
+        AttributeNewerThanGuard guard)
+    {
+        // Optimistic-concurrency filter: apply only if the persisted value at
+        // guard.AttributePath is missing, null, or <= guard.NewValue. A strictly-newer
+        // persisted value means a later writer has already won — we skip silently. <= (not
+        // <) makes ties idempotent: two writes with identical timestamps both apply, last-
+        // arriving wins on the actual document content. The race this protects against has
+        // monotonically increasing timestamps in practice (each writer captures
+        // DateTime.UtcNow before its DB roundtrip), so ties are extremely rare regardless.
+        var id = _mongoDataSourceMapper.GetId(document);
+        var idFilter = Builders<TDocument>.Filter.BuildIdFilter(id);
+        var bsonNewValue = BsonValue.Create(guard.NewValue);
+        var guardFilter = Builders<TDocument>.Filter.Or(
+            Builders<TDocument>.Filter.Not(Builders<TDocument>.Filter.Exists(guard.AttributePath)),
+            Builders<TDocument>.Filter.Eq(guard.AttributePath, BsonNull.Value),
+            Builders<TDocument>.Filter.Lte(guard.AttributePath, bsonNewValue));
+        var combinedFilter = Builders<TDocument>.Filter.And(idFilter, guardFilter);
+
+        var updateDefinition = _mongoDataSourceMapper.ApplyUpdate(document);
+        var result = await _documentCollection.UpdateOneAsync(((IOctoSessionInternal)session).SessionHandle,
+            combinedFilter, updateDefinition);
+        ThrowIfNotAcknowledged(result.IsAcknowledged);
+        // MatchedCount=0 is the intended outcome when the guard rejects a stale write —
+        // do NOT throw. The caller can detect a no-op via the return value.
+        return result.MatchedCount > 0;
+    }
+
     public async Task UpdateManyAsync(IOctoSession session, Expression<Func<TDocument, bool>> expression,
         TDocument document)
     {
