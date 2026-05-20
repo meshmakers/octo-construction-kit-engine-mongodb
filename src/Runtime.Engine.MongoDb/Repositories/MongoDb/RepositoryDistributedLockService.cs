@@ -32,10 +32,6 @@ internal class RepositoryDistributedLockService(
     private static readonly string CurrentProcessHolderInfo =
         $"{Environment.MachineName}/{Environment.ProcessId}";
 
-    // TTL index initialization is done once per process (Fix 1)
-    private static bool _ttlIndexEnsured;
-    private static readonly Lock TtlIndexLock = new();
-
     private bool _isLockAcquired;
     private readonly Lock _lockObject = new();
     private CancellationTokenSource? _heartbeatCts;
@@ -220,42 +216,30 @@ internal class RepositoryDistributedLockService(
     /// automatically reaps expired lock documents within the TTL reaper interval (~60s).
     /// This is the safety net against entries that the application-level reclaim
     /// logic fails to delete (Fix 1).
+    ///
+    /// Called on every acquire — MongoDB's createIndex is idempotent (no-op when the
+    /// same key/name/options already exist), so this stays correct across fresh
+    /// database instances (e.g. CI testcontainers spinning up new clusters per class).
     /// </summary>
     private void EnsureTtlIndex(IMongoCollection<SysLock> mongoCollection)
     {
-        if (_ttlIndexEnsured)
+        try
         {
-            return;
+            var indexKeys = Builders<SysLock>.IndexKeys.Ascending(x => x.ExpiryDateTime);
+            var indexOptions = new CreateIndexOptions
+            {
+                ExpireAfter = TimeSpan.Zero,
+                Name = "sysLock_ttl_expiryDateTime"
+            };
+            mongoCollection.Indexes.CreateOne(
+                new CreateIndexModel<SysLock>(indexKeys, indexOptions));
         }
-
-        lock (TtlIndexLock)
+        catch (Exception ex)
         {
-            if (_ttlIndexEnsured)
-            {
-                return;
-            }
-
-            try
-            {
-                var indexKeys = Builders<SysLock>.IndexKeys.Ascending(x => x.ExpiryDateTime);
-                var indexOptions = new CreateIndexOptions
-                {
-                    ExpireAfter = TimeSpan.Zero,
-                    Name = "sysLock_ttl_expiryDateTime"
-                };
-                mongoCollection.Indexes.CreateOne(
-                    new CreateIndexModel<SysLock>(indexKeys, indexOptions));
-                _ttlIndexEnsured = true;
-                logger.LogInformation(
-                    "Ensured TTL index on SysLock.{Field}", nameof(SysLock.ExpiryDateTime));
-            }
-            catch (Exception ex)
-            {
-                // Do not block lock acquisition if the index cannot be created
-                // (e.g. permissions); application-level reclaim still handles staleness.
-                logger.LogWarning(ex,
-                    "Failed to ensure TTL index on SysLock collection — relying on application-level reclaim only");
-            }
+            // Do not block lock acquisition if the index cannot be created
+            // (e.g. permissions); application-level reclaim still handles staleness.
+            logger.LogWarning(ex,
+                "Failed to ensure TTL index on SysLock collection — relying on application-level reclaim only");
         }
     }
 
