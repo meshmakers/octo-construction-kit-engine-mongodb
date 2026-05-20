@@ -250,6 +250,12 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.AutoMap();
 
             cm.MapMember(c => c.CreationDateTime).SetIsRequired(true);
+
+            // MongoDB v3 driver requires an explicit GuidRepresentation per member —
+            // the default Unspecified throws on serialize. Standard (UUID v4 layout) is
+            // the recommended representation for new fields.
+            cm.MapMember(c => c.OwnerToken).SetSerializer(
+                new NullableSerializer<Guid>(new GuidSerializer(GuidRepresentation.Standard)));
         });
 
         BsonClassMap.RegisterClassMap<CkModel>(cm =>
