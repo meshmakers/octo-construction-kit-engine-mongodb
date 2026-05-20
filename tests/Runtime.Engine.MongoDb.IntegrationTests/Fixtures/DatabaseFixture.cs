@@ -36,17 +36,55 @@ public class DatabaseFixture : ConfigurationFixture
         }
         else
         {
-            // Start MongoDB test container with authentication
-            _mongoDbContainer = new MongoDbBuilder(_options.MongoDbImage)
-                .WithReplicaSet()
-                .WithName($"mongodb-test-{Guid.NewGuid():N}")
-                .WithUsername(_options.AdminUser)
-                .WithPassword(_options.AdminUserPassword)
-                .Build();
+            // Start MongoDB test container with authentication.
+            // Testcontainers' rs.initiate() handshake races with mongod startup and
+            // occasionally hits "container is not running" / Docker 409 Conflict on CI
+            // agents under load. Retry the whole build+start cycle with a fresh container
+            // before giving up. Each attempt is capped to keep total time bounded.
+            const int maxAttempts = 3;
+            var perAttemptTimeout = TimeSpan.FromMinutes(2);
 
-            await _mongoDbContainer.StartAsync();
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                _mongoDbContainer = new MongoDbBuilder(_options.MongoDbImage)
+                    .WithReplicaSet()
+                    .WithName($"mongodb-test-{Guid.NewGuid():N}")
+                    .WithUsername(_options.AdminUser)
+                    .WithPassword(_options.AdminUserPassword)
+                    .Build();
 
-            var mappedPort = _mongoDbContainer.GetMappedPublicPort();
+                using var startCts = new CancellationTokenSource(perAttemptTimeout);
+                try
+                {
+                    await _mongoDbContainer.StartAsync(startCts.Token);
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(
+                        $"Testcontainer MongoDB start failed on attempt {attempt}/{maxAttempts}: {ex.GetType().Name}: {ex.Message}");
+
+                    try
+                    {
+                        await _mongoDbContainer.DisposeAsync();
+                    }
+                    catch (Exception disposeEx)
+                    {
+                        Console.WriteLine($"  Disposal of failed container also threw: {disposeEx.Message}");
+                    }
+
+                    _mongoDbContainer = null;
+
+                    if (attempt == maxAttempts)
+                    {
+                        throw;
+                    }
+
+                    await Task.Delay(TimeSpan.FromSeconds(2 * attempt));
+                }
+            }
+
+            var mappedPort = _mongoDbContainer!.GetMappedPublicPort();
             databaseHost = $"localhost:{mappedPort}";
             Console.WriteLine($"Using Testcontainer MongoDB at {databaseHost}");
         }
