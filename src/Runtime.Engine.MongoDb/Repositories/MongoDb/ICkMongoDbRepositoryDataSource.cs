@@ -21,7 +21,8 @@ public interface ICkMongoDbRepositoryDataSource
     IMongoDbDataSourceCollection<OctoObjectId, CkRecordInheritance> CkRecordInheritances { get; }
 
     Task UpdateCollectionsAsync(IOctoSession session, bool includeModelsInStateImporting = false, bool skipCleanup = false);
-    Task UpdateIndexAsync(IOctoSession session, bool includeModelsInStateImporting, CkModelId? scopeToModelId = null);
+    Task UpdateIndexAsync(IOctoSession session, bool includeModelsInStateImporting,
+        CkModelId? scopeToModelId = null, CancellationToken cancellationToken = default);
 
     Task<IOctoSession> CreateSessionAsync();
 
@@ -30,8 +31,11 @@ public interface ICkMongoDbRepositoryDataSource
     /// The lock prevents multiple services from importing the same model simultaneously.
     /// </summary>
     /// <param name="modelName">The name of the model to lock (without version)</param>
-    /// <returns>An IAsyncDisposable that releases the lock when disposed</returns>
-    Task<IAsyncDisposable> AcquireModelImportLockAsync(string modelName);
+    /// <param name="cancellationToken">Token to cancel the polling loop while waiting for the lock.</param>
+    /// <returns>An <see cref="IDistributedLockHandle"/> whose <see cref="IDistributedLockHandle.LockLostToken"/>
+    /// fires if ownership is lost (e.g. due to TTL expiry under load) and which releases the lock when disposed.</returns>
+    Task<IDistributedLockHandle> AcquireModelImportLockAsync(string modelName,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Cleans up empty collections that were created for abstract CK types.

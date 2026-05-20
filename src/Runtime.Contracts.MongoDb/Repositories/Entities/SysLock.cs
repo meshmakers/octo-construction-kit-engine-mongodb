@@ -35,4 +35,17 @@ public class SysLock
     /// Used to extend the lock lifetime for long-running operations.
     /// </summary>
     public DateTime? LastHeartbeat { get; set; }
+
+    /// <summary>
+    /// Gets or sets the unique owner token of the service instance currently holding the lock.
+    /// Heartbeat and release operations filter on this token, so a stale process cannot
+    /// extend or delete a lock that has already been claimed by another instance.
+    /// </summary>
+    public Guid? OwnerToken { get; set; }
+
+    /// <summary>
+    /// Gets or sets a human-readable identifier of the lock holder
+    /// (e.g. machine name + process id) for diagnostic purposes.
+    /// </summary>
+    public string? HolderInfo { get; set; }
 }

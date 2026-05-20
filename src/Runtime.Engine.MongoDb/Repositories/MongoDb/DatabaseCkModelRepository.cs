@@ -409,8 +409,17 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     {
         _logger.LogInformation("Executing import of CK model '{CkModelId}' to database", compiledModel.ModelId);
 
-        // Acquire distributed lock to prevent parallel imports of the same model
-        await using var importLock = await mongoDbRepositoryDataSource.AcquireModelImportLockAsync(compiledModel.ModelId.Name);
+        // Acquire distributed lock to prevent parallel imports of the same model.
+        // Pass the caller's cancellation token so the polling loop is interruptable.
+        await using var importLock = await mongoDbRepositoryDataSource.AcquireModelImportLockAsync(
+            compiledModel.ModelId.Name, cancellationToken ?? CancellationToken.None);
+
+        // Link the caller's token with the lock's LockLostToken: if the heartbeat detects we no
+        // longer own the lock (e.g. our TTL expired under load and another service claimed it),
+        // the import must abort to prevent split-brain writes against shared CK collections.
+        using var linkedImportCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken ?? CancellationToken.None, importLock.LockLostToken);
+        cancellationToken = linkedImportCts.Token;
 
         // Re-check after acquiring the lock: another service may have already imported
         // the model while we were waiting for the lock
@@ -577,7 +586,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             // Attention! This operation is critical. It forces an exclusive write lock on the database.
             // Scope to the imported model to avoid re-indexing all collection roots in the tenant.
             _logger.LogDebug("Updating index");
-            await mongoDbRepositoryDataSource.UpdateIndexAsync(indexUpdateSession, true, compiledModel.ModelId);
+            await mongoDbRepositoryDataSource.UpdateIndexAsync(indexUpdateSession, true, compiledModel.ModelId,
+                cancellationToken ?? CancellationToken.None);
             CheckCancellation(cancellationToken);
 
             await indexUpdateSession.CommitTransactionAsync();

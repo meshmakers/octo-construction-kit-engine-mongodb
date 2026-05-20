@@ -366,7 +366,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     }
 
     public async Task UpdateIndexAsync(IOctoSession session, bool includeModelsInStateImporting,
-        CkModelId? scopeToModelId = null)
+        CkModelId? scopeToModelId = null, CancellationToken cancellationToken = default)
     {
         if (scopeToModelId != null)
         {
@@ -380,7 +380,12 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         await using var lockService =
             new RepositoryDistributedLockService(_repositoryClient, _repository, _logger, "index_update_lock");
-        await lockService.AcquireLockAsync();
+        await lockService.AcquireLockAsync(cancellationToken);
+
+        // Abort the index update if either the caller cancels or the lock is lost mid-flight.
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, lockService.LockLostToken);
+        var effectiveToken = linkedCts.Token;
 
         var aggregate = _ckTypes.Aggregate(session);
         aggregate = aggregate.Match(x => x.IsCollectionRoot == true && !x.IsAbstract &&
@@ -388,7 +393,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 ? (x.ModelState == ModelState.Available || x.ModelState == ModelState.Importing)
                 : x.ModelState == ModelState.Available));
 
-        var ckTypeInfoList = await AggregateCkTypeInfo(aggregate).ToListAsync();
+        var ckTypeInfoList = await AggregateCkTypeInfo(aggregate).ToListAsync(effectiveToken);
         var collectionRootTypes = ckTypeInfoList.ToList();
 
         // When scoped to a specific model, only process collection roots belonging to that model.
@@ -414,6 +419,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         foreach (var ckTypeInfo in collectionRootTypes)
         {
+            effectiveToken.ThrowIfCancellationRequested();
             var baseTypes = baseTypesMap.TryGetValue(ckTypeInfo.CkTypeId, out var types) ? types : [];
             await UpdateIndexesForCollectionRoot(ckTypeInfo, baseTypes, allCkAttributes, allCkRecords);
         }
@@ -421,6 +427,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         // Create indexes for RtAssociations collection (model-independent, only needed for full updates)
         if (scopeToModelId == null)
         {
+            effectiveToken.ThrowIfCancellationRequested();
             await CreateRtAssociationIndexesAsync();
         }
 
@@ -1234,13 +1241,22 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     }
 
     /// <inheritdoc />
-    public async Task<IAsyncDisposable> AcquireModelImportLockAsync(string modelName)
+    public async Task<IDistributedLockHandle> AcquireModelImportLockAsync(string modelName,
+        CancellationToken cancellationToken = default)
     {
         var lockId = $"ck_model_import_{modelName}";
         _logger.LogInformation("Acquiring model import lock for '{ModelName}' with lock ID '{LockId}'", modelName, lockId);
 
         var lockService = new RepositoryDistributedLockService(_repositoryClient, _repository, _logger, lockId);
-        await lockService.AcquireLockAsync();
+        try
+        {
+            await lockService.AcquireLockAsync(cancellationToken);
+        }
+        catch
+        {
+            await lockService.DisposeAsync();
+            throw;
+        }
 
         return lockService;
     }
