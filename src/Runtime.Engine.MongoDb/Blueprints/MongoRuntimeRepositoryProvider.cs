@@ -98,6 +98,33 @@ public class MongoRuntimeRepositoryProvider : IRuntimeRepositoryProvider
         // compiled model from a catalog, writes the schema, runs migrations, and unloads
         // the in-memory CK cache so the next access reloads it.
         await tenantContext.ImportCkModelAsync(modelId, operationResult);
+
+        // The CkModelId overload of ImportCkModelAsync swallows ModelValidationException
+        // (missing dependencies) without surfacing an error — intentional for the
+        // parallel-startup auto-import path, but it breaks the "Ensure" contract that
+        // blueprint application relies on. Verify by name (not exact CkModelId): the
+        // blueprint engine passes a representative CkModelId derived from a version
+        // range (typically the lower bound, e.g. "System-2.0.0"), but the catalog
+        // resolves the range to whatever satisfying version is actually available
+        // (e.g. "System-2.2.0"). An exact match would spuriously report missing.
+        var repository = tenantContext.GetTenantRepository();
+        var session = await repository.GetSessionAsync().ConfigureAwait(false);
+        var installedModels = await repository.GetCkModelsAsync(session, null, RtEntityQueryOptions.Create())
+            .ConfigureAwait(false);
+        var anyInstalled = installedModels.Items.Any(m =>
+            m.ModelState == ModelState.Available && m.Id.Name == modelId.Name);
+
+        if (!anyInstalled)
+        {
+            _logger.LogError(
+                "CK model {ModelId} is still not installed for tenant {TenantId} after import; " +
+                "dependencies are likely missing or still importing",
+                modelId, tenantId);
+            operationResult.AddMessage(new OperationMessage(
+                MessageLevel.Error, null, 25,
+                $"CK model '{modelId}' could not be installed for tenant '{tenantId}'; " +
+                "required CK model dependencies may be missing or still importing"));
+        }
     }
 
     /// <inheritdoc />
