@@ -1,9 +1,7 @@
-using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.BlueprintCatalogs;
 using Meshmakers.Octo.ConstructionKit.Engine.BlueprintCatalogs;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.Blueprints;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.Blueprints;
 
 using Microsoft.Extensions.DependencyInjection;
@@ -79,9 +77,10 @@ public class BlueprintServiceFixture : ImportTestCkModelFixture
     public IRuntimeRepositoryProvider GetRuntimeRepositoryProvider() => GetService<IRuntimeRepositoryProvider>();
 
     /// <summary>
-    /// Creates a fresh child tenant, imports the Test CK model into it, and
-    /// returns the tenant id. Caller is responsible for invoking
-    /// <see cref="DropTenantAsync"/> in a finally block.
+    /// Creates a fresh child tenant and returns its tenant id. The Test CK model
+    /// is installed lazily by <see cref="IBlueprintService.ApplyBlueprintAsync"/>
+    /// via the blueprint's <c>ckModelDependencies</c>. Caller is responsible for
+    /// invoking <see cref="DropTenantAsync"/> in a finally block.
     /// </summary>
     public async Task<string> CreateTestTenantAsync(string? prefix = null)
     {
@@ -100,20 +99,10 @@ public class BlueprintServiceFixture : ImportTestCkModelFixture
             await session.CommitTransactionAsync();
         }
 
-        // Load the Test CK model into the child tenant so seed-data referencing
-        // Test/Customer can be imported. The blueprint's ckModelDependencies
-        // list this same model, but the engine currently only triggers CK model
-        // *migrations* — the initial import has to happen out-of-band.
-        var childContext = await systemContext.FindTenantContextAsync(tenantId);
-        var importResult = new OperationResult();
-        await childContext.ImportCkModelAsync(new CkModelId("Test"), importResult);
-
-        // Warm the in-memory CK cache for the tenant. Without this, the
-        // engine's BlueprintService.ApplyBlueprintAsync calls
-        // _ckCacheService.CreateTenant() (which only allocates the cache entry
-        // but does not load the model graph) and downstream validation throws
-        // CacheUnloaded.
-        await ((TenantContext)childContext).LoadCacheForTenantAsync();
+        // The blueprint's ckModelDependencies list the Test CK model, so
+        // BlueprintService.ApplyBlueprintAsync auto-installs it into the child
+        // tenant and loads the in-memory CK cache. No out-of-band ImportCkModelAsync
+        // or LoadCacheForTenantAsync is needed here.
 
         return tenantId;
     }

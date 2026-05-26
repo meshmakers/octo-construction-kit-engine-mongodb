@@ -1,4 +1,6 @@
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.Messages;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
@@ -70,6 +72,32 @@ public class MongoRuntimeRepositoryProvider : IRuntimeRepositoryProvider
         {
             return false;
         }
+    }
+
+    /// <inheritdoc />
+    public async Task EnsureCkModelInstalledAsync(
+        string tenantId,
+        CkModelId modelId,
+        OperationResult operationResult,
+        CancellationToken cancellationToken = default)
+    {
+        var tenantContext = await _systemContext.TryFindTenantContextAsync(tenantId);
+        if (tenantContext == null)
+        {
+            _logger.LogError(
+                "Cannot install CK model {ModelId}: no tenant context found for tenant {TenantId}",
+                modelId, tenantId);
+            operationResult.AddMessage(new OperationMessage(
+                MessageLevel.Error, null, 24,
+                $"Tenant '{tenantId}' not found; cannot install CK model '{modelId}'"));
+            return;
+        }
+
+        // ImportCkModelAsync is idempotent: it short-circuits when the exact model id is
+        // already present (only retries pending migrations), otherwise it fetches the
+        // compiled model from a catalog, writes the schema, runs migrations, and unloads
+        // the in-memory CK cache so the next access reloads it.
+        await tenantContext.ImportCkModelAsync(modelId, operationResult);
     }
 
     /// <inheritdoc />
