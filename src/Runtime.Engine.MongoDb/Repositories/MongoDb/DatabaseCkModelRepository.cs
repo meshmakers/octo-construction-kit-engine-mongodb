@@ -7,6 +7,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.ConstructionKit.Engine.Resolvers.Repository;
 using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.CkModelMigrations;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
@@ -94,18 +95,19 @@ internal readonly struct SessionScope : IAsyncDisposable
 public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 {
     private readonly IRepositoryModelResolver _repositoryModelResolver;
+    private readonly ICkModelImportAuditTrail _importAuditTrail;
     private readonly ILogger<DatabaseCkModelRepository> _logger;
 
     /// <summary>
     ///     Creates a new instance of the <see cref="DatabaseCkModelRepository" /> class.
     /// </summary>
-    /// <param name="logger"></param>
-    /// <param name="repositoryModelResolver"></param>
     public DatabaseCkModelRepository(ILogger<DatabaseCkModelRepository> logger,
-        IRepositoryModelResolver repositoryModelResolver)
+        IRepositoryModelResolver repositoryModelResolver,
+        ICkModelImportAuditTrail importAuditTrail)
     {
         _logger = logger;
         _repositoryModelResolver = repositoryModelResolver;
+        _importAuditTrail = importAuditTrail;
     }
 
     /// <inheritdoc />
@@ -172,7 +174,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         });
         await ExecuteImport(ckCompiledModel, transientCkModel,
             sourceIdentifierObject.MongoDbRepositoryDataSource,
-            operationResult, sourceIdentifier, cancellationToken);
+            operationResult, sourceIdentifier, sourceIdentifierObject.TenantId, cancellationToken);
     }
 
     public async Task<CkCompiledModelRoot?> TryLookupCkModelAsync(CkModelId ckModelId, OperationResult operationResult,
@@ -405,6 +407,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     private async Task ExecuteImport(CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel,
         ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource, OperationResult operationResult,
         object? sourceIdentifier,
+        string? tenantId,
         CancellationToken? cancellationToken)
     {
         _logger.LogInformation("Executing import of CK model '{CkModelId}' to database", compiledModel.ModelId);
@@ -489,7 +492,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             CheckCancellation(cancellationToken);
 
             // Preserve extension values from extensible enums before deleting the old version
-            await PreserveExtensibleEnumValues(session, compiledModel.ModelId, mongoDbRepositoryDataSource, transientCkModel);
+            await PreserveExtensibleEnumValues(session, compiledModel.ModelId, mongoDbRepositoryDataSource,
+                transientCkModel, tenantId);
             CheckCancellation(cancellationToken);
 
             _logger.LogDebug("Deleting previous version of CK model");
@@ -913,10 +917,13 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     ///     Preserves extension values from extensible enums before the old version is deleted.
     ///     Extension values (IsExtension = true) are custom values added via the API that should
     ///     survive model imports/updates. Custom values take precedence over construction kit
-    ///     defined values with the same key.
+    ///     defined values with the same key. Key collisions are reported via
+    ///     <see cref="ICkModelImportAuditTrail"/> so they surface in the platform event log
+    ///     (WI #3324 AC3).
     /// </summary>
     private async Task PreserveExtensibleEnumValues(IOctoSession session, CkModelId ckModelId,
-        ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource, TransientCkModel transientCkModel)
+        ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource, TransientCkModel transientCkModel,
+        string? tenantId)
     {
         // Find all existing extensible enums for this model
         var existingEnums = await mongoDbRepositoryDataSource.CkEnums.FindManyAsync(session,
@@ -950,9 +957,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                         // Remove the CK-defined value and replace with the custom extension value
                         newEnum.Values.Remove(existingValue);
                         newEnum.Values.Add(extensionValue);
-                        _logger.LogDebug(
-                            "Extension enum value '{EnumValueName}' (key: {EnumValueKey}) overrides CK-defined value for enum '{CkEnumId}'",
-                            extensionValue.Name, extensionValue.Key, newEnum.CkEnumId);
+                        await _importAuditTrail.RecordExtensibleEnumValueOverrideAsync(
+                            tenantId, ckModelId, newEnum.CkEnumId,
+                            existingValue.Name, extensionValue.Name, extensionValue.Key);
                     }
                     else
                     {

@@ -72,7 +72,7 @@ public class SystemContext : TenantContext, ISystemContext
             }
 
             await _ckModelRepositoryService.UpdateModelAsync(ckCompiledModelRoot,
-                new TenantDatabaseSourceIdentifier(null, ckModelRepository));
+                new TenantDatabaseSourceIdentifier(null, ckModelRepository, normalizedTenantId));
 
             // Distribute updates (post) to inform other services.
             await _tenantNotifications.NotifyPosTenantCreateAsync(normalizedTenantId, correlationId);

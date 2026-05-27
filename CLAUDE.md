@@ -204,6 +204,25 @@ The shared `CkArchiveSnapshot` covers both subtypes. When the loaded entity is a
   archive store into `RollupArchiveLifecycleService`; the archive store is needed by
   `CreateAsync` to look up the source archive's `TargetCkTypeId`.
 
+### Extensible Enum Preservation on Import (WI #3324)
+
+`DatabaseCkModelRepository.PreserveExtensibleEnumValues` runs inside `ExecuteImport`
+**before** `DeletePreviousVersion` so custom enum extensions (`CkEnumValue.IsExtension == true`)
+survive a model upgrade:
+
+1. Load all `CkEnum` rows for the current model where `IsExtensible == true`.
+2. For each extensible enum in the new compiled model, copy back every preserved extension
+   value.
+3. If a preserved extension value's `Key` collides with a CK-defined value, the extension
+   value wins (CK-defined value is removed first). The collision is reported via
+   `ICkModelImportAuditTrail.RecordExtensibleEnumValueOverrideAsync`. The default audit-trail
+   implementation logs a warning; `EventRepositoryCkModelImportAuditTrail` in
+   `octo-common-services` bridges the call to `IEventRepository.StoreWarningEvent` so it
+   surfaces in the tenant event log (`AddOctoNotification` registers this adapter).
+
+`TenantDatabaseSourceIdentifier` carries the `TenantId` (nullable; `null` = system tenant) so
+the audit trail can route notifications to the correct tenant.
+
 ### Auto-import Downgrade Guard
 
 `TenantContext.EnsureStreamDataCkModelImportedAsync` checks the currently-installed

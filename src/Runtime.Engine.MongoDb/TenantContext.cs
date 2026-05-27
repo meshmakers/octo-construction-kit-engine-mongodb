@@ -254,7 +254,7 @@ public class TenantContext : ITenantContext
     protected async Task UpdateSystemCkModelAsync(string normalizedDatabaseName, string tenantId, bool isRepositoryInCreation = false)
     {
         var databaseContext = CreateRepositoryDataSourceAsAdmin(normalizedDatabaseName, tenantId);
-        var databaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, databaseContext);
+        var databaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, databaseContext, tenantId);
         OperationResult operationResult = new();
         if (await _ckModelRepositoryService.IsExistingAsync(SystemCkIds.CkModelId, databaseSourceIdentifier))
         {
@@ -877,7 +877,7 @@ public class TenantContext : ITenantContext
         var modelId = descriptor?.CkModelId ?? new CkModelId("System.StreamData-1.0.0");
 
         var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName, TenantId);
-        var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource);
+        var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource, TenantId);
         var anyVersionRange = new CkModelIdVersionRange(modelId.Name, "0.0.0");
         var installed = await _ckModelRepositoryService.IsExistingAsync(anyVersionRange, tenantDatabaseSourceIdentifier);
         if (installed.Exists && installed.ModelId is { } installedModelId &&
@@ -1233,7 +1233,7 @@ public class TenantContext : ITenantContext
         // which requires the `collMod` action — not granted to the tenant `readWrite` user.
         // This matches the pattern used by UpdateIndexesAsync (schema-level ops run as admin).
         var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName, TenantId);
-        var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource);
+        var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource, TenantId);
 
         // Capture schema versions BEFORE importing (for migration detection)
         var previousSchemaVersions = await GetSchemaVersionsDirectAsync(tenantDatabaseSourceIdentifier);
@@ -1303,7 +1303,7 @@ public class TenantContext : ITenantContext
         // which requires the `collMod` action — not granted to the tenant `readWrite` user.
         // This matches the pattern used by UpdateIndexesAsync (schema-level ops run as admin).
         var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName, TenantId);
-        var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource);
+        var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource, TenantId);
         if (await _ckModelRepositoryService.IsExistingAsync(ckModelId, tenantDatabaseSourceIdentifier))
         {
             _logger.LogDebug("CK Model '{CkModelId}' already exists in tenant '{TenantId}', skipping import",
@@ -1376,7 +1376,7 @@ public class TenantContext : ITenantContext
 
         var r = await _ckModelRepositoryService.IsExistingAsync(
             ckModelId.ToVersionRange(),
-            new TenantDatabaseSourceIdentifier(null, repositoryDataSource));
+            new TenantDatabaseSourceIdentifier(null, repositoryDataSource, TenantId));
         return r.Exists;
     }
 
@@ -1392,7 +1392,7 @@ public class TenantContext : ITenantContext
             await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
             await _ckModelRepositoryService.CustomizeCkEnumAsync(
                 ckEnumId,
-                ckEnumUpdates, new TenantDatabaseSourceIdentifier(null, repositoryDataSource), cancellationToken);
+                ckEnumUpdates, new TenantDatabaseSourceIdentifier(null, repositoryDataSource, TenantId), cancellationToken);
         }
         finally
         {
