@@ -93,6 +93,31 @@ public class MongoRuntimeRepositoryProvider : IRuntimeRepositoryProvider
             return;
         }
 
+        // Pre-check by model name: if any version of this model is already installed
+        // (Available), skip the import path entirely. The blueprint engine passes the
+        // LOWER BOUND of a version range as modelId (e.g. "System-2.0.0" for the
+        // range "System-[2.0,3.0)"). ImportCkModelAsync's IsExistingAsync gate uses
+        // EXACT-id match — so when a higher satisfying version (e.g. "System-2.2.0")
+        // is installed, the exact-id check misses, and ImportCkModelAsync proceeds to
+        // import the lower bound. That import calls InsertModelWithImportingState which
+        // deletes every CkModel row sharing the model name, including the higher
+        // version — a silent DOWNGRADE that wipes the actually-installed schema. The
+        // post-import verification block below still runs by-name (see comment there)
+        // to cover the case where the import path was taken and partially failed.
+        var repository = tenantContext.GetTenantRepository();
+        var session = await repository.GetSessionAsync().ConfigureAwait(false);
+        var installedModels = await repository.GetCkModelsAsync(session, null, RtEntityQueryOptions.Create())
+            .ConfigureAwait(false);
+        var anyInstalled = installedModels.Items.Any(m =>
+            m.ModelState == ModelState.Available && m.Id.Name == modelId.Name);
+        if (anyInstalled)
+        {
+            _logger.LogDebug(
+                "CK model '{ModelName}' already installed for tenant '{TenantId}' (requested {ModelId}); skipping import",
+                modelId.Name, tenantId, modelId);
+            return;
+        }
+
         // ImportCkModelAsync is idempotent: it short-circuits when the exact model id is
         // already present (only retries pending migrations), otherwise it fetches the
         // compiled model from a catalog, writes the schema, runs migrations, and unloads
@@ -107,11 +132,9 @@ public class MongoRuntimeRepositoryProvider : IRuntimeRepositoryProvider
         // range (typically the lower bound, e.g. "System-2.0.0"), but the catalog
         // resolves the range to whatever satisfying version is actually available
         // (e.g. "System-2.2.0"). An exact match would spuriously report missing.
-        var repository = tenantContext.GetTenantRepository();
-        var session = await repository.GetSessionAsync().ConfigureAwait(false);
-        var installedModels = await repository.GetCkModelsAsync(session, null, RtEntityQueryOptions.Create())
+        installedModels = await repository.GetCkModelsAsync(session, null, RtEntityQueryOptions.Create())
             .ConfigureAwait(false);
-        var anyInstalled = installedModels.Items.Any(m =>
+        anyInstalled = installedModels.Items.Any(m =>
             m.ModelState == ModelState.Available && m.Id.Name == modelId.Name);
 
         if (!anyInstalled)
