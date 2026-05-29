@@ -693,19 +693,33 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             return;
         }
 
+        // Build a local CkTypeIndex with resolved/normalized fields. The input ckTypeIndex
+        // instance is reused across multiple collection roots (base-type indexes like Entity's
+        // RtBlueprintSource), so mutating it — including reassigning Fields — corrupts every
+        // subsequent call. Each subsequent call would re-read the already-resolved paths and,
+        // when re-resolution fails, prepend another "attributes." via the fallback, producing
+        // "attributes.attributes...rtBlueprintSource".
+        var localIndex = new CkTypeIndex
+        {
+            IndexType = ckTypeIndex.IndexType,
+            Language = ckTypeIndex.Language,
+            Fields = ckTypeIndex.Fields.Select(fields => new CkIndexFields
+            {
+                Weight = fields.Weight,
+                AttributeNames = fields.AttributeNames.ToList()
+            }).ToList()
+        };
+
         // Resolve attribute paths to fully qualified MongoDB field paths.
         // e.g. "TimeRange.From" → "attributes.timeRange.attributes.from"
-        // Clone the fields to avoid mutating shared CkTypeIndex objects — the same CkTypeIndex
-        // instances from base types (e.g. Entity) are reused across multiple collection roots.
         if (allCkAttributes != null && allCkRecords != null)
         {
             var metadataProvider = new DatabaseAttributeMetadataProvider(
                 indexDefiningType.Attributes, allCkAttributes, allCkRecords, isRecordContext: false);
 
-            ckTypeIndex.Fields = ckTypeIndex.Fields.Select(fields => new CkIndexFields
+            foreach (var fields in localIndex.Fields)
             {
-                Weight = fields.Weight,
-                AttributeNames = fields.AttributeNames.Select(name =>
+                fields.AttributeNames = fields.AttributeNames.Select(name =>
                 {
                     if (Constants.IsSystemAttribute(name))
                     {
@@ -722,13 +736,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                         "Could not resolve attribute path '{AttributePath}' for index on type '{CkTypeId}', using fallback",
                         name, indexDefiningType.CkTypeId);
                     return Constants.AttributesName + Constants.PathSeparator + name.ToCamelCase();
-                }).ToList()
-            }).ToList();
+                }).ToList();
+            }
         }
 
         // Ensure that attributes are not multiple times in the index. If an attribute is defined multiple times, we remove duplicates.
         HashSet<string> attributePaths = new();
-        foreach (CkIndexFields fields in ckTypeIndex.Fields.OrderBy(f => f.Weight))
+        foreach (CkIndexFields fields in localIndex.Fields.OrderBy(f => f.Weight))
         {
             var fieldAttributePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (string attributeName in fields.AttributeNames)
@@ -745,11 +759,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         // Prepend ckTypeId as first field and append rtState as last field to Ascending indexes.
         // Queries always filter on ckTypeId (via $in) first, so it should lead the compound index
         // for optimal selectivity. rtState goes last because $ne filters have low selectivity.
-        if (ckTypeIndex.IndexType == IndexTypes.Ascending)
+        if (localIndex.IndexType == IndexTypes.Ascending)
         {
             var ckTypeIdFieldName = nameof(RtEntity.CkTypeId).ToCamelCase();
             var rtStateFieldName = nameof(RtEntity.RtState).ToCamelCase();
-            var allAttributeNames = ckTypeIndex.Fields
+            var allAttributeNames = localIndex.Fields
                 .SelectMany(f => f.AttributeNames)
                 .ToList();
 
@@ -758,7 +772,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     string.Equals(a, ckTypeIdFieldName, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(a, nameof(RtEntity.CkTypeId), StringComparison.OrdinalIgnoreCase)))
             {
-                var firstFieldGroup = ckTypeIndex.Fields.First();
+                var firstFieldGroup = localIndex.Fields.First();
                 firstFieldGroup.AttributeNames = firstFieldGroup.AttributeNames
                     .Prepend(ckTypeIdFieldName).ToList();
             }
@@ -768,13 +782,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     string.Equals(a, rtStateFieldName, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(a, nameof(RtEntity.RtState), StringComparison.OrdinalIgnoreCase)))
             {
-                var lastFieldGroup = ckTypeIndex.Fields.Last();
+                var lastFieldGroup = localIndex.Fields.Last();
                 lastFieldGroup.AttributeNames = lastFieldGroup.AttributeNames
                     .Append(rtStateFieldName).ToList();
             }
         }
 
-        await CreateOrUpdateIndexWithTracking(collection.CollectionName, ckTypeIndex, repositoryIndices,
+        await CreateOrUpdateIndexWithTracking(collection.CollectionName, localIndex, repositoryIndices,
             collection, uniqueIndexNumber, collectionRootType, indexDefiningType);
     }
 
