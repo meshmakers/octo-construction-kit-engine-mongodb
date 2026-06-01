@@ -1,6 +1,7 @@
 using FakeItEasy;
 
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
@@ -241,6 +242,115 @@ public class MongoRuntimeRepositoryProviderTests(SystemFixture fixture)
         Assert.True(operationResult.HasErrors);
         Assert.Contains(operationResult.Messages,
             m => m.MessageNumber == 25 && m.MessageText!.Contains("MissingDep"));
+    }
+
+    /// <summary>
+    /// Pins the version-aware idempotency fix. Before the fix the provider skipped the
+    /// import whenever ANY version of the model name was already installed; for an
+    /// additive-only CK bump (no migration script) the older version stayed in the DB,
+    /// <see cref="ICkModelUpgradeService"/> ran a no-op migration that only recorded
+    /// history, and downstream <c>ValidateCkModels</c> failed because the new version
+    /// was never materialised. The current contract: skip only when the installed
+    /// version is greater than OR equal to the requested one; otherwise fall through
+    /// to ImportCkModelAsync so the schema actually gets upgraded.
+    /// </summary>
+    [Fact]
+    public async Task EnsureCkModelInstalledAsync_OlderVersionInstalled_TriggersImportForNewerVersion()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string tenantId = "fake-tenant";
+        var requested = new CkModelId("System.Communication-3.21.0");
+
+        // Installed = 3.20.0 (older than requested 3.21.0).
+        var olderInstalled = new CkModel
+        {
+            Id = new CkModelId("System.Communication-3.20.0"),
+            ModelState = ModelState.Available,
+        };
+        var newerInstalled = new CkModel
+        {
+            Id = new CkModelId("System.Communication-3.21.0"),
+            ModelState = ModelState.Available,
+        };
+        var session = A.Fake<IOctoSession>();
+        var olderOnlyResultSet = A.Fake<IResultSet<CkModel>>();
+        A.CallTo(() => olderOnlyResultSet.Items).Returns(new[] { olderInstalled });
+        var bothResultSet = A.Fake<IResultSet<CkModel>>();
+        A.CallTo(() => bothResultSet.Items).Returns(new[] { olderInstalled, newerInstalled });
+
+        var repository = A.Fake<ITenantRepository>();
+        A.CallTo(() => repository.GetSessionAsync()).Returns(session);
+        // First GetCkModelsAsync call (the version-aware pre-check) returns the older
+        // installation only; the post-import verification call returns both so the
+        // provider does not flag a missing model after the simulated import.
+        A.CallTo(() => repository.GetCkModelsAsync(
+                A<IOctoSession>._, A<List<CkModelId>?>._, A<RtEntityQueryOptions>._, A<int?>._, A<int?>._))
+            .ReturnsNextFromSequence(
+                Task.FromResult(olderOnlyResultSet),
+                Task.FromResult(bothResultSet));
+
+        var tenantContext = A.Fake<ITenantContext>();
+        A.CallTo(() => tenantContext.GetTenantRepository()).Returns(repository);
+
+        var systemContext = A.Fake<ISystemContext>();
+        A.CallTo(() => systemContext.TryFindTenantContextAsync(tenantId)).Returns(tenantContext);
+
+        var logger = A.Fake<ILogger<MongoRuntimeRepositoryProvider>>();
+        var provider = new MongoRuntimeRepositoryProvider(systemContext, logger);
+
+        var operationResult = new OperationResult();
+        await provider.EnsureCkModelInstalledAsync(tenantId, requested, operationResult, ct);
+
+        // ImportCkModelAsync must have been called exactly once with the requested id.
+        A.CallTo(() => tenantContext.ImportCkModelAsync(requested, operationResult))
+            .MustHaveHappenedOnceExactly();
+        Assert.False(operationResult.HasErrors);
+    }
+
+    /// <summary>
+    /// Downgrade-protection: when the installed version is strictly greater than the
+    /// requested one (the historic regression — blueprint engine passing the lower
+    /// bound of a version range), the provider must NOT trigger ImportCkModelAsync,
+    /// because the real import path would `InsertModelWithImportingState` and wipe
+    /// every CkModel row sharing the name, silently downgrading the schema.
+    /// </summary>
+    [Fact]
+    public async Task EnsureCkModelInstalledAsync_NewerVersionInstalled_SkipsImport()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string tenantId = "fake-tenant";
+        var requested = new CkModelId("System-2.0.0"); // lower bound of [2.0,3.0)
+
+        var newerInstalled = new CkModel
+        {
+            Id = new CkModelId("System-2.2.0"),
+            ModelState = ModelState.Available,
+        };
+        var session = A.Fake<IOctoSession>();
+        var resultSet = A.Fake<IResultSet<CkModel>>();
+        A.CallTo(() => resultSet.Items).Returns(new[] { newerInstalled });
+
+        var repository = A.Fake<ITenantRepository>();
+        A.CallTo(() => repository.GetSessionAsync()).Returns(session);
+        A.CallTo(() => repository.GetCkModelsAsync(
+                A<IOctoSession>._, A<List<CkModelId>?>._, A<RtEntityQueryOptions>._, A<int?>._, A<int?>._))
+            .Returns(Task.FromResult(resultSet));
+
+        var tenantContext = A.Fake<ITenantContext>();
+        A.CallTo(() => tenantContext.GetTenantRepository()).Returns(repository);
+
+        var systemContext = A.Fake<ISystemContext>();
+        A.CallTo(() => systemContext.TryFindTenantContextAsync(tenantId)).Returns(tenantContext);
+
+        var logger = A.Fake<ILogger<MongoRuntimeRepositoryProvider>>();
+        var provider = new MongoRuntimeRepositoryProvider(systemContext, logger);
+
+        var operationResult = new OperationResult();
+        await provider.EnsureCkModelInstalledAsync(tenantId, requested, operationResult, ct);
+
+        A.CallTo(() => tenantContext.ImportCkModelAsync(A<CkModelId>._, A<OperationResult>._))
+            .MustNotHaveHappened();
+        Assert.False(operationResult.HasErrors);
     }
 
     private IRuntimeRepositoryProvider CreateProvider()

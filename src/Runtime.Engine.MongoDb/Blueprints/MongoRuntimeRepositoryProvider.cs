@@ -93,27 +93,45 @@ public class MongoRuntimeRepositoryProvider : IRuntimeRepositoryProvider
             return;
         }
 
-        // Pre-check by model name: if any version of this model is already installed
-        // (Available), skip the import path entirely. The blueprint engine passes the
-        // LOWER BOUND of a version range as modelId (e.g. "System-2.0.0" for the
-        // range "System-[2.0,3.0)"). ImportCkModelAsync's IsExistingAsync gate uses
-        // EXACT-id match — so when a higher satisfying version (e.g. "System-2.2.0")
-        // is installed, the exact-id check misses, and ImportCkModelAsync proceeds to
-        // import the lower bound. That import calls InsertModelWithImportingState which
-        // deletes every CkModel row sharing the model name, including the higher
-        // version — a silent DOWNGRADE that wipes the actually-installed schema. The
-        // post-import verification block below still runs by-name (see comment there)
-        // to cover the case where the import path was taken and partially failed.
+        // Pre-check by model name + version. Two scenarios this guards against:
+        //
+        // 1. **Silent downgrade**: the blueprint engine passes the LOWER BOUND of a
+        //    version range as modelId (e.g. "System-2.0.0" for the range
+        //    "System-[2.0,3.0)"). ImportCkModelAsync's IsExistingAsync gate uses
+        //    EXACT-id match — so when a higher satisfying version (e.g. "System-2.2.0")
+        //    is installed, the exact-id check misses, and ImportCkModelAsync proceeds
+        //    to import the lower bound. That import calls InsertModelWithImportingState
+        //    which deletes every CkModel row sharing the model name, including the
+        //    higher version — a silent DOWNGRADE that wipes the actually-installed
+        //    schema. Skip the import whenever a satisfying-or-higher version is
+        //    already present.
+        //
+        // 2. **Missed additive upgrade**: when the installed version is STRICTLY OLDER
+        //    than the requested one (e.g. installed 3.20.0, requested 3.21.0) the
+        //    schema must be re-imported — UpgradeModelsAsync only runs data migrations
+        //    and is a no-op when no migration script bridges the gap, so without this
+        //    fall-through the CkModel collection stays at the older version and any
+        //    seed-data dependency on the new version fails ValidateCkModels with
+        //    "No models satisfying '<name>-<new-version>' found in tenant". Skipping
+        //    by name alone (the previous behaviour) silently swallowed every
+        //    additive-only CK bump and broke startup on the first tenant that already
+        //    had a prior version installed.
+        //
+        // The post-import verification block below still runs by-name (see comment
+        // there) to cover the case where the import path was taken and partially
+        // failed.
         var repository = tenantContext.GetTenantRepository();
         var session = await repository.GetSessionAsync().ConfigureAwait(false);
         var installedModels = await repository.GetCkModelsAsync(session, null, RtEntityQueryOptions.Create())
             .ConfigureAwait(false);
-        var anyInstalled = installedModels.Items.Any(m =>
-            m.ModelState == ModelState.Available && m.Id.Name == modelId.Name);
-        if (anyInstalled)
+        var satisfyingInstalled = installedModels.Items.Any(m =>
+            m.ModelState == ModelState.Available
+            && m.Id.Name == modelId.Name
+            && m.Id.Version.CompareTo(modelId.Version) >= 0);
+        if (satisfyingInstalled)
         {
             _logger.LogDebug(
-                "CK model '{ModelName}' already installed for tenant '{TenantId}' (requested {ModelId}); skipping import",
+                "CK model '{ModelName}' already installed for tenant '{TenantId}' at a satisfying-or-higher version (requested {ModelId}); skipping import",
                 modelId.Name, tenantId, modelId);
             return;
         }
@@ -134,7 +152,7 @@ public class MongoRuntimeRepositoryProvider : IRuntimeRepositoryProvider
         // (e.g. "System-2.2.0"). An exact match would spuriously report missing.
         installedModels = await repository.GetCkModelsAsync(session, null, RtEntityQueryOptions.Create())
             .ConfigureAwait(false);
-        anyInstalled = installedModels.Items.Any(m =>
+        var anyInstalled = installedModels.Items.Any(m =>
             m.ModelState == ModelState.Available && m.Id.Name == modelId.Name);
 
         if (!anyInstalled)
