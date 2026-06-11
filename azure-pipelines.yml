@@ -25,7 +25,7 @@ resources:
       type: github
       name: meshmakers/octo-pipeline-templates
       endpoint: meshmakers-access-token
-      ref: refs/tags/tpl-v0.2.1
+      ref: refs/tags/tpl-v0.3.0
 
 trigger:
   batch: true
@@ -53,8 +53,6 @@ variables:
     value: ${{ eq(variables['Build.SourceBranch'], 'refs/heads/main') }}
   - name: isTest
     value: ${{ startsWith(variables['Build.SourceBranch'], 'refs/heads/test') }}
-  - name: OctoLocalCatalogIsEnabled
-    value: 'false'
 
 stages:
   - stage: Build
