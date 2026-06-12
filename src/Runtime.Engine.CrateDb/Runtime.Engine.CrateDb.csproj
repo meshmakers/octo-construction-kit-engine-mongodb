@@ -12,7 +12,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="$(OctoVersion)" />
+        <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="$(OctoCoreLibVersion)" />
         <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.9" />
         <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.9" />
         <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.9" />
