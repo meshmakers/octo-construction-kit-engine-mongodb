@@ -25,7 +25,7 @@ resources:
       type: github
       name: meshmakers/octo-pipeline-templates
       endpoint: meshmakers-access-token
-      ref: refs/tags/tpl-v0.3.1
+      ref: refs/tags/tpl-v0.4.3
 
 trigger:
   batch: true
@@ -67,6 +67,15 @@ stages:
             clean: true
             submodules: true
           - template: templates/steps/set-version.yml@pipelineTemplates
+          # §10 #7 Versions-Floor-Check pilot. CK-Mongo is the repo that hit
+          # the r3.4.9 slim-NuGet-restore trap (build #34814) which inspired
+          # this guard. With OctoCoreLibVersion split done at 3.4.x, declare
+          # the floor here so any future Directory.Build.props edit that
+          # accidentally rolls back to 3.3.* fails the build before restore.
+          - template: templates/steps/verify-libs-floor.yml@pipelineTemplates
+            parameters:
+              coreLibFloor: '3.4'
+              commFloor: '3.4'
           - task: DotNetCoreCLI@2
             displayName: 'Restore NuGet packages'
             inputs:
