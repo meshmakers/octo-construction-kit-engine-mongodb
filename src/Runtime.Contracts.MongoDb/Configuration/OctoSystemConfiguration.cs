@@ -64,4 +64,23 @@ public class OctoSystemConfiguration()
     /// which is required for multi-document transactions to work correctly with MongoDB.Driver v3.x.
     /// </summary>
     public string? ReplicaSetName { get; set; }
+
+    /// <summary>
+    /// Threshold in milliseconds above which a MongoDB command is logged at WARN level and tagged as slow.
+    /// Set to 0 to disable slow-query logging entirely (OpenTelemetry histograms are still emitted).
+    /// </summary>
+    public int SlowQueryThresholdMs { get; set; } = 100;
+
+    /// <summary>
+    /// Threshold in milliseconds above which the truncated BSON command body is included in the slow-query
+    /// WARN log line. Must be greater than or equal to <see cref="SlowQueryThresholdMs"/>; values below
+    /// the slow-query threshold are ignored. Set to 0 to disable full-command logging.
+    /// </summary>
+    public int SlowQueryFullCommandLogMs { get; set; } = 1000;
+
+    /// <summary>
+    /// Maximum length in bytes of the BSON command preview attached to slow-query log entries.
+    /// Prevents huge aggregation pipelines from flooding the log.
+    /// </summary>
+    public int SlowQueryCommandPreviewBytes { get; set; } = 2048;
 }
