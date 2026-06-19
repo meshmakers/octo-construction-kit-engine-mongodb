@@ -120,6 +120,55 @@ public sealed class MongoCommandObservabilityTests : IDisposable
     }
 
     [Fact]
+    public void TruncateBson_RespectsByteBudget_NotCharBudget_ForNonAsciiContent()
+    {
+        // German umlauts encode to 2 UTF-8 bytes each. A naive char-based truncation would
+        // under-count the byte cost and overshoot the documented byte budget.
+        // 30 "ä" → 30 chars but 60 UTF-8 bytes.
+        var command = new BsonDocument("find", new string('ä', 30));
+
+        var result = MongoCommandObservability.TruncateBson(command, maxBytes: 20);
+
+        // The trailing marker is appended verbatim; the JSON prefix alone must respect the budget.
+        var prefix = result.Replace("…<truncated>", string.Empty);
+        Assert.True(
+            System.Text.Encoding.UTF8.GetByteCount(prefix) <= 20,
+            $"Prefix consumed {System.Text.Encoding.UTF8.GetByteCount(prefix)} UTF-8 bytes, budget was 20: {prefix}");
+    }
+
+    [Fact]
+    public void TruncateBson_DoesNotSplitMultibyteSequence()
+    {
+        // After truncation, re-encoding to UTF-8 must produce no replacement chars — the prefix
+        // ends at a whole-rune boundary.
+        var command = new BsonDocument("note", string.Concat(Enumerable.Repeat("äöüß€😀", 20)));
+
+        // Choose a byte budget that would land mid-emoji if truncated naively.
+        var result = MongoCommandObservability.TruncateBson(command, maxBytes: 33);
+
+        var prefix = result.Replace("…<truncated>", string.Empty);
+        var roundtripped = System.Text.Encoding.UTF8.GetString(System.Text.Encoding.UTF8.GetBytes(prefix));
+        Assert.Equal(prefix, roundtripped);
+        Assert.DoesNotContain('�', roundtripped); // U+FFFD = replacement char on invalid input
+    }
+
+    [Fact]
+    public void TruncateBson_MaxBytesZero_ReturnsEmpty()
+    {
+        var command = new BsonDocument("find", "ck_types");
+        Assert.Equal(string.Empty, MongoCommandObservability.TruncateBson(command, maxBytes: 0));
+        Assert.Equal(string.Empty, MongoCommandObservability.TruncateBson(command, maxBytes: -5));
+    }
+
+    [Fact]
+    public void TruncateBson_ContentFitsBudget_ReturnsUnmodified()
+    {
+        var command = new BsonDocument("find", "ck");
+        var result = MongoCommandObservability.TruncateBson(command, maxBytes: 1024);
+        Assert.DoesNotContain("<truncated>", result);
+    }
+
+    [Fact]
     public void SucceededCommand_TruncatesBsonPreview_WhenLargerThanLimit()
     {
         _config.Current.SlowQueryThresholdMs = 50;

@@ -70,18 +70,25 @@ internal sealed class MongoCommandObservability
             return;
         }
 
-        // Bounded growth: if the map is full (commands lost their finish event, e.g. dropped
-        // connection), drop the oldest by clearing. Pragmatic — accuracy of slow-query stats
-        // matters more than perfect correlation in degenerate cases.
-        if (_pending.Count >= MaxPendingCommands)
+        try
         {
-            _pending.Clear();
-        }
+            // Bounded growth: if the map is full (commands lost their finish event, e.g. dropped
+            // connection), drop the oldest by clearing. Pragmatic — accuracy of slow-query stats
+            // matters more than perfect correlation in degenerate cases.
+            if (_pending.Count >= MaxPendingCommands)
+            {
+                _pending.Clear();
+            }
 
-        _pending[e.RequestId] = new PendingCommand(
-            Database: e.DatabaseNamespace?.DatabaseName ?? "unknown",
-            Target: ExtractCommandTarget(e.Command),
-            Command: e.Command);
+            _pending[e.RequestId] = new PendingCommand(
+                Database: e.DatabaseNamespace?.DatabaseName ?? "unknown",
+                Target: ExtractCommandTarget(e.Command),
+                Command: e.Command);
+        }
+        catch (Exception ex)
+        {
+            SafeLogError(ex, "MongoCommandObservability.OnStarted threw");
+        }
     }
 
     public void OnSucceeded(CommandSucceededEvent e)
@@ -212,20 +219,48 @@ internal sealed class MongoCommandObservability
         };
     }
 
-    private static string TruncateBson(BsonDocument? command, int maxBytes)
+    /// <summary>
+    /// Truncates the BSON-as-JSON representation so it fits within <paramref name="maxBytes"/>
+    /// bytes when UTF-8 encoded — i.e. the same byte budget the log sink will spend. Naïve
+    /// char-based truncation under-counts non-ASCII content (each German umlaut is 2 UTF-8 bytes,
+    /// emoji are 4) and can also split a UTF-16 surrogate pair, producing an invalid string.
+    /// </summary>
+    internal static string TruncateBson(BsonDocument? command, int maxBytes)
     {
         if (command is null)
         {
             return "<null>";
         }
 
+        if (maxBytes <= 0)
+        {
+            return string.Empty;
+        }
+
         var json = command.ToJson();
-        if (json.Length <= maxBytes)
+        if (System.Text.Encoding.UTF8.GetByteCount(json) <= maxBytes)
         {
             return json;
         }
 
-        return json.Substring(0, maxBytes) + "…<truncated>";
+        // Walk runes, accumulating their UTF-8 byte length. Stops on the last whole rune
+        // that fits inside the budget — never splits a multi-byte sequence or a surrogate pair.
+        var span = json.AsSpan();
+        var accumulatedBytes = 0;
+        var charsConsumed = 0;
+        foreach (var rune in span.EnumerateRunes())
+        {
+            var runeBytes = rune.Utf8SequenceLength;
+            if (accumulatedBytes + runeBytes > maxBytes)
+            {
+                break;
+            }
+
+            accumulatedBytes += runeBytes;
+            charsConsumed += rune.Utf16SequenceLength;
+        }
+
+        return json.Substring(0, charsConsumed) + "…<truncated>";
     }
 
     private sealed record PendingCommand(string Database, string Target, BsonDocument? Command);
