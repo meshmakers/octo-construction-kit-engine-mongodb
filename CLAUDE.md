@@ -135,13 +135,38 @@ In OctoMesh today the scope is opened automatically by `MongoCommandSurfaceMiddl
 `X-Octo-MongoDb-Duration-Ms` / `X-Octo-MongoDb-Command-Count`; GraphQL responses get
 `extensions.mongoDb = { totalMs, commandCount, slowestMs, slowestCommand }`.
 
+### Slow-Query Buffer (AB#4212)
+
+In addition to metrics, slow-log, and the per-request scope, `MongoCommandObservability`
+also captures every slow command (above `SlowQueryThresholdMs`) into a process-wide
+**ring buffer** so the Refinery Studio Diagnostics surface can show recent slow queries
+without scraping logs:
+
+- `SlowQueryEntry` POCO — Timestamp, CommandName, Target, Database, DurationMs, RequestId,
+  CommandBsonPreview, Success, ErrorCode
+- `SlowQueriesBuffer` public class — thread-safe FIFO ring backed by `ConcurrentQueue<T>`;
+  default capacity 1000 (~3 MB resident at ~3 KB per entry), configurable via
+  `OctoSystemConfiguration.SlowQueryBufferSize` (0 disables)
+- Registered as a DI singleton from `AddMongoDbRuntimeRepository()` — one buffer per
+  service process, shared between admin and user MongoDB connections
+- Read API: `GetSnapshot(predicate, limit)` returns entries newest-first, point-in-time
+  consistent under concurrent writers
+- Both successful and failed slow commands are captured (failures distinguished via
+  `Success` field and `ErrorCode`)
+- Heartbeat commands are filtered before reaching the buffer (same `IgnoredCommands` list)
+
+In OctoMesh today this buffer is consumed by `DiagnosticsController` in `octo-asset-repo-services`,
+which exposes `GET /{tenantId}/v1/Diagnostics/slow-mongo-queries` and filters entries by
+`Database == tenantId` so each tenant only sees its own queries. The Refinery Studio
+**Diagnostics → Slow Queries** page renders the result.
+
 ### Roadmap
 
-This is **Stage 1** of a three-stage Performance Advisor. Stage 2 (explain-based COLLSCAN
-detection) and Stage 3 (`$indexStats` unused-index analysis) are tracked separately —
-- Stage 1: **AB#4206** (merged)
-- Per-request surface: **AB#4210**
-- Stage 2 / Stage 3: not yet scheduled
+- Stage 1: **AB#4206** (merged) — slow-log + OTel histograms
+- Per-request surface: **AB#4210** (merged) — GraphQL extension + REST headers
+- Studio surface: **AB#4212** — ring buffer + Diagnostics page
+- Next-up: explain-based `COLLSCAN` detection + CK-Index suggestions (Stage 2 continuation)
+- Stage 3: `$indexStats` unused-index analysis
 
 ## BSON Serialization Conventions
 

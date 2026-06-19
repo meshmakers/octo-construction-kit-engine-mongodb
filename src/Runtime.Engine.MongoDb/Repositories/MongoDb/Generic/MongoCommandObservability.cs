@@ -60,12 +60,17 @@ internal sealed class MongoCommandObservability
 
     private readonly ILogger _logger;
     private readonly IOptionsMonitor<OctoSystemConfiguration> _config;
+    private readonly SlowQueriesBuffer? _slowQueries;
     private readonly ConcurrentDictionary<int, PendingCommand> _pending = new();
 
-    public MongoCommandObservability(ILogger logger, IOptionsMonitor<OctoSystemConfiguration> config)
+    public MongoCommandObservability(
+        ILogger logger,
+        IOptionsMonitor<OctoSystemConfiguration> config,
+        SlowQueriesBuffer? slowQueries = null)
     {
         _logger = logger;
         _config = config;
+        _slowQueries = slowQueries;
     }
 
     /// <summary>
@@ -161,7 +166,7 @@ internal sealed class MongoCommandObservability
 
             CurrentScope.Value?.Record(e.CommandName, ms);
 
-            LogIfSlow(e.CommandName, ctx, ms, e.RequestId);
+            HandleSlow(e.CommandName, ctx, ms, e.RequestId, success: true, errorCode: null);
         }
         catch (Exception ex)
         {
@@ -199,6 +204,8 @@ internal sealed class MongoCommandObservability
 
             CurrentScope.Value?.Record(e.CommandName, ms);
 
+            HandleSlow(e.CommandName, ctx, ms, e.RequestId, success: false, errorCode: errorCode);
+
             _logger.LogWarning(e.Failure,
                 "MongoDB command failed: {CommandName} {Target} on {Database} after {DurationMs}ms (errorCode={ErrorCode}, requestId={RequestId})",
                 e.CommandName, ctx.Target, ctx.Database, ms, errorCode, e.RequestId);
@@ -224,10 +231,37 @@ internal sealed class MongoCommandObservability
         }
     }
 
-    private void LogIfSlow(string commandName, PendingCommand ctx, double ms, int requestId)
+    private void HandleSlow(
+        string commandName, PendingCommand ctx, double ms, int requestId,
+        bool success, string? errorCode)
     {
         var cfg = _config.CurrentValue;
         if (cfg.SlowQueryThresholdMs <= 0 || ms <= cfg.SlowQueryThresholdMs)
+        {
+            return;
+        }
+
+        // Truncated BSON preview is needed in two places (buffer entry + optionally the WARN
+        // log when above SlowQueryFullCommandLogMs). Compute once, share between both.
+        var preview = TruncateBson(ctx.Command, cfg.SlowQueryCommandPreviewBytes);
+
+        // Studio diagnostics surface: always capture every slow command (success or failure)
+        // so a tenant admin can inspect what was slow. Tenant filtering happens at the
+        // read endpoint, keyed off the entry's Database field.
+        _slowQueries?.Add(new SlowQueryEntry(
+            Timestamp: DateTimeOffset.UtcNow,
+            CommandName: commandName,
+            Target: ctx.Target,
+            Database: ctx.Database,
+            DurationMs: ms,
+            RequestId: requestId,
+            CommandBsonPreview: preview,
+            Success: success,
+            ErrorCode: errorCode));
+
+        // Slow-log: only for successful commands. Failures are already logged at WARN in
+        // OnFailed with the exception attached; a second slow-log here would just duplicate.
+        if (!success)
         {
             return;
         }
@@ -243,7 +277,6 @@ internal sealed class MongoCommandObservability
         }
 
         // Very slow → include truncated BSON body so the exact filter / pipeline is captured.
-        var preview = TruncateBson(ctx.Command, cfg.SlowQueryCommandPreviewBytes);
         _logger.LogWarning(
             "Slow MongoDB command: {CommandName} {Target} on {Database} took {DurationMs}ms (requestId={RequestId}) command={Command}",
             commandName, ctx.Target, ctx.Database, ms, requestId, preview);

@@ -264,6 +264,99 @@ public sealed class MongoCommandObservabilityTests : IDisposable
         Assert.Contains(obs.Tags, t => t.Key == "database" && (string?)t.Value == "unknown");
     }
 
+    // ---- SlowQueriesBuffer integration (AB#4212) ----
+
+    [Fact]
+    public void SlowCommand_WritesToSlowQueriesBuffer()
+    {
+        var buffer = new SlowQueriesBuffer(capacity: 100);
+        var sut = new MongoCommandObservability(_logger, _config, buffer);
+        _config.Current.SlowQueryThresholdMs = 50;
+
+        var (started, succeeded) = BuildPair("aggregate", "rt_entities", "tenant_a", durationMs: 250);
+        sut.OnStarted(started);
+        sut.OnSucceeded(succeeded);
+
+        var entries = buffer.GetSnapshot();
+        var entry = Assert.Single(entries);
+        Assert.Equal("aggregate", entry.CommandName);
+        Assert.Equal("rt_entities", entry.Target);
+        Assert.Equal("tenant_a", entry.Database);
+        Assert.Equal(250, entry.DurationMs, precision: 4);
+        Assert.True(entry.Success);
+        Assert.Null(entry.ErrorCode);
+        Assert.Contains("rt_entities", entry.CommandBsonPreview);
+    }
+
+    [Fact]
+    public void FastCommand_DoesNotWriteToSlowQueriesBuffer()
+    {
+        var buffer = new SlowQueriesBuffer(capacity: 100);
+        var sut = new MongoCommandObservability(_logger, _config, buffer);
+        _config.Current.SlowQueryThresholdMs = 100;
+
+        var (started, succeeded) = BuildPair("find", "ck_types", "tenant_a", durationMs: 10);
+        sut.OnStarted(started);
+        sut.OnSucceeded(succeeded);
+
+        Assert.Empty(buffer.GetSnapshot());
+    }
+
+    [Fact]
+    public void HeartbeatCommand_DoesNotWriteToBuffer_EvenIfSlow()
+    {
+        // Heartbeats are filtered at the very top of OnSucceeded/OnFailed before any other
+        // path. They must never reach the buffer regardless of duration.
+        var buffer = new SlowQueriesBuffer(capacity: 100);
+        var sut = new MongoCommandObservability(_logger, _config, buffer);
+        _config.Current.SlowQueryThresholdMs = 1;
+
+        var (started, succeeded) = BuildPair("isMaster", "admin", "admin", durationMs: 5000);
+        sut.OnStarted(started);
+        sut.OnSucceeded(succeeded);
+
+        Assert.Empty(buffer.GetSnapshot());
+    }
+
+    [Fact]
+    public void FailedSlowCommand_WritesToBuffer_WithErrorCode_AndSuccessFalse()
+    {
+        var buffer = new SlowQueriesBuffer(capacity: 100);
+        var sut = new MongoCommandObservability(_logger, _config, buffer);
+        _config.Current.SlowQueryThresholdMs = 50;
+
+        var (started, failed) = BuildFailedPair("update", "rt_entities", "tenant_a",
+            durationMs: 200, errorCode: 112, errorMessage: "WriteConflict");
+        sut.OnStarted(started);
+        sut.OnFailed(failed);
+
+        var entry = Assert.Single(buffer.GetSnapshot());
+        Assert.False(entry.Success);
+        Assert.Equal("112", entry.ErrorCode);
+        Assert.Equal("update", entry.CommandName);
+    }
+
+    [Fact]
+    public void NoBufferProvided_DoesNotThrow_AndStillLogs()
+    {
+        // The buffer is an optional dependency — Mesh-Adapter / bot-services / unit tests can
+        // construct the listener without one. Slow-log + metrics must still fire.
+        var sutWithoutBuffer = new MongoCommandObservability(_logger, _config);
+        _config.Current.SlowQueryThresholdMs = 50;
+
+        var (started, succeeded) = BuildPair("find", "ck_types", "tenant_a", durationMs: 250);
+        var ex = Record.Exception(() =>
+        {
+            sutWithoutBuffer.OnStarted(started);
+            sutWithoutBuffer.OnSucceeded(succeeded);
+        });
+
+        Assert.Null(ex);
+        Assert.Single(_logger.Entries, e => e.Level == LogLevel.Warning);
+    }
+
+    // ---- RequestScope tests (AB#4210) ----
+
     [Fact]
     public void RequestScope_AccumulatesCommands_Until_Disposed()
     {

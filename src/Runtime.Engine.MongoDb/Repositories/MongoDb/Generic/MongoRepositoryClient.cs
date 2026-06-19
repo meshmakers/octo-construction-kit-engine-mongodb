@@ -80,7 +80,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 settings.RetryWrites = true;
                 var observability = new MongoCommandObservability(
                     _serviceProvider.GetRequiredService<ILogger<MongoCommandObservability>>(),
-                    _serviceProvider.GetRequiredService<IOptionsMonitor<OctoSystemConfiguration>>());
+                    _serviceProvider.GetRequiredService<IOptionsMonitor<OctoSystemConfiguration>>(),
+                    _serviceProvider.GetService<SlowQueriesBuffer>());
 
                 settings.ClusterConfigurator = cb =>
                 {
