@@ -441,4 +441,132 @@ public class MigrationSupportTests(MigrationSupportFixture fixture)
     }
 
     #endregion
+
+    #region RewriteAttributeValueForMigrationAsync
+
+    [Fact]
+    public async Task RewriteAttributeValueForMigrationAsync_RewritesOnlyTheSpecifiedAttribute()
+    {
+        // Arrange: insert a temporary entity with a populated StringArray attribute, then
+        // rewrite only that one slot to a List<RtRecord>. Every other entity field must
+        // survive untouched.
+        var systemContext = fixture.GetSystemContext();
+        var repository = systemContext.GetTenantRepository();
+        var tempRtId = OctoObjectId.GenerateNewId();
+        var beforeRewrite = new DateTime(
+            DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond * TimeSpan.TicksPerMillisecond,
+            DateTimeKind.Utc);
+
+        using var session = await repository.GetSessionAsync();
+        session.StartTransaction();
+
+        try
+        {
+            var entity = new RtEntity(MeasuringPointTypeId, tempRtId);
+            entity.SetAttributeRawValue("Tags", new List<string> { "raw-1", "raw-2" });
+            entity.SetAttributeRawValue("Name", "rewrite-fixture");
+            await repository.InsertOneRtEntityForMigrationAsync(session, MeasuringPointTypeId, entity);
+
+            // Build a wrapper record list — the exact shape WrapScalarInRecord produces.
+            var wrappedList = new List<RtRecord>
+            {
+                new(new RtCkId<CkRecordId>("Test", "EMailAddress"),
+                    new Dictionary<string, object?>
+                    {
+                        ["EMailAddress"] = "raw-1",
+                        ["EMailAddressType"] = "base",
+                    }),
+                new(new RtCkId<CkRecordId>("Test", "EMailAddress"),
+                    new Dictionary<string, object?>
+                    {
+                        ["EMailAddress"] = "raw-2",
+                        ["EMailAddressType"] = "base",
+                    }),
+            };
+
+            // Act
+            await repository.RewriteAttributeValueForMigrationAsync(
+                session, MeasuringPointTypeId, tempRtId, "Tags", wrappedList);
+
+            // Assert: read it back via the cache-free path and inspect the attribute slot.
+            var (entitiesAfter, _) = await repository.GetRtEntitiesByTypeForMigrationAsync(
+                session, MeasuringPointTypeId);
+            var afterRewrite = entitiesAfter.FirstOrDefault(e => e.RtId == tempRtId);
+            Assert.NotNull(afterRewrite);
+
+            // The Name attribute must be untouched.
+            Assert.Equal("rewrite-fixture", afterRewrite.GetAttributeStringValueOrDefault("Name"));
+
+            // The Tags slot now holds the record list. BSON round-trips the list as
+            // List<RtRecord> (the AutoMap registration for RtEntity handles it). We sanity-
+            // check by enumerating without asserting on the precise CLR type — the migration
+            // service only requires the wire shape to round-trip.
+            var tagsValue = afterRewrite.GetAttributeValueOrDefault("Tags");
+            Assert.NotNull(tagsValue);
+            var enumerable = Assert.IsAssignableFrom<System.Collections.IEnumerable>(tagsValue);
+            int count = 0;
+            foreach (var _ in enumerable)
+            {
+                count++;
+            }
+            Assert.Equal(2, count);
+
+            // rtChangedDateTime advanced; rtVersion bumped relative to the freshly-inserted
+            // entity (insert sets it to default zero in this code path).
+            Assert.NotNull(afterRewrite.RtChangedDateTime);
+            Assert.True(afterRewrite.RtChangedDateTime >= beforeRewrite,
+                "rtChangedDateTime should be advanced by the rewrite call");
+
+            // Cleanup so the next test sees a clean fixture state.
+            await repository.DeleteOneRtEntityForMigrationAsync(session, MeasuringPointTypeId, tempRtId);
+            await session.CommitTransactionAsync();
+        }
+        catch
+        {
+            await session.AbortTransactionAsync();
+            throw;
+        }
+    }
+
+    [Fact]
+    public async Task RewriteAttributeValueForMigrationAsync_NullValue_ClearsTheSlot()
+    {
+        // Arrange: a quirky but supported edge case — passing null clears the slot. The
+        // migration service itself doesn't drive null values today but the underlying API
+        // shouldn't pretend it can't.
+        var systemContext = fixture.GetSystemContext();
+        var repository = systemContext.GetTenantRepository();
+        var tempRtId = OctoObjectId.GenerateNewId();
+
+        using var session = await repository.GetSessionAsync();
+        session.StartTransaction();
+
+        try
+        {
+            var entity = new RtEntity(MeasuringPointTypeId, tempRtId);
+            entity.SetAttributeRawValue("Tags", new List<string> { "raw" });
+            await repository.InsertOneRtEntityForMigrationAsync(session, MeasuringPointTypeId, entity);
+
+            // Act
+            await repository.RewriteAttributeValueForMigrationAsync(
+                session, MeasuringPointTypeId, tempRtId, "Tags", null);
+
+            // Assert
+            var (entitiesAfter, _) = await repository.GetRtEntitiesByTypeForMigrationAsync(
+                session, MeasuringPointTypeId);
+            var afterRewrite = entitiesAfter.FirstOrDefault(e => e.RtId == tempRtId);
+            Assert.NotNull(afterRewrite);
+            Assert.Null(afterRewrite.GetAttributeValueOrDefault("Tags"));
+
+            await repository.DeleteOneRtEntityForMigrationAsync(session, MeasuringPointTypeId, tempRtId);
+            await session.CommitTransactionAsync();
+        }
+        catch
+        {
+            await session.AbortTransactionAsync();
+            throw;
+        }
+    }
+
+    #endregion
 }
