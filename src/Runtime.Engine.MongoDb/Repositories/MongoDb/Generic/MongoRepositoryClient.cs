@@ -78,12 +78,19 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 // Retry always writes to prevent
                 // Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction. 
                 settings.RetryWrites = true;
+                var observability = new MongoCommandObservability(
+                    _serviceProvider.GetRequiredService<ILogger<MongoCommandObservability>>(),
+                    _serviceProvider.GetRequiredService<IOptionsMonitor<OctoSystemConfiguration>>());
+
                 settings.ClusterConfigurator = cb =>
                 {
                     cb.Subscribe<CommandStartedEvent>(e =>
                     {
+                        observability.OnStarted(e);
                         _logger.LogDebug("{ObjCommandName} - {Json}", e.CommandName, e.Command.ToJson());
                     });
+                    cb.Subscribe<CommandSucceededEvent>(observability.OnSucceeded);
+                    cb.Subscribe<CommandFailedEvent>(observability.OnFailed);
                     cb.Subscribe<ConnectionOpenedEvent>(e =>
                     {
                         _logger.LogDebug("Connection opened: {ConnectionId}", e.ConnectionId);

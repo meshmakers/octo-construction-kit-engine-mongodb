@@ -43,6 +43,73 @@ USE_LOCAL_MONGODB=true dotnet test -c DebugL
 }
 ```
 
+## Observability — MongoDB Command Profiling
+
+`MongoCommandObservability` (in `Repositories/MongoDb/Generic/`) subscribes to
+`CommandStartedEvent` / `CommandSucceededEvent` / `CommandFailedEvent` on the singleton
+`MongoClient` and acts as the Community Edition replacement for the Atlas / Enterprise
+Performance Advisor. It emits OpenTelemetry instruments and structured slow-query logs
+without changing any application code path.
+
+### Metrics
+
+Meter name: **`Meshmakers.Octo.MongoDb`** (registered in
+`octo-common-services/Observability/ObservabilityBuilder.cs` — every service that calls
+`builder.AddObservability()` exposes the metrics over Prometheus automatically).
+
+| Instrument | Type | Tags | Purpose |
+|------------|------|------|---------|
+| `octo.mongodb.command.duration` | Histogram (ms) | `command_name`, `database`, `status` | Latency distribution per command per tenant DB |
+| `octo.mongodb.command.errors` | Counter | `command_name`, `database`, `error_code` | Failure counts, tagged with the Mongo error code (e.g. `112` for WriteConflict) |
+
+The `tenantId` is deliberately **not** a tag — `database` is used instead as the
+low-cardinality attribution dimension (it equals the tenant database name).
+
+### Slow-Query Logging
+
+Two thresholds on `OctoSystemConfiguration`:
+
+| Property | Default | Behaviour |
+|----------|---------|-----------|
+| `SlowQueryThresholdMs` | `100` | Above this, the command is logged at **WARN** as: `Slow MongoDB command: <name> <target> on <db> took <ms>ms (requestId=<id>)`. `0` disables slow-query logging (metrics still emitted). |
+| `SlowQueryFullCommandLogMs` | `1000` | Above this **additional** threshold, the truncated BSON command body is included in the log line — useful to capture the exact filter/pipeline for very slow operations. |
+| `SlowQueryCommandPreviewBytes` | `2048` | Truncation limit for the BSON preview. |
+
+The `<target>` is extracted from the first BSON element value of the command (e.g.
+`aggregate=rt_entities`, `find=ck_types`) — enough to identify the affected collection
+without dumping the full pipeline.
+
+Env-var override example: `OCTO_System__SlowQueryThresholdMs=50`.
+
+### Suppressed Commands
+
+Heartbeats and handshakes are excluded from both metrics and logs to keep histogram
+cardinality bounded:
+`isMaster`, `hello`, `ping`, `buildInfo`, `saslStart`, `saslContinue`, `saslContinueOrFinish`,
+`endSessions`, `getMore`.
+
+### Correlation
+
+`CommandSucceededEvent` and `CommandFailedEvent` do not carry the database name nor the
+command body. A small `ConcurrentDictionary<int, PendingCommand>` keyed by `RequestId`
+bridges from `CommandStartedEvent` to the finish event. The map is capped at **10 000**
+in-flight entries — on overflow the map is cleared (in normal operation the driver fires
+matching success/failed events for every started event, so growth is bounded by concurrency).
+When the lookup misses (started event lost), the listener falls back to `database="unknown"`
+rather than throwing.
+
+### Exception Safety
+
+Driver command events fire on the driver's own thread pool. Every callback in
+`MongoCommandObservability` is wrapped in try/catch and the inner `SafeLogError` swallows
+any logger throws — a broken sink must never poison the driver's event pipeline.
+
+### Roadmap
+
+This is **Stage 1** of a three-stage Performance Advisor. Stage 2 (explain-based COLLSCAN
+detection) and Stage 3 (`$indexStats` unused-index analysis) are tracked separately —
+this issue / work item: **AB#4206**.
+
 ## BSON Serialization Conventions
 
 ### CamelCase Convention
