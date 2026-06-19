@@ -104,11 +104,44 @@ Driver command events fire on the driver's own thread pool. Every callback in
 `MongoCommandObservability` is wrapped in try/catch and the inner `SafeLogError` swallows
 any logger throws — a broken sink must never poison the driver's event pipeline.
 
+### Per-Request Accumulator (AB#4210)
+
+In addition to the always-on metrics and slow-log paths, an HTTP middleware or GraphQL
+listener can open a **request scope** that aggregates the cost of every Mongo command issued
+on the same async flow:
+
+```csharp
+using var _ = MongoRequestScope.Begin(out var stats);
+// ... do work ...
+// stats.CommandCount, stats.TotalMs, stats.SlowestMs, stats.SlowestCommand
+```
+
+- `MongoRequestScope` is the public façade — consumers in `octo-common-services` and
+  `octo-asset-repo-services` use it, not the internal `MongoCommandObservability` listener.
+- `MongoRequestScope.Current` reads the active scope's stats from any code on the same async
+  flow — useful for a GraphQL execution listener that runs inside a request whose scope was
+  opened by upstream middleware.
+- The scope is carried via `AsyncLocal<RequestMongoStats>`. The MongoDB driver's command
+  events fire on its own thread pool, but `ExecutionContext` propagation through Task
+  continuations preserves the AsyncLocal value — verified by `AsyncLocalDriverFlowSpike`.
+- Out-of-scope work (background jobs, Mesh-Adapter pipelines) sees `null` and the listener
+  silently no-ops — only metrics and slow-log fire there, identical to pre-AB#4210 behaviour.
+- Heartbeat commands are still filtered before reaching the accumulator, matching the listener's
+  ignored-commands set.
+
+In OctoMesh today the scope is opened automatically by `MongoCommandSurfaceMiddleware`
+(`octo-common-services` Observability), and consumed by `MongoStatsListener`
+(`octo-asset-repo-services` GraphQL pipeline). REST responses get headers
+`X-Octo-MongoDb-Duration-Ms` / `X-Octo-MongoDb-Command-Count`; GraphQL responses get
+`extensions.mongoDb = { totalMs, commandCount, slowestMs, slowestCommand }`.
+
 ### Roadmap
 
 This is **Stage 1** of a three-stage Performance Advisor. Stage 2 (explain-based COLLSCAN
 detection) and Stage 3 (`$indexStats` unused-index analysis) are tracked separately —
-this issue / work item: **AB#4206**.
+- Stage 1: **AB#4206** (merged)
+- Per-request surface: **AB#4210**
+- Stage 2 / Stage 3: not yet scheduled
 
 ## BSON Serialization Conventions
 

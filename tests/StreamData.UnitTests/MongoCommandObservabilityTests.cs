@@ -265,6 +265,161 @@ public sealed class MongoCommandObservabilityTests : IDisposable
     }
 
     [Fact]
+    public void RequestScope_AccumulatesCommands_Until_Disposed()
+    {
+        using (MongoCommandObservability.BeginRequestScope(out var stats))
+        {
+            var (s1, ok1) = BuildPair("find", "ck_types", "tenant_a", durationMs: 12);
+            var (s2, ok2) = BuildPair("aggregate", "rt_entities", "tenant_a", durationMs: 47, requestId: 2);
+            var (s3, ok3) = BuildPair("find", "ck_types", "tenant_a", durationMs: 3, requestId: 3);
+
+            _sut.OnStarted(s1); _sut.OnSucceeded(ok1);
+            _sut.OnStarted(s2); _sut.OnSucceeded(ok2);
+            _sut.OnStarted(s3); _sut.OnSucceeded(ok3);
+
+            Assert.Equal(3, stats.CommandCount);
+            Assert.Equal(62, stats.TotalMs, precision: 4);
+            Assert.Equal(47, stats.SlowestMs, precision: 4);
+            Assert.Equal("aggregate", stats.SlowestCommand);
+        }
+
+        // After disposal the scope is gone — further commands must not throw and must not
+        // touch the now-orphaned stats instance.
+        Assert.Null(MongoCommandObservability.GetCurrentScope());
+    }
+
+    [Fact]
+    public void RequestScope_RecordsFailureDurations_Too()
+    {
+        using var _ = MongoCommandObservability.BeginRequestScope(out var stats);
+
+        var (started, failed) = BuildFailedPair("update", "rt_entities", "tenant_a",
+            durationMs: 25, errorCode: 112, errorMessage: "WriteConflict");
+        _sut.OnStarted(started);
+        _sut.OnFailed(failed);
+
+        Assert.Equal(1, stats.CommandCount);
+        Assert.Equal(25, stats.TotalMs, precision: 4);
+        Assert.Equal("update", stats.SlowestCommand);
+    }
+
+    [Fact]
+    public void RequestScope_IgnoresHeartbeatCommands()
+    {
+        using var _ = MongoCommandObservability.BeginRequestScope(out var stats);
+
+        var (s1, ok1) = BuildPair("hello", "admin", "admin", durationMs: 8);
+        var (s2, ok2) = BuildPair("isMaster", "admin", "admin", durationMs: 5, requestId: 2);
+        var (s3, ok3) = BuildPair("ping", "admin", "admin", durationMs: 4, requestId: 3);
+        var (s4, ok4) = BuildPair("find", "ck_types", "tenant_a", durationMs: 17, requestId: 4);
+
+        _sut.OnStarted(s1); _sut.OnSucceeded(ok1);
+        _sut.OnStarted(s2); _sut.OnSucceeded(ok2);
+        _sut.OnStarted(s3); _sut.OnSucceeded(ok3);
+        _sut.OnStarted(s4); _sut.OnSucceeded(ok4);
+
+        // Only the find should appear — heartbeats remain excluded from the user-facing surface.
+        Assert.Equal(1, stats.CommandCount);
+        Assert.Equal(17, stats.TotalMs, precision: 4);
+        Assert.Equal("find", stats.SlowestCommand);
+    }
+
+    [Fact]
+    public void RequestScope_OutOfScope_IsNoOp_NoExceptions()
+    {
+        // Bare-metal call without an active scope (the Mesh-Adapter / background-job shape).
+        // Listener must behave exactly as before: histogram is emitted, no scope side effects,
+        // no exceptions.
+        Assert.Null(MongoCommandObservability.GetCurrentScope());
+
+        var (started, succeeded) = BuildPair("find", "ck_types", "tenant_a", durationMs: 5);
+        var ex = Record.Exception(() =>
+        {
+            _sut.OnStarted(started);
+            _sut.OnSucceeded(succeeded);
+        });
+
+        Assert.Null(ex);
+        Assert.Single(_histogramObservations);
+    }
+
+    [Fact]
+    public async Task RequestScope_FlowsThroughAwaitBoundaries()
+    {
+        using var _ = MongoCommandObservability.BeginRequestScope(out var stats);
+
+        var (s1, ok1) = BuildPair("find", "ck_types", "tenant_a", durationMs: 5);
+        _sut.OnStarted(s1);
+        _sut.OnSucceeded(ok1);
+
+        // Realistic shape: a resolver awaits something between Mongo calls. The scope must
+        // still be the same RequestMongoStats instance after the continuation.
+        await Task.Yield();
+        await Task.Delay(1, TestContext.Current.CancellationToken);
+
+        var (s2, ok2) = BuildPair("aggregate", "rt_entities", "tenant_a", durationMs: 11, requestId: 2);
+        _sut.OnStarted(s2);
+        _sut.OnSucceeded(ok2);
+
+        Assert.Equal(2, stats.CommandCount);
+        Assert.Equal(16, stats.TotalMs, precision: 4);
+    }
+
+    [Fact]
+    public async Task RequestScope_IsolatesParallelRequests()
+    {
+        // Two pseudo-requests running concurrently must not see each other's commands.
+        var tcs = new TaskCompletionSource();
+
+        async Task<RequestMongoStats> RunPseudoRequest(string commandName, double durationMs, int requestIdBase)
+        {
+            using var scope = MongoCommandObservability.BeginRequestScope(out var stats);
+            var (s1, ok1) = BuildPair(commandName, "tgt", "tenant_a", durationMs, requestIdBase);
+            _sut.OnStarted(s1);
+            await tcs.Task; // gate — both branches reach here before either records
+            _sut.OnSucceeded(ok1);
+            return stats;
+        }
+
+        var task1 = RunPseudoRequest("find", durationMs: 10, requestIdBase: 100);
+        var task2 = RunPseudoRequest("aggregate", durationMs: 25, requestIdBase: 200);
+
+        await Task.Delay(20, TestContext.Current.CancellationToken); // let both reach the gate
+        tcs.SetResult();
+
+        var statsA = await task1;
+        var statsB = await task2;
+
+        // Each scope sees only its own command. If AsyncLocal bled, one would see 2 and the
+        // other 0 — or the totals would mix.
+        Assert.Equal(1, statsA.CommandCount);
+        Assert.Equal(10, statsA.TotalMs, precision: 4);
+        Assert.Equal(1, statsB.CommandCount);
+        Assert.Equal(25, statsB.TotalMs, precision: 4);
+    }
+
+    [Fact]
+    public void RequestScope_NestedScopes_RestoreOnDispose()
+    {
+        using (MongoCommandObservability.BeginRequestScope(out var outer))
+        {
+            var outerRef = MongoCommandObservability.GetCurrentScope();
+            Assert.Same(outer, outerRef);
+
+            using (MongoCommandObservability.BeginRequestScope(out var inner))
+            {
+                Assert.Same(inner, MongoCommandObservability.GetCurrentScope());
+                Assert.NotSame(outer, inner);
+            }
+
+            // Inner disposed → outer is restored, not lost.
+            Assert.Same(outer, MongoCommandObservability.GetCurrentScope());
+        }
+
+        Assert.Null(MongoCommandObservability.GetCurrentScope());
+    }
+
+    [Fact]
     public void Observability_DoesNotPropagateExceptions_FromLogger()
     {
         // A logger that throws must not break the driver's event pipeline.
