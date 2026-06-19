@@ -37,6 +37,15 @@ internal sealed class MongoCommandObservability
         "endSessions", "getMore"
     };
 
+    /// <summary>
+    /// Per-request accumulator scope. The AsyncLocal value flows through ExecutionContext into
+    /// the MongoDB driver's command-event callbacks, so commands issued during the scope are
+    /// summed into the active <see cref="RequestMongoStats"/> instance. Out-of-scope work
+    /// (background jobs, Mesh-Adapter pipelines) sees <c>null</c> and is left untouched —
+    /// only the metrics and slow-log paths fire there. Verified by AsyncLocalDriverFlowSpike.
+    /// </summary>
+    private static readonly AsyncLocal<RequestMongoStats?> CurrentScope = new();
+
     private static readonly Meter Meter = new(MeterName, "1.0.0");
 
     private static readonly Histogram<double> CommandDuration = Meter.CreateHistogram<double>(
@@ -57,6 +66,45 @@ internal sealed class MongoCommandObservability
     {
         _logger = logger;
         _config = config;
+    }
+
+    /// <summary>
+    /// Opens a per-request scope so that subsequent MongoDB commands on this async-flow are
+    /// summed into <paramref name="stats"/>. Dispose the returned handle to close the scope —
+    /// typically from an HTTP middleware's <c>OnStarting</c> callback or a GraphQL document
+    /// execution listener.
+    /// </summary>
+    /// <remarks>
+    /// Nesting: opening a scope while another is active replaces it for the duration; disposing
+    /// restores the previous one. This is intentional — production code should not nest, but
+    /// tests sometimes do, and silent corruption would be worse than restore-on-dispose.
+    /// </remarks>
+    public static IDisposable BeginRequestScope(out RequestMongoStats stats)
+    {
+        stats = new RequestMongoStats();
+        var previous = CurrentScope.Value;
+        CurrentScope.Value = stats;
+        return new ScopeReset(previous);
+    }
+
+    /// <summary>
+    /// Returns the currently active <see cref="RequestMongoStats"/> for this async flow, or
+    /// <c>null</c> if no scope is open. Surfaced publicly via <see cref="MongoRequestScope.Current"/>;
+    /// production callers should use that façade rather than this internal accessor.
+    /// </summary>
+    internal static RequestMongoStats? GetCurrentScope() => CurrentScope.Value;
+
+    private sealed class ScopeReset(RequestMongoStats? previous) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                CurrentScope.Value = previous;
+            }
+        }
     }
 
     /// <summary>
@@ -111,6 +159,8 @@ internal sealed class MongoCommandObservability
                 new KeyValuePair<string, object?>("database", ctx.Database),
                 new KeyValuePair<string, object?>("status", "success"));
 
+            CurrentScope.Value?.Record(e.CommandName, ms);
+
             LogIfSlow(e.CommandName, ctx, ms, e.RequestId);
         }
         catch (Exception ex)
@@ -146,6 +196,8 @@ internal sealed class MongoCommandObservability
                 new KeyValuePair<string, object?>("command_name", e.CommandName),
                 new KeyValuePair<string, object?>("database", ctx.Database),
                 new KeyValuePair<string, object?>("error_code", errorCode));
+
+            CurrentScope.Value?.Record(e.CommandName, ms);
 
             _logger.LogWarning(e.Failure,
                 "MongoDB command failed: {CommandName} {Target} on {Database} after {DurationMs}ms (errorCode={ErrorCode}, requestId={RequestId})",
