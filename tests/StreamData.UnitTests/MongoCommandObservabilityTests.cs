@@ -369,23 +369,34 @@ public sealed class MongoCommandObservabilityTests : IDisposable
     public async Task RequestScope_IsolatesParallelRequests()
     {
         // Two pseudo-requests running concurrently must not see each other's commands.
-        var tcs = new TaskCompletionSource();
+        //
+        // Deterministic barrier: each branch signals "ready" once it has entered its scope and
+        // emitted OnStarted; the test waits for BOTH ready signals before releasing the shared
+        // gate. This guarantees both branches are paused inside their respective scopes when the
+        // OnSucceeded calls fire — Task.Delay-based timing would let this test pass without
+        // ever actually exercising parallel scopes.
+        var gate = new TaskCompletionSource();
+        var ready1 = new TaskCompletionSource();
+        var ready2 = new TaskCompletionSource();
 
-        async Task<RequestMongoStats> RunPseudoRequest(string commandName, double durationMs, int requestIdBase)
+        async Task<RequestMongoStats> RunPseudoRequest(
+            string commandName, double durationMs, int requestIdBase, TaskCompletionSource ready)
         {
             using var scope = MongoCommandObservability.BeginRequestScope(out var stats);
             var (s1, ok1) = BuildPair(commandName, "tgt", "tenant_a", durationMs, requestIdBase);
             _sut.OnStarted(s1);
-            await tcs.Task; // gate — both branches reach here before either records
+            ready.SetResult();
+            await gate.Task;
             _sut.OnSucceeded(ok1);
             return stats;
         }
 
-        var task1 = RunPseudoRequest("find", durationMs: 10, requestIdBase: 100);
-        var task2 = RunPseudoRequest("aggregate", durationMs: 25, requestIdBase: 200);
+        var task1 = RunPseudoRequest("find", durationMs: 10, requestIdBase: 100, ready1);
+        var task2 = RunPseudoRequest("aggregate", durationMs: 25, requestIdBase: 200, ready2);
 
-        await Task.Delay(20, TestContext.Current.CancellationToken); // let both reach the gate
-        tcs.SetResult();
+        await Task.WhenAll(ready1.Task, ready2.Task).WaitAsync(
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        gate.SetResult();
 
         var statsA = await task1;
         var statsB = await task2;

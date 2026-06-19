@@ -2,9 +2,9 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
 /// <summary>
 /// Aggregate statistics about MongoDB commands executed during the lifetime of a request scope
-/// opened via <see cref="MongoCommandObservability.BeginRequestScope"/>. The values are surfaced
-/// to the caller — either in a GraphQL <c>extensions.mongoDb</c> block or as REST response
-/// headers — so a user can see at a glance how much of their request time MongoDB cost.
+/// opened via <see cref="MongoRequestScope.Begin"/>. The values are surfaced to the caller —
+/// either in a GraphQL <c>extensions.mongoDb</c> block or as REST response headers — so a user
+/// can see at a glance how much of their request time MongoDB cost.
 /// </summary>
 public sealed class RequestMongoStats
 {

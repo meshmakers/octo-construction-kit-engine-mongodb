@@ -22,28 +22,33 @@ public sealed class AsyncLocalDriverFlowSpike
     [Fact]
     public async Task AsyncLocal_FlowsIntoCommandStartedAndSucceededCallbacks()
     {
-        if (!IsMongoReachable("mongodb://localhost:27017"))
-        {
-            return; // soft-skip when no Mongo is up
-        }
+        Assert.SkipUnless(
+            IsMongoReachable("mongodb://localhost:27017/?directConnection=true"),
+            "Skipping — no MongoDB reachable at localhost:27017. " +
+            "This spike pins driver-thread ExecutionContext propagation; " +
+            "run again with the local replica set up to actually verify it.");
 
         string? observedInStarted = null;
         string? observedInSucceeded = null;
 
-        var settings = MongoClientSettings.FromConnectionString("mongodb://localhost:27017");
+        var settings = MongoClientSettings.FromConnectionString("mongodb://localhost:27017/?directConnection=true");
         settings.ServerSelectionTimeout = TimeSpan.FromSeconds(3);
         settings.ClusterConfigurator = cb =>
         {
+            // We hook ping (not find) because ping is an auth-free command on any deployment —
+            // including the user's local replica set where the test runs without credentials.
+            // The whole point of the spike is whether AsyncLocal flows through the driver's
+            // event pipeline; the specific command name is incidental.
             cb.Subscribe<CommandStartedEvent>(e =>
             {
-                if (e.CommandName == "find")
+                if (e.CommandName == "ping")
                 {
                     observedInStarted = Probe.Value;
                 }
             });
             cb.Subscribe<CommandSucceededEvent>(e =>
             {
-                if (e.CommandName == "find")
+                if (e.CommandName == "ping")
                 {
                     observedInSucceeded = Probe.Value;
                 }
@@ -51,7 +56,6 @@ public sealed class AsyncLocalDriverFlowSpike
         };
 
         var client = new MongoClient(settings);
-        var collection = client.GetDatabase("admin").GetCollection<BsonDocument>("system.version");
 
         Probe.Value = "set-on-calling-thread";
 
@@ -60,8 +64,9 @@ public sealed class AsyncLocalDriverFlowSpike
         // one thread and the Mongo I/O completes on another.
         await Task.Yield();
 
-        await collection.Find(FilterDefinition<BsonDocument>.Empty).Limit(1)
-            .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        await client.GetDatabase("admin").RunCommandAsync<BsonDocument>(
+            new BsonDocument("ping", 1),
+            cancellationToken: TestContext.Current.CancellationToken);
 
         // Both observations must equal what we set on the calling thread. If either is null
         // the driver dropped ExecutionContext and Plan A (AsyncLocal) is not viable —
@@ -73,20 +78,19 @@ public sealed class AsyncLocalDriverFlowSpike
     [Fact]
     public async Task AsyncLocal_IsolatesAcrossParallelRequests()
     {
-        if (!IsMongoReachable("mongodb://localhost:27017"))
-        {
-            return;
-        }
+        Assert.SkipUnless(
+            IsMongoReachable("mongodb://localhost:27017/?directConnection=true"),
+            "Skipping — no MongoDB reachable at localhost:27017.");
 
         var observedByRequestId = new System.Collections.Concurrent.ConcurrentDictionary<int, string?>();
 
-        var settings = MongoClientSettings.FromConnectionString("mongodb://localhost:27017");
+        var settings = MongoClientSettings.FromConnectionString("mongodb://localhost:27017/?directConnection=true");
         settings.ServerSelectionTimeout = TimeSpan.FromSeconds(3);
         settings.ClusterConfigurator = cb =>
         {
             cb.Subscribe<CommandSucceededEvent>(e =>
             {
-                if (e.CommandName == "find")
+                if (e.CommandName == "ping")
                 {
                     observedByRequestId[e.RequestId] = Probe.Value;
                 }
@@ -94,14 +98,15 @@ public sealed class AsyncLocalDriverFlowSpike
         };
 
         var client = new MongoClient(settings);
-        var collection = client.GetDatabase("admin").GetCollection<BsonDocument>("system.version");
+        var db = client.GetDatabase("admin");
 
         async Task FireWithMarker(string marker)
         {
             Probe.Value = marker;
             await Task.Yield();
-            await collection.Find(FilterDefinition<BsonDocument>.Empty).Limit(1)
-                .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+            await db.RunCommandAsync<BsonDocument>(
+                new BsonDocument("ping", 1),
+                cancellationToken: TestContext.Current.CancellationToken);
         }
 
         // Fire 10 concurrent "requests" each setting its own marker. AsyncLocal must not bleed
@@ -109,11 +114,16 @@ public sealed class AsyncLocalDriverFlowSpike
         var tasks = Enumerable.Range(0, 10).Select(i => FireWithMarker($"req-{i}")).ToArray();
         await Task.WhenAll(tasks);
 
-        // All 10 observations must be in the set we set. None can be null, none can be unrelated.
-        var seenMarkers = observedByRequestId.Values.Where(v => v != null).Select(v => v!).Distinct().ToHashSet();
-        var expectedMarkers = Enumerable.Range(0, 10).Select(i => $"req-{i}").ToHashSet();
-        Assert.Subset(expectedMarkers, seenMarkers);
+        // Strong assertion: exactly 10 driver callbacks must have fired (one per request), none
+        // saw null, and the observed markers form exactly the expected set — not a subset that
+        // could be satisfied by 0 observations. Without this we'd pass even if the driver
+        // dropped every event.
+        Assert.Equal(10, observedByRequestId.Count);
         Assert.DoesNotContain(null, observedByRequestId.Values);
+
+        var seenMarkers = observedByRequestId.Values.Select(v => v!).ToHashSet();
+        var expectedMarkers = Enumerable.Range(0, 10).Select(i => $"req-{i}").ToHashSet();
+        Assert.Equal(expectedMarkers, seenMarkers);
     }
 
     private static bool IsMongoReachable(string connectionString)
@@ -121,7 +131,11 @@ public sealed class AsyncLocalDriverFlowSpike
         try
         {
             var settings = MongoClientSettings.FromConnectionString(connectionString);
-            settings.ServerSelectionTimeout = TimeSpan.FromSeconds(1);
+            // 3 s is enough for handshake/ping but short enough that a missing Mongo skips fast
+            // in CI. directConnection=true is set on the URI itself to bypass replica-set
+            // topology discovery — that discovery hits container-internal hostnames that the
+            // host can't resolve.
+            settings.ServerSelectionTimeout = TimeSpan.FromSeconds(3);
             var client = new MongoClient(settings);
             client.GetDatabase("admin").RunCommand<BsonDocument>(new BsonDocument("ping", 1));
             return true;
