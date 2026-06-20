@@ -1147,6 +1147,41 @@ internal class TenantRepository(
         return true;
     }
 
+    /// <inheritdoc />
+    public override async Task RewriteAttributeValueForMigrationAsync(
+        IOctoSession session,
+        RtCkId<CkTypeId> rtCkTypeId,
+        OctoObjectId rtId,
+        string attributeId,
+        object? newValue)
+    {
+        // Resolve the collection the same way DeleteOneRtEntityForMigrationAsync does so that
+        // derived-type entities living in a parent collection are correctly addressed.
+        IMongoDbDataSourceCollection<OctoObjectId, RtEntity> collection;
+        if (_derivedTypeCollectionMap.TryGetValue(rtCkTypeId.FullName, out var parentCollectionName))
+        {
+            collection = GetRtCollectionByName<RtEntity>(parentCollectionName);
+        }
+        else
+        {
+            collection = GetRtCollectionForMigration<RtEntity>(rtCkTypeId);
+        }
+
+        // Attribute storage uses the same convention as MongoDataSourceMapper.ApplyUpdate:
+        // `attributes.<key.ToCamelCase()>`. The CK migration step's attribute id is the
+        // dictionary key on the in-memory RtEntity; the camelCase transform produces the BSON
+        // field path. rtVersion is bumped and rtChangedDateTime updated to match the regular
+        // mutation path's change-tracking semantics — otherwise downstream change-stream
+        // consumers would miss the rewrite.
+        var fieldPath = "attributes." + attributeId.ToCamelCase();
+        var updateDef = Builders<RtEntity>.Update.Combine(
+            Builders<RtEntity>.Update.Set(fieldPath, newValue),
+            Builders<RtEntity>.Update.Set("rtChangedDateTime", DateTime.UtcNow),
+            Builders<RtEntity>.Update.Inc("rtVersion", 1));
+
+        await collection.UpdateOneAsync(session, rtId, updateDef).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Gets a MongoDB collection for a CK type by directly constructing the collection name
     /// from the type ID, without requiring a CkTypeGraph from the CK cache.
