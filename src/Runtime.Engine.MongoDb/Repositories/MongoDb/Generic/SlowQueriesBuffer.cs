@@ -127,4 +127,69 @@ public sealed class SlowQueriesBuffer
     /// contention drops. For a deterministic point-in-time count, use <c>GetSnapshot().Count</c>.
     /// </summary>
     public int Count => (int)Interlocked.Read(ref _count);
+
+    /// <summary>
+    /// Same point-in-time snapshot as <see cref="GetSnapshot"/>, but aggregated by
+    /// <see cref="SlowQueryEntry.Fingerprint"/>. Groups are returned ordered by
+    /// <see cref="SlowQueryGroup.LastSeen"/> descending (most-recent activity first).
+    /// </summary>
+    /// <param name="predicate">Optional filter applied to the entries before grouping.</param>
+    /// <param name="limit">Optional max number of groups (after sorting).</param>
+    public IReadOnlyList<SlowQueryGroup> GetGroupedSnapshot(
+        Func<SlowQueryEntry, bool>? predicate = null,
+        int? limit = null)
+    {
+        if (limit is < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit), limit,
+                "Slow-queries grouped-snapshot limit cannot be negative. Pass null for no limit, or 0 for an empty result.");
+        }
+
+        var snapshot = _queue.ToArray();
+        IEnumerable<SlowQueryEntry> view = snapshot;
+        if (predicate is not null)
+        {
+            view = view.Where(predicate);
+        }
+
+        // Composite grouping key: Fingerprint alone is not sufficient because the
+        // fingerprinter normalises primitive *values* in the command body, but the buffer
+        // entry's CommandName / Target / Database fields are extracted independently and can
+        // legitimately differ for the same fingerprint:
+        //   { find: "ck_types",    filter: {name: "?"} }   → fp=X target=ck_types
+        //   { find: "rt_entities", filter: {name: "?"} }   → fp=X target=rt_entities  ← same fp!
+        // Grouping by fingerprint alone would mix those into one row with "most-recent
+        // representative" metadata that misleads about the rest of the group. Compose the
+        // key so each group carries semantically consistent CommandName/Target/Database.
+        var groups = view
+            .GroupBy(e => (e.Fingerprint, e.CommandName, e.Target, e.Database))
+            .Select(g =>
+            {
+                // Materialize once; we need multiple aggregations + the representative pick.
+                var entries = g.ToList();
+                var ordered = entries.OrderByDescending(e => e.Timestamp).ToList();
+                var representative = ordered[0];
+                return new SlowQueryGroup(
+                    Fingerprint: g.Key.Fingerprint,
+                    CommandName: g.Key.CommandName,
+                    Target: g.Key.Target,
+                    Database: g.Key.Database,
+                    Count: entries.Count,
+                    FirstSeen: entries.Min(e => e.Timestamp),
+                    LastSeen: ordered[0].Timestamp,
+                    MinDurationMs: entries.Min(e => e.DurationMs),
+                    MaxDurationMs: entries.Max(e => e.DurationMs),
+                    AvgDurationMs: entries.Average(e => e.DurationMs),
+                    Representative: representative);
+            })
+            .OrderByDescending(g => g.LastSeen);
+
+        IEnumerable<SlowQueryGroup> final = groups;
+        if (limit.HasValue)
+        {
+            final = final.Take(limit.Value);
+        }
+
+        return final.ToList();
+    }
 }
