@@ -17,7 +17,9 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModificatio
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Defaults;
 
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 
 using IMongoTenantBackupService = Meshmakers.Octo.Runtime.Contracts.MongoDb.Services.ITenantBackupService;
 using IBlueprintBackupService = Meshmakers.Octo.Runtime.Contracts.Blueprints.ITenantBackupService;
@@ -67,6 +69,16 @@ public static class RuntimeEngineBuilderExtensions
 
         builder.Services.AddSingleton<IUserRepositoryAccess, UserRepositoryAccess>();
         builder.Services.AddSingleton<IAdminRepositoryAccess, AdminRepositoryAccess>();
+
+        // Slow-query ring buffer — one per service process, shared between admin and user
+        // MongoDB connections so the Refinery Studio Diagnostics surface sees every slow
+        // command regardless of which connection issued it. Capacity is locked at startup;
+        // changing OctoSystemConfiguration.SlowQueryBufferSize requires a service restart.
+        builder.Services.AddSingleton(sp =>
+        {
+            var cfg = sp.GetRequiredService<IOptions<OctoSystemConfiguration>>().Value;
+            return new SlowQueriesBuffer(cfg.SlowQueryBufferSize);
+        });
 
         // Add pre-document modification services
         builder.Services.AddTransient<IPreDocumentModification<RtEntity>, AutoIncrementModifier>();

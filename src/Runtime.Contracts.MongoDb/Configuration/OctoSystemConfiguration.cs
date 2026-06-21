@@ -83,4 +83,11 @@ public class OctoSystemConfiguration()
     /// Prevents huge aggregation pipelines from flooding the log.
     /// </summary>
     public int SlowQueryCommandPreviewBytes { get; set; } = 2048;
+
+    /// <summary>
+    /// Number of slow-query entries the per-service in-memory ring buffer retains for the
+    /// Refinery Studio Diagnostics surface. Default 1000, set to 0 to disable buffer capture
+    /// (metrics and slow-log still fire). At ~3 KB per entry the default is ~3 MB resident.
+    /// </summary>
+    public int SlowQueryBufferSize { get; set; } = 1000;
 }
