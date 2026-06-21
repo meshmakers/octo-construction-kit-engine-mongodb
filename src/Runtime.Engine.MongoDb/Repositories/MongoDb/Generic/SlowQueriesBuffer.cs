@@ -28,6 +28,14 @@ public sealed class SlowQueriesBuffer
     private readonly ConcurrentQueue<SlowQueryEntry> _queue = new();
     private readonly int _capacity;
 
+    /// <summary>
+    /// Interlocked-tracked entry count. We maintain this ourselves because
+    /// <c>ConcurrentQueue.Count</c> is O(N) and only approximate under contention — calling
+    /// it in the hot Add()-trim loop would add measurable overhead on the MongoDB driver's
+    /// callback threads.
+    /// </summary>
+    private long _count;
+
     /// <summary>Total entries the buffer will retain before FIFO-dropping.</summary>
     public int Capacity => _capacity;
 
@@ -55,12 +63,24 @@ public sealed class SlowQueriesBuffer
         }
 
         _queue.Enqueue(entry);
+        var current = Interlocked.Increment(ref _count);
 
-        // Trim until back at capacity. Under contention this loop may temporarily over-trim
-        // (another concurrent writer enqueues a new entry mid-trim), but the result is always
-        // a buffer with ≤ Capacity entries — never blown out, never blocking.
-        while (_queue.Count > _capacity && _queue.TryDequeue(out _))
+        // Trim using our own Interlocked counter — no O(N) ConcurrentQueue.Count scan.
+        // Under contention this loop may briefly leave the queue at Capacity+k for a small k
+        // (another writer increments between our TryDequeue and Interlocked.Decrement), but
+        // converges back deterministically as soon as contention drops.
+        while (current > _capacity)
         {
+            if (_queue.TryDequeue(out _))
+            {
+                current = Interlocked.Decrement(ref _count);
+            }
+            else
+            {
+                // Another writer's Dequeue raced us; the queue is empty even though _count
+                // hadn't caught up. Stop — the next Add will rebalance.
+                break;
+            }
         }
     }
 
@@ -75,6 +95,12 @@ public sealed class SlowQueriesBuffer
         Func<SlowQueryEntry, bool>? predicate = null,
         int? limit = null)
     {
+        if (limit is < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit), limit,
+                "Slow-queries snapshot limit cannot be negative. Pass null for no limit, or 0 for an empty result.");
+        }
+
         // ConcurrentQueue.ToArray() takes an internal lock-free snapshot — perfect for our
         // use case. The array is ordered oldest → newest; we reverse for the UI surface.
         var snapshot = _queue.ToArray();
@@ -87,7 +113,7 @@ public sealed class SlowQueriesBuffer
 
         view = view.Reverse();
 
-        if (limit.HasValue && limit.Value >= 0)
+        if (limit.HasValue)
         {
             view = view.Take(limit.Value);
         }
@@ -95,6 +121,10 @@ public sealed class SlowQueriesBuffer
         return view.ToList();
     }
 
-    /// <summary>Approximate current entry count. May be slightly stale under concurrent writers.</summary>
-    public int Count => _queue.Count;
+    /// <summary>
+    /// Approximate current entry count from the Interlocked tracker. May be briefly stale
+    /// (off by one or two) under heavy concurrent Add() contention but converges as soon as
+    /// contention drops. For a deterministic point-in-time count, use <c>GetSnapshot().Count</c>.
+    /// </summary>
+    public int Count => (int)Interlocked.Read(ref _count);
 }

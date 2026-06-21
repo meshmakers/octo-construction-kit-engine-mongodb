@@ -241,23 +241,28 @@ internal sealed class MongoCommandObservability
             return;
         }
 
-        // Truncated BSON preview is needed in two places (buffer entry + optionally the WARN
-        // log when above SlowQueryFullCommandLogMs). Compute once, share between both.
-        var preview = TruncateBson(ctx.Command, cfg.SlowQueryCommandPreviewBytes);
+        // BSON preview is the expensive bit (BsonDocument.ToJson()). Compute lazily — only
+        // pay the cost when something actually consumes it. The buffer needs it whenever
+        // present; the WARN log needs it only above SlowQueryFullCommandLogMs.
+        string? preview = null;
 
         // Studio diagnostics surface: always capture every slow command (success or failure)
         // so a tenant admin can inspect what was slow. Tenant filtering happens at the
         // read endpoint, keyed off the entry's Database field.
-        _slowQueries?.Add(new SlowQueryEntry(
-            Timestamp: DateTimeOffset.UtcNow,
-            CommandName: commandName,
-            Target: ctx.Target,
-            Database: ctx.Database,
-            DurationMs: ms,
-            RequestId: requestId,
-            CommandBsonPreview: preview,
-            Success: success,
-            ErrorCode: errorCode));
+        if (_slowQueries is not null)
+        {
+            preview = TruncateBson(ctx.Command, cfg.SlowQueryCommandPreviewBytes);
+            _slowQueries.Add(new SlowQueryEntry(
+                Timestamp: DateTimeOffset.UtcNow,
+                CommandName: commandName,
+                Target: ctx.Target,
+                Database: ctx.Database,
+                DurationMs: ms,
+                RequestId: requestId,
+                CommandBsonPreview: preview,
+                Success: success,
+                ErrorCode: errorCode));
+        }
 
         // Slow-log: only for successful commands. Failures are already logged at WARN in
         // OnFailed with the exception attached; a second slow-log here would just duplicate.
@@ -267,7 +272,8 @@ internal sealed class MongoCommandObservability
         }
 
         // Short slow-log: identifies the operation + target (e.g. aggregate on rt_entities).
-        // Sufficient to find the query without dumping the whole pipeline body.
+        // Sufficient to find the query without dumping the whole pipeline body — so we skip
+        // the BSON cost here entirely when there's no buffer either.
         if (cfg.SlowQueryFullCommandLogMs <= 0 || ms <= cfg.SlowQueryFullCommandLogMs)
         {
             _logger.LogWarning(
@@ -277,6 +283,9 @@ internal sealed class MongoCommandObservability
         }
 
         // Very slow → include truncated BSON body so the exact filter / pipeline is captured.
+        // Reuses the preview computed for the buffer when one is registered, otherwise
+        // computes it now.
+        preview ??= TruncateBson(ctx.Command, cfg.SlowQueryCommandPreviewBytes);
         _logger.LogWarning(
             "Slow MongoDB command: {CommandName} {Target} on {Database} took {DurationMs}ms (requestId={RequestId}) command={Command}",
             commandName, ctx.Target, ctx.Database, ms, requestId, preview);

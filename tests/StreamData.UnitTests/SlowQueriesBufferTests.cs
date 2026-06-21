@@ -117,6 +117,18 @@ public sealed class SlowQueriesBufferTests
     }
 
     [Fact]
+    public void GetSnapshot_NegativeLimit_Throws()
+    {
+        var buf = new SlowQueriesBuffer(capacity: 10);
+        buf.Add(Entry());
+
+        // Negative limits used to be silently treated as "no limit", which masks call-site
+        // bugs. We now throw explicitly, matching the constructor's handling of negative
+        // capacity.
+        Assert.Throws<ArgumentOutOfRangeException>(() => buf.GetSnapshot(limit: -1));
+    }
+
+    [Fact]
     public async Task Concurrent_Writes_NeverExceed_Capacity()
     {
         // The buffer is written from the MongoDB driver's command-event thread pool; multiple
@@ -137,11 +149,12 @@ public sealed class SlowQueriesBufferTests
 
         await Task.WhenAll(tasks);
 
-        // After all writers settle, the buffer must be exactly at capacity (we wrote far more
-        // than the cap). The Trim loop is intentionally allowed to over-trim briefly under
-        // contention, but converges to ≤ Capacity once the contention is over.
-        Assert.True(buf.Count <= capacity,
-            $"Buffer count {buf.Count} exceeded capacity {capacity} after concurrent writes");
+        // After all writers settle the buffer must be ≤ Capacity. Use GetSnapshot().Count for
+        // a deterministic point-in-time read — buf.Count tracks an Interlocked field that can
+        // briefly drift under racing writers and isn't appropriate for assertions.
+        var finalCount = buf.GetSnapshot().Count;
+        Assert.True(finalCount <= capacity,
+            $"Buffer snapshot count {finalCount} exceeded capacity {capacity} after concurrent writes");
     }
 
     [Fact]
