@@ -252,6 +252,7 @@ internal sealed class MongoCommandObservability
         if (_slowQueries is not null)
         {
             preview = TruncateBson(ctx.Command, cfg.SlowQueryCommandPreviewBytes);
+            var fingerprint = SlowQueryFingerprinter.Fingerprint(ctx.Command);
             _slowQueries.Add(new SlowQueryEntry(
                 Timestamp: DateTimeOffset.UtcNow,
                 CommandName: commandName,
@@ -261,7 +262,8 @@ internal sealed class MongoCommandObservability
                 RequestId: requestId,
                 CommandBsonPreview: preview,
                 Success: success,
-                ErrorCode: errorCode));
+                ErrorCode: errorCode,
+                Fingerprint: fingerprint));
         }
 
         // Slow-log: only for successful commands. Failures are already logged at WARN in

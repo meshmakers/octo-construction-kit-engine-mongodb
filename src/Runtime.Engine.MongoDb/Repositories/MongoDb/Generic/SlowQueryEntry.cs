@@ -13,6 +13,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 /// <param name="CommandBsonPreview">Truncated BSON command body in JSON form, capped at <c>SlowQueryCommandPreviewBytes</c> UTF-8 bytes.</param>
 /// <param name="Success"><c>true</c> if the command completed via <c>CommandSucceededEvent</c>; <c>false</c> if it failed.</param>
 /// <param name="ErrorCode">For failures, the Mongo error code (e.g. 112 for WriteConflict). <c>null</c> when <see cref="Success"/> is <c>true</c>.</param>
+/// <param name="Fingerprint">Structural fingerprint of the command (see <see cref="SlowQueryFingerprinter"/>) — used to group semantically-identical queries that differ only in literal values.</param>
 public sealed record SlowQueryEntry(
     DateTimeOffset Timestamp,
     string CommandName,
@@ -22,4 +23,5 @@ public sealed record SlowQueryEntry(
     int RequestId,
     string CommandBsonPreview,
     bool Success,
-    string? ErrorCode);
+    string? ErrorCode,
+    string Fingerprint);

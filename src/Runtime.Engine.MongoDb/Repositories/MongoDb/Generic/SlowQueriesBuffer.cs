@@ -127,4 +127,60 @@ public sealed class SlowQueriesBuffer
     /// contention drops. For a deterministic point-in-time count, use <c>GetSnapshot().Count</c>.
     /// </summary>
     public int Count => (int)Interlocked.Read(ref _count);
+
+    /// <summary>
+    /// Same point-in-time snapshot as <see cref="GetSnapshot"/>, but aggregated by
+    /// <see cref="SlowQueryEntry.Fingerprint"/>. Groups are returned ordered by
+    /// <see cref="SlowQueryGroup.LastSeen"/> descending (most-recent activity first).
+    /// </summary>
+    /// <param name="predicate">Optional filter applied to the entries before grouping.</param>
+    /// <param name="limit">Optional max number of groups (after sorting).</param>
+    public IReadOnlyList<SlowQueryGroup> GetGroupedSnapshot(
+        Func<SlowQueryEntry, bool>? predicate = null,
+        int? limit = null)
+    {
+        if (limit is < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit), limit,
+                "Slow-queries grouped-snapshot limit cannot be negative. Pass null for no limit, or 0 for an empty result.");
+        }
+
+        var snapshot = _queue.ToArray();
+        IEnumerable<SlowQueryEntry> view = snapshot;
+        if (predicate is not null)
+        {
+            view = view.Where(predicate);
+        }
+
+        var groups = view
+            .GroupBy(e => e.Fingerprint, StringComparer.Ordinal)
+            .Select(g =>
+            {
+                // Materialize once; we need multiple aggregations + the representative pick.
+                var entries = g.ToList();
+                var ordered = entries.OrderByDescending(e => e.Timestamp).ToList();
+                var representative = ordered[0];
+                return new SlowQueryGroup(
+                    Fingerprint: g.Key,
+                    CommandName: representative.CommandName,
+                    Target: representative.Target,
+                    Database: representative.Database,
+                    Count: entries.Count,
+                    FirstSeen: entries.Min(e => e.Timestamp),
+                    LastSeen: ordered[0].Timestamp,
+                    MinDurationMs: entries.Min(e => e.DurationMs),
+                    MaxDurationMs: entries.Max(e => e.DurationMs),
+                    AvgDurationMs: entries.Average(e => e.DurationMs),
+                    Representative: representative);
+            })
+            .OrderByDescending(g => g.LastSeen);
+
+        IEnumerable<SlowQueryGroup> final = groups;
+        if (limit.HasValue)
+        {
+            final = final.Take(limit.Value);
+        }
+
+        return final.ToList();
+    }
 }

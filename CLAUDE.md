@@ -160,6 +160,28 @@ which exposes `GET /{tenantId}/v1/Diagnostics/slow-mongo-queries` and filters en
 `Database == tenantId` so each tenant only sees its own queries. The Refinery Studio
 **Diagnostics → Slow Queries** page renders the result.
 
+### Pipeline Fingerprinting (AB#4213)
+
+`SlowQueryFingerprinter.Fingerprint(BsonDocument)` produces a stable 16-char hex hash of
+a command's structural shape — semantically-identical queries that differ only in literal
+values (e.g. `{find: 'ck_types', filter: {name: 'Asset'}}` vs `… {name: 'Device'}`) get
+the same fingerprint. Algorithm: walk the BSON recursively, replace every primitive value
+with `"?"`, preserve field/stage order, collapse primitive arrays to one placeholder element,
+recurse into document arrays (so aggregation pipelines keep stage count + order), serialise to
+canonical JSON, SHA-256, first 16 hex chars.
+
+Every `SlowQueryEntry` in the buffer carries a `Fingerprint`. `SlowQueriesBuffer` also exposes
+`GetGroupedSnapshot(predicate, limit)` which aggregates by fingerprint and returns
+`SlowQueryGroup` records carrying Count, FirstSeen, LastSeen, Min/Max/Avg duration and the
+most-recent representative entry.
+
+The REST endpoint accepts `?groupBy=fingerprint` to return `SlowQueryGroupDto[]` instead of
+the per-call entries. The Refinery Studio page exposes this as a **Group similar** toggle.
+
+The fingerprint is also the planned dedup key for Stage 2B's `explain()` capture (one explain
+per fingerprint per time window, to avoid replay storms when a hot endpoint produces hundreds
+of structurally-identical slow queries).
+
 ### Roadmap
 
 - Stage 1: **AB#4206** (merged) — slow-log + OTel histograms

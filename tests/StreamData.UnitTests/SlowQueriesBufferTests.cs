@@ -7,7 +7,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.UnitTests;
 public sealed class SlowQueriesBufferTests
 {
     private static SlowQueryEntry Entry(string commandName = "find", string database = "tenant_a",
-        double durationMs = 150, int requestId = 1)
+        double durationMs = 150, int requestId = 1, string fingerprint = "aaaaaaaaaaaaaaaa")
         => new(
             Timestamp: new DateTimeOffset(2026, 6, 19, 12, 0, 0, TimeSpan.Zero).AddSeconds(requestId),
             CommandName: commandName,
@@ -17,7 +17,8 @@ public sealed class SlowQueriesBufferTests
             RequestId: requestId,
             CommandBsonPreview: "{\"find\":\"rt_entities\"}",
             Success: true,
-            ErrorCode: null);
+            ErrorCode: null,
+            Fingerprint: fingerprint);
 
     [Fact]
     public void Empty_Buffer_ReturnsEmptySnapshot()
@@ -193,5 +194,103 @@ public sealed class SlowQueriesBufferTests
             await writer;
         }
         catch (OperationCanceledException) { /* expected */ }
+    }
+
+    // ---- GetGroupedSnapshot (AB#4213) ----
+
+    [Fact]
+    public void GetGroupedSnapshot_GroupsByFingerprint_AggregatesCountAndDurations()
+    {
+        var buf = new SlowQueriesBuffer(capacity: 50);
+        // Three entries with fingerprint "fp_a" — different durations
+        buf.Add(Entry(requestId: 1, fingerprint: "fp_a", durationMs: 100));
+        buf.Add(Entry(requestId: 2, fingerprint: "fp_a", durationMs: 200));
+        buf.Add(Entry(requestId: 3, fingerprint: "fp_a", durationMs: 300));
+        // Two entries with fingerprint "fp_b"
+        buf.Add(Entry(requestId: 4, fingerprint: "fp_b", durationMs: 500));
+        buf.Add(Entry(requestId: 5, fingerprint: "fp_b", durationMs: 700));
+
+        var groups = buf.GetGroupedSnapshot();
+
+        Assert.Equal(2, groups.Count);
+        var groupA = groups.Single(g => g.Fingerprint == "fp_a");
+        Assert.Equal(3, groupA.Count);
+        Assert.Equal(100, groupA.MinDurationMs);
+        Assert.Equal(300, groupA.MaxDurationMs);
+        Assert.Equal(200, groupA.AvgDurationMs);
+
+        var groupB = groups.Single(g => g.Fingerprint == "fp_b");
+        Assert.Equal(2, groupB.Count);
+        Assert.Equal(500, groupB.MinDurationMs);
+        Assert.Equal(700, groupB.MaxDurationMs);
+        Assert.Equal(600, groupB.AvgDurationMs);
+    }
+
+    [Fact]
+    public void GetGroupedSnapshot_OrdersByLastSeenDescending()
+    {
+        var buf = new SlowQueriesBuffer(capacity: 50);
+        // fp_old: requestId 1 → Timestamp 12:00:01
+        buf.Add(Entry(requestId: 1, fingerprint: "fp_old"));
+        // fp_new: requestId 10 → Timestamp 12:00:10 (later)
+        buf.Add(Entry(requestId: 10, fingerprint: "fp_new"));
+
+        var groups = buf.GetGroupedSnapshot();
+
+        // Most recently seen first.
+        Assert.Equal("fp_new", groups[0].Fingerprint);
+        Assert.Equal("fp_old", groups[1].Fingerprint);
+    }
+
+    [Fact]
+    public void GetGroupedSnapshot_RepresentativeIsTheMostRecentEntry()
+    {
+        var buf = new SlowQueriesBuffer(capacity: 50);
+        buf.Add(Entry(requestId: 1, fingerprint: "fp", durationMs: 100));
+        buf.Add(Entry(requestId: 5, fingerprint: "fp", durationMs: 999)); // newest
+        buf.Add(Entry(requestId: 3, fingerprint: "fp", durationMs: 200));
+
+        var group = buf.GetGroupedSnapshot().Single();
+
+        Assert.Equal(5, group.Representative.RequestId);
+        Assert.Equal(999, group.Representative.DurationMs);
+    }
+
+    [Fact]
+    public void GetGroupedSnapshot_AppliesPredicateBeforeGrouping()
+    {
+        var buf = new SlowQueriesBuffer(capacity: 50);
+        buf.Add(Entry(requestId: 1, fingerprint: "fp", database: "tenant_a"));
+        buf.Add(Entry(requestId: 2, fingerprint: "fp", database: "tenant_b"));
+        buf.Add(Entry(requestId: 3, fingerprint: "fp", database: "tenant_a"));
+
+        var groups = buf.GetGroupedSnapshot(predicate: e => e.Database == "tenant_a");
+
+        var group = Assert.Single(groups);
+        Assert.Equal("fp", group.Fingerprint);
+        Assert.Equal(2, group.Count);
+    }
+
+    [Fact]
+    public void GetGroupedSnapshot_LimitTrimsAfterOrdering()
+    {
+        var buf = new SlowQueriesBuffer(capacity: 50);
+        // Three distinct fingerprints, different last-seen times.
+        buf.Add(Entry(requestId: 1, fingerprint: "fp_old"));
+        buf.Add(Entry(requestId: 5, fingerprint: "fp_mid"));
+        buf.Add(Entry(requestId: 10, fingerprint: "fp_new"));
+
+        var groups = buf.GetGroupedSnapshot(limit: 2);
+
+        Assert.Equal(2, groups.Count);
+        Assert.Equal(new[] { "fp_new", "fp_mid" }, groups.Select(g => g.Fingerprint));
+    }
+
+    [Fact]
+    public void GetGroupedSnapshot_NegativeLimit_Throws()
+    {
+        var buf = new SlowQueriesBuffer(capacity: 10);
+        buf.Add(Entry());
+        Assert.Throws<ArgumentOutOfRangeException>(() => buf.GetGroupedSnapshot(limit: -1));
     }
 }
