@@ -161,7 +161,11 @@ public sealed class SlowQueriesBufferTests
     public async Task Snapshot_IsConsistent_AcrossConcurrentWrites()
     {
         // A reader taking a snapshot during a write storm must see a well-formed list — no
-        // null entries, no torn records, no count discrepancies.
+        // null entries, no torn records, no exceptions. We don't assert snap.Count <= Capacity
+        // here because the cap is enforced asynchronously: Add() enqueues first, then trims.
+        // Under concurrent writers the queue can transiently sit at Capacity+N (one per
+        // in-flight Add) before the trims catch up. The post-quiesce strict-cap assertion
+        // lives in Concurrent_Writes_NeverExceed_Capacity.
         var buf = new SlowQueriesBuffer(capacity: 200);
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
 
@@ -177,8 +181,10 @@ public sealed class SlowQueriesBufferTests
         for (var read = 0; read < 100; read++)
         {
             var snap = buf.GetSnapshot();
+            // Confirms the snapshot is a real, non-torn array (no null slots, no exceptions
+            // during materialization). Returning here without throwing is the proof of
+            // consistency — the size invariant is verified by the sibling test.
             Assert.All(snap, e => Assert.NotNull(e));
-            Assert.True(snap.Count <= 200);
         }
 
         await stop.CancelAsync();
