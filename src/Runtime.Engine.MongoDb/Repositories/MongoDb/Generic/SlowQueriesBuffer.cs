@@ -152,8 +152,17 @@ public sealed class SlowQueriesBuffer
             view = view.Where(predicate);
         }
 
+        // Composite grouping key: Fingerprint alone is not sufficient because the
+        // fingerprinter normalises primitive *values* in the command body, but the buffer
+        // entry's CommandName / Target / Database fields are extracted independently and can
+        // legitimately differ for the same fingerprint:
+        //   { find: "ck_types",    filter: {name: "?"} }   → fp=X target=ck_types
+        //   { find: "rt_entities", filter: {name: "?"} }   → fp=X target=rt_entities  ← same fp!
+        // Grouping by fingerprint alone would mix those into one row with "most-recent
+        // representative" metadata that misleads about the rest of the group. Compose the
+        // key so each group carries semantically consistent CommandName/Target/Database.
         var groups = view
-            .GroupBy(e => e.Fingerprint, StringComparer.Ordinal)
+            .GroupBy(e => (e.Fingerprint, e.CommandName, e.Target, e.Database))
             .Select(g =>
             {
                 // Materialize once; we need multiple aggregations + the representative pick.
@@ -161,10 +170,10 @@ public sealed class SlowQueriesBuffer
                 var ordered = entries.OrderByDescending(e => e.Timestamp).ToList();
                 var representative = ordered[0];
                 return new SlowQueryGroup(
-                    Fingerprint: g.Key,
-                    CommandName: representative.CommandName,
-                    Target: representative.Target,
-                    Database: representative.Database,
+                    Fingerprint: g.Key.Fingerprint,
+                    CommandName: g.Key.CommandName,
+                    Target: g.Key.Target,
+                    Database: g.Key.Database,
                     Count: entries.Count,
                     FirstSeen: entries.Min(e => e.Timestamp),
                     LastSeen: ordered[0].Timestamp,

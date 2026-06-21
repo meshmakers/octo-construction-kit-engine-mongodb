@@ -39,9 +39,10 @@ public static class SlowQueryFingerprinter
     public const int FingerprintLength = 16;
 
     /// <summary>
-    /// Returns a stable 16-character hex fingerprint of <paramref name="command"/>, or
-    /// <c>"00000000"</c> when the command is null or empty (the caller should treat this as
-    /// "unknown shape" rather than a real grouping key).
+    /// Returns a stable hex fingerprint of <paramref name="command"/> of length
+    /// <see cref="FingerprintLength"/> (currently 16, all zero) when the command is null or
+    /// empty. Callers should treat the all-zero value as "unknown shape" rather than a real
+    /// grouping key.
     /// </summary>
     public static string Fingerprint(BsonDocument? command)
     {

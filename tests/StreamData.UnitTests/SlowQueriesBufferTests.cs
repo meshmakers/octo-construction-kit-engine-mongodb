@@ -293,4 +293,43 @@ public sealed class SlowQueriesBufferTests
         buf.Add(Entry());
         Assert.Throws<ArgumentOutOfRangeException>(() => buf.GetGroupedSnapshot(limit: -1));
     }
+
+    [Fact]
+    public void GetGroupedSnapshot_CompositeKey_SeparatesByTarget()
+    {
+        // Same fingerprint, different target → must NOT merge. Reviewer flagged: the
+        // fingerprinter normalises primitive *values* but the buffer's Target field is
+        // extracted independently from the BSON, so {find: "ck_types"} and
+        // {find: "rt_entities"} can share a fingerprint despite hitting different
+        // collections.
+        var buf = new SlowQueriesBuffer(capacity: 50);
+        buf.Add(Entry(requestId: 1, fingerprint: "fp_shared", commandName: "find") with { Target = "ck_types" });
+        buf.Add(Entry(requestId: 2, fingerprint: "fp_shared", commandName: "find") with { Target = "rt_entities" });
+        buf.Add(Entry(requestId: 3, fingerprint: "fp_shared", commandName: "find") with { Target = "ck_types" });
+
+        var groups = buf.GetGroupedSnapshot();
+
+        // Two distinct groups, distinguished by target.
+        Assert.Equal(2, groups.Count);
+        var ckTypes = groups.Single(g => g.Target == "ck_types");
+        Assert.Equal(2, ckTypes.Count);
+        var rtEntities = groups.Single(g => g.Target == "rt_entities");
+        Assert.Equal(1, rtEntities.Count);
+    }
+
+    [Fact]
+    public void GetGroupedSnapshot_CompositeKey_SeparatesByDatabase()
+    {
+        // Same fingerprint, different tenant database → must NOT merge across tenants.
+        var buf = new SlowQueriesBuffer(capacity: 50);
+        buf.Add(Entry(requestId: 1, fingerprint: "fp", database: "tenant_a"));
+        buf.Add(Entry(requestId: 2, fingerprint: "fp", database: "tenant_b"));
+
+        var groups = buf.GetGroupedSnapshot();
+
+        Assert.Equal(2, groups.Count);
+        Assert.All(groups, g => Assert.Equal(1, g.Count));
+        Assert.Contains(groups, g => g.Database == "tenant_a");
+        Assert.Contains(groups, g => g.Database == "tenant_b");
+    }
 }
