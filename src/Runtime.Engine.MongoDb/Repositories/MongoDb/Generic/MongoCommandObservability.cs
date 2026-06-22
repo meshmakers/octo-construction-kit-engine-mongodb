@@ -380,7 +380,13 @@ internal sealed class MongoCommandObservability
                 var result = await db.RunCommandAsync<BsonDocument>(
                     new BsonDocumentCommand<BsonDocument>(explainCommand), null, cts.Token).ConfigureAwait(false);
 
-                var parsed = SlowQueryExplainParser.Parse(result, DateTimeOffset.UtcNow, previewBytes);
+                // Stage 2C — pass the original command + name + target through so the parser
+                // can attach a SlowQueryIndexSuggestion whenever the plan reports COLLSCAN.
+                // The suggester is read-only over the BSON (no further mutation, no driver
+                // calls) so it runs synchronously here without affecting the cooldown gate.
+                var parsed = SlowQueryExplainParser.Parse(
+                    result, DateTimeOffset.UtcNow, previewBytes,
+                    originalCommand: commandClone, commandName: commandName, target: target);
                 cache.Set(key, parsed);
             }
             catch (OperationCanceledException)

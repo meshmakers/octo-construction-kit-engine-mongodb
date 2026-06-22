@@ -38,10 +38,21 @@ public static class SlowQueryExplainParser
     /// <see cref="SlowQueryExplain.ErrorMessage"/>. <paramref name="rawPreviewBytes"/> caps the
     /// truncated queryPlanner JSON stored on the result (0 = no preview).
     /// </summary>
+    /// <remarks>
+    /// When <paramref name="originalCommand"/>, <paramref name="commandName"/>, and
+    /// <paramref name="target"/> are all supplied AND the parsed plan flags
+    /// <c>HasCollScan = true</c>, <see cref="SlowQueryIndexSuggester.TrySuggest"/> is invoked
+    /// and the result attached to <see cref="SlowQueryExplain.IndexSuggestion"/>. When the
+    /// triple is omitted (legacy callers, unit tests of pure parsing), the suggestion is
+    /// always <c>null</c>.
+    /// </remarks>
     public static SlowQueryExplain Parse(
         BsonDocument? explainResult,
         DateTimeOffset capturedAt,
-        int rawPreviewBytes)
+        int rawPreviewBytes,
+        BsonDocument? originalCommand = null,
+        string? commandName = null,
+        string? target = null)
     {
         if (explainResult is null)
         {
@@ -78,6 +89,17 @@ public static class SlowQueryExplainParser
                 ? MongoCommandObservability.TruncateBson(planner, rawPreviewBytes)
                 : null;
 
+            // Stage 2C — when the plan reports a COLLSCAN and the dispatcher passed through
+            // the original command, ask the suggester for an actionable index. Suggestion is
+            // attached even for an UNK winning stage as long as HasCollScan flipped — the
+            // missing-index symptom is what matters, not the surrounding stage shape.
+            SlowQueryIndexSuggestion? suggestion = null;
+            if (hasCollScan && originalCommand is not null &&
+                !string.IsNullOrEmpty(commandName) && !string.IsNullOrEmpty(target))
+            {
+                suggestion = SlowQueryIndexSuggester.TrySuggest(originalCommand, commandName, target);
+            }
+
             return new SlowQueryExplain(
                 CapturedAt: capturedAt,
                 Status: SlowQueryExplainStatus.Success,
@@ -85,7 +107,8 @@ public static class SlowQueryExplainParser
                 HasCollScan: hasCollScan,
                 IndexNames: indexNames,
                 RawExplainPreview: preview,
-                ErrorMessage: null);
+                ErrorMessage: null,
+                IndexSuggestion: suggestion);
         }
         catch (Exception ex)
         {
