@@ -90,4 +90,39 @@ public class OctoSystemConfiguration()
     /// (metrics and slow-log still fire). At ~3 KB per entry the default is ~3 MB resident.
     /// </summary>
     public int SlowQueryBufferSize { get; set; } = 1000;
+
+    /// <summary>
+    /// Master switch for the asynchronous <c>explain()</c> capture of slow queries (Stage 2B
+    /// Performance Advisor). When <c>false</c>, no explain probe is ever scheduled and the
+    /// cache stays empty. Existing slow-query metrics / log / buffer behaviour is unaffected.
+    /// </summary>
+    public bool SlowQueryExplainEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Minimum seconds between explain captures for the same
+    /// <c>(Fingerprint, CommandName, Target, Database)</c> key. Within this window a slow
+    /// query that already has a cached explain does not trigger a new round-trip. Default 300 s.
+    /// </summary>
+    public int SlowQueryExplainCooldownSeconds { get; set; } = 300;
+
+    /// <summary>
+    /// Maximum distinct keys held in the explain cache. On overflow the oldest entry is
+    /// FIFO-evicted (Interlocked counter, same pattern as <c>SlowQueriesBuffer</c>).
+    /// Default 5000; at ~5 KB per stored preview that bounds resident memory at ~25 MB.
+    /// </summary>
+    public int SlowQueryExplainCacheCapacity { get; set; } = 5000;
+
+    /// <summary>
+    /// Per-explain wall-clock budget in seconds. The MongoDB driver call gets a
+    /// CancellationToken derived from this; on timeout the cache records
+    /// <c>Status=failed</c> with <c>ErrorMessage=&quot;timeout&quot;</c>. Default 5 s.
+    /// </summary>
+    public int SlowQueryExplainTimeoutSeconds { get; set; } = 5;
+
+    /// <summary>
+    /// UTF-8 byte cap on the truncated raw <c>queryPlanner</c> JSON stored on each
+    /// <c>SlowQueryExplain</c>. Default 4096; matches the order-of-magnitude of
+    /// <c>SlowQueryCommandPreviewBytes</c> so neither half of the entry dominates.
+    /// </summary>
+    public int SlowQueryExplainPreviewBytes { get; set; } = 4096;
 }

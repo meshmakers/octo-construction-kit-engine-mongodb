@@ -61,16 +61,40 @@ internal sealed class MongoCommandObservability
     private readonly ILogger _logger;
     private readonly IOptionsMonitor<OctoSystemConfiguration> _config;
     private readonly SlowQueriesBuffer? _slowQueries;
+    private readonly SlowQueryExplainCache? _explainCache;
     private readonly ConcurrentDictionary<int, PendingCommand> _pending = new();
+
+    /// <summary>
+    /// MongoDB client used to run the explain probe. Wired post-construction by
+    /// <see cref="MongoRepositoryClient"/> because the client is itself built using a
+    /// ClusterConfigurator that already needs <c>this</c> — chicken/egg if we asked for it
+    /// in the constructor. Stays <c>null</c> when no explain probe is wired (the buffer-only
+    /// AB#4212 path).
+    /// </summary>
+    private IMongoClient? _mongoClient;
 
     public MongoCommandObservability(
         ILogger logger,
         IOptionsMonitor<OctoSystemConfiguration> config,
-        SlowQueriesBuffer? slowQueries = null)
+        SlowQueriesBuffer? slowQueries = null,
+        SlowQueryExplainCache? explainCache = null)
     {
         _logger = logger;
         _config = config;
         _slowQueries = slowQueries;
+        _explainCache = explainCache;
+    }
+
+    /// <summary>
+    /// Post-construction wiring of the live <see cref="IMongoClient"/>. Idempotent — replays
+    /// (e.g. lazy <see cref="MongoRepositoryClient.Client"/> getter accessed twice) overwrite
+    /// the reference with the same instance, which is harmless. Must be called before any
+    /// command-event callbacks fire, otherwise the first explain probe is skipped with
+    /// <see cref="SlowQueryExplainStatus.Failed"/> + <c>ErrorMessage="no client wired"</c>.
+    /// </summary>
+    public void SetMongoClient(IMongoClient client)
+    {
+        _mongoClient = client;
     }
 
     /// <summary>
@@ -249,10 +273,11 @@ internal sealed class MongoCommandObservability
         // Studio diagnostics surface: always capture every slow command (success or failure)
         // so a tenant admin can inspect what was slow. Tenant filtering happens at the
         // read endpoint, keyed off the entry's Database field.
+        string? fingerprint = null;
         if (_slowQueries is not null)
         {
             preview = TruncateBson(ctx.Command, cfg.SlowQueryCommandPreviewBytes);
-            var fingerprint = SlowQueryFingerprinter.Fingerprint(ctx.Command);
+            fingerprint = SlowQueryFingerprinter.Fingerprint(ctx.Command);
             _slowQueries.Add(new SlowQueryEntry(
                 Timestamp: DateTimeOffset.UtcNow,
                 CommandName: commandName,
@@ -264,6 +289,17 @@ internal sealed class MongoCommandObservability
                 Success: success,
                 ErrorCode: errorCode,
                 Fingerprint: fingerprint));
+        }
+
+        // Stage 2B — async explain capture. The cache is the dedup gate: ShouldCapture returns
+        // false within the configured cooldown for the same fingerprint key, so a hot endpoint
+        // that fires the same slow shape 200×/min still produces only one explain per window.
+        // We require success (failed commands have no representative plan worth fetching) and
+        // a live BSON command (CommandStartedEvent might have been lost for malformed traffic).
+        if (success && cfg.SlowQueryExplainEnabled && _explainCache is not null && _mongoClient is not null &&
+            ctx.Command is not null && fingerprint is not null)
+        {
+            DispatchExplain(commandName, ctx, fingerprint, cfg);
         }
 
         // Slow-log: only for successful commands. Failures are already logged at WARN in
@@ -291,6 +327,71 @@ internal sealed class MongoCommandObservability
         _logger.LogWarning(
             "Slow MongoDB command: {CommandName} {Target} on {Database} took {DurationMs}ms (requestId={RequestId}) command={Command}",
             commandName, ctx.Target, ctx.Database, ms, requestId, preview);
+    }
+
+    /// <summary>
+    /// Fire-and-forget explain dispatch on the runtime thread pool — the MongoDB driver's
+    /// command-event callback (our caller) must never block. Dedup against
+    /// <see cref="SlowQueryExplainCache"/> is checked inside the task, NOT here, so the cooldown
+    /// is honoured strictly serially per key without the caller paying the lookup cost on every
+    /// slow command. The task is async-void in spirit — every code path is wrapped so an
+    /// exception cannot tear down the host even on broken sinks.
+    /// </summary>
+    private void DispatchExplain(string commandName, PendingCommand ctx, string fingerprint, OctoSystemConfiguration cfg)
+    {
+        // Snapshot all the values the task closure needs — never the mutable PendingCommand,
+        // and never the driver-shared BsonDocument reference. DeepClone the command body so a
+        // subsequent driver retry that mutates the original cannot corrupt our wrapped explain.
+        var cache = _explainCache!;
+        var client = _mongoClient!;
+        var database = ctx.Database;
+        var target = ctx.Target;
+        var commandClone = (BsonDocument)ctx.Command!.DeepClone();
+        var previewBytes = cfg.SlowQueryExplainPreviewBytes;
+        var timeoutSeconds = cfg.SlowQueryExplainTimeoutSeconds;
+
+        var key = new SlowQueryExplainKey(fingerprint, commandName, target, database);
+        if (!cache.ShouldCapture(key))
+        {
+            return;
+        }
+
+        if (!SlowQueryExplainParser.IsExplainable(commandName))
+        {
+            // Stamp the cache so the cooldown applies — otherwise every fire of an
+            // unexplainable shape would re-walk this branch and re-check IsExplainable.
+            cache.Set(key, SlowQueryExplainParser.Unsupported(DateTimeOffset.UtcNow, commandName));
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+                var explainCommand = new BsonDocument
+                {
+                    { "explain", commandClone },
+                    { "verbosity", "queryPlanner" }
+                };
+                var db = client.GetDatabase(database);
+                var result = await db.RunCommandAsync<BsonDocument>(
+                    new BsonDocumentCommand<BsonDocument>(explainCommand), null, cts.Token).ConfigureAwait(false);
+
+                var parsed = SlowQueryExplainParser.Parse(result, DateTimeOffset.UtcNow, previewBytes);
+                cache.Set(key, parsed);
+            }
+            catch (OperationCanceledException)
+            {
+                cache.Set(key, SlowQueryExplainParser.Failure(DateTimeOffset.UtcNow, "timeout"));
+            }
+            catch (Exception ex)
+            {
+                cache.Set(key, SlowQueryExplainParser.Failure(DateTimeOffset.UtcNow,
+                    ex.GetType().Name + ": " + ex.Message));
+                SafeLogError(ex, "MongoCommandObservability explain dispatch threw");
+            }
+        });
     }
 
     /// <summary>

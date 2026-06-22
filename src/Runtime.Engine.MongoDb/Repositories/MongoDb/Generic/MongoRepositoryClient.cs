@@ -81,7 +81,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 var observability = new MongoCommandObservability(
                     _serviceProvider.GetRequiredService<ILogger<MongoCommandObservability>>(),
                     _serviceProvider.GetRequiredService<IOptionsMonitor<OctoSystemConfiguration>>(),
-                    _serviceProvider.GetService<SlowQueriesBuffer>());
+                    _serviceProvider.GetService<SlowQueriesBuffer>(),
+                    _serviceProvider.GetService<SlowQueryExplainCache>());
 
                 settings.ClusterConfigurator = cb =>
                 {
@@ -102,6 +103,14 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                     });
                 };
                 _client = new MongoClient(settings);
+
+                // Stage 2B — wire the live client into the observability listener so its
+                // fire-and-forget explain dispatch has something to run commands against. The
+                // ClusterConfigurator above already references `observability`, so we must
+                // build the listener before the client, then set the client reference after.
+                // Setter is idempotent; on the (unlikely) re-entrant Client-getter, the same
+                // instance is written twice — harmless.
+                observability.SetMongoClient(_client);
             }
 
             return _client;

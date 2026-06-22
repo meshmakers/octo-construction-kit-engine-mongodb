@@ -21,12 +21,17 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 ///   <item>Capacity of 0 disables capture (sized-out ring). Capacity comes from the configured
 ///         value at construction time and is fixed for the lifetime of the buffer; rebuilding
 ///         the DI graph on config change applies a new size.</item>
+///   <item>Optional join with <see cref="SlowQueryExplainCache"/>: when a cache is supplied at
+///         construction time, <see cref="GetSnapshot"/> and <see cref="GetGroupedSnapshot"/>
+///         stamp each returned entry's <see cref="SlowQueryEntry.Explain"/> from the cache so
+///         downstream surfaces (REST endpoint, Studio page) see a single joined view.</item>
 /// </list>
 /// </remarks>
 public sealed class SlowQueriesBuffer
 {
     private readonly ConcurrentQueue<SlowQueryEntry> _queue = new();
     private readonly int _capacity;
+    private readonly SlowQueryExplainCache? _explainCache;
 
     /// <summary>
     /// Interlocked-tracked entry count. We maintain this ourselves because
@@ -40,6 +45,18 @@ public sealed class SlowQueriesBuffer
     public int Capacity => _capacity;
 
     public SlowQueriesBuffer(int capacity)
+        : this(capacity, explainCache: null)
+    {
+    }
+
+    /// <summary>
+    /// Constructor that joins the buffer with an optional
+    /// <see cref="SlowQueryExplainCache"/>. When set, every <see cref="SlowQueryEntry"/>
+    /// returned by the read APIs has its <see cref="SlowQueryEntry.Explain"/> stamped from the
+    /// cache at read time — the buffer itself never holds explain state, so the writer-side
+    /// fast path stays untouched.
+    /// </summary>
+    public SlowQueriesBuffer(int capacity, SlowQueryExplainCache? explainCache)
     {
         if (capacity < 0)
         {
@@ -48,6 +65,7 @@ public sealed class SlowQueriesBuffer
         }
 
         _capacity = capacity;
+        _explainCache = explainCache;
     }
 
     /// <summary>
@@ -87,7 +105,9 @@ public sealed class SlowQueriesBuffer
     /// <summary>
     /// Returns a snapshot of the buffer's contents, newest first, optionally filtered and
     /// capped. The snapshot is consistent at a single point in time; concurrent writes after
-    /// this call do not affect the returned list.
+    /// this call do not affect the returned list. When an explain cache was supplied at
+    /// construction, each entry's <see cref="SlowQueryEntry.Explain"/> is filled from the
+    /// cache before returning.
     /// </summary>
     /// <param name="predicate">Optional filter applied before reversal and limit.</param>
     /// <param name="limit">Optional max number of entries to return (after filtering).</param>
@@ -118,7 +138,7 @@ public sealed class SlowQueriesBuffer
             view = view.Take(limit.Value);
         }
 
-        return view.ToList();
+        return view.Select(EnrichWithExplain).ToList();
     }
 
     /// <summary>
@@ -168,7 +188,7 @@ public sealed class SlowQueriesBuffer
                 // Materialize once; we need multiple aggregations + the representative pick.
                 var entries = g.ToList();
                 var ordered = entries.OrderByDescending(e => e.Timestamp).ToList();
-                var representative = ordered[0];
+                var representative = EnrichWithExplain(ordered[0]);
                 return new SlowQueryGroup(
                     Fingerprint: g.Key.Fingerprint,
                     CommandName: g.Key.CommandName,
@@ -180,7 +200,9 @@ public sealed class SlowQueriesBuffer
                     MinDurationMs: entries.Min(e => e.DurationMs),
                     MaxDurationMs: entries.Max(e => e.DurationMs),
                     AvgDurationMs: entries.Average(e => e.DurationMs),
-                    Representative: representative);
+                    Representative: representative,
+                    // Mirrored from the representative — see SlowQueryGroup.Explain docs.
+                    Explain: representative.Explain);
             })
             .OrderByDescending(g => g.LastSeen);
 
@@ -191,5 +213,24 @@ public sealed class SlowQueriesBuffer
         }
 
         return final.ToList();
+    }
+
+    /// <summary>
+    /// Joins an entry with the latest cached explain (if any) — a no-op when no cache was
+    /// supplied at construction time. The buffer always stores entries with
+    /// <see cref="SlowQueryEntry.Explain"/> = <c>null</c>; the join happens lazily here so
+    /// the writer-side fast path on the driver thread stays untouched.
+    /// </summary>
+    private SlowQueryEntry EnrichWithExplain(SlowQueryEntry entry)
+    {
+        if (_explainCache is null)
+        {
+            return entry;
+        }
+
+        var explain = _explainCache.TryGet(new SlowQueryExplainKey(
+            entry.Fingerprint, entry.CommandName, entry.Target, entry.Database));
+
+        return explain is null ? entry : entry with { Explain = explain };
     }
 }
