@@ -284,8 +284,14 @@ public static class SlowQueryIndexSuggester
 
             if (name.StartsWith('$'))
             {
-                // Unknown top-level operator that isn't a combinator — record the field-free
-                // hint and move on.
+                // Top-level operator that's neither a combinator nor $not. Special operators
+                // (notably $text) are valid at the top level — e.g. {$text: {...}, tenantId: "t"}
+                // mixes a fulltext predicate with a regular equality. The text-index caveat
+                // belongs to the suggestion regardless of where $text appeared.
+                if (SpecialOperators.TryGetValue(name, out var topLevelNote))
+                {
+                    ctx.MarkSpecialOperator(topLevelNote);
+                }
                 continue;
             }
 
@@ -347,7 +353,7 @@ public static class SlowQueryIndexSuggester
 
             if (SpecialOperators.TryGetValue(op.Name, out var note))
             {
-                ctx.AddNote(note);
+                ctx.MarkSpecialOperator(note);
                 sawSpecial = true;
                 continue;
             }
@@ -469,7 +475,10 @@ public static class SlowQueryIndexSuggester
     /// <summary>
     /// Builds the mongosh shell command. Field paths are JSON-string-quoted because dotted
     /// paths (the OctoMesh norm: <c>attributes.name.value</c>) are not valid JS identifiers
-    /// and must be quoted in the spec literal.
+    /// and must be quoted in the spec literal. We escape backslashes and double quotes inside
+    /// the field/index-name literals — defence in depth against pathologically named fields
+    /// or generated index names that contain those characters; without escaping a name like
+    /// <c>a"b</c> would close the surrounding quote and produce broken mongosh.
     /// </summary>
     private static string BuildShellCommand(
         string target,
@@ -477,9 +486,17 @@ public static class SlowQueryIndexSuggester
         string indexName)
     {
         var spec = string.Join(", ",
-            fields.Select(f => $"\"{f.Name}\": {f.Direction}"));
-        return $"db.{target}.createIndex({{{spec}}}, {{name: \"{indexName}\"}})";
+            fields.Select(f => $"\"{EscapeForJsString(f.Name)}\": {f.Direction}"));
+        return $"db.{target}.createIndex({{{spec}}}, {{name: \"{EscapeForJsString(indexName)}\"}})";
     }
+
+    /// <summary>
+    /// Escapes backslashes and double quotes for inclusion inside a JavaScript double-quoted
+    /// string literal. Order matters — backslash first, otherwise the just-inserted escape
+    /// itself gets escaped again on the second pass.
+    /// </summary>
+    private static string EscapeForJsString(string value)
+        => value.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
     /// <summary>
     /// Confidence heuristic — see <see cref="SlowQueryIndexSuggestionConfidence"/> XML doc.
@@ -528,12 +545,21 @@ public static class SlowQueryIndexSuggester
 
             if (Fields.TryGetValue(name, out var existing))
             {
-                // Promotion order: Equality stays equality if seen first; a sort over an
-                // equality field is upgraded to Sort (the planner will use it that way). Range
-                // never overwrites Equality (we want the strongest classification first).
-                if (kind == SlowQueryIndexFieldKind.Sort && existing.Kind == SlowQueryIndexFieldKind.Equality)
+                // Promotion order: any non-Sort kind seen later as a Sort upgrades to Sort —
+                // both Equality + Sort AND Range + Sort patterns are common (a range
+                // predicate plus an ordered output of the same field). In either case the
+                // Order is re-stamped to the sort document's position; otherwise a filter
+                // walk that inserted the field first would force a compound order the
+                // planner can't use to satisfy the sort, and the index is wasted on an
+                // in-memory sort step.
+                if (kind == SlowQueryIndexFieldKind.Sort && existing.Kind != SlowQueryIndexFieldKind.Sort)
                 {
-                    Fields[name] = existing with { Kind = SlowQueryIndexFieldKind.Sort, Direction = direction };
+                    Fields[name] = existing with
+                    {
+                        Kind = SlowQueryIndexFieldKind.Sort,
+                        Direction = direction,
+                        Order = _orderCounter++
+                    };
                 }
                 else if (kind == SlowQueryIndexFieldKind.Equality && existing.Kind == SlowQueryIndexFieldKind.Range)
                 {
@@ -557,10 +583,19 @@ public static class SlowQueryIndexSuggester
             {
                 HasOrBranches = true;
             }
-            else if (note.Contains("operator detected", StringComparison.Ordinal))
-            {
-                HasSpecialOperator = true;
-            }
+        }
+
+        /// <summary>
+        /// Flags a special-operator hit and records its caveat in one call. The flag is set
+        /// explicitly here rather than inferred from the note's text — earlier we tried
+        /// inferring via "operator detected" substring match, which silently broke for
+        /// $regex / $elemMatch notes that didn't contain that exact phrase, and would have
+        /// broken again on any future note rewording.
+        /// </summary>
+        public void MarkSpecialOperator(string note)
+        {
+            AddNote(note);
+            HasSpecialOperator = true;
         }
     }
 

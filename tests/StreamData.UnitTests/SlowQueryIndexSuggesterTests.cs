@@ -431,6 +431,119 @@ public class SlowQueryIndexSuggesterTests
 
     // ---- confidence ratings ------------------------------------------------------------
 
+    // ---- review fixes (PR #105) ---------------------------------------------------------
+
+    [Fact]
+    public void TrySuggest_ShellCommand_EscapesQuoteAndBackslashInFieldName()
+    {
+        // Pathologically named field with embedded backslash and double quote. Without
+        // escaping, the emitted createIndex literal would be syntactically broken (and a
+        // path to inject if untrusted input ever shapes field names). The escape pass is
+        // defence in depth: we don't expect this in OctoMesh today, but the suggester is
+        // generic over the BSON shape.
+        var cmd = new BsonDocument
+        {
+            { "find", "x" },
+            { "filter", new BsonDocument("evil\\name\"with quote", 1) }
+        };
+
+        var s = SlowQueryIndexSuggester.TrySuggest(cmd, "find", "x")!;
+
+        Assert.Contains("\\\\", s.ShellCommand); // backslash → \\
+        Assert.Contains("\\\"", s.ShellCommand); // double-quote → \"
+        // The literal quote-without-escape inside the field name must NOT appear unescaped.
+        // We look specifically for the substring `name"with` (raw quote between letters); if
+        // escaping ever broke, that's the substring that would show up.
+        Assert.DoesNotContain("name\"with", s.ShellCommand);
+    }
+
+    [Fact]
+    public void TrySuggest_TopLevelTextOperator_FlagsCaveatEvenWithRegularFields()
+    {
+        // {$text: {...}, tenantId: "t"} — $text at the TOP level, not inside a field doc.
+        // Walk() must still record the text-index caveat when this shape appears, otherwise
+        // the operator picks up a regular compound index suggestion that the planner can't
+        // use for the fulltext predicate.
+        var cmd = new BsonDocument
+        {
+            { "find", "docs" },
+            { "filter", new BsonDocument
+                {
+                    { "$text", new BsonDocument("$search", "needle") },
+                    { "tenantId", "t" }
+                }
+            }
+        };
+
+        var s = SlowQueryIndexSuggester.TrySuggest(cmd, "find", "docs")!;
+
+        Assert.Contains(s.Notes, n => n.Contains("text", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(SlowQueryIndexSuggestionConfidence.Low, s.Confidence);
+    }
+
+    [Fact]
+    public void TrySuggest_RegexOperator_DowngradesConfidenceToLow()
+    {
+        // The regex note is "$regex detected — index is only used for anchored patterns".
+        // Previously HasSpecialOperator was inferred via the substring "operator detected",
+        // which wouldn't match this note's text — letting a single-regex-field query slip
+        // through as High confidence. MarkSpecialOperator sets the flag explicitly.
+        var cmd = new BsonDocument
+        {
+            { "find", "x" },
+            { "filter", new BsonDocument("name", new BsonDocument("$regex", "^prefix")) }
+        };
+
+        var s = SlowQueryIndexSuggester.TrySuggest(cmd, "find", "x")!;
+
+        Assert.Contains(s.Notes, n => n.Contains("$regex"));
+        Assert.Equal(SlowQueryIndexSuggestionConfidence.Low, s.Confidence);
+    }
+
+    [Fact]
+    public void TrySuggest_ElemMatchOperator_DowngradesConfidenceToLow()
+    {
+        var cmd = new BsonDocument
+        {
+            { "find", "x" },
+            { "filter", new BsonDocument("tags", new BsonDocument("$elemMatch",
+                new BsonDocument("$eq", "blue"))) }
+        };
+
+        var s = SlowQueryIndexSuggester.TrySuggest(cmd, "find", "x")!;
+
+        Assert.Contains(s.Notes, n => n.Contains("$elemMatch"));
+        Assert.Equal(SlowQueryIndexSuggestionConfidence.Low, s.Confidence);
+    }
+
+    [Fact]
+    public void TrySuggest_SortReordersFiltersToMatchSortDocument()
+    {
+        // Both a and b appear in the filter; the sort document specifies b BEFORE a. The
+        // resulting compound MUST be {b, a} — otherwise the planner can't use it to
+        // satisfy the sort without a separate in-memory sort step. Sort field order from
+        // the sort document overrides filter-walk insertion order.
+        var cmd = new BsonDocument
+        {
+            { "find", "x" },
+            { "filter", new BsonDocument
+                {
+                    { "a", new BsonDocument("$exists", true) }, // range-ish, eligible for sort upgrade
+                    { "b", new BsonDocument("$exists", true) }
+                }
+            },
+            { "sort", new BsonDocument { { "b", 1 }, { "a", 1 } } }
+        };
+
+        var s = SlowQueryIndexSuggester.TrySuggest(cmd, "find", "x")!;
+
+        Assert.Equal(2, s.Fields.Count);
+        // After the sort-driven re-stamp, b must come first.
+        Assert.Equal("b", s.Fields[0].Name);
+        Assert.Equal("a", s.Fields[1].Name);
+        Assert.All(s.Fields, f => Assert.Equal(SlowQueryIndexFieldKind.Sort, f.Kind));
+    }
+
     [Fact]
     public void Confidence_Low_When_ManyFields()
     {
