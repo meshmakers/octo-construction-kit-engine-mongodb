@@ -160,6 +160,62 @@ which exposes `GET /{tenantId}/v1/Diagnostics/slow-mongo-queries` and filters en
 `Database == tenantId` so each tenant only sees its own queries. The Refinery Studio
 **Diagnostics → Slow Queries** page renders the result.
 
+### Async Explain Capture (AB#4216)
+
+For every slow query that lands in the buffer with a fingerprint, `MongoCommandObservability`
+asynchronously schedules `db.runCommand({explain: {<original command>}, verbosity: "queryPlanner"})`
+against the originating database and stores the parsed plan in `SlowQueryExplainCache`. The
+buffer's read APIs (`GetSnapshot`, `GetGroupedSnapshot`) join entries with the cache at read
+time so the Refinery Studio Diagnostics surface sees the explain stamped alongside the BSON
+preview without any extra round-trip.
+
+| Type | Purpose |
+|---|---|
+| `SlowQueryExplain` | Parsed result: `WinningStage`, `HasCollScan`, `IndexNames`, optional `RawExplainPreview`, status (`Success` / `Unsupported` / `Failed`) + optional `ErrorMessage`. |
+| `SlowQueryExplainKey` | Composite key `(Fingerprint, CommandName, Target, Database)` — same shape the grouped snapshot uses, so explain is per-tenant-per-target even when the fingerprint alone would collide. |
+| `SlowQueryExplainParser` | Static parser. Handles `find`/`count`/`distinct`/`findAndModify`/`update`/`delete`/`mapReduce` (top-level `queryPlanner.winningPlan`) and `aggregate` (descends into the first `$cursor` stage). Recursive walk through `inputStage` / `inputStages` captures every IXSCAN's index name and flips `HasCollScan` on first COLLSCAN. |
+| `SlowQueryExplainCache` | Thread-safe per-process cache. `ShouldCapture(key)` enforces cooldown (no probe within `SlowQueryExplainCooldownSeconds` of a successful capture for the same key). FIFO-evicts beyond `SlowQueryExplainCacheCapacity`. |
+
+**Dispatch (`MongoCommandObservability.DispatchExplain`):** runs as a fire-and-forget
+`Task.Run` from the driver's command-event callback. Guards execute synchronously *before*
+the task:
+
+1. Skip if `SlowQueryExplainEnabled = false` or no live `IMongoClient` wired
+2. Skip if the command failed (no winning plan worth fetching)
+3. Skip if the cache says `ShouldCapture = false` (cooldown active)
+4. If the command type is not in the explainable set, stamp the cache with
+   `SlowQueryExplainStatus.Unsupported` and skip the driver round-trip — this keeps the
+   cooldown ticking so we don't re-walk this branch on every fire of the same shape
+
+When the task does run, it deep-clones the BSON command (the driver may still retry the
+original on its own connection), wraps it in
+`{explain: <clone>, verbosity: "queryPlanner"}`, runs against
+`client.GetDatabase(database)`, parses, stores. Cancellation token derived from
+`SlowQueryExplainTimeoutSeconds`; on timeout we store `Status = Failed` /
+`ErrorMessage = "timeout"`. All exceptions are caught and logged via the same `SafeLogError`
+path the rest of the listener uses — a broken sink must never poison the driver pipeline.
+
+**Configuration (`OctoSystemConfiguration`):**
+
+| Field | Default | Purpose |
+|---|---|---|
+| `SlowQueryExplainEnabled` | `true` | Master switch. When `false`, the cache is constructed with capacity 0 so `ShouldCapture` always returns false and nothing is dispatched. |
+| `SlowQueryExplainCooldownSeconds` | `300` | Minimum seconds between captures for the same key. |
+| `SlowQueryExplainCacheCapacity` | `5000` | Distinct keys retained before FIFO eviction. |
+| `SlowQueryExplainTimeoutSeconds` | `5` | Per-explain wall-clock budget. |
+| `SlowQueryExplainPreviewBytes` | `4096` | UTF-8 byte cap on the truncated `queryPlanner` JSON stored on each result. |
+
+**Surface:** `SlowQueryEntry` and `SlowQueryGroup` carry a nullable `Explain` field; the
+buffer's read methods join from the cache before returning, so REST callers
+(`DiagnosticsController`) and the Studio surface see a single enriched view. `null` means
+no probe has finished yet for this key.
+
+**Note for write commands.** `update`, `delete`, and `findAndModify` are *explainable* at
+`verbosity: "queryPlanner"` and do **not** execute the write at that verbosity — the MongoDB
+docs are explicit. We include them in `IsExplainable` because they're frequently the
+slowest commands and the plan reveals whether the operation was anchored by an index.
+`executionStats` verbosity (which *would* execute writes) is deliberately out of scope.
+
 ### Pipeline Fingerprinting (AB#4213)
 
 `SlowQueryFingerprinter.Fingerprint(BsonDocument)` produces a stable 16-char hex hash of
@@ -186,8 +242,10 @@ of structurally-identical slow queries).
 
 - Stage 1: **AB#4206** (merged) — slow-log + OTel histograms
 - Per-request surface: **AB#4210** (merged) — GraphQL extension + REST headers
-- Studio surface: **AB#4212** — ring buffer + Diagnostics page
-- Next-up: explain-based `COLLSCAN` detection + CK-Index suggestions (Stage 2 continuation)
+- Studio surface: **AB#4212** (merged) — ring buffer + Diagnostics page
+- Stage 2A: **AB#4213** (merged) — pipeline fingerprinting + grouped view
+- Stage 2B: **AB#4216** — async `explain()` capture + COLLSCAN detection (this section)
+- Stage 2C: CK-attribute → Mongo-field mapping + index suggestion generator
 - Stage 3: `$indexStats` unused-index analysis
 
 ## BSON Serialization Conventions

@@ -523,6 +523,144 @@ public sealed class MongoCommandObservabilityTests : IDisposable
         Assert.Null(MongoCommandObservability.GetCurrentScope());
     }
 
+    // ---- Stage 2B explain capture dispatch guards (AB#4216) ----
+    // We don't fake an IMongoClient in unit tests (the driver's interface surface is enormous
+    // and mocking it brittle). These tests verify the guard layer above the driver call: when
+    // do we dispatch, when do we skip, and when do we stamp the cache directly without a
+    // round-trip. The actual driver round-trip is validated manually against a real Mongo
+    // instance post-deployment — see CLAUDE.md Observability section.
+
+    [Fact]
+    public void Explain_FeatureDisabled_DoesNotTouchCache()
+    {
+        var buffer = new SlowQueriesBuffer(capacity: 100);
+        var cache = new SlowQueryExplainCache(capacity: 100, cooldown: TimeSpan.Zero);
+        var sut = new MongoCommandObservability(_logger, _config, buffer, cache);
+        _config.Current.SlowQueryThresholdMs = 1;
+        _config.Current.SlowQueryExplainEnabled = false;
+
+        var (started, succeeded) = BuildPair("find", "ck_types", "tenant_a", durationMs: 250);
+        sut.OnStarted(started);
+        sut.OnSucceeded(succeeded);
+
+        Assert.Equal(0, cache.Count);
+    }
+
+    [Fact]
+    public void Explain_NoClientWired_DoesNotTouchCache()
+    {
+        // SetMongoClient never called — listener silently skips dispatch. This is the
+        // pre-startup shape (between observability construction and MongoClient creation).
+        var buffer = new SlowQueriesBuffer(capacity: 100);
+        var cache = new SlowQueryExplainCache(capacity: 100, cooldown: TimeSpan.Zero);
+        var sut = new MongoCommandObservability(_logger, _config, buffer, cache);
+        _config.Current.SlowQueryThresholdMs = 1;
+        _config.Current.SlowQueryExplainEnabled = true;
+
+        var (started, succeeded) = BuildPair("find", "ck_types", "tenant_a", durationMs: 250);
+        sut.OnStarted(started);
+        sut.OnSucceeded(succeeded);
+
+        Assert.Equal(0, cache.Count);
+    }
+
+    [Fact]
+    public void Explain_FailedCommand_DoesNotDispatch()
+    {
+        // Failed slow commands write to the buffer but should not trigger an explain probe —
+        // there is no winning plan to capture, and re-running a failing command is wasteful.
+        var buffer = new SlowQueriesBuffer(capacity: 100);
+        var cache = new SlowQueryExplainCache(capacity: 100, cooldown: TimeSpan.Zero);
+        var sut = new MongoCommandObservability(_logger, _config, buffer, cache);
+        sut.SetMongoClient(new ThrowingMongoClient());  // would throw if dispatch fired
+        _config.Current.SlowQueryThresholdMs = 1;
+        _config.Current.SlowQueryExplainEnabled = true;
+
+        var (started, failed) = BuildFailedPair("find", "ck_types", "tenant_a",
+            durationMs: 250, errorCode: 11600, errorMessage: "InterruptedAtShutdown");
+        sut.OnStarted(started);
+        sut.OnFailed(failed);
+
+        // Buffer still gets the failed entry — explain just stayed out.
+        Assert.Single(buffer.GetSnapshot());
+        Assert.Equal(0, cache.Count);
+    }
+
+    [Fact]
+    public void Explain_UnsupportedCommand_StampsCacheUnsupportedAndSkipsDriverCall()
+    {
+        // The guard runs synchronously BEFORE the Task.Run dispatch, so even with a throwing
+        // client wired the unsupported case must not fire the driver.
+        var buffer = new SlowQueriesBuffer(capacity: 100);
+        var cache = new SlowQueryExplainCache(capacity: 100, cooldown: TimeSpan.Zero);
+        var sut = new MongoCommandObservability(_logger, _config, buffer, cache);
+        sut.SetMongoClient(new ThrowingMongoClient());
+        _config.Current.SlowQueryThresholdMs = 1;
+        _config.Current.SlowQueryExplainEnabled = true;
+
+        // 'insert' is not in IsExplainable's allowed set.
+        var (started, succeeded) = BuildPair("insert", "rt_entities", "tenant_a", durationMs: 250);
+        sut.OnStarted(started);
+        sut.OnSucceeded(succeeded);
+
+        var entry = Assert.Single(buffer.GetSnapshot());
+        var stamped = cache.TryGet(new SlowQueryExplainKey(
+            entry.Fingerprint, entry.CommandName, entry.Target, entry.Database));
+        Assert.NotNull(stamped);
+        Assert.Equal(SlowQueryExplainStatus.Unsupported, stamped.Status);
+    }
+
+    [Fact]
+    public void Explain_NoBuffer_DoesNotDispatch()
+    {
+        // Without a buffer the listener never computes a fingerprint — so there's no key to
+        // dispatch under. Stage 2B is consciously gated on Stage 2A buffer wiring.
+        var cache = new SlowQueryExplainCache(capacity: 100, cooldown: TimeSpan.Zero);
+        var sut = new MongoCommandObservability(_logger, _config, slowQueries: null, explainCache: cache);
+        sut.SetMongoClient(new ThrowingMongoClient());
+        _config.Current.SlowQueryThresholdMs = 1;
+        _config.Current.SlowQueryExplainEnabled = true;
+
+        var (started, succeeded) = BuildPair("find", "ck_types", "tenant_a", durationMs: 250);
+        sut.OnStarted(started);
+        sut.OnSucceeded(succeeded);
+
+        Assert.Equal(0, cache.Count);
+    }
+
+    [Fact]
+    public void Explain_CacheCooldownPreventsRedispatch()
+    {
+        // First fire stamps a cache entry; a second fire with the same shape must observe
+        // ShouldCapture=false (cooldown active) and skip dispatch. We seed the cache directly
+        // with a recent entry to make the test deterministic — the Unsupported path is the
+        // most convenient way to populate the cache without faking a driver round-trip.
+        var buffer = new SlowQueriesBuffer(capacity: 100);
+        var cache = new SlowQueryExplainCache(capacity: 100, cooldown: TimeSpan.FromMinutes(5));
+        var sut = new MongoCommandObservability(_logger, _config, buffer, cache);
+        sut.SetMongoClient(new ThrowingMongoClient());
+        _config.Current.SlowQueryThresholdMs = 1;
+        _config.Current.SlowQueryExplainEnabled = true;
+
+        // Fire once with an unsupported command — stamps cache with Unsupported, dispatch
+        // never reaches the client.
+        var (s1, ok1) = BuildPair("insert", "rt_entities", "tenant_a", durationMs: 250);
+        sut.OnStarted(s1);
+        sut.OnSucceeded(ok1);
+        var sizeAfterFirst = cache.Count;
+
+        // Fire twice more with the same shape — should still be exactly one cache entry
+        // (cooldown active, no re-stamp, no driver call).
+        for (var i = 0; i < 2; i++)
+        {
+            var (s, ok) = BuildPair("insert", "rt_entities", "tenant_a", durationMs: 250, requestId: 100 + i);
+            sut.OnStarted(s);
+            sut.OnSucceeded(ok);
+        }
+
+        Assert.Equal(sizeAfterFirst, cache.Count);
+    }
+
     [Fact]
     public void Observability_DoesNotPropagateExceptions_FromLogger()
     {
@@ -607,6 +745,58 @@ public sealed class MongoCommandObservabilityTests : IDisposable
         void ILogger.Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
             => throw new InvalidOperationException("logger boom");
+    }
+
+    /// <summary>
+    /// Trip-wire IMongoClient: every call throws. Used by the Stage 2B guard tests to assert
+    /// that the dispatch path exited BEFORE reaching the driver. If a guard regression let
+    /// the dispatch through, GetDatabase would throw and the test would fail loudly.
+    /// </summary>
+    private sealed class ThrowingMongoClient : IMongoClient
+    {
+        private static InvalidOperationException Boom() =>
+            new("Trip-wire IMongoClient — guard should have prevented this call.");
+
+        public ICluster Cluster => throw Boom();
+        public MongoClientSettings Settings => throw Boom();
+        public IMongoDatabase GetDatabase(string name, MongoDatabaseSettings? settings = null) => throw Boom();
+        public void DropDatabase(string name, CancellationToken cancellationToken = default) => throw Boom();
+        public void DropDatabase(IClientSessionHandle session, string name, CancellationToken cancellationToken = default) => throw Boom();
+        public Task DropDatabaseAsync(string name, CancellationToken cancellationToken = default) => throw Boom();
+        public Task DropDatabaseAsync(IClientSessionHandle session, string name, CancellationToken cancellationToken = default) => throw Boom();
+        public IAsyncCursor<string> ListDatabaseNames(CancellationToken cancellationToken = default) => throw Boom();
+        public IAsyncCursor<string> ListDatabaseNames(ListDatabaseNamesOptions options, CancellationToken cancellationToken = default) => throw Boom();
+        public IAsyncCursor<string> ListDatabaseNames(IClientSessionHandle session, CancellationToken cancellationToken = default) => throw Boom();
+        public IAsyncCursor<string> ListDatabaseNames(IClientSessionHandle session, ListDatabaseNamesOptions options, CancellationToken cancellationToken = default) => throw Boom();
+        public Task<IAsyncCursor<string>> ListDatabaseNamesAsync(CancellationToken cancellationToken = default) => throw Boom();
+        public Task<IAsyncCursor<string>> ListDatabaseNamesAsync(ListDatabaseNamesOptions options, CancellationToken cancellationToken = default) => throw Boom();
+        public Task<IAsyncCursor<string>> ListDatabaseNamesAsync(IClientSessionHandle session, CancellationToken cancellationToken = default) => throw Boom();
+        public Task<IAsyncCursor<string>> ListDatabaseNamesAsync(IClientSessionHandle session, ListDatabaseNamesOptions options, CancellationToken cancellationToken = default) => throw Boom();
+        public IAsyncCursor<BsonDocument> ListDatabases(CancellationToken cancellationToken = default) => throw Boom();
+        public IAsyncCursor<BsonDocument> ListDatabases(ListDatabasesOptions options, CancellationToken cancellationToken = default) => throw Boom();
+        public IAsyncCursor<BsonDocument> ListDatabases(IClientSessionHandle session, CancellationToken cancellationToken = default) => throw Boom();
+        public IAsyncCursor<BsonDocument> ListDatabases(IClientSessionHandle session, ListDatabasesOptions options, CancellationToken cancellationToken = default) => throw Boom();
+        public Task<IAsyncCursor<BsonDocument>> ListDatabasesAsync(CancellationToken cancellationToken = default) => throw Boom();
+        public Task<IAsyncCursor<BsonDocument>> ListDatabasesAsync(ListDatabasesOptions options, CancellationToken cancellationToken = default) => throw Boom();
+        public Task<IAsyncCursor<BsonDocument>> ListDatabasesAsync(IClientSessionHandle session, CancellationToken cancellationToken = default) => throw Boom();
+        public Task<IAsyncCursor<BsonDocument>> ListDatabasesAsync(IClientSessionHandle session, ListDatabasesOptions options, CancellationToken cancellationToken = default) => throw Boom();
+        public IClientSessionHandle StartSession(ClientSessionOptions? options = null, CancellationToken cancellationToken = default) => throw Boom();
+        public Task<IClientSessionHandle> StartSessionAsync(ClientSessionOptions? options = null, CancellationToken cancellationToken = default) => throw Boom();
+        public IChangeStreamCursor<TResult> Watch<TResult>(PipelineDefinition<ChangeStreamDocument<BsonDocument>, TResult> pipeline, ChangeStreamOptions? options = null, CancellationToken cancellationToken = default) => throw Boom();
+        public IChangeStreamCursor<TResult> Watch<TResult>(IClientSessionHandle session, PipelineDefinition<ChangeStreamDocument<BsonDocument>, TResult> pipeline, ChangeStreamOptions? options = null, CancellationToken cancellationToken = default) => throw Boom();
+        public Task<IChangeStreamCursor<TResult>> WatchAsync<TResult>(PipelineDefinition<ChangeStreamDocument<BsonDocument>, TResult> pipeline, ChangeStreamOptions? options = null, CancellationToken cancellationToken = default) => throw Boom();
+        public Task<IChangeStreamCursor<TResult>> WatchAsync<TResult>(IClientSessionHandle session, PipelineDefinition<ChangeStreamDocument<BsonDocument>, TResult> pipeline, ChangeStreamOptions? options = null, CancellationToken cancellationToken = default) => throw Boom();
+        public IMongoClient WithReadConcern(ReadConcern readConcern) => throw Boom();
+        public IMongoClient WithReadPreference(ReadPreference readPreference) => throw Boom();
+        public IMongoClient WithWriteConcern(WriteConcern writeConcern) => throw Boom();
+        public ClientBulkWriteResult BulkWrite(IReadOnlyList<BulkWriteModel> models, ClientBulkWriteOptions? options = null, CancellationToken cancellationToken = default) => throw Boom();
+        public ClientBulkWriteResult BulkWrite(IClientSessionHandle session, IReadOnlyList<BulkWriteModel> models, ClientBulkWriteOptions? options = null, CancellationToken cancellationToken = default) => throw Boom();
+        public Task<ClientBulkWriteResult> BulkWriteAsync(IReadOnlyList<BulkWriteModel> models, ClientBulkWriteOptions? options = null, CancellationToken cancellationToken = default) => throw Boom();
+        public Task<ClientBulkWriteResult> BulkWriteAsync(IClientSessionHandle session, IReadOnlyList<BulkWriteModel> models, ClientBulkWriteOptions? options = null, CancellationToken cancellationToken = default) => throw Boom();
+        public void Dispose()
+        {
+            // IMongoClient inherits IDisposable. No state to release in the trip-wire fake.
+        }
     }
 
     private sealed class StubOptionsMonitor : IOptionsMonitor<OctoSystemConfiguration>

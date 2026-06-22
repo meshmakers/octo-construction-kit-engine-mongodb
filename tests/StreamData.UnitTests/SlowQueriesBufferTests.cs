@@ -332,4 +332,73 @@ public sealed class SlowQueriesBufferTests
         Assert.Contains(groups, g => g.Database == "tenant_a");
         Assert.Contains(groups, g => g.Database == "tenant_b");
     }
+
+    [Fact]
+    public void GetSnapshot_WithExplainCache_StampsExplainOnReturnedEntry()
+    {
+        // Stage 2B — buffer constructed with an explain cache; reads should join the latest
+        // captured plan onto each returned entry. The buffer itself never holds the explain.
+        var cache = new SlowQueryExplainCache(capacity: 10, cooldown: TimeSpan.Zero);
+        var buf = new SlowQueriesBuffer(capacity: 50, explainCache: cache);
+        buf.Add(Entry(requestId: 1, fingerprint: "fp_with_explain"));
+
+        var explain = new SlowQueryExplain(
+            CapturedAt: DateTimeOffset.UtcNow,
+            Status: SlowQueryExplainStatus.Success,
+            WinningStage: "COLLSCAN",
+            HasCollScan: true,
+            IndexNames: Array.Empty<string>(),
+            RawExplainPreview: null,
+            ErrorMessage: null);
+        cache.Set(new SlowQueryExplainKey("fp_with_explain", "find", "rt_entities", "tenant_a"), explain);
+
+        var entries = buf.GetSnapshot();
+
+        Assert.Single(entries);
+        Assert.NotNull(entries[0].Explain);
+        Assert.Same(explain, entries[0].Explain);
+    }
+
+    [Fact]
+    public void GetSnapshot_WithExplainCache_NoMatchingKey_LeavesExplainNull()
+    {
+        // Cache lookup is keyed on (Fingerprint, CommandName, Target, Database). A miss keeps
+        // the entry's Explain null — never a partial overlay from a different shape.
+        var cache = new SlowQueryExplainCache(capacity: 10, cooldown: TimeSpan.Zero);
+        var buf = new SlowQueriesBuffer(capacity: 50, explainCache: cache);
+        buf.Add(Entry(requestId: 1, fingerprint: "fp_a"));
+
+        cache.Set(new SlowQueryExplainKey("fp_other", "find", "rt_entities", "tenant_a"),
+            new SlowQueryExplain(DateTimeOffset.UtcNow, SlowQueryExplainStatus.Success,
+                "COLLSCAN", true, Array.Empty<string>(), null, null));
+
+        var entries = buf.GetSnapshot();
+
+        Assert.Single(entries);
+        Assert.Null(entries[0].Explain);
+    }
+
+    [Fact]
+    public void GetGroupedSnapshot_WithExplainCache_StampsExplainOnGroupAndRepresentative()
+    {
+        // Group's Explain mirrors the representative entry's Explain — both must be set so the
+        // Studio surface can render the badge directly off the group row.
+        var cache = new SlowQueryExplainCache(capacity: 10, cooldown: TimeSpan.Zero);
+        var buf = new SlowQueriesBuffer(capacity: 50, explainCache: cache);
+        buf.Add(Entry(requestId: 1, fingerprint: "fp_explain"));
+        buf.Add(Entry(requestId: 2, fingerprint: "fp_explain"));
+
+        var explain = new SlowQueryExplain(
+            DateTimeOffset.UtcNow, SlowQueryExplainStatus.Success,
+            "IXSCAN", false, new[] { "idx_x" }, null, null);
+        cache.Set(new SlowQueryExplainKey("fp_explain", "find", "rt_entities", "tenant_a"), explain);
+
+        var groups = buf.GetGroupedSnapshot();
+
+        Assert.Single(groups);
+        Assert.NotNull(groups[0].Explain);
+        Assert.Equal("IXSCAN", groups[0].Explain!.WinningStage);
+        Assert.NotNull(groups[0].Representative.Explain);
+        Assert.Same(groups[0].Explain, groups[0].Representative.Explain);
+    }
 }

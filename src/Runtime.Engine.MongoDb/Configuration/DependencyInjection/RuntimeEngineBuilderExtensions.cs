@@ -70,14 +70,32 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services.AddSingleton<IUserRepositoryAccess, UserRepositoryAccess>();
         builder.Services.AddSingleton<IAdminRepositoryAccess, AdminRepositoryAccess>();
 
+        // Stage 2B explain cache — singleton, shared between admin and user MongoDB
+        // connections so a tenant query's explain finishes wherever the listener that
+        // dispatched it ran, and is reachable from the Diagnostics read endpoint. Disabled
+        // when SlowQueryExplainEnabled=false (the cache is still constructed with capacity 0
+        // so the buffer-join wiring stays uniform; ShouldCapture short-circuits and Set is a
+        // no-op, so no probe ever fires).
+        builder.Services.AddSingleton(sp =>
+        {
+            var cfg = sp.GetRequiredService<IOptions<OctoSystemConfiguration>>().Value;
+            var capacity = cfg.SlowQueryExplainEnabled ? cfg.SlowQueryExplainCacheCapacity : 0;
+            return new SlowQueryExplainCache(
+                capacity,
+                TimeSpan.FromSeconds(cfg.SlowQueryExplainCooldownSeconds));
+        });
+
         // Slow-query ring buffer — one per service process, shared between admin and user
         // MongoDB connections so the Refinery Studio Diagnostics surface sees every slow
         // command regardless of which connection issued it. Capacity is locked at startup;
         // changing OctoSystemConfiguration.SlowQueryBufferSize requires a service restart.
+        // The buffer is joined with the explain cache at construction so GetSnapshot and
+        // GetGroupedSnapshot stamp each entry's Explain field automatically.
         builder.Services.AddSingleton(sp =>
         {
             var cfg = sp.GetRequiredService<IOptions<OctoSystemConfiguration>>().Value;
-            return new SlowQueriesBuffer(cfg.SlowQueryBufferSize);
+            var explainCache = sp.GetRequiredService<SlowQueryExplainCache>();
+            return new SlowQueriesBuffer(cfg.SlowQueryBufferSize, explainCache);
         });
 
         // Add pre-document modification services

@@ -18,6 +18,12 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 /// <param name="MaxDurationMs">Slowest observed duration in this group.</param>
 /// <param name="AvgDurationMs">Mean duration across the group.</param>
 /// <param name="Representative">Most-recent matching entry — carries the truncated BSON preview for inspection.</param>
+/// <param name="Explain">
+/// Latest async <c>explain()</c> result for the group's fingerprint key. Identical to
+/// <c>Representative.Explain</c>; surfaced here directly so callers don't have to dereference
+/// through the representative just to render the COLLSCAN badge. <c>null</c> until a capture
+/// has finished.
+/// </param>
 public sealed record SlowQueryGroup(
     string Fingerprint,
     string CommandName,
@@ -29,4 +35,5 @@ public sealed record SlowQueryGroup(
     double MinDurationMs,
     double MaxDurationMs,
     double AvgDurationMs,
-    SlowQueryEntry Representative);
+    SlowQueryEntry Representative,
+    SlowQueryExplain? Explain = null);

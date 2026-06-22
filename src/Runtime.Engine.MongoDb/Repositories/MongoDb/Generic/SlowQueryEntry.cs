@@ -14,6 +14,12 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 /// <param name="Success"><c>true</c> if the command completed via <c>CommandSucceededEvent</c>; <c>false</c> if it failed.</param>
 /// <param name="ErrorCode">For failures, the Mongo error code (e.g. 112 for WriteConflict). <c>null</c> when <see cref="Success"/> is <c>true</c>.</param>
 /// <param name="Fingerprint">Structural fingerprint of the command (see <see cref="SlowQueryFingerprinter"/>) — used to group semantically-identical queries that differ only in literal values.</param>
+/// <param name="Explain">
+/// Latest async <c>explain()</c> result for this entry's fingerprint key, stamped at read time
+/// from <see cref="SlowQueryExplainCache"/>. <c>null</c> until a capture has finished — the
+/// driver-thread side never blocks on explain. See <see cref="SlowQueryExplainParser"/> for
+/// the parsing pipeline.
+/// </param>
 public sealed record SlowQueryEntry(
     DateTimeOffset Timestamp,
     string CommandName,
@@ -24,4 +30,5 @@ public sealed record SlowQueryEntry(
     string CommandBsonPreview,
     bool Success,
     string? ErrorCode,
-    string Fingerprint);
+    string Fingerprint,
+    SlowQueryExplain? Explain = null);
