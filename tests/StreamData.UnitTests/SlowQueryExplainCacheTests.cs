@@ -129,6 +129,31 @@ public class SlowQueryExplainCacheTests
     }
 
     [Fact]
+    public async Task Set_ConcurrentWritersForSameKey_CountStaysOne()
+    {
+        // Pins the race fix from PR #102 review: with ContainsKey + indexer-assign, two
+        // writers could both see "absent" and both Interlocked.Increment _count, leaving
+        // Count = 2 for a single distinct key. TryAdd narrows new-key detection to a single
+        // atomic CAS — only one of the concurrent writers wins the +1.
+        var cache = new SlowQueryExplainCache(capacity: 100, cooldown: TimeSpan.Zero);
+        var key = Key("same_key");
+        const int writers = 32;
+        var gate = new TaskCompletionSource();
+
+        var tasks = Enumerable.Range(0, writers).Select(i => Task.Run(async () =>
+        {
+            await gate.Task;
+            cache.Set(key, Success(Origin.AddSeconds(i)));
+        })).ToArray();
+
+        gate.SetResult();
+        await Task.WhenAll(tasks);
+
+        Assert.Equal(1, cache.Count);
+        Assert.NotNull(cache.TryGet(key));
+    }
+
+    [Fact]
     public void Constructor_NegativeCapacity_Throws()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
