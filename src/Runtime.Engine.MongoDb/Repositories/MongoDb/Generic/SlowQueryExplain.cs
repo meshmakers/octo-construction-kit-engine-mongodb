@@ -31,6 +31,12 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 /// Short failure cause when <see cref="Status"/> is <c>failed</c> (e.g. <c>"timeout"</c>,
 /// <c>"command not supported"</c>, exception type name). <c>null</c> otherwise.
 /// </param>
+/// <param name="IndexSuggestion">
+/// MongoDB index suggestion emitted when <see cref="HasCollScan"/> is <c>true</c> and the
+/// suggester could extract at least one filter field (Stage 2C / AB#4220). <c>null</c>
+/// otherwise — e.g. for IXSCAN plans, aggregates without a leading <c>$match</c>, or empty
+/// filters. Carries a ready-to-run <c>db.&lt;coll&gt;.createIndex(...)</c> shell command.
+/// </param>
 public sealed record SlowQueryExplain(
     DateTimeOffset CapturedAt,
     SlowQueryExplainStatus Status,
@@ -38,7 +44,8 @@ public sealed record SlowQueryExplain(
     bool HasCollScan,
     IReadOnlyList<string> IndexNames,
     string? RawExplainPreview,
-    string? ErrorMessage);
+    string? ErrorMessage,
+    SlowQueryIndexSuggestion? IndexSuggestion = null);
 
 /// <summary>
 /// Outcome of an explain capture attempt.

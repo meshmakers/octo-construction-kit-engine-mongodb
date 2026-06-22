@@ -216,6 +216,52 @@ docs are explicit. We include them in `IsExplainable` because they're frequently
 slowest commands and the plan reveals whether the operation was anchored by an index.
 `executionStats` verbosity (which *would* execute writes) is deliberately out of scope.
 
+### MongoDB Index Suggestions for COLLSCAN (AB#4220)
+
+When `SlowQueryExplain.HasCollScan` flips, `SlowQueryIndexSuggester.TrySuggest` analyses
+the original BSON command and emits a ready-to-run mongosh `createIndex(...)` command.
+The suggestion is attached to the explain (`SlowQueryExplain.IndexSuggestion`) and surfaces
+in the Refinery Studio Diagnostics expand row with a copy-to-clipboard button.
+
+| Command type | Filter source |
+|---|---|
+| `find` / `count` | `filter` or `query` |
+| `distinct` | `query` + the `key` field appended as equality |
+| `aggregate` | First pipeline stage (must be `$match`; otherwise no suggestion) plus the immediately-following `$sort` stage if present |
+| `update` / `delete` / `findAndModify` | `updates[0].q` / `deletes[0].q` / `q` / `query` |
+
+**ESR ordering.** Compound-index keys are emitted per Mongo's Equality → Sort → Range rule.
+Within each category the original BSON element order is preserved, so an operator can reason
+about "first equality field" deterministically.
+
+**Filter walking.** Top-level `$and` branches contribute fields as a union. `$or` / `$nor`
+also contribute the union but the suggestion gets a Notes caveat that per-branch indexes
+may be more selective. Operator-prefixed keys (`$gt`, `$lt`, `$in`, `$ne`, …) are not
+field paths — they're classified as ranges / equalities on their parent field. Special
+operators (`$text`, `$near`, `$elemMatch`, `$regex`) downgrade confidence to Low and emit
+a Notes caveat that a different index type is required.
+
+**Confidence:**
+
+| Rating | When |
+|---|---|
+| `High` | Single field, equality only, no $or, no special operators. |
+| `Medium` | 2-3 fields, equality + at most one range / sort. |
+| `Low` | 4+ fields, contains $or / $nor, contains text / geo / regex / elemMatch. Still emitted as a starting point. |
+
+**Out of scope:**
+
+- `getIndexes` introspection to suppress duplicates — adds DB load; a duplicate `createIndex`
+  is a no-op anyway.
+- Auto-execute button — footgun across N tenants. Manual copy-paste is the right ergonomic
+  for production data.
+- CK-attribute reverse mapping (Stage 2D). Today the suggestion targets the raw MongoDB
+  field path (`attributes.name.value`); the future CK-YAML emission will write
+  `Indexed: true` on the CK attribute so the index survives model re-imports.
+- Per-branch indexes for `$or`. One compound covering the union with a Notes caveat.
+- Index-name length cap at 127 bytes (Mongo's hard limit) with SHA-256 short-hash suffix
+  for truncated names so similar shapes don't collide.
+
 ### Pipeline Fingerprinting (AB#4213)
 
 `SlowQueryFingerprinter.Fingerprint(BsonDocument)` produces a stable 16-char hex hash of
@@ -244,8 +290,9 @@ of structurally-identical slow queries).
 - Per-request surface: **AB#4210** (merged) — GraphQL extension + REST headers
 - Studio surface: **AB#4212** (merged) — ring buffer + Diagnostics page
 - Stage 2A: **AB#4213** (merged) — pipeline fingerprinting + grouped view
-- Stage 2B: **AB#4216** — async `explain()` capture + COLLSCAN detection (this section)
-- Stage 2C: CK-attribute → Mongo-field mapping + index suggestion generator
+- Stage 2B: **AB#4216** (merged) — async `explain()` capture + COLLSCAN detection
+- Stage 2C: **AB#4220** — MongoDB index suggestions for COLLSCAN (this section)
+- Stage 2D: CK-attribute reverse mapping + CK-YAML `Indexed: true` emission
 - Stage 3: `$indexStats` unused-index analysis
 
 ## BSON Serialization Conventions
