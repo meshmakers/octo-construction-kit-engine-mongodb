@@ -8,6 +8,7 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
@@ -22,9 +23,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 /// - ApplyUpdate honours Safe / Merge / Full semantics
 /// - Rollback restores a backed-up state
 /// </summary>
-[Collection("Sequential")]
+[Collection(BlueprintServiceCollection.Name)]
 public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
-    : IClassFixture<BlueprintServiceFixture>
 {
     private readonly BlueprintServiceFixture _fixture = fixture;
 

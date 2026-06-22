@@ -7,11 +7,12 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
-[Collection("Sequential")]
-public class IndexCreationTests : IClassFixture<ImportTestCkModelFixture>
+[Collection(ImportTestCkModelCollection.Name)]
+public class IndexCreationTests
 {
     private readonly ImportTestCkModelFixture _fixture;
 

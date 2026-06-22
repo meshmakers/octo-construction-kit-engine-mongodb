@@ -7,12 +7,12 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using TestCkModel.Generated.Test.v1;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
-[Collection("Sequential")]
+[Collection(ImportTestCkModelCollection.Name)]
 public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture systemFixture)
-    : IClassFixture<ImportTestCkModelFixture>
 {
     [Fact]
     public async Task CreateAndQuery_Scalar_Typed_OK()

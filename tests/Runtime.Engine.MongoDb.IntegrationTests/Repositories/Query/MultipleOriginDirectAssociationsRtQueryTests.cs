@@ -7,6 +7,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using TestCkModel.Generated.Test.v1;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.Query;
 
@@ -14,9 +15,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.Q
 /// Tests for <see cref="MultipleOriginDirectAssociationsRtQuery{TTargetEntity}"/>
 /// focusing on correct totalCount calculation when pagination ($limit) is used.
 /// </summary>
-[Collection("Sequential")]
+[Collection(SampleRtModelDataCollection.Name)]
 public class MultipleOriginDirectAssociationsRtQueryTests
-    : IClassFixture<SampleRtModelDataFixture>
 {
     private readonly SampleRtModelDataFixture _fixture;
 

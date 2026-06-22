@@ -1,11 +1,12 @@
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
-[Collection("Sequential")]
-public class TenantConfigurationTests : IClassFixture<SystemFixture>
+[Collection(SystemCollection.Name)]
+public class TenantConfigurationTests
 {
     private readonly SystemFixture _systemFixture;
 

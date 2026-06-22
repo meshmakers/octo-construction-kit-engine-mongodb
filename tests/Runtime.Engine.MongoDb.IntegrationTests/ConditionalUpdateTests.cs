@@ -7,6 +7,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using TestCkModel.Generated.Test.v1;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
@@ -16,8 +17,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 ///     filter on the <c>UpdateOne</c> call so a stale write does not overwrite a more-recent
 ///     persisted value.
 /// </summary>
-[Collection("Sequential")]
-public class ConditionalUpdateTests(ImportTestCkModelFixture fixture) : IClassFixture<ImportTestCkModelFixture>
+[Collection(ImportTestCkModelCollection.Name)]
+public class ConditionalUpdateTests(ImportTestCkModelFixture fixture)
 {
     [Fact]
     public async Task ConditionalUpdate_GuardOlderThanPersisted_NoOp()

@@ -1,11 +1,12 @@
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.LargeBinary;
 
-[Collection("Sequential")]
-public class LocalDirectoryRepositoryTemporaryBinaryTests(ImportTestCkModelFixture fixture) : IClassFixture<ImportTestCkModelFixture>
+[Collection(ImportTestCkModelCollection.Name)]
+public class LocalDirectoryRepositoryTemporaryBinaryTests(ImportTestCkModelFixture fixture)
 {
     [Fact]
     public async Task Cache_UploadTemporaryLargeBinaryAsync()

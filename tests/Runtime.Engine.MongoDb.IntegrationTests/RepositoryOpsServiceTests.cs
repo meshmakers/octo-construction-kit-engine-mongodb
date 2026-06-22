@@ -6,10 +6,12 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Microsoft.Extensions.DependencyInjection;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
-public class RepositoryOpsServiceTests(SystemFixture systemFixture) : IClassFixture<SystemFixture>
+[Collection(SystemCollection.Name)]
+public class RepositoryOpsServiceTests(SystemFixture systemFixture)
 {
     private readonly IRepositoryOpsService _service =
         systemFixture.Provider!.GetRequiredService<IRepositoryOpsService>();

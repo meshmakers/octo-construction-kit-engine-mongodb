@@ -12,11 +12,12 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 using Microsoft.Extensions.Logging;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.Query;
 
-[Collection("Sequential")]
-public class CkTypeQueryTests : IClassFixture<ImportTestCkModelFixture>
+[Collection(ImportTestCkModelCollection.Name)]
+public class CkTypeQueryTests
 {
     private readonly ImportTestCkModelFixture _fixture;
     private readonly ILoggerFactory _loggerFactory;

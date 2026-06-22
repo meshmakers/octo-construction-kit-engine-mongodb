@@ -3,6 +3,7 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
@@ -11,9 +12,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 /// These tests verify the migration helper methods that allow manipulating RT entities
 /// without requiring the source CK type to be present in the CK cache.
 /// </summary>
-[Collection("Sequential")]
+[Collection(MigrationSupportCollection.Name)]
 public class MigrationSupportTests(MigrationSupportFixture fixture)
-    : IClassFixture<MigrationSupportFixture>
 {
     // Location types form a hierarchy: Location (abstract, collection root) -> Continent, Country, District, etc.
     // All derived types are stored in the Location collection (shared collection).

@@ -11,12 +11,12 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using TestCkModel.Generated.Test.v1;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
-[Collection("Sequential")]
+[Collection(ImportTestCkModelCollection.Name)]
 public class WatchRtEntitiesFilterTests(ImportTestCkModelFixture fixture)
-    : IClassFixture<ImportTestCkModelFixture>
 {
     // Give the change-stream cursor time to open before mutating.
     private static readonly TimeSpan CursorWarmup = TimeSpan.FromMilliseconds(500);

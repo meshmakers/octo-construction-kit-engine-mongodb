@@ -6,12 +6,12 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using TestCkModel.Generated.Test.v1;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
-[Collection("Sequential")]
+[Collection(SampleRtModelDataCollection.Name)]
 public class ParallelTransactionTests(SampleRtModelDataFixture sampleRtModelDataFixture)
-    : IClassFixture<SampleRtModelDataFixture>
 {
     [Fact]
     public async Task MultipleInserts_OK()

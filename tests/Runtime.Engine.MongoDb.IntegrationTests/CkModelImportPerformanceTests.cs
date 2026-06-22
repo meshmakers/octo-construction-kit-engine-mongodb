@@ -2,6 +2,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
@@ -11,9 +12,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 /// - UpdateIndexAsync scoped to the imported model only
 /// - CleanupEmptyAbstractTypeCollections using fast document existence check
 /// </summary>
-[Collection("Sequential")]
+[Collection(CkModelImportMigrationCollection.Name)]
 public class CkModelImportPerformanceTests(CkModelImportMigrationFixture fixture)
-    : IClassFixture<CkModelImportMigrationFixture>
 {
     private static readonly CkModelId TestV1ModelId = new("Test-1.0.0");
     private static readonly CkModelId TestV2ModelId = new("Test-2.0.0");

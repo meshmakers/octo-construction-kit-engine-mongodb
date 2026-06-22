@@ -20,12 +20,12 @@ using MongoDB.Bson;
 using TestCkModel.Generated.Test.v1;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.Query;
 
-[Collection("Sequential")]
+[Collection(SampleRtModelDataCollection.Name)]
 public class SingleOriginRtQueryTests
-    : IClassFixture<SampleRtModelDataFixture>
 {
     private readonly SampleRtModelDataFixture _systemFixture;
     private readonly ILoggerFactory _loggerFactory;

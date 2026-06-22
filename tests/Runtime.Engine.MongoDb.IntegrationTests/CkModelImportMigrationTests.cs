@@ -4,12 +4,12 @@ using Meshmakers.Octo.Runtime.Contracts.CkModelMigrations;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
-[Collection("Sequential")]
+[Collection(CkModelImportMigrationCollection.Name)]
 public class CkModelImportMigrationTests(CkModelImportMigrationFixture fixture)
-    : IClassFixture<CkModelImportMigrationFixture>
 {
     private static readonly CkModelId TestV1ModelId = new("Test-1.0.0");
     private static readonly CkModelId TestV2ModelId = new("Test-2.0.0");

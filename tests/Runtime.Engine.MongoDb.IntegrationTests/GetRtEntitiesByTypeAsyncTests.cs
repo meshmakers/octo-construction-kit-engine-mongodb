@@ -4,11 +4,12 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using TestCkModel.Generated.Test.v1;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
-[Collection("Sequential")]
-public class GetRtEntitiesByTypeAsyncTests(SampleRtModelDataFixture sampleRtModelDataFixture) : IClassFixture<SampleRtModelDataFixture>
+[Collection(SampleRtModelDataCollection.Name)]
+public class GetRtEntitiesByTypeAsyncTests(SampleRtModelDataFixture sampleRtModelDataFixture)
 {
     [Fact]
     public async Task GetRtEntitiesByTypeAsync_Filter_In_StringArray_OK()

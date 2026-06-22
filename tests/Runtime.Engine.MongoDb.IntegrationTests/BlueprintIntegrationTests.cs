@@ -3,15 +3,15 @@ using Meshmakers.Octo.Runtime.Contracts.Blueprints;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
 /// <summary>
 /// Integration tests for MongoDB blueprint functionality.
 /// </summary>
-[Collection("Sequential")]
+[Collection(BlueprintCollection.Name)]
 public class BlueprintIntegrationTests(BlueprintFixture fixture)
-    : IClassFixture<BlueprintFixture>
 {
     private readonly BlueprintFixture _fixture = fixture;
 

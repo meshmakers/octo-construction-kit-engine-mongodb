@@ -13,6 +13,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Microsoft.Extensions.Logging;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
@@ -21,9 +22,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 /// These tests verify the provider's ability to access tenant repositories
 /// using the MongoDB-based system context.
 /// </summary>
-[Collection("Sequential")]
+[Collection(SystemCollection.Name)]
 public class MongoRuntimeRepositoryProviderTests(SystemFixture fixture)
-    : IClassFixture<SystemFixture>
 {
     [Fact]
     public async Task GetRepositoryAsync_NonExistentTenant_ShouldReturnNull()

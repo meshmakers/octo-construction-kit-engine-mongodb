@@ -14,6 +14,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
@@ -28,9 +29,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 /// YAML parser path is independently covered by the unit tests; here we want to focus the
 /// integration test on the storage write path.
 /// </summary>
-[Collection("Sequential")]
+[Collection(MigrationSupportCollection.Name)]
 public class WrapScalarInRecordMigrationTests(MigrationSupportFixture fixture)
-    : IClassFixture<MigrationSupportFixture>
 {
     private static readonly RtCkId<CkTypeId> MeasuringPointTypeId = new("Test/MeasuringPoint");
     private static readonly RtCkId<CkRecordId> TagRecordId = new("Test/EMailAddress");

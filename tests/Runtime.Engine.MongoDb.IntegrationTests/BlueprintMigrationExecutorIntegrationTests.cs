@@ -10,6 +10,7 @@ using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
@@ -19,9 +20,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 /// migration DTO in code, runs it through the executor, and verifies the
 /// expected side effects on the tenant.
 /// </summary>
-[Collection("Sequential")]
+[Collection(BlueprintServiceCollection.Name)]
 public class BlueprintMigrationExecutorIntegrationTests(BlueprintServiceFixture fixture)
-    : IClassFixture<BlueprintServiceFixture>
 {
     private readonly BlueprintServiceFixture _fixture = fixture;
 
