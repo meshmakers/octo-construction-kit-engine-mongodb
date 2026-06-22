@@ -107,33 +107,41 @@ public sealed class SlowQueryExplainCache
             return;
         }
 
-        var isNew = !_entries.ContainsKey(key);
-        _entries[key] = new CacheEntry(explain);
+        var entry = new CacheEntry(explain);
 
-        if (!isNew)
+        // Atomic new-key detection: TryAdd returns true exactly once across all concurrent
+        // writers for a given key. A previous version used ContainsKey + indexer assignment,
+        // which is racy — two writers seeing "absent" before either had written would both
+        // increment _count and both enqueue an eviction entry, inflating Count and producing
+        // spurious evictions. TryAdd narrows this to a single atomic CAS.
+        if (_entries.TryAdd(key, entry))
         {
+            _evictionOrder.Enqueue(key);
+            var current = Interlocked.Increment(ref _count);
+
+            // Trim using the eviction-order queue. Like SlowQueriesBuffer.Add, the loop may
+            // briefly leave the cache at Capacity+k under contention (another writer increments
+            // between our TryDequeue + Remove and Interlocked.Decrement), but converges as soon
+            // as contention drops.
+            while (current > _capacity)
+            {
+                if (_evictionOrder.TryDequeue(out var oldest))
+                {
+                    _entries.TryRemove(oldest, out _);
+                    current = Interlocked.Decrement(ref _count);
+                }
+                else
+                {
+                    break;
+                }
+            }
+
             return;
         }
 
-        _evictionOrder.Enqueue(key);
-        var current = Interlocked.Increment(ref _count);
-
-        // Trim using the eviction-order queue. Like SlowQueriesBuffer.Add, the loop may
-        // briefly leave the cache at Capacity+k under contention (another writer increments
-        // between our TryDequeue + Remove and Interlocked.Decrement), but converges as soon
-        // as contention drops.
-        while (current > _capacity)
-        {
-            if (_evictionOrder.TryDequeue(out var oldest))
-            {
-                _entries.TryRemove(oldest, out _);
-                current = Interlocked.Decrement(ref _count);
-            }
-            else
-            {
-                break;
-            }
-        }
+        // Key already present — overwrite in place. No eviction-order churn (the slot keeps
+        // its FIFO position from when it was first inserted), no _count change.
+        _entries[key] = entry;
     }
 
     /// <summary>

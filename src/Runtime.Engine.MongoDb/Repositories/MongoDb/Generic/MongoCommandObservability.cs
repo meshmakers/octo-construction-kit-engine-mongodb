@@ -88,9 +88,10 @@ internal sealed class MongoCommandObservability
     /// <summary>
     /// Post-construction wiring of the live <see cref="IMongoClient"/>. Idempotent — replays
     /// (e.g. lazy <see cref="MongoRepositoryClient.Client"/> getter accessed twice) overwrite
-    /// the reference with the same instance, which is harmless. Must be called before any
-    /// command-event callbacks fire, otherwise the first explain probe is skipped with
-    /// <see cref="SlowQueryExplainStatus.Failed"/> + <c>ErrorMessage="no client wired"</c>.
+    /// the reference with the same instance, which is harmless. If a command-event callback
+    /// fires before this is called, <see cref="DispatchExplain"/> silently skips the probe
+    /// (the buffer / log / metrics paths are unaffected) — no cache entry is written, so the
+    /// next slow command for the same shape will retry once the client is wired.
     /// </summary>
     public void SetMongoClient(IMongoClient client)
     {
@@ -331,11 +332,12 @@ internal sealed class MongoCommandObservability
 
     /// <summary>
     /// Fire-and-forget explain dispatch on the runtime thread pool — the MongoDB driver's
-    /// command-event callback (our caller) must never block. Dedup against
-    /// <see cref="SlowQueryExplainCache"/> is checked inside the task, NOT here, so the cooldown
-    /// is honoured strictly serially per key without the caller paying the lookup cost on every
-    /// slow command. The task is async-void in spirit — every code path is wrapped so an
-    /// exception cannot tear down the host even on broken sinks.
+    /// command-event callback (our caller) must never block. The cache cooldown check
+    /// (<see cref="SlowQueryExplainCache.ShouldCapture"/>) runs SYNCHRONOUSLY here before
+    /// scheduling: a key inside its cooldown window never reaches <c>Task.Run</c>. Likewise
+    /// the unsupported-command branch stamps the cache and returns without scheduling.
+    /// Only the actual driver round-trip happens inside the task — and every code path there
+    /// is wrapped so an exception cannot tear down the host even on broken sinks.
     /// </summary>
     private void DispatchExplain(string commandName, PendingCommand ctx, string fingerprint, OctoSystemConfiguration cfg)
     {
