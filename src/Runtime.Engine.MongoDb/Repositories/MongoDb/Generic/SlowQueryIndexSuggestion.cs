@@ -33,12 +33,28 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 /// per-branch indexes may be more selective"</c>, <c>"$text operator detected — a text index
 /// is required, not a regular index"</c>). Empty when the suggestion is unambiguous.
 /// </param>
+/// <param name="CkYamlSnippet">
+/// CK-YAML snippet (Stage 2D / AB#4222) the operator can paste into their CK type's source
+/// file under the <c>indexes:</c> array. Same index as <see cref="ShellCommand"/>, but
+/// persisted as part of the model so subsequent re-imports re-create it automatically.
+/// <c>null</c> when CK reverse-mapping wasn't possible: filter carries no
+/// <c>ckTypeId.fullName</c> equality, the suggester was constructed without an
+/// <c>ICkCacheService</c>, the CK type or attribute isn't in the loaded cache, or the
+/// target collection isn't an RtEntity-shaped collection.
+/// </param>
+/// <param name="CkTypeFullName">
+/// CK type full name the <see cref="CkYamlSnippet"/> belongs to (e.g.
+/// <c>Demo/Asset</c>). <c>null</c> when <see cref="CkYamlSnippet"/> is null. The Studio
+/// surface uses this to label the snippet ("paste into your model source for X").
+/// </param>
 public sealed record SlowQueryIndexSuggestion(
     string IndexName,
     IReadOnlyList<SlowQueryIndexField> Fields,
     string ShellCommand,
     SlowQueryIndexSuggestionConfidence Confidence,
-    IReadOnlyList<string> Notes);
+    IReadOnlyList<string> Notes,
+    string? CkYamlSnippet = null,
+    string? CkTypeFullName = null);
 
 /// <summary>
 /// One field of a suggested compound index. <see cref="Direction"/> is conventionally

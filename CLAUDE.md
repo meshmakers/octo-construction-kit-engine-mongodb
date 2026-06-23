@@ -216,6 +216,46 @@ docs are explicit. We include them in `IsExplainable` because they're frequently
 slowest commands and the plan reveals whether the operation was anchored by an index.
 `executionStats` verbosity (which *would* execute writes) is deliberately out of scope.
 
+### CK-YAML Index Suggestions for COLLSCAN (AB#4222 / Stage 2D)
+
+For every Stage 2C suggestion that targets a known CK type, the suggester additionally
+emits a **CK-YAML snippet** the operator can paste into the CK type's source YAML under
+its `indexes:` array. Subsequent model imports re-create the corresponding MongoDB index
+via the existing `CkTypeIndexDto` → `MongoDbRepositoryDataSource.PrepareAndCreateIndex`
+machinery, so the index survives re-imports and cross-tenant migration.
+
+| Component | Purpose |
+|---|---|
+| `MongoDbAttributePathResolver.TryReverseToCkPath` | Inverse of `ResolveToMongoDbFieldPath`. Strips `attributes.` prefix and `.value` suffix, walks even-indexed camelCase segments and odd-indexed `attributes` separators back into PascalCase CK attribute names. Returns null when the path isn't a CK attribute (e.g. `ckTypeId.fullName`, `_id`) or fails to resolve in the provider. |
+| `CkYamlIndexSnippetWriter.Write` | Hand-formatted YAML matching the shape used by real CK types — `indexes: - indexType: Ascending - fields: - attributePaths: [...]`. Leading comment carries the audit trail (AB#4222 + CK type full name). |
+
+**Suggester wiring.** `SlowQueryIndexSuggester.TrySuggest` now accepts an optional
+`(tenantId, ICkCacheService)` pair. When both supplied AND the filter carries a top-level
+`ckTypeId.fullName` equality predicate AND the cache knows that type AND every Mongo field
+in the suggestion reverse-maps to a CK attribute path, the result carries
+`CkYamlSnippet` and `CkTypeFullName`. Any failure along the way leaves them null — the
+mongosh shell command still ships as Stage 2C.
+
+**`ckTypeId.fullName` extraction.** Walks the top level and direct `$and` branches.
+`$or`/`$nor` branches with differing type values short-circuit (we don't pick arbitrarily
+and emit a snippet against the wrong type).
+
+**Dispatcher wiring.** `MongoCommandObservability` takes an optional `ICkCacheService`
+constructor dependency; `MongoRepositoryClient.Client` getter resolves it via
+`IServiceProvider.GetService` (null for hosts without the engine attached). Snapshot into
+a local before the `Task.Run` closure so a concurrent field replacement can't race the
+in-flight explain.
+
+**Out of scope:**
+
+- New `Indexed: true` flag on `CkAttributeDto` (would need Compiler + schema bump in
+  `octo-construction-kit-engine` — deferred to a future stage if/when attribute-level
+  index hints prove useful beyond the suggester).
+- Direct CK-YAML emission for non-RtEntity collections (`ck_types`, `rt_associations`,
+  `_users`, …). Those don't have a single CK type to attribute the index to.
+- Auto-apply the snippet to a CK source file. Operator pastes manually so they can review
+  placement.
+
 ### MongoDB Index Suggestions for COLLSCAN (AB#4220)
 
 When `SlowQueryExplain.HasCollScan` flips, `SlowQueryIndexSuggester.TrySuggest` analyses
@@ -291,8 +331,8 @@ of structurally-identical slow queries).
 - Studio surface: **AB#4212** (merged) — ring buffer + Diagnostics page
 - Stage 2A: **AB#4213** (merged) — pipeline fingerprinting + grouped view
 - Stage 2B: **AB#4216** (merged) — async `explain()` capture + COLLSCAN detection
-- Stage 2C: **AB#4220** — MongoDB index suggestions for COLLSCAN (this section)
-- Stage 2D: CK-attribute reverse mapping + CK-YAML `Indexed: true` emission
+- Stage 2C: **AB#4220** (merged) — MongoDB index suggestions for COLLSCAN
+- Stage 2D: **AB#4222** — CK-attribute reverse mapping + CK-YAML emission (this section)
 - Stage 3: `$indexStats` unused-index analysis
 
 ## BSON Serialization Conventions

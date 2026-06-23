@@ -82,7 +82,12 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                     _serviceProvider.GetRequiredService<ILogger<MongoCommandObservability>>(),
                     _serviceProvider.GetRequiredService<IOptionsMonitor<OctoSystemConfiguration>>(),
                     _serviceProvider.GetService<SlowQueriesBuffer>(),
-                    _serviceProvider.GetService<SlowQueryExplainCache>());
+                    _serviceProvider.GetService<SlowQueryExplainCache>(),
+                    // Stage 2D — opt-in CK cache for CK-YAML emission in slow-query
+                    // suggestions. Hosts that registered AddRuntimeEngine() have
+                    // ICkCacheService in DI; bare engine-mongodb consumers don't, in which
+                    // case the suggester silently falls back to MongoDB-only output.
+                    _serviceProvider.GetService<Meshmakers.Octo.ConstructionKit.Contracts.Services.ICkCacheService>());
 
                 settings.ClusterConfigurator = cb =>
                 {

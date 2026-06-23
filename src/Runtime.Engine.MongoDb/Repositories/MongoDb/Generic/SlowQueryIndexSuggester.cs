@@ -1,6 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
 
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+
 using MongoDB.Bson;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
@@ -88,10 +93,25 @@ public static class SlowQueryIndexSuggester
     /// <param name="command">The original driver command (deep-cloned by the dispatcher).</param>
     /// <param name="commandName">Driver command name (<c>find</c>, <c>aggregate</c>, …).</param>
     /// <param name="target">Target collection name (used to build the shell command).</param>
+    /// <param name="tenantId">
+    /// Tenant database name; used together with <paramref name="ckCacheService"/> to look up
+    /// the CK type graph for Stage 2D CK-YAML emission. Pass <c>null</c> to skip CK mapping
+    /// and emit MongoDB-only suggestions (the Stage 2C shape).
+    /// </param>
+    /// <param name="ckCacheService">
+    /// Loaded CK cache for the tenant. When supplied AND the filter carries a
+    /// <c>ckTypeId.fullName</c> equality predicate, the suggester reverse-maps each
+    /// MongoDB field path back to its CK attribute path and emits a CK-YAML snippet
+    /// alongside the mongosh shell command (Stage 2D / AB#4222). When the cache is
+    /// supplied but no resolvable type / attribute is found, the MongoDB-only suggestion
+    /// is still returned — CK-YAML is additive, not gating.
+    /// </param>
     public static SlowQueryIndexSuggestion? TrySuggest(
         BsonDocument? command,
         string commandName,
-        string target)
+        string target,
+        string? tenantId = null,
+        ICkCacheService? ckCacheService = null)
     {
         if (command is null || command.ElementCount == 0 || string.IsNullOrEmpty(target))
         {
@@ -123,12 +143,38 @@ public static class SlowQueryIndexSuggester
             var indexName = BuildIndexName(ordered);
             var shellCommand = BuildShellCommand(target, ordered, indexName);
             var confidence = Rate(ordered, ctx);
+
+            // Stage 2D — opportunistic CK-YAML emission. All four conditions must hold:
+            //   1. caller supplied tenantId + CK cache
+            //   2. filter carries a top-level ckTypeId.fullName equality (identifies the
+            //      CK type the suggested index belongs to)
+            //   3. that CK type is in the cache (could be a stale tenant or a type from a
+            //      sibling tenant — silently skip)
+            //   4. EVERY Mongo field reverse-maps to a CK attribute path against that type
+            //      (partial mapping would mislead the operator, so it's all-or-nothing)
+            string? ckYamlSnippet = null;
+            string? ckTypeFullName = null;
+            if (ckCacheService is not null && !string.IsNullOrEmpty(tenantId))
+            {
+                var maybeType = TryExtractCkTypeId(filter);
+                if (maybeType is not null)
+                {
+                    ckYamlSnippet = TryBuildCkYamlSnippet(ckCacheService, tenantId, maybeType, ordered);
+                    if (ckYamlSnippet is not null)
+                    {
+                        ckTypeFullName = maybeType;
+                    }
+                }
+            }
+
             return new SlowQueryIndexSuggestion(
                 IndexName: indexName,
                 Fields: ordered,
                 ShellCommand: shellCommand,
                 Confidence: confidence,
-                Notes: ctx.Notes);
+                Notes: ctx.Notes,
+                CkYamlSnippet: ckYamlSnippet,
+                CkTypeFullName: ckTypeFullName);
         }
         catch (Exception ex)
         {
@@ -140,6 +186,145 @@ public static class SlowQueryIndexSuggester
             _ = ex;
             return null;
         }
+    }
+
+    /// <summary>
+    /// Looks for a top-level <c>ckTypeId.fullName</c> equality predicate in the filter and
+    /// returns the right-hand string value. We only walk the top level and the direct
+    /// children of any <c>$and</c> branches — <c>$or</c>-mixed types deliberately fall
+    /// through (we don't want to pick an arbitrary one and emit a CK-YAML snippet against
+    /// the wrong type). Returns null when no unambiguous type can be derived.
+    /// </summary>
+    private static string? TryExtractCkTypeId(BsonDocument filter)
+    {
+        string? found = null;
+
+        foreach (var element in filter.Elements)
+        {
+            // Equality at the top level: { "ckTypeId.fullName": "Demo/Asset" }
+            if (element.Name == "ckTypeId.fullName" && element.Value.IsString)
+            {
+                if (found is not null && found != element.Value.AsString)
+                {
+                    // Two distinct equality predicates on the same path is degenerate; bail.
+                    return null;
+                }
+                found = element.Value.AsString;
+                continue;
+            }
+
+            // $and recurses; $or / $nor with mixed types deliberately doesn't.
+            if (element.Name == "$and" && element.Value is BsonArray branches)
+            {
+                foreach (var branch in branches)
+                {
+                    if (branch is BsonDocument branchDoc)
+                    {
+                        var nested = TryExtractCkTypeId(branchDoc);
+                        if (nested is null)
+                        {
+                            continue;
+                        }
+                        if (found is not null && found != nested)
+                        {
+                            return null;
+                        }
+                        found = nested;
+                    }
+                }
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// Reverse-maps the suggestion's CK-attribute fields to their CK attribute paths and
+    /// renders the YAML snippet. Returns null when the cache doesn't know the type, when
+    /// no field is a CK attribute (the suggestion is purely non-attribute infra like
+    /// <c>ckTypeId.fullName</c> + <c>rtState</c>), or when any field uses
+    /// <c>Direction = -1</c> (CK indexes are always Ascending; mixing descending sort
+    /// fields into a CK-YAML snippet would silently misrepresent the suggested index).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Non-attribute fields (those <see cref="MongoDbAttributePathResolver.TryReverseToCkPath"/>
+    /// rejects — <c>ckTypeId.fullName</c>, <c>rtState</c>, <c>_id</c>, etc.) are silently
+    /// skipped rather than failing the whole snippet. They're filter discriminators or
+    /// infra fields whose indexes either come from the CK system model or aren't
+    /// representable in the per-type CK YAML at all. As long as AT LEAST ONE CK attribute
+    /// resolves, a snippet ships listing those.
+    /// </para>
+    /// <para>
+    /// The resulting CK YAML may therefore describe a STRICT SUBSET of the mongosh
+    /// suggestion's fields. That's intentional: the CK-modelled index still helps the
+    /// query (the type discriminator implicitly scopes it inside <c>rt_entities</c>) and
+    /// is the right shape for a portable per-type model declaration. The Studio surface
+    /// shows both so the operator can apply whichever is appropriate for their context.
+    /// </para>
+    /// </remarks>
+    private static string? TryBuildCkYamlSnippet(
+        ICkCacheService ckCacheService,
+        string tenantId,
+        string ckTypeFullName,
+        IReadOnlyList<SlowQueryIndexField> fields)
+    {
+        // Descending direction can't be represented by Stage 2D's CK-YAML emission —
+        // CkTypeIndexDto.IndexType only carries Ascending/Text/Unique/UniqueNotDeleted, no
+        // per-field direction. Emitting Ascending when the suggestion was descending would
+        // silently produce a different MongoDB index than the mongosh command. Bail rather
+        // than mislead; the mongosh shell command still ships.
+        foreach (var field in fields)
+        {
+            if (field.Direction == -1)
+            {
+                return null;
+            }
+        }
+
+        // TryGetCkType: returns false (rather than throwing) for unknown / stale type IDs,
+        // which is the right shape for an opportunistic enrichment path. The full-name
+        // string is the constructor input for CkId<TElementId>, so a malformed value (e.g.
+        // an empty discriminator we somehow read past the type-check) is caught here too.
+        CkId<CkTypeId> ckTypeIdKey;
+        try
+        {
+            ckTypeIdKey = new CkId<CkTypeId>(ckTypeFullName);
+        }
+        catch
+        {
+            return null;
+        }
+
+        if (!ckCacheService.TryGetCkType(tenantId, ckTypeIdKey, out var typeGraph) || typeGraph is null)
+        {
+            return null;
+        }
+
+        var provider = new CkCacheAttributeMetadataProvider(ckCacheService, tenantId, typeGraph);
+        var ckPaths = new List<string>(fields.Count);
+        foreach (var field in fields)
+        {
+            var ckPath = MongoDbAttributePathResolver.TryReverseToCkPath(field.Name, provider);
+            if (ckPath is null)
+            {
+                // Non-attribute field (ckTypeId.fullName, rtState, _id, ...). Skip — these
+                // are filter discriminators or infra fields, not paste-into-CK-source
+                // material. The CK-YAML snippet lists the CK-attribute subset.
+                continue;
+            }
+            ckPaths.Add(ckPath);
+        }
+
+        // Need at least one resolved CK attribute path to produce a meaningful snippet.
+        // Zero-attribute suggestions (queries that only filter on type discriminator +
+        // infra fields) emit only the mongosh command — there's no CK-YAML to write.
+        if (ckPaths.Count == 0)
+        {
+            return null;
+        }
+
+        return CkYamlIndexSnippetWriter.Write(ckTypeFullName, ckPaths);
     }
 
     /// <summary>
