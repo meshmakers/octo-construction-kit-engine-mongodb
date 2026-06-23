@@ -22,11 +22,20 @@ public enum StreamDataFieldCategory
 /// </summary>
 /// <param name="Category">Whether the field is a default, data stream, or unknown field.</param>
 /// <param name="CrateDbName">
-/// The canonical camelCase CrateDB column name (concept §9, T17). Both default and data-stream
+/// The CrateDB column name (concept §9, T17). For data-stream attributes this is the lower-case
+/// concatenated form produced by <see cref="ColumnNameMapper.PathToColumnName"/>
+/// (e.g. <c>obiscode</c>, <c>sensorreadingvalue</c>) — see that type for why the physical column
+/// is lower-cased. For default fields (rtId, timestamp, ...) this is the field name as registered
+/// by <c>Constants.GetDefaultStreamDataFields</c> (camelCase). Both default and data-stream
 /// fields are first-class typed columns on the per-archive table — there is no longer a generic
 /// <c>data</c> blob, so this is always a direct column reference.
 /// </param>
-/// <param name="GraphQlAlias">The camelCase alias used in GraphQL responses.</param>
+/// <param name="GraphQlAlias">
+/// The alias the resolver suggests for the GraphQL wire. Engine-side callers that need a wire
+/// form different from the storage key (e.g. echoing the caller's requested column string) build
+/// the <c>ColumnNameMapping</c> themselves rather than relying on this default — see
+/// <c>StreamDataFieldResolverExtensions.ResolveToMappings</c>.
+/// </param>
 public record ResolvedField(
     StreamDataFieldCategory Category,
     string CrateDbName,

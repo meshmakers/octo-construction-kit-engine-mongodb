@@ -911,7 +911,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             var resolved = fieldResolver.Resolve(column);
             if (resolved == null) continue;
 
-            // Canonical PascalCase is what StreamDataRow.Values is keyed by.
+            // CrateDbName is the lower-case concatenated form (see ColumnNameMapper) and is what
+            // StreamDataRow.Values is keyed by — both the SQL alias on the read side and the
+            // dictionary key on the row-mapping side. The GraphQL wire form is decided separately
+            // by StreamDataFieldResolverExtensions.ResolveToMappings (echoes the caller input).
             resolvedColumnNames.Add(resolved.CrateDbName);
 
             if (resolved.Category == StreamDataFieldCategory.Default)
