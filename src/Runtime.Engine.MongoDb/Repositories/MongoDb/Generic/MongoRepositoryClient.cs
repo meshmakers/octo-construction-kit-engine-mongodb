@@ -227,10 +227,29 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 return;
             }
 
-            BsonSerializer.RegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
-            BsonSerializer.RegisterDiscriminatorConvention(typeof(RtEntity), new RtEntityDiscriminatorConvention("_t"));
+            // Idempotency contract — set BEFORE the registrations, not after.
+            //
+            // BsonSerializer's static registry uses lazy default registration for
+            // `typeof(object)`: the first call to `LookupDiscriminatorConvention(typeof(object))`
+            // anywhere in the process (including indirectly via `BsonClassMap.RegisterClassMap`
+            // on a CK class with object-typed members) auto-registers
+            // `ObjectDiscriminatorConvention`. Our subsequent
+            // `RegisterDiscriminatorConvention(typeof(object), ...)` then throws
+            // "already registered" — and historically this left `_isSerializerRegistered`
+            // FALSE, so every subsequent fixture ctor in the same test process re-entered
+            // and re-threw, cascading 304+ test failures (CI builds 36175, 36256).
+            //
+            // Setting the flag eagerly + wrapping each registration in `TryRegister*` makes
+            // the method idempotent across both the desired (single startup) path and the
+            // CI race path. Production startup is unchanged (single thread, default state
+            // is empty → all registrations succeed). The defensive catch only fires when
+            // BSON state is pre-populated by a different path.
+            _isSerializerRegistered = true;
 
-            BsonSerializer.RegisterSerializer(new OctoObjectListSerializer());
+            TryRegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
+            TryRegisterDiscriminatorConvention(typeof(RtEntity), new RtEntityDiscriminatorConvention("_t"));
+
+            TryRegisterSerializer(new OctoObjectListSerializer());
             var objectSerializer = new OctoObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
                                                                     type.FullName?.StartsWith(typeof(RtEntity)
                                                                         .Namespace!) ==
@@ -238,28 +257,83 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                                                                         .Namespace!)
                                                                     || type.Namespace!.StartsWith(typeof(CkModelId)
                                                                         .Namespace!) || type == typeof(List<RtRecord>));
-            BsonSerializer.RegisterSerializer(objectSerializer);
+            TryRegisterSerializer(objectSerializer);
 
-            BsonSerializer.RegisterSerializer(new OctoObjectIdSerializer());
-            BsonSerializer.RegisterDiscriminator(typeof(DateTimeOffset), "datetimeoffset");
-            BsonSerializer.RegisterSerializer(new DateTimeOffsetSerializer());
-            BsonSerializer.RegisterSerializer(new Serialization.TimeSpanSerializer());
+            TryRegisterSerializer(new OctoObjectIdSerializer());
+            TryRegisterDiscriminator(typeof(DateTimeOffset), "datetimeoffset");
+            TryRegisterSerializer(new DateTimeOffsetSerializer());
+            TryRegisterSerializer(new Serialization.TimeSpanSerializer());
 
-            BsonSerializer.RegisterSerializer(new CkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
-            BsonSerializer.RegisterSerializer(new CkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>());
-            BsonSerializer.RegisterSerializer(
-                new CkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());
-            BsonSerializer.RegisterSerializer(new CkIdSerializer<CkRecordId, OctoRecordIdSerializer>());
-            BsonSerializer.RegisterSerializer(new CkIdSerializer<CkEnumId, OctoEnumIdSerializer>());
-            BsonSerializer.RegisterSerializer(new ModelIdSerializer());
+            TryRegisterSerializer(new CkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
+            TryRegisterSerializer(new CkIdSerializer<CkAttributeId, OctoAttributeIdSerializer>());
+            TryRegisterSerializer(new CkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());
+            TryRegisterSerializer(new CkIdSerializer<CkRecordId, OctoRecordIdSerializer>());
+            TryRegisterSerializer(new CkIdSerializer<CkEnumId, OctoEnumIdSerializer>());
+            TryRegisterSerializer(new ModelIdSerializer());
 
             // RtId serializers
-            BsonSerializer.RegisterSerializer(new RtCkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
-            BsonSerializer.RegisterSerializer(new RtCkIdSerializer<CkRecordId, OctoRecordIdSerializer>());
-            BsonSerializer.RegisterSerializer(
-                new RtCkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());
+            TryRegisterSerializer(new RtCkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
+            TryRegisterSerializer(new RtCkIdSerializer<CkRecordId, OctoRecordIdSerializer>());
+            TryRegisterSerializer(new RtCkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());
+        }
+    }
 
-            _isSerializerRegistered = true;
+    /// <summary>
+    /// Idempotent wrapper around <see cref="BsonSerializer.RegisterSerializer{T}(IBsonSerializer{T})"/>.
+    /// Same idempotency story as <see cref="TryRegisterDiscriminatorConvention"/>: the driver
+    /// throws if the value type already has a serializer registered. Pre-registration can
+    /// happen via CK class-map source generation that touches BSON state before
+    /// <see cref="RegisterSerializers"/> runs.
+    /// </summary>
+    private static void TryRegisterSerializer<T>(IBsonSerializer<T> serializer)
+    {
+        try
+        {
+            BsonSerializer.RegisterSerializer(serializer);
+        }
+        catch (BsonSerializationException)
+        {
+            // Pre-registered — accept what's there.
+        }
+    }
+
+    /// <summary>
+    /// Idempotent wrapper around <see cref="BsonSerializer.RegisterDiscriminatorConvention"/>.
+    /// Absorbs the "already registered" exception that the MongoDB driver throws when the
+    /// registry already holds a convention for the given type — typically because an earlier
+    /// path triggered the driver's lazy default-registration on first
+    /// <c>LookupDiscriminatorConvention</c>. Our `RtEntity`-specific convention on
+    /// <c>typeof(RtEntity)</c> still wins for polymorphic RtEntity deserialization because
+    /// the driver walks the type hierarchy and finds the more specific match first; the
+    /// `typeof(object)` registration is a defensive catch-all for List&lt;object&gt; cases.
+    /// </summary>
+    private static void TryRegisterDiscriminatorConvention(Type type, IDiscriminatorConvention convention)
+    {
+        try
+        {
+            BsonSerializer.RegisterDiscriminatorConvention(type, convention);
+        }
+        catch (BsonSerializationException)
+        {
+            // Pre-registered (e.g. lazy default from CK class-map source generation).
+            // Accept what's there; production startup never hits this path.
+        }
+    }
+
+    /// <summary>
+    /// Same idempotency story as <see cref="TryRegisterDiscriminatorConvention"/>, applied
+    /// to the type-name discriminator registration. The MongoDB driver throws if the same
+    /// type is given two distinct discriminator strings; here we accept the existing one.
+    /// </summary>
+    private static void TryRegisterDiscriminator(Type type, string discriminator)
+    {
+        try
+        {
+            BsonSerializer.RegisterDiscriminator(type, discriminator);
+        }
+        catch (BsonSerializationException)
+        {
+            // Pre-registered — accept what's there.
         }
     }
 
