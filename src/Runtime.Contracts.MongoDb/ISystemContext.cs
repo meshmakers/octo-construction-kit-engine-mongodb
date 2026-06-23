@@ -96,5 +96,24 @@ public interface ISystemContext : ITenantContext
         string? sourceDatabaseName = null, bool dropExistingTenant = true, bool attachTenant = true,
         TimeSpan? timeout = null, CancellationToken? cancellationToken = null);
 
+    /// <summary>
+    /// Clones an existing tenant into a new temporary tenant via dump+restore. The caller
+    /// is responsible for calling <see cref="ITenantContext.DropChildTenantAsync"/> on the
+    /// temp tenant when done — this method does not auto-cleanup the temp tenant.
+    /// </summary>
+    /// <remarks>
+    /// AB#4209 Step 5 — used by the <c>DumpTenant --clean</c> orchestrator
+    /// (bot-services) to clone a tenant into an isolated temp tenant before stripping
+    /// <c>overlay:*</c> URI entries and re-dumping. Cloning isolates the cleanup from the
+    /// live tenant so OIDC traffic against the source is unaffected.
+    /// </remarks>
+    /// <param name="sourceTenantId">The tenant to clone from. Must be attached.</param>
+    /// <param name="tempTenantId">The new tenant ID to attach the clone as. Must not already exist.</param>
+    /// <param name="tempDatabaseName">The new database name to restore the clone into. Must not already exist.</param>
+    /// <param name="timeout">Timeout applied to each of the underlying dump + restore steps independently.</param>
+    /// <param name="cancellationToken">Cancellation token propagated to both steps.</param>
+    Task<CommandResult> CloneTenantToTempAsync(string sourceTenantId, string tempTenantId,
+        string tempDatabaseName, TimeSpan? timeout = null, CancellationToken? cancellationToken = null);
+
     #endregion
 }

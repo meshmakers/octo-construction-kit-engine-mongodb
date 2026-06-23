@@ -33,4 +33,37 @@ internal interface ITenantBackupService
     Task<CommandResult> RestoreTenantAsync(string tenantId, string databaseName, string archiveFilePath,
         string? sourceDatabaseName = null, bool dropExistingTenant = true, bool attachTenant = true,
         TimeSpan? timeout = null, CancellationToken? cancellationToken = null);
+
+    /// <summary>
+    /// Clones an existing tenant into a new temporary tenant by piping a
+    /// <c>mongodump</c> of the source database into a <c>mongorestore</c> against a fresh
+    /// database, then attaches the result as <paramref name="tempTenantId"/>. The
+    /// intermediate dump file lives under <c>Path.GetTempPath()</c> and is deleted before
+    /// the call returns regardless of success.
+    /// </summary>
+    /// <remarks>
+    /// AB#4209 Step 5 — the <c>DumpTenant --clean</c> orchestrator (bot-services PR 3)
+    /// clones the source tenant via this primitive, calls the identity-services
+    /// <c>cleanOverlayEntries</c> endpoint against the temp tenant, mongodumps the temp DB
+    /// to the final clean archive, then drops the temp tenant. Cloning isolates the cleanup
+    /// from the live tenant — no race between OIDC traffic and the strip operation.
+    ///
+    /// PHASE-3 MIGRATION CANDIDATE: this primitive is the engine half of the dump-clean
+    /// flow that will move under <c>octo-platform-services</c> when it grows to Phase 3
+    /// (blueprint orchestration). The primitive itself stays here (engine owns
+    /// tenant lifecycle); the orchestration on top of it migrates.
+    ///
+    /// Caller is responsible for calling <c>DropChildTenantAsync</c> on the temp tenant
+    /// after they're done. This method does NOT auto-cleanup the temp tenant — leaving
+    /// orphan temp tenants on failure is preferable to silent data loss if the caller
+    /// hasn't finished extracting what they needed.
+    /// </remarks>
+    /// <param name="sourceTenantId">The tenant to clone from. Must be attached.</param>
+    /// <param name="tempTenantId">The new tenant ID to attach the clone as. Must not already exist.</param>
+    /// <param name="tempDatabaseName">The new database name to restore the clone into. Must not already exist.</param>
+    /// <param name="timeout">Timeout applied to each of the underlying dump + restore steps independently.</param>
+    /// <param name="cancellationToken">Cancellation token propagated to both steps.</param>
+    /// <returns>Command result indicating success or failure of the clone operation.</returns>
+    Task<CommandResult> CloneTenantToTempAsync(string sourceTenantId, string tempTenantId,
+        string tempDatabaseName, TimeSpan? timeout = null, CancellationToken? cancellationToken = null);
 }
