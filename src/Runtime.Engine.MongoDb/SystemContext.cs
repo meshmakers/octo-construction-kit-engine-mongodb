@@ -216,5 +216,13 @@ public class SystemContext : TenantContext, ISystemContext
             dropExistingTenant, attachTenant, timeout, cancellationToken);
     }
 
+    public Task<CommandResult> CloneTenantToTempAsync(string sourceTenantId, string tempTenantId,
+        string tempDatabaseName, TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
+    {
+        var backupService = _serviceProvider.GetRequiredService<ITenantBackupService>();
+        return backupService.CloneTenantToTempAsync(sourceTenantId, tempTenantId, tempDatabaseName,
+            timeout, cancellationToken);
+    }
+
     #endregion
 }

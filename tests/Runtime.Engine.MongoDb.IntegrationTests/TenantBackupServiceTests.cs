@@ -334,4 +334,146 @@ public class TenantBackupServiceTests(SystemFixture systemFixture)
         Assert.False(result.Success);
         Assert.Contains("not found", result.Error, StringComparison.OrdinalIgnoreCase);
     }
+
+    // AB#4209 Step 5 PR 2 — clone primitive coverage.
+    // The clone is used by the DumpTenant --clean orchestrator (bot-services) to isolate
+    // the cleanup pass from the live tenant. These tests pin the contract: clone produces
+    // an attached temp tenant with its own database, the source tenant is untouched, and
+    // the clone fails fast on non-existent sources without leaking a half-restored temp.
+
+    [Fact]
+    public async Task CloneTenantToTemp_WithValidSource_CreatesAttachedTempTenant()
+    {
+        var systemContext = systemFixture.GetSystemContext();
+
+        var sourceTenantId = $"clonesrc_{Guid.NewGuid():N}";
+        var sourceDatabaseName = sourceTenantId.ToLower();
+        var tempTenantId = $"clonetmp_{Guid.NewGuid():N}";
+        var tempDatabaseName = tempTenantId.ToLower();
+
+        try
+        {
+            // 1) Create a source tenant
+            using (var session = await systemContext.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await systemContext.CreateChildTenantAsync(session, sourceDatabaseName, sourceTenantId);
+                await session.CommitTransactionAsync();
+            }
+
+            // 2) Clone the source to a temp tenant
+            var cloneResult = await systemContext.CloneTenantToTempAsync(
+                sourceTenantId, tempTenantId, tempDatabaseName);
+
+            // 3) Verify clone succeeded
+            Assert.True(cloneResult.Success, $"Clone should succeed. Error: {cloneResult.Error}");
+
+            // 4) Verify temp tenant is attached and accessible
+            var tempContext = await systemContext.GetChildTenantContextAsync(tempTenantId);
+            Assert.NotNull(tempContext);
+            Assert.Equal(tempTenantId.ToLower(), tempContext.TenantId);
+            Assert.Equal(tempDatabaseName.ToLower(), tempContext.DatabaseName);
+
+            // 5) Verify source tenant is still attached and unchanged
+            var sourceContext = await systemContext.TryFindTenantContextAsync(sourceTenantId);
+            Assert.NotNull(sourceContext);
+            Assert.Equal(sourceTenantId.ToLower(), sourceContext.TenantId);
+        }
+        finally
+        {
+            await TryDropTenant(systemContext, tempTenantId);
+            await TryDropTenant(systemContext, sourceTenantId);
+        }
+    }
+
+    [Fact]
+    public async Task CloneTenantToTemp_WithNonExistentSource_FailsWithoutCreatingTemp()
+    {
+        var systemContext = systemFixture.GetSystemContext();
+
+        var tempTenantId = $"clonetmp_{Guid.NewGuid():N}";
+        var tempDatabaseName = tempTenantId.ToLower();
+
+        try
+        {
+            var result = await systemContext.CloneTenantToTempAsync(
+                "nonexistent_source_tenant", tempTenantId, tempDatabaseName);
+
+            Assert.False(result.Success);
+            Assert.Contains("not found", result.Error, StringComparison.OrdinalIgnoreCase);
+
+            // The temp tenant must not have been attached on the failure path.
+            var tempContext = await systemContext.TryFindTenantContextAsync(tempTenantId);
+            Assert.Null(tempContext);
+        }
+        finally
+        {
+            await TryDropTenant(systemContext, tempTenantId);
+        }
+    }
+
+    [Fact]
+    public async Task CloneTenantToTemp_TempTenantIsIndependentFromSource()
+    {
+        // The whole point of cloning instead of mutating-in-place is that operations on the
+        // temp tenant (the DumpTenant --clean orchestrator's cleanOverlayEntries call) must
+        // not visibly affect the source. We verify isolation by dropping the temp tenant
+        // and confirming the source is still attached.
+        var systemContext = systemFixture.GetSystemContext();
+
+        var sourceTenantId = $"clonesrc_{Guid.NewGuid():N}";
+        var sourceDatabaseName = sourceTenantId.ToLower();
+        var tempTenantId = $"clonetmp_{Guid.NewGuid():N}";
+        var tempDatabaseName = tempTenantId.ToLower();
+
+        try
+        {
+            using (var session = await systemContext.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await systemContext.CreateChildTenantAsync(session, sourceDatabaseName, sourceTenantId);
+                await session.CommitTransactionAsync();
+            }
+
+            var cloneResult = await systemContext.CloneTenantToTempAsync(
+                sourceTenantId, tempTenantId, tempDatabaseName);
+            Assert.True(cloneResult.Success);
+
+            // Drop the temp tenant; source must remain.
+            using (var session = await systemContext.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await systemContext.DropChildTenantAsync(session, tempTenantId);
+                await session.CommitTransactionAsync();
+            }
+
+            var sourceStillAttached = await systemContext.TryFindTenantContextAsync(sourceTenantId);
+            Assert.NotNull(sourceStillAttached);
+            var tempGone = await systemContext.TryFindTenantContextAsync(tempTenantId);
+            Assert.Null(tempGone);
+        }
+        finally
+        {
+            await TryDropTenant(systemContext, tempTenantId);
+            await TryDropTenant(systemContext, sourceTenantId);
+        }
+    }
+
+    private static async Task TryDropTenant(Meshmakers.Octo.Runtime.Contracts.MongoDb.ISystemContext systemContext, string tenantId)
+    {
+        try
+        {
+            using var session = await systemContext.GetAdminSessionAsync();
+            session.StartTransaction();
+            if (await systemContext.IsChildTenantExistingAsync(session, tenantId))
+            {
+                await systemContext.DropChildTenantAsync(session, tenantId);
+            }
+            await session.CommitTransactionAsync();
+        }
+        catch
+        {
+            // Ignore cleanup errors
+        }
+    }
 }

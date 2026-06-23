@@ -79,6 +79,75 @@ internal class TenantBackupService(
     }
 
     /// <inheritdoc />
+    public async Task<CommandResult> CloneTenantToTempAsync(string sourceTenantId, string tempTenantId,
+        string tempDatabaseName, TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
+    {
+        // The intermediate archive lands in the per-process temp dir under a unique-per-call
+        // file name. Path.GetTempFileName creates an empty file as a side-effect (atomic
+        // O_CREAT|O_EXCL) — we then overwrite that file with the mongodump archive.
+        // Cleanup runs in finally so a failed clone doesn't leak the archive.
+        var tempArchive = Path.GetTempFileName();
+        try
+        {
+            logger.LogInformation(
+                "Cloning tenant '{SourceTenantId}' to temp tenant '{TempTenantId}' (database '{TempDatabaseName}', staging archive '{Archive}')",
+                sourceTenantId, tempTenantId, tempDatabaseName, tempArchive);
+
+            // Look up the source DB name — RestoreTenantAsync uses it for the
+            // mongorestore --nsFrom/--nsTo namespace mapping when target DB name differs.
+            var sourceContext = await systemContext.TryFindTenantContextAsync(sourceTenantId);
+            if (sourceContext == null)
+            {
+                return CommandResult.Failure($"Source tenant '{sourceTenantId}' not found.");
+            }
+            var sourceDatabaseName = sourceContext.DatabaseName;
+
+            var backupResult = await BackupTenantAsync(sourceTenantId, tempArchive,
+                detachTenant: false, timeout, cancellationToken);
+            if (!backupResult.Success)
+            {
+                return CommandResult.Failure(
+                    $"Clone failed at backup step for source tenant '{sourceTenantId}': {backupResult.Error}");
+            }
+
+            var restoreResult = await RestoreTenantAsync(tempTenantId, tempDatabaseName, tempArchive,
+                sourceDatabaseName, dropExistingTenant: false, attachTenant: true, timeout, cancellationToken);
+            if (!restoreResult.Success)
+            {
+                return CommandResult.Failure(
+                    $"Clone failed at restore step (temp tenant '{tempTenantId}'): {restoreResult.Error}");
+            }
+
+            logger.LogInformation(
+                "Clone of tenant '{SourceTenantId}' to '{TempTenantId}' complete",
+                sourceTenantId, tempTenantId);
+            return new CommandResult { Success = true, ExitCode = 0 };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex,
+                "Error cloning tenant '{SourceTenantId}' to '{TempTenantId}'", sourceTenantId, tempTenantId);
+            return CommandResult.Failure($"Exception during clone: {ex.Message}");
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempArchive))
+                {
+                    File.Delete(tempArchive);
+                }
+            }
+            catch (Exception cleanupEx)
+            {
+                logger.LogWarning(cleanupEx,
+                    "Failed to delete intermediate clone archive '{Archive}' — manual cleanup may be required",
+                    tempArchive);
+            }
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<CommandResult> RestoreTenantAsync(string tenantId, string databaseName,
         string archiveFilePath, string? sourceDatabaseName = null, bool dropExistingTenant = true,
         bool attachTenant = true, TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
