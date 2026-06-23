@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FakeItEasy;
@@ -17,6 +19,36 @@ public class RollupOrchestratorHostedServiceTests
 {
     private readonly ISystemContext _systemContext = A.Fake<ISystemContext>();
     private readonly IRollupTenantSource _tenantSource = A.Fake<IRollupTenantSource>();
+
+    // Generous ceiling for poll-until-tick waits. Local runs see the first tick within
+    // a handful of milliseconds; CI agents under heavy load can stall the threadpool for
+    // hundreds of milliseconds before the first scheduled tick fires. 5 seconds keeps the
+    // tests deterministic without making green runs noticeably slower.
+    private static readonly TimeSpan TickAssertionTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Polls <paramref name="predicate"/> every <c>20ms</c> until it returns <c>true</c> or
+    /// <paramref name="timeout"/> elapses. Returns silently in either case — the caller's
+    /// follow-up FakeItEasy assertion is what surfaces a real failure with the expected
+    /// diagnostic message. The polling avoids the historic <c>Task.Delay(80)</c> race where
+    /// the hosted service hadn't ticked yet on slow CI agents (RollupOrchestratorHostedService
+    /// has TickInterval=10ms but the threadpool can stall well past 80ms on a loaded box).
+    /// </summary>
+    private static async Task WaitForTickAsync(Func<bool> predicate)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.Elapsed < TickAssertionTimeout)
+        {
+            if (predicate())
+            {
+                return;
+            }
+            await Task.Delay(20);
+        }
+    }
+
+    private static bool WasCalled<T>(T fake, string methodName) where T : class =>
+        Fake.GetCalls(fake).Any(c => c.Method.Name == methodName);
 
     private static IOptionsMonitor<RollupOrchestratorOptions> Options(TimeSpan? tick = null, TimeSpan? startup = null)
     {
@@ -40,11 +72,15 @@ public class RollupOrchestratorHostedServiceTests
         A.CallTo(() => _tenantSource.GetTenantIdsAsync(A<CancellationToken>._))
             .Returns(Array.Empty<string>());
 
-        // Start, wait long enough for at least one tick, then stop.
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
-        try { await NewSut().StartAsync(cts.Token); await Task.Delay(50, cts.Token); }
-        catch (OperationCanceledException) { /* expected on cancel */ }
-        await NewSut().StopAsync(CancellationToken.None);
+        // Wait until the hosted service has polled the tenant source at least twice — proves a
+        // tick fired and saw the empty list. With TickInterval=10ms this is near-instant
+        // locally and bounded by TickAssertionTimeout on slow CI agents. The follow-up
+        // MustNotHaveHappened assertion then verifies the empty list short-circuited before
+        // touching the system context — the actual contract under test.
+        var sut = NewSut();
+        await sut.StartAsync(CancellationToken.None);
+        await WaitForTickAsync(() => Fake.GetCalls(_tenantSource).Count(c => c.Method.Name == "GetTenantIdsAsync") >= 2);
+        await sut.StopAsync(CancellationToken.None);
 
         A.CallTo(() => _systemContext.TryFindTenantContextAsync(A<string>._)).MustNotHaveHappened();
     }
@@ -60,9 +96,8 @@ public class RollupOrchestratorHostedServiceTests
         A.CallTo(() => _systemContext.TryFindTenantContextAsync("tenant-x")).Returns(tenantContext);
 
         var sut = NewSut();
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
-        await sut.StartAsync(cts.Token);
-        await Task.Delay(80, TestContext.Current.CancellationToken);
+        await sut.StartAsync(CancellationToken.None);
+        await WaitForTickAsync(() => WasCalled(tenantContext, "GetRollupOrchestrator"));
         await sut.StopAsync(CancellationToken.None);
 
         A.CallTo(() => tenantContext.GetRollupOrchestrator()).MustHaveHappened();
@@ -87,9 +122,8 @@ public class RollupOrchestratorHostedServiceTests
         A.CallTo(() => _systemContext.TryFindTenantContextAsync("tenant-b")).Returns(contextB);
 
         var sut = NewSut();
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
-        await sut.StartAsync(cts.Token);
-        await Task.Delay(80, TestContext.Current.CancellationToken);
+        await sut.StartAsync(CancellationToken.None);
+        await WaitForTickAsync(() => WasCalled(orchestratorA, "TickAsync") && WasCalled(orchestratorB, "TickAsync"));
         await sut.StopAsync(CancellationToken.None);
 
         A.CallTo(() => orchestratorA.TickAsync(A<CancellationToken>._)).MustHaveHappened();
@@ -115,9 +149,8 @@ public class RollupOrchestratorHostedServiceTests
         A.CallTo(() => _systemContext.TryFindTenantContextAsync("tenant-good")).Returns(goodContext);
 
         var sut = NewSut();
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
-        await sut.StartAsync(cts.Token);
-        await Task.Delay(80, TestContext.Current.CancellationToken);
+        await sut.StartAsync(CancellationToken.None);
+        await WaitForTickAsync(() => WasCalled(good, "TickAsync"));
         await sut.StopAsync(CancellationToken.None);
 
         A.CallTo(() => good.TickAsync(A<CancellationToken>._)).MustHaveHappened();
