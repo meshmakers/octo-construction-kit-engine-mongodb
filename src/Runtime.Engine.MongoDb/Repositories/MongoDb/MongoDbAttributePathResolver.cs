@@ -161,6 +161,18 @@ internal static class MongoDbAttributePathResolver
         }
 
         var segments = trimmed.Split(Constants.PathSeparator);
+
+        // The forward function alternates attribute-name segments (indices 0, 2, 4, …) with
+        // "attributes" markers (indices 1, 3, 5, …), so a well-formed path always ends on an
+        // attribute name — i.e. an ODD total segment count. An even count means the path
+        // terminated on the "attributes" marker (e.g. "attributes.timeRange.attributes"),
+        // which the forward function cannot produce. Reject up-front so the loop never
+        // returns a partial result.
+        if (segments.Length % 2 == 0)
+        {
+            return null;
+        }
+
         var result = new StringBuilder();
         var currentProvider = provider;
 

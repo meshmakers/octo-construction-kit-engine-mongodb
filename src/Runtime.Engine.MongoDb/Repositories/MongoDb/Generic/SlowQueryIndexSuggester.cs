@@ -239,17 +239,49 @@ public static class SlowQueryIndexSuggester
     }
 
     /// <summary>
-    /// Reverse-maps every suggestion field to a CK attribute path and renders the YAML
-    /// snippet. Returns null if the CK type isn't in the cache or any field can't be
-    /// resolved — we never emit a half-correct snippet that an operator would paste and
-    /// then debug for hours.
+    /// Reverse-maps the suggestion's CK-attribute fields to their CK attribute paths and
+    /// renders the YAML snippet. Returns null when the cache doesn't know the type, when
+    /// no field is a CK attribute (the suggestion is purely non-attribute infra like
+    /// <c>ckTypeId.fullName</c> + <c>rtState</c>), or when any field uses
+    /// <c>Direction = -1</c> (CK indexes are always Ascending; mixing descending sort
+    /// fields into a CK-YAML snippet would silently misrepresent the suggested index).
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Non-attribute fields (those <see cref="MongoDbAttributePathResolver.TryReverseToCkPath"/>
+    /// rejects — <c>ckTypeId.fullName</c>, <c>rtState</c>, <c>_id</c>, etc.) are silently
+    /// skipped rather than failing the whole snippet. They're filter discriminators or
+    /// infra fields whose indexes either come from the CK system model or aren't
+    /// representable in the per-type CK YAML at all. As long as AT LEAST ONE CK attribute
+    /// resolves, a snippet ships listing those.
+    /// </para>
+    /// <para>
+    /// The resulting CK YAML may therefore describe a STRICT SUBSET of the mongosh
+    /// suggestion's fields. That's intentional: the CK-modelled index still helps the
+    /// query (the type discriminator implicitly scopes it inside <c>rt_entities</c>) and
+    /// is the right shape for a portable per-type model declaration. The Studio surface
+    /// shows both so the operator can apply whichever is appropriate for their context.
+    /// </para>
+    /// </remarks>
     private static string? TryBuildCkYamlSnippet(
         ICkCacheService ckCacheService,
         string tenantId,
         string ckTypeFullName,
         IReadOnlyList<SlowQueryIndexField> fields)
     {
+        // Descending direction can't be represented by Stage 2D's CK-YAML emission —
+        // CkTypeIndexDto.IndexType only carries Ascending/Text/Unique/UniqueNotDeleted, no
+        // per-field direction. Emitting Ascending when the suggestion was descending would
+        // silently produce a different MongoDB index than the mongosh command. Bail rather
+        // than mislead; the mongosh shell command still ships.
+        foreach (var field in fields)
+        {
+            if (field.Direction == -1)
+            {
+                return null;
+            }
+        }
+
         // TryGetCkType: returns false (rather than throwing) for unknown / stale type IDs,
         // which is the right shape for an opportunistic enrichment path. The full-name
         // string is the constructor input for CkId<TElementId>, so a malformed value (e.g.
@@ -276,11 +308,20 @@ public static class SlowQueryIndexSuggester
             var ckPath = MongoDbAttributePathResolver.TryReverseToCkPath(field.Name, provider);
             if (ckPath is null)
             {
-                // Partial mapping — bail. The mongosh suggestion still ships; CK-YAML stays
-                // null and the surface renders only the shell command.
-                return null;
+                // Non-attribute field (ckTypeId.fullName, rtState, _id, ...). Skip — these
+                // are filter discriminators or infra fields, not paste-into-CK-source
+                // material. The CK-YAML snippet lists the CK-attribute subset.
+                continue;
             }
             ckPaths.Add(ckPath);
+        }
+
+        // Need at least one resolved CK attribute path to produce a meaningful snippet.
+        // Zero-attribute suggestions (queries that only filter on type discriminator +
+        // infra fields) emit only the mongosh command — there's no CK-YAML to write.
+        if (ckPaths.Count == 0)
+        {
+            return null;
         }
 
         return CkYamlIndexSnippetWriter.Write(ckTypeFullName, ckPaths);

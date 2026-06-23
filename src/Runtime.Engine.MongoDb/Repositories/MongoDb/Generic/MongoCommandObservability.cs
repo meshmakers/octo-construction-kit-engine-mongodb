@@ -350,9 +350,10 @@ internal sealed class MongoCommandObservability
         var cache = _explainCache!;
         var client = _mongoClient!;
         var database = ctx.Database;
-        // Stage 2D — local snapshot of the optional CK cache so the Task.Run closure
-        // never re-reads the instance field after another writer might have replaced it.
-        // Null when no cache is wired (host without CK engine attached).
+        // Stage 2D — local snapshot of the optional CK cache. _ckCacheService is a readonly
+        // field set in the constructor, so the snapshot is not about field-replacement
+        // races; it just keeps the Task.Run closure self-contained without capturing
+        // `this`. Null when no cache is wired (host without CK engine attached).
         var ckCacheService = _ckCacheService;
         var target = ctx.Target;
         var commandClone = (BsonDocument)ctx.Command!.DeepClone();

@@ -160,6 +160,23 @@ public class MongoDbAttributePathResolverReverseTests
         Assert.Null(result);
     }
 
+    [Fact]
+    public void TryReverseToCkPath_PathEndingOnAttributesMarker_ReturnsNull()
+    {
+        // Pinned by the PR #107 review: "attributes.timeRange.attributes" is malformed —
+        // the forward function always ends on an attribute name, never on the marker.
+        // Without the even-count guard, the loop returns the partial "TimeRange" path.
+        var inner = new FakeProvider(isRecord: true).WithAttribute("From", AttributeValueTypesDto.DateTime);
+        var outer = new FakeProvider()
+            .WithAttribute("TimeRange", AttributeValueTypesDto.Record)
+            .WithRecordChild("TimeRange", inner);
+
+        var result = MongoDbAttributePathResolver.TryReverseToCkPath(
+            "attributes.timeRange.attributes", outer);
+
+        Assert.Null(result);
+    }
+
     // ---- minimal stub for IAttributeMetadataProvider ----
 
     /// <summary>

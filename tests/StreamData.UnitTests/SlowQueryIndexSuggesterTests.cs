@@ -628,6 +628,35 @@ public class SlowQueryIndexSuggesterTests
     }
 
     [Fact]
+    public void TrySuggest_WithDescendingSortDirection_NoCkYamlSnippet()
+    {
+        // PR #107 review fix: CkTypeIndexDto only supports Ascending (no per-field
+        // direction). Emitting a CK-YAML snippet when the suggestion includes a
+        // descending field would silently misrepresent it. We bail rather than mislead
+        // — the mongosh shell command still ships.
+        var fakeCache = A.Fake<Meshmakers.Octo.ConstructionKit.Contracts.Services.ICkCacheService>();
+        var cmd = new BsonDocument
+        {
+            { "find", "rt_entities" },
+            { "filter", new BsonDocument
+                {
+                    { "ckTypeId.fullName", "Demo/Asset" },
+                    { "attributes.name.value", "x" }
+                }
+            },
+            { "sort", new BsonDocument("attributes.name.value", -1) }
+        };
+
+        var s = SlowQueryIndexSuggester.TrySuggest(cmd, "find", "rt_entities",
+            tenantId: "tenant_a", ckCacheService: fakeCache)!;
+
+        Assert.NotNull(s);
+        Assert.Null(s.CkYamlSnippet);
+        Assert.Null(s.CkTypeFullName);
+        Assert.NotEmpty(s.ShellCommand);
+    }
+
+    [Fact]
     public void TrySuggest_WithCkCacheAndOrBranchedTypes_NoCkYamlSnippet()
     {
         // {$or: [{ckTypeId.fullName: A}, {ckTypeId.fullName: B}]} — two distinct types in
