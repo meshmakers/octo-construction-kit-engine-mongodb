@@ -13,6 +13,7 @@ using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
@@ -21,8 +22,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 /// owner-token fencing, TTL index, holder-info diagnostics, stale-lock reclaim,
 /// concurrent acquire mutual-exclusion, lock-lost signalling, and acquire cancellation.
 /// </summary>
-[Collection("Sequential")]
-public class RepositoryDistributedLockServiceTests : IClassFixture<SystemFixture>
+[Collection(SystemCollection.Name)]
+public class RepositoryDistributedLockServiceTests
 {
     private readonly SystemFixture _fixture;
 

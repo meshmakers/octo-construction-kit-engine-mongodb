@@ -3,6 +3,7 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
@@ -12,9 +13,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 /// work correctly when split across separate transactions (entity updates
 /// committed first, association updates run outside the transaction).
 /// </summary>
-[Collection("Sequential")]
+[Collection(MigrationSupportCollection.Name)]
 public class ChangeCkTypeMigrationTests(MigrationSupportFixture fixture)
-    : IClassFixture<MigrationSupportFixture>
 {
     private static readonly RtCkId<CkTypeId> DistrictTypeId = new("Test/District");
     private static readonly RtCkId<CkTypeId> RenamedDistrictTypeId = new("Test/DistrictMigrated");

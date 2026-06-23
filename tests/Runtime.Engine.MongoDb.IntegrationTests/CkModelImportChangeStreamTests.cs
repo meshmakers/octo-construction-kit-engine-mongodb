@@ -10,6 +10,7 @@ using MongoDB.Bson;
 using MongoDB.Driver;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
@@ -23,9 +24,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 /// for them and MongoDB auto-created the <c>RtEntity_*</c> collection without the
 /// <c>changeStreamPreAndPostImages</c> option applied.
 /// </summary>
-[Collection("Sequential")]
+[Collection(CkModelImportMigrationCollection.Name)]
 public class CkModelImportChangeStreamTests(CkModelImportMigrationFixture fixture)
-    : IClassFixture<CkModelImportMigrationFixture>
 {
     private static readonly CkModelId TestV1ModelId = new("Test-1.0.0");
     private static readonly CkModelId TestV2ModelId = new("Test-2.0.0");

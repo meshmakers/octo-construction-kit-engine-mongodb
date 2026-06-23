@@ -3,12 +3,12 @@ using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
-[Collection("Sequential")]
+[Collection(SampleRtModelDataCollection.Name)]
 public class GetRtDeepGraphAsyncTests
-    : IClassFixture<SampleRtModelDataFixture>
 {
     private readonly SampleRtModelDataFixture _sampleRtModelDataFixture;
 

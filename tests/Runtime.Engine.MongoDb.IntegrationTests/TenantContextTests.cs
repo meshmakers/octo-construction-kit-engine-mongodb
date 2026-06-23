@@ -1,12 +1,12 @@
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
-[Collection("Sequential")]
+[Collection(SystemCollection.Name)]
 public class TenantContextTests(SystemFixture systemFixture)
-    : IClassFixture<SystemFixture>
 {
     [Fact]
     public async Task IsSystemTenantExisting()

@@ -9,6 +9,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using TestCkModel.Generated.Test.v1;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.Query;
 
@@ -17,9 +18,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.Q
 /// Uses the ParentChild association (inbound multiplicity N) on StateOrProvince ← District.
 /// Salzburg has 5 districts (active), Tirol has 2 active + 2 archived.
 /// </summary>
-[Collection("Sequential")]
+[Collection(SampleRtModelDataCollection.Name)]
 public class AssociationCountFilterTests(SampleRtModelDataFixture fixture)
-    : IClassFixture<SampleRtModelDataFixture>
 {
     private NavigationPair CreateChildrenNavigationPair(AssociationCountFilter? countFilter = null)
     {

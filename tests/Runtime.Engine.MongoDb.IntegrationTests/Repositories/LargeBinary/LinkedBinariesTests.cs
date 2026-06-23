@@ -8,11 +8,12 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using TestCkModel.Generated.Test.v1;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.LargeBinary;
 
-[Collection("Sequential")]
-public class LinkedBinariesTests(ImportTestCkModelFixture fixture) : IClassFixture<ImportTestCkModelFixture>
+[Collection(ImportTestCkModelCollection.Name)]
+public class LinkedBinariesTests(ImportTestCkModelFixture fixture)
 {
     [Fact]
     public async Task FileSystem_InsertOneRtEntityAsync()

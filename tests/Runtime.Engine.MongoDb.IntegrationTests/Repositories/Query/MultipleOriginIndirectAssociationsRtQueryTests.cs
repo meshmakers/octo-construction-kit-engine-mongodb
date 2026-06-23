@@ -14,12 +14,12 @@ using Microsoft.Extensions.Logging;
 using TestCkModel.Generated.Test.v1;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.Query;
 
-[Collection("Sequential")]
+[Collection(SampleRtModelDataCollection.Name)]
 public class MultipleOriginIndirectAssociationsRtQueryTests
-    : IClassFixture<SampleRtModelDataFixture>
 {
     private readonly SampleRtModelDataFixture _systemFixture;
     private readonly ILoggerFactory _loggerFactory;

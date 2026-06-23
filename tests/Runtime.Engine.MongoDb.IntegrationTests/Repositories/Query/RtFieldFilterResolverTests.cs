@@ -7,12 +7,12 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 using TestCkModel.Generated.Test.v1;
 
 using Xunit;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.Query;
 
-[Collection("Sequential")]
+[Collection(ImportTestCkModelCollection.Name)]
 public class RtFieldFilterResolverTests(ImportTestCkModelFixture systemFixture)
-    : IClassFixture<ImportTestCkModelFixture>
 {
     [Theory]
     [InlineData("Address")]
