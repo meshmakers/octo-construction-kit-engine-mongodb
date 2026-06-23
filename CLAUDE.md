@@ -216,6 +216,43 @@ docs are explicit. We include them in `IsExplainable` because they're frequently
 slowest commands and the plan reveals whether the operation was anchored by an index.
 `executionStats` verbosity (which *would* execute writes) is deliberately out of scope.
 
+### Unused-Index Analysis via $indexStats (AB#4224 / Stage 3)
+
+Closes the Performance Advisor's add-and-remove loop: Stage 2C/2D ADD indexes when a slow
+query needs them; Stage 3 IDENTIFIES indexes that aren't earning their keep so they can be
+removed.
+
+| Component | Purpose |
+|---|---|
+| `IndexUsageEntry` (record) | One row per `(collection, index)` after aggregating MongoDB's `$indexStats` across replica-set hosts. Carries `OpsCount` (sum across hosts), `SinceUtc` (earliest across hosts — worst-case observation window), `AgeDays`, `IsBuiltin`, paste-ready `DropShellCommand`, and a pre-classified `Status`. |
+| `IndexUsageStatus` | `Builtin` (e.g. `_id_` — never droppable), `Unused` (0 ops, ≥ minAgeDays old), `LowUsage` (some ops but below threshold, ≥ minAgeDays old), `Used` (otherwise — including indexes too young to judge). |
+| `IndexUsageClassifier.Classify` | Pure function — Builtin overrides, then age guard (anything younger than `minAgeDays` is always `Used`), then ops thresholds. No clock reads inside; deterministic. |
+| `IndexUsageCollector.CollectAsync` | Lists non-system collections, runs `$indexStats` per collection, projects via `BuildEntries`. Live-query design — called on demand from the asset-repo REST endpoint, no background polling. |
+| `IndexUsageCollector.BuildEntries` | Pure (testable) projection step. Groups raw `$indexStats` docs by index name, folds per-host figures, builds drop command with JS-string escape (same defensive pattern as Stage 2C `createIndex`), classifies. |
+| `IIndexUsageService` / `IndexUsageService` | DI entry point asset-repo consumes. Takes a `tenantId`, resolves the tenant's `IMongoDatabase` via `ISystemContext.FindTenantContextAsync` + `IAdminRepositoryAccess`, delegates to `IndexUsageCollector.CollectAsync`. Internal-impl-behind-public-interface — the engine keeps freedom to swap the resolution path (caching, tenant-pool client) without breaking consumers. Registered as singleton in `RuntimeEngineBuilderExtensions`. |
+| `IRepositoryInternal.Database` | Engine-internal accessor on `MongoRepository`. Exposes the underlying `IMongoDatabase` so observability paths (Stage 3 `$indexStats`) can issue driver-level aggregations without going through the dynamic CK-typed collection wrappers. Kept on the internal interface — the Mongo-driver type does not leak into the public engine API. |
+
+**System collections skipped:** any name starting with `system.` or `__`. Tenant-data
+collections (RtEntity, associations, blueprint history, configuration, …) are in scope.
+
+**Replica-set aggregation:** `$indexStats` returns one document per host. We sum
+`accesses.ops` across hosts (any host's hit counts) and take the EARLIEST
+`accesses.since` (longest observation window — if an index was added recently on a secondary,
+the primary's older `since` is what the operator should reason about).
+
+**`accesses.since` reset on `mongod` restart.** A fresh process means every index reports
+0 ops with `since = now`. The default `MinAgeDays = 7` filter makes this safe: right after
+a restart, nothing is older than 7 days, the page is effectively empty until enough time has
+passed for the signal to be meaningful.
+
+**Out of scope:**
+
+- Background polling / history tracking (Stage 3B if production needs it)
+- Automatic `dropIndex` execution (footgun across tenants — copy-paste only)
+- Reverse-mapping index → CK-YAML source (operator can find it by name)
+- Sharded-cluster aggregation (OctoMesh tenants are replica sets)
+- `$collStats` size analysis (separate concern)
+
 ### CK-YAML Index Suggestions for COLLSCAN (AB#4222 / Stage 2D)
 
 For every Stage 2C suggestion that targets a known CK type, the suggester additionally
@@ -332,8 +369,8 @@ of structurally-identical slow queries).
 - Stage 2A: **AB#4213** (merged) — pipeline fingerprinting + grouped view
 - Stage 2B: **AB#4216** (merged) — async `explain()` capture + COLLSCAN detection
 - Stage 2C: **AB#4220** (merged) — MongoDB index suggestions for COLLSCAN
-- Stage 2D: **AB#4222** — CK-attribute reverse mapping + CK-YAML emission (this section)
-- Stage 3: `$indexStats` unused-index analysis
+- Stage 2D: **AB#4222** (merged) — CK-attribute reverse mapping + CK-YAML emission
+- Stage 3: **AB#4224** — `$indexStats` unused-index analysis (this section)
 
 ## BSON Serialization Conventions
 
