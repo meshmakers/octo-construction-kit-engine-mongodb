@@ -62,6 +62,7 @@ internal sealed class MongoCommandObservability
     private readonly IOptionsMonitor<OctoSystemConfiguration> _config;
     private readonly SlowQueriesBuffer? _slowQueries;
     private readonly SlowQueryExplainCache? _explainCache;
+    private readonly Meshmakers.Octo.ConstructionKit.Contracts.Services.ICkCacheService? _ckCacheService;
     private readonly ConcurrentDictionary<int, PendingCommand> _pending = new();
 
     /// <summary>
@@ -77,12 +78,14 @@ internal sealed class MongoCommandObservability
         ILogger logger,
         IOptionsMonitor<OctoSystemConfiguration> config,
         SlowQueriesBuffer? slowQueries = null,
-        SlowQueryExplainCache? explainCache = null)
+        SlowQueryExplainCache? explainCache = null,
+        Meshmakers.Octo.ConstructionKit.Contracts.Services.ICkCacheService? ckCacheService = null)
     {
         _logger = logger;
         _config = config;
         _slowQueries = slowQueries;
         _explainCache = explainCache;
+        _ckCacheService = ckCacheService;
     }
 
     /// <summary>
@@ -347,6 +350,10 @@ internal sealed class MongoCommandObservability
         var cache = _explainCache!;
         var client = _mongoClient!;
         var database = ctx.Database;
+        // Stage 2D — local snapshot of the optional CK cache so the Task.Run closure
+        // never re-reads the instance field after another writer might have replaced it.
+        // Null when no cache is wired (host without CK engine attached).
+        var ckCacheService = _ckCacheService;
         var target = ctx.Target;
         var commandClone = (BsonDocument)ctx.Command!.DeepClone();
         var previewBytes = cfg.SlowQueryExplainPreviewBytes;
@@ -380,13 +387,15 @@ internal sealed class MongoCommandObservability
                 var result = await db.RunCommandAsync<BsonDocument>(
                     new BsonDocumentCommand<BsonDocument>(explainCommand), null, cts.Token).ConfigureAwait(false);
 
-                // Stage 2C — pass the original command + name + target through so the parser
-                // can attach a SlowQueryIndexSuggestion whenever the plan reports COLLSCAN.
-                // The suggester is read-only over the BSON (no further mutation, no driver
-                // calls) so it runs synchronously here without affecting the cooldown gate.
+                // Stage 2C/2D — pass the original command + name + target through so the
+                // parser can attach a SlowQueryIndexSuggestion whenever the plan reports
+                // COLLSCAN. The CK cache (when wired) lets the suggester additionally
+                // reverse-map MongoDB paths back to CK attributes and emit a CK-YAML snippet
+                // (Stage 2D / AB#4222). All read-only over the BSON; no driver calls.
                 var parsed = SlowQueryExplainParser.Parse(
                     result, DateTimeOffset.UtcNow, previewBytes,
-                    originalCommand: commandClone, commandName: commandName, target: target);
+                    originalCommand: commandClone, commandName: commandName, target: target,
+                    tenantId: database, ckCacheService: ckCacheService);
                 cache.Set(key, parsed);
             }
             catch (OperationCanceledException)

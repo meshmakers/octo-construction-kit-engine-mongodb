@@ -1,3 +1,5 @@
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+
 using MongoDB.Bson;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
@@ -44,7 +46,9 @@ public static class SlowQueryExplainParser
     /// <c>HasCollScan = true</c>, <see cref="SlowQueryIndexSuggester.TrySuggest"/> is invoked
     /// and the result attached to <see cref="SlowQueryExplain.IndexSuggestion"/>. When the
     /// triple is omitted (legacy callers, unit tests of pure parsing), the suggestion is
-    /// always <c>null</c>.
+    /// always <c>null</c>. <paramref name="tenantId"/> + <paramref name="ckCacheService"/>
+    /// (Stage 2D) are forwarded to the suggester for opportunistic CK-YAML emission; both
+    /// null produces a pure MongoDB suggestion (Stage 2C shape).
     /// </remarks>
     public static SlowQueryExplain Parse(
         BsonDocument? explainResult,
@@ -52,7 +56,9 @@ public static class SlowQueryExplainParser
         int rawPreviewBytes,
         BsonDocument? originalCommand = null,
         string? commandName = null,
-        string? target = null)
+        string? target = null,
+        string? tenantId = null,
+        ICkCacheService? ckCacheService = null)
     {
         if (explainResult is null)
         {
@@ -97,7 +103,9 @@ public static class SlowQueryExplainParser
             if (hasCollScan && originalCommand is not null &&
                 !string.IsNullOrEmpty(commandName) && !string.IsNullOrEmpty(target))
             {
-                suggestion = SlowQueryIndexSuggester.TrySuggest(originalCommand, commandName, target);
+                suggestion = SlowQueryIndexSuggester.TrySuggest(
+                    originalCommand, commandName, target,
+                    tenantId: tenantId, ckCacheService: ckCacheService);
             }
 
             return new SlowQueryExplain(

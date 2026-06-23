@@ -1,3 +1,5 @@
+using FakeItEasy;
+
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
 using MongoDB.Bson;
@@ -542,6 +544,114 @@ public class SlowQueryIndexSuggesterTests
         Assert.Equal("b", s.Fields[0].Name);
         Assert.Equal("a", s.Fields[1].Name);
         Assert.All(s.Fields, f => Assert.Equal(SlowQueryIndexFieldKind.Sort, f.Kind));
+    }
+
+    // ---- Stage 2D CK-YAML suggester wiring (AB#4222) ------------------------------------
+
+    [Fact]
+    public void TrySuggest_WithoutCkCache_NoCkYamlSnippet()
+    {
+        // Regression test for Stage 2C behaviour: when no CK cache is wired (legacy callers,
+        // hosts without the construction-kit engine attached), the suggester still emits
+        // the MongoDB-only suggestion with no CK-YAML snippet.
+        var cmd = new BsonDocument
+        {
+            { "find", "rt_entities" },
+            { "filter", new BsonDocument
+                {
+                    { "ckTypeId.fullName", "Demo/Asset" },
+                    { "attributes.name.value", "x" }
+                }
+            }
+        };
+
+        var s = SlowQueryIndexSuggester.TrySuggest(cmd, "find", "rt_entities");
+
+        Assert.NotNull(s);
+        Assert.Null(s.CkYamlSnippet);
+        Assert.Null(s.CkTypeFullName);
+        Assert.NotEmpty(s.ShellCommand); // Stage 2C suggestion still ships
+    }
+
+    [Fact]
+    public void TrySuggest_WithCkCacheButNoTypeFilter_NoCkYamlSnippet()
+    {
+        // Filter has the slow path's attribute fields but no ckTypeId.fullName equality.
+        // We can't safely attribute the index to a single CK type, so CK-YAML stays null.
+        var fakeCache = A.Fake<Meshmakers.Octo.ConstructionKit.Contracts.Services.ICkCacheService>();
+        var cmd = new BsonDocument
+        {
+            { "find", "rt_entities" },
+            { "filter", new BsonDocument("attributes.name.value", "x") }
+        };
+
+        var s = SlowQueryIndexSuggester.TrySuggest(cmd, "find", "rt_entities",
+            tenantId: "tenant_a", ckCacheService: fakeCache)!;
+
+        Assert.NotNull(s);
+        Assert.Null(s.CkYamlSnippet);
+        Assert.Null(s.CkTypeFullName);
+    }
+
+    [Fact]
+    public void TrySuggest_WithCkCacheAndTypeFilter_TypeUnknown_NoCkYamlSnippet()
+    {
+        // The filter carries ckTypeId.fullName, but the cache doesn't know that type
+        // (stale tenant, sibling-tenant type, typo). TryGetCkType returns false; suggester
+        // bails on CK-YAML, MongoDB-only ships.
+        var fakeCache = A.Fake<Meshmakers.Octo.ConstructionKit.Contracts.Services.ICkCacheService>();
+        Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph.CkTypeGraph? outGraph = null;
+        A.CallTo(() => fakeCache.TryGetCkType(
+            A<string>._,
+            A<Meshmakers.Octo.ConstructionKit.Contracts.CkId<Meshmakers.Octo.ConstructionKit.Contracts.CkTypeId>>._,
+            out outGraph))
+            .Returns(false);
+
+        var cmd = new BsonDocument
+        {
+            { "find", "rt_entities" },
+            { "filter", new BsonDocument
+                {
+                    { "ckTypeId.fullName", "Demo/Unknown" },
+                    { "attributes.name.value", "x" }
+                }
+            }
+        };
+
+        var s = SlowQueryIndexSuggester.TrySuggest(cmd, "find", "rt_entities",
+            tenantId: "tenant_a", ckCacheService: fakeCache)!;
+
+        Assert.NotNull(s);
+        Assert.Null(s.CkYamlSnippet);
+        Assert.Null(s.CkTypeFullName);
+        Assert.NotEmpty(s.ShellCommand);
+    }
+
+    [Fact]
+    public void TrySuggest_WithCkCacheAndOrBranchedTypes_NoCkYamlSnippet()
+    {
+        // {$or: [{ckTypeId.fullName: A}, {ckTypeId.fullName: B}]} — two distinct types in
+        // an $or, we don't know which to attribute the index to. TryExtractCkTypeId returns
+        // null when the equality value can't be uniquely determined.
+        // We don't even need to set up TryGetCkType — the type extraction short-circuits.
+        var fakeCache = A.Fake<Meshmakers.Octo.ConstructionKit.Contracts.Services.ICkCacheService>();
+        var cmd = new BsonDocument
+        {
+            { "find", "rt_entities" },
+            { "filter", new BsonDocument("$or", new BsonArray
+                {
+                    new BsonDocument("ckTypeId.fullName", "Demo/A"),
+                    new BsonDocument("ckTypeId.fullName", "Demo/B")
+                })
+            }
+        };
+
+        var s = SlowQueryIndexSuggester.TrySuggest(cmd, "find", "rt_entities",
+            tenantId: "tenant_a", ckCacheService: fakeCache)!;
+
+        Assert.NotNull(s);
+        Assert.Null(s.CkYamlSnippet);
+        Assert.Null(s.CkTypeFullName);
     }
 
     [Fact]
