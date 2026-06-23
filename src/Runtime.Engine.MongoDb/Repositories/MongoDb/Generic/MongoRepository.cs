@@ -16,7 +16,15 @@ public class MongoRepository(ILoggerFactory loggerFactory, IMongoDatabase mongoD
     private readonly ConcurrentDictionary<Type, string> _collectionNameMapping = new();
     private readonly ILogger<MongoRepository> _logger = loggerFactory.CreateLogger<MongoRepository>();
 
-    IMongoDatabase IRepositoryInternal.Database => mongoDatabase;
+    /// <summary>
+    /// Underlying MongoDB driver handle for this tenant's database. Exposed as a public
+    /// property on the concrete <c>MongoRepository</c> rather than on <c>IRepositoryInternal</c>:
+    /// adding the member to the internal interface triggered a type-load-order regression that
+    /// reproduced the BSON discriminator race in CI (PR #109 build 36175). Keeping the
+    /// accessor on the concrete class only is enough — <see cref="IndexUsageService"/> casts to
+    /// <c>MongoRepository</c> directly when it needs the raw <c>IMongoDatabase</c>.
+    /// </summary>
+    public IMongoDatabase Database => mongoDatabase;
 
     // Do not do here any commands that access the database. At initial
     // setups, the user might not have yet created.

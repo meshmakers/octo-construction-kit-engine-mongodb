@@ -37,7 +37,12 @@ internal sealed class IndexUsageService : IIndexUsageService
         var tenantContext = await _systemContext.FindTenantContextAsync(tenantId).ConfigureAwait(false);
 
         var client = _adminRepositoryAccess.GetRepositoryClient(tenantContext.DatabaseName);
-        var repository = (IRepositoryInternal)client.GetRepository(tenantContext.DatabaseName);
+        // Cast to the concrete MongoRepository (public type) rather than going through
+        // IRepositoryInternal — adding the IMongoDatabase accessor to the internal interface
+        // surfaced a type-load-order regression that hit the BSON discriminator race in CI
+        // (PR #109 build 36175). The concrete cast is safe: MongoRepositoryClient.GetRepository
+        // always returns a MongoRepository.
+        var repository = (MongoRepository)client.GetRepository(tenantContext.DatabaseName);
 
         return await IndexUsageCollector
             .CollectAsync(repository.Database, minAgeDays, lowUsageOpsThreshold, now, cancellationToken)
