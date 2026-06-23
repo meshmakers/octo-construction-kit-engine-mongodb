@@ -70,6 +70,12 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services.AddSingleton<IUserRepositoryAccess, UserRepositoryAccess>();
         builder.Services.AddSingleton<IAdminRepositoryAccess, AdminRepositoryAccess>();
 
+        // Stage 3 / AB#4224 unused-index analysis. Resolves the tenant's IMongoDatabase via
+        // ISystemContext + admin client and runs $indexStats on demand — live-query design,
+        // no background polling. Singleton because its dependencies are singletons; per-tenant
+        // database lookups happen inside each call.
+        builder.Services.AddSingleton<IIndexUsageService, IndexUsageService>();
+
         // Stage 2B explain cache — singleton, shared between admin and user MongoDB
         // connections so a tenant query's explain finishes wherever the listener that
         // dispatched it ran, and is reachable from the Diagnostics read endpoint. Disabled

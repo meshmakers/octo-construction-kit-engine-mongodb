@@ -1,9 +1,19 @@
+using MongoDB.Driver;
 using MongoDB.Driver.GridFS;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
 internal interface IRepositoryInternal : IRepository
 {
+    /// <summary>
+    /// Underlying MongoDB driver handle for this tenant's database. Exposed so engine-internal
+    /// observability paths (e.g. <see cref="IndexUsageService"/> running <c>$indexStats</c>)
+    /// can issue driver-level aggregations without going through the dynamic CK-typed
+    /// collection wrappers. Kept on the internal interface so this Mongo-driver type does not
+    /// leak into the public engine API.
+    /// </summary>
+    IMongoDatabase Database { get; }
+
     string GetCollectionName<TKey, TDocument>(IMongoDataSourceMapper<TKey, TDocument> mongoDataSourceMapper,
         string? suffix = null)
         where TKey : notnull

@@ -229,6 +229,8 @@ removed.
 | `IndexUsageClassifier.Classify` | Pure function — Builtin overrides, then age guard (anything younger than `minAgeDays` is always `Used`), then ops thresholds. No clock reads inside; deterministic. |
 | `IndexUsageCollector.CollectAsync` | Lists non-system collections, runs `$indexStats` per collection, projects via `BuildEntries`. Live-query design — called on demand from the asset-repo REST endpoint, no background polling. |
 | `IndexUsageCollector.BuildEntries` | Pure (testable) projection step. Groups raw `$indexStats` docs by index name, folds per-host figures, builds drop command with JS-string escape (same defensive pattern as Stage 2C `createIndex`), classifies. |
+| `IIndexUsageService` / `IndexUsageService` | DI entry point asset-repo consumes. Takes a `tenantId`, resolves the tenant's `IMongoDatabase` via `ISystemContext.FindTenantContextAsync` + `IAdminRepositoryAccess`, delegates to `IndexUsageCollector.CollectAsync`. Internal-impl-behind-public-interface — the engine keeps freedom to swap the resolution path (caching, tenant-pool client) without breaking consumers. Registered as singleton in `RuntimeEngineBuilderExtensions`. |
+| `IRepositoryInternal.Database` | Engine-internal accessor on `MongoRepository`. Exposes the underlying `IMongoDatabase` so observability paths (Stage 3 `$indexStats`) can issue driver-level aggregations without going through the dynamic CK-typed collection wrappers. Kept on the internal interface — the Mongo-driver type does not leak into the public engine API. |
 
 **System collections skipped:** any name starting with `system.` or `__`. Tenant-data
 collections (RtEntity, associations, blueprint history, configuration, …) are in scope.

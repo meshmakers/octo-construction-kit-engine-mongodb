@@ -16,6 +16,8 @@ public class MongoRepository(ILoggerFactory loggerFactory, IMongoDatabase mongoD
     private readonly ConcurrentDictionary<Type, string> _collectionNameMapping = new();
     private readonly ILogger<MongoRepository> _logger = loggerFactory.CreateLogger<MongoRepository>();
 
+    IMongoDatabase IRepositoryInternal.Database => mongoDatabase;
+
     // Do not do here any commands that access the database. At initial
     // setups, the user might not have yet created.
 
