@@ -3,6 +3,7 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Runtime.Contracts.Geospatial.Geometry;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -12,8 +13,20 @@ using MongoDB.Driver.GeoJsonObjectModel;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 
+// The value serializer for the attribute dictionary is pinned to an OctoObjectSerializer with our
+// own discriminator convention + allowed-types predicate, rather than relying on whatever is
+// globally registered for `typeof(object)`. A process-global registration race can otherwise leave
+// the MongoDB driver's default ObjectSerializer (framework-types only) in place, which rejects
+// RtRecord during deserialization of attribute values (CI build 36440). Pinning makes the read
+// path deterministic regardless of registration order.
 internal class RtAttributeDictionarySerializer()
-    : DictionarySerializerBase<Dictionary<string, object?>>(DictionaryRepresentation.Document)
+    : DictionarySerializerBase<Dictionary<string, object?>>(
+        DictionaryRepresentation.Document,
+        new StringSerializer(),
+        new OctoObjectSerializer(
+            new RtEntityDiscriminatorConvention("_t"),
+            GuidRepresentation.Unspecified,
+            MongoRepositoryClient.OctoObjectAllowedTypes))
 {
     public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args,
         Dictionary<string, object?>? value)

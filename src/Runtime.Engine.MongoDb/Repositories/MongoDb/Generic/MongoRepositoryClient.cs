@@ -213,6 +213,25 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         }
     }
 
+    /// <summary>
+    /// Allowed-types predicate for the OctoMesh object serializer: the MongoDB-driver framework
+    /// defaults plus the repository-entity / GeoJson / CK-id namespaces and <c>List&lt;RtRecord&gt;</c>.
+    ///
+    /// Shared by the process-global object serializer registered in <see cref="RegisterSerializers"/>
+    /// AND by the explicit value serializer in
+    /// <see cref="Serialization.RtAttributeDictionarySerializer"/>. The dictionary serializer pins
+    /// its own object serializer so attribute values (notably <c>RtRecord</c>) deserialize correctly
+    /// even when a process-global registration race leaves the MongoDB driver's default
+    /// <c>ObjectSerializer</c> (framework-types only) registered for <c>typeof(object)</c> — the
+    /// failure mode behind CI build 36440.
+    /// </summary>
+    internal static readonly Func<Type, bool> OctoObjectAllowedTypes = type =>
+        ObjectSerializer.DefaultAllowedTypes(type) ||
+        type.FullName?.StartsWith(typeof(RtEntity).Namespace!) == true ||
+        type.Namespace?.StartsWith(typeof(GeoJson).Namespace!) == true ||
+        type.Namespace?.StartsWith(typeof(CkModelId).Namespace!) == true ||
+        type == typeof(List<RtRecord>);
+
     internal static void RegisterSerializers()
     {
         if (_isSerializerRegistered)
@@ -250,13 +269,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             TryRegisterDiscriminatorConvention(typeof(RtEntity), new RtEntityDiscriminatorConvention("_t"));
 
             TryRegisterSerializer(new OctoObjectListSerializer());
-            var objectSerializer = new OctoObjectSerializer(type => ObjectSerializer.DefaultAllowedTypes(type) ||
-                                                                    type.FullName?.StartsWith(typeof(RtEntity)
-                                                                        .Namespace!) ==
-                                                                    true || type.Namespace!.StartsWith(typeof(GeoJson)
-                                                                        .Namespace!)
-                                                                    || type.Namespace!.StartsWith(typeof(CkModelId)
-                                                                        .Namespace!) || type == typeof(List<RtRecord>));
+            var objectSerializer = new OctoObjectSerializer(OctoObjectAllowedTypes);
             TryRegisterSerializer(objectSerializer);
 
             TryRegisterSerializer(new OctoObjectIdSerializer());
