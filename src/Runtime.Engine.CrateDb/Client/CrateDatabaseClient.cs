@@ -116,6 +116,28 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         return dataPointDtos;
     }
 
+    public async IAsyncEnumerable<IReadOnlyDictionary<string, object?>> StreamRawRowsAsync(
+        string tenantId, string query,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        // Unbuffered enumeration: Dapper hands back rows one at a time off the open data reader so a
+        // multi-GB archive export never materialises the whole table. The connection stays open for
+        // the life of the enumeration (held by `await using`), which is why this is a per-page query
+        // in the caller's keyset loop rather than one giant cursor — a page is small and bounded.
+        await using var connection = await CreateConnectionAsync(tenantId, cancellationToken);
+        var rows = connection.QueryUnbufferedAsync(query);
+        await foreach (var row in rows.WithCancellation(cancellationToken))
+        {
+            if (row is not IDictionary<string, object?> dict)
+            {
+                continue;
+            }
+
+            // Copy into a plain dictionary so the value survives past the reader's row lifetime.
+            yield return new Dictionary<string, object?>(dict, StringComparer.Ordinal);
+        }
+    }
+
     public async Task<long> GetCountAsync(string tenantId, string countQuery)
     {
         return await _resilience.ExecuteAsync(async _ =>

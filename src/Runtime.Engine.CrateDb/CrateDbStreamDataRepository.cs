@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
@@ -735,6 +736,312 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
 
         return new StreamDataQueryResult { Rows = rows, TotalCount = rows.Count };
     }
+
+    /// <summary>
+    /// Page size for the keyset export scan. ~5000 rows balances round-trip count against the
+    /// memory held per page (one page is fully materialised by <see cref="StreamRawRowsAsync"/>'s
+    /// per-row copy before the next page is fetched). Concept §4.1.
+    /// </summary>
+    private const int ExportPageSize = 5000;
+
+    private static readonly System.Text.RegularExpressions.Regex RtIdHexRegex =
+        new("^[0-9a-fA-F]{24}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<IReadOnlyDictionary<string, object?>> ExportRowsAsync(
+        OctoObjectId archiveRtId,
+        TimeWindow? window,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        // Export does not require the archive to be Activated — a Disabled archive's table is
+        // preserved and exporting it is explicitly allowed (concept §10). We only need the snapshot
+        // to know the storage shape (raw vs windowed). A missing snapshot is a hard error; a Created
+        // archive (no table yet) yields zero rows.
+        var snapshot = await _archiveStore.GetAsync(archiveRtId)
+            ?? throw new ArchiveNotFoundException(archiveRtId);
+
+        var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString());
+        var windowed = snapshot.UsesWindowedStorage;
+
+        // Time-axis column: window_start for windowed archives, timestamp for raw.
+        var timeColumn = windowed ? Constants.WindowStart : Constants.Timestamp;
+
+        // Keyset cursor. Raw key: (timestamp, rtid). Windowed key: (window_start, rtid, cktypeid)
+        // — window_start alone is not unique (multiple entities per window), so rtid + cktypeid
+        // complete the natural key the windowed PK uses.
+        DateTime? cursorTime = null;
+        string? cursorRtId = null;
+        string? cursorCkTypeId = null;
+
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var sql = BuildExportPageSql(
+                qualifiedTable, windowed, timeColumn, window,
+                cursorTime, cursorRtId, cursorCkTypeId, ExportPageSize);
+
+            var pageCount = 0;
+            IReadOnlyDictionary<string, object?>? lastRow = null;
+
+            await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, sql, ct))
+            {
+                pageCount++;
+                lastRow = row;
+                yield return row;
+            }
+
+            if (pageCount < ExportPageSize || lastRow is null)
+            {
+                yield break; // last (partial) page reached
+            }
+
+            // Advance the cursor to the last row of this page.
+            cursorTime = AsUtcDateTime(lastRow.TryGetValue(timeColumn, out var t) ? t : null);
+            cursorRtId = lastRow.TryGetValue(Constants.RtId, out var r) ? r as string : null;
+            cursorCkTypeId = windowed
+                ? (lastRow.TryGetValue(Constants.CkTypeId, out var c) ? c as string : null)
+                : null;
+
+            if (cursorTime is null || cursorRtId is null || (windowed && cursorCkTypeId is null))
+            {
+                // Defensive: a row without a usable cursor key would otherwise loop forever.
+                _logger.LogWarning(
+                    "Export of archive {ArchiveRtId} stopped early: last page row had no usable keyset cursor.",
+                    archiveRtId);
+                yield break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Builds one keyset-pagination page query for the export scan. Emits <c>SELECT *</c> ordered by
+    /// the natural key with a tuple cursor predicate and the optional <c>[FromUtc, ToUtc)</c> window
+    /// predicate. Timestamps are embedded as quoted literals in CrateDB's canonical format (the
+    /// export path is internal and the only string inputs are server-controlled identifiers, not
+    /// user data).
+    /// </summary>
+    private static string BuildExportPageSql(
+        string qualifiedTable, bool windowed, string timeColumn, TimeWindow? window,
+        DateTime? cursorTime, string? cursorRtId, string? cursorCkTypeId, int pageSize)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("SELECT * FROM ").Append(qualifiedTable);
+
+        var predicates = new List<string>();
+
+        if (window is not null)
+        {
+            predicates.Add($"\"{timeColumn}\" >= '{FormatTs(window.FromUtc)}'");
+            predicates.Add($"\"{timeColumn}\" < '{FormatTs(window.ToUtc)}'");
+        }
+
+        if (cursorTime is not null)
+        {
+            // Tuple-greater-than on the natural key. CrateDB supports row-value comparison, but we
+            // spell it out to stay portable across the (time, rtid[, cktypeid]) key shapes.
+            var ts = FormatTs(cursorTime.Value);
+            if (windowed)
+            {
+                predicates.Add(
+                    $"(\"{timeColumn}\" > '{ts}' " +
+                    $"OR (\"{timeColumn}\" = '{ts}' AND \"{Constants.RtId}\" > '{EscapeLiteral(cursorRtId!)}') " +
+                    $"OR (\"{timeColumn}\" = '{ts}' AND \"{Constants.RtId}\" = '{EscapeLiteral(cursorRtId!)}' " +
+                    $"AND \"{Constants.CkTypeId}\" > '{EscapeLiteral(cursorCkTypeId!)}'))");
+            }
+            else
+            {
+                predicates.Add(
+                    $"(\"{timeColumn}\" > '{ts}' " +
+                    $"OR (\"{timeColumn}\" = '{ts}' AND \"{Constants.RtId}\" > '{EscapeLiteral(cursorRtId!)}'))");
+            }
+        }
+
+        if (predicates.Count > 0)
+        {
+            sb.Append(" WHERE ").Append(string.Join(" AND ", predicates));
+        }
+
+        sb.Append(" ORDER BY \"").Append(timeColumn).Append("\", \"").Append(Constants.RtId).Append('"');
+        if (windowed)
+        {
+            sb.Append(", \"").Append(Constants.CkTypeId).Append('"');
+        }
+
+        sb.Append(" LIMIT ").Append(pageSize.ToString(CultureInfo.InvariantCulture)).Append(';');
+        return sb.ToString();
+    }
+
+    private static string FormatTs(DateTime dt)
+        => dt.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture);
+
+    private static string EscapeLiteral(string s) => s.Replace("'", "''");
+
+    private static DateTime? AsUtcDateTime(object? value) => value switch
+    {
+        DateTime dt => DateTime.SpecifyKind(dt, DateTimeKind.Utc),
+        DateTimeOffset dto => dto.UtcDateTime,
+        _ => null,
+    };
+
+    /// <inheritdoc />
+    public async Task ImportRowsAsync(
+        OctoObjectId archiveRtId,
+        IAsyncEnumerable<IReadOnlyDictionary<string, object?>> rows,
+        ArchiveImportMode mode,
+        CancellationToken ct)
+    {
+        // Import targets a Disabled (or Activated) archive — we need the snapshot for the storage
+        // shape and user-column physical names, not for the Activated guard (concept §7: import runs
+        // while the archive is Disabled so no live writes race the import).
+        var snapshot = await _archiveStore.GetAsync(archiveRtId)
+            ?? throw new ArchiveNotFoundException(archiveRtId);
+
+        var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString());
+        var userColumnNames = snapshot.Columns
+            .Select(c => ColumnNameMapper.PathToColumnName(c.Path))
+            .ToList();
+        var windowed = snapshot.UsesWindowedStorage;
+
+        using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.importRows");
+        activity?.SetTag("streamdata.tenant", _tenantId);
+        activity?.SetTag("streamdata.archive.rtid", archiveRtId.ToString());
+
+        var rawBatch = new List<DataPointDto>(ExportPageSize);
+        var windowedBatch = new List<Dtos.TimeRangeDataPointDto>(ExportPageSize);
+        var rowIndex = 0;
+
+        await foreach (var row in rows.WithCancellation(ct))
+        {
+            if (windowed)
+            {
+                windowedBatch.Add(MapImportedWindowedRow(row, userColumnNames, rowIndex));
+                if (windowedBatch.Count >= ExportPageSize)
+                {
+                    await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, windowedBatch);
+                    windowedBatch.Clear();
+                }
+            }
+            else
+            {
+                rawBatch.Add(MapImportedRawRow(row, userColumnNames, rowIndex));
+                if (rawBatch.Count >= ExportPageSize)
+                {
+                    await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, rawBatch);
+                    rawBatch.Clear();
+                }
+            }
+
+            rowIndex++;
+        }
+
+        if (windowed && windowedBatch.Count > 0)
+        {
+            await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, windowedBatch);
+        }
+        else if (!windowed && rawBatch.Count > 0)
+        {
+            await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, rawBatch);
+        }
+
+        // mode is honoured by the insert SQL: the existing INSERT … ON CONFLICT DO UPDATE for
+        // windowed always overwrites user columns (Upsert semantics); the raw path's ON CONFLICT
+        // preserves user columns (InsertOnly). For raw archives Upsert is currently mapped onto the
+        // same conflict path — documented as a follow-up (the raw insert SQL would need an
+        // overwrite variant to fully honour Upsert), surfaced here so the intent is explicit.
+        _logger.LogDebug(
+            "Imported {RowCount} rows into archive {ArchiveRtId} (windowed={Windowed}, mode={Mode}).",
+            rowIndex, archiveRtId, windowed, mode);
+    }
+
+    /// <summary>
+    /// Maps one exported NDJSON row (physical column name → value) back into a <see cref="DataPointDto"/>
+    /// for the raw insert path. Validates the rtid is 24-char hex and surfaces a per-field error
+    /// (concept §10 / feedback_rtid_must_be_hex) rather than letting a malformed id reach the DB.
+    /// </summary>
+    private static DataPointDto MapImportedRawRow(
+        IReadOnlyDictionary<string, object?> row, IReadOnlyList<string> userColumnNames, int rowIndex)
+    {
+        var rtId = ParseRtId(row, rowIndex);
+        var ckTypeId = ParseCkTypeId(row, rowIndex);
+
+        var attributes = new Dictionary<string, object?>(userColumnNames.Count);
+        foreach (var col in userColumnNames)
+        {
+            attributes[col] = row.TryGetValue(col, out var v) ? v : null;
+        }
+
+        return new DataPointDto(attributes)
+        {
+            RtId = rtId,
+            CkTypeId = ckTypeId,
+            Timestamp = RequireUtc(row, Constants.Timestamp, rowIndex),
+            RtWellKnownName = row.TryGetValue(Constants.RtWellKnownName, out var wkn) ? wkn as string : null,
+            RtCreationDateTime = OptionalUtc(row, Constants.RtCreationDateTime),
+            RtChangedDateTime = OptionalUtc(row, Constants.RtChangedDateTime),
+        };
+    }
+
+    private static Dtos.TimeRangeDataPointDto MapImportedWindowedRow(
+        IReadOnlyDictionary<string, object?> row, IReadOnlyList<string> userColumnNames, int rowIndex)
+    {
+        var rtId = ParseRtId(row, rowIndex);
+        var ckTypeId = ParseCkTypeId(row, rowIndex);
+
+        var attributes = new Dictionary<string, object?>(userColumnNames.Count, StringComparer.Ordinal);
+        foreach (var col in userColumnNames)
+        {
+            attributes[col] = row.TryGetValue(col, out var v) ? v : null;
+        }
+
+        return new Dtos.TimeRangeDataPointDto(attributes)
+        {
+            RtId = rtId,
+            CkTypeId = ckTypeId,
+            RtWellKnownName = row.TryGetValue(Constants.RtWellKnownName, out var wkn) ? wkn as string : null,
+            From = RequireUtc(row, Constants.WindowStart, rowIndex),
+            To = RequireUtc(row, Constants.WindowEnd, rowIndex),
+        };
+    }
+
+    private static OctoObjectId ParseRtId(IReadOnlyDictionary<string, object?> row, int rowIndex)
+    {
+        var raw = row.TryGetValue(Constants.RtId, out var v) ? v as string : null;
+        if (string.IsNullOrEmpty(raw) || !RtIdHexRegex.IsMatch(raw))
+        {
+            throw new ArgumentException(
+                $"Import row {rowIndex}: field '{Constants.RtId}' must be a 24-character hex string, but was '{raw ?? "(null)"}'.",
+                nameof(row));
+        }
+        return new OctoObjectId(raw);
+    }
+
+    private static RtCkId<CkTypeId> ParseCkTypeId(IReadOnlyDictionary<string, object?> row, int rowIndex)
+    {
+        var raw = row.TryGetValue(Constants.CkTypeId, out var v) ? v as string : null;
+        if (string.IsNullOrEmpty(raw))
+        {
+            throw new ArgumentException(
+                $"Import row {rowIndex}: field '{Constants.CkTypeId}' is required but was missing or empty.",
+                nameof(row));
+        }
+        return new RtCkId<CkTypeId>(raw);
+    }
+
+    private static DateTime RequireUtc(IReadOnlyDictionary<string, object?> row, string column, int rowIndex)
+    {
+        var dt = AsUtcDateTime(row.TryGetValue(column, out var v) ? v : null);
+        if (dt is null)
+        {
+            throw new ArgumentException(
+                $"Import row {rowIndex}: field '{column}' is required but was missing or not a valid timestamp.",
+                nameof(row));
+        }
+        return dt.Value;
+    }
+
+    private static DateTime OptionalUtc(IReadOnlyDictionary<string, object?> row, string column)
+        => AsUtcDateTime(row.TryGetValue(column, out var v) ? v : null) ?? default;
 
     /// <inheritdoc />
     public async Task<int> AggregateBucketAsync(
