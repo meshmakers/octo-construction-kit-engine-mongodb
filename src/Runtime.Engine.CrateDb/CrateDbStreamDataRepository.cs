@@ -933,7 +933,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     private static void AddRtIdFilter(CrateQueryBuilder q, IReadOnlyList<OctoObjectId>? rtIds)
     {
         if (rtIds is not { Count: > 0 }) return;
-        q.AddWhereIn("RtId", rtIds.Select(x => x.ToString()).ToArray());
+        // Must match the registered default-variable name (Constants.RtId == "rtid"); the
+        // query-builder lookup is case-sensitive, so the literal "RtId" silently broke the
+        // entire rtIds source-scope across all four SD query kinds (WhereIn Variable not found).
+        q.AddWhereIn(Constants.RtId, rtIds.Select(x => x.ToString()).ToArray());
     }
 
     private static void AddSortOrders(

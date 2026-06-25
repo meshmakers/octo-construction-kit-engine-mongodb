@@ -1,4 +1,5 @@
 using System.Globalization;
+using Meshmakers.Octo.Runtime.Engine.CrateDb;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 
@@ -328,6 +329,52 @@ public class CrateQueryBuilderTests
         Assert.Contains($"LEFT JOIN {Table} AS d ON", sql);
         Assert.Contains("d.\"voltage\" > '0'", sql);
         Assert.DoesNotContain(" WHERE ", sql);
+    }
+
+    // Regression for the rtIds source-scope bug: AddRtIdFilter called AddWhereIn with the literal
+    // PascalCase "RtId", but the registered default variable (and CrateDB column) is
+    // Constants.RtId == "rtid". The query-builder lookup is case-sensitive, so the scope threw
+    // "WhereIn Variable not found: 'RtId'" and was silently broken on every SD query kind. These
+    // tests lock the contract: the rtIds scope must compile to a WHERE "rtid" IN (...) clause.
+    [Fact]
+    public void AddWhereIn_RtIdScope_WithDefaultVariables_EmitsRtidInClause()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.IncludeDefaultVariables();
+        queryBuilder.AddWhereIn(Constants.RtId, ["6a0ee049425c29914c86a4f1", "6a0ee04a425c29914c86a54a"]);
+
+        var compiler = new CrateQueryCompiler();
+        var query = compiler.CompileQuery(queryBuilder);
+
+        Assert.Contains("\"rtid\" IN ('6a0ee049425c29914c86a4f1', '6a0ee04a425c29914c86a54a')", query);
+    }
+
+    [Fact]
+    public void AddWhereIn_RtIdScope_WindowedArchive_EmitsRtidInClause()
+    {
+        // TimeRangeArchives (e.g. the energy-measurements archive) use windowed storage, but the
+        // default-variable set still registers "rtid", so the rtIds scope must work there too.
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.UseWindowedTimeAxis();
+        queryBuilder.IncludeDefaultVariables();
+        queryBuilder.AddWhereIn(Constants.RtId, ["abc123"]);
+
+        var compiler = new CrateQueryCompiler();
+        var query = compiler.CompileQuery(queryBuilder);
+
+        Assert.Contains("\"rtid\" IN ('abc123')", query);
+    }
+
+    [Fact]
+    public void AddWhereIn_CaseMismatchedName_Throws()
+    {
+        // Guards the exact defect: the lookup is case-sensitive, so the PascalCase literal "RtId"
+        // does not match the registered "rtid" column and must throw rather than silently no-op.
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.IncludeDefaultVariables();
+
+        Assert.Throws<QueryBuilderException>(() =>
+            queryBuilder.AddWhereIn("RtId", ["abc123"]));
     }
 
     [Fact]
