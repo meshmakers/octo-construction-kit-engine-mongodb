@@ -37,6 +37,16 @@ public interface IStreamDataDatabaseClient
     Task<List<DataPointDto>> GetDataAsync(string tenantId, string query);
 
     /// <summary>
+    /// Streams the raw rows of an arbitrary read query without buffering the whole result set in
+    /// memory. Each row is yielded as a case-preserving dictionary of physical CrateDB column name →
+    /// value, exactly as the driver returns it. Used by the archive-data export path (AB#4230) which
+    /// drives keyset pagination at the caller and needs the physical columns verbatim (no DTO
+    /// projection). The connection is held open for the duration of the enumeration.
+    /// </summary>
+    IAsyncEnumerable<IReadOnlyDictionary<string, object?>> StreamRawRowsAsync(
+        string tenantId, string query, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Executes a COUNT query and returns the total number of matching rows.
     /// </summary>
     Task<long> GetCountAsync(string tenantId, string countQuery);
