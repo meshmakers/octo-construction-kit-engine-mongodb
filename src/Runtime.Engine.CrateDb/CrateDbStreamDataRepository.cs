@@ -672,6 +672,18 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             outputNameBySqlAlias[sqlAlias] = outputName2;
         }
 
+        // Per-series grouping (AB#4233): group each requested column by an extra series-identity
+        // column (typically the source rtId) in addition to the time bin, so interleaved series
+        // stay separated. Resolve via the field resolver where possible; fall back to the
+        // camelCase column form for identity columns (e.g. "rtId" → "rtid") that aren't part of
+        // the configured archive column set the resolver was built from.
+        foreach (var groupPath in options.GroupByColumnPaths ?? [])
+        {
+            var groupColumn = fieldResolver.Resolve(groupPath)?.CrateDbName
+                ?? ColumnNameMapper.PathToColumnName(groupPath);
+            q.WithDownsamplingGroupBy(groupColumn);
+        }
+
         AddRtIdFilter(q, options.RtIds);
         AddFieldFilters(q, fieldResolver, options.FieldFilters);
 
