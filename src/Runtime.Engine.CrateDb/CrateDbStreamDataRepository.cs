@@ -1298,12 +1298,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
                 case FieldFilterOperator.In:
                 case FieldFilterOperator.NotIn:
                 {
-                    var valueList = filter.ComparisonValue switch
-                    {
-                        IEnumerable<string> strings => strings.ToList(),
-                        IEnumerable<object> objects => objects.Select(o => o.ToString() ?? "").ToList(),
-                        _ => new List<string> { filter.ComparisonValue?.ToString() ?? "" }
-                    };
+                    // Parse the comparison value identically to the MongoDB runtime path so the
+                    // same GraphQL `comparisonValue` syntax (incl. the `"[a, b]"` array form)
+                    // works against CrateDB archives. See StreamDataFieldFilterValueParser.
+                    var valueList = StreamDataFieldFilterValueParser.ParseInValues(filter.ComparisonValue);
                     q.AddFieldFilter(resolved.CrateDbName, op, "", valueList: valueList);
                     break;
                 }

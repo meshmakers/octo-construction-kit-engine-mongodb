@@ -55,6 +55,59 @@ public class CrateQueryBuilderFilterOperatorTests
     }
 
     [Fact]
+    public void In_ParsesBracketWrappedStringValue_IntoIndividualValues()
+    {
+        // The GraphQL/persisted comparisonValue for an IN filter arrives as a single string in
+        // array form (same syntax the Mongo runtime path accepts). It must be unwrapped into
+        // separate IN values rather than treated as one literal.
+        var valueList = StreamDataFieldFilterValueParser.ParseInValues("[id1, id2, id3]");
+
+        Assert.Equal(["id1", "id2", "id3"], valueList);
+    }
+
+    [Fact]
+    public void In_ParsesMultiWrappedAndQuotedStringValue()
+    {
+        // Real-world value observed from the Studio query editor: multi-bracketed, comma+space
+        // separated. Trim('[',']') collapses the extra brackets; quotes and whitespace are stripped.
+        var valueList = StreamDataFieldFilterValueParser.ParseInValues(
+            "[[[[6a0ee04a425c29914c86a54a, \"6a0ee049425c29914c86a4f1\"]]]]");
+
+        Assert.Equal(["6a0ee04a425c29914c86a54a", "6a0ee049425c29914c86a4f1"], valueList);
+    }
+
+    [Fact]
+    public void In_BracketWrappedValue_EmitsCommaSeparatedSql()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.IncludeDefaultVariables();
+        queryBuilder.AddFieldFilter("rtid", StreamDataFieldFilterOperator.In, "",
+            valueList: StreamDataFieldFilterValueParser.ParseInValues(
+                "[6a0ee04a425c29914c86a54a, 6a0ee049425c29914c86a4f1]"));
+
+        var compiler = new CrateQueryCompiler();
+        var query = compiler.CompileQuery(queryBuilder);
+
+        Assert.Contains("\"rtid\" IN ('6a0ee04a425c29914c86a54a', '6a0ee049425c29914c86a4f1')", query);
+    }
+
+    [Fact]
+    public void In_PlainScalarString_IsSingleValue()
+    {
+        var valueList = StreamDataFieldFilterValueParser.ParseInValues("id1");
+
+        Assert.Equal(["id1"], valueList);
+    }
+
+    [Fact]
+    public void In_EnumerableValue_IsUsedAsIs()
+    {
+        var valueList = StreamDataFieldFilterValueParser.ParseInValues(new[] { "id1", "id2" });
+
+        Assert.Equal(["id1", "id2"], valueList);
+    }
+
+    [Fact]
     public void IsNull_EmitsIsNullCheck()
     {
         var queryBuilder = new CrateQueryBuilder(Table);
