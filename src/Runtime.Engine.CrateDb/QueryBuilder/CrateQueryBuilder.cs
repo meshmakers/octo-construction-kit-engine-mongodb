@@ -356,6 +356,28 @@ internal class CrateQueryBuilder
     }
 
     /// <summary>
+    /// Extra non-aggregated columns to group the downsampling result by, in addition to the time
+    /// bin. Keeps interleaved series separated: with e.g. one source <c>rtId</c> per series, a
+    /// downsampled multi-series query yields <see cref="Limit"/> bins <em>per series</em> instead
+    /// of collapsing every series into one bin. Only honoured on the downsampling path.
+    /// </summary>
+    internal List<string> DownsamplingGroupByColumns { get; } = new();
+
+    /// <summary>
+    /// Adds a column to the downsampling GROUP BY (in addition to the time bin) so each distinct
+    /// value of <paramref name="columnName"/> gets its own series of bins. The column is selected
+    /// as <c>d."col" AS "col"</c> and appended to GROUP BY / ORDER BY. Idempotent.
+    /// </summary>
+    public CrateQueryBuilder WithDownsamplingGroupBy(string columnName)
+    {
+        if (!DownsamplingGroupByColumns.Contains(columnName))
+        {
+            DownsamplingGroupByColumns.Add(columnName);
+        }
+        return this;
+    }
+
+    /// <summary>
     /// Defines what kind of query should be executed
     /// </summary>
     public QueryModeDto? QueryMode { get; set; }

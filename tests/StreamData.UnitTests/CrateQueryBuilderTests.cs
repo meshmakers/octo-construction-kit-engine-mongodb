@@ -264,6 +264,54 @@ public class CrateQueryBuilderTests
     }
 
     [Fact]
+    public void DownsamplingWithGroupBy_EmitsPerSeriesSelectGroupAndOrder()
+    {
+        // Multi-series downsampling (AB#4233): grouping by the source rtId keeps interleaved
+        // series separated, and a MIN/MAX/AVG reducer set preserves the envelope (peaks) per bin.
+        var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var to = DateTime.Parse("2024-01-01T01:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.WithCkTypeIdFilter("Test/123");
+        queryBuilder.WithDownsampling(10, from, to);
+        queryBuilder.WithDownsamplingGroupBy("rtid");
+        queryBuilder.AddVariable("timestamp", "T", null);
+        queryBuilder.AddAggregationVariable("amountValue", AggregationFunctionDto.Avg, "amountValue_avg");
+        queryBuilder.AddAggregationVariable("amountValue", AggregationFunctionDto.Min, "amountValue_min");
+        queryBuilder.AddAggregationVariable("amountValue", AggregationFunctionDto.Max, "amountValue_max");
+
+        var compiler = new CrateQueryCompiler();
+        var sql = compiler.CompileQuery(queryBuilder);
+
+        // Series identity selected verbatim alongside the bin timestamp.
+        Assert.Contains("SELECT bins.ts AS \"T\", d.\"rtid\" AS \"rtid\"", sql);
+        // Envelope reducers: AVG centre line + MIN/MAX band, all per (bin, series).
+        Assert.Contains("AVG(d.\"amountValue\") AS \"amountValue_avg\"", sql);
+        Assert.Contains("MIN(d.\"amountValue\") AS \"amountValue_min\"", sql);
+        Assert.Contains("MAX(d.\"amountValue\") AS \"amountValue_max\"", sql);
+        // Group + order extended with the series column.
+        Assert.Contains("GROUP BY bins.ts, d.\"rtid\"", sql);
+        Assert.Contains("ORDER BY bins.ts ASC, d.\"rtid\" ASC", sql);
+    }
+
+    [Fact]
+    public void DownsamplingWithoutGroupBy_KeepsSingleSeriesGrouping()
+    {
+        // Regression guard: group-by is opt-in — a plain downsampling query still groups only by
+        // the time bin (no stray series column in SELECT / GROUP BY).
+        var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var to = DateTime.Parse("2024-01-01T01:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.WithDownsampling(10, from, to);
+        queryBuilder.AddAggregationVariable("voltage", AggregationFunctionDto.Avg, "Avg_voltage");
+
+        var compiler = new CrateQueryCompiler();
+        var sql = compiler.CompileQuery(queryBuilder);
+
+        Assert.Contains("GROUP BY bins.ts ORDER BY bins.ts ASC", sql);
+        Assert.DoesNotContain("d.\"rtid\"", sql);
+    }
+
+    [Fact]
     public void DownsamplingWithAggregation_WindowedTimeAxis_KeysOnWindowEndAndAddsContainmentCheck()
     {
         var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);

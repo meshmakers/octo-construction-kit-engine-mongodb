@@ -114,6 +114,13 @@ internal class CrateQueryCompiler
         // SELECT bins.ts AS "T", AGG(d."voltage") AS "alias", COUNT(d."timestamp") AS "__binCount"
         query.Append("SELECT bins.ts AS \"T\"");
 
+        // Per-series group columns (e.g. d."rtid") are selected verbatim so the result carries the
+        // series identity; they are added to GROUP BY / ORDER BY below.
+        foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
+        {
+            query.Append($", d.\"{groupColumn}\" AS \"{groupColumn}\"");
+        }
+
         foreach (var variable in queryBuilder.QueryVariablesWithoutTimestamp)
         {
             query.Append(", ");
@@ -195,8 +202,19 @@ internal class CrateQueryCompiler
             }
         }
 
-        // GROUP BY and ORDER BY — no LIMIT needed since generate_series produces exactly Limit bins
-        query.Append(" GROUP BY bins.ts ORDER BY bins.ts ASC");
+        // GROUP BY and ORDER BY — no LIMIT needed since generate_series produces exactly Limit bins.
+        // Per-series group columns extend both clauses so each series gets its own run of bins.
+        query.Append(" GROUP BY bins.ts");
+        foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
+        {
+            query.Append($", d.\"{groupColumn}\"");
+        }
+
+        query.Append(" ORDER BY bins.ts ASC");
+        foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
+        {
+            query.Append($", d.\"{groupColumn}\" ASC");
+        }
 
         return query.ToString();
     }
