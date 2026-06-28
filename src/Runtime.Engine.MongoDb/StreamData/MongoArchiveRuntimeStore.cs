@@ -127,11 +127,11 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
                 {
                     Name = c.Name,
                     Formula = c.Formula,
-                    // The computed enum fields only carry meaning for computed columns; the CK enum
-                    // is non-nullable so an ingested column would otherwise report the key-0 value.
-                    // Key values are aligned with the contracts enums, so a direct cast is correct.
-                    ResultType = isComputed ? (FormulaResultType)(int)c.ResultType : null,
-                    ComputedState = isComputed ? (ComputedColumnState)(int)c.ComputedState : null,
+                    // The computed enum fields only carry meaning for computed columns and are
+                    // optional on the CK record (null for ingested columns). Key values are aligned
+                    // with the contracts enums, so a direct cast is correct when a value is present.
+                    ResultType = isComputed && c.ResultType is { } rt ? (FormulaResultType)(int)rt : null,
+                    ComputedState = isComputed && c.ComputedState is { } cs ? (ComputedColumnState)(int)cs : null,
                 };
             })
             .ToList();
