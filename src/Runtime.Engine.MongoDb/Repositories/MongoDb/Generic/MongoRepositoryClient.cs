@@ -272,6 +272,26 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             var objectSerializer = new OctoObjectSerializer(OctoObjectAllowedTypes);
             TryRegisterSerializer(objectSerializer);
 
+            // Fail fast if the driver's framework-only default ObjectSerializer won the
+            // registration for typeof(object) (a lost race / wrong-order load). When that
+            // happens TryRegisterSerializer above swallows the "already registered" throw and
+            // the default stays cached — every later filter/update render that boxes a custom
+            // type into object then fails with "Type … is not configured as a type that is
+            // allowed to be serialized", but only on the handful of boxed-object paths, so it
+            // reads as flaky (CI builds 36175 / 36256 / 36440 / 36992). The module initializer
+            // in BsonSerializationModuleInitializer is what guarantees we win; this assertion
+            // turns any future regression of that guarantee into one loud, named failure at
+            // startup instead of a scattered, intermittent test failure.
+            var activeObjectSerializer = BsonSerializer.LookupSerializer(typeof(object));
+            if (activeObjectSerializer is not OctoObjectSerializer)
+            {
+                throw new InvalidOperationException(
+                    $"The MongoDB driver's default '{activeObjectSerializer.GetType().FullName}' is registered " +
+                    $"for typeof(object) instead of OctoObjectSerializer. A class map or object-typed lookup ran " +
+                    $"before OctoMesh serializer registration. Ensure nothing touches BSON for typeof(object) " +
+                    $"before {nameof(BsonSerializationModuleInitializer)} / {nameof(RegisterSerializers)}.");
+            }
+
             TryRegisterSerializer(new OctoObjectIdSerializer());
             TryRegisterDiscriminator(typeof(DateTimeOffset), "datetimeoffset");
             TryRegisterSerializer(new DateTimeOffsetSerializer());
