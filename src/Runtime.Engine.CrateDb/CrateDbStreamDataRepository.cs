@@ -599,6 +599,42 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         return new StreamDataQueryResult { Rows = rows, TotalCount = rows.Count };
     }
 
+    /// <summary>
+    /// Returns the bucket count to actually downsample to: the requested <paramref name="requestedLimit"/>,
+    /// clamped down to the number of distinct source bins in range when the request is finer than the
+    /// data. Runs one cheap <c>COUNT(DISTINCT)</c> against the same source filters already configured on
+    /// <paramref name="q"/>. On any probe failure it falls back to the requested limit (the query still
+    /// runs; worst case is the pre-fix behaviour). See AB#4246.
+    /// </summary>
+    private async Task<int> ResolveEffectiveDownsamplingLimitAsync(CrateQueryBuilder q, int requestedLimit)
+    {
+        try
+        {
+            var countSql = new CrateQueryCompiler().CompileDownsamplingBucketCountQuery(q);
+            _logger.LogDebug("Executing downsampling bucket-count SQL: {Sql}", countSql);
+            var countData = await _databaseClient.GetDataAsync(_tenantId, countSql);
+            var first = countData.FirstOrDefault();
+            if (first?.Attributes != null && first.Attributes.TryGetValue("c", out var countObj) && countObj != null)
+            {
+                var distinctBins = Convert.ToInt32(countObj);
+                if (distinctBins > 0 && distinctBins < requestedLimit)
+                {
+                    _logger.LogDebug(
+                        "Clamping downsampling bucket count from {Requested} to {Effective} (distinct source bins in range)",
+                        requestedLimit, distinctBins);
+                    return distinctBins;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Downsampling bucket-count probe failed; using requested limit {Limit}", requestedLimit);
+        }
+
+        return requestedLimit;
+    }
+
     public async Task<StreamDataQueryResult> ExecuteDownsamplingQueryAsync(
         OctoObjectId archiveRtId, StreamDataDownsamplingQueryOptions options)
     {
@@ -612,16 +648,33 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         var fieldResolver = CreateFieldResolver(snapshot);
 
         var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
-        // Windowed-storage downsampling: the LEFT JOIN must key on window_end (not the
-        // non-existent `timestamp` column). The compiler's downsampling path adds an extra
-        // fully-contained predicate when TimeColumn=window_end so source windows that straddle
-        // target bin boundaries are dropped (concept-time-range §7).
+        // Windowed-storage downsampling: the LEFT JOIN keys on window_start (the bin that contains
+        // the window); the compiler adds the fully-contained predicate so straddling windows are
+        // dropped (concept-time-range §7). UseWindowedTimeAxis sets the time axis to window_end.
         if (snapshot.UsesWindowedStorage)
         {
             q.UseWindowedTimeAxis();
         }
         q.WithCkTypeIdFilter(options.CkTypeId);
-        q.WithDownsampling(options.Limit.Value, options.From.Value, options.To.Value);
+        q.WithTimeFilter(options.From.Value, options.To.Value);
+
+        // rtId scope + field filters are applied BEFORE the bucket-count probe so it counts exactly
+        // the source rows the downsampling query will read. The identity column is a group key (not
+        // a SELECT variable) on this path, so AddRtIdFilter's AddWhereIn would throw — emit the
+        // scope as an IN field-filter, which lands in the shared source-filter conditions.
+        if (options.RtIds is { Count: > 0 })
+        {
+            q.AddFieldFilter(Constants.RtId, Dtos.StreamDataFieldFilterOperator.In, string.Empty,
+                valueList: options.RtIds.Select(x => x.ToString()).ToList());
+        }
+        AddFieldFilters(q, fieldResolver, options.FieldFilters);
+
+        // Clamp the requested bucket count to the number of distinct source bins in range. Without
+        // this, a chart asking for more buckets than the data has distinct timestamps yields a bin
+        // finer than the source resolution; for windowed archives the fully-contained predicate
+        // then drops every window and every bin reads null (AB#4246). One cheap COUNT(DISTINCT).
+        var effectiveLimit = await ResolveEffectiveDownsamplingLimitAsync(q, options.Limit.Value);
+        q.WithDownsampling(effectiveLimit, options.From.Value, options.To.Value);
 
         // Timestamp is always first in the output for downsampling (the bin start time).
         // It maps from the "T" alias set by the downsampling SQL generator.
@@ -683,18 +736,6 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
                 ?? ColumnNameMapper.PathToColumnName(groupPath);
             q.WithDownsamplingGroupBy(groupColumn);
         }
-
-        // rtId scope on the downsampling path: the identity column is a group key, not a SELECT
-        // variable here, so AddRtIdFilter's AddWhereIn (which requires a registered variable)
-        // would throw. Emit the scope as an IN field-filter instead — it lands in the LEFT JOIN
-        // ON clause and restricts the source rows to the requested series.
-        if (options.RtIds is { Count: > 0 })
-        {
-            q.AddFieldFilter(Constants.RtId, Dtos.StreamDataFieldFilterOperator.In, string.Empty,
-                valueList: options.RtIds.Select(x => x.ToString()).ToList());
-        }
-
-        AddFieldFilters(q, fieldResolver, options.FieldFilters);
 
         var compiler = new CrateQueryCompiler();
         var sql = compiler.CompileQuery(q);

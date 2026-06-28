@@ -88,7 +88,13 @@ internal class CrateQueryCompiler
         var query = new StringBuilder();
 
         var interval = queryBuilder.To!.Value - queryBuilder.From!.Value;
-        var intervalSeconds = (int)interval.TotalSeconds / queryBuilder.Limit!.Value;
+        // Round (not truncate) to the nearest second and never go below 1s. Integer truncation
+        // (e.g. 70.7 -> 70 for 1222 bins over a day) shrinks the bin below the source resolution
+        // and, combined with the windowed containment predicate below, can drop every source row.
+        // The caller clamps Limit to the source's distinct bucket count so the bin is never finer
+        // than the data; this rounding keeps the bin aligned to that clamp.
+        var intervalSeconds = Math.Max(1,
+            (int)Math.Round(interval.TotalSeconds / queryBuilder.Limit!.Value, MidpointRounding.AwayFromZero));
         var intervalLiteral = $"'{intervalSeconds} seconds'::INTERVAL";
         // Normalise to UTC before formatting — Constants.DateTimeFormat appends a literal `Z`
         // suffix, so a Kind=Local DateTime would otherwise have its local-time digits stamped
@@ -108,6 +114,13 @@ internal class CrateQueryCompiler
         // says straddling windows are dropped from the target rather than pro-rated.
         var isWindowed = queryBuilder.TimeColumn == Constants.WindowEnd;
         var timeColumn = queryBuilder.TimeColumn;
+        // Bin-membership column for the LEFT JOIN. For windowed archives a source row's bin is the
+        // one that CONTAINS the window, identified by its window_start. Keying DATE_BIN on
+        // window_end (the time axis) assigns a boundary-aligned window to the NEXT bin, so the
+        // fully-contained predicate (window_start >= bins.ts) then always fails and the bin reads
+        // empty — the all-null bug. window_start keeps the §7 containment semantic intact
+        // (straddling windows still fail window_end <= bins.ts + interval and are dropped).
+        var binColumn = isWindowed ? Constants.WindowStart : timeColumn;
 
         // After T17 every attribute is a first-class typed column on the per-archive table — no
         // more `data['x']` indirection — so each variable becomes a qualified column reference.
@@ -145,9 +158,9 @@ internal class CrateQueryCompiler
         // FROM generate_series(from, seriesEnd, interval) — exactly Limit bins
         query.Append($" FROM generate_series({fromLiteral}, {seriesEndLiteral}, {intervalLiteral}) AS bins(ts)");
 
-        // LEFT JOIN — bin membership keyed on the appropriate time column (timestamp for raw
-        // archives, window_end for windowed archives).
-        query.Append($" LEFT JOIN {queryBuilder.TenantId} AS d ON DATE_BIN({intervalLiteral}, d.\"{timeColumn}\", {fromLiteral}) = bins.ts");
+        // LEFT JOIN — bin membership keyed on the bin column (timestamp for raw archives,
+        // window_start for windowed archives — see binColumn above).
+        query.Append($" LEFT JOIN {queryBuilder.TenantId} AS d ON DATE_BIN({intervalLiteral}, d.\"{binColumn}\", {fromLiteral}) = bins.ts");
 
         // Fully-contained predicate (concept-time-range §7): a windowed source row contributes
         // to bin B only when its entire [window_start, window_end) fits inside B. Without this,
@@ -159,7 +172,57 @@ internal class CrateQueryCompiler
             query.Append($" AND d.\"{Constants.WindowEnd}\" <= bins.ts + {intervalLiteral}");
         }
 
-        // All filter conditions go into the ON clause (not WHERE, since LEFT JOIN)
+        // Source-row filter conditions (ckType, time range, IN-lists, field filters) go into the
+        // ON clause — not WHERE — since this is a LEFT JOIN against the generated bin axis.
+        AppendDownsamplingSourceFilters(query, queryBuilder, isWindowed, timeColumn);
+
+        // GROUP BY and ORDER BY — no LIMIT needed since generate_series produces exactly Limit bins.
+        // Per-series group columns extend both clauses so each series gets its own run of bins.
+        query.Append(" GROUP BY bins.ts");
+        foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
+        {
+            query.Append($", d.\"{groupColumn}\"");
+        }
+
+        query.Append(" ORDER BY bins.ts ASC");
+        foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
+        {
+            query.Append($", d.\"{groupColumn}\" ASC");
+        }
+
+        return query.ToString();
+    }
+
+    /// <summary>
+    /// Compiles a scalar query that returns the number of distinct source bins in the requested
+    /// range under the same source filters the downsampling query uses (ckType, time range, rtId /
+    /// field filters). The caller clamps the requested bucket <c>Limit</c> to this count so the
+    /// generated bin can never be finer than the data — which, for windowed archives, would make
+    /// the fully-contained predicate drop every source window (the all-null bug). The distinct
+    /// column is the bin column: <c>window_start</c> for windowed archives, the time axis otherwise.
+    /// </summary>
+    public string CompileDownsamplingBucketCountQuery(CrateQueryBuilder queryBuilder)
+    {
+        var isWindowed = queryBuilder.TimeColumn == Constants.WindowEnd;
+        var binColumn = isWindowed ? Constants.WindowStart : queryBuilder.TimeColumn;
+
+        var query = new StringBuilder();
+        query.Append($"SELECT COUNT(DISTINCT d.\"{binColumn}\") AS \"c\"");
+        query.Append($" FROM {queryBuilder.TenantId} AS d");
+        query.Append(" WHERE 1 = 1");
+        AppendDownsamplingSourceFilters(query, queryBuilder, isWindowed, queryBuilder.TimeColumn);
+        return query.ToString();
+    }
+
+    /// <summary>
+    /// Appends the downsampling source-row filter conditions (each prefixed with <c> AND </c>,
+    /// referencing the joined/aliased table <c>d</c>): ckType, time-range overlap, IN-lists and
+    /// field filters. Shared by <see cref="CompileDownsamplingQuery"/> (ON clause) and
+    /// <see cref="CompileDownsamplingBucketCountQuery"/> (WHERE clause) so the two can never drift.
+    /// </summary>
+    private static void AppendDownsamplingSourceFilters(StringBuilder query, CrateQueryBuilder queryBuilder,
+        bool isWindowed, string timeColumn)
+    {
         if (queryBuilder.CkTypeId != null)
         {
             query.Append($" AND d.\"{Constants.CkTypeId}\" = '{queryBuilder.CkTypeId.SemanticVersionedFullName}'");
@@ -201,22 +264,6 @@ internal class CrateQueryCompiler
                 query.Append($" AND d.{CompileFieldFilter(filter)}");
             }
         }
-
-        // GROUP BY and ORDER BY — no LIMIT needed since generate_series produces exactly Limit bins.
-        // Per-series group columns extend both clauses so each series gets its own run of bins.
-        query.Append(" GROUP BY bins.ts");
-        foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
-        {
-            query.Append($", d.\"{groupColumn}\"");
-        }
-
-        query.Append(" ORDER BY bins.ts ASC");
-        foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
-        {
-            query.Append($", d.\"{groupColumn}\" ASC");
-        }
-
-        return query.ToString();
     }
 
     /// <summary>

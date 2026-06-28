@@ -312,7 +312,7 @@ public class CrateQueryBuilderTests
     }
 
     [Fact]
-    public void DownsamplingWithAggregation_WindowedTimeAxis_KeysOnWindowEndAndAddsContainmentCheck()
+    public void DownsamplingWithAggregation_WindowedTimeAxis_KeysOnWindowStartAndAddsContainmentCheck()
     {
         var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
         var to = DateTime.Parse("2024-01-01T01:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
@@ -324,9 +324,13 @@ public class CrateQueryBuilderTests
         var compiler = new CrateQueryCompiler();
         var sql = compiler.CompileQuery(queryBuilder);
 
-        // DATE_BIN keys on window_end (single time axis for bin assignment); __binCount also.
-        Assert.Contains("DATE_BIN('600 seconds'::INTERVAL, d.\"window_end\"", sql);
+        // AB#4246: DATE_BIN keys on window_start — the bin that CONTAINS the window. Keying on
+        // window_end assigned a boundary-aligned window to the next bin, so the fully-contained
+        // predicate (window_start >= bins.ts) always failed and the bin read empty (all-null bug).
+        Assert.Contains("DATE_BIN('600 seconds'::INTERVAL, d.\"window_start\"", sql);
+        // __binCount still counts the time axis (window_end).
         Assert.Contains("COUNT(d.\"window_end\") AS \"__binCount\"", sql);
+        Assert.DoesNotContain("DATE_BIN('600 seconds'::INTERVAL, d.\"window_end\"", sql);
         // Outer range filter uses bucket-overlap semantics — buckets whose body overlaps
         // [from, to] participate. Strict bin-containment (§7) is enforced separately below.
         Assert.Contains("d.\"window_start\" < '2024-01-01", sql);
@@ -438,5 +442,87 @@ public class CrateQueryBuilderTests
         Assert.Equal(
             $"SELECT COUNT(*) FROM {Table} WHERE \"cktypeid\" = 'Test/123'",
             countQuery);
+    }
+
+    // AB#4246: the bucket-count probe counts distinct source bins under the same source filters the
+    // downsampling query uses, so the caller can clamp an over-large requested bucket count down to
+    // the data's resolution (otherwise windowed archives null out every bin).
+    [Fact]
+    public void DownsamplingBucketCountQuery_Windowed_CountsDistinctWindowStartWithFilters()
+    {
+        var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var to = DateTime.Parse("2024-01-01T01:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.UseWindowedTimeAxis();
+        queryBuilder.WithCkTypeIdFilter("Test/123");
+        queryBuilder.WithTimeFilter(from, to);
+        queryBuilder.AddFieldFilter(Constants.RtId, StreamDataFieldFilterOperator.In, string.Empty,
+            valueList: ["r1", "r2"]);
+
+        var compiler = new CrateQueryCompiler();
+        var sql = compiler.CompileDownsamplingBucketCountQuery(queryBuilder);
+
+        // Distinct of the bin column (window_start for windowed archives), aliased "c".
+        Assert.Contains($"SELECT COUNT(DISTINCT d.\"window_start\") AS \"c\" FROM {Table} AS d WHERE 1 = 1", sql);
+        // Same source filters as the downsampling query: ckType, windowed range overlap, rtId scope.
+        Assert.Contains("d.\"cktypeid\" = 'Test/123'", sql);
+        Assert.Contains("d.\"window_start\" < '2024-01-01", sql);
+        Assert.Contains("d.\"window_end\" > '2024-01-01", sql);
+        Assert.Contains("d.\"rtid\" IN ('r1', 'r2')", sql);
+        // It's a scalar count — no generate_series / join / group-by.
+        Assert.DoesNotContain("generate_series", sql);
+        Assert.DoesNotContain("LEFT JOIN", sql);
+    }
+
+    [Fact]
+    public void DownsamplingBucketCountQuery_Raw_CountsDistinctTimestamp()
+    {
+        var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var to = DateTime.Parse("2024-01-01T01:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.WithCkTypeIdFilter("Test/123");
+        queryBuilder.WithTimeFilter(from, to);
+
+        var compiler = new CrateQueryCompiler();
+        var sql = compiler.CompileDownsamplingBucketCountQuery(queryBuilder);
+
+        Assert.Contains($"SELECT COUNT(DISTINCT d.\"timestamp\") AS \"c\" FROM {Table} AS d WHERE 1 = 1", sql);
+        Assert.Contains("d.\"timestamp\" >= '2024-01-01", sql);
+        Assert.Contains("d.\"timestamp\" <= '2024-01-01", sql);
+    }
+
+    // AB#4246: the bin interval is rounded to the nearest second (was integer-truncated). For 1222
+    // bins over a day, 86400/1222 = 70.7 -> 71s, not 70s.
+    [Fact]
+    public void Downsampling_IntervalRounding_RoundsToNearestSecondNotTruncate()
+    {
+        var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var to = DateTime.Parse("2024-01-02T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.WithDownsampling(1222, from, to);
+        queryBuilder.AddAggregationVariable("voltage", AggregationFunctionDto.Avg, "Avg_voltage");
+
+        var compiler = new CrateQueryCompiler();
+        var sql = compiler.CompileQuery(queryBuilder);
+
+        Assert.Contains("DATE_BIN('71 seconds'::INTERVAL", sql);
+        Assert.DoesNotContain("'70 seconds'", sql);
+    }
+
+    [Fact]
+    public void Downsampling_IntervalRounding_NeverBelowOneSecond()
+    {
+        // 30s span over 100 bins rounds to 0s; clamped to a 1s floor so the SQL stays valid.
+        var from = DateTime.Parse("2024-01-01T00:00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var to = DateTime.Parse("2024-01-01T00:00:30Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.WithDownsampling(100, from, to);
+        queryBuilder.AddAggregationVariable("voltage", AggregationFunctionDto.Avg, "Avg_voltage");
+
+        var compiler = new CrateQueryCompiler();
+        var sql = compiler.CompileQuery(queryBuilder);
+
+        Assert.Contains("DATE_BIN('1 seconds'::INTERVAL", sql);
+        Assert.DoesNotContain("'0 seconds'", sql);
     }
 }
