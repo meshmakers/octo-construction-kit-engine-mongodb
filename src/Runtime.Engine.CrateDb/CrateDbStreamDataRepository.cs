@@ -684,7 +684,16 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             q.WithDownsamplingGroupBy(groupColumn);
         }
 
-        AddRtIdFilter(q, options.RtIds);
+        // rtId scope on the downsampling path: the identity column is a group key, not a SELECT
+        // variable here, so AddRtIdFilter's AddWhereIn (which requires a registered variable)
+        // would throw. Emit the scope as an IN field-filter instead — it lands in the LEFT JOIN
+        // ON clause and restricts the source rows to the requested series.
+        if (options.RtIds is { Count: > 0 })
+        {
+            q.AddFieldFilter(Constants.RtId, Dtos.StreamDataFieldFilterOperator.In, string.Empty,
+                valueList: options.RtIds.Select(x => x.ToString()).ToList());
+        }
+
         AddFieldFilters(q, fieldResolver, options.FieldFilters);
 
         var compiler = new CrateQueryCompiler();
