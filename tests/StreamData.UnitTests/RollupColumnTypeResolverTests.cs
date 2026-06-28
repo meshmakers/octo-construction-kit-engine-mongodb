@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
 
@@ -94,5 +96,30 @@ public class RollupColumnTypeResolverTests
 
         Assert.Throws<UnresolvableArchivePathException>(
             () => RollupColumnTypeResolver.Resolve(columns, aggregations));
+    }
+
+    [Fact]
+    public void Resolve_RollupInternalComputedColumn_TypedFromResultType()
+    {
+        // A rollup may declare a computed column over its aggregate outputs (concept §11). It is not
+        // backed by an aggregation, so the resolver types it from ResultType — nullable, like raw.
+        var aggregations = new[] { new CkRollupAggregationSpec("active", CkRollupFunction.Sum, null) };
+        var columns = new List<CkArchiveColumnSpec>(RollupColumnGenerator.Generate(aggregations))
+        {
+            new(string.Empty, Indexed: true, Required: false)
+            {
+                Name = "ratio",
+                Formula = "active_sum / 2",
+                ResultType = FormulaResultType.Double,
+            },
+        };
+
+        var resolved = RollupColumnTypeResolver.Resolve(columns, aggregations);
+
+        Assert.Equal(2, resolved.Count); // active_sum + ratio
+        var computed = resolved[1];
+        Assert.Equal("ratio", computed.ColumnName);
+        Assert.Equal("DOUBLE PRECISION", Assert.IsType<CrateColumnType.Primitive>(computed.Type).CrateTypeName);
+        Assert.False(computed.Required);
     }
 }

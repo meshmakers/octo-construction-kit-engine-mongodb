@@ -2,7 +2,6 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
-using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
@@ -43,7 +42,7 @@ internal static class ArchivePathTypeResolver
                 // Computed columns have no CK attribute path: the type comes from the declared
                 // ResultType and the name from Name. They are always nullable — the formula may
                 // evaluate to null / NaN, stored as NULL. Concept §4 / §5.
-                resolved.Add(BuildComputedColumn(column));
+                resolved.Add(ComputedColumnDdl.Build(column));
                 continue;
             }
 
@@ -54,36 +53,6 @@ internal static class ArchivePathTypeResolver
 
         return resolved;
     }
-
-    private static ArchiveColumnDdl BuildComputedColumn(CkArchiveColumnSpec column)
-    {
-        if (string.IsNullOrWhiteSpace(column.Name))
-        {
-            throw new UnresolvableArchivePathException(column.Formula ?? string.Empty,
-                "computed column requires a Name.");
-        }
-
-        if (column.ResultType is null)
-        {
-            throw new UnresolvableArchivePathException(column.Name,
-                "computed column requires a ResultType.");
-        }
-
-        var crateType = MapResultType(column.ResultType.Value, column.Name);
-        var columnName = ColumnNameMapper.PathToColumnName(column.Name);
-        return new ArchiveColumnDdl(string.Empty, crateType, Required: false, column.Indexed, columnName);
-    }
-
-    private static CrateColumnType MapResultType(FormulaResultType resultType, string columnName) => resultType switch
-    {
-        FormulaResultType.Boolean => new CrateColumnType.Primitive("BOOLEAN"),
-        FormulaResultType.Int => new CrateColumnType.Primitive("INTEGER"),
-        FormulaResultType.Int64 => new CrateColumnType.Primitive("BIGINT"),
-        FormulaResultType.Double => new CrateColumnType.Primitive("DOUBLE PRECISION"),
-        FormulaResultType.DateTime => new CrateColumnType.Primitive("TIMESTAMP WITH TIME ZONE"),
-        _ => throw new UnresolvableArchivePathException(columnName,
-            $"computed column ResultType '{resultType}' has no CrateDB mapping."),
-    };
 
     private static CrateColumnType ResolvePath(
         ICkCacheService ckCache, string tenantId, CkTypeGraph rootType, string path)

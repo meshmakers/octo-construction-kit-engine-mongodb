@@ -73,7 +73,15 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
                     (CkRollupFunction)(int)a.Function,
                     a.TargetColumnName))
                 .ToList();
+            // Aggregate columns are derived from the aggregation specs; any computed columns the
+            // rollup also declares (concept §11) are appended after them. The generated aggregate
+            // columns are the dehydrated-cache form; computed columns live in the entity's Columns.
             columns = RollupColumnGenerator.Generate(rollupAggregations);
+            var rollupComputed = MapColumnSpecs(entity.Columns).Where(c => c.IsComputed).ToList();
+            if (rollupComputed.Count > 0)
+            {
+                columns = columns.Concat(rollupComputed).ToList();
+            }
         }
         else if (entity is RtTimeRangeArchive timeRange)
         {

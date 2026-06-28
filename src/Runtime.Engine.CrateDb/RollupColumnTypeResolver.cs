@@ -48,6 +48,15 @@ internal static class RollupColumnTypeResolver
         var resolved = new List<ArchiveColumnDdl>(columns.Count);
         foreach (var column in columns)
         {
+            if (column.IsComputed)
+            {
+                // Rollup-internal computed columns (concept §11): no aggregation backs them — the
+                // type comes from the declared ResultType, the same as raw / time-range computed
+                // columns. Always nullable.
+                resolved.Add(ComputedColumnDdl.Build(column));
+                continue;
+            }
+
             if (!typeByColumn.TryGetValue(column.Path, out var crateType))
             {
                 // Defensive: should never happen since both lists come from the same generator
