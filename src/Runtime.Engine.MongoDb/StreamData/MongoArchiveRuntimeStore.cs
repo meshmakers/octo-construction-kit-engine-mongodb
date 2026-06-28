@@ -2,6 +2,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Models.StreamData.Generated.System.StreamData.v1;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
@@ -80,17 +81,11 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
             // Period attribute is optional and advisory; the generated record exposes it as
             // a nullable TimeSpan via the inherited attribute machinery.
             period = timeRange.Period;
-            columns = (entity.Columns ?? Enumerable.Empty<RtCkArchiveColumnRecord>())
-                .Where(c => c.Path is not null)
-                .Select(c => new CkArchiveColumnSpec(c.Path!, c.Indexed, c.Required))
-                .ToList();
+            columns = MapColumnSpecs(entity.Columns);
         }
         else
         {
-            columns = (entity.Columns ?? Enumerable.Empty<RtCkArchiveColumnRecord>())
-                .Where(c => c.Path is not null)
-                .Select(c => new CkArchiveColumnSpec(c.Path!, c.Indexed, c.Required))
-                .ToList();
+            columns = MapColumnSpecs(entity.Columns);
         }
 
         return new ArchiveSnapshot(
@@ -104,6 +99,34 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
             IsTimeRange = isTimeRange,
             Period = period,
         };
+    }
+
+    /// <summary>
+    /// Projects the runtime column records onto <see cref="CkArchiveColumnSpec"/>, keeping both
+    /// ingested columns (Path set) and computed columns (Formula set). The computed enum fields are
+    /// cast straight across — the CK enum key values are aligned with
+    /// <see cref="FormulaResultType"/> / <see cref="ComputedColumnState"/>.
+    /// </summary>
+    private static IReadOnlyList<CkArchiveColumnSpec> MapColumnSpecs(
+        IEnumerable<RtCkArchiveColumnRecord>? columns)
+    {
+        return (columns ?? Enumerable.Empty<RtCkArchiveColumnRecord>())
+            .Where(c => c.Path is not null || !string.IsNullOrWhiteSpace(c.Formula))
+            .Select(c =>
+            {
+                var isComputed = !string.IsNullOrWhiteSpace(c.Formula);
+                return new CkArchiveColumnSpec(c.Path ?? string.Empty, c.Indexed, c.Required)
+                {
+                    Name = c.Name,
+                    Formula = c.Formula,
+                    // The computed enum fields only carry meaning for computed columns; the CK enum
+                    // is non-nullable so an ingested column would otherwise report the key-0 value.
+                    // Key values are aligned with the contracts enums, so a direct cast is correct.
+                    ResultType = isComputed ? (FormulaResultType)(int)c.ResultType : null,
+                    ComputedState = isComputed ? (ComputedColumnState)(int)c.ComputedState : null,
+                };
+            })
+            .ToList();
     }
 
     /// <inheritdoc />
