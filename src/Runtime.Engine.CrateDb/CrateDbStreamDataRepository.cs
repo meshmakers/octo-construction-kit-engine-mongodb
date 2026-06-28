@@ -77,6 +77,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         //   table shape uses (window_start, window_end) + was_updated instead of a single
         //   timestamp. See ArchiveDdlGenerator.GenerateCreateTimeRangeTable.
         // - Raw: columns are CK-type attribute paths; standard (timestamp, rtid, ckTypeId) PK.
+        // Validate computed columns (raw / time-range only) before provisioning — concept §9. Rollup
+        // archives derive their columns server-side and don't carry user formulas yet (Phase 6).
+        if (snapshot.RollupAggregations is null)
+        {
+            ComputedColumnValidator.Validate(snapshot.RtId, snapshot.Columns, _formulaEngine);
+        }
+
         var resolvedColumns = snapshot.RollupAggregations is { } aggs
             ? RollupColumnTypeResolver.Resolve(snapshot.Columns, aggs)
             : ArchivePathTypeResolver.Resolve(
