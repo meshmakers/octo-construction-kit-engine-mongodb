@@ -10,7 +10,7 @@ using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
-using Meshmakers.Octo.Runtime.Engine.MongoDb.Formulas;
+using Meshmakers.Octo.Runtime.Engine.Formulas;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 using MongoDB.Driver;

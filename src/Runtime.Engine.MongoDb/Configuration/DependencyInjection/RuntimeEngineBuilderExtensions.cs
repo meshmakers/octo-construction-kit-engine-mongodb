@@ -63,6 +63,12 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services.AddSingleton<IModelLoaderService, ModelLoaderService>();
         builder.Services.AddSingleton<IMetricsContext, MetricsContext>();
         builder.Services.TryAddSingleton<ITenantNotifications, DefaultTenantNotifications>();
+
+        // Shared mXparser formula engine (concept-computed-columns §7), now in the
+        // Meshmakers.Octo.Runtime.Engine.Formulas package. Consolidates the formula glue formerly
+        // duplicated in the mesh-adapter node and the communication-controller validation service;
+        // used by archive computed-column ingest and validation.
+        builder.Services.AddFormulaEngine();
         builder.Services.AddTransient<IRepositoryOpsService, RepositoryOpsService>();
         builder.Services.AddTransient<IMongoTenantBackupService, TenantBackupService>();
         builder.Services.AddTransient<IBlueprintBackupService, MongoBlueprintBackupService>();
