@@ -141,6 +141,13 @@ public interface ITenantContext
     IRecomputeJobStore GetRecomputeJobStore();
 
     /// <summary>
+    /// Returns the recompute orchestrator for this tenant (AB#4184), or <c>null</c> if stream data is
+    /// disabled / not wired for the tenant. Drives optimistic rollup recompute (the periodic
+    /// background service ticks it; the manual API calls <c>RecomputeArchiveAsync</c>).
+    /// </summary>
+    IRecomputeOrchestrator? GetRecomputeOrchestrator();
+
+    /// <summary>
     /// Returns the rollup lifecycle service for this tenant, or null if no rollup support is
     /// wired (no <see cref="IRollupArchiveRuntimeStore"/> available). Backs the rollup-only
     /// mutations from rollup-archives concept §9 (freeze / unfreeze / rewind).

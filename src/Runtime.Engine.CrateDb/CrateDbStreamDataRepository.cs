@@ -18,9 +18,10 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// CrateDB implementation of <see cref="IStreamDataRepository"/>.
 /// Encapsulates query orchestration, field resolution, pagination, and result transformation.
 /// </summary>
-internal class CrateDbStreamDataRepository : IStreamDataRepository
+internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveRecomputeExecutor
 {
     private readonly ILogger<CrateDbStreamDataRepository> _logger;
+    private CrateDbArchiveRecomputeExecutor? _recomputeExecutor;
     private readonly ICkCacheService _ckCacheService;
     private readonly IStreamDataDatabaseClient _databaseClient;
     private readonly IStreamDataDatabaseManagementClient _managementClient;
@@ -1170,6 +1171,24 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         await EvaluateRollupComputedColumnsAsync(rollup.RtId, targetTable, bucketStart, bucketEnd, cancellationToken);
 
         return affected;
+    }
+
+    /// <inheritdoc />
+    public Task<RecomputeExecutionResult> ExecuteAsync(
+        ArchiveSnapshot source,
+        RollupArchiveSnapshot rollup,
+        DateTime rangeStart,
+        DateTime rangeEnd,
+        OctoObjectId? rtIdScope,
+        CancellationToken cancellationToken)
+    {
+        // Reuse this repository's already-wired CrateDB clients / config / archive store — the
+        // recompute executor needs the exact same plumbing as bucket aggregation.
+        _recomputeExecutor ??= new CrateDbArchiveRecomputeExecutor(
+            _tenantId, _databaseClient, _managementClient, _archiveStore,
+            _configuration.NumberOfShards, _configuration.NumberOfReplicas, _logger);
+
+        return _recomputeExecutor.ExecuteAsync(source, rollup, rangeStart, rangeEnd, rtIdScope, cancellationToken);
     }
 
     private async Task EvaluateRollupComputedColumnsAsync(

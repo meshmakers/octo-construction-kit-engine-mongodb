@@ -37,7 +37,7 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
     private readonly IArchiveRuntimeStore _archiveStore;
     private readonly int _numberOfShards;
     private readonly int _numberOfReplicas;
-    private readonly ILogger<CrateDbArchiveRecomputeExecutor> _logger;
+    private readonly ILogger _logger;
 
     /// <summary>Constructs the executor for one tenant.</summary>
     public CrateDbArchiveRecomputeExecutor(
@@ -47,7 +47,7 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         IArchiveRuntimeStore archiveStore,
         int numberOfShards,
         int numberOfReplicas,
-        ILogger<CrateDbArchiveRecomputeExecutor> logger)
+        ILogger logger)
     {
         _tenantId = tenantId;
         _databaseClient = databaseClient;
