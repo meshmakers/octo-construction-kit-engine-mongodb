@@ -128,6 +128,19 @@ public interface ITenantContext
     ITimeRangeArchiveRuntimeStore? GetTimeRangeArchiveRuntimeStore();
 
     /// <summary>
+    /// Returns the per-archive recompute-state store for this tenant (AB#4184): the dirty-window
+    /// ledger, the pending recompute-range work list, and the recompute observability fields, all
+    /// held as runtime-state attributes on the archive entity.
+    /// </summary>
+    IArchiveRecomputeStateStore GetArchiveRecomputeStateStore();
+
+    /// <summary>
+    /// Returns the recompute-job history store for this tenant (AB#4184): the persistent, queryable
+    /// per-run records that back <c>recomputeJobsFor</c> and the coalesce policy.
+    /// </summary>
+    IRecomputeJobStore GetRecomputeJobStore();
+
+    /// <summary>
     /// Returns the rollup lifecycle service for this tenant, or null if no rollup support is
     /// wired (no <see cref="IRollupArchiveRuntimeStore"/> available). Backs the rollup-only
     /// mutations from rollup-archives concept §9 (freeze / unfreeze / rewind).

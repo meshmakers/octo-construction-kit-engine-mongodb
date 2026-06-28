@@ -1066,6 +1066,22 @@ public class TenantContext : ITenantContext
         return _timeRangeStore ??= new MongoTimeRangeArchiveRuntimeStore(GetTenantRepository());
     }
 
+    private IArchiveRecomputeStateStore? _archiveRecomputeStateStore;
+
+    /// <inheritdoc />
+    public IArchiveRecomputeStateStore GetArchiveRecomputeStateStore()
+    {
+        return _archiveRecomputeStateStore ??= new MongoArchiveRecomputeStateStore(GetTenantRepository());
+    }
+
+    private IRecomputeJobStore? _recomputeJobStore;
+
+    /// <inheritdoc />
+    public IRecomputeJobStore GetRecomputeJobStore()
+    {
+        return _recomputeJobStore ??= new MongoRecomputeJobStore(GetTenantRepository());
+    }
+
     private IRollupArchiveLifecycleService? _rollupLifecycleService;
     private bool _rollupLifecycleServiceResolved;
 
