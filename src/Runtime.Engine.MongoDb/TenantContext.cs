@@ -1004,7 +1004,8 @@ public class TenantContext : ITenantContext
         // the store is always available — we own its lifetime here. The rollup store is optional
         // and only needed for cascade-rollup chain-aware aggregation resolution; null when the
         // tenant doesn't have rollup support registered.
-        _streamDataRepository = factory.Create(TenantId, GetArchiveRuntimeStore(), GetRollupArchiveRuntimeStore());
+        _streamDataRepository = factory.Create(
+            TenantId, GetArchiveRuntimeStore(), GetRollupArchiveRuntimeStore(), GetArchiveRecomputeStateStore());
         _streamDataRepositoryResolved = true;
         return _streamDataRepository;
     }
