@@ -17,8 +17,14 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// When false the column is emitted with <c>INDEX OFF</c>; defaults true to match CrateDB's
 /// standard indexing.
 /// </param>
+/// <param name="ColumnName">
+/// Explicit column name. When set (computed columns, which have no <see cref="Path"/>), it is used
+/// verbatim and the path-derived name is bypassed. When null (ingested / rollup columns), the
+/// generator derives the name from <see cref="Path"/> via <c>ColumnNameMapper</c>.
+/// </param>
 internal sealed record ArchiveColumnDdl(
     string Path,
     CrateColumnType Type,
     bool Required,
-    bool Indexed);
+    bool Indexed,
+    string? ColumnName = null);

@@ -2,6 +2,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
@@ -29,17 +30,60 @@ internal static class ArchivePathTypeResolver
     {
         if (columns.Count == 0) return Array.Empty<ArchiveColumnDdl>();
 
-        var ckType = ckCache.GetRtCkType(tenantId, targetCkTypeId);
         var resolved = new List<ArchiveColumnDdl>(columns.Count);
+
+        // The target CK type is only needed to resolve ingested-column paths; a computed-only
+        // archive (all columns are formulas) does not require it. Resolve lazily.
+        CkTypeGraph? ckType = null;
 
         foreach (var column in columns)
         {
+            if (column.IsComputed)
+            {
+                // Computed columns have no CK attribute path: the type comes from the declared
+                // ResultType and the name from Name. They are always nullable — the formula may
+                // evaluate to null / NaN, stored as NULL. Concept §4 / §5.
+                resolved.Add(BuildComputedColumn(column));
+                continue;
+            }
+
+            ckType ??= ckCache.GetRtCkType(tenantId, targetCkTypeId);
             var crateType = ResolvePath(ckCache, tenantId, ckType, column.Path);
             resolved.Add(new ArchiveColumnDdl(column.Path, crateType, column.Required, column.Indexed));
         }
 
         return resolved;
     }
+
+    private static ArchiveColumnDdl BuildComputedColumn(CkArchiveColumnSpec column)
+    {
+        if (string.IsNullOrWhiteSpace(column.Name))
+        {
+            throw new UnresolvableArchivePathException(column.Formula ?? string.Empty,
+                "computed column requires a Name.");
+        }
+
+        if (column.ResultType is null)
+        {
+            throw new UnresolvableArchivePathException(column.Name,
+                "computed column requires a ResultType.");
+        }
+
+        var crateType = MapResultType(column.ResultType.Value, column.Name);
+        var columnName = ColumnNameMapper.PathToColumnName(column.Name);
+        return new ArchiveColumnDdl(string.Empty, crateType, Required: false, column.Indexed, columnName);
+    }
+
+    private static CrateColumnType MapResultType(FormulaResultType resultType, string columnName) => resultType switch
+    {
+        FormulaResultType.Boolean => new CrateColumnType.Primitive("BOOLEAN"),
+        FormulaResultType.Int => new CrateColumnType.Primitive("INTEGER"),
+        FormulaResultType.Int64 => new CrateColumnType.Primitive("BIGINT"),
+        FormulaResultType.Double => new CrateColumnType.Primitive("DOUBLE PRECISION"),
+        FormulaResultType.DateTime => new CrateColumnType.Primitive("TIMESTAMP WITH TIME ZONE"),
+        _ => throw new UnresolvableArchivePathException(columnName,
+            $"computed column ResultType '{resultType}' has no CrateDB mapping."),
+    };
 
     private static CrateColumnType ResolvePath(
         ICkCacheService ckCache, string tenantId, CkTypeGraph rootType, string path)

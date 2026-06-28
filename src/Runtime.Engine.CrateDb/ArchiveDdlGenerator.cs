@@ -95,27 +95,15 @@ internal static class ArchiveDdlGenerator
 
         foreach (var col in columns)
         {
-            if (string.IsNullOrWhiteSpace(col.Path))
-            {
-                throw new ArgumentException("Archive column path must not be empty.", nameof(columns));
-            }
-
-            // Convert dotted attribute path to a camelCase column identifier so per-archive
-            // tables match the MongoDB BSON convention (concept §9). Two distinct paths can in
-            // principle collapse to the same column name (e.g. `temp.celsius` and `tempCelsius`),
-            // which we surface as a hard error rather than silently overwriting.
-            var columnName = ColumnNameMapper.PathToColumnName(col.Path);
+            var columnName = ResolveColumnName(col);
             if (!seenColumnNames.Add(columnName))
             {
                 throw new ArgumentException(
-                    $"Column name '{columnName}' (from path '{col.Path}') collides with another archive column or a standard column.",
+                    $"Column name '{columnName}' collides with another archive column or a standard column.",
                     nameof(columns));
             }
 
-            sb.Append(' ').Append('"').Append(columnName).Append("\" ");
-            col.Type.AppendTo(sb);
-            if (col.Required) sb.Append(" NOT NULL");
-            if (!col.Indexed) sb.Append(" INDEX OFF");
+            AppendColumn(sb, columnName, col);
             sb.Append(',');
         }
 
@@ -173,23 +161,15 @@ internal static class ArchiveDdlGenerator
 
         foreach (var col in columns)
         {
-            if (string.IsNullOrWhiteSpace(col.Path))
-            {
-                throw new ArgumentException("Archive column path must not be empty.", nameof(columns));
-            }
-
-            var columnName = ColumnNameMapper.PathToColumnName(col.Path);
+            var columnName = ResolveColumnName(col);
             if (!seenColumnNames.Add(columnName))
             {
                 throw new ArgumentException(
-                    $"Column name '{columnName}' (from path '{col.Path}') collides with another archive column or a standard column.",
+                    $"Column name '{columnName}' collides with another archive column or a standard column.",
                     nameof(columns));
             }
 
-            sb.Append(' ').Append('"').Append(columnName).Append("\" ");
-            col.Type.AppendTo(sb);
-            if (col.Required) sb.Append(" NOT NULL");
-            if (!col.Indexed) sb.Append(" INDEX OFF");
+            AppendColumn(sb, columnName, col);
             sb.Append(',');
         }
 
@@ -207,6 +187,64 @@ internal static class ArchiveDdlGenerator
 
         sb.Append(';');
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Builds <c>ALTER TABLE {table} ADD COLUMN "{name}" {type} [INDEX OFF];</c> for adding a single
+    /// column to an existing archive table — used when a computed column is added to an already-active
+    /// archive (concept §8, Phase 7). Computed columns are nullable, so the column is never emitted
+    /// with <c>NOT NULL</c> in practice; the generic Required/Indexed handling is preserved so the
+    /// method works for any <see cref="ArchiveColumnDdl"/>.
+    /// </summary>
+    public static string GenerateAddColumn(string qualifiedTableName, ArchiveColumnDdl column)
+    {
+        if (string.IsNullOrWhiteSpace(qualifiedTableName))
+        {
+            throw new ArgumentException("qualifiedTableName must not be empty", nameof(qualifiedTableName));
+        }
+
+        var columnName = ResolveColumnName(column);
+
+        var sb = new StringBuilder();
+        sb.Append("ALTER TABLE ").Append(qualifiedTableName).Append(" ADD COLUMN");
+        AppendColumn(sb, columnName, column);
+        sb.Append(';');
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Resolves the physical column name: the explicit <see cref="ArchiveColumnDdl.ColumnName"/> when
+    /// set (computed columns), otherwise the camelCase name derived from
+    /// <see cref="ArchiveColumnDdl.Path"/> via <see cref="ColumnNameMapper"/> (ingested / rollup
+    /// columns). Two distinct paths can collapse to the same column name (e.g. <c>temp.celsius</c> and
+    /// <c>tempCelsius</c>); the create generators surface that as a hard error rather than silently
+    /// overwriting.
+    /// </summary>
+    private static string ResolveColumnName(ArchiveColumnDdl col)
+    {
+        if (!string.IsNullOrWhiteSpace(col.ColumnName))
+        {
+            return col.ColumnName!;
+        }
+
+        if (string.IsNullOrWhiteSpace(col.Path))
+        {
+            throw new ArgumentException(
+                "Archive column must have either a Path or an explicit ColumnName.", nameof(col));
+        }
+
+        return ColumnNameMapper.PathToColumnName(col.Path);
+    }
+
+    /// <summary>
+    /// Appends <c>"name" TYPE [NOT NULL] [INDEX OFF]</c> (no trailing comma) for a single column.
+    /// </summary>
+    private static void AppendColumn(StringBuilder sb, string columnName, ArchiveColumnDdl col)
+    {
+        sb.Append(' ').Append('"').Append(columnName).Append("\" ");
+        col.Type.AppendTo(sb);
+        if (col.Required) sb.Append(" NOT NULL");
+        if (!col.Indexed) sb.Append(" INDEX OFF");
     }
 
     /// <summary>
