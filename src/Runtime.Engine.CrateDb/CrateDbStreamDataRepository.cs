@@ -748,7 +748,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             {
                 Timestamp = dp.Timestamp,
                 RtId = dp.RtId,
-                CkTypeId = dp.CkTypeId,
+                // The downsampling projection doesn't select cktypeid (it isn't grouped), so every
+                // bin row — populated or empty — comes back with an empty/absent type. Stamp the
+                // query's target Ck type unconditionally so the non-null GraphQL ckTypeId field
+                // resolves; all rows of one archive share the same type anyway. (dp.CkTypeId here
+                // is an empty RtCkId, not null, so a null-coalesce wouldn't fire.)
+                CkTypeId = options.CkTypeId ?? dp.CkTypeId,
                 RtCreationDateTime = dp.RtCreationDateTime,
                 RtChangedDateTime = dp.RtChangedDateTime,
                 Values = values
