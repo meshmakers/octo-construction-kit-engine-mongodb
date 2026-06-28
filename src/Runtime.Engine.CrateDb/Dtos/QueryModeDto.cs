@@ -6,12 +6,16 @@
 public enum QueryModeDto
 {
     /// <summary>
-    /// Returns the real values
+    /// Returns the raw stored values (no reduction).
     /// </summary>
     Default,
-    
+
     /// <summary>
-    /// Downsampling of the values
+    /// Reduces the result to <c>Limit</c> equal-width time buckets. Honoured by every aggregating
+    /// stream-data variant and — since AB#4233 — also by a <c>SimpleSdQuery</c> (and the transient
+    /// <c>simple</c> sub-connection): the engine then synthesizes a per-value-type reducer for each
+    /// projected column (AVG+MIN+MAX for numeric, MAX for the rest) and groups per source rtId, so
+    /// raw-row queries get a representative N-point reduction without a separate DownsamplingSdQuery.
     /// </summary>
     Downsampling,
     
