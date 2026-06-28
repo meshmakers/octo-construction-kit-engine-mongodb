@@ -1164,7 +1164,80 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             new("tenant", _tenantId),
             new("rollup", rollup.RtId.ToString()));
 
+        // Rollup-internal computed columns (concept §11, approach a): after the aggregate columns
+        // are written, evaluate any computed columns over the just-written bucket rows in .NET and
+        // write the results back. Reuses the same plan / evaluation machinery as raw ingest.
+        await EvaluateRollupComputedColumnsAsync(rollup.RtId, targetTable, bucketStart, bucketEnd, cancellationToken);
+
         return affected;
+    }
+
+    private async Task EvaluateRollupComputedColumnsAsync(
+        OctoObjectId rollupRtId,
+        string targetTable,
+        DateTime bucketStart,
+        DateTime bucketEnd,
+        CancellationToken cancellationToken)
+    {
+        // The rollup's computed columns live on its archive snapshot (the orchestrator only passes
+        // the rollup-specific snapshot, which doesn't carry Columns). Load it; bail out fast for the
+        // common case of a rollup without computed columns.
+        var snapshot = await _archiveStore.GetAsync(rollupRtId);
+        if (snapshot is null)
+        {
+            return;
+        }
+
+        var plan = BuildComputedPlan(snapshot);
+        if (plan.Count == 0)
+        {
+            return;
+        }
+
+        // Aggregate columns are the non-computed columns; their Path is already the physical storage
+        // name. Read them (plus the key columns) back for the bucket.
+        var aggregateColumns = new List<string>();
+        foreach (var column in snapshot.Columns)
+        {
+            if (!column.IsComputed)
+            {
+                aggregateColumns.Add(ColumnNameMapper.PathToColumnName(column.Path));
+            }
+        }
+
+        var selectSql = RollupComputedColumnSqlBuilder.BuildSelect(
+            targetTable, aggregateColumns, bucketStart, bucketEnd);
+
+        var rows = new List<Dictionary<string, object?>>();
+        await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, selectSql, cancellationToken))
+        {
+            rows.Add(new Dictionary<string, object?>(row, StringComparer.Ordinal));
+        }
+
+        foreach (var row in rows)
+        {
+            if (!row.TryGetValue(Constants.RtId, out var rtIdValue) || rtIdValue is null ||
+                !row.TryGetValue(Constants.CkTypeId, out var ckTypeIdValue) || ckTypeIdValue is null)
+            {
+                continue;
+            }
+
+            // Evaluate the computed columns over the bucket row and collect their cells.
+            ApplyComputedColumns(row, plan);
+
+            var assignments = new List<(string Column, object? Value)>(plan.Count);
+            foreach (var item in plan)
+            {
+                row.TryGetValue(item.ColumnName, out var value);
+                assignments.Add((item.ColumnName, value));
+            }
+
+            var updateSql = RollupComputedColumnSqlBuilder.BuildUpdate(
+                targetTable, assignments, rtIdValue.ToString()!, ckTypeIdValue.ToString()!,
+                bucketStart, bucketEnd);
+
+            await _databaseClient.ExecuteNonQueryAsync(_tenantId, updateSql, cancellationToken);
+        }
     }
 
     /// <inheritdoc />
