@@ -2,6 +2,7 @@ using System;
 using FakeItEasy;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
@@ -25,6 +26,7 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
     private readonly IStreamDataDatabaseManagementClient _mgmt = A.Fake<IStreamDataDatabaseManagementClient>();
     private readonly ICkCacheService _cache = A.Fake<ICkCacheService>();
     private readonly IArchiveRuntimeStore _store = A.Fake<IArchiveRuntimeStore>();
+    private readonly IFormulaEngine _formula = A.Fake<IFormulaEngine>();
 
     private static readonly IOptions<StreamDataConfiguration> Config =
         Options.Create(new StreamDataConfiguration { ConnectionString = "Host=ignored" });
@@ -32,7 +34,7 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
     private CrateDbStreamDataRepository NewSut() =>
         new(NullLogger<CrateDbStreamDataRepository>.Instance,
             _cache, _db, _mgmt, Config, "tenant-x",
-            _store);
+            _store, _formula);
 
     private void Stub(CkArchiveStatus status) =>
         A.CallTo(() => _store.GetAsync(Archive))

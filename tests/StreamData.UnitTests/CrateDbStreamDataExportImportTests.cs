@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using FakeItEasy;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
@@ -32,12 +33,13 @@ public class CrateDbStreamDataExportImportTests
     private readonly IStreamDataDatabaseManagementClient _mgmt = A.Fake<IStreamDataDatabaseManagementClient>();
     private readonly ICkCacheService _cache = A.Fake<ICkCacheService>();
     private readonly IArchiveRuntimeStore _store = A.Fake<IArchiveRuntimeStore>();
+    private readonly IFormulaEngine _formula = A.Fake<IFormulaEngine>();
 
     private static readonly IOptions<StreamDataConfiguration> Config =
         Options.Create(new StreamDataConfiguration { ConnectionString = "Host=ignored" });
 
     private CrateDbStreamDataRepository NewSut() =>
-        new(NullLogger<CrateDbStreamDataRepository>.Instance, _cache, _db, _mgmt, Config, "tenant-x", _store);
+        new(NullLogger<CrateDbStreamDataRepository>.Instance, _cache, _db, _mgmt, Config, "tenant-x", _store, _formula);
 
     private void StubRaw() =>
         A.CallTo(() => _store.GetAsync(Archive)).Returns(

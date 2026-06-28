@@ -1,4 +1,5 @@
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
@@ -19,19 +20,22 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
     private readonly IStreamDataDatabaseClient _databaseClient;
     private readonly IStreamDataDatabaseManagementClient _managementClient;
     private readonly IOptions<StreamDataConfiguration> _configuration;
+    private readonly IFormulaEngine _formulaEngine;
 
     public CrateDbStreamDataRepositoryFactory(
         ILoggerFactory loggerFactory,
         ICkCacheService ckCacheService,
         IStreamDataDatabaseClient databaseClient,
         IStreamDataDatabaseManagementClient managementClient,
-        IOptions<StreamDataConfiguration> configuration)
+        IOptions<StreamDataConfiguration> configuration,
+        IFormulaEngine formulaEngine)
     {
         _loggerFactory = loggerFactory;
         _ckCacheService = ckCacheService;
         _databaseClient = databaseClient;
         _managementClient = managementClient;
         _configuration = configuration;
+        _formulaEngine = formulaEngine;
     }
 
     public IStreamDataRepository Create(
@@ -47,6 +51,7 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
             _configuration,
             tenantId,
             archiveStore,
+            _formulaEngine,
             rollupArchiveStore);
     }
 }

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
@@ -27,6 +28,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     private readonly IRollupArchiveRuntimeStore? _rollupArchiveStore;
     private readonly StreamDataConfiguration _configuration;
     private readonly string _tenantId;
+    private readonly IFormulaEngine _formulaEngine;
 
     public CrateDbStreamDataRepository(
         ILogger<CrateDbStreamDataRepository> logger,
@@ -36,6 +38,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         IOptions<StreamDataConfiguration> configuration,
         string tenantId,
         IArchiveRuntimeStore archiveStore,
+        IFormulaEngine formulaEngine,
         IRollupArchiveRuntimeStore? rollupArchiveStore = null)
     {
         _logger = logger;
@@ -46,6 +49,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         _rollupArchiveStore = rollupArchiveStore;
         _configuration = configuration.Value;
         _tenantId = tenantId;
+        _formulaEngine = formulaEngine;
     }
 
     public Task EnsureDatabaseCreatedAsync()
@@ -183,7 +187,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         var (qualifiedTable, userColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
 
         var sw = Stopwatch.StartNew();
-        var dto = MapToDataPointDto(datapoint);
+        var computedPlan = BuildComputedPlan(snapshot);
+        var dto = MapToDataPointDto(datapoint, computedPlan);
         await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dto);
         sw.Stop();
 
@@ -230,7 +235,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         var (qualifiedTable, userColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
 
         var sw = Stopwatch.StartNew();
-        var dtos = filtered.Select(MapToDataPointDto);
+        var computedPlan = BuildComputedPlan(snapshot);
+        var dtos = filtered.Select(p => MapToDataPointDto(p, computedPlan));
         await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos);
         sw.Stop();
 
@@ -252,7 +258,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         ArchiveSnapshot snapshot, OctoObjectId archiveRtId)
     {
         var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString());
-        var userColumnNames = snapshot.Columns.Select(c => ColumnNameMapper.PathToColumnName(c.Path)).ToList();
+        var userColumnNames = snapshot.Columns
+            // Computed columns derive their name from Name (no Path); ingested columns from Path.
+            // Defensively skip a computed column missing its Name — activation DDL would have
+            // rejected it, but the insert path must never throw on a malformed snapshot.
+            .Where(c => !c.IsComputed || !string.IsNullOrWhiteSpace(c.Name))
+            .Select(c => ColumnNameMapper.PathToColumnName(c.IsComputed ? c.Name! : c.Path))
+            .ToList();
         return (qualifiedTable, userColumnNames);
     }
 
@@ -309,7 +321,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         var (qualifiedTable, userColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
 
         var sw = Stopwatch.StartNew();
-        var dtos = filtered.Select(MapToTimeRangeDataPointDto);
+        var computedPlan = BuildComputedPlan(snapshot);
+        var dtos = filtered.Select(p => MapToTimeRangeDataPointDto(p, computedPlan));
         await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos);
         sw.Stop();
 
@@ -323,7 +336,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             new("archive", archiveRtId.ToString()));
     }
 
-    private static Dtos.TimeRangeDataPointDto MapToTimeRangeDataPointDto(TimeRangeStreamDataPoint point)
+    private Dtos.TimeRangeDataPointDto MapToTimeRangeDataPointDto(TimeRangeStreamDataPoint point,
+        IReadOnlyList<ComputedColumnPlanItem> computedPlan)
     {
         // Normalise to UTC: the storage column is TIMESTAMP WITH TIME ZONE so Npgsql writes the
         // offset; downstream queries always read UTC. Matches MapToDataPointDto's behaviour for
@@ -338,6 +352,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
             kv => ColumnNameMapper.PathToColumnName(kv.Key),
             kv => kv.Value,
             StringComparer.Ordinal);
+        ApplyComputedColumns(attributes, computedPlan);
         return new Dtos.TimeRangeDataPointDto(attributes)
         {
             RtId = point.RtId,
@@ -1484,7 +1499,204 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         };
     }
 
-    private static DataPointDto MapToDataPointDto(StreamDataPoint point)
+    /// <summary>
+    /// A single computed column resolved for ingest: the physical column name, its formula, and the
+    /// declared result type the double result is cast back to (concept §5).
+    /// </summary>
+    private readonly record struct ComputedColumnPlanItem(
+        string ColumnName, string Formula, FormulaResultType ResultType);
+
+    /// <summary>
+    /// Builds the per-archive computed-column evaluation plan in dependency order: a computed column
+    /// whose formula references another computed column is evaluated after it (Kahn topological
+    /// sort). On an unexpected cycle — validation rejects cycles up front — the declared order is
+    /// used. Returns an empty list for the common case of an archive with no computed columns, so the
+    /// ingest hot path pays nothing.
+    /// </summary>
+    private static IReadOnlyList<ComputedColumnPlanItem> BuildComputedPlan(ArchiveSnapshot snapshot)
+    {
+        List<ComputedColumnPlanItem>? items = null;
+        foreach (var c in snapshot.Columns)
+        {
+            if (!c.IsComputed || string.IsNullOrWhiteSpace(c.Name) || c.ResultType is null)
+            {
+                continue;
+            }
+
+            items ??= new List<ComputedColumnPlanItem>();
+            items.Add(new ComputedColumnPlanItem(
+                ColumnNameMapper.PathToColumnName(c.Name!), c.Formula!, c.ResultType.Value));
+        }
+
+        if (items is null)
+        {
+            return Array.Empty<ComputedColumnPlanItem>();
+        }
+
+        return items.Count <= 1 ? items : TopologicalSort(items);
+    }
+
+    private static IReadOnlyList<ComputedColumnPlanItem> TopologicalSort(List<ComputedColumnPlanItem> items)
+    {
+        var indexByName = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < items.Count; i++)
+        {
+            indexByName[items[i].ColumnName] = i;
+        }
+
+        var dependents = new List<int>[items.Count];
+        var inDegree = new int[items.Count];
+        for (var i = 0; i < items.Count; i++)
+        {
+            dependents[i] = new List<int>();
+        }
+
+        // item i references computed column 'name' ⇒ that column must be evaluated before i.
+        for (var i = 0; i < items.Count; i++)
+        {
+            foreach (var (name, depIndex) in indexByName)
+            {
+                if (depIndex == i)
+                {
+                    continue;
+                }
+
+                if (ReferencesToken(items[i].Formula, name))
+                {
+                    dependents[depIndex].Add(i);
+                    inDegree[i]++;
+                }
+            }
+        }
+
+        var queue = new Queue<int>();
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (inDegree[i] == 0)
+            {
+                queue.Enqueue(i);
+            }
+        }
+
+        var ordered = new List<ComputedColumnPlanItem>(items.Count);
+        while (queue.Count > 0)
+        {
+            var i = queue.Dequeue();
+            ordered.Add(items[i]);
+            foreach (var dependent in dependents[i])
+            {
+                if (--inDegree[dependent] == 0)
+                {
+                    queue.Enqueue(dependent);
+                }
+            }
+        }
+
+        // A cycle leaves some items unqueued; validation rejects cycles, so fall back to declared order.
+        return ordered.Count == items.Count ? ordered : items;
+    }
+
+    /// <summary>Whole-word (identifier-boundary) check for <paramref name="token"/> in a formula.</summary>
+    private static bool ReferencesToken(string formula, string token)
+    {
+        var idx = 0;
+        while ((idx = formula.IndexOf(token, idx, StringComparison.Ordinal)) >= 0)
+        {
+            var beforeOk = idx == 0 || !IsIdentifierChar(formula[idx - 1]);
+            var afterPos = idx + token.Length;
+            var afterOk = afterPos >= formula.Length || !IsIdentifierChar(formula[afterPos]);
+            if (beforeOk && afterOk)
+            {
+                return true;
+            }
+
+            idx = afterPos;
+        }
+
+        return false;
+    }
+
+    private static bool IsIdentifierChar(char c) => char.IsLetterOrDigit(c) || c == '_';
+
+    /// <summary>
+    /// Evaluates each computed column in <paramref name="plan"/> over the row's current column
+    /// values and writes the result back into <paramref name="attributes"/> under the column's
+    /// physical name. The result also feeds any dependent computed column later in the plan. A
+    /// formula that throws (or yields NaN / null) stores NULL — ingest never fails on a computed
+    /// column (concept §5).
+    /// </summary>
+    private void ApplyComputedColumns(Dictionary<string, object?> attributes,
+        IReadOnlyList<ComputedColumnPlanItem> plan)
+    {
+        if (plan.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var item in plan)
+        {
+            object? result;
+            try
+            {
+                var args = BuildFormulaArguments(attributes);
+                result = _formulaEngine.Evaluate(item.Formula, args, item.ResultType);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Computed column '{Column}' formula '{Formula}' failed to evaluate; storing NULL.",
+                    item.ColumnName, item.Formula);
+                result = null;
+            }
+
+            attributes[item.ColumnName] = result;
+        }
+    }
+
+    /// <summary>
+    /// Projects the row's column values onto the numeric argument map the formula engine binds.
+    /// Columns that have no numeric reading (strings without a number, records, arrays, null) are
+    /// simply not bound — a formula referencing them then fails its syntax check and the cell
+    /// becomes NULL.
+    /// </summary>
+    private static IReadOnlyDictionary<string, double> BuildFormulaArguments(
+        IReadOnlyDictionary<string, object?> attributes)
+    {
+        var args = new Dictionary<string, double>(attributes.Count, StringComparer.Ordinal);
+        foreach (var kv in attributes)
+        {
+            if (TryToDouble(kv.Value, out var d))
+            {
+                args[kv.Key] = d;
+            }
+        }
+
+        return args;
+    }
+
+    private static bool TryToDouble(object? value, out double result)
+    {
+        result = 0;
+        switch (value)
+        {
+            case null: return false;
+            case double d: result = d; return true;
+            case float f: result = f; return true;
+            case int i: result = i; return true;
+            case long l: result = l; return true;
+            case short s: result = s; return true;
+            case byte b: result = b; return true;
+            case decimal m: result = (double)m; return true;
+            case bool bo: result = bo ? 1d : 0d; return true;
+            case DateTime dt: result = dt.Ticks; return true;
+            case string str:
+                return double.TryParse(str, NumberStyles.Float, CultureInfo.InvariantCulture, out result);
+            default: return false;
+        }
+    }
+
+    private DataPointDto MapToDataPointDto(StreamDataPoint point,
+        IReadOnlyList<ComputedColumnPlanItem> computedPlan)
     {
         // Re-key attributes from raw CK paths (e.g. "sensor.reading.value") to the camelCase
         // column names that exist on the per-archive table — the data plane no longer carries a
@@ -1494,6 +1706,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         {
             attributes[ColumnNameMapper.PathToColumnName(kvp.Key)] = kvp.Value;
         }
+        ApplyComputedColumns(attributes, computedPlan);
         return new DataPointDto(attributes)
         {
             RtId = point.RtId,
