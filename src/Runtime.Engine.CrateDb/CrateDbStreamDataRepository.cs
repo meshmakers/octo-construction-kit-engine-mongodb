@@ -488,9 +488,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         {
             q.UseWindowedTimeAxis();
             // Phase 6 (AB#4184): for rollup archives, constrain reads to the active generation per
-            // window so a query during a recompute never mixes generations. No-op for time-range
-            // archives and for rollups with no recompute history (empty genmap).
-            q.WithGenerationRanges(await LoadGenerationRangesAsync(snapshot, archiveRtId));
+            // window so a query during a recompute never mixes generations. Marks the query
+            // generation-tracked even when the genmap is empty (baseline generation = 0), which hides
+            // a recompute's not-yet-committed next-generation rows. Time-range archives have no
+            // generation column, so they are left untouched.
+            if (snapshot.RollupAggregations is not null)
+            {
+                q.WithGenerationRanges(await LoadGenerationRangesAsync(snapshot, archiveRtId));
+            }
         }
         q.IncludeDefaultVariables();
         q.WithCkTypeIdFilter(options.CkTypeId);
@@ -536,9 +541,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         {
             q.UseWindowedTimeAxis();
             // Phase 6 (AB#4184): for rollup archives, constrain reads to the active generation per
-            // window so a query during a recompute never mixes generations. No-op for time-range
-            // archives and for rollups with no recompute history (empty genmap).
-            q.WithGenerationRanges(await LoadGenerationRangesAsync(snapshot, archiveRtId));
+            // window so a query during a recompute never mixes generations. Marks the query
+            // generation-tracked even when the genmap is empty (baseline generation = 0), which hides
+            // a recompute's not-yet-committed next-generation rows. Time-range archives have no
+            // generation column, so they are left untouched.
+            if (snapshot.RollupAggregations is not null)
+            {
+                q.WithGenerationRanges(await LoadGenerationRangesAsync(snapshot, archiveRtId));
+            }
         }
         q.WithCkTypeIdFilter(options.CkTypeId);
 
@@ -623,9 +633,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         {
             q.UseWindowedTimeAxis();
             // Phase 6 (AB#4184): for rollup archives, constrain reads to the active generation per
-            // window so a query during a recompute never mixes generations. No-op for time-range
-            // archives and for rollups with no recompute history (empty genmap).
-            q.WithGenerationRanges(await LoadGenerationRangesAsync(snapshot, archiveRtId));
+            // window so a query during a recompute never mixes generations. Marks the query
+            // generation-tracked even when the genmap is empty (baseline generation = 0), which hides
+            // a recompute's not-yet-committed next-generation rows. Time-range archives have no
+            // generation column, so they are left untouched.
+            if (snapshot.RollupAggregations is not null)
+            {
+                q.WithGenerationRanges(await LoadGenerationRangesAsync(snapshot, archiveRtId));
+            }
         }
         q.WithCkTypeIdFilter(options.CkTypeId);
 
@@ -760,9 +775,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         {
             q.UseWindowedTimeAxis();
             // Phase 6 (AB#4184): for rollup archives, constrain reads to the active generation per
-            // window so a query during a recompute never mixes generations. No-op for time-range
-            // archives and for rollups with no recompute history (empty genmap).
-            q.WithGenerationRanges(await LoadGenerationRangesAsync(snapshot, archiveRtId));
+            // window so a query during a recompute never mixes generations. Marks the query
+            // generation-tracked even when the genmap is empty (baseline generation = 0), which hides
+            // a recompute's not-yet-committed next-generation rows. Time-range archives have no
+            // generation column, so they are left untouched.
+            if (snapshot.RollupAggregations is not null)
+            {
+                q.WithGenerationRanges(await LoadGenerationRangesAsync(snapshot, archiveRtId));
+            }
         }
         q.WithCkTypeIdFilter(options.CkTypeId);
         q.WithTimeFilter(options.From.Value, options.To.Value);

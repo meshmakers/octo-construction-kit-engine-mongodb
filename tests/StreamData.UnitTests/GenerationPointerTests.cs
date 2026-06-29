@@ -69,8 +69,10 @@ public class GenerationPointerTests
     }
 
     [Fact]
-    public void Compile_NoGenerationRanges_EmitsNoGenerationPredicate()
+    public void Compile_NotGenerationTracked_EmitsNoGenerationPredicate()
     {
+        // A non-rollup (time-range) query never calls WithGenerationRanges, so no generation
+        // predicate is emitted — those tables have no generation column.
         var qb = new CrateQueryBuilder(Table);
         qb.AddVariable("voltage_avg_sum", null, null);
 
@@ -78,6 +80,21 @@ public class GenerationPointerTests
 
         Assert.DoesNotContain("generation", sql);
         Assert.DoesNotContain("WHERE", sql);
+    }
+
+    [Fact]
+    public void Compile_GenerationTracked_EmptyRanges_EmitsBaselineGenerationZero()
+    {
+        // Rollup read with an empty genmap (steady state, or mid-recompute before the pointer flip):
+        // must still filter to generation 0 so not-yet-committed next-generation rows stay hidden.
+        var qb = new CrateQueryBuilder(Table);
+        qb.AddVariable("voltage_avg_sum", null, null);
+        qb.WithGenerationRanges(System.Array.Empty<GenerationRange>());
+
+        var sql = new CrateQueryCompiler().CompileQuery(qb);
+
+        Assert.Contains("WHERE \"generation\" = 0", sql);
+        Assert.DoesNotContain("CASE", sql);
     }
 
     [Fact]

@@ -385,21 +385,30 @@ internal class CrateQueryBuilder
     /// <summary>
     /// Active-generation ranges for a rollup archive (AB#4184, Phase 6). Each entry maps a
     /// half-open window range (epoch ms) to the generation a reader must select. Empty in the steady
-    /// state (no recompute has happened) — the compiler then emits no generation predicate and all
-    /// rows (generation 0) are returned. Populated from the rollup's <c>__genmap</c> side-table.
+    /// state (no recompute has happened); the compiler then emits <c>generation = 0</c>. Populated
+    /// from the rollup's <c>__genmap</c> side-table.
     /// </summary>
     internal List<GenerationRange> GenerationRanges { get; } = new();
 
-    /// <summary>True when at least one active-generation range is configured (rollup archives only).</summary>
-    internal bool HasGenerationFilter => GenerationRanges.Count > 0;
+    /// <summary>
+    /// True when this query targets a generation-tracked (rollup) archive. Set by
+    /// <see cref="WithGenerationRanges"/>. When true the compiler ALWAYS emits a generation predicate
+    /// — at minimum <c>generation = 0</c> — even with an empty range list, because a recompute writes
+    /// the next generation's rows into the live table *before* it flips the pointer; without the
+    /// baseline filter those uncommitted rows would leak into reads as a mixed-generation result.
+    /// </summary>
+    internal bool GenerationTracked { get; private set; }
 
     /// <summary>
-    /// Supplies the active-generation ranges read from the rollup's generation-map side-table. The
-    /// compiler turns them into a <c>generation = CASE … ELSE 0 END</c> predicate so a query during a
-    /// recompute returns a single consistent generation per window. No-op for an empty list.
+    /// Marks the query as targeting a generation-tracked rollup archive and supplies the active-
+    /// generation ranges read from its generation-map side-table. The compiler turns them into a
+    /// <c>generation = CASE … ELSE 0 END</c> predicate (or a bare <c>generation = 0</c> when the list
+    /// is empty) so a query during a recompute returns a single consistent generation per window.
+    /// Must NOT be called for time-range archives — their tables have no generation column.
     /// </summary>
     public CrateQueryBuilder WithGenerationRanges(IEnumerable<GenerationRange> ranges)
     {
+        GenerationTracked = true;
         GenerationRanges.AddRange(ranges);
         return this;
     }
