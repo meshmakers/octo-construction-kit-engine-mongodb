@@ -550,7 +550,9 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
   active-generation pointer. **Design note:** the concept doc (§4) places this pointer in "Mongo
   metadata"; we deliberately co-locate it in CrateDB next to the data so the flip is a single-row
   write in the same store — no CK-model bump, no cross-store coordination.
-- **Executor flip** (`CrateDbArchiveRecomputeExecutor`) — compute into staging (as before), then:
+- **Executor flip** (`CrateDbArchiveRecomputeExecutor`) — compute into staging, then **refresh the
+  staging table** (CrateDB applies inserts to the read path asynchronously, so the staging→live
+  `INSERT … SELECT` would otherwise copy zero rows — found by the integration test below), then:
   (1) `BuildInsertFromStagingWithGeneration` copies staged rows into the live table stamped with the
   next generation `N+1` (the previous generation stays visible); (2) `RefreshArchiveTableAsync`;
   (3) `GenerationMapSqlBuilder.BuildUpsertPointer` flips the pointer to `N+1` — the **atomic commit**;
@@ -561,7 +563,13 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
   and pass the ranges to `CrateQueryBuilder.WithGenerationRanges`; `CrateQueryCompiler` emits
   `"generation" = CASE WHEN <range> THEN <gen> … ELSE 0 END` (ranges ordered newest-generation-first
   so an overlapping re-recompute wins). Empty genmap ⇒ no predicate ⇒ all (generation-0) rows.
-- **Caveats** (live-CrateDB validation pending): rollup tables provisioned *before* Phase 6 lack the
+- **Integration test:** `RollupRecomputeGenerationPointerTests` (in `octo-asset-repo-services`,
+  reusing its CrateDB+Mongo `StreamDataFixture`) drives the real executor end-to-end against a CrateDB
+  Testcontainer and asserts the generation flip, the no-mixed-read filter (an injected uncommitted
+  generation stays hidden), and the post-flip sweep. This is the automated replacement for the
+  previously-manual live validation; it caught both the staging-refresh bug above and the empty-genmap
+  baseline-filter bug.
+- **Caveats:** rollup tables provisioned *before* Phase 6 lack the
   generation column/PK — they need recreate (forward aggregation's `ON CONFLICT (…, generation)`
   would otherwise not match); `LoadGenerationRangesAsync` tolerates a missing genmap table. Per-rtId
   scoped recompute is still `NotSupported` in the executor (genmap `rtid_scope` is always `''`).

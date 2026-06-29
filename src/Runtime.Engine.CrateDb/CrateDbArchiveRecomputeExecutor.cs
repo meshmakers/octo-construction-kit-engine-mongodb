@@ -120,6 +120,11 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
             windows++;
         }
 
+        // CrateDB applies inserts to the read path asynchronously, so the staged aggregates are not
+        // yet visible to the next statement. Refresh staging before the staging->live copy, otherwise
+        // the INSERT ... SELECT FROM staging reads zero rows and the live table ends up empty.
+        await _databaseClient.RefreshArchiveTableAsync(_tenantId, stagingTable);
+
         // ---- Atomic swap via the per-window generation pointer (Phase 6) ----
         // Instead of a non-atomic DELETE+INSERT over the live range, copy the staged rows into the
         // live table under a fresh generation (the previous generation stays visible), then flip the
