@@ -1492,7 +1492,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// <see cref="EvaluateRollupComputedColumnsAsync"/> works around).
     /// </para>
     /// </summary>
-    internal async Task BackfillComputedColumnAsync(
+    public async Task BackfillComputedColumnAsync(
         ArchiveSnapshot snapshot, string columnName, CancellationToken cancellationToken = default)
     {
         var target = snapshot.Columns.FirstOrDefault(
@@ -1568,6 +1568,55 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         snapshot.UsesWindowedStorage
             ? new[] { Constants.WindowStart, Constants.WindowEnd, Constants.RtId, Constants.CkTypeId }
             : new[] { Constants.Timestamp, Constants.RtId, Constants.CkTypeId };
+
+    /// <inheritdoc />
+    public Task ValidateComputedColumnsAsync(
+        OctoObjectId archiveRtId,
+        IReadOnlyList<CkArchiveColumnSpec> prospectiveColumns,
+        CancellationToken cancellationToken = default)
+    {
+        // Pure (no I/O): runs the same validator the activation path uses, over an arbitrary
+        // prospective set. Throws ComputedColumnInvalidException (a StreamDataException → stable
+        // GraphQL error code) on the first issue.
+        ComputedColumnValidator.Validate(archiveRtId, prospectiveColumns, _formulaEngine);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public async Task AddComputedColumnStorageAsync(
+        ArchiveSnapshot snapshot, string columnName, CancellationToken cancellationToken = default)
+    {
+        var column = snapshot.Columns.FirstOrDefault(
+            c => c.IsComputed && string.Equals(c.Name, columnName, StringComparison.Ordinal));
+        if (column is null)
+        {
+            return; // nothing to provision — validation upstream rejects an unknown column
+        }
+
+        var table = TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString());
+        var sql = ArchiveDdlGenerator.GenerateAddColumn(table, ComputedColumnDdl.Build(column));
+
+        try
+        {
+            await _databaseClient.ExecuteNonQueryAsync(_tenantId, sql, cancellationToken);
+        }
+        catch (Exception ex) when (IsColumnAlreadyExists(ex))
+        {
+            // Idempotent: a re-add reuses the orphaned physical column left by a prior remove, and a
+            // retried add finds the column already provisioned. The backfill overwrites every row.
+            _logger.LogDebug(ex,
+                "Physical column for computed column '{Column}' on archive {Archive} already exists; reusing it.",
+                columnName, snapshot.RtId);
+        }
+    }
+
+    /// <summary>
+    /// True when a failed <c>ALTER TABLE … ADD COLUMN</c> is the benign "column already exists" case
+    /// (CrateDB has no <c>ADD COLUMN IF NOT EXISTS</c>), so the add path can treat it as idempotent.
+    /// </summary>
+    private static bool IsColumnAlreadyExists(Exception ex) =>
+        ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+        || ex.Message.Contains("already has a column", StringComparison.OrdinalIgnoreCase);
 
     /// <inheritdoc />
     public async Task<IReadOnlyDictionary<OctoObjectId, ArchiveStorageStats>> GetArchiveStatsAsync(

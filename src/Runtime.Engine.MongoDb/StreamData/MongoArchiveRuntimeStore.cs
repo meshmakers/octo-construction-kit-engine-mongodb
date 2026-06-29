@@ -153,6 +153,70 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
     }
 
     /// <inheritdoc />
+    public Task AddComputedColumnAsync(OctoObjectId archiveRtId, CkArchiveColumnSpec column) =>
+        MutateAsync(archiveRtId, entity =>
+        {
+            var list = entity.Columns ?? new AttributeRecordValueList<RtCkArchiveColumnRecord>();
+            list.Add(new RtCkArchiveColumnRecord
+            {
+                Path = column.Path,
+                Indexed = column.Indexed,
+                Required = column.Required,
+                Name = column.Name,
+                Formula = column.Formula,
+                ResultType = column.ResultType is { } rt ? (RtCkComputedColumnResultTypeEnum)(int)rt : null,
+                ComputedState = column.ComputedState is { } cs ? (RtCkComputedColumnStateEnum)(int)cs : null,
+                ComputedVersion = column.ComputedVersion,
+            });
+            entity.Columns = list;
+        });
+
+    /// <inheritdoc />
+    public Task SetComputedColumnStateAsync(OctoObjectId archiveRtId, string name, ComputedColumnState state) =>
+        MutateAsync(archiveRtId, entity =>
+        {
+            var column = entity.Columns?.FirstOrDefault(
+                c => !string.IsNullOrWhiteSpace(c.Formula) && string.Equals(c.Name, name, StringComparison.Ordinal));
+            if (column is null)
+            {
+                // The lifecycle service always persists the column before flipping its state, so a
+                // miss here is an internal invariant violation, not a user error.
+                throw new InvalidOperationException(
+                    $"Computed column '{name}' not found on archive {archiveRtId}.");
+            }
+
+            column.ComputedState = (RtCkComputedColumnStateEnum)(int)state;
+        });
+
+    /// <inheritdoc />
+    public Task RemoveComputedColumnAsync(OctoObjectId archiveRtId, string name) =>
+        MutateAsync(archiveRtId, entity =>
+        {
+            if (entity.Columns is null)
+            {
+                return;
+            }
+
+            var kept = new AttributeRecordValueList<RtCkArchiveColumnRecord>();
+            kept.AddRange(entity.Columns.Where(
+                c => !(!string.IsNullOrWhiteSpace(c.Formula) && string.Equals(c.Name, name, StringComparison.Ordinal))));
+            entity.Columns = kept;
+        });
+
+    private async Task MutateAsync(OctoObjectId archiveRtId, Action<RtArchive> mutate)
+    {
+        var session = await _tenantRepository.GetSessionAsync();
+        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtArchive>(session, archiveRtId)
+            ?? throw new ArchiveNotFoundException(archiveRtId);
+
+        mutate(entity);
+
+        // Persist via the concrete CkTypeId (Raw / TimeRange / Rollup); the abstract <RtArchive>
+        // generic would hand the rule engine the abstract base type. Same idiom as SetStatusAsync.
+        await _tenantRepository.UpdateOneRtEntityByIdAsync(session, entity.CkTypeId!, archiveRtId, entity);
+    }
+
+    /// <inheritdoc />
     public async Task ArchiveEntityAsync(OctoObjectId archiveRtId)
     {
         var session = await _tenantRepository.GetSessionAsync();
