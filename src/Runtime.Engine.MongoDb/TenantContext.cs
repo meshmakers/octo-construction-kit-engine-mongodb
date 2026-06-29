@@ -1088,7 +1088,8 @@ public class TenantContext : ITenantContext
         // the store is always available — we own its lifetime here. The rollup store is optional
         // and only needed for cascade-rollup chain-aware aggregation resolution; null when the
         // tenant doesn't have rollup support registered.
-        _streamDataRepository = factory.Create(TenantId, GetArchiveRuntimeStore(), GetRollupArchiveRuntimeStore());
+        _streamDataRepository = factory.Create(
+            TenantId, GetArchiveRuntimeStore(), GetRollupArchiveRuntimeStore(), GetArchiveRecomputeStateStore());
         _streamDataRepositoryResolved = true;
         return _streamDataRepository;
     }
@@ -1148,6 +1149,22 @@ public class TenantContext : ITenantContext
     public ITimeRangeArchiveRuntimeStore? GetTimeRangeArchiveRuntimeStore()
     {
         return _timeRangeStore ??= new MongoTimeRangeArchiveRuntimeStore(GetTenantRepository());
+    }
+
+    private IArchiveRecomputeStateStore? _archiveRecomputeStateStore;
+
+    /// <inheritdoc />
+    public IArchiveRecomputeStateStore GetArchiveRecomputeStateStore()
+    {
+        return _archiveRecomputeStateStore ??= new MongoArchiveRecomputeStateStore(GetTenantRepository());
+    }
+
+    private IRecomputeJobStore? _recomputeJobStore;
+
+    /// <inheritdoc />
+    public IRecomputeJobStore GetRecomputeJobStore()
+    {
+        return _recomputeJobStore ??= new MongoRecomputeJobStore(GetTenantRepository());
     }
 
     private IRollupArchiveLifecycleService? _rollupLifecycleService;
@@ -1227,6 +1244,54 @@ public class TenantContext : ITenantContext
             audit,
             _loggerFactory.CreateLogger<RollupOrchestrator>());
         return _rollupOrchestrator;
+    }
+
+    private IRecomputeOrchestrator? _recomputeOrchestrator;
+
+    /// <inheritdoc />
+    public IRecomputeOrchestrator? GetRecomputeOrchestrator()
+    {
+        if (_recomputeOrchestrator != null)
+        {
+            return _recomputeOrchestrator;
+        }
+
+        var streamData = GetStreamDataRepository();
+        var rollupStore = GetRollupArchiveRuntimeStore();
+        if (streamData is null || rollupStore is null)
+        {
+            return null;
+        }
+
+        // Same tenant-level gate as GetRollupOrchestrator: skip until the tenant has imported the
+        // System.StreamData CK model (otherwise the stores' EnumerateAsync throws CkCacheException).
+        if (!_cacheService.TryGetRtCkType(TenantId, RollupArchiveRtCkTypeId, out _))
+        {
+            return null;
+        }
+
+        // The CrateDB stream-data repository doubles as the recompute executor (it owns the wired
+        // CrateDB clients). If a non-Crate repository is ever plugged in, recompute stays disabled.
+        if (streamData is not IArchiveRecomputeExecutor executor)
+        {
+            return null;
+        }
+
+        var audit = _serviceProvider.GetService<IArchiveAuditTrail>()
+                    ?? new LoggingArchiveAuditTrail(_loggerFactory.CreateLogger<LoggingArchiveAuditTrail>());
+
+        _recomputeOrchestrator = new RecomputeOrchestrator(
+            TenantId,
+            GetArchiveRuntimeStore(),
+            rollupStore,
+            new RollupDependencyGraph(rollupStore),
+            GetArchiveRecomputeStateStore(),
+            GetRecomputeJobStore(),
+            executor,
+            audit,
+            _loggerFactory.CreateLogger<RecomputeOrchestrator>(),
+            () => DateTime.UtcNow);
+        return _recomputeOrchestrator;
     }
 
     #endregion Access management

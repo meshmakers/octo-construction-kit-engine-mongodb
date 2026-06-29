@@ -18,9 +18,10 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// CrateDB implementation of <see cref="IStreamDataRepository"/>.
 /// Encapsulates query orchestration, field resolution, pagination, and result transformation.
 /// </summary>
-internal class CrateDbStreamDataRepository : IStreamDataRepository
+internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveRecomputeExecutor
 {
     private readonly ILogger<CrateDbStreamDataRepository> _logger;
+    private CrateDbArchiveRecomputeExecutor? _recomputeExecutor;
     private readonly ICkCacheService _ckCacheService;
     private readonly IStreamDataDatabaseClient _databaseClient;
     private readonly IStreamDataDatabaseManagementClient _managementClient;
@@ -29,6 +30,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     private readonly StreamDataConfiguration _configuration;
     private readonly string _tenantId;
     private readonly IFormulaEngine _formulaEngine;
+    private readonly IArchiveRecomputeStateStore? _recomputeStateStore;
 
     public CrateDbStreamDataRepository(
         ILogger<CrateDbStreamDataRepository> logger,
@@ -39,7 +41,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         string tenantId,
         IArchiveRuntimeStore archiveStore,
         IFormulaEngine formulaEngine,
-        IRollupArchiveRuntimeStore? rollupArchiveStore = null)
+        IRollupArchiveRuntimeStore? rollupArchiveStore = null,
+        IArchiveRecomputeStateStore? recomputeStateStore = null)
     {
         _logger = logger;
         _ckCacheService = ckCacheService;
@@ -50,6 +53,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         _configuration = configuration.Value;
         _tenantId = tenantId;
         _formulaEngine = formulaEngine;
+        _recomputeStateStore = recomputeStateStore;
     }
 
     public Task EnsureDatabaseCreatedAsync()
@@ -205,6 +209,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         CrateDbDiagnostics.InsertedPoints.Add(1,
             new("tenant", _tenantId),
             new("archive", archiveRtId.ToString()));
+
+        await DetectAndRecordRetroactiveWriteAsync(
+            archiveRtId, new[] { datapoint.Timestamp }, RecomputeChangeSource.Pipeline);
     }
 
     public async Task InsertAsync(OctoObjectId archiveRtId, IEnumerable<StreamDataPoint> datapoints)
@@ -254,6 +261,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         CrateDbDiagnostics.InsertedPoints.Add(filtered.Count,
             new("tenant", _tenantId),
             new("archive", archiveRtId.ToString()));
+
+        await DetectAndRecordRetroactiveWriteAsync(
+            archiveRtId, filtered.Select(p => p.Timestamp), RecomputeChangeSource.Pipeline);
     }
 
     /// <summary>
@@ -340,6 +350,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         CrateDbDiagnostics.InsertedPoints.Add(filtered.Count,
             new("tenant", _tenantId),
             new("archive", archiveRtId.ToString()));
+
+        // Time-range rows are keyed by their window start; a late window correction is retroactive.
+        await DetectAndRecordRetroactiveWriteAsync(
+            archiveRtId, filtered.Select(p => p.From), RecomputeChangeSource.Pipeline);
     }
 
     private Dtos.TimeRangeDataPointDto MapToTimeRangeDataPointDto(TimeRangeStreamDataPoint point,
@@ -1166,6 +1180,77 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         await EvaluateRollupComputedColumnsAsync(rollup.RtId, targetTable, bucketStart, bucketEnd, cancellationToken);
 
         return affected;
+    }
+
+    /// <inheritdoc />
+    public Task<RecomputeExecutionResult> ExecuteAsync(
+        ArchiveSnapshot source,
+        RollupArchiveSnapshot rollup,
+        DateTime rangeStart,
+        DateTime rangeEnd,
+        OctoObjectId? rtIdScope,
+        CancellationToken cancellationToken)
+    {
+        // Reuse this repository's already-wired CrateDB clients / config / archive store — the
+        // recompute executor needs the exact same plumbing as bucket aggregation.
+        _recomputeExecutor ??= new CrateDbArchiveRecomputeExecutor(
+            _tenantId, _databaseClient, _managementClient, _archiveStore,
+            _configuration.NumberOfShards, _configuration.NumberOfReplicas, _logger);
+
+        return _recomputeExecutor.ExecuteAsync(source, rollup, rangeStart, rangeEnd, rtIdScope, cancellationToken);
+    }
+
+    /// <summary>
+    /// Information A (AB#4184): records a dirty window on the source archive when an ingest batch
+    /// contains a timestamp at/before the high-water mark already consumed by dependent rollups
+    /// (a correction / late value). No-op when recompute state tracking is not wired, the archive
+    /// has no dependents, or every timestamp is a forward append. Cheap guards run before the rollup
+    /// enumeration so the common forward-ingest path stays untouched.
+    /// </summary>
+    private async Task DetectAndRecordRetroactiveWriteAsync(
+        OctoObjectId archiveRtId, IEnumerable<DateTime> timestamps, RecomputeChangeSource source)
+    {
+        if (_recomputeStateStore is null || _rollupArchiveStore is null)
+        {
+            return;
+        }
+
+        var consumedWatermark = await GetConsumedWatermarkAsync(archiveRtId);
+        if (RetroactiveWriteDetector.TryBuildDirtyWindow(
+                consumedWatermark, timestamps, source, DateTime.UtcNow, out var window))
+        {
+            await _recomputeStateStore.AppendDirtyWindowAsync(archiveRtId, window);
+            _logger.LogInformation(
+                "Archive {ArchiveRtId}: retroactive write detected over [{Start:O}, {End:O}); dirty window recorded for recompute.",
+                archiveRtId, window.WindowStart, window.WindowEnd);
+        }
+    }
+
+    /// <summary>
+    /// The earliest point any dependent rollup has aggregated past — the consumed high-water mark of
+    /// <paramref name="sourceArchiveRtId"/>. Null when no dependent exists or none has aggregated
+    /// yet (nothing has been consumed, so no write can be retroactive).
+    /// </summary>
+    private async Task<DateTime?> GetConsumedWatermarkAsync(OctoObjectId sourceArchiveRtId)
+    {
+        if (_rollupArchiveStore is null)
+        {
+            return null;
+        }
+
+        DateTime? min = null;
+        await foreach (var rollup in _rollupArchiveStore.EnumerateAsync())
+        {
+            if (rollup.SourceArchiveRtId != sourceArchiveRtId)
+            {
+                continue;
+            }
+            if (rollup.LastAggregatedBucketEnd is { } watermark && (min is null || watermark < min))
+            {
+                min = watermark;
+            }
+        }
+        return min;
     }
 
     private async Task EvaluateRollupComputedColumnsAsync(

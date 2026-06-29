@@ -207,4 +207,22 @@ public static class RuntimeEngineBuilderExtensions
 
         return builder;
     }
+
+    /// <summary>
+    /// Registers the recompute orchestrator background service (AB#4184). Reuses the same
+    /// <see cref="Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.IRollupTenantSource"/> as the
+    /// rollup orchestrator for the active tenant set; bind options from
+    /// <c>StreamData:Recompute</c> or rely on the defaults (60 s tick, 60 s startup delay). Call
+    /// <see cref="AddRollupOrchestratorBackgroundService"/> as well so a tenant source is wired.
+    /// </summary>
+    public static IRuntimeEngineBuilder AddRecomputeOrchestratorBackgroundService(this IRuntimeEngineBuilder builder)
+    {
+        builder.Services.AddOptions<Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.RecomputeOrchestratorOptions>();
+        builder.Services.TryAddSingleton<
+            Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.IRollupTenantSource,
+            Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.ConfigBasedRollupTenantSource>();
+        builder.Services.AddHostedService<Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.RecomputeOrchestratorHostedService>();
+
+        return builder;
+    }
 }

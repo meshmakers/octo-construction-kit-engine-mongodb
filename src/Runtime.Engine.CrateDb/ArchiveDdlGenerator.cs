@@ -220,7 +220,7 @@ internal static class ArchiveDdlGenerator
     /// <c>tempCelsius</c>); the create generators surface that as a hard error rather than silently
     /// overwriting.
     /// </summary>
-    private static string ResolveColumnName(ArchiveColumnDdl col)
+    internal static string ResolveColumnName(ArchiveColumnDdl col)
     {
         if (!string.IsNullOrWhiteSpace(col.ColumnName))
         {
