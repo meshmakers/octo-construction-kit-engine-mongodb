@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Globalization;
 using System.Text;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
@@ -32,8 +31,8 @@ internal static class RollupComputedColumnSqlBuilder
         }
 
         sb.Append(" FROM ").Append(qualifiedTable)
-          .Append(" WHERE \"").Append(Constants.WindowStart).Append("\" = ").Append(Timestamp(bucketStart))
-          .Append(" AND \"").Append(Constants.WindowEnd).Append("\" = ").Append(Timestamp(bucketEnd))
+          .Append(" WHERE \"").Append(Constants.WindowStart).Append("\" = ").Append(CrateSqlLiteral.Timestamp(bucketStart))
+          .Append(" AND \"").Append(Constants.WindowEnd).Append("\" = ").Append(CrateSqlLiteral.Timestamp(bucketEnd))
           .Append(';');
         return sb.ToString();
     }
@@ -56,33 +55,14 @@ internal static class RollupComputedColumnSqlBuilder
         for (var i = 0; i < assignments.Count; i++)
         {
             if (i > 0) sb.Append(", ");
-            sb.Append('"').Append(assignments[i].Column).Append("\" = ").Append(Literal(assignments[i].Value));
+            sb.Append('"').Append(assignments[i].Column).Append("\" = ").Append(CrateSqlLiteral.Value(assignments[i].Value));
         }
 
-        sb.Append(" WHERE \"").Append(Constants.WindowStart).Append("\" = ").Append(Timestamp(bucketStart))
-          .Append(" AND \"").Append(Constants.WindowEnd).Append("\" = ").Append(Timestamp(bucketEnd))
-          .Append(" AND \"").Append(Constants.RtId).Append("\" = ").Append(StringLiteral(rtId))
-          .Append(" AND \"").Append(Constants.CkTypeId).Append("\" = ").Append(StringLiteral(ckTypeId))
+        sb.Append(" WHERE \"").Append(Constants.WindowStart).Append("\" = ").Append(CrateSqlLiteral.Timestamp(bucketStart))
+          .Append(" AND \"").Append(Constants.WindowEnd).Append("\" = ").Append(CrateSqlLiteral.Timestamp(bucketEnd))
+          .Append(" AND \"").Append(Constants.RtId).Append("\" = ").Append(CrateSqlLiteral.String(rtId))
+          .Append(" AND \"").Append(Constants.CkTypeId).Append("\" = ").Append(CrateSqlLiteral.String(ckTypeId))
           .Append(';');
         return sb.ToString();
     }
-
-    private static string Timestamp(System.DateTime dt) =>
-        $"'{dt.ToUniversalTime():yyyy-MM-ddTHH:mm:ss.fffZ}'::timestamp with time zone";
-
-    private static string StringLiteral(string s) => "'" + s.Replace("'", "''") + "'";
-
-    private static string Literal(object? value) => value switch
-    {
-        null => "NULL",
-        bool b => b ? "TRUE" : "FALSE",
-        double d => double.IsFinite(d) ? d.ToString("R", CultureInfo.InvariantCulture) : "NULL",
-        float f => float.IsFinite(f) ? f.ToString("R", CultureInfo.InvariantCulture) : "NULL",
-        int i => i.ToString(CultureInfo.InvariantCulture),
-        long l => l.ToString(CultureInfo.InvariantCulture),
-        short s => s.ToString(CultureInfo.InvariantCulture),
-        decimal m => m.ToString(CultureInfo.InvariantCulture),
-        System.DateTime dt => Timestamp(dt),
-        _ => StringLiteral(value.ToString() ?? string.Empty),
-    };
 }
