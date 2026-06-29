@@ -224,6 +224,18 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             entity.FrozenUntil)
         {
             BucketAlignment = bucketAlignment,
+            // Recompute observability (AB#4184) — projected from the engine-maintained Archive-base
+            // attributes so rollupsFor can surface recompute health. Counts fall back to 0 when the
+            // RecordArray attribute was never written (steady state / pre-1.6.0 entities).
+            RecomputeInProgress = entity.RecomputeInProgress,
+            LastRecomputeStartedAt = entity.LastRecomputeStartedAt,
+            LastRecomputeSuccessAt = entity.LastRecomputeSuccessAt,
+            LastRecomputeFailureAt = entity.LastRecomputeFailureAt,
+            LastRecomputeFailureReason = string.IsNullOrEmpty(entity.LastRecomputeFailureReason)
+                ? null
+                : entity.LastRecomputeFailureReason,
+            DirtyWindowsPending = entity.DirtyWindows?.Count ?? 0,
+            PendingRecomputeRanges = entity.PendingRecomputeRanges?.Count ?? 0,
         };
     }
 }
