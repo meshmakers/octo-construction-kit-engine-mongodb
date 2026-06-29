@@ -8,11 +8,10 @@ using Xunit;
 namespace Meshmakers.Octo.Runtime.Engine.UnitTests;
 
 /// <summary>
-/// Read-path projection gating (AB#4189 Phase 7, §8.2 D-7.2): the field resolver that decides which
-/// columns a query may project must register a computed column by its <c>Name</c> (closing the MVP
-/// gap where computed columns were fed by their empty <c>Path</c> and so were never queryable), but
-/// only when the column is readable — a column mid-backfill / failed stays hidden so consumers keep
-/// seeing the previous archive state until the swap commits.
+/// Read-path projection gating + versioned physical naming (AB#4189 Phase 7, §8): a computed column
+/// is projected by its logical <c>Name</c> mapped to its <em>active versioned</em> physical column
+/// (<c>{base}__v{N}</c>); columns mid-backfill / failed stay hidden so consumers keep the previous
+/// state until the swap.
 /// </summary>
 public class CrateDbReadableColumnIdentifiersTests
 {
@@ -21,39 +20,56 @@ public class CrateDbReadableColumnIdentifiersTests
 
     private static CkArchiveColumnSpec Ing(string path) => new(path, Indexed: true, Required: false);
 
-    private static CkArchiveColumnSpec Comp(string name, ComputedColumnState? state) =>
+    private static CkArchiveColumnSpec Comp(string name, ComputedColumnState? state, int version = 0) =>
         new(string.Empty, Indexed: true, Required: false)
         {
             Name = name,
             Formula = "activepower / apparentpower",
             ResultType = FormulaResultType.Double,
             ComputedState = state,
+            ComputedVersion = version,
         };
 
-    private static string[] Resolve(params CkArchiveColumnSpec[] columns) =>
-        CrateDbStreamDataRepository.ReadableColumnIdentifiers(
+    private static (string Name, string Physical)[] Readable(params CkArchiveColumnSpec[] columns) =>
+        CrateDbStreamDataRepository.ReadableComputedColumns(
                 new ArchiveSnapshot(Archive, SomeType, CkArchiveStatus.Activated, "energy", columns))
             .ToArray();
 
     [Fact]
-    public void IngestedColumns_ContributeTheirPath()
+    public void Naming_Version0_IsBaseName()
     {
-        Assert.Equal(new[] { "ActivePower", "ApparentPower" },
-            Resolve(Ing("ActivePower"), Ing("ApparentPower")));
+        var c = Comp("powerFactor", ComputedColumnState.Active, version: 0);
+        Assert.Equal("powerfactor", ComputedColumnNaming.Base(c));
+        Assert.Equal("powerfactor", ComputedColumnNaming.Active(c));
+        Assert.Equal("powerfactor__v1", ComputedColumnNaming.Pending(c));
     }
 
     [Fact]
-    public void ComputedColumn_CreatedWithArchive_NullState_IsReadableByName()
+    public void Naming_VersionN_IsSuffixed()
     {
-        // A computed column created together with its archive has no lifecycle state yet → live.
-        Assert.Equal(new[] { "powerFactor" }, Resolve(Comp("powerFactor", state: null)));
+        var c = Comp("powerFactor", ComputedColumnState.Active, version: 2);
+        Assert.Equal("powerfactor", ComputedColumnNaming.Base(c));
+        Assert.Equal("powerfactor__v2", ComputedColumnNaming.Active(c));
+        Assert.Equal("powerfactor__v3", ComputedColumnNaming.Pending(c));
     }
 
     [Fact]
-    public void ComputedColumn_Active_IsReadableByName()
+    public void IngestedColumns_AreNotComputed_NotInResult()
     {
-        Assert.Equal(new[] { "powerFactor" },
-            Resolve(Comp("powerFactor", ComputedColumnState.Active)));
+        Assert.Empty(Readable(Ing("ActivePower"), Ing("ApparentPower")));
+    }
+
+    [Fact]
+    public void ComputedColumn_NullState_ReadableAtBaseName()
+    {
+        Assert.Equal(new[] { ("powerFactor", "powerfactor") }, Readable(Comp("powerFactor", state: null)));
+    }
+
+    [Fact]
+    public void ComputedColumn_Active_Version2_ReadableAtVersionedName()
+    {
+        Assert.Equal(new[] { ("powerFactor", "powerfactor__v2") },
+            Readable(Comp("powerFactor", ComputedColumnState.Active, version: 2)));
     }
 
     [Theory]
@@ -62,24 +78,24 @@ public class CrateDbReadableColumnIdentifiersTests
     [InlineData(ComputedColumnState.Failed)]
     public void ComputedColumn_MidBackfillOrFailed_IsHidden(ComputedColumnState state)
     {
-        Assert.Empty(Resolve(Comp("powerFactor", state)));
+        Assert.Empty(Readable(Comp("powerFactor", state)));
     }
 
     [Fact]
     public void ComputedColumn_MissingName_IsSkippedDefensively()
     {
-        Assert.Empty(Resolve(Comp(string.Empty, ComputedColumnState.Active)));
+        Assert.Empty(Readable(Comp(string.Empty, ComputedColumnState.Active)));
     }
 
     [Fact]
-    public void MixedColumns_OnlyIngestedAndReadableComputedAreProjected()
+    public void MixedColumns_OnlyReadableComputedProjected_WithVersionedNames()
     {
-        var result = Resolve(
+        var result = Readable(
             Ing("ActivePower"),
-            Comp("powerFactor", ComputedColumnState.Active),
+            Comp("powerFactor", ComputedColumnState.Active, version: 1),
             Comp("draftRatio", ComputedColumnState.Backfilling),
             Comp("legacyRatio", state: null));
 
-        Assert.Equal(new[] { "ActivePower", "powerFactor", "legacyRatio" }, result);
+        Assert.Equal(new[] { ("powerFactor", "powerfactor__v1"), ("legacyRatio", "legacyratio") }, result);
     }
 }

@@ -133,6 +133,7 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
                     ResultType = isComputed && c.ResultType is { } rt ? (FormulaResultType)(int)rt : null,
                     ComputedState = isComputed && c.ComputedState is { } cs ? (ComputedColumnState)(int)cs : null,
                     ComputedVersion = isComputed && c.ComputedVersion is { } cv ? (int)cv : 0,
+                    PendingFormula = isComputed ? c.PendingFormula : null,
                 };
             })
             .ToList();
@@ -201,6 +202,39 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
             kept.AddRange(entity.Columns.Where(
                 c => !(!string.IsNullOrWhiteSpace(c.Formula) && string.Equals(c.Name, name, StringComparison.Ordinal))));
             entity.Columns = kept;
+        });
+
+    /// <inheritdoc />
+    public Task SetPendingFormulaAsync(OctoObjectId archiveRtId, string name, string pendingFormula) =>
+        MutateComputedColumnAsync(archiveRtId, name, column => column.PendingFormula = pendingFormula);
+
+    /// <inheritdoc />
+    public Task SwapComputedColumnFormulaAsync(OctoObjectId archiveRtId, string name, string newFormula, int newVersion) =>
+        MutateComputedColumnAsync(archiveRtId, name, column =>
+        {
+            column.Formula = newFormula;
+            column.ComputedVersion = newVersion;
+            column.PendingFormula = null;
+        });
+
+    /// <inheritdoc />
+    public Task ClearPendingFormulaAsync(OctoObjectId archiveRtId, string name) =>
+        MutateComputedColumnAsync(archiveRtId, name, column => column.PendingFormula = null);
+
+    private Task MutateComputedColumnAsync(OctoObjectId archiveRtId, string name, Action<RtCkArchiveColumnRecord> mutate) =>
+        MutateAsync(archiveRtId, entity =>
+        {
+            var column = entity.Columns?.FirstOrDefault(
+                c => !string.IsNullOrWhiteSpace(c.Formula) && string.Equals(c.Name, name, StringComparison.Ordinal));
+            if (column is null)
+            {
+                // The lifecycle service always loads + checks the column before calling these, so a
+                // miss here is an internal invariant violation, not a user error.
+                throw new InvalidOperationException(
+                    $"Computed column '{name}' not found on archive {archiveRtId}.");
+            }
+
+            mutate(column);
         });
 
     private async Task MutateAsync(OctoObjectId archiveRtId, Action<RtArchive> mutate)

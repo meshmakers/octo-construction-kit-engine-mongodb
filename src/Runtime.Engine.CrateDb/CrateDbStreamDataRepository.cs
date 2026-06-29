@@ -327,13 +327,31 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         ArchiveSnapshot snapshot, OctoObjectId archiveRtId)
     {
         var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString());
-        var userColumnNames = snapshot.Columns
-            // Computed columns derive their name from Name (no Path); ingested columns from Path.
-            // Defensively skip a computed column missing its Name — activation DDL would have
-            // rejected it, but the insert path must never throw on a malformed snapshot.
-            .Where(c => !c.IsComputed || !string.IsNullOrWhiteSpace(c.Name))
-            .Select(c => ColumnNameMapper.PathToColumnName(c.IsComputed ? c.Name! : c.Path))
-            .ToList();
+        var userColumnNames = new List<string>(snapshot.Columns.Count);
+        foreach (var c in snapshot.Columns)
+        {
+            if (!c.IsComputed)
+            {
+                userColumnNames.Add(ColumnNameMapper.PathToColumnName(c.Path));
+                continue;
+            }
+
+            // Defensively skip a computed column missing its Name — activation DDL would have rejected
+            // it, but the insert path must never throw on a malformed snapshot.
+            if (string.IsNullOrWhiteSpace(c.Name))
+            {
+                continue;
+            }
+
+            // The active physical column (versioned) always; and during a formula change the pending
+            // versioned column too, so ingest dual-writes both (BuildComputedPlan emits both values).
+            userColumnNames.Add(ComputedColumnNaming.Active(c));
+            if (c.HasPendingFormula)
+            {
+                userColumnNames.Add(ComputedColumnNaming.Pending(c));
+            }
+        }
+
         return (qualifiedTable, userColumnNames);
     }
 
@@ -1483,9 +1501,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// (AB#4189 Phase 7, §8): page through the rows, evaluate the column's formula in .NET over each
     /// row's operands, and write the result into the column's physical cell. The physical column must
     /// already exist (the lifecycle adds it via <c>ALTER TABLE ADD COLUMN</c> before the backfill).
-    /// The target column is expected to be in a non-readable lifecycle state (Backfilling) while this
-    /// runs, so the read path keeps hiding it (<see cref="ReadableColumnIdentifiers"/>) until the
-    /// caller flips it to <see cref="ComputedColumnState.Active"/> on success.
+    /// For an add the target is in a non-readable state (Backfilling) so the read path hides it
+    /// (<see cref="ReadableComputedColumns"/>) until the caller flips it to
+    /// <see cref="ComputedColumnState.Active"/>; for a formula change the target stays Active at the
+    /// previous version while the new formula is backfilled into the pending versioned column.
     /// <para>
     /// Each page is fully materialised before its UPDATEs run — CrateDB / Npgsql cannot issue an
     /// UPDATE while a SELECT cursor is open on the same connection (the same constraint
@@ -1503,16 +1522,22 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             return;
         }
 
-        var plan = BuildComputedPlan(snapshot);
-        var targetPhysical = ColumnNameMapper.PathToColumnName(target.Name);
+        // A formula change (PendingFormula set) backfills the NEW formula into the pending versioned
+        // column ({base}__v{N+1}); the plain add / re-add case backfills the active formula into the
+        // active column. Either way it is a single-target evaluation over the row's operands.
+        var (formula, targetPhysical) = target.HasPendingFormula
+            ? (target.PendingFormula!, ComputedColumnNaming.Pending(target))
+            : (target.Formula!, ComputedColumnNaming.Active(target));
+        var plan = new[] { new ComputedColumnPlanItem(targetPhysical, formula, target.ResultType.Value) };
 
         var table = TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString());
         var keyColumns = BackfillKeyColumns(snapshot);
-        // Operands are the readable data-stream columns (ingested + already-active computed), mapped
-        // to their physical names. The target itself is non-readable while backfilling, so it is not
-        // selected — ApplyComputedColumns writes it from the formula.
-        var valueColumns = ReadableColumnIdentifiers(snapshot)
-            .Select(ColumnNameMapper.PathToColumnName)
+        // Operands are the readable data-stream columns (ingested + already-active computed) at their
+        // physical names, minus the target's own physical columns (a formula can't reference itself).
+        var activeTargetPhysical = ComputedColumnNaming.Active(target);
+        var valueColumns = ReadableOperandPhysicalColumns(snapshot)
+            .Where(p => !string.Equals(p, targetPhysical, StringComparison.Ordinal)
+                        && !string.Equals(p, activeTargetPhysical, StringComparison.Ordinal))
             .ToList();
 
         var offset = 0;
@@ -1610,6 +1635,55 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
     }
 
+    /// <inheritdoc />
+    public async Task AddPendingComputedColumnStorageAsync(
+        ArchiveSnapshot snapshot, string columnName, CancellationToken cancellationToken = default)
+    {
+        var column = snapshot.Columns.FirstOrDefault(
+            c => c.IsComputed && string.Equals(c.Name, columnName, StringComparison.Ordinal));
+        if (column is null)
+        {
+            return;
+        }
+
+        // Guard (AB#4189 Phase 7 MVP limitation): a formula change re-versions the column's physical
+        // name ({base} -> {base}__v{N+1}), so any other computed column whose formula references the
+        // current physical name would silently bind to the orphaned old column. Reject the change and
+        // make the operator re-point or remove the dependent first. (Direct-SQL / Grafana consumers
+        // referencing the physical name must likewise follow the rename — documented.)
+        var activePhysical = ComputedColumnNaming.Active(column);
+        foreach (var other in snapshot.Columns)
+        {
+            if (ReferenceEquals(other, column) || !other.IsComputed || string.IsNullOrEmpty(other.Formula))
+            {
+                continue;
+            }
+
+            if (ReferencesToken(other.Formula!, activePhysical))
+            {
+                throw new ComputedColumnInvalidException(snapshot.RtId, column.Name,
+                    $"cannot change the formula of computed column '{column.Name}' because computed column " +
+                    $"'{other.Name}' references it; remove or re-point the dependent computed column first.");
+            }
+        }
+
+        var table = TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString());
+        var pendingName = ComputedColumnNaming.Pending(column);
+        var sql = ArchiveDdlGenerator.GenerateAddColumn(table, ComputedColumnDdl.Build(column, pendingName));
+
+        try
+        {
+            await _databaseClient.ExecuteNonQueryAsync(_tenantId, sql, cancellationToken);
+        }
+        catch (Exception ex) when (IsColumnAlreadyExists(ex))
+        {
+            // Idempotent: a retried formula change finds the pending column already provisioned.
+            _logger.LogDebug(ex,
+                "Pending physical column '{Pending}' on archive {Archive} already exists; reusing it.",
+                pendingName, snapshot.RtId);
+        }
+    }
+
     /// <summary>
     /// True when a failed <c>ALTER TABLE … ADD COLUMN</c> is the benign "column already exists" case
     /// (CrateDB has no <c>ADD COLUMN IF NOT EXISTS</c>), so the add path can treat it as idempotent.
@@ -1702,41 +1776,64 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // T17 archives are CK-type-agnostic: the queryable column set is exactly the columns the
         // archive was configured to capture. Windowed (rollup + time-range) archives swap the
         // single `timestamp` default for the `window_start` / `window_end` / `was_updated` triple.
-        return new StreamDataFieldResolver(
-            ReadableColumnIdentifiers(snapshot),
+        var resolver = new StreamDataFieldResolver(
+            snapshot.Columns.Where(c => !c.IsComputed).Select(c => c.Path),
             usesWindowedStorage: snapshot.UsesWindowedStorage);
+
+        // Computed columns are registered explicitly with their *versioned* active physical name
+        // (a formula change moves them to {base}__v{N}), which the generic PathToColumnName mapping
+        // the ctor uses for ingested columns can't produce.
+        foreach (var (name, physical) in ReadableComputedColumns(snapshot))
+        {
+            resolver.RegisterComputedColumn(name, physical);
+        }
+
+        return resolver;
     }
 
     /// <summary>
-    /// The data-stream column identifiers that feed the read-path <see cref="StreamDataFieldResolver"/>
-    /// — i.e. the columns a query may project. An ingested column contributes its <see cref="CkArchiveColumnSpec.Path"/>;
-    /// a computed column contributes its <see cref="CkArchiveColumnSpec.Name"/> (the formula-referenceable
-    /// identifier, mapped to the same physical column the ingest path writes via
-    /// <see cref="ColumnNameMapper.PathToColumnName"/>) — but only when the column is <em>readable</em>.
-    /// <para>
-    /// A computed column mid-backfill (<see cref="ComputedColumnState.Pending"/> /
+    /// The computed columns the read path may project, as (logical <c>Name</c>, active versioned
+    /// physical name) pairs. A computed column mid-backfill (<see cref="ComputedColumnState.Pending"/> /
     /// <see cref="ComputedColumnState.Backfilling"/>) or whose backfill failed
-    /// (<see cref="ComputedColumnState.Failed"/>) is excluded from the projection, so consumers keep
-    /// seeing the previous archive state until the backfill commits (AB#4189 §8.3 reader contract).
-    /// A computed column created together with its archive carries no lifecycle state (<c>null</c>) and
-    /// is live from creation, so <c>null</c> counts as readable alongside
-    /// <see cref="ComputedColumnState.Active"/>. The ingest / DDL path (<see cref="ResolveTableAndColumns"/>)
-    /// deliberately does <em>not</em> gate on state — even a Pending column's physical column exists and
-    /// must be written on ingest; gating is a read-path concern only.
-    /// </para>
+    /// (<see cref="ComputedColumnState.Failed"/>) is excluded, so consumers keep seeing the previous
+    /// archive state until the backfill commits (AB#4189 §8.3). A computed column created together with
+    /// its archive carries no lifecycle state (<c>null</c>) and is live from creation. The ingest / DDL
+    /// path (<see cref="ResolveTableAndColumns"/>) deliberately does <em>not</em> gate on state — even a
+    /// Pending column's physical column exists and must be written on ingest; gating is a read concern.
     /// </summary>
-    internal static IEnumerable<string> ReadableColumnIdentifiers(ArchiveSnapshot snapshot)
+    internal static IEnumerable<(string Name, string Physical)> ReadableComputedColumns(ArchiveSnapshot snapshot)
+    {
+        foreach (var c in snapshot.Columns)
+        {
+            // Defensively skip a computed column missing its Name — activation DDL would have rejected
+            // it, but the read path must never throw on a malformed snapshot.
+            if (!c.IsComputed || string.IsNullOrWhiteSpace(c.Name))
+            {
+                continue;
+            }
+
+            if (c.ComputedState is null or ComputedColumnState.Active)
+            {
+                yield return (c.Name!, ComputedColumnNaming.Active(c));
+            }
+        }
+    }
+
+    /// <summary>
+    /// The physical names of the readable data-stream columns that can feed a formula as operands:
+    /// every ingested column plus every active computed column (at its versioned physical name).
+    /// Used by the backfill to SELECT a row's operand values.
+    /// </summary>
+    private static IEnumerable<string> ReadableOperandPhysicalColumns(ArchiveSnapshot snapshot)
     {
         foreach (var c in snapshot.Columns)
         {
             if (!c.IsComputed)
             {
-                yield return c.Path;
+                yield return ColumnNameMapper.PathToColumnName(c.Path);
                 continue;
             }
 
-            // Defensively skip a computed column missing its Name — activation DDL would have
-            // rejected it, but the read path must never throw on a malformed snapshot.
             if (string.IsNullOrWhiteSpace(c.Name))
             {
                 continue;
@@ -1744,7 +1841,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
             if (c.ComputedState is null or ComputedColumnState.Active)
             {
-                yield return c.Name;
+                yield return ComputedColumnNaming.Active(c);
             }
         }
     }
@@ -2029,8 +2126,19 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             }
 
             items ??= new List<ComputedColumnPlanItem>();
+            // The active formula into the active (versioned) physical column — keeps current readers
+            // correct on every ingest.
             items.Add(new ComputedColumnPlanItem(
-                ColumnNameMapper.PathToColumnName(c.Name!), c.Formula!, c.ResultType.Value));
+                ComputedColumnNaming.Active(c), c.Formula!, c.ResultType.Value));
+
+            // During a formula change, also evaluate the pending formula into the pending versioned
+            // column so rows ingested mid-backfill are already consistent at swap time (dual-write,
+            // §8 D-7.3).
+            if (c.HasPendingFormula)
+            {
+                items.Add(new ComputedColumnPlanItem(
+                    ComputedColumnNaming.Pending(c), c.PendingFormula!, c.ResultType.Value));
+            }
         }
 
         if (items is null)

@@ -98,4 +98,43 @@ public class CrateDbAddComputedColumnStorageTests
         A.CallTo(() => _db.ExecuteNonQueryAsync(A<string>._, A<string>._, A<CancellationToken>._))
             .MustNotHaveHappened();
     }
+
+    private static CkArchiveColumnSpec CompRef(string name, string formula) =>
+        new(string.Empty, Indexed: true, Required: false)
+        {
+            Name = name, Formula = formula, ResultType = FormulaResultType.Double,
+            ComputedState = ComputedColumnState.Active,
+        };
+
+    [Fact]
+    public async Task AddPendingStorage_AltersVersionedPendingColumn_WhenNotReferenced()
+    {
+        string? executed = null;
+        A.CallTo(() => _db.ExecuteNonQueryAsync("tenant-x", A<string>._, A<CancellationToken>._))
+            .Invokes(call => executed = call.GetArgument<string>(1))
+            .Returns(1);
+
+        await NewSut().AddPendingComputedColumnStorageAsync(Snapshot(CompRef("powerFactor", "x / y")), "powerFactor",
+            CancellationToken.None);
+
+        Assert.NotNull(executed);
+        Assert.Contains("ADD COLUMN", executed);
+        Assert.Contains("\"powerfactor__v1\"", executed);
+    }
+
+    [Fact]
+    public async Task AddPendingStorage_RejectsWhenReferencedByAnotherComputedColumn()
+    {
+        // ratio references powerfactor by its physical name; re-versioning powerFactor would orphan
+        // that reference, so the formula change is rejected (AB#4189 Phase 7 MVP guard).
+        var snapshot = Snapshot(
+            CompRef("powerFactor", "activepower / apparentpower"),
+            CompRef("ratio", "powerfactor * 2"));
+
+        await Assert.ThrowsAsync<ComputedColumnInvalidException>(() =>
+            NewSut().AddPendingComputedColumnStorageAsync(snapshot, "powerFactor", CancellationToken.None));
+
+        A.CallTo(() => _db.ExecuteNonQueryAsync(A<string>._, A<string>._, A<CancellationToken>._))
+            .MustNotHaveHappened();
+    }
 }

@@ -13,7 +13,13 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// </summary>
 internal static class ComputedColumnDdl
 {
-    public static ArchiveColumnDdl Build(CkArchiveColumnSpec column)
+    /// <param name="column">The computed column spec.</param>
+    /// <param name="physicalName">
+    /// Explicit physical column name to emit. Defaults to the column's base name
+    /// (<see cref="ColumnNameMapper.PathToColumnName"/>); the formula-change path (AB#4189 Phase 7)
+    /// passes the versioned pending name (<c>{base}__v{N+1}</c>) instead.
+    /// </param>
+    public static ArchiveColumnDdl Build(CkArchiveColumnSpec column, string? physicalName = null)
     {
         if (string.IsNullOrWhiteSpace(column.Name))
         {
@@ -28,7 +34,7 @@ internal static class ComputedColumnDdl
         }
 
         var crateType = MapResultType(column.ResultType.Value, column.Name);
-        var columnName = ColumnNameMapper.PathToColumnName(column.Name!);
+        var columnName = physicalName ?? ColumnNameMapper.PathToColumnName(column.Name!);
         return new ArchiveColumnDdl(string.Empty, crateType, Required: false, column.Indexed, columnName);
     }
 

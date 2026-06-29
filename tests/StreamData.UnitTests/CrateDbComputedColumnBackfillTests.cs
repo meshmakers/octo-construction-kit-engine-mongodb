@@ -159,6 +159,38 @@ public class CrateDbComputedColumnBackfillTests
     }
 
     [Fact]
+    public async Task Backfill_FormulaChange_WritesNewFormulaIntoPendingVersionedColumn()
+    {
+        // PendingFormula set ⇒ the backfill targets the pending versioned column with the NEW formula;
+        // the active column (still serving old values) is left untouched.
+        var snapshot = RawSnapshot(
+            Ing("ActivePower"),
+            new CkArchiveColumnSpec(string.Empty, Indexed: true, Required: false)
+            {
+                Name = "powerFactor",
+                Formula = "activepower / 100",
+                ResultType = FormulaResultType.Double,
+                ComputedState = ComputedColumnState.Active,
+                ComputedVersion = 0,
+                PendingFormula = "activepower / 200",
+            });
+
+        A.CallTo(() => _db.StreamRawRowsAsync("tenant-x", A<string>._, A<CancellationToken>._))
+            .Returns(Rows(new Dictionary<string, object?>
+            {
+                ["timestamp"] = Ts, ["rtid"] = "rt-1", ["cktypeid"] = "EnergyMeter", ["activepower"] = 400.0,
+            }));
+
+        var updates = CaptureUpdates();
+
+        await NewSut().BackfillComputedColumnAsync(snapshot, "powerFactor", CancellationToken.None);
+
+        var update = Assert.Single(updates);
+        Assert.Contains("\"powerfactor__v1\" = 2", update);  // 400 / 200
+        Assert.DoesNotContain("\"powerfactor\" =", update);   // active column untouched
+    }
+
+    [Fact]
     public async Task Backfill_UnknownColumn_IsNoOp()
     {
         var snapshot = RawSnapshot(Ing("ActivePower"));

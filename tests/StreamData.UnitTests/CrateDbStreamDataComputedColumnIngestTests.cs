@@ -81,6 +81,29 @@ public class CrateDbStreamDataComputedColumnIngestTests
     }
 
     [Fact]
+    public async Task ComputedColumn_DuringFormulaChange_DualWritesActiveAndPending()
+    {
+        // PendingFormula set ⇒ ingest writes the active formula into the base column (current readers)
+        // and the pending formula into the versioned column (post-swap consistency) — AB#4189 §8 D-7.3.
+        StubArchive(
+            Ing("activePower"),
+            new CkArchiveColumnSpec(string.Empty, Indexed: true, Required: false)
+            {
+                Name = "derived",
+                Formula = "activepower * 2",
+                ResultType = FormulaResultType.Double,
+                ComputedState = ComputedColumnState.Active,
+                ComputedVersion = 0,
+                PendingFormula = "activepower * 3",
+            });
+
+        var dto = await CaptureInsertAsync(Point(new() { ["activePower"] = 10.0 }));
+
+        Assert.Equal(20.0, Assert.IsType<double>(dto.Attributes["derived"]), 10);     // active -> base
+        Assert.Equal(30.0, Assert.IsType<double>(dto.Attributes["derived__v1"]), 10); // pending -> __v1
+    }
+
+    [Fact]
     public async Task ComputedColumn_AppearsInUserColumnNames()
     {
         StubArchive(Ing("activePower"), Comp("derived", "activepower * 2", FormulaResultType.Double));

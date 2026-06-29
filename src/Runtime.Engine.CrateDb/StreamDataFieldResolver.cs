@@ -102,6 +102,26 @@ public class StreamDataFieldResolver
     }
 
     /// <summary>
+    /// Registers a computed column (AB#4189 Phase 7) under its logical <paramref name="logicalName"/>
+    /// (the <c>Name</c> a query uses) mapped to its <em>versioned</em> physical column
+    /// <paramref name="physicalName"/> (<see cref="ComputedColumnNaming.Active"/>). Unlike the
+    /// ctor-registered ingested columns, a computed column's physical name is not a pure function of
+    /// its logical name — a formula change moves it to <c>{base}__v{N}</c> — so it must be registered
+    /// explicitly rather than derived via <see cref="ColumnNameMapper.PathToColumnName"/>. Never
+    /// shadows a default field.
+    /// </summary>
+    public void RegisterComputedColumn(string logicalName, string physicalName)
+    {
+        if (Constants.IsDefaultField(logicalName))
+        {
+            return;
+        }
+
+        _fields[logicalName] = new ResolvedField(
+            StreamDataFieldCategory.DataStream, physicalName, physicalName);
+    }
+
+    /// <summary>
     /// Resolves a field name to its canonical representation.
     /// Returns null if the field is not recognized as either a default or data stream field.
     /// </summary>
