@@ -69,6 +69,34 @@ public class GenerationPointerTests
     }
 
     [Fact]
+    public void BuildDeleteGenerationsFrom_DeletesPointersReachingPastBoundary()
+    {
+        var genMap = GenerationMapSqlBuilder.GenMapTable("acmecorp", "rollup1");
+        var fromBucketEnd = new DateTime(2026, 5, 11, 12, 0, 0, DateTimeKind.Utc);
+        var boundaryMs = new DateTimeOffset(fromBucketEnd).ToUnixTimeMilliseconds();
+
+        var sql = GenerationMapSqlBuilder.BuildDeleteGenerationsFrom(genMap, fromBucketEnd);
+
+        Assert.Equal(
+            $"DELETE FROM {genMap} WHERE \"range_end\" > {boundaryMs};",
+            sql);
+        // Boundary is a numeric epoch-ms literal, never a quoted timestamp.
+        Assert.DoesNotContain("'", sql);
+    }
+
+    [Fact]
+    public void BuildDeleteGenerationsFrom_TreatsUnspecifiedKindAsUtc()
+    {
+        var genMap = GenerationMapSqlBuilder.GenMapTable("acmecorp", "rollup1");
+        var unspecified = new DateTime(2026, 5, 11, 12, 0, 0, DateTimeKind.Unspecified);
+        var utc = new DateTime(2026, 5, 11, 12, 0, 0, DateTimeKind.Utc);
+
+        Assert.Equal(
+            GenerationMapSqlBuilder.BuildDeleteGenerationsFrom(genMap, utc),
+            GenerationMapSqlBuilder.BuildDeleteGenerationsFrom(genMap, unspecified));
+    }
+
+    [Fact]
     public void Compile_NotGenerationTracked_EmitsNoGenerationPredicate()
     {
         // A non-rollup (time-range) query never calls WithGenerationRanges, so no generation

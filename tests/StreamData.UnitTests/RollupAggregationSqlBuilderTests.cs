@@ -33,6 +33,34 @@ public class RollupAggregationSqlBuilderTests
         Assert.DoesNotContain(" AVG(", sql);
     }
 
+    [Fact]
+    public void Build_WithRtIdScope_RestrictsAggregationToThatEntity_BeforeGroupBy()
+    {
+        var aggregations = new[] { new CkRollupAggregationSpec("voltage", CkRollupFunction.Sum, null) };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false, rtIdScope: "mp-42");
+
+        Assert.Contains("AND \"rtid\" = 'mp-42'", sql);
+        // The rtId filter is part of the WHERE (before GROUP BY), not after.
+        Assert.True(
+            sql.IndexOf("AND \"rtid\" = 'mp-42'", StringComparison.Ordinal)
+            < sql.IndexOf("GROUP BY", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Build_WithoutRtIdScope_EmitsNoRtIdFilter()
+    {
+        var aggregations = new[] { new CkRollupAggregationSpec("voltage", CkRollupFunction.Sum, null) };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
+
+        Assert.DoesNotContain("AND \"rtid\" =", sql);
+    }
+
     [Theory]
     [InlineData(CkRollupFunction.Min, "MIN", "voltage_min")]
     [InlineData(CkRollupFunction.Max, "MAX", "voltage_max")]

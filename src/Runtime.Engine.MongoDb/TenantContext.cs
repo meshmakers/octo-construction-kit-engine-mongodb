@@ -1196,7 +1196,10 @@ public class TenantContext : ITenantContext
             rollupStore,
             archiveStore,
             audit,
-            _loggerFactory.CreateLogger<RollupArchiveLifecycleService>());
+            _loggerFactory.CreateLogger<RollupArchiveLifecycleService>(),
+            // AB#4184, Phase 6: the stream-data repository lets RewindWatermarkAsync clear recompute
+            // generation pointers over the rewound range. Null when stream data is not enabled.
+            GetStreamDataRepository());
         _rollupLifecycleServiceResolved = true;
         return _rollupLifecycleService;
     }

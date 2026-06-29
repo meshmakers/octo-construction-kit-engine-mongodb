@@ -24,9 +24,10 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// generation-pointer atomicity is layered on with the Phase 6 read path.
 /// </para>
 /// <para>
-/// Per-<c>rtId</c> scoped recompute is not yet implemented (the aggregation builder has no rtId
-/// filter); a non-null <paramref name="rtIdScope"/> throws. The planner-produced ranges always pass
-/// <c>null</c>; only a manually scoped operator request would hit this.
+/// Per-<c>rtId</c> scoped recompute (AB#4184): a non-null <c>rtIdScope</c> restricts the source
+/// aggregation, the generation-pointer entry (genmap <c>rtid_scope</c>), and the post-flip sweep to
+/// that single entity, so a recompute of one metering point leaves every other entity's rows (and
+/// generations) in the range untouched. Planner-produced ranges pass <c>null</c> (whole range).
 /// </para>
 /// </remarks>
 public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
@@ -67,11 +68,9 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         OctoObjectId? rtIdScope,
         CancellationToken cancellationToken)
     {
-        if (rtIdScope is not null)
-        {
-            throw new NotSupportedException(
-                "Per-rtId scoped recompute is not yet supported (AB#4184 Phase 3c); recompute the whole window range.");
-        }
+        // Per-rtId scoped recompute (AB#4184): null = the whole range (all entities); otherwise the
+        // aggregation, the generation-pointer entry, and the sweep are all restricted to this entity.
+        var scope = rtIdScope?.ToString() ?? GenerationMapSqlBuilder.AllRtIdsScope;
 
         // Load the rollup's full archive snapshot — it carries Columns + RollupAggregations, which
         // the rollup-specific snapshot does not. Resolve the storage columns exactly as the table was
@@ -114,7 +113,8 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
                 aggregations,
                 bucketStart,
                 bucketEnd,
-                source.UsesWindowedStorage);
+                source.UsesWindowedStorage,
+                rtIdScope: scope);
 
             rows += await _databaseClient.ExecuteNonQueryAsync(_tenantId, aggregateSql, cancellationToken);
             windows++;
@@ -142,23 +142,26 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
             cancellationToken);
         await _databaseClient.RefreshArchiveTableAsync(_tenantId, liveTable);
 
-        // 2. Flip the pointer (atomic commit).
+        // 2. Flip the pointer (atomic commit) — scoped to the entity when a per-rtId recompute.
         await _databaseClient.ExecuteNonQueryAsync(_tenantId,
             GenerationMapSqlBuilder.BuildUpsertPointer(
-                genMapTable, rangeStart, rangeEnd, GenerationMapSqlBuilder.AllRtIdsScope, generation),
+                genMapTable, rangeStart, rangeEnd, scope, generation),
             cancellationToken);
 
-        // 3. Sweep the now-superseded generation(s) in the range.
+        // 3. Sweep the now-superseded generation(s) in the range (within the scope when set).
         await _databaseClient.ExecuteNonQueryAsync(_tenantId,
-            RollupRecomputeSqlBuilder.BuildSweepSupersededGenerations(liveTable, rangeStart, rangeEnd, generation),
+            RollupRecomputeSqlBuilder.BuildSweepSupersededGenerations(
+                liveTable, rangeStart, rangeEnd, generation,
+                string.IsNullOrEmpty(scope) ? null : scope),
             cancellationToken);
 
         // 4. Drop staging.
         await _managementClient.ExecuteDdlAsync(_tenantId, RollupRecomputeSqlBuilder.BuildDropIfExists(stagingTable));
 
         _logger.LogInformation(
-            "Recomputed rollup {RollupRtId} range [{From:O},{To:O}) as generation {Generation}: {Windows} windows / {Rows} staged rows, pointer flipped + superseded rows swept.",
-            rollup.RtId, rangeStart, rangeEnd, generation, windows, rows);
+            "Recomputed rollup {RollupRtId} range [{From:O},{To:O}) scope '{Scope}' as generation {Generation}: " +
+            "{Windows} windows / {Rows} staged rows, pointer flipped + superseded rows swept.",
+            rollup.RtId, rangeStart, rangeEnd, string.IsNullOrEmpty(scope) ? "(all)" : scope, generation, windows, rows);
 
         return new RecomputeExecutionResult(rows, windows);
     }

@@ -81,6 +81,18 @@ internal static class GenerationMapSqlBuilder
     public static string BuildSelectAll(string genMapTable) =>
         $"SELECT \"range_start\", \"range_end\", \"rtid_scope\", \"{Constants.Generation}\" FROM {genMapTable};";
 
+    /// <summary>
+    /// Builds the delete of all active-generation entries whose range reaches at or past
+    /// <paramref name="fromBucketEnd"/> — i.e. <c>range_end &gt; fromBucketEnd</c>. Used when a rollup
+    /// watermark is rewound over a recomputed range (AB#4184, Phase 6): clearing these entries lets
+    /// the forward re-aggregation (generation 0) become the active generation again. Entries entirely
+    /// before the boundary (not rewound) are kept. An entry that straddles the boundary is removed in
+    /// full, so its pre-boundary part also falls back to generation 0 — align rewind boundaries with
+    /// recompute-range boundaries to avoid losing the non-rewound part.
+    /// </summary>
+    public static string BuildDeleteGenerationsFrom(string genMapTable, DateTime fromBucketEnd) =>
+        $"DELETE FROM {genMapTable} WHERE \"range_end\" > {ToEpochMs(fromBucketEnd)};";
+
     private static string ToEpochMs(DateTime value)
     {
         var utc = value.Kind == DateTimeKind.Unspecified

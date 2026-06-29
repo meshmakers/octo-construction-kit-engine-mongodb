@@ -88,4 +88,30 @@ public class RollupRecomputeSqlBuilderTests
             RollupRecomputeSqlBuilder.BuildSweepSupersededGenerations(LiveTable, utc, utc.AddHours(1), 1),
             RollupRecomputeSqlBuilder.BuildSweepSupersededGenerations(LiveTable, unspecified, unspecified.AddHours(1), 1));
     }
+
+    [Fact]
+    public void BuildDeleteRecomputedRowsFrom_DeletesOnlyNonZeroGenerationsAtOrAfterBoundary()
+    {
+        var from = new DateTime(2026, 5, 11, 10, 0, 0, DateTimeKind.Utc);
+        var fromMs = new DateTimeOffset(from).ToUnixTimeMilliseconds();
+
+        var sql = RollupRecomputeSqlBuilder.BuildDeleteRecomputedRowsFrom(LiveTable, from);
+
+        Assert.Equal(
+            $"DELETE FROM {LiveTable} WHERE \"window_start\" >= {fromMs} AND \"generation\" != 0;",
+            sql);
+        // Boundary is numeric epoch-ms, never a quoted timestamp literal.
+        Assert.DoesNotContain("'", sql);
+    }
+
+    [Fact]
+    public void BuildDeleteRecomputedRowsFrom_TreatsUnspecifiedKindAsUtc()
+    {
+        var unspecified = new DateTime(2026, 5, 11, 10, 0, 0, DateTimeKind.Unspecified);
+        var utc = new DateTime(2026, 5, 11, 10, 0, 0, DateTimeKind.Utc);
+
+        Assert.Equal(
+            RollupRecomputeSqlBuilder.BuildDeleteRecomputedRowsFrom(LiveTable, utc),
+            RollupRecomputeSqlBuilder.BuildDeleteRecomputedRowsFrom(LiveTable, unspecified));
+    }
 }

@@ -49,7 +49,8 @@ internal static class RollupAggregationSqlBuilder
         IReadOnlyList<CkRollupAggregationSpec> aggregations,
         DateTime bucketStart,
         DateTime bucketEnd,
-        bool sourceUsesWindowedStorage)
+        bool sourceUsesWindowedStorage,
+        string? rtIdScope = null)
     {
         if (string.IsNullOrWhiteSpace(sourceTable)) throw new ArgumentException("sourceTable must not be empty.", nameof(sourceTable));
         if (string.IsNullOrWhiteSpace(targetTable)) throw new ArgumentException("targetTable must not be empty.", nameof(targetTable));
@@ -140,6 +141,12 @@ internal static class RollupAggregationSqlBuilder
         {
             sb.Append("WHERE \"").Append(Constants.Timestamp).Append("\" >= '").Append(bucketStartLiteral).Append("'::timestamp ")
               .Append("AND \"").Append(Constants.Timestamp).Append("\" < '").Append(bucketEndLiteral).AppendLine("'::timestamp");
+        }
+        // Per-rtId scoped recompute (AB#4184): restrict the aggregation to a single source entity so
+        // only that entity's rollup rows are recomputed (and later swept) for the range.
+        if (!string.IsNullOrEmpty(rtIdScope))
+        {
+            sb.Append("AND \"").Append(Constants.RtId).Append("\" = '").Append(EscapeLiteral(rtIdScope)).AppendLine("'");
         }
         sb.Append("GROUP BY \"").Append(Constants.RtId).AppendLine("\"");
 

@@ -1308,6 +1308,35 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     /// <inheritdoc />
+    public async Task ClearRecomputeGenerationsAsync(
+        OctoObjectId rollupRtId, DateTime fromBucketEnd, CancellationToken cancellationToken = default)
+    {
+        var genMapTable = GenerationMapSqlBuilder.GenMapTable(_tenantId, rollupRtId.ToString());
+        var liveTable = TenantSchema.QualifiedArchiveTable(_tenantId, rollupRtId.ToString());
+        try
+        {
+            // 1. Drop the active-generation pointers reaching into the rewound range so those windows
+            //    fall back to generation 0 (the forward re-aggregation target).
+            await _databaseClient.ExecuteNonQueryAsync(_tenantId,
+                GenerationMapSqlBuilder.BuildDeleteGenerationsFrom(genMapTable, fromBucketEnd), cancellationToken);
+            // 2. Remove the now-orphaned higher-generation rows in that range (generation 0 rows stay).
+            await _databaseClient.ExecuteNonQueryAsync(_tenantId,
+                RollupRecomputeSqlBuilder.BuildDeleteRecomputedRowsFrom(liveTable, fromBucketEnd), cancellationToken);
+            await _databaseClient.RefreshArchiveTableAsync(_tenantId, liveTable);
+
+            _logger.LogInformation(
+                "Cleared recompute generations for rollup {RollupRtId} at/after {From:O} (watermark rewind).",
+                rollupRtId, fromBucketEnd);
+        }
+        catch (Exception ex)
+        {
+            // No genmap side-table (non-rollup or pre-Phase-6) ⇒ nothing to clear. Idempotent no-op.
+            _logger.LogDebug(ex,
+                "ClearRecomputeGenerationsAsync is a no-op for {RollupRtId} (no recompute state).", rollupRtId);
+        }
+    }
+
+    /// <inheritdoc />
     public Task<RecomputeExecutionResult> ExecuteAsync(
         ArchiveSnapshot source,
         RollupArchiveSnapshot rollup,

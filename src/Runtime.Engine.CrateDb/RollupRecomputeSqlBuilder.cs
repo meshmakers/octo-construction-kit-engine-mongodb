@@ -75,6 +75,17 @@ internal static class RollupRecomputeSqlBuilder
             $"AND \"{Constants.Generation}\" != {g}{scopeClause};";
     }
 
+    /// <summary>
+    /// Builds the delete of all recomputed (generation &gt; 0) rows at or after
+    /// <paramref name="fromBucketEnd"/>. Companion to <see cref="GenerationMapSqlBuilder.BuildDeleteGenerationsFrom"/>
+    /// for a watermark rewind (AB#4184, Phase 6): once the generation pointers are gone the forward
+    /// re-aggregation rewrites these windows at generation 0, so the stale higher-generation rows are
+    /// removed here. Generation-0 rows are kept (they are the re-aggregation target / steady state).
+    /// </summary>
+    public static string BuildDeleteRecomputedRowsFrom(string liveTable, DateTime fromBucketEnd) =>
+        $"DELETE FROM {liveTable} WHERE \"{Constants.WindowStart}\" >= {ToEpochMs(fromBucketEnd)} " +
+        $"AND \"{Constants.Generation}\" != 0;";
+
     private static string ToEpochMs(DateTime value)
     {
         var utc = value.Kind == DateTimeKind.Unspecified
