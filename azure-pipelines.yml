@@ -92,6 +92,7 @@ stages:
               coreLibFloor: '3.4'
               commFloor: '3.4'
           - task: DotNetCoreCLI@2
+            retryCountOnTaskFailure: 2
             displayName: 'Restore NuGet packages'
             inputs:
               command: 'restore'
@@ -99,12 +100,14 @@ stages:
               restoreArguments: '--force /p:OctoNugetPrivateServer=$(nugetPrivateServer)'
               noCache: true
           - task: DotNetCoreCLI@2
+            retryCountOnTaskFailure: 2
             displayName: 'Build'
             inputs:
               command: 'build'
               projects: $(SolutionFile)
               arguments: '--configuration $(BuildConfiguration) --no-restore /p:OctoNugetPrivateServer=$(nugetPrivateServer) /p:OctoPrivateGitHubApiKey=$(GitHubPAT) /p:OctoPublicGitHubApiKey=$(GitHubPAT)'
           - task: DotNetCoreCLI@2
+            retryCountOnTaskFailure: 2
             displayName: 'Test'
             inputs:
               command: 'test'
