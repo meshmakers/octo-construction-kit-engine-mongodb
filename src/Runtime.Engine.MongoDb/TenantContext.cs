@@ -10,6 +10,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.AuditTrails;
 using Meshmakers.Octo.Runtime.Contracts.Blueprints;
 using Meshmakers.Octo.Runtime.Contracts.CkModelMigrations;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -165,16 +166,20 @@ public class TenantContext : ITenantContext
             };
             var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
             await systemTenantRepository.InsertOneRtEntityAsync(adminSession, rtSystemTenant);
-        }
-        catch (Exception)
-        {
-            await _adminRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
-            throw;
-        }
-        finally
-        {
-            // Distribute updates (post) to inform other services.
+
+            // Distribute updates (post) only on success. Signalling "tenant created" while we are
+            // about to roll the tenant back leaves other services provisioning orphaned resources
+            // for a tenant that never came to exist (AB#1958).
             await _tenantNotifications.NotifyPosTenantCreateAsync(tenantId, correlationId);
+        }
+        catch (Exception ex)
+        {
+            // Roll back the database + database user that may have been created and surface the
+            // failure in the platform event log. The octosystem tenant entries are part of the
+            // caller's transaction and are rolled back when it is aborted (AB#1958).
+            await CleanupFailedTenantCreationAsync(normalizedDatabaseName, tenantId, correlationId, ex,
+                dropDatabaseAndUser: true);
+            throw;
         }
     }
 
@@ -546,11 +551,90 @@ public class TenantContext : ITenantContext
             };
             var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
             await systemTenantRepository.InsertOneRtEntityAsync(adminSession, rtSystemTenant);
-        }
-        finally
-        {
-            // Distribute updates (post) to inform other services.
+
+            // Distribute updates (post) only on success - see CreateChildTenantAsync (AB#1958).
             await _tenantNotifications.NotifyPosTenantCreateAsync(tenantId, correlationId);
+        }
+        catch (Exception ex)
+        {
+            // Attach reuses an already existing database, so it is never dropped here; only the
+            // database user we may have created is rolled back, plus an event-log entry. The
+            // octosystem tenant entries roll back with the caller's transaction (AB#1958).
+            await CleanupFailedTenantCreationAsync(normalizedDatabaseName, tenantId, correlationId, ex,
+                dropDatabaseAndUser: false);
+            throw;
+        }
+    }
+
+    /// <summary>
+    ///     Rolls back the side effects of a failed tenant creation and records the failure in the
+    ///     platform event log (AB#1958).
+    /// </summary>
+    /// <param name="normalizedDatabaseName">The (normalized) tenant database name.</param>
+    /// <param name="tenantId">The tenant that failed to be created.</param>
+    /// <param name="correlationId">Correlation id of the create operation.</param>
+    /// <param name="cause">The exception that aborted the creation.</param>
+    /// <param name="dropDatabaseAndUser">
+    ///     <c>true</c> for create (the database/user were created by us and must be removed);
+    ///     <c>false</c> for attach (the database pre-existed and must be kept).
+    /// </param>
+    protected async Task CleanupFailedTenantCreationAsync(string normalizedDatabaseName, string tenantId,
+        Guid correlationId, Exception cause, bool dropDatabaseAndUser)
+    {
+        _logger.LogError(cause,
+            "Tenant creation failed for tenant {TenantId} (database {DatabaseName}); performing cleanup",
+            tenantId, normalizedDatabaseName);
+
+        if (dropDatabaseAndUser)
+        {
+            try
+            {
+                await _adminRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to drop database {DatabaseName} during tenant creation rollback",
+                    normalizedDatabaseName);
+            }
+
+            try
+            {
+                await _adminRepositoryClient.DropUser(_systemConfiguration.Value.AuthenticationDatabaseName,
+                    string.Format(_systemConfiguration.Value.DatabaseUser, normalizedDatabaseName));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Failed to drop database user during tenant creation rollback for database {DatabaseName}",
+                    normalizedDatabaseName);
+            }
+        }
+
+        // Surface the failure in the platform event log. Routed through IAuditEventSink so the host
+        // (asset-repo) persists it via EventRepositoryAuditEventSink; engine-only hosts just log it.
+        try
+        {
+            var auditSink = _serviceProvider.GetService<IAuditEventSink>();
+            if (auditSink != null)
+            {
+                await auditSink.PublishAsync(new AuditEvent(
+                    null,
+                    AuditEventLevel.Error,
+                    "Tenant.CreateFailed",
+                    $"Creation of tenant '{tenantId}' failed and was rolled back. Reason: {cause.Message}")
+                {
+                    Metadata = new Dictionary<string, object?>
+                    {
+                        ["tenantId"] = tenantId,
+                        ["databaseName"] = normalizedDatabaseName,
+                        ["correlationId"] = correlationId
+                    }
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to write tenant-create-failure event for tenant {TenantId}", tenantId);
         }
     }
 

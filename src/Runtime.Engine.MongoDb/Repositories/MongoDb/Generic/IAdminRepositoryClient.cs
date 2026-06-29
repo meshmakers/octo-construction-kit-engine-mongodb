@@ -19,4 +19,10 @@ public interface IAdminRepositoryClient : IRepositoryClient
 
     Task CreateUser(string authenticationDatabaseName, string userDatabaseName, string user,
         string? password);
+
+    /// <summary>
+    ///     Drops a database user. No-op if the user does not exist. Used to roll back a partially
+    ///     created tenant (AB#1958).
+    /// </summary>
+    Task DropUser(string authenticationDatabaseName, string user);
 }

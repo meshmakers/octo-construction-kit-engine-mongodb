@@ -91,6 +91,24 @@ public class AdminMongoRepositoryClient(
         await database.RunCommandAsync(new BsonDocumentCommand<BsonDocument>(createUserCommand));
     }
 
+    public async Task DropUser(string authenticationDatabaseName, string user)
+    {
+        ArgumentValidation.ValidateString(nameof(authenticationDatabaseName), authenticationDatabaseName);
+        ArgumentValidation.ValidateString(nameof(user), user);
+
+        var database = Client.GetDatabase(authenticationDatabaseName);
+
+        var result = await database.RunCommandAsync<BsonDocument>("{usersInfo: '" + user + "'}");
+        if (result.GetValue("ok").AsDouble <= 0 || result.GetValue("users").AsBsonArray.Count == 0)
+        {
+            // User does not exist (e.g. its creation is what failed) - nothing to roll back.
+            return;
+        }
+
+        var dropUserCommand = new BsonDocument { { "dropUser", user } };
+        await database.RunCommandAsync(new BsonDocumentCommand<BsonDocument>(dropUserCommand));
+    }
+
     protected override MongoUrl CreateConnectionUri()
     {
         var urlBuilder = new MongoUrlBuilder();

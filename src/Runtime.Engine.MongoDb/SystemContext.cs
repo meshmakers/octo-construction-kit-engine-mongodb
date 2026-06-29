@@ -79,6 +79,11 @@ public class SystemContext : TenantContext, ISystemContext
         }
         catch (Exception e)
         {
+            // Roll back the (partially) created system database + user before surfacing the failure
+            // (AB#1958). The event-log write is a no-op while the system tenant itself does not yet
+            // exist, but the database/user rollback prevents a half-created system tenant.
+            await CleanupFailedTenantCreationAsync(normalizedDatabaseName, normalizedTenantId,
+                Guid.NewGuid(), e, dropDatabaseAndUser: true);
             throw TenantException.CreateSystemTenantFailed(e);
         }
     }
