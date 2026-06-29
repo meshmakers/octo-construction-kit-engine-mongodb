@@ -132,6 +132,7 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
                     // with the contracts enums, so a direct cast is correct when a value is present.
                     ResultType = isComputed && c.ResultType is { } rt ? (FormulaResultType)(int)rt : null,
                     ComputedState = isComputed && c.ComputedState is { } cs ? (ComputedColumnState)(int)cs : null,
+                    ComputedVersion = isComputed && c.ComputedVersion is { } cv ? (int)cv : 0,
                 };
             })
             .ToList();
