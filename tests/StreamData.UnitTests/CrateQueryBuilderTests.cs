@@ -429,6 +429,33 @@ public class CrateQueryBuilderTests
             queryBuilder.AddWhereIn("RtId", ["abc123"]));
     }
 
+    // Regression for the pie-chart (grouped-aggregation) rtIds-scope bug: AddRtIdFilter used
+    // AddWhereIn, which only works when "rtid" is a registered SELECT variable. The grouped and
+    // pure-aggregation paths select only the group-by columns and aggregates — never "rtid" — so
+    // AddWhereIn threw "WhereIn Variable not found: 'rtid'" and the "ENERGY BY OBIS CODE / DATA
+    // QUALITY" pie widgets surfaced "Failed to load data". AddRtIdFilter now emits the scope as an
+    // `In` field-filter on the raw "rtid" column, which lands in the WHERE clause independent of the
+    // SELECT list. This test reproduces the grouped shape (group-by + SUM, NO default variables) and
+    // locks the contract: the scope must compile to a WHERE "rtid" IN (...) clause without throwing.
+    [Fact]
+    public void RtIdScopeAsFieldFilter_GroupedAggregation_EmitsRtidInClauseWithoutSelectVariable()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        // Group-by column + aggregate — exactly what ExecuteGroupedAggregationQueryAsync builds for
+        // a pie chart. Note: no IncludeDefaultVariables(), so "rtid" is NOT a SELECT variable.
+        queryBuilder.AddVariable("amountunit", "amountunit", null);
+        queryBuilder.AddAggregationVariable("amountvalue", AggregationFunctionDto.Sum, "SUM_amountvalue");
+        // Mirrors AddRtIdFilter's new field-filter emission.
+        queryBuilder.AddFieldFilter("rtid", StreamDataFieldFilterOperator.In, string.Empty,
+            valueList: ["6a0ee049425c29914c86a4f1", "6a0ee04a425c29914c86a54a"]);
+
+        var compiler = new CrateQueryCompiler();
+        var query = compiler.CompileQuery(queryBuilder);
+
+        Assert.Contains("\"rtid\" IN ('6a0ee049425c29914c86a4f1', '6a0ee04a425c29914c86a54a')", query);
+        Assert.DoesNotContain("voltage", query); // sanity: no stray default variables leaked in
+    }
+
     [Fact]
     public void CompileCountQuery_Basic_ReturnsValidCountQuery()
     {

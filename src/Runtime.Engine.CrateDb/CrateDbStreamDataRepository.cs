@@ -680,14 +680,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
         q.WithTimeFilter(options.From.Value, options.To.Value);
 
         // rtId scope + field filters are applied BEFORE the bucket-count probe so it counts exactly
-        // the source rows the downsampling query will read. The identity column is a group key (not
-        // a SELECT variable) on this path, so AddRtIdFilter's AddWhereIn would throw — emit the
-        // scope as an IN field-filter, which lands in the shared source-filter conditions.
-        if (options.RtIds is { Count: > 0 })
-        {
-            q.AddFieldFilter(Constants.RtId, Dtos.StreamDataFieldFilterOperator.In, string.Empty,
-                valueList: options.RtIds.Select(x => x.ToString()).ToList());
-        }
+        // the source rows the downsampling query will read. AddRtIdFilter emits an IN field-filter
+        // (not an AddWhereIn on a SELECT variable), so it scopes this path even though the identity
+        // column is only a group key here, not a selected output variable.
+        AddRtIdFilter(q, options.RtIds);
         AddFieldFilters(q, fieldResolver, options.FieldFilters);
 
         // Clamp the requested bucket count to the number of distinct source bins in range. Without
@@ -1401,10 +1397,16 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository
     private static void AddRtIdFilter(CrateQueryBuilder q, IReadOnlyList<OctoObjectId>? rtIds)
     {
         if (rtIds is not { Count: > 0 }) return;
-        // Must match the registered default-variable name (Constants.RtId == "rtid"); the
-        // query-builder lookup is case-sensitive, so the literal "RtId" silently broke the
-        // entire rtIds source-scope across all four SD query kinds (WhereIn Variable not found).
-        q.AddWhereIn(Constants.RtId, rtIds.Select(x => x.ToString()).ToArray());
+        // Emit the rtId scope as an `In` field-filter on the raw `rtid` column rather than an
+        // AddWhereIn on a SELECT variable. AddWhereIn only works when `rtid` is a registered
+        // output variable — true on the simple/rows path (IncludeDefaultVariables) but NOT on the
+        // aggregation / grouped-aggregation paths, where only the group-by columns and aggregates
+        // are selected. There AddWhereIn threw "WhereIn Variable not found: 'rtid'" and broke the
+        // pie-chart (grouped) widgets. The field-filter lands in the shared source-filter WHERE
+        // conditions, independent of the SELECT list, so it scopes every query kind uniformly —
+        // the same mechanism the downsampling path already uses.
+        q.AddFieldFilter(Constants.RtId, Dtos.StreamDataFieldFilterOperator.In, string.Empty,
+            valueList: rtIds.Select(x => x.ToString()).ToList());
     }
 
     private static void AddSortOrders(
