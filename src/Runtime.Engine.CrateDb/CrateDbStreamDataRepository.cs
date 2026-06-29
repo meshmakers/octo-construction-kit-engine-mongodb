@@ -104,13 +104,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             // column instead of `(window_start, window_end)`. The orchestrator's new aggregation
             // SQL would fail with column-not-found; recreating loses already-aggregated data, but
             // the orchestrator will backfill on the next watermark advance (concept-time-range §6).
-            await EnsureWindowedTableShapeAsync(snapshot.RtId.ToString());
-
             // Rollup archives carry the Phase-6 generation column (and a generation-map side-table)
             // so partial-range recomputes can flip a per-window pointer atomically. Time-range
             // archives are externally fed and never recomputed through that path, so they stay on the
             // plain windowed shape.
             var isRollup = snapshot.RollupAggregations is not null;
+
+            await EnsureWindowedTableShapeAsync(snapshot.RtId.ToString(), requireGenerationColumn: isRollup);
+
             var sql = ArchiveDdlGenerator.GenerateCreateWindowedTable(
                 qualifiedTable, resolvedColumns, _configuration.NumberOfShards, _configuration.NumberOfReplicas,
                 includeGeneration: isRollup);
@@ -139,13 +140,22 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     /// <summary>
-    /// Phase-7 migration helper. If a CrateDB table exists for the given archive but lacks the
-    /// new <c>window_start</c> column, drop it so the subsequent <c>CREATE TABLE IF NOT EXISTS</c>
-    /// recreates it with the windowed shape. Pre-Phase-7 RollupArchive tables had a single
-    /// <c>timestamp</c> column; without the drop, the new aggregation SQL would fail. No-op for
-    /// fresh activations (no table exists) and for tables already in the windowed shape.
+    /// Migration helper for the windowed-storage shapes. Drops an existing CrateDB archive table when
+    /// its shape predates what the current model needs, so the subsequent <c>CREATE TABLE IF NOT
+    /// EXISTS</c> recreates it correctly:
+    /// <list type="bullet">
+    /// <item>Phase-7: a table lacking the <c>window_start</c> column is a pre-windowed
+    /// single-<c>timestamp</c> RollupArchive — drop it.</item>
+    /// <item>Phase-6 (AB#4184): when <paramref name="requireGenerationColumn"/> is true (rollup
+    /// archives), a windowed table that lacks the <c>generation</c> column predates the generation
+    /// pointer. Its PK does not include <c>generation</c>, so forward aggregation's
+    /// <c>ON CONFLICT (…, generation)</c> would fail — drop it so it is recreated with the
+    /// generation column keyed into the PK.</item>
+    /// </list>
+    /// Both drops lose already-aggregated bucket rows; the orchestrator re-aggregates them on the
+    /// next watermark advance. No-op for fresh activations and tables already on the right shape.
     /// </summary>
-    private async Task EnsureWindowedTableShapeAsync(string archiveRtId)
+    private async Task EnsureWindowedTableShapeAsync(string archiveRtId, bool requireGenerationColumn)
     {
         var schemaName = TenantSchema.SchemaName(_tenantId);
         var tableName = "archive_" + archiveRtId;
@@ -161,7 +171,28 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             $"AND column_name = '{Constants.WindowStart}'");
         if (hasWindowStartCol > 0)
         {
-            return; // already on the new shape
+            // Already windowed. Phase-6 self-heal: a rollup table provisioned before Phase 6 has the
+            // windowed shape but no `generation` column (which is now part of the rollup PK). Drop it
+            // so CREATE recreates it with the generation-keyed PK; the orchestrator backfills.
+            if (requireGenerationColumn)
+            {
+                var hasGenerationCol = await _databaseClient.GetCountAsync(_tenantId,
+                    $"SELECT count(*) FROM information_schema.columns " +
+                    $"WHERE table_schema = '{schemaName.Replace("'", "''")}' " +
+                    $"AND table_name = '{tableName.Replace("'", "''")}' " +
+                    $"AND column_name = '{Constants.Generation}'");
+                if (hasGenerationCol == 0)
+                {
+                    _logger.LogWarning(
+                        "Migrating rollup archive table {Table} to the Phase-6 generation-pointer shape: " +
+                        "dropping the existing table (it predates the generation column / PK); the orchestrator " +
+                        "will re-aggregate on the next watermark advance (any persisted bucket rows are lost).",
+                        quotedTable);
+                    await _managementClient.ExecuteDdlAsync(_tenantId, ArchiveDdlGenerator.GenerateDropTable(quotedTable));
+                }
+            }
+
+            return; // already on the windowed shape (generation handled above for rollups)
         }
 
         var tableExists = await _databaseClient.GetCountAsync(_tenantId,

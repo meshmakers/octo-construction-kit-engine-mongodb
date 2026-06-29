@@ -569,11 +569,16 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
   generation stays hidden), and the post-flip sweep. This is the automated replacement for the
   previously-manual live validation; it caught both the staging-refresh bug above and the empty-genmap
   baseline-filter bug.
-- **Caveats:** rollup tables provisioned *before* Phase 6 lack the
-  generation column/PK — they need recreate (forward aggregation's `ON CONFLICT (…, generation)`
-  would otherwise not match); `LoadGenerationRangesAsync` tolerates a missing genmap table. Per-rtId
-  scoped recompute is still `NotSupported` in the executor (genmap `rtid_scope` is always `''`).
-  `rewindRollupWatermark` over a recomputed range is not reconciled with the genmap yet.
+- **Upgrade self-heal:** `EnsureWindowedTableShapeAsync(requireGenerationColumn: isRollup)` drops an
+  existing rollup table that is on the windowed shape but lacks the `generation` column (provisioned
+  before Phase 6) so the subsequent `CREATE TABLE IF NOT EXISTS` re-adds it with the generation-keyed
+  PK; the orchestrator re-aggregates on the next watermark advance (the same lossy-but-self-healing
+  trade-off as the pre-Phase-7 single-timestamp migration). No-op once the column is present.
+- **Caveats:** rollup tables provisioned *before* Phase 6 lack the generation column/PK — handled by
+  the upgrade self-heal above (dropped + recreated); `LoadGenerationRangesAsync` also tolerates a
+  missing genmap table on the read side. Per-rtId scoped recompute is still `NotSupported` in the
+  executor (genmap `rtid_scope` is always `''`). `rewindRollupWatermark` over a recomputed range is
+  not reconciled with the genmap yet.
 
 ### Extensible Enum Preservation on Import (WI #3324)
 

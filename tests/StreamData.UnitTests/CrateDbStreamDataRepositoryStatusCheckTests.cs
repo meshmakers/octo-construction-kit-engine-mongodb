@@ -133,6 +133,54 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
             .MustHaveHappenedOnceExactly();
     }
 
+    [Fact]
+    public async Task EnsureArchiveCreated_RollupTableWithoutGenerationColumn_IsDroppedForRecreate()
+    {
+        // Phase-6 self-heal (AB#4184): an existing rollup table on the windowed shape but WITHOUT the
+        // generation column predates the generation pointer — it must be dropped so CREATE re-adds it
+        // with generation keyed into the PK. window_start present (1), generation absent (0).
+        A.CallTo(() => _db.GetCountAsync("tenant-x", A<string>.That.Contains("'window_start'"))).Returns(1L);
+        A.CallTo(() => _db.GetCountAsync("tenant-x", A<string>.That.Contains("'generation'"))).Returns(0L);
+
+        var rollup = new ArchiveSnapshot(Archive, SomeType, CkArchiveStatus.Created, null, Array.Empty<CkArchiveColumnSpec>())
+        {
+            RollupAggregations = new[] { new CkRollupAggregationSpec("Voltage", CkRollupFunction.Sum, null) }
+        };
+
+        await NewSut().EnsureArchiveCreatedAsync(rollup);
+
+        A.CallTo(() => _mgmt.ExecuteDdlAsync(
+                "tenant-x",
+                A<string>.That.Matches(sql =>
+                    sql.Contains("DROP TABLE")
+                    && sql.Contains($"archive_{Archive}")
+                    && !sql.Contains("__genmap"))))
+            .MustHaveHappenedOnceExactly();
+    }
+
+    [Fact]
+    public async Task EnsureArchiveCreated_RollupTableWithGenerationColumn_IsNotDropped()
+    {
+        // Already on the Phase-6 shape (generation present): no self-heal drop.
+        A.CallTo(() => _db.GetCountAsync("tenant-x", A<string>.That.Contains("'window_start'"))).Returns(1L);
+        A.CallTo(() => _db.GetCountAsync("tenant-x", A<string>.That.Contains("'generation'"))).Returns(1L);
+
+        var rollup = new ArchiveSnapshot(Archive, SomeType, CkArchiveStatus.Created, null, Array.Empty<CkArchiveColumnSpec>())
+        {
+            RollupAggregations = new[] { new CkRollupAggregationSpec("Voltage", CkRollupFunction.Sum, null) }
+        };
+
+        await NewSut().EnsureArchiveCreatedAsync(rollup);
+
+        A.CallTo(() => _mgmt.ExecuteDdlAsync(
+                "tenant-x",
+                A<string>.That.Matches(sql =>
+                    sql.Contains("DROP TABLE")
+                    && sql.Contains($"archive_{Archive}")
+                    && !sql.Contains("__genmap"))))
+            .MustNotHaveHappened();
+    }
+
     private static StreamDataPoint NewPoint() => new()
     {
         RtId = OctoObjectId.GenerateNewId(),
