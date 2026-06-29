@@ -38,6 +38,15 @@ internal class TimeSpanSerializer : StructSerializerBase<TimeSpan>
                 return TimeSpan.FromTicks((long)reader.ReadDouble());
             case BsonType.String:
                 var raw = reader.ReadString();
+                // A bare-integer string is the canonical ticks form (matching the Int64/Int32 cases
+                // above), NOT a .NET TimeSpan literal — TimeSpan.Parse reads "9000000000" as
+                // 9-billion days and overflows. This shape is produced by the ImportRt export/import
+                // JSON round-trip (AB#4259). Check before the .NET / ISO-8601 parse.
+                if (long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ticksFromString))
+                {
+                    return TimeSpan.FromTicks(ticksFromString);
+                }
+
                 if (TimeSpan.TryParse(raw, CultureInfo.InvariantCulture, out var dotnetParsed))
                 {
                     return dotnetParsed;
