@@ -106,12 +106,26 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             // the orchestrator will backfill on the next watermark advance (concept-time-range §6).
             await EnsureWindowedTableShapeAsync(snapshot.RtId.ToString());
 
+            // Rollup archives carry the Phase-6 generation column (and a generation-map side-table)
+            // so partial-range recomputes can flip a per-window pointer atomically. Time-range
+            // archives are externally fed and never recomputed through that path, so they stay on the
+            // plain windowed shape.
+            var isRollup = snapshot.RollupAggregations is not null;
             var sql = ArchiveDdlGenerator.GenerateCreateWindowedTable(
-                qualifiedTable, resolvedColumns, _configuration.NumberOfShards, _configuration.NumberOfReplicas);
+                qualifiedTable, resolvedColumns, _configuration.NumberOfShards, _configuration.NumberOfReplicas,
+                includeGeneration: isRollup);
             _logger.LogDebug(
                 "Provisioning windowed archive table {Table} with {ColumnCount} user columns for tenant {TenantId} (shape: {Shape})",
                 qualifiedTable, resolvedColumns.Count, _tenantId, shape);
             await _managementClient.ExecuteDdlAsync(_tenantId, sql);
+
+            if (isRollup)
+            {
+                // Created empty at activation so the read path can always issue a plain SELECT against
+                // it (no rows ⇒ no generation predicate ⇒ all steady-state generation-0 rows returned).
+                var genMapTable = GenerationMapSqlBuilder.GenMapTable(_tenantId, snapshot.RtId.ToString());
+                await _managementClient.ExecuteDdlAsync(_tenantId, GenerationMapSqlBuilder.BuildCreateTable(genMapTable));
+            }
         }
         else
         {
@@ -174,6 +188,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var sql = ArchiveDdlGenerator.GenerateDropTable(qualifiedTable);
         _logger.LogDebug("Dropping archive table {Table} for tenant {TenantId}", qualifiedTable, _tenantId);
         await _managementClient.ExecuteDdlAsync(_tenantId, sql);
+
+        // Drop the Phase-6 generation-map side-table too (IF EXISTS — no-op for raw / time-range
+        // archives that never had one).
+        var genMapTable = GenerationMapSqlBuilder.GenMapTable(_tenantId, archiveRtId.ToString());
+        await _managementClient.ExecuteDdlAsync(_tenantId, GenerationMapSqlBuilder.BuildDropIfExists(genMapTable));
     }
 
     public async Task InsertAsync(OctoObjectId archiveRtId, StreamDataPoint datapoint)
@@ -415,6 +434,45 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
     }
 
+    /// <summary>
+    /// Loads the active-generation ranges for a rollup archive from its <c>__genmap</c> side-table
+    /// (AB#4184, Phase 6). Returns empty for non-rollup archives and for rollups that have never been
+    /// recomputed (no genmap rows) or were provisioned before Phase 6 (no genmap table) — in all those
+    /// cases the read path emits no generation predicate and every row (generation 0) is returned.
+    /// </summary>
+    private async Task<IReadOnlyList<GenerationRange>> LoadGenerationRangesAsync(
+        ArchiveSnapshot snapshot, OctoObjectId archiveRtId)
+    {
+        if (snapshot.RollupAggregations is null)
+        {
+            return Array.Empty<GenerationRange>();
+        }
+
+        var genMapTable = GenerationMapSqlBuilder.GenMapTable(_tenantId, archiveRtId.ToString());
+        var ranges = new List<GenerationRange>();
+        try
+        {
+            await foreach (var row in _databaseClient.StreamRawRowsAsync(
+                               _tenantId, GenerationMapSqlBuilder.BuildSelectAll(genMapTable)))
+            {
+                var start = Convert.ToInt64(row["range_start"], System.Globalization.CultureInfo.InvariantCulture);
+                var end = Convert.ToInt64(row["range_end"], System.Globalization.CultureInfo.InvariantCulture);
+                var scope = row.TryGetValue("rtid_scope", out var s) && s is not null ? s.ToString() ?? string.Empty : string.Empty;
+                var generation = Convert.ToInt64(row[Constants.Generation], System.Globalization.CultureInfo.InvariantCulture);
+                ranges.Add(new GenerationRange(start, end, scope, generation));
+            }
+        }
+        catch (Exception ex)
+        {
+            // Pre-Phase-6 rollup table without a genmap side-table ⇒ no active generations; read all
+            // rows unfiltered (they are all generation 0). Debug-level so it is observable but quiet.
+            _logger.LogDebug(ex,
+                "No generation map for rollup archive {ArchiveRtId}; reading all rows as generation 0.", archiveRtId);
+        }
+
+        return ranges;
+    }
+
     public async Task<StreamDataQueryResult> ExecuteQueryAsync(OctoObjectId archiveRtId, StreamDataQueryOptions options)
     {
         var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
@@ -429,6 +487,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         if (snapshot.UsesWindowedStorage)
         {
             q.UseWindowedTimeAxis();
+            // Phase 6 (AB#4184): for rollup archives, constrain reads to the active generation per
+            // window so a query during a recompute never mixes generations. No-op for time-range
+            // archives and for rollups with no recompute history (empty genmap).
+            q.WithGenerationRanges(await LoadGenerationRangesAsync(snapshot, archiveRtId));
         }
         q.IncludeDefaultVariables();
         q.WithCkTypeIdFilter(options.CkTypeId);
@@ -473,6 +535,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         if (snapshot.UsesWindowedStorage)
         {
             q.UseWindowedTimeAxis();
+            // Phase 6 (AB#4184): for rollup archives, constrain reads to the active generation per
+            // window so a query during a recompute never mixes generations. No-op for time-range
+            // archives and for rollups with no recompute history (empty genmap).
+            q.WithGenerationRanges(await LoadGenerationRangesAsync(snapshot, archiveRtId));
         }
         q.WithCkTypeIdFilter(options.CkTypeId);
 
@@ -556,6 +622,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         if (snapshot.UsesWindowedStorage)
         {
             q.UseWindowedTimeAxis();
+            // Phase 6 (AB#4184): for rollup archives, constrain reads to the active generation per
+            // window so a query during a recompute never mixes generations. No-op for time-range
+            // archives and for rollups with no recompute history (empty genmap).
+            q.WithGenerationRanges(await LoadGenerationRangesAsync(snapshot, archiveRtId));
         }
         q.WithCkTypeIdFilter(options.CkTypeId);
 
@@ -689,6 +759,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         if (snapshot.UsesWindowedStorage)
         {
             q.UseWindowedTimeAxis();
+            // Phase 6 (AB#4184): for rollup archives, constrain reads to the active generation per
+            // window so a query during a recompute never mixes generations. No-op for time-range
+            // archives and for rollups with no recompute history (empty genmap).
+            q.WithGenerationRanges(await LoadGenerationRangesAsync(snapshot, archiveRtId));
         }
         q.WithCkTypeIdFilter(options.CkTypeId);
         q.WithTimeFilter(options.From.Value, options.To.Value);

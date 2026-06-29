@@ -381,4 +381,33 @@ internal class CrateQueryBuilder
     /// Defines what kind of query should be executed
     /// </summary>
     public QueryModeDto? QueryMode { get; set; }
+
+    /// <summary>
+    /// Active-generation ranges for a rollup archive (AB#4184, Phase 6). Each entry maps a
+    /// half-open window range (epoch ms) to the generation a reader must select. Empty in the steady
+    /// state (no recompute has happened) — the compiler then emits no generation predicate and all
+    /// rows (generation 0) are returned. Populated from the rollup's <c>__genmap</c> side-table.
+    /// </summary>
+    internal List<GenerationRange> GenerationRanges { get; } = new();
+
+    /// <summary>True when at least one active-generation range is configured (rollup archives only).</summary>
+    internal bool HasGenerationFilter => GenerationRanges.Count > 0;
+
+    /// <summary>
+    /// Supplies the active-generation ranges read from the rollup's generation-map side-table. The
+    /// compiler turns them into a <c>generation = CASE … ELSE 0 END</c> predicate so a query during a
+    /// recompute returns a single consistent generation per window. No-op for an empty list.
+    /// </summary>
+    public CrateQueryBuilder WithGenerationRanges(IEnumerable<GenerationRange> ranges)
+    {
+        GenerationRanges.AddRange(ranges);
+        return this;
+    }
 }
+
+/// <summary>
+/// One active-generation pointer entry: the half-open window range <c>[StartMs, EndMs)</c> (epoch
+/// ms), an optional <c>rtId</c> scope (empty = all), and the <see cref="Generation"/> a reader must
+/// select for windows in that range. AB#4184, Phase 6.
+/// </summary>
+internal sealed record GenerationRange(long StartMs, long EndMs, string Scope, long Generation);

@@ -34,19 +34,15 @@ internal static class RollupRecomputeSqlBuilder
         $"DROP TABLE IF EXISTS {qualifiedTable};";
 
     /// <summary>
-    /// Builds the live-range delete: removes the buckets whose <c>window_start</c> falls in
-    /// <c>[from, to)</c>, the half-open range the recompute is about to replace from staging.
+    /// Builds the generation-aware staging copy (AB#4184, Phase 6): inserts the staged rows into the
+    /// live table stamping every row with <paramref name="generation"/> via a literal in the SELECT
+    /// list, instead of copying staging's own generation. The new-generation rows coexist with the
+    /// previous generation (the generation column is part of the rollup PK) until the pointer flips
+    /// and <see cref="BuildSweepSupersededGenerations"/> removes the old rows. No live DELETE happens
+    /// before the pointer flips, so a crash mid-copy leaves readers on the previous generation.
     /// </summary>
-    public static string BuildRangeDelete(string liveTable, DateTime from, DateTime to) =>
-        $"DELETE FROM {liveTable} WHERE \"{Constants.WindowStart}\" >= {ToEpochMs(from)} " +
-        $"AND \"{Constants.WindowStart}\" < {ToEpochMs(to)};";
-
-    /// <summary>
-    /// Builds <c>INSERT INTO {live} (cols) SELECT cols FROM {staging};</c> with an explicit, identical
-    /// column list on both sides so the copy is order-independent of how either table was created.
-    /// </summary>
-    public static string BuildInsertFromStaging(
-        string liveTable, string stagingTable, IReadOnlyList<string> columnNames)
+    public static string BuildInsertFromStagingWithGeneration(
+        string liveTable, string stagingTable, IReadOnlyList<string> columnNames, long generation)
     {
         if (columnNames.Count == 0)
         {
@@ -54,7 +50,29 @@ internal static class RollupRecomputeSqlBuilder
         }
 
         var cols = string.Join(", ", columnNames.Select(c => $"\"{c}\""));
-        return $"INSERT INTO {liveTable} ({cols}) SELECT {cols} FROM {stagingTable};";
+        var g = generation.ToString(CultureInfo.InvariantCulture);
+        return
+            $"INSERT INTO {liveTable} ({cols}, \"{Constants.Generation}\") " +
+            $"SELECT {cols}, {g} FROM {stagingTable};";
+    }
+
+    /// <summary>
+    /// Builds the post-flip sweep: removes the now-superseded rows in <c>[from, to)</c> whose
+    /// generation differs from the active one. Runs <b>after</b> the pointer flip, so no consistent
+    /// generation is ever removed from under a reader. Optionally scoped to a single
+    /// <paramref name="rtIdScope"/> (empty/null = whole range).
+    /// </summary>
+    public static string BuildSweepSupersededGenerations(
+        string liveTable, DateTime from, DateTime to, long generation, string? rtIdScope = null)
+    {
+        var g = generation.ToString(CultureInfo.InvariantCulture);
+        var scopeClause = string.IsNullOrEmpty(rtIdScope)
+            ? string.Empty
+            : $" AND \"{Constants.RtId}\" = '{rtIdScope.Replace("'", "''")}'";
+        return
+            $"DELETE FROM {liveTable} WHERE \"{Constants.WindowStart}\" >= {ToEpochMs(from)} " +
+            $"AND \"{Constants.WindowStart}\" < {ToEpochMs(to)} " +
+            $"AND \"{Constants.Generation}\" != {g}{scopeClause};";
     }
 
     private static string ToEpochMs(DateTime value)

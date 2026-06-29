@@ -114,7 +114,9 @@ public class RollupAggregationSqlBuilderTests
         Assert.Contains("WHERE \"timestamp\" >= '", sql);
         Assert.Contains("AND \"timestamp\" < '", sql);
         Assert.Contains("GROUP BY \"rtid\"", sql);
-        Assert.Contains("ON CONFLICT (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\") DO UPDATE SET", sql);
+        // Phase 6: generation is part of the rollup conflict key and is written as the steady-state 0.
+        Assert.Contains("ON CONFLICT (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\", \"generation\") DO UPDATE SET", sql);
+        Assert.Contains("0 AS \"generation\"", sql);
         Assert.Contains("\"voltage_sum\" = EXCLUDED.\"voltage_sum\"", sql);
         Assert.Contains("\"was_updated\" = TRUE", sql);
         // No source.was_updated propagation for a raw source — column does not exist there.

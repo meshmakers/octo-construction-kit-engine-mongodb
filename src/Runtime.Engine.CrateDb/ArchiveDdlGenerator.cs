@@ -130,11 +130,18 @@ internal static class ArchiveDdlGenerator
     /// <c>(window_start, window_end, rtid, ckTypeId)</c> primary key, the <c>was_updated</c> flag
     /// column, plus the user-defined data columns. Same shard/replica knobs as the raw overload.
     /// </summary>
+    /// <param name="includeGeneration">
+    /// When true (rollup archives only, AB#4184 Phase 6) the table gains a
+    /// <c>generation BIGINT NOT NULL DEFAULT 0</c> column and the primary key is extended with it, so
+    /// a recompute's new-generation rows coexist with the previous generation until the active-
+    /// generation pointer flips. Time-range archives pass <c>false</c> and are unaffected.
+    /// </param>
     public static string GenerateCreateWindowedTable(
         string qualifiedTableName,
         IReadOnlyList<ArchiveColumnDdl> columns,
         int numberOfShards,
-        int numberOfReplicas)
+        int numberOfReplicas,
+        bool includeGeneration = false)
     {
         if (string.IsNullOrWhiteSpace(qualifiedTableName))
         {
@@ -159,6 +166,12 @@ internal static class ArchiveDdlGenerator
             sb.Append(' ').Append('"').Append(name).Append("\" ").Append(definition).Append(',');
         }
 
+        if (includeGeneration)
+        {
+            sb.Append(" \"").Append(Constants.Generation).Append("\" BIGINT NOT NULL DEFAULT 0,");
+            seenColumnNames.Add(Constants.Generation);
+        }
+
         foreach (var col in columns)
         {
             var columnName = ResolveColumnName(col);
@@ -173,7 +186,8 @@ internal static class ArchiveDdlGenerator
             sb.Append(',');
         }
 
-        sb.Append($" PRIMARY KEY (\"{Constants.WindowStart}\", \"{Constants.WindowEnd}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\")");
+        var generationPkSuffix = includeGeneration ? $", \"{Constants.Generation}\"" : string.Empty;
+        sb.Append($" PRIMARY KEY (\"{Constants.WindowStart}\", \"{Constants.WindowEnd}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\"{generationPkSuffix})");
         sb.Append(") CLUSTERED INTO ")
           .Append(numberOfShards.ToString(CultureInfo.InvariantCulture))
           .Append(" SHARDS");

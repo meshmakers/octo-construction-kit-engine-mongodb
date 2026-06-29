@@ -279,7 +279,7 @@ internal class CrateQueryCompiler
 
     private static void AppendWhereClause(StringBuilder query, CrateQueryBuilder queryBuilder)
     {
-        if (queryBuilder.VariableInListVariables.Any() || queryBuilder is { From: not null, To: not null } || queryBuilder.CkTypeId != null || queryBuilder.HasFieldFilters)
+        if (queryBuilder.VariableInListVariables.Any() || queryBuilder is { From: not null, To: not null } || queryBuilder.CkTypeId != null || queryBuilder.HasFieldFilters || queryBuilder.HasGenerationFilter)
         {
             // we can only have one where clause, but we can connect it with AND
             query.Append(" WHERE ");
@@ -353,6 +353,47 @@ internal class CrateQueryCompiler
             query.Append(string.Join(" AND ",
                 queryBuilder.FieldFilters.Select(CompileFieldFilter)));
         }
+
+        // Phase 6 (AB#4184): per-window active-generation filter for rollup archives. Emitted last,
+        // self-managing its leading AND, so it composes with any combination of the conditions above
+        // without touching their inter-condition AND handling.
+        if (queryBuilder.HasGenerationFilter)
+        {
+            var anyPrior = queryBuilder.CkTypeId != null
+                           || queryBuilder.VariableInListVariables.Any()
+                           || queryBuilder is { From: not null, To: not null }
+                           || queryBuilder.HasFieldFilters;
+            if (anyPrior)
+            {
+                query.Append(" AND ");
+            }
+
+            query.Append(CompileGenerationFilter(queryBuilder));
+        }
+    }
+
+    /// <summary>
+    /// Builds <c>"generation" = CASE WHEN &lt;range&gt; THEN &lt;gen&gt; … ELSE 0 END</c> from the active-
+    /// generation ranges. Ranges are emitted newest-generation-first so an overlapping re-recompute
+    /// (higher generation) wins via CASE's first-match semantics; windows in no recomputed range fall
+    /// through to the steady-state generation 0. AB#4184, Phase 6.
+    /// </summary>
+    private static string CompileGenerationFilter(CrateQueryBuilder queryBuilder)
+    {
+        var sb = new StringBuilder();
+        sb.Append('"').Append(Constants.Generation).Append("\" = CASE");
+        foreach (var range in queryBuilder.GenerationRanges.OrderByDescending(r => r.Generation))
+        {
+            sb.Append(" WHEN (\"").Append(Constants.WindowStart).Append("\" >= ").Append(range.StartMs)
+              .Append(" AND \"").Append(Constants.WindowStart).Append("\" < ").Append(range.EndMs).Append(')');
+            if (!string.IsNullOrEmpty(range.Scope))
+            {
+                sb.Append(" AND \"").Append(Constants.RtId).Append("\" = '").Append(range.Scope.Replace("'", "''")).Append('\'');
+            }
+            sb.Append(" THEN ").Append(range.Generation);
+        }
+        sb.Append(" ELSE 0 END");
+        return sb.ToString();
     }
 
     private static string CompileFieldFilter(StreamDataFieldFilterDto filter)

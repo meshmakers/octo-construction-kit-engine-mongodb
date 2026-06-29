@@ -533,6 +533,40 @@ The shared `CkArchiveSnapshot` covers both subtypes. When the loaded entity is a
   archive store into `RollupArchiveLifecycleService`; the archive store is needed by
   `CreateAsync` to look up the source archive's `TargetCkTypeId`.
 
+### Optimistic Recompute — Per-Window Generation Pointer (AB#4184, Phase 6)
+
+A partial-range rollup recompute must swap the recomputed windows **atomically** even though CrateDB
+has no multi-statement transaction. The mechanism is a per-window `generation` pointer:
+
+- **`generation` column** — `CrateDbStreamDataRepository.EnsureArchiveCreatedAsync` provisions rollup
+  tables via `ArchiveDdlGenerator.GenerateCreateWindowedTable(..., includeGeneration: true)`, which
+  adds `generation BIGINT NOT NULL DEFAULT 0` **and keys it into the PK**
+  `(window_start, window_end, rtid, cktypeid, generation)`. Time-range archives pass
+  `includeGeneration: false` and are unaffected. Forward aggregation
+  (`RollupAggregationSqlBuilder`) always writes generation `0` and includes it in the `ON CONFLICT`
+  key, so a forward re-aggregation collapses onto the generation-0 row.
+- **Pointer side-table** — `GenerationMapSqlBuilder` creates a tiny `archive_<rtId>__genmap` table
+  per rollup (at activation) holding `(range_start, range_end, rtid_scope, generation)`. This is the
+  active-generation pointer. **Design note:** the concept doc (§4) places this pointer in "Mongo
+  metadata"; we deliberately co-locate it in CrateDB next to the data so the flip is a single-row
+  write in the same store — no CK-model bump, no cross-store coordination.
+- **Executor flip** (`CrateDbArchiveRecomputeExecutor`) — compute into staging (as before), then:
+  (1) `BuildInsertFromStagingWithGeneration` copies staged rows into the live table stamped with the
+  next generation `N+1` (the previous generation stays visible); (2) `RefreshArchiveTableAsync`;
+  (3) `GenerationMapSqlBuilder.BuildUpsertPointer` flips the pointer to `N+1` — the **atomic commit**;
+  (4) `BuildSweepSupersededGenerations` deletes the now-superseded generations in the range; (5) drop
+  staging. A crash before the flip leaves readers on the previous generation; a crash after the flip
+  but before the sweep just leaves dead rows the next sweep/activation reclaims.
+- **Read path** — the four windowed query methods call `LoadGenerationRangesAsync` (reads the genmap)
+  and pass the ranges to `CrateQueryBuilder.WithGenerationRanges`; `CrateQueryCompiler` emits
+  `"generation" = CASE WHEN <range> THEN <gen> … ELSE 0 END` (ranges ordered newest-generation-first
+  so an overlapping re-recompute wins). Empty genmap ⇒ no predicate ⇒ all (generation-0) rows.
+- **Caveats** (live-CrateDB validation pending): rollup tables provisioned *before* Phase 6 lack the
+  generation column/PK — they need recreate (forward aggregation's `ON CONFLICT (…, generation)`
+  would otherwise not match); `LoadGenerationRangesAsync` tolerates a missing genmap table. Per-rtId
+  scoped recompute is still `NotSupported` in the executor (genmap `rtid_scope` is always `''`).
+  `rewindRollupWatermark` over a recomputed range is not reconciled with the genmap yet.
+
 ### Extensible Enum Preservation on Import (WI #3324)
 
 `DatabaseCkModelRepository.PreserveExtensibleEnumValues` runs inside `ExecuteImport`

@@ -37,6 +37,15 @@ public static class Constants
     /// <summary>ckTypeId column name</summary>
     public const string CkTypeId = "cktypeid";
 
+    /// <summary>
+    /// Generation column on rollup archive tables (AB#4184, Phase 6). Part of the rollup table's
+    /// primary key so a recomputed window's new rows (generation N+1) can coexist with the previous
+    /// rows (generation N) until the per-window active-generation pointer flips and the superseded
+    /// rows are swept. Forward orchestrator writes always use generation <c>0</c>; only the recompute
+    /// executor writes higher generations. Time-range and raw archive tables do not carry this column.
+    /// </summary>
+    public const string Generation = "generation";
+
     /// <summary>rtWellKnownName column name</summary>
     public const string RtWellKnownName = "rtwellknownname";
 

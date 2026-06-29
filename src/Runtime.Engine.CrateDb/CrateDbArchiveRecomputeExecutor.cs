@@ -93,9 +93,12 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         var stagingTable = RollupRecomputeSqlBuilder.StagingTable(_tenantId, rollup.RtId.ToString());
 
         // Fresh staging: drop any leftover from a crashed run, recreate with the live windowed shape.
+        // includeGeneration:true so the shared RollupAggregationSqlBuilder (which now always writes a
+        // generation column) targets a matching schema; staging's generation is always 0 and is
+        // overridden to the new generation when the staged rows are copied into the live table.
         await _managementClient.ExecuteDdlAsync(_tenantId, RollupRecomputeSqlBuilder.BuildDropIfExists(stagingTable));
         await _managementClient.ExecuteDdlAsync(_tenantId,
-            ArchiveDdlGenerator.GenerateCreateWindowedTable(stagingTable, resolvedColumns, _numberOfShards, _numberOfReplicas));
+            ArchiveDdlGenerator.GenerateCreateWindowedTable(stagingTable, resolvedColumns, _numberOfShards, _numberOfReplicas, includeGeneration: true));
 
         var rows = 0;
         var windows = 0;
@@ -117,18 +120,60 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
             windows++;
         }
 
-        // Swap: replace the live range from staging (see remarks for the atomicity caveat).
-        await _databaseClient.ExecuteNonQueryAsync(_tenantId,
-            RollupRecomputeSqlBuilder.BuildRangeDelete(liveTable, rangeStart, rangeEnd), cancellationToken);
-        await _databaseClient.ExecuteNonQueryAsync(_tenantId,
-            RollupRecomputeSqlBuilder.BuildInsertFromStaging(liveTable, stagingTable, columnNames), cancellationToken);
+        // ---- Atomic swap via the per-window generation pointer (Phase 6) ----
+        // Instead of a non-atomic DELETE+INSERT over the live range, copy the staged rows into the
+        // live table under a fresh generation (the previous generation stays visible), then flip the
+        // active-generation pointer in a single-row write — the actual commit — and finally sweep the
+        // superseded rows. A crash before the flip leaves readers on the previous generation; a crash
+        // after the flip but before the sweep just leaves dead rows the next sweep / activation can GC.
+        var genMapTable = GenerationMapSqlBuilder.GenMapTable(_tenantId, rollup.RtId.ToString());
+        await _managementClient.ExecuteDdlAsync(_tenantId, GenerationMapSqlBuilder.BuildCreateTable(genMapTable));
+        var generation = await ReadNextGenerationAsync(genMapTable, cancellationToken);
 
+        // 1. Stage → live under the new generation. Refresh so the rows are on the read path before
+        //    the pointer flip makes them authoritative.
+        await _databaseClient.ExecuteNonQueryAsync(_tenantId,
+            RollupRecomputeSqlBuilder.BuildInsertFromStagingWithGeneration(liveTable, stagingTable, columnNames, generation),
+            cancellationToken);
+        await _databaseClient.RefreshArchiveTableAsync(_tenantId, liveTable);
+
+        // 2. Flip the pointer (atomic commit).
+        await _databaseClient.ExecuteNonQueryAsync(_tenantId,
+            GenerationMapSqlBuilder.BuildUpsertPointer(
+                genMapTable, rangeStart, rangeEnd, GenerationMapSqlBuilder.AllRtIdsScope, generation),
+            cancellationToken);
+
+        // 3. Sweep the now-superseded generation(s) in the range.
+        await _databaseClient.ExecuteNonQueryAsync(_tenantId,
+            RollupRecomputeSqlBuilder.BuildSweepSupersededGenerations(liveTable, rangeStart, rangeEnd, generation),
+            cancellationToken);
+
+        // 4. Drop staging.
         await _managementClient.ExecuteDdlAsync(_tenantId, RollupRecomputeSqlBuilder.BuildDropIfExists(stagingTable));
 
         _logger.LogInformation(
-            "Recomputed rollup {RollupRtId} range [{From:O},{To:O}): {Windows} windows / {Rows} staged rows swapped into the live table.",
-            rollup.RtId, rangeStart, rangeEnd, windows, rows);
+            "Recomputed rollup {RollupRtId} range [{From:O},{To:O}) as generation {Generation}: {Windows} windows / {Rows} staged rows, pointer flipped + superseded rows swept.",
+            rollup.RtId, rangeStart, rangeEnd, generation, windows, rows);
 
         return new RecomputeExecutionResult(rows, windows);
+    }
+
+    /// <summary>
+    /// Reads the next monotonic generation for the archive (<c>MAX(generation)+1</c> from the genmap
+    /// table). The genmap table has just been created if absent, so the query always succeeds.
+    /// </summary>
+    private async Task<long> ReadNextGenerationAsync(string genMapTable, CancellationToken cancellationToken)
+    {
+        await foreach (var row in _databaseClient.StreamRawRowsAsync(
+                           _tenantId, GenerationMapSqlBuilder.BuildNextGeneration(genMapTable), cancellationToken))
+        {
+            if (row.TryGetValue("next", out var value) && value is not null)
+            {
+                return Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+            }
+        }
+
+        // Empty result (should not happen for an aggregate query) ⇒ first generation.
+        return 1;
     }
 }

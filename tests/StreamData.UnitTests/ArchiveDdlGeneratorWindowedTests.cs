@@ -61,6 +61,40 @@ public class ArchiveDdlGeneratorWindowedTests
     }
 
     [Fact]
+    public void GenerateCreateWindowedTable_DefaultOmitsGenerationColumn_TimeRangeShapeUnchanged()
+    {
+        // Time-range archives pass includeGeneration:false (the default) and must keep the pre-Phase-6
+        // shape — no generation column, generation absent from the PK.
+        var sql = ArchiveDdlGenerator.GenerateCreateWindowedTable(
+            qualifiedTableName: "\"loxone\".\"archive_eda\"",
+            columns: System.Array.Empty<ArchiveColumnDdl>(),
+            numberOfShards: 1,
+            numberOfReplicas: -1);
+
+        Assert.DoesNotContain("\"generation\"", sql);
+        Assert.Contains("PRIMARY KEY (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\")", sql);
+    }
+
+    [Fact]
+    public void GenerateCreateWindowedTable_IncludeGeneration_AddsColumnAndExtendsPrimaryKey()
+    {
+        // Rollup archives pass includeGeneration:true (AB#4184, Phase 6): a generation column keyed
+        // into the PK so a recompute's new generation coexists with the previous one until the flip.
+        var sql = ArchiveDdlGenerator.GenerateCreateWindowedTable(
+            qualifiedTableName: "\"acmecorp\".\"archive_rollup1\"",
+            columns: new[]
+            {
+                new ArchiveColumnDdl("voltage_avg_sum", new CrateColumnType.Primitive("DOUBLE PRECISION"), Required: false, Indexed: true),
+            },
+            numberOfShards: 1,
+            numberOfReplicas: -1,
+            includeGeneration: true);
+
+        Assert.Contains("\"generation\" BIGINT NOT NULL DEFAULT 0", sql);
+        Assert.Contains("PRIMARY KEY (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\", \"generation\")", sql);
+    }
+
+    [Fact]
     public void GenerateCreateTimeRangeTable_RejectsEmptyQualifiedTable()
     {
         Assert.Throws<System.ArgumentException>(() =>

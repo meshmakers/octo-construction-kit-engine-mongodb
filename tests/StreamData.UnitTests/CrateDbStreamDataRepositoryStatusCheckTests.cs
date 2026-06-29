@@ -115,11 +115,21 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
     {
         await NewSut().DeleteArchiveAsync(Archive);
 
+        // The archive table itself is dropped exactly once (excluding the genmap side-table below).
         A.CallTo(() => _mgmt.ExecuteDdlAsync(
                 "tenant-x",
                 A<string>.That.Matches(sql =>
                     sql.Contains("DROP TABLE IF EXISTS")
-                    && sql.Contains($"archive_{Archive}"))))
+                    && sql.Contains($"archive_{Archive}")
+                    && !sql.Contains("__genmap"))))
+            .MustHaveHappenedOnceExactly();
+
+        // The Phase-6 generation-map side-table is dropped too (IF EXISTS — no-op for non-rollups).
+        A.CallTo(() => _mgmt.ExecuteDdlAsync(
+                "tenant-x",
+                A<string>.That.Matches(sql =>
+                    sql.Contains("DROP TABLE IF EXISTS")
+                    && sql.Contains($"archive_{Archive}__genmap"))))
             .MustHaveHappenedOnceExactly();
     }
 

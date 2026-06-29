@@ -101,6 +101,9 @@ internal static class RollupAggregationSqlBuilder
                 sb.Append(", \"").Append(t.ColumnName).Append('"');
             }
         }
+        // Phase 6: forward aggregation always writes generation 0 (the steady-state generation);
+        // only the recompute executor stamps higher generations when copying staging into live.
+        sb.Append(", \"").Append(Constants.Generation).Append('"');
         sb.AppendLine(")");
 
         // ---- SELECT ... FROM source WHERE <time-predicate> GROUP BY rtId ----
@@ -123,6 +126,7 @@ internal static class RollupAggregationSqlBuilder
                 sb.Append(", ").Append(t.Function).Append("(\"").Append(sourceColumn).Append("\") AS \"").Append(t.ColumnName).Append('"');
             }
         }
+        sb.Append(", 0 AS \"").Append(Constants.Generation).Append('"');
         sb.AppendLine().Append("FROM ").AppendLine(sourceTable);
         if (sourceUsesWindowedStorage)
         {
@@ -143,7 +147,10 @@ internal static class RollupAggregationSqlBuilder
         // Same conflict key as TimeRangeArchive — same was_updated semantics: the orchestrator
         // re-running a bucket (after rewind, or a crash that didn't commit the watermark) is a
         // correction; flip the flag to signal "this row was rewritten at some point".
-        sb.Append("ON CONFLICT (\"").Append(Constants.WindowStart).Append("\", \"").Append(Constants.WindowEnd).Append("\", \"").Append(Constants.RtId).Append("\", \"").Append(Constants.CkTypeId).AppendLine("\") DO UPDATE SET");
+        // Conflict key includes generation: rollup tables key on (window_start, window_end, rtid,
+        // ckTypeId, generation) (Phase 6) so a forward re-aggregation collapses onto the generation-0
+        // row, while recomputed higher-generation rows for the same window are left untouched.
+        sb.Append("ON CONFLICT (\"").Append(Constants.WindowStart).Append("\", \"").Append(Constants.WindowEnd).Append("\", \"").Append(Constants.RtId).Append("\", \"").Append(Constants.CkTypeId).Append("\", \"").Append(Constants.Generation).AppendLine("\") DO UPDATE SET");
         sb.Append("    \"").Append(Constants.RtWellKnownName).Append("\" = EXCLUDED.\"").Append(Constants.RtWellKnownName).Append('"');
         foreach (var (_, targets) in resolved)
         {
