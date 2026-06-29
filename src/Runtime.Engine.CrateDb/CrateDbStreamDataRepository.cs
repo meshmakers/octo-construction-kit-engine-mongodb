@@ -1560,8 +1560,50 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // archive was configured to capture. Windowed (rollup + time-range) archives swap the
         // single `timestamp` default for the `window_start` / `window_end` / `was_updated` triple.
         return new StreamDataFieldResolver(
-            snapshot.Columns.Select(c => c.Path),
+            ReadableColumnIdentifiers(snapshot),
             usesWindowedStorage: snapshot.UsesWindowedStorage);
+    }
+
+    /// <summary>
+    /// The data-stream column identifiers that feed the read-path <see cref="StreamDataFieldResolver"/>
+    /// — i.e. the columns a query may project. An ingested column contributes its <see cref="CkArchiveColumnSpec.Path"/>;
+    /// a computed column contributes its <see cref="CkArchiveColumnSpec.Name"/> (the formula-referenceable
+    /// identifier, mapped to the same physical column the ingest path writes via
+    /// <see cref="ColumnNameMapper.PathToColumnName"/>) — but only when the column is <em>readable</em>.
+    /// <para>
+    /// A computed column mid-backfill (<see cref="ComputedColumnState.Pending"/> /
+    /// <see cref="ComputedColumnState.Backfilling"/>) or whose backfill failed
+    /// (<see cref="ComputedColumnState.Failed"/>) is excluded from the projection, so consumers keep
+    /// seeing the previous archive state until the backfill commits (AB#4189 §8.3 reader contract).
+    /// A computed column created together with its archive carries no lifecycle state (<c>null</c>) and
+    /// is live from creation, so <c>null</c> counts as readable alongside
+    /// <see cref="ComputedColumnState.Active"/>. The ingest / DDL path (<see cref="ResolveTableAndColumns"/>)
+    /// deliberately does <em>not</em> gate on state — even a Pending column's physical column exists and
+    /// must be written on ingest; gating is a read-path concern only.
+    /// </para>
+    /// </summary>
+    internal static IEnumerable<string> ReadableColumnIdentifiers(ArchiveSnapshot snapshot)
+    {
+        foreach (var c in snapshot.Columns)
+        {
+            if (!c.IsComputed)
+            {
+                yield return c.Path;
+                continue;
+            }
+
+            // Defensively skip a computed column missing its Name — activation DDL would have
+            // rejected it, but the read path must never throw on a malformed snapshot.
+            if (string.IsNullOrWhiteSpace(c.Name))
+            {
+                continue;
+            }
+
+            if (c.ComputedState is null or ComputedColumnState.Active)
+            {
+                yield return c.Name;
+            }
+        }
     }
 
     /// <summary>
