@@ -20,6 +20,9 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// </summary>
 internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveRecomputeExecutor
 {
+    /// <summary>Rows read + written per page during an active-archive computed-column backfill (§8).</summary>
+    private const int BackfillPageSize = 1000;
+
     private readonly ILogger<CrateDbStreamDataRepository> _logger;
     private CrateDbArchiveRecomputeExecutor? _recomputeExecutor;
     private readonly ICkCacheService _ckCacheService;
@@ -1474,6 +1477,97 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             await _databaseClient.ExecuteNonQueryAsync(_tenantId, updateSql, cancellationToken);
         }
     }
+
+    /// <summary>
+    /// Backfills one computed column across the existing rows of a live raw / time-range archive
+    /// (AB#4189 Phase 7, §8): page through the rows, evaluate the column's formula in .NET over each
+    /// row's operands, and write the result into the column's physical cell. The physical column must
+    /// already exist (the lifecycle adds it via <c>ALTER TABLE ADD COLUMN</c> before the backfill).
+    /// The target column is expected to be in a non-readable lifecycle state (Backfilling) while this
+    /// runs, so the read path keeps hiding it (<see cref="ReadableColumnIdentifiers"/>) until the
+    /// caller flips it to <see cref="ComputedColumnState.Active"/> on success.
+    /// <para>
+    /// Each page is fully materialised before its UPDATEs run — CrateDB / Npgsql cannot issue an
+    /// UPDATE while a SELECT cursor is open on the same connection (the same constraint
+    /// <see cref="EvaluateRollupComputedColumnsAsync"/> works around).
+    /// </para>
+    /// </summary>
+    internal async Task BackfillComputedColumnAsync(
+        ArchiveSnapshot snapshot, string columnName, CancellationToken cancellationToken = default)
+    {
+        var target = snapshot.Columns.FirstOrDefault(
+            c => c.IsComputed && string.Equals(c.Name, columnName, StringComparison.Ordinal));
+        if (target?.Name is null || target.ResultType is null)
+        {
+            // Unknown / malformed column — validation upstream rejects this; never throw here.
+            return;
+        }
+
+        var plan = BuildComputedPlan(snapshot);
+        var targetPhysical = ColumnNameMapper.PathToColumnName(target.Name);
+
+        var table = TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString());
+        var keyColumns = BackfillKeyColumns(snapshot);
+        // Operands are the readable data-stream columns (ingested + already-active computed), mapped
+        // to their physical names. The target itself is non-readable while backfilling, so it is not
+        // selected — ApplyComputedColumns writes it from the formula.
+        var valueColumns = ReadableColumnIdentifiers(snapshot)
+            .Select(ColumnNameMapper.PathToColumnName)
+            .ToList();
+
+        var offset = 0;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var selectSql = ComputedColumnBackfillSqlBuilder.BuildSelect(
+                table, keyColumns, valueColumns, BackfillPageSize, offset);
+
+            var page = new List<Dictionary<string, object?>>(BackfillPageSize);
+            await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, selectSql, cancellationToken))
+            {
+                page.Add(new Dictionary<string, object?>(row, StringComparer.Ordinal));
+            }
+
+            foreach (var row in page)
+            {
+                ApplyComputedColumns(row, plan);
+                row.TryGetValue(targetPhysical, out var value);
+
+                var keyPredicates = new List<(string Column, object? Value)>(keyColumns.Count);
+                foreach (var key in keyColumns)
+                {
+                    row.TryGetValue(key, out var keyValue);
+                    keyPredicates.Add((key, keyValue));
+                }
+
+                var updateSql = ComputedColumnBackfillSqlBuilder.BuildUpdate(
+                    table, new[] { (targetPhysical, value) }, keyPredicates);
+                await _databaseClient.ExecuteNonQueryAsync(_tenantId, updateSql, cancellationToken);
+            }
+
+            if (page.Count < BackfillPageSize)
+            {
+                break;
+            }
+
+            offset += BackfillPageSize;
+        }
+
+        // Make the backfilled cells visible to subsequent reads (CrateDB applies writes to the read
+        // path asynchronously), mirroring the rollup recompute executor's refresh discipline.
+        await _databaseClient.RefreshArchiveTableAsync(_tenantId, table);
+    }
+
+    /// <summary>
+    /// The primary-key columns that address a single row for the backfill UPDATE: raw archives are
+    /// keyed by <c>(timestamp, rtid, cktypeid)</c>, windowed (time-range) archives by
+    /// <c>(window_start, window_end, rtid, cktypeid)</c>.
+    /// </summary>
+    private static IReadOnlyList<string> BackfillKeyColumns(ArchiveSnapshot snapshot) =>
+        snapshot.UsesWindowedStorage
+            ? new[] { Constants.WindowStart, Constants.WindowEnd, Constants.RtId, Constants.CkTypeId }
+            : new[] { Constants.Timestamp, Constants.RtId, Constants.CkTypeId };
 
     /// <inheritdoc />
     public async Task<IReadOnlyDictionary<OctoObjectId, ArchiveStorageStats>> GetArchiveStatsAsync(
