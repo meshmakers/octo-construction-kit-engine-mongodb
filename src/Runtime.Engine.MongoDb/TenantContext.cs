@@ -1291,6 +1291,9 @@ public class TenantContext : ITenantContext
             GetArchiveRecomputeStateStore(),
             GetRecomputeJobStore(),
             executor,
+            // AB#4269: backfill resolves the source archive's earliest timestamp via the stream-data
+            // repository (the same CrateDB instance the executor wraps), then recomputes [min, now).
+            streamData,
             audit,
             _loggerFactory.CreateLogger<RecomputeOrchestrator>(),
             () => DateTime.UtcNow);

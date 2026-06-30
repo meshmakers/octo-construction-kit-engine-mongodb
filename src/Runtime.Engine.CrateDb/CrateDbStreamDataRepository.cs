@@ -1428,6 +1428,61 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         return min;
     }
 
+    /// <inheritdoc />
+    public async Task<DateTime?> GetArchiveMinTimestampAsync(
+        OctoObjectId archiveRtId, CancellationToken cancellationToken = default)
+    {
+        // Need the snapshot only to pick the time-axis column: window_start for windowed (rollup /
+        // time-range) tables, timestamp for raw tables. Created archives (no snapshot / no backing
+        // table) resolve to null.
+        var snapshot = await _archiveStore.GetAsync(archiveRtId);
+        if (snapshot is null)
+        {
+            return null;
+        }
+
+        var timeColumn = snapshot.UsesWindowedStorage ? Constants.WindowStart : Constants.Timestamp;
+        var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString());
+        var sql = $"SELECT MIN(\"{timeColumn}\") AS \"min_ts\" FROM {qualifiedTable}";
+
+        try
+        {
+            await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, sql, cancellationToken))
+            {
+                if (row.TryGetValue("min_ts", out var value))
+                {
+                    return AsUtcDateTimeFlexible(value);
+                }
+                break;
+            }
+        }
+        catch (Exception ex)
+        {
+            // No backing table yet (e.g. Created status): MIN over a missing table throws. Treat as
+            // "no data". Debug so it stays observable but quiet.
+            _logger.LogDebug(ex,
+                "Archive {ArchiveRtId}: min-timestamp probe found no backing table (treated as empty).", archiveRtId);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Converts a CrateDB timestamp scalar to a UTC <see cref="DateTime"/>. Tolerates the wire-type
+    /// variants an aggregate result may surface across driver/transport versions: a real
+    /// <see cref="DateTime"/> / <see cref="DateTimeOffset"/>, or epoch-milliseconds as an integer.
+    /// Returns null for SQL NULL (empty table) or an unrecognised shape.
+    /// </summary>
+    private static DateTime? AsUtcDateTimeFlexible(object? value) => value switch
+    {
+        null => null,
+        DateTime dt => DateTime.SpecifyKind(dt, DateTimeKind.Utc),
+        DateTimeOffset dto => dto.UtcDateTime,
+        long ms => DateTimeOffset.FromUnixTimeMilliseconds(ms).UtcDateTime,
+        int ms => DateTimeOffset.FromUnixTimeMilliseconds(ms).UtcDateTime,
+        _ => null,
+    };
+
     private async Task EvaluateRollupComputedColumnsAsync(
         OctoObjectId rollupRtId,
         string targetTable,
