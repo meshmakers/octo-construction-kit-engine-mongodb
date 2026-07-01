@@ -1456,15 +1456,53 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 break;
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (IsRelationUnknown(ex))
         {
-            // No backing table yet (e.g. Created status): MIN over a missing table throws. Treat as
-            // "no data". Debug so it stays observable but quiet.
+            // AB#4284: ONLY "no backing table yet" (e.g. Created status: MIN over a missing table)
+            // maps to "no data" → null. Any OTHER read failure (transient CrateDB read, connector
+            // reset, timeout) must propagate so BackfillRollupFromSource ends the job Failed with the
+            // real error instead of reporting a misleading "source holds no data" no-op. Debug so the
+            // genuinely-empty path stays observable but quiet.
             _logger.LogDebug(ex,
                 "Archive {ArchiveRtId}: min-timestamp probe found no backing table (treated as empty).", archiveRtId);
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// True when the exception is CrateDB's "relation/table unknown" error — the only failure that
+    /// <see cref="GetArchiveMinTimestampAsync"/> treats as a genuine empty source (no backing table
+    /// provisioned yet). Matched on message text (mirroring <see cref="IsColumnAlreadyExists"/>)
+    /// because the driver surfaces it as a generic exception, and the inner exception chain is
+    /// walked so a wrapped driver error is still classified. AB#4284.
+    /// </summary>
+    internal static bool IsRelationUnknown(Exception ex)
+    {
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            var message = current.Message;
+
+            // Explicit CrateDB/Npgsql tokens for a missing relation.
+            if (message.Contains("RelationUnknown", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("TableUnknown", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("does not exist", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // CrateDB phrases it "Relation 'schema.table' unknown" — the noun and "unknown" are
+            // separated by the quoted relation name, so require both tokens rather than an adjacent
+            // substring. Guarded by "unknown" so it can never match a transient read message.
+            if (message.Contains("unknown", StringComparison.OrdinalIgnoreCase)
+                && (message.Contains("relation", StringComparison.OrdinalIgnoreCase)
+                    || message.Contains("table", StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

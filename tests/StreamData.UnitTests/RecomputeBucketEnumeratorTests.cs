@@ -60,4 +60,51 @@ public class RecomputeBucketEnumeratorTests
         Assert.Empty(RecomputeBucketEnumerator
             .Enumerate(Utc(2026, 5, 11, 10), Utc(2026, 5, 11, 13), BucketAlignment.FixedSize, TimeSpan.Zero));
     }
+
+    // ---- AB#4282: calendar-aligned enumeration over a multi-year range must not overflow ----------
+    // A calendar rollup's BucketSize (a TimeSpan derived from a >Int32 BucketSizeMs) is ignored by
+    // the calendar branches, which walk via AddMonths / AddYears / AddDays on DateTime — pure
+    // calendar arithmetic that never converts the range duration to Int32.
+
+    [Fact]
+    public void CalendarMonth_OverThreeYears_YieldsThirtySixBucketsWithoutOverflow()
+    {
+        // BucketSize deliberately set to the calendar-month width (2,419,200,000 ms > Int32.MaxValue)
+        // to prove the enumeration ignores it and does not overflow on the range.
+        var buckets = RecomputeBucketEnumerator
+            .Enumerate(Utc(2023, 1, 1), Utc(2026, 1, 1), BucketAlignment.CalendarMonth,
+                TimeSpan.FromMilliseconds(2_419_200_000L))
+            .ToList();
+
+        Assert.Equal(36, buckets.Count);
+        Assert.Equal((Utc(2023, 1, 1), Utc(2023, 2, 1)), buckets[0]);
+        Assert.Equal((Utc(2025, 12, 1), Utc(2026, 1, 1)), buckets[^1]);
+    }
+
+    [Fact]
+    public void CalendarYear_OverMultiYearRange_YieldsOneBucketPerYear()
+    {
+        var buckets = RecomputeBucketEnumerator
+            .Enumerate(Utc(2023, 1, 1), Utc(2026, 1, 1), BucketAlignment.CalendarYear,
+                TimeSpan.FromMilliseconds(31_536_000_000L))
+            .ToList();
+
+        Assert.Equal(3, buckets.Count);
+        Assert.Equal((Utc(2023, 1, 1), Utc(2024, 1, 1)), buckets[0]);
+        Assert.Equal((Utc(2025, 1, 1), Utc(2026, 1, 1)), buckets[2]);
+    }
+
+    [Fact]
+    public void Iso8601Week_OverThreeYears_TilesEveryWeekWithoutOverflow()
+    {
+        var buckets = RecomputeBucketEnumerator
+            .Enumerate(Utc(2023, 1, 2), Utc(2026, 1, 5), BucketAlignment.Iso8601Week,
+                TimeSpan.FromMilliseconds(604_800_000L))
+            .ToList();
+
+        // 2023-01-02 (Mon) → 2026-01-05 (Mon) is exactly 157 seven-day buckets.
+        Assert.Equal(157, buckets.Count);
+        Assert.Equal((Utc(2023, 1, 2), Utc(2023, 1, 9)), buckets[0]);
+        Assert.All(buckets, b => Assert.Equal(TimeSpan.FromDays(7), b.End - b.Start));
+    }
 }
