@@ -147,6 +147,43 @@ public class CrateDbStreamDataExportImportTests
     }
 
     [Fact]
+    public async Task Import_Raw_LargeRowSet_FlushesInMultipleBatches()
+    {
+        // AB#4278: a large import must be written in bounded batches (ExportPageSize=5000 per flush),
+        // never accumulated into one giant insert. 12 000 rows → 3 flushes (5000 + 5000 + 2000).
+        StubRaw();
+
+        var batchSizes = new List<int>();
+        A.CallTo(() => _db.InsertDataAsync(
+                A<string>._, A<string>._, A<IReadOnlyList<string>>._, A<IEnumerable<DataPointDto>>._))
+            .Invokes((string _, string _, IReadOnlyList<string> _, IEnumerable<DataPointDto> d) =>
+                batchSizes.Add(d.Count()));
+
+        await NewSut().ImportRowsAsync(
+            Archive, ManyRawRows(12_000), ArchiveImportMode.InsertOnly, CancellationToken.None);
+
+        Assert.Equal(3, batchSizes.Count);
+        Assert.Equal(new[] { 5000, 5000, 2000 }, batchSizes);
+        Assert.Equal(12_000, batchSizes.Sum());
+    }
+
+    private static async IAsyncEnumerable<IReadOnlyDictionary<string, object?>> ManyRawRows(int count)
+    {
+        await Task.CompletedTask;
+        var ts = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+        for (var i = 0; i < count; i++)
+        {
+            yield return new Dictionary<string, object?>
+            {
+                [Constants.RtId] = HexRtId,
+                [Constants.CkTypeId] = SomeType.ToString(),
+                [Constants.Timestamp] = ts.AddSeconds(i),
+                ["voltage"] = 230.0 + i,
+            };
+        }
+    }
+
+    [Fact]
     public async Task Import_Windowed_UsesTimeRangeInsertPath()
     {
         StubWindowed();

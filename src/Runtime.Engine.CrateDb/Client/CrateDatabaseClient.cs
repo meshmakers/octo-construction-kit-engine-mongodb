@@ -18,6 +18,16 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatabaseManagementClient,
     IStreamDataHealthCheckClient
 {
+    /// <summary>
+    /// AB#4278: maximum single-row inserts executed under one resilience (Polly) envelope. A bulk
+    /// insert of millions of rows (the <c>import_archive_data</c> path) is split into sub-batches of
+    /// this size, each opening its own connection and running inside its own per-attempt timeout, so
+    /// no single attempt spans more inserts than can complete within the timeout — and a transient
+    /// retry replays only the failed sub-batch instead of the whole input. Sized well below the number
+    /// of single-row round-trips that fit in the 30s per-attempt budget.
+    /// </summary>
+    private const int MaxRowsPerInsertBatch = 1000;
+
     private readonly ILogger<CrateDatabaseClient> _logger;
     private readonly ICrateDbConnectionAccess _connectionAccess;
     private readonly StreamDataConfiguration _configuration;
@@ -159,15 +169,23 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // Looping single-row inserts trades raw throughput for correct typing across heterogeneous
         // column sets — fine for the volumes the pipeline produces; revisit if profiling flags
         // this as a hot spot.
-        await _resilience.ExecuteAsync(async _ =>
+        var sql = BuildSingleRowInsertSql(qualifiedTable, userColumnNames);
+
+        // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
+        // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
+        for (var offset = 0; offset < d.Length; offset += MaxRowsPerInsertBatch)
         {
-            await using var connection = await CreateConnectionAsync(tenantId);
-            var sql = BuildSingleRowInsertSql(qualifiedTable, userColumnNames);
-            foreach (var dto in d)
+            var start = offset;
+            var end = Math.Min(offset + MaxRowsPerInsertBatch, d.Length);
+            await _resilience.ExecuteAsync(async _ =>
             {
-                await ExecuteSingleInsertAsync(connection, sql, dto, userColumnNames);
-            }
-        });
+                await using var connection = await CreateConnectionAsync(tenantId);
+                for (var i = start; i < end; i++)
+                {
+                    await ExecuteSingleInsertAsync(connection, sql, d[i], userColumnNames);
+                }
+            });
+        }
     }
 
     public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint)
@@ -188,15 +206,23 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
         // Same single-row loop rationale as InsertDataAsync — typed columns need their own
         // native param types per row, the bulk-unnest path can't carry that information.
-        await _resilience.ExecuteAsync(async _ =>
+        var sql = BuildTimeRangeInsertSql(qualifiedTable, userColumnNames);
+
+        // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
+        // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
+        for (var offset = 0; offset < d.Length; offset += MaxRowsPerInsertBatch)
         {
-            await using var connection = await CreateConnectionAsync(tenantId);
-            var sql = BuildTimeRangeInsertSql(qualifiedTable, userColumnNames);
-            foreach (var dto in d)
+            var start = offset;
+            var end = Math.Min(offset + MaxRowsPerInsertBatch, d.Length);
+            await _resilience.ExecuteAsync(async _ =>
             {
-                await ExecuteSingleTimeRangeInsertAsync(connection, sql, dto, userColumnNames);
-            }
-        });
+                await using var connection = await CreateConnectionAsync(tenantId);
+                for (var i = start; i < end; i++)
+                {
+                    await ExecuteSingleTimeRangeInsertAsync(connection, sql, d[i], userColumnNames);
+                }
+            });
+        }
     }
 
     private static async Task ExecuteSingleTimeRangeInsertAsync(
