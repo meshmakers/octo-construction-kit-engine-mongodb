@@ -1283,6 +1283,12 @@ public class TenantContext : ITenantContext
         var audit = _serviceProvider.GetService<IArchiveAuditTrail>()
                     ?? new LoggingArchiveAuditTrail(_loggerFactory.CreateLogger<LoggingArchiveAuditTrail>());
 
+        // AB#4283: a decade-long recompute/backfill is split into bucket-aligned chunks so no single
+        // CrateDB statement exceeds the per-statement timeout. Chunk size is overridable via
+        // OCTO_StreamData__RecomputeMaxBucketsPerChunk for tuning against a specific cluster; the
+        // default is sized to stay well inside the 30s statement budget.
+        var maxBucketsPerChunk = ResolveRecomputeMaxBucketsPerChunk();
+
         _recomputeOrchestrator = new RecomputeOrchestrator(
             TenantId,
             GetArchiveRuntimeStore(),
@@ -1296,8 +1302,28 @@ public class TenantContext : ITenantContext
             streamData,
             audit,
             _loggerFactory.CreateLogger<RecomputeOrchestrator>(),
-            () => DateTime.UtcNow);
+            () => DateTime.UtcNow,
+            maxBucketsPerChunk);
         return _recomputeOrchestrator;
+    }
+
+    /// <summary>
+    /// Resolves the recompute chunk size (AB#4283). Honours the
+    /// <c>OCTO_StreamData__RecomputeMaxBucketsPerChunk</c> environment override when it parses to a
+    /// positive integer; otherwise falls back to <see cref="RecomputeOrchestrator.DefaultMaxBucketsPerChunk"/>.
+    /// </summary>
+    private int ResolveRecomputeMaxBucketsPerChunk()
+    {
+        var raw = Environment.GetEnvironmentVariable("OCTO_StreamData__RecomputeMaxBucketsPerChunk");
+        if (!string.IsNullOrWhiteSpace(raw)
+            && int.TryParse(raw, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            && parsed > 0)
+        {
+            return parsed;
+        }
+
+        return RecomputeOrchestrator.DefaultMaxBucketsPerChunk;
     }
 
     #endregion Access management

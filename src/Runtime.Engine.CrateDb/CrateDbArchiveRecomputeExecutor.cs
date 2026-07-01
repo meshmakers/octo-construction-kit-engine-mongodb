@@ -116,17 +116,15 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
                 source.UsesWindowedStorage,
                 rtIdScope: scope);
 
-            // AB#4283: this per-bucket INSERT ... SELECT is the recompute source read. It runs through
-            // CrateDatabaseClient.ExecuteNonQueryAsync, which is already wrapped in the shared Polly
-            // resilience pipeline (per-attempt timeout + 3× exponential-backoff retry on the transient
-            // NpgsqlException "Exception while reading from stream" / connector-reset class; only
-            // server-rejected PostgresException is excluded). So the transient-read class is bounded-
-            // retried here already. What is NOT solved is a very large single-statement aggregation
-            // (~841k source rows) exhausting the per-attempt timeout on every retry: that needs the
-            // full connection-stability work — connection pooling, statement paging, or COPY-based
-            // bulk aggregation — which is out of scope for this mitigation. Do NOT stack another retry
-            // loop here: it would multiply against the Polly retries and amplify load on a struggling
-            // cluster. Track the full fix under AB#4283.
+            // This per-bucket INSERT ... SELECT is the recompute source read. It runs through
+            // CrateDatabaseClient.ExecuteNonQueryAsync, which is wrapped in the shared Polly resilience
+            // pipeline (per-attempt timeout + retry on the transient connector-reset class). AB#4283:
+            // the range-scale timeout ("the operation was canceled" on a decade-long recompute) is now
+            // handled one level up — RecomputeOrchestrator.RecomputeArchiveAsync splits [from, to) into
+            // bounded bucket-aligned chunks and calls this executor once per chunk, so neither this
+            // aggregate loop nor the staging→live copy / sweep below ever spans more than a chunk's
+            // worth of buckets in a single statement. Do NOT add another retry loop here (it would
+            // multiply against the Polly retries and amplify load on a struggling cluster).
             rows += await _databaseClient.ExecuteNonQueryAsync(_tenantId, aggregateSql, cancellationToken);
             windows++;
         }
