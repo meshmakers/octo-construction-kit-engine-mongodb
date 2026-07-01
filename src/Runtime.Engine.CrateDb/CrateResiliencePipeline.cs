@@ -1,3 +1,5 @@
+using System.IO;
+using System.Net.Sockets;
 using Npgsql;
 using Polly;
 using Polly.CircuitBreaker;
@@ -41,12 +43,18 @@ public static class CrateResiliencePipeline
 
         // Middle: retry on transient failures with exponential backoff + jitter. NpgsqlException
         // covers connection/socket/timeout errors; we exclude PostgresException which already
-        // signals the server rejected the SQL (won't get better on retry).
+        // signals the server rejected the SQL (won't get better on retry). We ALSO handle the raw
+        // stream/IO/socket class (IOException incl. EndOfStreamException "Attempted to read past the
+        // end of the stream", SocketException) because a connection dropped mid-read surfaces either
+        // wrapped in NpgsqlException ("Exception while reading from stream") OR as the bare
+        // IOException/EndOfStreamException — both are transient and must be retried (AB#4278).
         builder.AddRetry(new RetryStrategyOptions
         {
             ShouldHandle = new PredicateBuilder()
                 .Handle<NpgsqlException>(ex => ex is not PostgresException)
-                .Handle<TimeoutRejectedException>(),
+                .Handle<TimeoutRejectedException>()
+                .Handle<IOException>()
+                .Handle<SocketException>(),
             MaxRetryAttempts = options.MaxRetryAttempts,
             Delay = options.BaseRetryDelay,
             BackoffType = DelayBackoffType.Exponential,
@@ -60,7 +68,9 @@ public static class CrateResiliencePipeline
         {
             ShouldHandle = new PredicateBuilder()
                 .Handle<NpgsqlException>(ex => ex is not PostgresException)
-                .Handle<TimeoutRejectedException>(),
+                .Handle<TimeoutRejectedException>()
+                .Handle<IOException>()
+                .Handle<SocketException>(),
             FailureRatio = options.CircuitFailureRatio,
             SamplingDuration = options.CircuitSamplingDuration,
             MinimumThroughput = options.CircuitMinimumThroughput,

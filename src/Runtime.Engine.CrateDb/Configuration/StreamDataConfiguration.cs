@@ -39,6 +39,22 @@ public class StreamDataConfiguration
     public TimeSpan ConnectionIdleLifetime { get; set; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
+    /// How often the pool prunes connections that have exceeded <see cref="ConnectionIdleLifetime"/>.
+    /// The pool samples idle connections on this cadence; a broken/half-closed idle connection is
+    /// therefore evicted within roughly one pruning interval rather than lingering to be handed out
+    /// and fail on next use. Keep well below <see cref="ConnectionIdleLifetime"/>.
+    /// </summary>
+    public TimeSpan ConnectionPruningInterval { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// TCP keepalive interval for pooled physical connections. A positive value makes Npgsql send
+    /// keepalive probes so a connection silently dropped by the CrateDB server or an intermediary
+    /// (LB/proxy) is detected and torn down instead of being reused mid-backfill and surfacing as
+    /// <c>"Exception while reading from stream"</c>. <see cref="TimeSpan.Zero"/> disables keepalives.
+    /// </summary>
+    public TimeSpan Keepalive { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// Master switch for Npgsql pooling. <c>true</c> by default after T1; set to <c>false</c> only
     /// when an environment-specific issue forces unpooled fallback (e.g., a CrateDB version that
     /// regresses on PostgreSQL session reset).

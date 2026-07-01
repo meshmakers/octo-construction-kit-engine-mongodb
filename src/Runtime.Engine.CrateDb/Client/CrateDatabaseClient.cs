@@ -459,8 +459,17 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     {
         try
         {
-            await using var connection = await CreateConnectionAsync("default");
-            await connection.ExecuteAsync("SELECT 1");
+            // Probe under the resilience pipeline so a single dropped connection (the transient
+            // "Exception while reading from stream" class) is retried rather than reported as a hard
+            // outage — a blip during a long backfill must not flap the health check. The pooled
+            // datasource is never evicted here, so a broken physical connection is simply pruned and
+            // the next probe / operation opens a fresh one; the cached datasource self-recovers
+            // without a rebuild (AB#4278).
+            await _resilience.ExecuteAsync(async _ =>
+            {
+                await using var connection = await CreateConnectionAsync("default");
+                await connection.ExecuteAsync("SELECT 1");
+            });
             return HealthCheckResult.Healthy("CrateDB is healthy");
         }
         catch (Exception ex)
