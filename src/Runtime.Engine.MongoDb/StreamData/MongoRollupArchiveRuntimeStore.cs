@@ -81,8 +81,11 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             TargetCkTypeId = targetCkTypeId.ToString(),
             Status = RtCkArchiveStatusEnum.Created,
             SourceArchiveRtId = sourceArchiveRtId.ToString(),
-            BucketSizeMs = (int)bucketSize.TotalMilliseconds,
-            WatermarkLagMs = (int)watermarkLag.TotalMilliseconds,
+            // AB#4281: BucketSizeMs / WatermarkLagMs are Int64 (System.StreamData 1.6.3). Cast to long
+            // — a calendar-month (2,419,200,000 ms) or calendar-year (31,536,000,000 ms) bucket width
+            // exceeds Int32.MaxValue, so an (int) cast would silently truncate before the widening.
+            BucketSizeMs = (long)bucketSize.TotalMilliseconds,
+            WatermarkLagMs = (long)watermarkLag.TotalMilliseconds,
             // LastAggregatedBucketEnd starts null — set by ArchiveLifecycleService.ActivateAsync to
             // the activation timestamp (truncated to the bucket boundary). The orchestrator then
             // advances it forward, never backwards (except via rewindRollupWatermark). Concept §5.
