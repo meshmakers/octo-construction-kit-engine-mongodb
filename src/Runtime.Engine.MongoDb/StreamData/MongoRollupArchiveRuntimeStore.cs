@@ -227,6 +227,9 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             entity.FrozenUntil)
         {
             BucketAlignment = bucketAlignment,
+            // Optional IANA reference time zone for DST-correct calendar buckets (AB#4290 / O6).
+            // Null (unset, or pre-1.6.4 entities) ⇒ UTC calendar boundaries.
+            ReferenceTimeZone = string.IsNullOrWhiteSpace(entity.ReferenceTimeZone) ? null : entity.ReferenceTimeZone,
             // Recompute observability (AB#4184) — projected from the engine-maintained Archive-base
             // attributes so rollupsFor can surface recompute health. Counts fall back to 0 when the
             // RecordArray attribute was never written (steady state / pre-1.6.0 entities).
