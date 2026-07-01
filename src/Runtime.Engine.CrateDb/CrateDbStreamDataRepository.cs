@@ -1402,9 +1402,16 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     /// <summary>
-    /// The earliest point any dependent rollup has aggregated past — the consumed high-water mark of
-    /// <paramref name="sourceArchiveRtId"/>. Null when no dependent exists or none has aggregated
-    /// yet (nothing has been consumed, so no write can be retroactive).
+    /// The furthest point <b>any</b> dependent rollup has aggregated past — the consumed high-water
+    /// mark of <paramref name="sourceArchiveRtId"/> taken as the <b>maximum</b> of the dependents'
+    /// <c>LastAggregatedBucketEnd</c>. A write strictly before this is a retroactive correction for at
+    /// least one dependent (AB#4288): because a source can feed rollups of different granularities
+    /// whose watermarks differ widely (e.g. a yearly rollup lags because its bucket only closes
+    /// annually while an hourly rollup sits near now), using the <i>minimum</i> here would silently
+    /// miss corrections in the band between the slowest and fastest dependent. The orchestrator clamps
+    /// each dependent's recompute range to its own watermark, so flagging on the maximum never makes a
+    /// lagging dependent re-aggregate a forward, not-yet-closed bucket. Null when no dependent exists
+    /// or none has aggregated yet (nothing has been consumed, so no write can be retroactive).
     /// </summary>
     private async Task<DateTime?> GetConsumedWatermarkAsync(OctoObjectId sourceArchiveRtId)
     {
@@ -1413,19 +1420,19 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             return null;
         }
 
-        DateTime? min = null;
+        DateTime? max = null;
         await foreach (var rollup in _rollupArchiveStore.EnumerateAsync())
         {
             if (rollup.SourceArchiveRtId != sourceArchiveRtId)
             {
                 continue;
             }
-            if (rollup.LastAggregatedBucketEnd is { } watermark && (min is null || watermark < min))
+            if (rollup.LastAggregatedBucketEnd is { } watermark && (max is null || watermark > max))
             {
-                min = watermark;
+                max = watermark;
             }
         }
-        return min;
+        return max;
     }
 
     /// <inheritdoc />
