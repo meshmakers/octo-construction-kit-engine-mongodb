@@ -145,4 +145,28 @@ public class ServiceManagedCkModelDescriptorTests(ServiceManagedDescriptorFixtur
         await tenantContext.EnsureServiceManagedCkModelsImportedAsync();
         Assert.True(await tenantContext.IsCkModelExistingAsync(TestV2ModelId));
     }
+
+    [Fact]
+    public async Task InvalidateTenantResolveImportGuards_ReenablesImportAfterTenantRecreate()
+    {
+        // AB#4294 regression fix: a delete+recreate of a tenant within the same process must re-import
+        // the service-managed model on the next resolve. The production lifecycle path clears the guard
+        // via ISystemContext.InvalidateTenantResolveImportGuards (from the Pre-delete/Pre-update
+        // consumer) instead of the test-only reset used above.
+        await fixture.ResetTenantAsync();
+        TenantContext.ResetServiceManagedCkModelImportGuardForTests();
+        var tenantContext = (TenantContext)fixture.GetSystemContext();
+
+        // First attempt imports and arms the per-process guard.
+        await tenantContext.EnsureServiceManagedCkModelsImportedAsync();
+        Assert.True(await tenantContext.IsCkModelExistingAsync(TestV2ModelId));
+
+        // Simulate the tenant being deleted and recreated fresh.
+        await fixture.ResetTenantAsync();
+
+        // Invalidating the guard via the production API re-enables the import for the recreated tenant.
+        tenantContext.InvalidateTenantResolveImportGuards(tenantContext.TenantId);
+        await tenantContext.EnsureServiceManagedCkModelsImportedAsync();
+        Assert.True(await tenantContext.IsCkModelExistingAsync(TestV2ModelId));
+    }
 }

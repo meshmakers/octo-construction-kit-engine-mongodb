@@ -6,6 +6,7 @@ using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Blueprints;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
@@ -234,7 +235,7 @@ public class MongoRuntimeRepositoryProviderTests(SystemFixture fixture)
         A.CallTo(() => systemContext.TryFindTenantContextAsync(tenantId)).Returns(tenantContext);
 
         var logger = A.Fake<ILogger<MongoRuntimeRepositoryProvider>>();
-        var provider = new MongoRuntimeRepositoryProvider(systemContext, logger);
+        var provider = new MongoRuntimeRepositoryProvider(systemContext, logger, []);
 
         var operationResult = new OperationResult();
         await provider.EnsureCkModelInstalledAsync(tenantId, modelId, operationResult, ct);
@@ -296,7 +297,7 @@ public class MongoRuntimeRepositoryProviderTests(SystemFixture fixture)
         A.CallTo(() => systemContext.TryFindTenantContextAsync(tenantId)).Returns(tenantContext);
 
         var logger = A.Fake<ILogger<MongoRuntimeRepositoryProvider>>();
-        var provider = new MongoRuntimeRepositoryProvider(systemContext, logger);
+        var provider = new MongoRuntimeRepositoryProvider(systemContext, logger, []);
 
         var operationResult = new OperationResult();
         await provider.EnsureCkModelInstalledAsync(tenantId, requested, operationResult, ct);
@@ -343,7 +344,7 @@ public class MongoRuntimeRepositoryProviderTests(SystemFixture fixture)
         A.CallTo(() => systemContext.TryFindTenantContextAsync(tenantId)).Returns(tenantContext);
 
         var logger = A.Fake<ILogger<MongoRuntimeRepositoryProvider>>();
-        var provider = new MongoRuntimeRepositoryProvider(systemContext, logger);
+        var provider = new MongoRuntimeRepositoryProvider(systemContext, logger, []);
 
         var operationResult = new OperationResult();
         await provider.EnsureCkModelInstalledAsync(tenantId, requested, operationResult, ct);
@@ -353,11 +354,66 @@ public class MongoRuntimeRepositoryProviderTests(SystemFixture fixture)
         Assert.False(operationResult.HasErrors);
     }
 
+    /// <summary>
+    /// Bug 2 (AB#4294): a service-managed CK model is owned by an
+    /// <see cref="IServiceManagedCkModelDescriptor"/>, not by the blueprint's ckModelDependencies floor.
+    /// The blueprint engine passes the range's lower bound (e.g. "System.UI-2.2.0" for "[2.2.0,3.0)"),
+    /// which may no longer be published — only the descriptor's embedded version (2.3.0) is. The provider
+    /// must redirect the install target to the descriptor version so the floor stays a pure
+    /// satisfiability floor and the import does not fail with "Model not found in catalogs".
+    /// </summary>
+    [Fact]
+    public async Task EnsureCkModelInstalledAsync_ServiceManagedModel_RedirectsFloorToDescriptorVersion()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string tenantId = "fake-tenant";
+        var requestedFloor = new CkModelId("System.UI-2.2.0");   // blueprint floor lower bound
+        var descriptorVersion = new CkModelId("System.UI-2.3.0"); // embedded / descriptor version
+
+        var session = A.Fake<IOctoSession>();
+        var emptyResultSet = A.Fake<IResultSet<CkModel>>();
+        A.CallTo(() => emptyResultSet.Items).Returns(Array.Empty<CkModel>());
+        var installedResultSet = A.Fake<IResultSet<CkModel>>();
+        A.CallTo(() => installedResultSet.Items).Returns(new[]
+        {
+            new CkModel { Id = descriptorVersion, ModelState = ModelState.Available },
+        });
+
+        var repository = A.Fake<ITenantRepository>();
+        A.CallTo(() => repository.GetSessionAsync()).Returns(session);
+        // Fresh tenant: pre-check finds nothing, post-import verification finds the descriptor version.
+        A.CallTo(() => repository.GetCkModelsAsync(
+                A<IOctoSession>._, A<List<CkModelId>?>._, A<RtEntityQueryOptions>._, A<int?>._, A<int?>._))
+            .ReturnsNextFromSequence(
+                Task.FromResult(emptyResultSet),
+                Task.FromResult(installedResultSet));
+
+        var tenantContext = A.Fake<ITenantContext>();
+        A.CallTo(() => tenantContext.GetTenantRepository()).Returns(repository);
+
+        var systemContext = A.Fake<ISystemContext>();
+        A.CallTo(() => systemContext.TryFindTenantContextAsync(tenantId)).Returns(tenantContext);
+
+        var logger = A.Fake<ILogger<MongoRuntimeRepositoryProvider>>();
+        var provider = new MongoRuntimeRepositoryProvider(
+            systemContext, logger, [new ServiceManagedCkModelDescriptor(descriptorVersion)]);
+
+        var operationResult = new OperationResult();
+        await provider.EnsureCkModelInstalledAsync(tenantId, requestedFloor, operationResult, ct);
+
+        // The import must target the descriptor version, not the requested floor.
+        A.CallTo(() => tenantContext.ImportCkModelAsync(descriptorVersion, operationResult))
+            .MustHaveHappenedOnceExactly();
+        A.CallTo(() => tenantContext.ImportCkModelAsync(requestedFloor, A<OperationResult>._))
+            .MustNotHaveHappened();
+        Assert.False(operationResult.HasErrors);
+    }
+
     private IRuntimeRepositoryProvider CreateProvider()
     {
         fixture.EnsureInitialized();
         var systemContext = fixture.GetSystemContext();
         var logger = fixture.GetService<ILogger<MongoRuntimeRepositoryProvider>>();
-        return new MongoRuntimeRepositoryProvider(systemContext, logger);
+        return new MongoRuntimeRepositoryProvider(systemContext, logger, []);
     }
 }

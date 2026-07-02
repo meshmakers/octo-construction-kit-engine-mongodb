@@ -66,6 +66,18 @@ public interface ISystemContext : ITenantContext
     /// <returns>></returns>
     Task EnsureSystemCkModelAsync();
 
+    /// <summary>
+    /// Invalidates the per-process tenant-resolve auto-import guards for the given tenant so the next
+    /// resolve re-imports its service-managed CK models (e.g. <c>System.UI</c>) and StreamData model.
+    /// </summary>
+    /// <remarks>
+    /// Call this from the Pre-update / Pre-delete tenant lifecycle events. A delete+recreate of a tenant
+    /// within one process lifetime would otherwise skip the guarded auto-import and leave the fresh tenant
+    /// without those models (AB#4294 regression). Safe no-op when the tenant has no guard entries.
+    /// </remarks>
+    /// <param name="tenantId">The tenant whose resolve-import guards should be cleared.</param>
+    void InvalidateTenantResolveImportGuards(string tenantId);
+
     #region Backup and Restore
 
     /// <summary>

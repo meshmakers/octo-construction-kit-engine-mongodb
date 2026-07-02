@@ -1014,6 +1014,46 @@ public class TenantContext : ITenantContext
     internal static void ResetServiceManagedCkModelImportGuardForTests() =>
         _serviceManagedCkModelsAttempted.Clear();
 
+    /// <inheritdoc cref="ISystemContext.InvalidateTenantResolveImportGuards" />
+    public void InvalidateTenantResolveImportGuards(string tenantId) =>
+        ClearTenantResolveImportGuards(tenantId);
+
+    /// <summary>
+    /// Removes the per-process tenant-resolve auto-import guards (<see cref="_serviceManagedCkModelsAttempted"/>
+    /// and <see cref="_streamDataAutoImportAttempted"/>) for a single tenant, so the next resolve of that
+    /// tenant re-runs <see cref="EnsureServiceManagedCkModelsImportedAsync"/> /
+    /// <see cref="EnsureStreamDataCkModelIfEnabledAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// Called from the Pre-update / Pre-delete tenant lifecycle events (see the
+    /// <c>PreUpdatePreDeleteTenantConsumer</c>). Without this, a delete+recreate of a tenant within the
+    /// same process lifetime hits the still-set guard and skips the auto-import, leaving the fresh tenant
+    /// without its service-managed CK models (e.g. <c>System.UI</c>) — the AB#4294 regression that broke a
+    /// re-initialised tenant. The tenant segment is matched case-insensitively so a differently-cased
+    /// lifecycle-event tenant id still clears the guard that was set from the resolved context's id.
+    /// </remarks>
+    private static void ClearTenantResolveImportGuards(string tenantId)
+    {
+        foreach (var key in _serviceManagedCkModelsAttempted.Keys)
+        {
+            // Keys are "{TenantId}:{modelName}" — compare only the tenant segment.
+            var separatorIndex = key.IndexOf(':');
+            if (separatorIndex > 0 &&
+                key.AsSpan(0, separatorIndex).Equals(tenantId, StringComparison.OrdinalIgnoreCase))
+            {
+                _serviceManagedCkModelsAttempted.TryRemove(key, out _);
+            }
+        }
+
+        foreach (var key in _streamDataAutoImportAttempted.Keys)
+        {
+            if (key.Equals(tenantId, StringComparison.OrdinalIgnoreCase))
+            {
+                _streamDataAutoImportAttempted.TryRemove(key, out _);
+            }
+        }
+    }
+
     /// <summary>
     /// Auto-imports every host-registered <see cref="IServiceManagedCkModelDescriptor"/> at its
     /// embedded version (with downgrade guard). Runs on tenant-resolve; no-op when no descriptors are

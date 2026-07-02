@@ -3,6 +3,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.Messages;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Microsoft.Extensions.Logging;
@@ -22,18 +23,24 @@ public class MongoRuntimeRepositoryProvider : IRuntimeRepositoryProvider
 {
     private readonly ISystemContext _systemContext;
     private readonly ILogger<MongoRuntimeRepositoryProvider> _logger;
+    private readonly IReadOnlyCollection<IServiceManagedCkModelDescriptor> _serviceManagedDescriptors;
 
     /// <summary>
     /// Creates a new instance of <see cref="MongoRuntimeRepositoryProvider"/>
     /// </summary>
     /// <param name="systemContext">The system context for accessing tenant repositories</param>
     /// <param name="logger">Logger instance</param>
+    /// <param name="serviceManagedDescriptors">
+    /// Host-registered service-managed CK model descriptors. Empty for hosts that ship none.
+    /// </param>
     public MongoRuntimeRepositoryProvider(
         ISystemContext systemContext,
-        ILogger<MongoRuntimeRepositoryProvider> logger)
+        ILogger<MongoRuntimeRepositoryProvider> logger,
+        IEnumerable<IServiceManagedCkModelDescriptor> serviceManagedDescriptors)
     {
         _systemContext = systemContext;
         _logger = logger;
+        _serviceManagedDescriptors = serviceManagedDescriptors.ToList();
     }
 
     /// <inheritdoc />
@@ -91,6 +98,27 @@ public class MongoRuntimeRepositoryProvider : IRuntimeRepositoryProvider
                 MessageLevel.Error, null, 24,
                 $"Tenant '{tenantId}' not found; cannot install CK model '{modelId}'"));
             return;
+        }
+
+        // Service-managed CK models (e.g. System.UI) are owned by an IServiceManagedCkModelDescriptor,
+        // NOT by the blueprint's ckModelDependencies floor. The blueprint engine passes the range's
+        // LOWER BOUND as modelId (e.g. "System.UI-2.2.0" for "[2.2.0,3.0)"), but that exact version is
+        // often no longer published/embedded — only the descriptor's current embedded version is
+        // (AB#4294). Redirect the install target to the descriptor version so the floor stays a pure
+        // satisfiability floor; keep the requested version if the descriptor is (unexpectedly) older, so
+        // this never downgrades below what the blueprint asked for.
+        var descriptor = _serviceManagedDescriptors.FirstOrDefault(d =>
+            string.Equals(d.CkModelId.Name, modelId.Name, StringComparison.Ordinal));
+        if (descriptor != null && descriptor.CkModelId.Version.CompareTo(modelId.Version) >= 0)
+        {
+            if (descriptor.CkModelId.Version.CompareTo(modelId.Version) != 0)
+            {
+                _logger.LogDebug(
+                    "Redirecting service-managed CK model install for tenant '{TenantId}' from blueprint floor '{RequestedModelId}' to descriptor version '{DescriptorModelId}'",
+                    tenantId, modelId, descriptor.CkModelId);
+            }
+
+            modelId = descriptor.CkModelId;
         }
 
         // Pre-check by model name + version. Two scenarios this guards against:

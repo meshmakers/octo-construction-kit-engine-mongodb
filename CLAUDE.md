@@ -643,6 +643,36 @@ fallback for services that register no descriptor) from overwriting a higher ver
 sibling service already installed. Without this guard `DeletePreviousVersion` would strip the
 newer model's CK records and the `CkCache` reload would lose the newer types.
 
+### Service-Managed CK Model Auto-import (AB#4294)
+
+`TenantContext.EnsureServiceManagedCkModelsImportedAsync` runs on every tenant-resolve
+(`TryGetChildTenantContextAsync`) and imports each host-registered
+`IServiceManagedCkModelDescriptor` (e.g. `System.UI`, registered by platform-services) at its
+embedded version via the same downgrade-guarded import. A per-process `ConcurrentDictionary`
+guard (`_serviceManagedCkModelsAttempted`, keyed `{TenantId}:{modelName}`) makes the import run
+at most once per (tenant, model) — it breaks the `ImportCkModelAsync → RetryPendingMigrations →
+tenant-resolve → here` recursion. `_streamDataAutoImportAttempted` is the StreamData analogue.
+
+**Guard invalidation on tenant delete/update (AB#4294 fix).** Because the guard is per-process
+and keyed only by tenant, a **delete+recreate of a tenant within one process lifetime** (e.g.
+`om_initialize_tenant` re-provisioning) would hit the still-armed guard and skip the auto-import,
+leaving the fresh tenant without its service-managed model. `ISystemContext.InvalidateTenantResolveImportGuards(tenantId)`
+clears both guards for a tenant; the Pre-delete / Pre-update tenant lifecycle consumer
+(`PreUpdatePreDeleteTenantConsumer` in `octo-common-services`) calls it next to the CK-cache
+unload, so the next resolve re-imports. Regression test:
+`ServiceManagedCkModelDescriptorTests.InvalidateTenantResolveImportGuards_ReenablesImportAfterTenantRecreate`.
+
+**Blueprint floor → descriptor version redirect (AB#4294 fix).** The cockpit blueprints declare
+`ckModelDependencies: System.UI-[2.2.0,3.0)` as a *pure satisfiability floor* — the actual install
+target is the descriptor's embedded version, NOT the floor's lower bound. But `BlueprintService`
+still passes the range's `MinVersion` (2.2.0) to `EnsureCkModelInstalledAsync` when the dependency
+is unsatisfied, and that version may no longer be published/embedded (only 2.3.0 is). So
+`MongoRuntimeRepositoryProvider.EnsureCkModelInstalledAsync` redirects the requested model id to the
+matching `IServiceManagedCkModelDescriptor` version when one is registered and is ≥ the requested
+version — otherwise a blueprint apply on a tenant that hadn't yet been auto-imported failed with
+`Model 'System.UI-2.2.0' not found in one of the registered catalogs`. Regression test:
+`MongoRuntimeRepositoryProviderTests.EnsureCkModelInstalledAsync_ServiceManagedModel_RedirectsFloorToDescriptorVersion`.
+
 ## Test Data Structure
 
 The test CK model includes this hierarchy:
