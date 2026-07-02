@@ -995,6 +995,10 @@ public class TenantContext : ITenantContext
         }
     }
 
+    /// <inheritdoc />
+    public Task ImportCkModelWithDowngradeGuardAsync(CkModelId ckModelId) =>
+        ImportEmbeddedCkModelWithDowngradeGuardAsync(ckModelId);
+
     /// <summary>
     /// Per-process guard so the generic service-managed auto-import runs at most once per
     /// (tenant, model) in this process — mirrors <see cref="_streamDataAutoImportAttempted"/> and

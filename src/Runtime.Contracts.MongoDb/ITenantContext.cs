@@ -303,6 +303,16 @@ public interface ITenantContext
     Task ImportCkModelAsync(CkModelId ckModelId, OperationResult operationResult);
 
     /// <summary>
+    ///     Imports the given CK model version, but skips the import when the tenant already has a
+    ///     strictly-newer version installed (downgrade guard). Use this when a service ensures its own
+    ///     embedded (source-generated) model version is present without ever clobbering a newer one a
+    ///     sibling deploy may have installed — e.g. a feature-service importing its model on enable.
+    ///     Idempotent: a no-op when the exact version is already present.
+    /// </summary>
+    /// <param name="ckModelId">The embedded CK model id (name + version) to ensure is present.</param>
+    Task ImportCkModelWithDowngradeGuardAsync(CkModelId ckModelId);
+
+    /// <summary>
     ///     Returns true if a construction kit model with the given id exists.
     /// </summary>
     /// <param name="ckModelId">The construction kit model id to check</param>

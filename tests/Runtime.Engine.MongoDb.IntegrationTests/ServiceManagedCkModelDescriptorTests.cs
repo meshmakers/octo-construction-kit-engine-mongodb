@@ -1,5 +1,6 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.CkModelMigrations;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
@@ -27,6 +28,35 @@ public class ImportEmbeddedCkModelWithDowngradeGuardTests(CkModelImportMigration
         await tenantContext.ImportEmbeddedCkModelWithDowngradeGuardAsync(TestV2ModelId);
 
         Assert.True(await tenantContext.IsCkModelExistingAsync(TestV2ModelId));
+    }
+
+    [Fact]
+    public async Task PublicApi_LowerVersionInstalled_UpgradesToEmbeddedVersion()
+    {
+        // Exercises the public ITenantContext surface that feature services (e.g. ai-services'
+        // DefaultAiCreatorService for System.Ai) call to drive their model version from the embedded
+        // version instead of a blueprint floor.
+        await fixture.ResetTenantAsync();
+        var tenantContext = (ITenantContext)fixture.GetSystemContext();
+
+        await tenantContext.ImportCkModelAsync(TestV1ModelId, new OperationResult());
+        await tenantContext.ImportCkModelWithDowngradeGuardAsync(TestV2ModelId);
+
+        Assert.True(await tenantContext.IsCkModelExistingAsync(TestV2ModelId));
+        Assert.False(await tenantContext.IsCkModelExistingAsync(TestV1ModelId));
+    }
+
+    [Fact]
+    public async Task PublicApi_HigherVersionInstalled_SkipsDowngrade()
+    {
+        await fixture.ResetTenantAsync();
+        var tenantContext = (ITenantContext)fixture.GetSystemContext();
+
+        await tenantContext.ImportCkModelAsync(TestV2ModelId, new OperationResult());
+        await tenantContext.ImportCkModelWithDowngradeGuardAsync(TestV1ModelId);
+
+        Assert.True(await tenantContext.IsCkModelExistingAsync(TestV2ModelId));
+        Assert.False(await tenantContext.IsCkModelExistingAsync(TestV1ModelId));
     }
 
     [Fact]
