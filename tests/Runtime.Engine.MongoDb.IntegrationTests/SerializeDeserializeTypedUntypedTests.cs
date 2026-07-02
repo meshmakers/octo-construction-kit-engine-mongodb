@@ -155,6 +155,89 @@ public class SerializeDeserializeTypedUntypedTests(ImportTestCkModelFixture syst
     }
     
     [Fact]
+    public async Task CreateAndQuery_WithRecordList_Typed_DeserializeUntyped_OK()
+    {
+        // Regression for AB#4291: embedded record LISTS (AttributeRecordValueList<T> — the shape of
+        // Identity's RtUser.UserLogins) must round-trip through OctoObjectListSerializer without a
+        // hierarchical _t discriminator. When the RtRecord discriminator convention lost its
+        // registration race the driver wrote _t: ["RtRecord","Rt<X>Record"] on save and then threw
+        // "Unknown discriminator value" on load, breaking external/EntraID login tenant-wide.
+        await systemFixture.ClearCollectionAsync();
+        var systemContext = systemFixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        for (var i = 0; i < 5; i++)
+        {
+            var rtCustomer = await tenantRepository.CreateTransientRtEntityAsync<RtCustomer>();
+            rtCustomer.EMailAddresses = new AttributeRecordValueList<RtEMailAddressRecord>
+            {
+                new() { EMailAddress = "office" + i + "@example.com", EMailAddressType = RtEMailAddressTypeEnum.Office },
+                new() { EMailAddress = "home" + i + "@example.com", EMailAddressType = RtEMailAddressTypeEnum.Home }
+            };
+            await tenantRepository.InsertOneRtEntityAsync(session, rtCustomer);
+        }
+
+        await session.CommitTransactionAsync();
+
+        using var session2 = await tenantRepository.GetSessionAsync();
+        session2.StartTransaction();
+        var y = await tenantRepository.GetRtEntitiesByTypeAsync(session2, "Test/Customer",
+            RtEntityQueryOptions.Create());
+        await session2.CommitTransactionAsync();
+
+        Assert.Equal(5, y.Items.Count());
+
+        var emails = y.Items.First().GetRtRecordAttributeValues<RtEMailAddressRecord>("EMailAddresses").ToList();
+        Assert.Equal(2, emails.Count);
+        Assert.Equal("office0@example.com", emails[0].EMailAddress);
+        Assert.Equal(RtEMailAddressTypeEnum.Office, emails[0].EMailAddressType);
+        Assert.Equal("home0@example.com", emails[1].EMailAddress);
+        Assert.Equal(RtEMailAddressTypeEnum.Home, emails[1].EMailAddressType);
+    }
+
+    [Fact]
+    public async Task CreateAndQuery_WithRecordList_Typed_DeserializeTyped_OK()
+    {
+        // Regression for AB#4291 — same as above but reading the strongly-typed list property back.
+        await systemFixture.ClearCollectionAsync();
+        var systemContext = systemFixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        for (var i = 0; i < 5; i++)
+        {
+            var rtCustomer = await tenantRepository.CreateTransientRtEntityAsync<RtCustomer>();
+            rtCustomer.EMailAddresses = new AttributeRecordValueList<RtEMailAddressRecord>
+            {
+                new() { EMailAddress = "office" + i + "@example.com", EMailAddressType = RtEMailAddressTypeEnum.Office },
+                new() { EMailAddress = "home" + i + "@example.com", EMailAddressType = RtEMailAddressTypeEnum.Home }
+            };
+            await tenantRepository.InsertOneRtEntityAsync(session, rtCustomer);
+        }
+
+        await session.CommitTransactionAsync();
+
+        using var session2 = await tenantRepository.GetSessionAsync();
+        session2.StartTransaction();
+        var y = await tenantRepository.GetRtEntitiesByTypeAsync<RtCustomer>(session2,
+            RtEntityQueryOptions.Create());
+        await session2.CommitTransactionAsync();
+
+        Assert.Equal(5, y.Items.Count());
+        var emails = y.Items.First().EMailAddresses!.ToList();
+        Assert.Equal(2, emails.Count);
+        Assert.Equal("office0@example.com", emails[0].EMailAddress);
+        Assert.Equal(RtEMailAddressTypeEnum.Office, emails[0].EMailAddressType);
+        Assert.Equal("home0@example.com", emails[1].EMailAddress);
+        Assert.Equal(RtEMailAddressTypeEnum.Home, emails[1].EMailAddressType);
+    }
+
+    [Fact]
     public async Task CreateAndQuery_GeoPoint()
     {
         await systemFixture.ClearCollectionAsync();

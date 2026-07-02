@@ -265,8 +265,19 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             // BSON state is pre-populated by a different path.
             _isSerializerRegistered = true;
 
-            TryRegisterDiscriminatorConvention(typeof(object), new RtEntityDiscriminatorConvention("_t"));
-            TryRegisterDiscriminatorConvention(typeof(RtEntity), new RtEntityDiscriminatorConvention("_t"));
+            TryRegisterDiscriminatorConvention(typeof(object), RtEntityDiscriminatorConvention.Instance);
+            TryRegisterDiscriminatorConvention(typeof(RtEntity), RtEntityDiscriminatorConvention.Instance);
+
+            // RtRecord is its own discriminated root hierarchy (SetIsRootClass in RegisterClassMaps),
+            // NOT a subtype of RtEntity, so the typeof(RtEntity) registration above does not cover it.
+            // Register our convention for typeof(RtRecord) explicitly and early — this method runs from
+            // the module initializer before any class map is frozen — so every generated CK record
+            // subtype (RtUserLoginRecord, RtSecretRecord, …) inherits it instead of falling back to the
+            // driver's default Hierarchical/Scalar convention. The default would write a _t discriminator
+            // ARRAY like ["RtRecord","RtUserLoginRecord"] on save and then throw "Unknown discriminator
+            // value 'RtUserLoginRecord'" on load — a silent, per-process registration race that broke
+            // tenant-wide external / EntraID login (AB#4291).
+            TryRegisterDiscriminatorConvention(typeof(RtRecord), RtEntityDiscriminatorConvention.Instance);
 
             TryRegisterSerializer(new OctoObjectListSerializer());
             var objectSerializer = new OctoObjectSerializer(OctoObjectAllowedTypes);
@@ -291,6 +302,16 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                     $"before OctoMesh serializer registration. Ensure nothing touches BSON for typeof(object) " +
                     $"before {nameof(BsonSerializationModuleInitializer)} / {nameof(RegisterSerializers)}.");
             }
+
+            // Same fail-fast guarantee for the DISCRIMINATOR CONVENTION as the object-serializer
+            // assertion above. TryRegisterDiscriminatorConvention silently accepts a pre-existing
+            // (driver-default) convention, so a lost registration race is otherwise invisible: the
+            // service starts normally but every RtRecord subtype resolves to the driver's
+            // Hierarchical/Scalar convention, writes a _t discriminator array, and throws
+            // "Unknown discriminator value" on read — tenant-wide external-login failures (AB#4291).
+            // Assert both the catch-all (object) and the record root (RtRecord) resolve to ours.
+            AssertOctoDiscriminatorConvention(typeof(object));
+            AssertOctoDiscriminatorConvention(typeof(RtRecord));
 
             TryRegisterSerializer(new OctoObjectIdSerializer());
             TryRegisterDiscriminator(typeof(DateTimeOffset), "datetimeoffset");
@@ -350,6 +371,28 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         {
             // Pre-registered (e.g. lazy default from CK class-map source generation).
             // Accept what's there; production startup never hits this path.
+        }
+    }
+
+    /// <summary>
+    /// Startup guard mirroring the object-serializer assertion in <see cref="RegisterSerializers"/>.
+    /// <see cref="TryRegisterDiscriminatorConvention"/> silently accepts a pre-existing (driver-default)
+    /// convention, so a lost registration race is otherwise invisible: the service starts normally but
+    /// every RtRecord subtype resolves to the driver's Hierarchical/Scalar convention, which writes a
+    /// <c>_t</c> discriminator array and throws "Unknown discriminator value" on read — tenant-wide
+    /// external-login failures (AB#4291). This turns that silent failure into one loud startup exception.
+    /// </summary>
+    private static void AssertOctoDiscriminatorConvention(Type type)
+    {
+        var convention = BsonSerializer.LookupDiscriminatorConvention(type);
+        if (convention is not RtEntityDiscriminatorConvention)
+        {
+            throw new InvalidOperationException(
+                $"The discriminator convention for '{type.FullName}' resolved to " +
+                $"'{convention.GetType().FullName}' instead of {nameof(RtEntityDiscriminatorConvention)}. " +
+                $"A class map or discriminator lookup ran before OctoMesh registration " +
+                $"({nameof(BsonSerializationModuleInitializer)} / {nameof(RegisterSerializers)}); RtRecord " +
+                $"subtypes would be written with a _t discriminator array and fail to deserialize (AB#4291).");
         }
     }
 
@@ -583,6 +626,9 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         BsonClassMap.RegisterClassMap<RtEntity>(cm =>
         {
             cm.SetIsRootClass(true);
+            // Pin our discriminator convention on the class map itself so it can never depend on the
+            // typeof(object) registration winning a lookup-order race (AB#4291).
+            cm.SetDiscriminatorConvention(RtEntityDiscriminatorConvention.Instance);
             cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(c => c.RtId).SetIdGenerator(new OctoObjectIdGenerator());
             cm.AutoMap();
@@ -599,6 +645,14 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         {
             cm.SetIsRootClass(true);
             cm.SetIgnoreExtraElements(true);
+
+            // Pin our discriminator convention directly on the class map (belt-and-braces with the
+            // early typeof(RtRecord) registration in RegisterSerializers). SetIsRootClass makes the
+            // driver serialize a discriminator for subtypes; without our convention that default is a
+            // Hierarchical _t array like ["RtRecord","RtUserLoginRecord"]. Ours returns null for
+            // RtRecord types (the type is identified by ckRecordId, so no _t is written) and maps any
+            // legacy *Record _t value back to RtRecord on read (AB#4291 / AB#3321).
+            cm.SetDiscriminatorConvention(RtEntityDiscriminatorConvention.Instance);
 
             // Disable discriminator for RtRecord - the type is determined by CkRecordId, not by _t
             // This prevents writing _t for derived RtRecord types

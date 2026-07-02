@@ -85,6 +85,26 @@ internal class RtEntityDiscriminatorConvention : IDiscriminatorConvention
             var bookmark = bsonReader.GetBookmark();
             bsonReader.ReadStartDocument();
             var actualType = nominalType;
+
+            // A record is identified by its ckRecordId (the CK record type), NOT by the _t
+            // discriminator. Detect it up-front so records always deserialize to RtRecord, whether
+            // _t is absent (the normal case — GetDiscriminator returns null for RtRecord types) or
+            // carries a legacy hierarchical value such as ["RtRecord","RtUserLoginRecord"] written by
+            // an older build or a pod that lost the discriminator-convention registration race. This
+            // mirrors OctoObjectListSerializer's ckRecordId-first handling and, crucially, avoids ever
+            // calling LookupActualType on a *Record discriminator that is not registered in this
+            // process — which throws "Unknown discriminator value" and broke tenant-wide external /
+            // EntraID login (AB#4291 / AB#3321).
+            if ((nominalType == typeof(object) || nominalType.IsAssignableTo(typeof(RtRecord)))
+                && bsonReader.FindElement("ckRecordId"))
+            {
+                bsonReader.ReturnToBookmark(bookmark);
+                return typeof(RtRecord);
+            }
+
+            bsonReader.ReturnToBookmark(bookmark);
+            bsonReader.ReadStartDocument();
+
             if (bsonReader.FindElement(ElementName))
             {
                 var context = BsonDeserializationContext.CreateRoot(bsonReader);
