@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
+using Meshmakers.Octo.Runtime.Engine.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 
@@ -8,8 +9,10 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// Enumerates the buckets covered by a bucket-aligned recompute range (AB#4184, Phase 3c). The
 /// orchestrator's planner already snaps <c>[from, to)</c> to the dependent's bucket boundaries, so
 /// this walks from <c>from</c> to <c>to</c> one bucket at a time, yielding each
-/// <c>[bucketStart, bucketEnd)</c> the recompute aggregates into staging. Mirrors the boundary
-/// arithmetic of the engine's <c>BucketBoundary</c> (which is engine-internal and not visible here).
+/// <c>[bucketStart, bucketEnd)</c> the recompute aggregates into staging. Delegates the boundary
+/// arithmetic to the engine's <see cref="BucketBoundary"/> so calendar alignments honour the
+/// reference time-zone (AB#4300 / O6) — the previous local UTC-only copy produced UTC calendar
+/// buckets even when a rollup declared <c>ReferenceTimeZone</c>.
 /// </summary>
 internal static class RecomputeBucketEnumerator
 {
@@ -17,10 +20,12 @@ internal static class RecomputeBucketEnumerator
 
     /// <summary>
     /// Yields the <c>[Start, End)</c> bucket intervals tiling <c>[from, to)</c>. Returns nothing for
-    /// an empty or inverted range, or for a non-positive fixed bucket size.
+    /// an empty or inverted range, or for a non-positive fixed bucket size. <paramref name="zone"/>
+    /// (from the rollup's <c>ReferenceTimeZone</c>) aligns calendar buckets to local wall-clock
+    /// boundaries; <c>null</c> keeps UTC calendar boundaries.
     /// </summary>
     public static IEnumerable<(DateTime Start, DateTime End)> Enumerate(
-        DateTime from, DateTime to, BucketAlignment alignment, TimeSpan bucketSize)
+        DateTime from, DateTime to, BucketAlignment alignment, TimeSpan bucketSize, TimeZoneInfo? zone = null)
     {
         var start = AsUtc(from);
         var endBound = AsUtc(to);
@@ -28,7 +33,7 @@ internal static class RecomputeBucketEnumerator
         var iterations = 0;
         while (start < endBound)
         {
-            var end = NextBucketEnd(start, alignment, bucketSize);
+            var end = BucketBoundary.NextBucketEnd(start, alignment, bucketSize, zone);
             if (end <= start)
             {
                 yield break; // defensive: zero / negative bucket would loop forever
@@ -43,17 +48,6 @@ internal static class RecomputeBucketEnumerator
             }
         }
     }
-
-    private static DateTime NextBucketEnd(DateTime start, BucketAlignment alignment, TimeSpan bucketSize) =>
-        alignment switch
-        {
-            BucketAlignment.FixedSize => start + bucketSize,
-            BucketAlignment.CalendarDay => start.AddDays(1),
-            BucketAlignment.Iso8601Week => start.AddDays(7),
-            BucketAlignment.CalendarMonth => start.AddMonths(1),
-            BucketAlignment.CalendarYear => start.AddYears(1),
-            _ => start + bucketSize,
-        };
 
     private static DateTime AsUtc(DateTime value) => value.Kind switch
     {

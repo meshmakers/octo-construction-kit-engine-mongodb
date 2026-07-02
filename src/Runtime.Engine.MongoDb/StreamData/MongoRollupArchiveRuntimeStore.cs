@@ -57,7 +57,8 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
         TimeSpan watermarkLag,
         IReadOnlyList<CkRollupAggregationSpec> aggregations,
         IReadOnlyList<CkArchiveColumnSpec> columns,
-        BucketAlignment bucketAlignment = BucketAlignment.FixedSize)
+        BucketAlignment bucketAlignment = BucketAlignment.FixedSize,
+        string? referenceTimeZone = null)
     {
         var columnList = new AttributeRecordValueList<RtCkArchiveColumnRecord>();
         columnList.AddRange(columns.Select(c => new RtCkArchiveColumnRecord
@@ -92,6 +93,9 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             LastAggregatedBucketEnd = null,
             FrozenUntil = null,
             BucketAlignment = (RtBucketAlignmentEnum)(int)bucketAlignment,
+            // AB#4300 / decision O6 — persist the optional IANA reference time-zone. Empty/whitespace
+            // is normalised to null so the read path's IsNullOrWhiteSpace check stays symmetric.
+            ReferenceTimeZone = string.IsNullOrWhiteSpace(referenceTimeZone) ? null : referenceTimeZone,
             Columns = columnList,
             Aggregations = aggregationList,
         };

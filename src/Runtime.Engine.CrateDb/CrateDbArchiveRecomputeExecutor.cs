@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
+using Meshmakers.Octo.Runtime.Engine.StreamData;
 using Microsoft.Extensions.Logging;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
@@ -99,10 +100,15 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         await _managementClient.ExecuteDdlAsync(_tenantId,
             ArchiveDdlGenerator.GenerateCreateWindowedTable(stagingTable, resolvedColumns, _numberOfShards, _numberOfReplicas, includeGeneration: true));
 
+        // Calendar buckets snap to this zone's local wall-clock boundaries (AB#4300 / O6); null ⇒
+        // UTC. Resolved once per recompute — the enumerator yields the zone-correct UTC instants
+        // that become each row's window_start / window_end.
+        var zone = BucketBoundary.ResolveZone(rollup.ReferenceTimeZone);
+
         var rows = 0;
         var windows = 0;
         foreach (var (bucketStart, bucketEnd) in
-                 RecomputeBucketEnumerator.Enumerate(rangeStart, rangeEnd, rollup.BucketAlignment, rollup.BucketSize))
+                 RecomputeBucketEnumerator.Enumerate(rangeStart, rangeEnd, rollup.BucketAlignment, rollup.BucketSize, zone))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
