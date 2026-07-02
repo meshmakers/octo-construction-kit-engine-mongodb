@@ -1215,7 +1215,11 @@ public class TenantContext : ITenantContext
             streamData,
             audit,
             _loggerFactory.CreateLogger<ArchiveLifecycleService>(),
-            GetRollupArchiveRuntimeStore());
+            GetRollupArchiveRuntimeStore(),
+            // AB#4300: wire the recompute stores so disable/delete purges any queued recompute work
+            // (pending ranges + the active job) instead of leaving an un-processable Pending ghost.
+            GetArchiveRecomputeStateStore(),
+            GetRecomputeJobStore());
         _archiveLifecycleServiceResolved = true;
         return _archiveLifecycleService;
     }
