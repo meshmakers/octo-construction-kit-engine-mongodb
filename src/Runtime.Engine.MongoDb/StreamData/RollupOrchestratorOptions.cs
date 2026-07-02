@@ -30,4 +30,17 @@ public sealed class RollupOrchestratorOptions
     /// register their own <see cref="IRollupTenantSource"/> and leave this empty.
     /// </summary>
     public IReadOnlyList<string> TenantIds { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Default ON (AB#4306): on every tick, additionally re-aggregate each activated rollup's
+    /// CURRENT open bucket as a provisional row, without advancing the watermark. The forward loop
+    /// alone only materialises a bucket once it has fully closed (bucketEnd &lt; now - lag), so a
+    /// coarse rollup's "this month / this year so far" total would otherwise stay absent or frozen
+    /// at the last backfill until the period ends — which is surprising for users. Keeping the open
+    /// bucket fresh on the tick cadence is the expected behaviour, so it is on by default. Cheap on a
+    /// cascaded ladder (each open bucket reads only a handful of rows from the finer level below).
+    /// Set <c>StreamData:Rollup:RefreshOpenBucket=false</c> to disable it for a deployment where the
+    /// extra per-tick write load on a very wide/deep rollup set is not wanted.
+    /// </summary>
+    public bool RefreshOpenBucket { get; set; } = true;
 }

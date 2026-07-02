@@ -1324,13 +1324,18 @@ public class TenantContext : ITenantContext
 
         var audit = _serviceProvider.GetService<IArchiveAuditTrail>()
                     ?? new LoggingArchiveAuditTrail(_loggerFactory.CreateLogger<LoggingArchiveAuditTrail>());
+        // AB#4306: opt-in provisional refresh of each rollup's current open bucket. Read from the
+        // same RollupOrchestratorOptions the hosted service binds (StreamData:Rollup); default off.
+        var refreshOpenBucket =
+            _serviceProvider.GetService<IOptions<RollupOrchestratorOptions>>()?.Value.RefreshOpenBucket ?? false;
         _rollupOrchestrator = new RollupOrchestrator(
             TenantId,
             GetArchiveRuntimeStore(),
             rollupStore,
             streamData,
             audit,
-            _loggerFactory.CreateLogger<RollupOrchestrator>());
+            _loggerFactory.CreateLogger<RollupOrchestrator>(),
+            refreshOpenBucket: refreshOpenBucket);
         return _rollupOrchestrator;
     }
 
