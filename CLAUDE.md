@@ -614,6 +614,38 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
   executor (genmap `rtid_scope` is always `''`). `rewindRollupWatermark` over a recomputed range is
   not reconciled with the genmap yet.
 
+### Open-Bucket Refresh + Recompute Cap (AB#4306)
+
+The forward `RollupOrchestrator` optionally re-aggregates the **current open (in-progress) bucket**
+on every tick at `generation 0`, without advancing the watermark, so a coarse partial period (*this
+month / this year so far*) stays live instead of showing nothing until the period closes. Controlled
+by `RollupOrchestratorOptions.RefreshOpenBucket` (`StreamData:Rollup:RefreshOpenBucket`, default
+**true**, wired in `TenantContext.GetRollupOrchestrator`); a frozen bucket is skipped.
+
+The generation pointer makes this fragile: if a **recompute** also claimed the open bucket, its
+`BuildUpsertPointer` flip would move that window to generation `N+1`, and the highest-generation-wins
+read path would then **mask** the refresh's `generation 0` write — freezing the partial-period total.
+So `RecomputeArchiveInternalAsync` **caps `to` at `BucketBoundary.AlignDown(now, …)`** (the start of
+the bucket containing `now`), leaving only closed buckets in range; an all-open range becomes a
+`Completed` no-op. This keeps the open bucket on the always-fresh generation-0 lane. In a cascade the
+open bucket of each level is refreshed cheaply from the level below, so the current period stays live
+all the way up (see also the voest cascade Design Decision in `voest-app/CLAUDE.md`).
+
+### Recompute-Work Purge + Fail-Fast on Non-Activated Rollups (AB#4300)
+
+The periodic drain (`RecomputeOrchestrator.TickAsync`) skips any rollup that is not `Activated`, so
+queued work on a non-activated rollup would otherwise sit at `Pending` forever. Two guards, both
+reachable from `TenantContext` DI:
+
+- **Fail-fast at the enqueue/manual entry points** — `EnqueueBackfillFromSourceAsync` and the manual
+  `RecomputeArchiveInternalAsync` path return a `Failed` job immediately when `rollup.Status !=
+  Activated`, instead of pre-creating a `Pending` job + range the drain would skip.
+- **Purge on disable/delete** — `ArchiveLifecycleService.DisableAsync`/`DeleteAsync` clear
+  `PendingRecomputeRanges` and terminate the single active (`Pending`/`Running`/`Swapping`) job as
+  `Failed`. `TenantContext` wires `GetArchiveRecomputeStateStore()` + `GetRecomputeJobStore()` into
+  the lifecycle service (both optional ctor params, so the backward-compatible construction still
+  works). Prevents a delete+re-import that reuses the same rtId from inheriting stale ranges/jobs.
+
 ### Extensible Enum Preservation on Import (WI #3324)
 
 `DatabaseCkModelRepository.PreserveExtensibleEnumValues` runs inside `ExecuteImport`
