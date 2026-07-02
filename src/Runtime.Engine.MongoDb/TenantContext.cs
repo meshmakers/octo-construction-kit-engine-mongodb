@@ -847,6 +847,7 @@ public class TenantContext : ITenantContext
 
         await UpdateSystemCkModelAsync(tenant.DatabaseName, tenant.TenantId);
         await context.EnsureStreamDataCkModelIfEnabledAsync();
+        await context.EnsureServiceManagedCkModelsImportedAsync();
 
         return context;
     }
@@ -959,7 +960,17 @@ public class TenantContext : ITenantContext
     {
         var descriptor = _serviceProvider.GetService<IStreamDataCkModelDescriptor>();
         var modelId = descriptor?.CkModelId ?? new CkModelId("System.StreamData-1.0.0");
+        await ImportEmbeddedCkModelWithDowngradeGuardAsync(modelId);
+    }
 
+    /// <summary>
+    /// Imports an embedded CK model at its exact <paramref name="modelId"/> version, skipping when a
+    /// higher version is already installed (downgrade guard). Shared by the StreamData descriptor path
+    /// and the generic <see cref="EnsureServiceManagedCkModelsImportedAsync"/> path. Idempotent —
+    /// ImportCkModelAsync short-circuits on an exact-version match.
+    /// </summary>
+    internal async Task ImportEmbeddedCkModelWithDowngradeGuardAsync(CkModelId modelId)
+    {
         var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName, TenantId);
         var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource, TenantId);
         var anyVersionRange = new CkModelIdVersionRange(modelId.Name, "0.0.0");
@@ -968,8 +979,7 @@ public class TenantContext : ITenantContext
             installedModelId.Version.CompareTo(modelId.Version) > 0)
         {
             _logger.LogInformation(
-                "Skipping StreamData CK model import for tenant '{TenantId}': installed version '{InstalledVersion}' is newer than our descriptor's target '{TargetVersion}'. " +
-                "Another deploy with a newer descriptor has already upgraded the model; downgrade prevented.",
+                "Skipping CK model import for tenant '{TenantId}': installed version '{InstalledVersion}' is newer than the embedded target '{TargetVersion}'; downgrade prevented.",
                 TenantId, installedModelId, modelId);
             return;
         }
@@ -979,9 +989,40 @@ public class TenantContext : ITenantContext
         if (operationResult.HasErrors || operationResult.HasFatalErrors)
         {
             _logger.LogError(
-                "Failed to import StreamData CK model '{CkModelId}' into tenant '{TenantId}'. Stream data is enabled but archive management features may not be available until the model is imported. Operation result: {Messages}",
+                "Failed to import embedded CK model '{CkModelId}' into tenant '{TenantId}'. Operation result: {Messages}",
                 modelId, TenantId,
                 string.Join("; ", operationResult.Messages.Select(m => $"{m.MessageNumber}: {m.MessageText}")));
+        }
+    }
+
+    /// <summary>
+    /// Per-process guard so the generic service-managed auto-import runs at most once per
+    /// (tenant, model) in this process — mirrors <see cref="_streamDataAutoImportAttempted"/> and
+    /// breaks the ImportCkModelAsync -> RetryPendingMigrations -> tenant-resolve -> here recursion.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, bool> _serviceManagedCkModelsAttempted = new();
+
+    /// <summary>
+    /// Test-only: clears the per-process service-managed auto-import guard so a test can re-trigger
+    /// <see cref="EnsureServiceManagedCkModelsImportedAsync"/> for a tenant/model already attempted in
+    /// this process. Not used by production code.
+    /// </summary>
+    internal static void ResetServiceManagedCkModelImportGuardForTests() =>
+        _serviceManagedCkModelsAttempted.Clear();
+
+    /// <summary>
+    /// Auto-imports every host-registered <see cref="IServiceManagedCkModelDescriptor"/> at its
+    /// embedded version (with downgrade guard). Runs on tenant-resolve; no-op when no descriptors are
+    /// registered (hosts that don't ship a service-managed model). Unlike the StreamData path this is
+    /// not feature-gated — DI registration is the opt-in.
+    /// </summary>
+    internal async Task EnsureServiceManagedCkModelsImportedAsync()
+    {
+        foreach (var descriptor in _serviceProvider.GetServices<IServiceManagedCkModelDescriptor>())
+        {
+            var modelId = descriptor.CkModelId;
+            if (!_serviceManagedCkModelsAttempted.TryAdd($"{TenantId}:{modelId.Name}", true)) continue;
+            await ImportEmbeddedCkModelWithDowngradeGuardAsync(modelId);
         }
     }
 

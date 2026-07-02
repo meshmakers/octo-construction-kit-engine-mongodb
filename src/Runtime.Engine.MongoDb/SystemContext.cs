@@ -155,6 +155,12 @@ public class SystemContext : TenantContext, ISystemContext
             }
             tenantContext = childTenantContext;
         }
+        else
+        {
+            // The system tenant resolves to `this` and bypasses TryGetChildTenantContextAsync, so the
+            // service-managed descriptor import (e.g. System.UI into octosystem) must fire here too.
+            await EnsureServiceManagedCkModelsImportedAsync();
+        }
 
         return tenantContext;
     }
