@@ -82,6 +82,11 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
             {
                 columns = columns.Concat(rollupComputed).ToList();
             }
+            // A rollup's native window length is its bucket size — surface it as Period so a
+            // downstream rollup's AB#4289 activation guard can enforce bucket-vs-source alignment
+            // when this rollup is itself a source (rollup-on-rollup). BucketSizeMs is Int64 ms
+            // (System.StreamData 1.6.3).
+            period = System.TimeSpan.FromMilliseconds(rollup.BucketSizeMs);
         }
         else if (entity is RtTimeRangeArchive timeRange)
         {
