@@ -212,6 +212,34 @@ public interface ITenantContext
     Task DropChildTenantAsync(IOctoAdminSession adminSession, string tenantId);
 
     /// <summary>
+    ///     Deletes only the tenant metadata records (in the current and system tenant repositories)
+    ///     within the caller's transaction and raises the pre-delete notification. The physical
+    ///     tenant database is <b>not</b> dropped here.
+    /// </summary>
+    /// <remarks>
+    ///     This is the first phase of a race-safe delete: the caller must
+    ///     <see cref="IOctoAdminSession" />.<c>CommitTransactionAsync</c> the returned metadata
+    ///     deletion and only then call <see cref="DropTenantDatabaseAsync" />. Dropping the database
+    ///     before the record deletion is committed leaves a window in which a concurrent
+    ///     tenant-resolve re-creates the database via CK-model auto-import (the resolve still finds
+    ///     the committed tenant record), resurrecting the just-dropped database.
+    /// </remarks>
+    /// <param name="adminSession">Admin session whose transaction the record deletion joins.</param>
+    /// <param name="tenantId">The tenant to delete.</param>
+    /// <returns>A handle carrying the database name and correlation id for the drop phase.</returns>
+    Task<TenantDeletionHandle> DeleteChildTenantMetadataAsync(IOctoAdminSession adminSession, string tenantId);
+
+    /// <summary>
+    ///     Drops the physical tenant database and raises the post-delete notification. Must be called
+    ///     only <b>after</b> the <see cref="DeleteChildTenantMetadataAsync" /> transaction has been
+    ///     committed, so a concurrent tenant-resolve can no longer find the tenant record and
+    ///     re-create the database.
+    /// </summary>
+    /// <param name="handle">The handle returned by <see cref="DeleteChildTenantMetadataAsync" />.</param>
+    /// <param name="tenantId">The tenant whose database is dropped (used for the notification).</param>
+    Task DropTenantDatabaseAsync(TenantDeletionHandle handle, string tenantId);
+
+    /// <summary>
     ///     Returns true if a child tenant with the given name exists.
     /// </summary>
     /// <param name="adminSession">Admin session to get the tenant context</param>

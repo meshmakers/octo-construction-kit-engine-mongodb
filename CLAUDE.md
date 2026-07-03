@@ -705,6 +705,40 @@ version — otherwise a blueprint apply on a tenant that hadn't yet been auto-im
 `Model 'System.UI-2.2.0' not found in one of the registered catalogs`. Regression test:
 `MongoRuntimeRepositoryProviderTests.EnsureCkModelInstalledAsync_ServiceManagedModel_RedirectsFloorToDescriptorVersion`.
 
+### Race-safe Tenant Delete — Two-phase Drop
+
+A tenant delete must **delete the tenant metadata record and commit it before dropping the physical
+database**. The physical `dropDatabase` is a DDL op that runs *outside* the caller's MongoDB
+transaction (Mongo can't drop a database inside a multi-document transaction), so it takes effect
+immediately, whereas the `RtTenant` record deletion only becomes visible to other sessions on commit.
+The original order (drop DB at `DropChildTenantAsync` → delete record → caller commits) left a window
+— measured at ~180 ms live — in which the tenant record was still committed-visible while the
+database was already gone. Any concurrent tenant-resolve in that window
+(`TryGetChildTenantContextAsync` from a nightly consumer, a health check, or the pre-notification of
+an immediately following Create) finds the record, resolves the context, and the **auto-import on
+resolve** (`UpdateSystemCkModelAsync` / `EnsureServiceManagedCkModelsImportedAsync` /
+`EnsureStreamDataCkModelImportedAsync`) writes `CkModel` into the tenant DB — MongoDB auto-creates the
+database (`CkModel` + `SysLock` skeleton). The just-dropped database is resurrected, and the next
+tenant `Create` aborts on `IsDatabaseExistingAsync` with *"Tenant database '…' does already exist"*,
+rolls back, and leaves an orphan DB with no tenant record → every re-run of `om_initialize_tenant`
+deadlocks identically.
+
+`DropChildTenantAsync` is therefore split into two composable phases on `ITenantContext`:
+
+| Method | Runs in caller's txn? | Does |
+|---|---|---|
+| `DeleteChildTenantMetadataAsync(session, tenantId)` | yes | Pre-delete notification + delete `RtTenant` from current & system repos. Returns a `TenantDeletionHandle(DatabaseName, CorrelationId)`. |
+| `DropTenantDatabaseAsync(handle, tenantId)` | no (DDL) | Physical `dropDatabase` + post-delete notification (reusing the handle's correlation id). |
+
+The tenant delete REST endpoint (`TenantsController.Delete`) now calls
+`DeleteChildTenantMetadataAsync` → `CommitTransactionAsync` → `DropTenantDatabaseAsync`, so the record
+is durably gone before the drop and no resolve can resurrect the DB. `DropChildTenantAsync` is kept as
+a single-call convenience (`DeleteChildTenantMetadataAsync` + `DropTenantDatabaseAsync`, record-delete
+now ordered before the drop) for callers with no concurrent resolver: create-rollback
+(`CreateChildTenantAsync` blueprint path), `ClearChildTenantAsync`, `TenantBackupService` temp cleanup,
+and the integration tests. Complements the AB#4294 guard invalidation above (which handles the
+*same-process delete+recreate* import-guard, a different facet of the same resurrection mechanism).
+
 ## Test Data Structure
 
 The test CK model includes this hierarchy:

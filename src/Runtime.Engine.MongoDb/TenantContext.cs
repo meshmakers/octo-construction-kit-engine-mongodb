@@ -695,6 +695,20 @@ public class TenantContext : ITenantContext
     // ReSharper disable once MemberCanBePrivate.Global
     public async Task DropChildTenantAsync(IOctoAdminSession adminSession, string tenantId)
     {
+        // Single-call convenience: delete the metadata and drop the database in one go, within the
+        // caller's transaction. Suitable for callers that have no concurrent tenant-resolve to race
+        // against (create-rollback, tenant backup temp cleanup, tests). Race-sensitive callers that
+        // delete a live tenant (e.g. the tenant delete REST endpoint) must instead call
+        // DeleteChildTenantMetadataAsync, commit, then DropTenantDatabaseAsync so the physical drop
+        // happens after the record deletion is durably gone. See DeleteChildTenantMetadataAsync.
+        var handle = await DeleteChildTenantMetadataAsync(adminSession, tenantId);
+        await DropTenantDatabaseAsync(handle, tenantId);
+    }
+
+    /// <inheritdoc />
+    public async Task<TenantDeletionHandle> DeleteChildTenantMetadataAsync(IOctoAdminSession adminSession,
+        string tenantId)
+    {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
         var tenantRepository = GetTenantRepositoryAsAdmin();
@@ -707,30 +721,38 @@ public class TenantContext : ITenantContext
 
         Guid correlationId = Guid.NewGuid();
 
-        try
+        await _tenantNotifications.NotifyPreTenantDeleteAsync(tenantId, correlationId);
+
+        // Deletes the tenant entry from the current tenant
+        await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
+            FieldFilterCriteria.Create().FieldEquals(nameof(RtTenant.TenantId),
+                tenantId.NormalizeString()), DeleteOptions.Erase);
+
+        // If the current tenant is not the system tenant, we need to delete the tenant entry in system tenant too.
+        if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
         {
-            await _tenantNotifications.NotifyPreTenantDeleteAsync(tenantId, correlationId);
-
-            await _adminRepositoryClient.DropRepositoryAsync(octoTenant.DatabaseName);
-
-            // Deletes the tenant entry from the current tenant
-            await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
+            var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
+            await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
                 FieldFilterCriteria.Create().FieldEquals(nameof(RtTenant.TenantId),
                     tenantId.NormalizeString()), DeleteOptions.Erase);
+        }
 
-            // If the current tenant is not the system tenant, we need to delete the tenant entry in system tenant too.
-            // Add the new tenant as child tenant of the current one
-            if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
-            {
-                var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
-                await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
-                    FieldFilterCriteria.Create().FieldEquals(nameof(RtTenant.TenantId),
-                        tenantId.NormalizeString()), DeleteOptions.Erase);
-            }
+        return new TenantDeletionHandle(octoTenant.DatabaseName, correlationId);
+    }
+
+    /// <inheritdoc />
+    public async Task DropTenantDatabaseAsync(TenantDeletionHandle handle, string tenantId)
+    {
+        ArgumentValidation.Validate(nameof(handle), handle);
+        ArgumentValidation.ValidateString(nameof(handle.DatabaseName), handle.DatabaseName);
+
+        try
+        {
+            await _adminRepositoryClient.DropRepositoryAsync(handle.DatabaseName);
         }
         finally
         {
-            await _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId, correlationId);
+            await _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId, handle.CorrelationId);
         }
     }
 
