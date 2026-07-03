@@ -87,10 +87,19 @@ stages:
           # this guard. With OctoCoreLibVersion split done at 3.4.x, declare
           # the floor here so any future Directory.Build.props edit that
           # accidentally rolls back to 3.3.* fails the build before restore.
+          #
+          # commFloor is deliberately NOT declared: this repo references no
+          # communication package (no .csproj consumes OctoCommVersion), so
+          # the OctoCommVersion pin in Directory.Build.props is inert. On an
+          # r-tag build the train injects only octoCoreLibVersion, leaving
+          # OctoCommVersion to the props fallback '$(OctoVersion)' — a macro
+          # verify-libs-floor extracts literally and can't compare, which
+          # hard-failed the auto-train cascade on r3.4.31 (build #38044).
+          # Gating a floor on a version the build never restores is a false
+          # positive; the core-lib floor is the only relevant guard here.
           - template: templates/steps/verify-libs-floor.yml@pipelineTemplates
             parameters:
               coreLibFloor: '3.4'
-              commFloor: '3.4'
           - task: DotNetCoreCLI@2
             retryCountOnTaskFailure: 2
             displayName: 'Restore NuGet packages'
