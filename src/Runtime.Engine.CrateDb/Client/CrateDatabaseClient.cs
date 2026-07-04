@@ -349,6 +349,53 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         });
     }
 
+    public async Task ExecuteBulkAsync(string tenantId, string parameterizedSql,
+        IReadOnlyList<IReadOnlyList<object?>> argumentSets, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(parameterizedSql))
+        {
+            throw new ArgumentException("sql must not be empty.", nameof(parameterizedSql));
+        }
+
+        if (argumentSets.Count == 0)
+        {
+            return;
+        }
+
+        await _resilience.ExecuteAsync(async _ =>
+        {
+            await using var lease = await LeaseConnectionAsync(tenantId, cancellationToken);
+            await using var batch = new NpgsqlBatch(lease.Connection);
+            foreach (var set in argumentSets)
+            {
+                var command = new NpgsqlBatchCommand(parameterizedSql);
+                foreach (var value in set)
+                {
+                    command.Parameters.Add(new NpgsqlParameter { Value = CoerceBulkParameter(value) });
+                }
+
+                batch.BatchCommands.Add(command);
+            }
+
+            // One prepared statement bound + executed per set in a single flush → CrateDB's bulk
+            // path (dramatically cheaper than N individual UPDATE statements).
+            return await batch.ExecuteNonQueryAsync(cancellationToken);
+        });
+    }
+
+    /// <summary>
+    /// Normalises a bulk parameter for Npgsql/CrateDB: <c>null</c> → <see cref="DBNull"/>; a
+    /// <see cref="DateTime"/> is pinned to UTC kind so Npgsql sends <c>timestamptz</c> (matching the
+    /// archive's <c>timestamp with time zone</c> key columns — an unspecified-kind DateTime would be
+    /// sent as <c>timestamp</c> and mis-compare the key predicate).
+    /// </summary>
+    private static object CoerceBulkParameter(object? value) => value switch
+    {
+        null => DBNull.Value,
+        DateTime dt => DateTime.SpecifyKind(dt, DateTimeKind.Utc),
+        _ => value,
+    };
+
     /// <summary>
     /// Leases a CrateDB connection whose disposal swallows the benign reset-time <c>ROLLBACK</c>
     /// (see <see cref="DisposeConnectionSafelyAsync"/>). Every CrateDB access opens its connection

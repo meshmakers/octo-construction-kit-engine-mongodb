@@ -179,20 +179,8 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
 
     /// <inheritdoc />
     public Task SetComputedColumnStateAsync(OctoObjectId archiveRtId, string name, ComputedColumnState state) =>
-        MutateAsync(archiveRtId, entity =>
-        {
-            var column = entity.Columns?.FirstOrDefault(
-                c => !string.IsNullOrWhiteSpace(c.Formula) && string.Equals(c.Name, name, StringComparison.Ordinal));
-            if (column is null)
-            {
-                // The lifecycle service always persists the column before flipping its state, so a
-                // miss here is an internal invariant violation, not a user error.
-                throw new InvalidOperationException(
-                    $"Computed column '{name}' not found on archive {archiveRtId}.");
-            }
-
-            column.ComputedState = (RtCkComputedColumnStateEnum)(int)state;
-        });
+        MutateComputedColumnAsync(archiveRtId, name,
+            column => column.ComputedState = (RtCkComputedColumnStateEnum)(int)state);
 
     /// <inheritdoc />
     public Task RemoveComputedColumnAsync(OctoObjectId archiveRtId, string name) =>
@@ -229,9 +217,33 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
     private Task MutateComputedColumnAsync(OctoObjectId archiveRtId, string name, Action<RtCkArchiveColumnRecord> mutate) =>
         MutateAsync(archiveRtId, entity =>
         {
-            var column = entity.Columns?.FirstOrDefault(
-                c => !string.IsNullOrWhiteSpace(c.Formula) && string.Equals(c.Name, name, StringComparison.Ordinal));
-            if (column is null)
+            // AttributeRecordValueList materialises a FRESH record per enumeration (CreateSubType), so
+            // mutating an element obtained via FirstOrDefault/indexer changes only that throwaway copy —
+            // the change must be written back by rebuilding + reassigning the list (same idiom as
+            // RemoveComputedColumnAsync). Mutating in place silently no-op'd, which left every computed
+            // column stuck in its last persisted state: the Backfilling/Active/Failed flips and the
+            // formula-change swap never survived, so a column never became visible (AB#4189).
+            if (entity.Columns is null)
+            {
+                throw new InvalidOperationException(
+                    $"Computed column '{name}' not found on archive {archiveRtId}.");
+            }
+
+            var rebuilt = new AttributeRecordValueList<RtCkArchiveColumnRecord>();
+            var found = false;
+            foreach (var column in entity.Columns)
+            {
+                if (!string.IsNullOrWhiteSpace(column.Formula) &&
+                    string.Equals(column.Name, name, StringComparison.Ordinal))
+                {
+                    mutate(column);
+                    found = true;
+                }
+
+                rebuilt.Add(column);
+            }
+
+            if (!found)
             {
                 // The lifecycle service always loads + checks the column before calling these, so a
                 // miss here is an internal invariant violation, not a user error.
@@ -239,7 +251,7 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
                     $"Computed column '{name}' not found on archive {archiveRtId}.");
             }
 
-            mutate(column);
+            entity.Columns = rebuilt;
         });
 
     private async Task MutateAsync(OctoObjectId archiveRtId, Action<RtArchive> mutate)

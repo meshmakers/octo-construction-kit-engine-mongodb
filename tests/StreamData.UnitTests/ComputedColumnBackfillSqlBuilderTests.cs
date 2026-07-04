@@ -29,17 +29,41 @@ public class ComputedColumnBackfillSqlBuilderTests
     }
 
     [Fact]
-    public void BuildSelect_AppendsLimitAndOffset_WhenPaging()
+    public void BuildSelect_AppendsLimit_WhenPaging()
     {
         var sql = ComputedColumnBackfillSqlBuilder.BuildSelect(
             Table,
             keyColumns: new[] { "timestamp" },
             valueColumns: new[] { "v" },
-            limit: 500,
-            offset: 1000);
+            limit: 500);
 
         Assert.Equal(
-            "SELECT \"timestamp\", \"v\" FROM \"energy\".\"archive_x\" ORDER BY \"timestamp\" LIMIT 500 OFFSET 1000;",
+            "SELECT \"timestamp\", \"v\" FROM \"energy\".\"archive_x\" ORDER BY \"timestamp\" LIMIT 500;",
+            sql);
+    }
+
+    [Fact]
+    public void BuildSelect_KeysetCursor_EmitsTupleGreaterThanPredicate()
+    {
+        var sql = ComputedColumnBackfillSqlBuilder.BuildSelect(
+            Table,
+            keyColumns: new[] { "timestamp", "rtid", "cktypeid" },
+            valueColumns: new[] { "v" },
+            limit: 1000,
+            cursor: new (string, object?)[]
+            {
+                ("timestamp", Ts),
+                ("rtid", "rt-1"),
+                ("cktypeid", "EnergyMeter"),
+            });
+
+        const string ts = "'2026-06-28T12:00:00.000Z'::timestamp with time zone";
+        Assert.Equal(
+            "SELECT \"timestamp\", \"rtid\", \"cktypeid\", \"v\" FROM \"energy\".\"archive_x\" WHERE " +
+            $"((\"timestamp\" > {ts}) " +
+            $"OR (\"timestamp\" = {ts} AND \"rtid\" > 'rt-1') " +
+            $"OR (\"timestamp\" = {ts} AND \"rtid\" = 'rt-1' AND \"cktypeid\" > 'EnergyMeter')) " +
+            "ORDER BY \"timestamp\", \"rtid\", \"cktypeid\" LIMIT 1000;",
             sql);
     }
 
@@ -54,6 +78,20 @@ public class ComputedColumnBackfillSqlBuilderTests
         Assert.Equal(
             "SELECT \"window_start\", \"window_end\", \"rtid\", \"cktypeid\", \"energy\" " +
             "FROM \"energy\".\"archive_x\" ORDER BY \"window_start\", \"window_end\", \"rtid\", \"cktypeid\";",
+            sql);
+    }
+
+    [Fact]
+    public void BuildBulkUpdate_TimeRange_ParameterisedByTargetAndKeys()
+    {
+        var sql = ComputedColumnBackfillSqlBuilder.BuildBulkUpdate(
+            Table,
+            targetColumn: "powerfactor",
+            keyColumns: new[] { "window_start", "window_end", "rtid", "cktypeid" });
+
+        Assert.Equal(
+            "UPDATE \"energy\".\"archive_x\" SET \"powerfactor\" = $1 WHERE " +
+            "\"window_start\" = $2 AND \"window_end\" = $3 AND \"rtid\" = $4 AND \"cktypeid\" = $5;",
             sql);
     }
 

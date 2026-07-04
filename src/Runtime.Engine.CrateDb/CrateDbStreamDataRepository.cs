@@ -1640,13 +1640,17 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                         && !string.Equals(p, activeTargetPhysical, StringComparison.Ordinal))
             .ToList();
 
-        var offset = 0;
+        // Keyset (cursor) paging over the primary key, NOT OFFSET: each page seeks straight past the
+        // previous page's last row via the key index, so memory stays O(BackfillPageSize) regardless
+        // of archive size. OFFSET made CrateDB collect + sort the whole table up to the offset on
+        // every page, tripping the query circuit breaker on the final pages of a large archive (AB#4189).
+        IReadOnlyList<(string Column, object? Value)>? cursor = null;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             var selectSql = ComputedColumnBackfillSqlBuilder.BuildSelect(
-                table, keyColumns, valueColumns, BackfillPageSize, offset);
+                table, keyColumns, valueColumns, BackfillPageSize, cursor);
 
             var page = new List<Dictionary<string, object?>>(BackfillPageSize);
             await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, selectSql, cancellationToken))
@@ -1654,29 +1658,45 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 page.Add(new Dictionary<string, object?>(row, StringComparer.Ordinal));
             }
 
+            // Write the whole page in ONE CrateDB bulk (one prepared UPDATE, one round-trip) instead
+            // of N individual UPDATE statements — the per-statement cost dominated the backfill
+            // (~500x on 4k rows measured). Each computed value is still evaluated per row in .NET.
+            var updateSql = ComputedColumnBackfillSqlBuilder.BuildBulkUpdate(table, targetPhysical, keyColumns);
+            var argumentSets = new List<IReadOnlyList<object?>>(page.Count);
             foreach (var row in page)
             {
                 ApplyComputedColumns(row, plan);
                 row.TryGetValue(targetPhysical, out var value);
 
-                var keyPredicates = new List<(string Column, object? Value)>(keyColumns.Count);
-                foreach (var key in keyColumns)
+                // Positional args: [computedValue, key0, key1, …] to match BuildBulkUpdate's $1..$n.
+                var args = new object?[keyColumns.Count + 1];
+                args[0] = value;
+                for (var k = 0; k < keyColumns.Count; k++)
                 {
-                    row.TryGetValue(key, out var keyValue);
-                    keyPredicates.Add((key, keyValue));
+                    row.TryGetValue(keyColumns[k], out var keyValue);
+                    args[k + 1] = keyValue;
                 }
 
-                var updateSql = ComputedColumnBackfillSqlBuilder.BuildUpdate(
-                    table, new[] { (targetPhysical, value) }, keyPredicates);
-                await _databaseClient.ExecuteNonQueryAsync(_tenantId, updateSql, cancellationToken);
+                argumentSets.Add(args);
             }
+
+            await _databaseClient.ExecuteBulkAsync(_tenantId, updateSql, argumentSets, cancellationToken);
 
             if (page.Count < BackfillPageSize)
             {
                 break;
             }
 
-            offset += BackfillPageSize;
+            // Advance the cursor to the last row's key so the next page starts strictly after it.
+            var lastRow = page[^1];
+            var nextCursor = new List<(string Column, object? Value)>(keyColumns.Count);
+            foreach (var key in keyColumns)
+            {
+                lastRow.TryGetValue(key, out var keyValue);
+                nextCursor.Add((key, keyValue));
+            }
+
+            cursor = nextCursor;
         }
 
         // Make the backfilled cells visible to subsequent reads (CrateDB applies writes to the read

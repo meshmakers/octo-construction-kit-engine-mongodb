@@ -64,14 +64,20 @@ public class CrateDbComputedColumnBackfillTests
         await Task.CompletedTask;
     }
 
-    private List<string> CaptureUpdates()
+    private List<(string Sql, IReadOnlyList<IReadOnlyList<object?>> Args)> CaptureBulk()
     {
-        var executed = new List<string>();
-        A.CallTo(() => _db.ExecuteNonQueryAsync("tenant-x", A<string>._, A<CancellationToken>._))
-            .Invokes(call => executed.Add(call.GetArgument<string>(1)!))
-            .Returns(1);
+        var executed = new List<(string, IReadOnlyList<IReadOnlyList<object?>>)>();
+        A.CallTo(() => _db.ExecuteBulkAsync("tenant-x", A<string>._,
+                A<IReadOnlyList<IReadOnlyList<object?>>>._, A<CancellationToken>._))
+            .Invokes(call => executed.Add((
+                call.GetArgument<string>(1)!,
+                call.GetArgument<IReadOnlyList<IReadOnlyList<object?>>>(2)!)))
+            .Returns(Task.CompletedTask);
         return executed;
     }
+
+    private static bool DoubleEq(double expected, object? actual) =>
+        actual is double d && Math.Abs(d - expected) < 1e-9;
 
     private static ArchiveSnapshot RawSnapshot(params CkArchiveColumnSpec[] columns) =>
         new(Archive, Type, CkArchiveStatus.Activated, "energy", columns);
@@ -97,15 +103,19 @@ public class CrateDbComputedColumnBackfillTests
                     ["activepower"] = 5.0, ["apparentpower"] = 10.0,
                 }));
 
-        var updates = CaptureUpdates();
+        var bulk = CaptureBulk();
 
         await NewSut().BackfillComputedColumnAsync(snapshot, "powerFactor", CancellationToken.None);
 
-        Assert.Equal(2, updates.Count);
-        Assert.Contains(updates, u => u.Contains("\"powerfactor\" = 0.8") && u.Contains("\"rtid\" = 'rt-1'"));
-        Assert.Contains(updates, u => u.Contains("\"powerfactor\" = 0.5") && u.Contains("\"rtid\" = 'rt-2'"));
-        // Raw archive ⇒ keyed by timestamp + rtid + cktypeid.
-        Assert.All(updates, u => Assert.Contains("\"timestamp\" = '2026-06-28T12:00:00.000Z'", u));
+        var (sql, args) = Assert.Single(bulk);
+        // Parameterised single-target update: value = $1, then the raw key (timestamp, rtid, cktypeid).
+        Assert.Contains(
+            "SET \"powerfactor\" = $1 WHERE \"timestamp\" = $2 AND \"rtid\" = $3 AND \"cktypeid\" = $4", sql);
+        Assert.Equal(2, args.Count);
+        // Positional args: [computedValue, timestamp, rtid, cktypeid].
+        Assert.Contains(args, a => DoubleEq(0.8, a[0]) && (string?)a[2] == "rt-1");
+        Assert.Contains(args, a => DoubleEq(0.5, a[0]) && (string?)a[2] == "rt-2");
+        Assert.All(args, a => Assert.Equal(Ts, (DateTime)a[1]!));
         // Reads must complete before writes; the backfill refreshes the table so writes become visible.
         A.CallTo(() => _db.RefreshArchiveTableAsync("tenant-x", A<string>._)).MustHaveHappenedOnceExactly();
     }
@@ -125,11 +135,13 @@ public class CrateDbComputedColumnBackfillTests
                 ["activepower"] = 8.0, ["apparentpower"] = null,
             }));
 
-        var updates = CaptureUpdates();
+        var bulk = CaptureBulk();
 
         await NewSut().BackfillComputedColumnAsync(snapshot, "powerFactor", CancellationToken.None);
 
-        Assert.Contains("\"powerfactor\" = NULL", Assert.Single(updates));
+        // NULL operand ⇒ null computed cell (never throws); args[0] is the computed value.
+        var (_, args) = Assert.Single(bulk);
+        Assert.Null(Assert.Single(args)[0]);
     }
 
     [Fact]
@@ -147,15 +159,20 @@ public class CrateDbComputedColumnBackfillTests
                 ["rtid"] = "rt-1", ["cktypeid"] = "EnergyMeter", ["energy"] = 4.0,
             }));
 
-        var updates = CaptureUpdates();
+        var bulk = CaptureBulk();
 
         await NewSut().BackfillComputedColumnAsync(snapshot, "doubled", CancellationToken.None);
 
-        var update = Assert.Single(updates);
-        Assert.Contains("\"doubled\" = 8", update);
-        Assert.Contains("\"window_start\" = '2026-06-28T12:00:00.000Z'", update);
-        Assert.Contains("\"window_end\" = '2026-06-28T13:00:00.000Z'", update);
-        Assert.DoesNotContain("\"timestamp\"", update);
+        var (sql, args) = Assert.Single(bulk);
+        // Time-range archive ⇒ keyed by (window_start, window_end, rtid, cktypeid), not timestamp.
+        Assert.Contains(
+            "SET \"doubled\" = $1 WHERE \"window_start\" = $2 AND \"window_end\" = $3 AND \"rtid\" = $4 AND \"cktypeid\" = $5",
+            sql);
+        Assert.DoesNotContain("\"timestamp\"", sql);
+        var set = Assert.Single(args);
+        Assert.True(DoubleEq(8.0, set[0]));                 // 4 * 2
+        Assert.Equal(Ts, (DateTime)set[1]!);                // window_start
+        Assert.Equal(Ts.AddHours(1), (DateTime)set[2]!);    // window_end
     }
 
     [Fact]
@@ -181,24 +198,25 @@ public class CrateDbComputedColumnBackfillTests
                 ["timestamp"] = Ts, ["rtid"] = "rt-1", ["cktypeid"] = "EnergyMeter", ["activepower"] = 400.0,
             }));
 
-        var updates = CaptureUpdates();
+        var bulk = CaptureBulk();
 
         await NewSut().BackfillComputedColumnAsync(snapshot, "powerFactor", CancellationToken.None);
 
-        var update = Assert.Single(updates);
-        Assert.Contains("\"powerfactor__v1\" = 2", update);  // 400 / 200
-        Assert.DoesNotContain("\"powerfactor\" =", update);   // active column untouched
+        var (sql, args) = Assert.Single(bulk);
+        Assert.Contains("SET \"powerfactor__v1\" = $1", sql);   // pending versioned column
+        Assert.DoesNotContain("\"powerfactor\" = $1", sql);      // active column untouched
+        Assert.True(DoubleEq(2.0, Assert.Single(args)[0]));      // 400 / 200
     }
 
     [Fact]
     public async Task Backfill_UnknownColumn_IsNoOp()
     {
         var snapshot = RawSnapshot(Ing("ActivePower"));
-        var updates = CaptureUpdates();
+        var bulk = CaptureBulk();
 
         await NewSut().BackfillComputedColumnAsync(snapshot, "doesNotExist", CancellationToken.None);
 
-        Assert.Empty(updates);
+        Assert.Empty(bulk);
         A.CallTo(() => _db.StreamRawRowsAsync(A<string>._, A<string>._, A<CancellationToken>._))
             .MustNotHaveHappened();
     }

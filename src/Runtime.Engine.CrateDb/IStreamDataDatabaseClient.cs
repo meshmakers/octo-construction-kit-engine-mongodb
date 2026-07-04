@@ -59,6 +59,15 @@ public interface IStreamDataDatabaseClient
     Task<int> ExecuteNonQueryAsync(string tenantId, string sql, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Executes one parameterised non-query statement once per argument set in a single CrateDB
+    /// bulk operation (one prepared statement, one round-trip). Used by the computed-column backfill
+    /// to write a whole page's rows at once — CrateDB executes the bulk far cheaper than N individual
+    /// statements. Positional parameters (<c>$1, $2, …</c>) bind each set in order.
+    /// </summary>
+    Task ExecuteBulkAsync(string tenantId, string parameterizedSql,
+        IReadOnlyList<IReadOnlyList<object?>> argumentSets, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Forces CrateDB to apply pending inserts to the read path immediately for the given archive
     /// table. CrateDB applies inserts asynchronously (~1s default) so callers that need strict
     /// read-after-write consistency must invoke this after a bulk insert. Concept §15: callers opt
