@@ -22,7 +22,6 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
 using IMongoTenantBackupService = Meshmakers.Octo.Runtime.Contracts.MongoDb.Services.ITenantBackupService;
-using IBlueprintBackupService = Meshmakers.Octo.Runtime.Contracts.Blueprints.ITenantBackupService;
 
 // ReSharper disable once CheckNamespace
 namespace Microsoft.Extensions.DependencyInjection;
@@ -71,7 +70,6 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services.AddFormulaEngine();
         builder.Services.AddTransient<IRepositoryOpsService, RepositoryOpsService>();
         builder.Services.AddTransient<IMongoTenantBackupService, TenantBackupService>();
-        builder.Services.AddTransient<IBlueprintBackupService, MongoBlueprintBackupService>();
 
         builder.Services.AddSingleton<IUserRepositoryAccess, UserRepositoryAccess>();
         builder.Services.AddSingleton<IAdminRepositoryAccess, AdminRepositoryAccess>();
@@ -136,10 +134,6 @@ public static class RuntimeEngineBuilderExtensions
     /// <c>System/BlueprintInstallation</c> entities inside the tenant's own
     /// runtime repository, so the rows live in the same Mongo database as the
     /// seed entities they describe (no cross-tenant writes to the system DB).
-    ///
-    /// The MongoDb-specific full-database backup service
-    /// (<see cref="IBlueprintBackupService"/>) is registered separately by
-    /// <see cref="AddMongoDbRuntimeRepository"/>.
     ///
     /// You must also call <c>AddBlueprints()</c> from the Engine assembly to
     /// register <c>IBlueprintService</c> and related services.

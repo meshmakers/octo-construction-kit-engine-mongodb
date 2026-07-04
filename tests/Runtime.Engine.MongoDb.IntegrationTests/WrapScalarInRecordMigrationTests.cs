@@ -4,7 +4,6 @@ using Meshmakers.Octo.ConstructionKit.Contracts.ModelCatalogs.DataTransferObject
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Engine.Serialization;
 using Meshmakers.Octo.Runtime.Contracts;
-using Meshmakers.Octo.Runtime.Contracts.Blueprints;
 using Meshmakers.Octo.Runtime.Contracts.CkModelMigrations;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
@@ -71,7 +70,7 @@ public class WrapScalarInRecordMigrationTests(MigrationSupportFixture fixture)
         // Act
         var result = await migrationService.MigrateAsync(
             systemContext.TenantId, SourceModel, TargetModel,
-            new CkMigrationOptions { CreateBackup = false },
+            new CkMigrationOptions(),
             TestContext.Current.CancellationToken);
 
         // Assert: migration succeeded and the fixture entity was rewritten.
@@ -168,7 +167,7 @@ public class WrapScalarInRecordMigrationTests(MigrationSupportFixture fixture)
         // Act
         var result = await migrationService.MigrateAsync(
             systemContext.TenantId, SourceModel, TargetModel,
-            new CkMigrationOptions { CreateBackup = false },
+            new CkMigrationOptions(),
             TestContext.Current.CancellationToken);
 
         // Assert: succeeded; the fixture entity was not touched (rtChangedDateTime stable).
@@ -243,9 +242,7 @@ public class WrapScalarInRecordMigrationTests(MigrationSupportFixture fixture)
         // separate TestCkModelV3 with a real YAML on disk just for two assertions. Every
         // other dependency is real: the real Mongo IRuntimeRepositoryProvider, the real
         // audit-trail forwarder (so a regression in the audit pipeline would surface here),
-        // the real parser. We pass a no-op backup service because the test runs with
-        // CreateBackup = false; supplying a real one would force MongoDump availability in
-        // the test environment.
+        // the real parser.
         var fakeContentProvider = A.Fake<ICkMigrationContentProvider>();
         A.CallTo(() => fakeContentProvider.HasMigrationsAsync(TargetModel, A<CancellationToken>._))
             .Returns(true);
@@ -271,12 +268,10 @@ public class WrapScalarInRecordMigrationTests(MigrationSupportFixture fixture)
         var repositoryProvider = fixture.GetService<IRuntimeRepositoryProvider>();
         var auditTrail = fixture.GetService<ICkModelImportAuditTrail>();
         var catalogService = fixture.GetService<ICatalogService>();
-        var backupService = A.Fake<ITenantBackupService>();
         var parser = new CkMigrationParser();
 
         return new CkModelMigrationService(
             parser,
-            backupService,
             fakeContentProvider,
             repositoryProvider,
             catalogService,

@@ -28,14 +28,6 @@ public class BlueprintFixture : SystemFixture
     }
 
     /// <summary>
-    /// Gets the backup service for blueprints from DI
-    /// </summary>
-    public ITenantBackupService GetBackupService()
-    {
-        return GetService<ITenantBackupService>();
-    }
-
-    /// <summary>
     /// Gets the tenant blueprint installations service from DI.
     /// </summary>
     public ITenantBlueprintInstallations GetBlueprintInstallations()

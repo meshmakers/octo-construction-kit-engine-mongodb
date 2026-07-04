@@ -22,7 +22,6 @@ services.AddRuntimeEngine()
 
 The method `AddMongoBlueprintSupport()` registers:
 - `ITenantBlueprintHistory` → `MongoTenantBlueprintHistory`
-- `ITenantBackupService` → `MongoBlueprintBackupService`
 
 ## Creating a Tenant with Blueprint
 
@@ -396,42 +395,6 @@ public class TenantBlueprintInfo
 
     // Checksum of seed data
     public string? SeedDataChecksum { get; set; }
-}
-```
-
-## Backup Service for Blueprints
-
-### ITenantBackupService
-
-Backups are automatically created before blueprint updates:
-
-```csharp
-public class BackupService
-{
-    private readonly ITenantBackupService _backupService;
-
-    public BackupService(ITenantBackupService backupService)
-    {
-        _backupService = backupService;
-    }
-
-    /// <summary>
-    /// Lists all backups of a tenant
-    /// </summary>
-    public async Task<IReadOnlyList<BackupInfo>> ListBackupsAsync(string tenantId)
-    {
-        return await _backupService.ListBackupsAsync(tenantId);
-    }
-
-    /// <summary>
-    /// Restores a backup
-    /// </summary>
-    public async Task<BackupRestoreResult> RestoreBackupAsync(
-        string tenantId,
-        string backupId)
-    {
-        return await _backupService.RestoreBackupAsync(tenantId, backupId);
-    }
 }
 ```
 

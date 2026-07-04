@@ -68,7 +68,6 @@ public class BlueprintMigrationExecutorIntegrationTests(BlueprintServiceFixture 
                 new BlueprintMigrationExecutionOptions
                 {
                     DryRun = false,
-                    CreateBackup = false,
                     BlueprintSource = TestBpV1.FullName
                 }, ct);
 
@@ -121,7 +120,6 @@ public class BlueprintMigrationExecutorIntegrationTests(BlueprintServiceFixture 
                 new BlueprintMigrationExecutionOptions
                 {
                     DryRun = false,
-                    CreateBackup = false,
                     BlueprintSource = TestBpV1.FullName
                 }, ct);
 
@@ -173,7 +171,6 @@ public class BlueprintMigrationExecutorIntegrationTests(BlueprintServiceFixture 
                 new BlueprintMigrationExecutionOptions
                 {
                     DryRun = true,
-                    CreateBackup = false,
                     BlueprintSource = TestBpV1.FullName
                 }, ct);
 
@@ -228,7 +225,6 @@ public class BlueprintMigrationExecutorIntegrationTests(BlueprintServiceFixture 
                 new BlueprintMigrationExecutionOptions
                 {
                     DryRun = false,
-                    CreateBackup = false,
                     BlueprintSource = TestBpV1.FullName
                 }, ct);
 
@@ -293,7 +289,6 @@ public class BlueprintMigrationExecutorIntegrationTests(BlueprintServiceFixture 
                 new BlueprintMigrationExecutionOptions
                 {
                     DryRun = false,
-                    CreateBackup = false,
                     BlueprintSource = TestBpV1.FullName
                 }, ct);
 
@@ -353,7 +348,6 @@ public class BlueprintMigrationExecutorIntegrationTests(BlueprintServiceFixture 
                 new BlueprintMigrationExecutionOptions
                 {
                     DryRun = false,
-                    CreateBackup = false,
                     BlueprintSource = TestBpV1.FullName
                 }, ct);
 

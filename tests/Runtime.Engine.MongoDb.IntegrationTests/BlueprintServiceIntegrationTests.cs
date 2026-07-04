@@ -418,48 +418,6 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
     }
 
     [Fact]
-    public async Task Rollback_AfterUpdate_RestoresPreviousState()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var blueprintService = _fixture.GetBlueprintService();
-        var backupService = _fixture.GetBackupService();
-        var tenantId = await _fixture.CreateTestTenantAsync("rollback");
-
-        try
-        {
-            await blueprintService.ApplyBlueprintAsync(tenantId, TestBpV1, force: false, ct);
-
-            // Create an explicit backup the test can roll back to.
-            var backup = await backupService.CreateBackupAsync(tenantId, "before update", ct);
-
-            var update = await blueprintService.ApplyUpdateAsync(
-                tenantId, TestBpV2, BlueprintUpdateMode.Full,
-                new BlueprintUpdateOptions { CreateBackup = false }, ct);
-            update.Success.Should().BeTrue();
-
-            (await QueryAllCustomersAsync(tenantId)).Should().HaveCount(2, "post-update: Alpha + Gamma");
-
-            var restore = await blueprintService.RollbackAsync(tenantId, backup.BackupId, ct);
-            restore.Success.Should().BeTrue();
-
-            var customers = await QueryAllCustomersAsync(tenantId);
-            customers.Should().HaveCount(2, "rolled back to TestBp-1.0.0: Alpha + Beta");
-            customers.Should().Contain(c => c.RtWellKnownName == "Alpha");
-            customers.Should().Contain(c => c.RtWellKnownName == "Beta");
-            customers.Should().NotContain(c => c.RtWellKnownName == "Gamma");
-
-            // After rollback the v1 blueprint id is on Alpha (v2's stamp is gone).
-            customers.Single(c => c.RtWellKnownName == "Alpha")
-                .GetAttributeStringValueOrDefault("RtBlueprintSource")
-                .Should().Be(TestBpV1.FullName, "rollback restored Alpha's v1 tag");
-        }
-        finally
-        {
-            await _fixture.DropTenantAsync(tenantId);
-        }
-    }
-
-    [Fact]
     public async Task ApplyBlueprint_WithDependency_InstallsBothInOrderWithCorrectFlags()
     {
         var ct = TestContext.Current.CancellationToken;

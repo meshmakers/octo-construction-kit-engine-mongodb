@@ -521,7 +521,6 @@ This works for **any** CK model, not just the System model.
 |-------|-------------|
 | `MongoRuntimeRepositoryProvider` | Implements `IRuntimeRepositoryProvider` using `ISystemContext` |
 | `MongoTenantBlueprintHistory` | MongoDB-based blueprint history storage |
-| `MongoBlueprintBackupService` | MongoDB-specific backup implementation |
 
 ## StreamData: Archives and Rollups
 

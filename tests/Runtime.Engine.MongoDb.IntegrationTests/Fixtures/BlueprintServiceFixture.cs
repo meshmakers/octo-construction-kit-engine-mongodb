@@ -13,7 +13,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 /// ImportTestCkModelFixture (which loads the Test CK model into the system
 /// tenant) and adds:
 /// <list type="bullet">
-/// <item><description>MongoDB blueprint support (history + backup + provider)</description></item>
+/// <item><description>MongoDB blueprint support (history + provider)</description></item>
 /// <item><description>A LocalFileSystemBlueprintCatalog pointed at
 /// <c>./TestBlueprints/</c> in the test output directory</description></item>
 /// </list>
@@ -71,8 +71,6 @@ public class BlueprintServiceFixture : ImportTestCkModelFixture
     public IBlueprintCatalogManager GetBlueprintCatalogManager() => GetService<IBlueprintCatalogManager>();
 
     public ITenantBlueprintHistory GetBlueprintHistory() => GetService<ITenantBlueprintHistory>();
-
-    public ITenantBackupService GetBackupService() => GetService<ITenantBackupService>();
 
     public IRuntimeRepositoryProvider GetRuntimeRepositoryProvider() => GetService<IRuntimeRepositoryProvider>();
 
