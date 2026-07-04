@@ -61,7 +61,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
     private async Task<List<DataPointDto>> GetDataInternalAsync(string tenantId, string query)
     {
-        await using var connection = await CreateConnectionAsync(tenantId);
+        await using var lease = await LeaseConnectionAsync(tenantId);
+        var connection = lease.Connection;
 
         var queryResult = await connection.QueryAsync(query);
 
@@ -134,7 +135,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // multi-GB archive export never materialises the whole table. The connection stays open for
         // the life of the enumeration (held by `await using`), which is why this is a per-page query
         // in the caller's keyset loop rather than one giant cursor — a page is small and bounded.
-        await using var connection = await CreateConnectionAsync(tenantId, cancellationToken);
+        await using var lease = await LeaseConnectionAsync(tenantId, cancellationToken);
+        var connection = lease.Connection;
         var rows = connection.QueryUnbufferedAsync(query);
         await foreach (var row in rows.WithCancellation(cancellationToken))
         {
@@ -152,7 +154,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     {
         return await _resilience.ExecuteAsync(async _ =>
         {
-            await using var connection = await CreateConnectionAsync(tenantId);
+            await using var lease = await LeaseConnectionAsync(tenantId);
+            var connection = lease.Connection;
             return await connection.ExecuteScalarAsync<long>(countQuery);
         });
     }
@@ -179,7 +182,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             var end = Math.Min(offset + MaxRowsPerInsertBatch, d.Length);
             await _resilience.ExecuteAsync(async _ =>
             {
-                await using var connection = await CreateConnectionAsync(tenantId);
+                await using var lease = await LeaseConnectionAsync(tenantId);
+                var connection = lease.Connection;
                 for (var i = start; i < end; i++)
                 {
                     await ExecuteSingleInsertAsync(connection, sql, d[i], userColumnNames);
@@ -192,7 +196,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     {
         await _resilience.ExecuteAsync(async _ =>
         {
-            await using var connection = await CreateConnectionAsync(tenantId);
+            await using var lease = await LeaseConnectionAsync(tenantId);
+            var connection = lease.Connection;
             var sql = BuildSingleRowInsertSql(qualifiedTable, userColumnNames);
             await ExecuteSingleInsertAsync(connection, sql, datapoint, userColumnNames);
         });
@@ -216,7 +221,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             var end = Math.Min(offset + MaxRowsPerInsertBatch, d.Length);
             await _resilience.ExecuteAsync(async _ =>
             {
-                await using var connection = await CreateConnectionAsync(tenantId);
+                await using var lease = await LeaseConnectionAsync(tenantId);
+                var connection = lease.Connection;
                 for (var i = start; i < end; i++)
                 {
                     await ExecuteSingleTimeRangeInsertAsync(connection, sql, d[i], userColumnNames);
@@ -322,8 +328,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     {
         await _resilience.ExecuteAsync(async _ =>
         {
-            await using var connection = await CreateConnectionAsync(tenantId);
-            await connection.ExecuteAsync(string.Format(Queries.RefreshTable, qualifiedTable));
+            await using var lease = await LeaseConnectionAsync(tenantId);
+            await lease.Connection.ExecuteAsync(string.Format(Queries.RefreshTable, qualifiedTable));
         });
     }
 
@@ -336,11 +342,72 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
         return await _resilience.ExecuteAsync(async _ =>
         {
-            await using var connection = await CreateConnectionAsync(tenantId, cancellationToken);
+            await using var lease = await LeaseConnectionAsync(tenantId, cancellationToken);
             // Dapper's ExecuteAsync returns the number of affected rows (Npgsql surfaces the
             // CrateDB `INSERT 0 N` / `UPDATE N` row count via NpgsqlCommand.ExecuteNonQuery).
-            return await connection.ExecuteAsync(sql);
+            return await lease.Connection.ExecuteAsync(sql);
         });
+    }
+
+    /// <summary>
+    /// Leases a CrateDB connection whose disposal swallows the benign reset-time <c>ROLLBACK</c>
+    /// (see <see cref="DisposeConnectionSafelyAsync"/>). Every CrateDB access opens its connection
+    /// through this so a failed statement surfaces its real error instead of being masked by the
+    /// dispose-time ROLLBACK.
+    /// </summary>
+    private async ValueTask<ConnectionLease> LeaseConnectionAsync(string tenantId,
+        CancellationToken cancellationToken = default)
+        => new ConnectionLease(await CreateConnectionAsync(tenantId, cancellationToken), this);
+
+    /// <summary>
+    /// Disposes a CrateDB connection, swallowing the benign <c>ROLLBACK</c> that Npgsql emits while
+    /// resetting the connection on close/return-to-pool. CrateDB has no transactions and auto-commits
+    /// every statement, but its Postgres-protocol implementation leaves the connection flagged
+    /// "in transaction", so Npgsql's <c>Reset()</c> sends a <c>ROLLBACK</c> — which CrateDB rejects
+    /// with <c>XX000 "mismatched input 'ROLLBACK'"</c>. The statement itself already committed, so this
+    /// dispose-time error is cosmetic. Worse, it MASKS the real error: on a failed statement the
+    /// dispose-time ROLLBACK exception replaces the genuine execution exception, so the caller only
+    /// ever saw the confusing ROLLBACK. This stalled rollup aggregation indefinitely — a rollup whose
+    /// source CrateDB table was missing failed every tick, but the logged error was the masking
+    /// ROLLBACK rather than the real <c>42P01 Relation … unknown</c> (voest
+    /// <c>energy-measurements-daily</c>). <c>No Reset On Close</c> only suppresses <c>DISCARD ALL</c>,
+    /// not this in-transaction rollback. Any other dispose error is rethrown.
+    /// </summary>
+    private async Task DisposeConnectionSafelyAsync(NpgsqlConnection connection)
+    {
+        try
+        {
+            await connection.DisposeAsync();
+        }
+        catch (PostgresException ex) when (IsBenignCrateResetRollback(ex))
+        {
+            _logger.LogDebug(ex,
+                "Ignored benign CrateDB reset-time ROLLBACK on connection dispose (CrateDB has no "
+                + "transactions; the statement already auto-committed).");
+        }
+    }
+
+    /// <summary>
+    /// True for the specific "CrateDB rejected the reset-time ROLLBACK" error
+    /// (<c>XX000</c> / <c>mismatched input 'ROLLBACK'</c>) so only that benign case is swallowed by
+    /// <see cref="DisposeConnectionSafelyAsync"/> — every other failure still surfaces.
+    /// </summary>
+    private static bool IsBenignCrateResetRollback(PostgresException ex) =>
+        string.Equals(ex.SqlState, "XX000", StringComparison.Ordinal)
+        && ex.MessageText.Contains("ROLLBACK", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// An <see cref="IAsyncDisposable"/> lease over a CrateDB <see cref="NpgsqlConnection"/> whose
+    /// disposal routes through <see cref="DisposeConnectionSafelyAsync"/>. Callers use
+    /// <c>await using var lease = await LeaseConnectionAsync(...)</c> and access
+    /// <see cref="Connection"/>.
+    /// </summary>
+    private sealed class ConnectionLease(NpgsqlConnection connection, CrateDatabaseClient owner)
+        : IAsyncDisposable
+    {
+        public NpgsqlConnection Connection { get; } = connection;
+
+        public async ValueTask DisposeAsync() => await owner.DisposeConnectionSafelyAsync(Connection);
     }
 
     public async Task<IReadOnlyList<string>> ListTablesInTenantSchemaAsync(string tenantId)
@@ -348,7 +415,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         return await _resilience.ExecuteAsync(async _ =>
         {
             var schema = TenantSchema.SchemaName(tenantId);
-            await using var connection = await CreateConnectionAsync(tenantId);
+            await using var lease = await LeaseConnectionAsync(tenantId);
+            var connection = lease.Connection;
             var rows = await connection.QueryAsync<string>(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = @schema",
                 new { schema });
@@ -370,7 +438,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         return await _resilience.ExecuteAsync(async _ =>
         {
             var schema = TenantSchema.SchemaName(tenantId);
-            await using var connection = await CreateConnectionAsync(tenantId, cancellationToken);
+            await using var lease = await LeaseConnectionAsync(tenantId, cancellationToken);
+            var connection = lease.Connection;
 
             // Two single-round-trip queries against the introspection surface, then merged in
             // memory by table name. We do NOT join sys.shards with sys.health server-side because
@@ -418,7 +487,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     {
         await _resilience.ExecuteAsync(async _ =>
         {
-            await using var connection = await CreateConnectionAsync(tenantId);
+            await using var lease = await LeaseConnectionAsync(tenantId);
+            var connection = lease.Connection;
             var schema = TenantSchema.SchemaName(tenantId);
 
             // CrateDB has no explicit DROP SCHEMA. Drop every table the project owns inside the
@@ -445,7 +515,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
         await _resilience.ExecuteAsync(async _ =>
         {
-            await using var connection = await CreateConnectionAsync(tenantId);
+            await using var lease = await LeaseConnectionAsync(tenantId);
+            var connection = lease.Connection;
             await connection.ExecuteAsync(sql);
         });
     }
@@ -467,7 +538,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             // without a rebuild (AB#4278).
             await _resilience.ExecuteAsync(async _ =>
             {
-                await using var connection = await CreateConnectionAsync("default");
+                await using var lease = await LeaseConnectionAsync("default");
+                var connection = lease.Connection;
                 await connection.ExecuteAsync("SELECT 1");
             });
             return HealthCheckResult.Healthy("CrateDB is healthy");
