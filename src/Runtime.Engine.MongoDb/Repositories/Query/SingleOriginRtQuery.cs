@@ -115,6 +115,32 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         }
     }
 
+    /// <summary>
+    /// Resolves the inbound association graph and the reached entity type for a navigation pair.
+    /// With reached-type path semantics (AB#4323) the pair's TargetCkTypeId addresses the
+    /// association's ORIGIN side (or a subtype of it) — exactly the entities the navigation loads,
+    /// so the lookup narrows to that subtype's derived set. Legacy pairs carried the queried type
+    /// itself (the In graph's declared TargetCkTypeId); those fall back to the whole origin-side
+    /// hierarchy of the association.
+    /// </summary>
+    private (CkTypeAssociationGraph? Association, CkTypeGraph ReachedCkTypeGraph) ResolveInboundNavigation(
+        CkTypeGraph originCkTypeGraph, NavigationPair roleIdDirectionPair, List<CkId<CkTypeId>> baseCkTypeIds,
+        CkTypeGraph targetCkTypeGraph)
+    {
+        var association = originCkTypeGraph.Associations.In.All.FirstOrDefault(a =>
+            a.CkRoleId.Equals(roleIdDirectionPair.CkRoleId) && baseCkTypeIds.Contains(a.OriginCkTypeId));
+        if (association != null)
+        {
+            return (association, targetCkTypeGraph);
+        }
+
+        association = originCkTypeGraph.Associations.In.All.FirstOrDefault(a =>
+            a.CkRoleId.Equals(roleIdDirectionPair.CkRoleId) && baseCkTypeIds.Contains(a.TargetCkTypeId));
+        return association == null
+            ? (null, targetCkTypeGraph)
+            : (association, _ckCacheService.GetCkType(_tenantId, association.OriginCkTypeId));
+    }
+
     private void CreateInnerNavigation(NavigationPair roleIdDirectionPair, CkTypeGraph originCkTypeGraph,
         List<IPipelineStageDefinition> stageDefinitions, bool filterEntitiesWithoutAssociations = true)
     {
@@ -129,8 +155,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         // We ensure that the association role exists.
         // Because navigation properties are centralized in the definition, all
         // associations with the same role id have the same navigation property name.
-        var association = originCkTypeGraph.Associations.In.All.FirstOrDefault(a =>
-            baseCkTypeIds.Contains(a.TargetCkTypeId) && a.CkRoleId.Equals(roleIdDirectionPair.CkRoleId));
+        CkTypeAssociationGraph? association;
 
         // For the association lookup filter, we need to match the correct CkTypeId field:
         // Inbound: join on targetRtId, filter by originCkTypeId (the type that created the association)
@@ -151,12 +176,12 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                 break;
             case GraphDirections.Inbound:
                 ckTypeIdFilterField = "originCkTypeId";
-                // For inbound, the originCkTypeId in the association document is the type that created
-                // the association (e.g., AccountingDocument), not the target type in the path.
-                var originOfAssociationGraph = _ckCacheService.GetCkType(_tenantId, association!.OriginCkTypeId);
-                ckTypeIdsToMatch = originOfAssociationGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
-                // Use the origin type's graph for the inner entity lookup collection
-                targetCkTypeGraph = originOfAssociationGraph;
+                var (inboundAssociation, reachedCkTypeGraph) = ResolveInboundNavigation(originCkTypeGraph,
+                    roleIdDirectionPair, baseCkTypeIds, targetCkTypeGraph);
+                association = inboundAssociation;
+                ckTypeIdsToMatch = reachedCkTypeGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
+                // Use the reached type's graph for the inner entity lookup collection
+                targetCkTypeGraph = reachedCkTypeGraph;
                 break;
             default:
                 throw OperationFailedException.GraphDirectionUnsupported(roleIdDirectionPair.Direction);
@@ -303,8 +328,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
 
         var innerLocalFieldRtId = (FieldDefinition<RtAssociation, string>)"originRtId";
         var foreignFieldRtId = (FieldDefinition<RtAssociation>)"targetRtId";
-        var association = originCkTypeGraph.Associations.In.All.FirstOrDefault(a =>
-            baseCkTypeIds.Contains(a.TargetCkTypeId) && a.CkRoleId.Equals(roleIdDirectionPair.CkRoleId));
+        CkTypeAssociationGraph? association;
 
         FieldDefinition<RtAssociation, RtCkId<CkTypeId>> ckTypeIdFilterField;
         IEnumerable<RtCkId<CkTypeId>> ckTypeIdsToMatch;
@@ -322,9 +346,11 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                 break;
             case GraphDirections.Inbound:
                 ckTypeIdFilterField = "originCkTypeId";
-                var originOfAssocGraph = _ckCacheService.GetCkType(_tenantId, association!.OriginCkTypeId);
-                ckTypeIdsToMatch = originOfAssocGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
-                targetCkTypeGraph = originOfAssocGraph;
+                var (inboundAssociation, reachedCkTypeGraph) = ResolveInboundNavigation(originCkTypeGraph,
+                    roleIdDirectionPair, baseCkTypeIds, targetCkTypeGraph);
+                association = inboundAssociation;
+                ckTypeIdsToMatch = reachedCkTypeGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
+                targetCkTypeGraph = reachedCkTypeGraph;
                 break;
             default:
                 throw OperationFailedException.GraphDirectionUnsupported(roleIdDirectionPair.Direction);
@@ -448,8 +474,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         baseCkTypeIds.Add(targetCkTypeGraph.CkTypeId);
 
         var foreignFieldRtId = (FieldDefinition<RtAssociation>)"targetRtId";
-        var association = originCkTypeGraph.Associations.In.All.FirstOrDefault(a =>
-            baseCkTypeIds.Contains(a.TargetCkTypeId) && a.CkRoleId.Equals(roleIdDirectionPair.CkRoleId));
+        CkTypeAssociationGraph? association;
 
         // For the count filter, we need to match the correct CkTypeId field in the association document.
         // Inbound: we join on targetRtId, filter by originCkTypeId (the type that created the association)
@@ -471,9 +496,10 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
             case GraphDirections.Inbound:
                 // Inbound: filter by originCkTypeId in association = the origin type (who created the association)
                 ckTypeIdFilterField = "originCkTypeId";
-                // The origin type is stored in the CkTypeAssociationGraph.OriginCkTypeId
-                var originOfAssociationGraph = _ckCacheService.GetCkType(_tenantId, association!.OriginCkTypeId);
-                ckTypeIdsToMatch = originOfAssociationGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
+                var (inboundAssociation, reachedCkTypeGraph) = ResolveInboundNavigation(originCkTypeGraph,
+                    roleIdDirectionPair, baseCkTypeIds, targetCkTypeGraph);
+                association = inboundAssociation;
+                ckTypeIdsToMatch = reachedCkTypeGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
                 break;
             default:
                 throw OperationFailedException.GraphDirectionUnsupported(roleIdDirectionPair.Direction);
