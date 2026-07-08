@@ -71,7 +71,11 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
                 .Select(a => new CkRollupAggregationSpec(
                     a.SourcePath!,
                     (CkRollupFunction)(int)a.Function,
-                    a.TargetColumnName))
+                    a.TargetColumnName,
+                    // AB#4336: without the comparison value a StateDuration spec renders "= ''"
+                    // in the recompute path (this shared snapshot feeds the recompute executor) —
+                    // found by TimeWeightedAggregationTests.Recompute_Reproduces….
+                    a.ComparisonValue))
                 .ToList();
             // Aggregate columns are derived from the aggregation specs; any computed columns the
             // rollup also declares (concept §11) are appended after them. The generated aggregate
