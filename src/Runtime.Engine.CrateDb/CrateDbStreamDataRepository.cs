@@ -584,6 +584,16 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(snapshot);
 
+        // AB#4336 §6.2: TimeWeightedAvg over a raw (event-based) archive needs the LOCF statement —
+        // the standard single-scan builder cannot express the carry / interval weighting. Routed
+        // before the query builder is assembled; plain columns ride along in the same statement.
+        if (!snapshot.UsesWindowedStorage
+            && options.AggregationColumns.Any(c => c.Function == AggregationFunction.TimeWeightedAverage))
+        {
+            return await ExecuteRawTimeWeightedAggregationAsync(
+                archiveRtId, fieldResolver, options, options.AggregationColumns, Array.Empty<string>());
+        }
+
         var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
         // Rollup + time-range archives use the windowed (window_start, window_end) shape — the
         // time-filter / sort needs to target window_end, not the nonexistent `timestamp`. Pure-
@@ -638,6 +648,25 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 }
             }
 
+            // TWA over a windowed non-rollup source (TimeRangeArchive): each row's weight is its
+            // own window length — expressible inline, no LOCF machinery (concept-time-weighted §3).
+            // A rollup without a matching TWA pair deliberately falls through to the guard below:
+            // its rows are aggregates, not observations, so window-length weighting would be wrong.
+            if (col.Function == AggregationFunction.TimeWeightedAverage && snapshot.RollupAggregations is null)
+            {
+                var resolvedTwa = fieldResolver.Resolve(col.AttributePath);
+                if (resolvedTwa == null) continue;
+                var windowLenMs = $"(\"{Constants.WindowEnd}\"::bigint - \"{Constants.WindowStart}\"::bigint)";
+                var twaAlias = $"{resolvedTwa.CrateDbName}_twavg";
+                q.AddRawAggregationExpression(
+                    $"SUM(CASE WHEN \"{resolvedTwa.CrateDbName}\" IS NOT NULL THEN \"{resolvedTwa.CrateDbName}\" * {windowLenMs} END)"
+                    + $" / NULLIF(SUM(CASE WHEN \"{resolvedTwa.CrateDbName}\" IS NOT NULL THEN {windowLenMs} END), 0)",
+                    twaAlias);
+                outputColumnNames.Add(twaAlias);
+                outputNameBySqlAlias[twaAlias] = twaAlias;
+                continue;
+            }
+
             var resolved = fieldResolver.Resolve(col.AttributePath);
             if (resolved == null) continue;
 
@@ -677,6 +706,15 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     {
         var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(snapshot);
+
+        // AB#4336 §6.2: TWA over a raw archive — LOCF statement, grouped variant. See
+        // ExecuteAggregationQueryAsync for the same routing rationale.
+        if (!snapshot.UsesWindowedStorage
+            && options.AggregationColumns.Any(c => c.Function == AggregationFunction.TimeWeightedAverage))
+        {
+            return await ExecuteRawTimeWeightedAggregationAsync(
+                archiveRtId, fieldResolver, options, options.AggregationColumns, options.GroupByColumns);
+        }
 
         var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
         // Windowed-storage time-axis (rollup / time-range) — see ExecuteAggregationQueryAsync
@@ -736,6 +774,25 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                     outputNameBySqlAlias[chained.SqlAlias] = outputName;
                     continue;
                 }
+            }
+
+            // TWA over a windowed non-rollup source (TimeRangeArchive): each row's weight is its
+            // own window length — expressible inline, no LOCF machinery (concept-time-weighted §3).
+            // A rollup without a matching TWA pair deliberately falls through to the guard below:
+            // its rows are aggregates, not observations, so window-length weighting would be wrong.
+            if (col.Function == AggregationFunction.TimeWeightedAverage && snapshot.RollupAggregations is null)
+            {
+                var resolvedTwa = fieldResolver.Resolve(col.AttributePath);
+                if (resolvedTwa == null) continue;
+                var windowLenMs = $"(\"{Constants.WindowEnd}\"::bigint - \"{Constants.WindowStart}\"::bigint)";
+                var twaAlias = $"{resolvedTwa.CrateDbName}_twavg";
+                q.AddRawAggregationExpression(
+                    $"SUM(CASE WHEN \"{resolvedTwa.CrateDbName}\" IS NOT NULL THEN \"{resolvedTwa.CrateDbName}\" * {windowLenMs} END)"
+                    + $" / NULLIF(SUM(CASE WHEN \"{resolvedTwa.CrateDbName}\" IS NOT NULL THEN {windowLenMs} END), 0)",
+                    twaAlias);
+                outputColumnNames.Add(twaAlias);
+                outputNameBySqlAlias[twaAlias] = twaAlias;
+                continue;
             }
 
             var resolved = fieldResolver.Resolve(col.AttributePath);
@@ -2221,6 +2278,90 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             AggregationFunction.TimeWeightedAverage => AggregationFunctionDto.TimeWeightedAvg,
             _ => throw new ArgumentOutOfRangeException(nameof(func))
         };
+    }
+
+    /// <summary>
+    /// TWA over a raw (event-based) archive — the query-time LOCF path (AB#4336 §6.2). Builds the
+    /// carry-in + LEAD-weighted statement via <see cref="TimeWeightedQuerySqlBuilder"/> with the
+    /// query window as the bucket; plain aggregation columns ride along carry-guarded. Grouped
+    /// variant groups the outer SELECT; LOCF weighting stays per <c>rtId</c> either way. The carry
+    /// scan uses the engine default lookback (raw archives carry no <c>CarryLookbackMs</c>).
+    /// </summary>
+    private async Task<StreamDataQueryResult> ExecuteRawTimeWeightedAggregationAsync(
+        OctoObjectId archiveRtId,
+        StreamDataFieldResolver fieldResolver,
+        StreamDataQueryOptionsBase options,
+        IReadOnlyList<AggregationColumn> aggregationColumns,
+        IReadOnlyList<string> groupByColumnPaths)
+    {
+        if (options.From is null || options.To is null)
+        {
+            throw StreamDataException.InvalidQueryParameters(
+                "TimeWeightedAverage over a raw archive requires From and To — the carry-in state is derived relative to the window.");
+        }
+
+        if (options.FieldFilters is { Count: > 0 })
+        {
+            throw StreamDataException.InvalidQueryParameters(
+                "TimeWeightedAverage over a raw archive does not support field filters yet — scope via rtIds or query a TimeWeightedAvg rollup.");
+        }
+
+        var outputColumnNames = new List<string>();
+        var outputNameBySqlAlias = new Dictionary<string, string>();
+
+        var groupColumns = new List<string>();
+        foreach (var groupCol in groupByColumnPaths)
+        {
+            var resolvedGroup = fieldResolver.Resolve(groupCol);
+            if (resolvedGroup == null) continue;
+            groupColumns.Add(resolvedGroup.CrateDbName);
+            outputColumnNames.Add(resolvedGroup.CrateDbName);
+            outputNameBySqlAlias[resolvedGroup.CrateDbName] = resolvedGroup.CrateDbName;
+        }
+
+        var twaColumns = new List<TimeWeightedQuerySqlBuilder.TwaColumn>();
+        var plainColumns = new List<TimeWeightedQuerySqlBuilder.PlainColumn>();
+        foreach (var col in aggregationColumns)
+        {
+            var resolved = fieldResolver.Resolve(col.AttributePath);
+            if (resolved == null) continue;
+
+            var aggFunc = MapAggregationFunction(col.Function);
+            if (col.Function == AggregationFunction.TimeWeightedAverage)
+            {
+                // Alias matches the rollup read path and the GraphQL wire suffix ("_twavg").
+                var twaAlias = $"{resolved.CrateDbName}_twavg";
+                twaColumns.Add(new TimeWeightedQuerySqlBuilder.TwaColumn(resolved.CrateDbName, twaAlias));
+                outputColumnNames.Add(twaAlias);
+                outputNameBySqlAlias[twaAlias] = twaAlias;
+            }
+            else
+            {
+                // Same "{column}_{lowercaseFunction}" output key as the standard aggregation path.
+                var alias = $"{resolved.CrateDbName}_{aggFunc.ToString().ToLowerInvariant()}";
+                plainColumns.Add(new TimeWeightedQuerySqlBuilder.PlainColumn(
+                    aggFunc.ToString().ToUpperInvariant(), resolved.CrateDbName, alias));
+                outputColumnNames.Add(alias);
+                outputNameBySqlAlias[alias] = alias;
+            }
+        }
+
+        var sql = TimeWeightedQuerySqlBuilder.Build(
+            TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()),
+            options.CkTypeId?.SemanticVersionedFullName,
+            options.From.Value,
+            options.To.Value,
+            twaColumns,
+            plainColumns,
+            groupColumns,
+            options.RtIds?.Select(id => id.ToString()).ToList(),
+            RollupAggregationSqlBuilder.DefaultCarryLookback);
+
+        _logger.LogDebug("Executing raw time-weighted aggregation SQL: {Sql}", sql);
+
+        var data = await _databaseClient.GetDataAsync(_tenantId, sql);
+        var rows = data.Select(dp => MapAggregationRow(dp, outputColumnNames, outputNameBySqlAlias)).ToList();
+        return new StreamDataQueryResult { Rows = rows, TotalCount = rows.Count };
     }
 
     /// <summary>

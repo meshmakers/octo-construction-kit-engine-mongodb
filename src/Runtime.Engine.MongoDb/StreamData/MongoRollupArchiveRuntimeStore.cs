@@ -58,7 +58,8 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
         IReadOnlyList<CkRollupAggregationSpec> aggregations,
         IReadOnlyList<CkArchiveColumnSpec> columns,
         BucketAlignment bucketAlignment = BucketAlignment.FixedSize,
-        string? referenceTimeZone = null)
+        string? referenceTimeZone = null,
+        TimeSpan? carryLookback = null)
     {
         var columnList = new AttributeRecordValueList<RtCkArchiveColumnRecord>();
         columnList.AddRange(columns.Select(c => new RtCkArchiveColumnRecord
@@ -96,6 +97,9 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             // AB#4300 / decision O6 — persist the optional IANA reference time-zone. Empty/whitespace
             // is normalised to null so the read path's IsNullOrWhiteSpace check stays symmetric.
             ReferenceTimeZone = string.IsNullOrWhiteSpace(referenceTimeZone) ? null : referenceTimeZone,
+            // Optional TWA carry-in lookback bound (AB#4336 / System.StreamData 1.6.5). Null keeps
+            // the attribute unset so the SQL builder applies its 35-day engine default.
+            CarryLookbackMs = carryLookback is { } cl ? (long)cl.TotalMilliseconds : null,
             Columns = columnList,
             Aggregations = aggregationList,
         };
