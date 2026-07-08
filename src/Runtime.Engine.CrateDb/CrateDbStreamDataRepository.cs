@@ -2136,7 +2136,23 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         StreamDataFieldResolver fieldResolver,
         IReadOnlyList<FieldFilter>? fieldFilters)
     {
-        if (fieldFilters == null) return;
+        foreach (var dto in BuildFieldFilterDtos(fieldResolver, fieldFilters))
+        {
+            q.AddFieldFilter(dto.FieldName, dto.Operator, dto.Value, dto.SecondaryValue, dto.ValueList);
+        }
+    }
+
+    /// <summary>
+    /// Resolves contract-level field filters to CrateDB filter DTOs — shared by the query-builder
+    /// path (<see cref="AddFieldFilters"/>) and the raw time-weighted statement (AB#4336 §6.2),
+    /// so both render the identical predicate for the same GraphQL input.
+    /// </summary>
+    private static List<Dtos.StreamDataFieldFilterDto> BuildFieldFilterDtos(
+        StreamDataFieldResolver fieldResolver,
+        IReadOnlyList<FieldFilter>? fieldFilters)
+    {
+        var result = new List<Dtos.StreamDataFieldFilterDto>();
+        if (fieldFilters == null) return result;
 
         foreach (var filter in fieldFilters)
         {
@@ -2152,9 +2168,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             switch (filter.Operator)
             {
                 case FieldFilterOperator.Between:
-                    q.AddFieldFilter(resolved.CrateDbName, op,
+                    result.Add(new Dtos.StreamDataFieldFilterDto(resolved.CrateDbName, op,
                         filter.ComparisonValue?.ToString() ?? "",
-                        secondaryValue: filter.SecondaryValue?.ToString());
+                        filter.SecondaryValue?.ToString(), null));
                     break;
 
                 case FieldFilterOperator.In:
@@ -2164,20 +2180,23 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                     // same GraphQL `comparisonValue` syntax (incl. the `"[a, b]"` array form)
                     // works against CrateDB archives. See StreamDataFieldFilterValueParser.
                     var valueList = StreamDataFieldFilterValueParser.ParseInValues(filter.ComparisonValue);
-                    q.AddFieldFilter(resolved.CrateDbName, op, "", valueList: valueList);
+                    result.Add(new Dtos.StreamDataFieldFilterDto(resolved.CrateDbName, op, "", null, valueList));
                     break;
                 }
 
                 case FieldFilterOperator.IsNull:
                 case FieldFilterOperator.IsNotNull:
-                    q.AddFieldFilter(resolved.CrateDbName, op, "");
+                    result.Add(new Dtos.StreamDataFieldFilterDto(resolved.CrateDbName, op, "", null, null));
                     break;
 
                 default:
-                    q.AddFieldFilter(resolved.CrateDbName, op, filter.ComparisonValue!.ToString()!);
+                    result.Add(new Dtos.StreamDataFieldFilterDto(resolved.CrateDbName, op,
+                        filter.ComparisonValue!.ToString()!, null, null));
                     break;
             }
         }
+
+        return result;
     }
 
     private async Task<(List<DataPointDto> Data, int TotalCount, int Offset)> ExecutePaginatedQueryAsync(
@@ -2300,11 +2319,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 "TimeWeightedAverage over a raw archive requires From and To — the carry-in state is derived relative to the window.");
         }
 
-        if (options.FieldFilters is { Count: > 0 })
-        {
-            throw StreamDataException.InvalidQueryParameters(
-                "TimeWeightedAverage over a raw archive does not support field filters yet — scope via rtIds or query a TimeWeightedAvg rollup.");
-        }
+        // Field filters select the EVENT SET the LOCF weighting runs over — they apply to both
+        // the carry scan and the in-window scan, so the opening state is the last observation
+        // that itself satisfies the filters (concept-time-weighted §6.2).
+        var filterDtos = BuildFieldFilterDtos(fieldResolver, options.FieldFilters);
 
         var outputColumnNames = new List<string>();
         var outputNameBySqlAlias = new Dictionary<string, string>();
@@ -2355,7 +2373,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             plainColumns,
             groupColumns,
             options.RtIds?.Select(id => id.ToString()).ToList(),
-            RollupAggregationSqlBuilder.DefaultCarryLookback);
+            RollupAggregationSqlBuilder.DefaultCarryLookback,
+            filterDtos);
 
         _logger.LogDebug("Executing raw time-weighted aggregation SQL: {Sql}", sql);
 

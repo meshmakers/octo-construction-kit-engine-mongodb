@@ -86,8 +86,9 @@ internal static class RollupAggregationSqlBuilder
         if (aggregations is null || aggregations.Count == 0) throw new ArgumentException("At least one aggregation is required.", nameof(aggregations));
         if (bucketEnd <= bucketStart) throw new ArgumentException("bucketEnd must be greater than bucketStart.", nameof(bucketEnd));
 
-        // Resolve every spec to its (sourceColumn, target[]) pair once.
-        var resolved = new List<(string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)>(aggregations.Count);
+        // Resolve every spec to its (sourceColumn, target[]) pair once. The spec rides along so
+        // marker branches (TWA, StateDuration) can reach its ComparisonValue.
+        var resolved = new List<(CkRollupAggregationSpec Spec, string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)>(aggregations.Count);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var spec in aggregations)
         {
@@ -101,10 +102,12 @@ internal static class RollupAggregationSqlBuilder
                         nameof(aggregations));
                 }
             }
-            resolved.Add((sourceColumn, targets));
+            resolved.Add((spec, sourceColumn, targets));
         }
 
-        var hasTimeWeighted = aggregations.Any(a => a.Function == CkRollupFunction.TimeWeightedAvg);
+        // Both time-weighted functions need the LOCF carry over a raw source. AB#4336.
+        var hasTimeWeighted = aggregations.Any(a =>
+            a.Function is CkRollupFunction.TimeWeightedAvg or CkRollupFunction.StateDuration);
         if (hasTimeWeighted && !sourceUsesWindowedStorage)
         {
             return BuildWithLocfCarry(
@@ -126,7 +129,7 @@ internal static class RollupAggregationSqlBuilder
         string sourceTable,
         string targetTable,
         string rollupCkTypeId,
-        IReadOnlyList<(string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)> resolved,
+        IReadOnlyList<(CkRollupAggregationSpec Spec, string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)> resolved,
         DateTime bucketStart,
         DateTime bucketEnd,
         bool sourceUsesWindowedStorage,
@@ -160,7 +163,7 @@ internal static class RollupAggregationSqlBuilder
         // source is a TimeRangeArchive (concept-time-weighted §3: the windows ARE the coverage).
         var windowLengthMs =
             $"(\"{Constants.WindowEnd}\"::bigint - \"{Constants.WindowStart}\"::bigint)";
-        foreach (var (sourceColumn, targets) in resolved)
+        foreach (var (spec, sourceColumn, targets) in resolved)
         {
             foreach (var t in targets)
             {
@@ -174,6 +177,11 @@ internal static class RollupAggregationSqlBuilder
                     case RollupAggregationColumns.TimeWeightedDuration:
                         sb.Append("SUM(CASE WHEN \"").Append(sourceColumn).Append("\" IS NOT NULL THEN ")
                           .Append(windowLengthMs).Append(" END)");
+                        break;
+                    case RollupAggregationColumns.StateDurationMarker:
+                        sb.Append("SUM(CASE WHEN \"").Append(sourceColumn).Append("\" = ")
+                          .Append(CrateSqlLiteral.StateLiteral(spec.ComparisonValue ?? string.Empty))
+                          .Append(" THEN ").Append(windowLengthMs).Append(" END)");
                         break;
                     default:
                         sb.Append(t.Function).Append("(\"").Append(sourceColumn).Append("\")");
@@ -223,7 +231,7 @@ internal static class RollupAggregationSqlBuilder
         string sourceTable,
         string targetTable,
         string rollupCkTypeId,
-        IReadOnlyList<(string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)> resolved,
+        IReadOnlyList<(CkRollupAggregationSpec Spec, string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)> resolved,
         DateTime bucketStart,
         DateTime bucketEnd,
         string? rtIdScope,
@@ -237,7 +245,7 @@ internal static class RollupAggregationSqlBuilder
         // Distinct source columns referenced by any spec — the event rows must carry all of them.
         var sourceColumns = new List<string>();
         var seenColumns = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (sourceColumn, _) in resolved)
+        foreach (var (_, sourceColumn, _) in resolved)
         {
             if (seenColumns.Add(sourceColumn))
             {
@@ -257,7 +265,7 @@ internal static class RollupAggregationSqlBuilder
           .Append('"').Append(Constants.RtId).Append("\", ")
           .Append('\'').Append(EscapeLiteral(rollupCkTypeId)).Append("' AS \"").Append(Constants.CkTypeId).Append("\", ")
           .Append("MAX(\"").Append(Constants.RtWellKnownName).Append("\") AS \"").Append(Constants.RtWellKnownName).Append('"');
-        foreach (var (sourceColumn, targets) in resolved)
+        foreach (var (spec, sourceColumn, targets) in resolved)
         {
             foreach (var t in targets)
             {
@@ -272,6 +280,13 @@ internal static class RollupAggregationSqlBuilder
                         break;
                     case RollupAggregationColumns.TimeWeightedDuration:
                         sb.Append("SUM(CASE WHEN \"").Append(sourceColumn).Append("\" IS NOT NULL THEN \"dt_ms\" END)");
+                        break;
+                    case RollupAggregationColumns.StateDurationMarker:
+                        // Absolute ms the signal held the comparison value — the carry row
+                        // participates so a state held across a silent bucket is fully counted.
+                        sb.Append("SUM(CASE WHEN \"").Append(sourceColumn).Append("\" = ")
+                          .Append(CrateSqlLiteral.StateLiteral(spec.ComparisonValue ?? string.Empty))
+                          .Append(" THEN \"dt_ms\" END)");
                         break;
                     default:
                         // Plain aggregations must not see the carry-in virtual row — it lies
@@ -346,7 +361,7 @@ internal static class RollupAggregationSqlBuilder
     private static void AppendInsertColumnList(
         StringBuilder sb,
         string targetTable,
-        IReadOnlyList<(string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)> resolved,
+        IReadOnlyList<(CkRollupAggregationSpec Spec, string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)> resolved,
         bool includeWasUpdated)
     {
         sb.Append("INSERT INTO ").Append(targetTable).Append(" (")
@@ -359,7 +374,7 @@ internal static class RollupAggregationSqlBuilder
         {
             sb.Append(", \"").Append(Constants.WasUpdated).Append('"');
         }
-        foreach (var (_, targets) in resolved)
+        foreach (var (_, _, targets) in resolved)
         {
             foreach (var t in targets)
             {
@@ -374,7 +389,7 @@ internal static class RollupAggregationSqlBuilder
 
     private static void AppendConflictClause(
         StringBuilder sb,
-        IReadOnlyList<(string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)> resolved)
+        IReadOnlyList<(CkRollupAggregationSpec Spec, string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)> resolved)
     {
         // ---- ON CONFLICT (window_start, window_end, rtId, ckTypeId) DO UPDATE SET ... ----
         // Same conflict key as TimeRangeArchive — same was_updated semantics: the orchestrator
@@ -385,7 +400,7 @@ internal static class RollupAggregationSqlBuilder
         // row, while recomputed higher-generation rows for the same window are left untouched.
         sb.Append("ON CONFLICT (\"").Append(Constants.WindowStart).Append("\", \"").Append(Constants.WindowEnd).Append("\", \"").Append(Constants.RtId).Append("\", \"").Append(Constants.CkTypeId).Append("\", \"").Append(Constants.Generation).AppendLine("\") DO UPDATE SET");
         sb.Append("    \"").Append(Constants.RtWellKnownName).Append("\" = EXCLUDED.\"").Append(Constants.RtWellKnownName).Append('"');
-        foreach (var (_, targets) in resolved)
+        foreach (var (_, _, targets) in resolved)
         {
             foreach (var t in targets)
             {

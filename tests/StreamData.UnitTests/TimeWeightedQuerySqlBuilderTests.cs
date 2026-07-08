@@ -92,4 +92,28 @@ public class TimeWeightedQuerySqlBuilderTests
             Array.Empty<TimeWeightedQuerySqlBuilder.PlainColumn>(),
             Array.Empty<string>(), null, TimeSpan.FromDays(35)));
     }
+
+    [Fact]
+    public void Build_FieldFilters_ApplyToCarryAndWindowScans()
+    {
+        var filters = new[]
+        {
+            new Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.StreamDataFieldFilterDto(
+                "ison", Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.StreamDataFieldFilterOperator.Equals,
+                "true", null, null),
+        };
+
+        var sql = TimeWeightedQuerySqlBuilder.Build(
+            SourceTable, CkTypeId, From, To,
+            new[] { Twa },
+            Array.Empty<TimeWeightedQuerySqlBuilder.PlainColumn>(),
+            Array.Empty<string>(),
+            rtIds: null,
+            carryLookback: TimeSpan.FromDays(35),
+            fieldFilters: filters);
+
+        // The filter selects the event set — both the carry scan and the in-window scan.
+        var occurrences = sql.Split("AND \"ison\" = 'true'").Length - 1;
+        Assert.Equal(2, occurrences);
+    }
 }

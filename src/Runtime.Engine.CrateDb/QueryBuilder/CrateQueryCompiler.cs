@@ -404,7 +404,11 @@ internal class CrateQueryCompiler
         return sb.ToString();
     }
 
-    private static string CompileFieldFilter(StreamDataFieldFilterDto filter)
+    /// <summary>
+    /// Renders one field-filter predicate (without leading AND / table alias). Internal so the
+    /// raw time-weighted query path (AB#4336 §6.2) reuses the exact same operator rendering.
+    /// </summary>
+    internal static string CompileFieldFilter(StreamDataFieldFilterDto filter)
     {
         // Direct camelCase column reference — the legacy `data['x']` indirection is gone.
         var fieldRef = $"\"{filter.FieldName}\"";

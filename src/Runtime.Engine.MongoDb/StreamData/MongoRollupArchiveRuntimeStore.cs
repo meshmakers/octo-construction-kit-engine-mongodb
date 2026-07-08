@@ -75,6 +75,7 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             SourcePath = a.SourcePath,
             Function = (RtCkRollupFunctionEnum)(int)a.Function,
             TargetColumnName = a.TargetColumnName,
+            ComparisonValue = a.ComparisonValue,
         }));
 
         var entity = new RtRollupArchive
@@ -212,7 +213,8 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             .Select(a => new CkRollupAggregationSpec(
                 a.SourcePath!,
                 (CkRollupFunction)(int)a.Function,
-                a.TargetColumnName))
+                a.TargetColumnName,
+                a.ComparisonValue))
             .ToList();
 
         // BucketAlignment is an optional CK attribute, so the generated property is nullable.

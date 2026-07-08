@@ -337,4 +337,55 @@ public class RollupAggregationSqlBuilderTests
         var occurrences = sql.Split("AND \"rtid\" = 'mp-42'").Length - 1;
         Assert.Equal(2, occurrences);
     }
+
+    // ---- StateDuration (AB#4336) ----
+
+    [Fact]
+    public void Build_StateDuration_RawSource_EmitsComparisonGuardedDurationInLocfShape()
+    {
+        var aggregations = new[]
+        {
+            new CkRollupAggregationSpec("isOn", CkRollupFunction.StateDuration, null, "true"),
+        };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
+
+        Assert.Contains("SUM(CASE WHEN \"ison\" = TRUE THEN \"dt_ms\" END) AS \"ison_stateduration\"", sql);
+        Assert.Contains("TRUE AS \"is_carry\"", sql); // LOCF carry applies to StateDuration too
+    }
+
+    [Fact]
+    public void Build_StateDuration_NumericComparison_RendersNumericLiteral()
+    {
+        var aggregations = new[]
+        {
+            new CkRollupAggregationSpec("machineState", CkRollupFunction.StateDuration, null, "2"),
+        };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
+
+        Assert.Contains("SUM(CASE WHEN \"machinestate\" = 2 THEN \"dt_ms\" END)", sql);
+    }
+
+    [Fact]
+    public void Build_StateDuration_WindowedSource_WeightsByWindowLength()
+    {
+        var aggregations = new[]
+        {
+            new CkRollupAggregationSpec("isOn", CkRollupFunction.StateDuration, null, "true"),
+        };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: true);
+
+        Assert.Contains(
+            "SUM(CASE WHEN \"ison\" = TRUE THEN (\"window_end\"::bigint - \"window_start\"::bigint) END)",
+            sql);
+        Assert.DoesNotContain("is_carry", sql);
+    }
 }

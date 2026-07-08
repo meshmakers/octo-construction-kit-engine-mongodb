@@ -86,6 +86,12 @@ internal static class RollupColumnTypeResolver
                 : new CrateColumnType.Primitive("DOUBLE PRECISION");
         }
 
+        if (function == CkRollupFunction.StateDuration)
+        {
+            // Milliseconds the signal held the comparison value — an absolute duration. AB#4336.
+            return new CrateColumnType.Primitive("BIGINT");
+        }
+
         if (function == CkRollupFunction.TimeWeightedAvg)
         {
             // TWA emits {base}_integral (Σ value × Δt(ms), DOUBLE) and {base}_duration (covered

@@ -131,6 +131,15 @@ public static class RollupQueryAggregationResolver
                     SqlAlias: $"{outputColumnName.ToLowerInvariant()}_count",
                     OutputColumnName: outputColumnName),
 
+            // Source StateDuration materialised as a single ms column — the total time-in-state
+            // over the query window is the SUM of the per-bucket durations (AB#4336). Queried with
+            // target SUM; there is no dedicated query-surface function.
+            (CkRollupFunction.StateDuration, AggregationFunctionDto.Sum) when targetColumns.Count == 1
+                => new RollupQueryAggregation(
+                    SqlExpression: $"SUM(\"{targetColumns[0].ColumnName}\")",
+                    SqlAlias: $"{outputColumnName.ToLowerInvariant()}_sum",
+                    OutputColumnName: outputColumnName),
+
             // Source TWA materialised as _integral + _duration. Re-aggregating the pair keeps the
             // time weighting exact across any query window (AB#4336). Only the same-function
             // target is well-defined — the integral is value·ms, not a value sum, so SUM/AVG

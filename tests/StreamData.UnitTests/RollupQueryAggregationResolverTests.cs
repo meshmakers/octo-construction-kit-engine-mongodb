@@ -179,4 +179,17 @@ public class RollupQueryAggregationResolverTests
 
         Assert.Null(result);
     }
+
+    [Fact]
+    public void StateDurationSpec_TargetSum_ResolvesToSumOfDurations()
+    {
+        // Total ms-in-state over the query window = SUM of the per-bucket durations (AB#4336).
+        var specs = new[] { new CkRollupAggregationSpec("IsOn", CkRollupFunction.StateDuration, null, "true") };
+
+        var result = RollupQueryAggregationResolver.Resolve(specs, "IsOn", AggregationFunctionDto.Sum);
+
+        Assert.NotNull(result);
+        Assert.Equal("SUM(\"ison_stateduration\")", result!.SqlExpression);
+        Assert.Equal("ison_sum", result.SqlAlias);
+    }
 }

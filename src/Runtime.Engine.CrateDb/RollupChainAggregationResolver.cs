@@ -244,6 +244,9 @@ public static class RollupChainAggregationResolver
             (CkRollupFunction.Count, CkRollupFunction.Sum) => (CkRollupFunction.Count, null),
             (CkRollupFunction.Min, CkRollupFunction.Min) => (CkRollupFunction.Min, null),
             (CkRollupFunction.Max, CkRollupFunction.Max) => (CkRollupFunction.Max, null),
+            // Absolute durations accumulate — a cascade re-aggregates the ms column with SUM
+            // and the result is still a StateDuration (AB#4336).
+            (CkRollupFunction.StateDuration, CkRollupFunction.Sum) => (CkRollupFunction.StateDuration, null),
             _ => (null, null),
         };
     }
@@ -266,9 +269,11 @@ public static class RollupChainAggregationResolver
         {
             case AggregationFunctionDto.Sum:
             {
-                // Prefer a single-column SUM origin; fall back to the AVG-numerator slot.
+                // Prefer a single-column SUM origin; fall back to the AVG-numerator slot, then to
+                // a StateDuration origin (total ms-in-state over the window, AB#4336).
                 var origin = FindSingle(matching, CkRollupFunction.Sum)
-                    ?? FindAvgRole(matching, LogicalAvgRole.Numerator);
+                    ?? FindAvgRole(matching, LogicalAvgRole.Numerator)
+                    ?? FindSingle(matching, CkRollupFunction.StateDuration);
                 if (origin is null) return null;
                 return new RollupQueryAggregation(
                     SqlExpression: $"SUM(\"{origin.PhysicalColumnName}\")",

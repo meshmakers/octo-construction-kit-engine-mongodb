@@ -56,6 +56,12 @@ internal static class RollupAggregationColumns
                 new RollupTargetColumn($"{baseName}_integral", TimeWeightedIntegral),
                 new RollupTargetColumn($"{baseName}_duration", TimeWeightedDuration),
             },
+            // Marker like the TWA pair — the SQL builders emit a comparison-guarded duration
+            // expression; the token is never emitted verbatim (AB#4336).
+            CkRollupFunction.StateDuration => new[]
+            {
+                new RollupTargetColumn(baseName, StateDurationMarker),
+            },
             _ => throw new System.ArgumentOutOfRangeException(
                 nameof(spec), spec.Function, "Unknown rollup function.")
         };
@@ -68,4 +74,7 @@ internal static class RollupAggregationColumns
 
     /// <summary>Marker function token for the TWA covered-duration column (ms).</summary>
     public const string TimeWeightedDuration = "TW_DURATION";
+
+    /// <summary>Marker function token for the StateDuration column (ms the signal held ComparisonValue).</summary>
+    public const string StateDurationMarker = "STATE_DURATION";
 }

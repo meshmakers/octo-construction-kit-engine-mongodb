@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 
@@ -52,6 +54,11 @@ internal static class TimeWeightedQuerySqlBuilder
     /// </param>
     /// <param name="rtIds">Optional rtId scope applied to both the carry and the in-window scan.</param>
     /// <param name="carryLookback">Bound on the carry-in scan before <paramref name="from"/>.</param>
+    /// <param name="fieldFilters">
+    /// Optional pre-resolved field filters. They select the EVENT SET the LOCF weighting runs
+    /// over — applied to both the carry and the in-window scan, so the opening state is the last
+    /// observation that itself satisfies the filters.
+    /// </param>
     public static string Build(
         string sourceTable,
         string? ckTypeId,
@@ -61,7 +68,8 @@ internal static class TimeWeightedQuerySqlBuilder
         IReadOnlyList<PlainColumn> plainColumns,
         IReadOnlyList<string> groupByColumns,
         IReadOnlyList<string>? rtIds,
-        TimeSpan carryLookback)
+        TimeSpan carryLookback,
+        IReadOnlyList<StreamDataFieldFilterDto>? fieldFilters = null)
     {
         if (string.IsNullOrWhiteSpace(sourceTable)) throw new ArgumentException("sourceTable must not be empty.", nameof(sourceTable));
         if (twaColumns is null || twaColumns.Count == 0) throw new ArgumentException("At least one time-weighted column is required.", nameof(twaColumns));
@@ -97,6 +105,13 @@ internal static class TimeWeightedQuerySqlBuilder
             predicate.Append(" AND \"").Append(Constants.RtId).Append("\" IN (")
                 .Append(string.Join(", ", rtIds.Select(id => $"'{EscapeLiteral(id)}'")))
                 .Append(')');
+        }
+        if (fieldFilters is { Count: > 0 })
+        {
+            foreach (var filter in fieldFilters)
+            {
+                predicate.Append(" AND ").Append(CrateQueryCompiler.CompileFieldFilter(filter));
+            }
         }
 
         var sb = new StringBuilder();

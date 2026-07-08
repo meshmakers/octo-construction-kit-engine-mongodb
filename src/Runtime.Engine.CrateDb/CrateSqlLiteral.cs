@@ -19,6 +19,24 @@ internal static class CrateSqlLiteral
     public static string String(string s) => "'" + s.Replace("'", "''") + "'";
 
     /// <summary>
+    /// Renders a StateDuration comparison literal from its CK-model string form (AB#4336):
+    /// a double-parsable value becomes a numeric literal, <c>true</c>/<c>false</c>
+    /// (case-insensitive) a boolean, anything else a quote-escaped string.
+    /// </summary>
+    public static string StateLiteral(string raw)
+    {
+        if (double.TryParse(raw, System.Globalization.NumberStyles.Float, CultureInfo.InvariantCulture, out var d)
+            && double.IsFinite(d))
+        {
+            return d.ToString("R", CultureInfo.InvariantCulture);
+        }
+
+        if (string.Equals(raw, "true", System.StringComparison.OrdinalIgnoreCase)) return "TRUE";
+        if (string.Equals(raw, "false", System.StringComparison.OrdinalIgnoreCase)) return "FALSE";
+        return String(raw);
+    }
+
+    /// <summary>
     /// Formats a CLR value as a CrateDB literal. Non-finite reals collapse to <c>NULL</c> (the
     /// formula engine already mapped NaN / the null sentinel to NULL, but this is defensive).
     /// </summary>
