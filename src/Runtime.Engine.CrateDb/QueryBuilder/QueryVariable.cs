@@ -18,6 +18,18 @@ internal record QueryVariable : IQueryVariable
         string? alias,
         AggregationFunctionDto? AggregationFunction)
     {
+        if (AggregationFunction == AggregationFunctionDto.TimeWeightedAvg)
+        {
+            // TWA has no single SQL aggregate — it is only resolvable against a rollup archive
+            // that materialised a TimeWeightedAvg (integral/duration) pair, which the chain-aware
+            // rollup path rewrites into a raw expression before reaching this ctor. Emitting
+            // TIMEWEIGHTEDAVG("col") would be silently-invalid SQL. Direct TWA over raw event
+            // archives is a documented follow-up (concept-time-weighted-aggregation §6.2).
+            throw new NotSupportedException(
+                "TimeWeightedAvg cannot be applied directly to this archive's columns — query a "
+                + "rollup archive that materialises a TimeWeightedAvg aggregation for the path.");
+        }
+
         this.AggregationFunction = AggregationFunction;
         Name = name;
 

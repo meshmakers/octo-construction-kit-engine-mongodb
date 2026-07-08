@@ -215,4 +215,64 @@ public class RollupChainAggregationResolverTests
 
         return (GetArchive, GetRollup);
     }
+
+    // ---- TimeWeightedAvg (AB#4336) ----
+
+    [Fact]
+    public async Task DirectRollup_TimeWeightedAvg_ResolvesIntegralOverDuration()
+    {
+        var hourly = MakeRollup(HourlyRtId, RawRtId,
+            new CkRollupAggregationSpec("dimming.level", CkRollupFunction.TimeWeightedAvg, null));
+
+        var (getArchive, getRollup) = Stores(MakeRawArchive(RawRtId), hourly);
+
+        var result = await RollupChainAggregationResolver.ResolveAsync(
+            hourly, "dimming.level", AggregationFunctionDto.TimeWeightedAvg,
+            getArchive, getRollup, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+        Assert.Equal(
+            "SUM(\"dimminglevel_twavg_integral\") / NULLIF(SUM(\"dimminglevel_twavg_duration\"), 0)",
+            result!.SqlExpression);
+        Assert.Equal("dimming.level_twavg", result.SqlAlias);
+    }
+
+    [Fact]
+    public async Task Cascade_TimeWeightedAvgPair_ChainsViaSumSpecs()
+    {
+        // Hourly materialises TWA over the raw event archive; Daily accumulates the pair via
+        // SUM specs on the physical columns — the ratio recombines exactly (AB#4336).
+        var hourly = MakeRollup(HourlyRtId, RawRtId,
+            new CkRollupAggregationSpec("dimming.level", CkRollupFunction.TimeWeightedAvg, null));
+        var daily = MakeRollup(DailyRtId, HourlyRtId,
+            new CkRollupAggregationSpec("dimminglevel_twavg_integral", CkRollupFunction.Sum, "dimminglevel_twavg_integral"),
+            new CkRollupAggregationSpec("dimminglevel_twavg_duration", CkRollupFunction.Sum, "dimminglevel_twavg_duration"));
+
+        var (getArchive, getRollup) = Stores(MakeRawArchive(RawRtId), hourly, daily);
+
+        var result = await RollupChainAggregationResolver.ResolveAsync(
+            daily, "dimming.level", AggregationFunctionDto.TimeWeightedAvg,
+            getArchive, getRollup, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+        Assert.Equal(
+            "SUM(\"dimminglevel_twavg_integral\") / NULLIF(SUM(\"dimminglevel_twavg_duration\"), 0)",
+            result!.SqlExpression);
+    }
+
+    [Fact]
+    public async Task DirectRollup_AvgPair_DoesNotSatisfyTimeWeightedAvgTarget()
+    {
+        // Sample-weighted AVG must never masquerade as time-weighted.
+        var hourly = MakeRollup(HourlyRtId, RawRtId,
+            new CkRollupAggregationSpec("dimming.level", CkRollupFunction.Avg, null));
+
+        var (getArchive, getRollup) = Stores(MakeRawArchive(RawRtId), hourly);
+
+        var result = await RollupChainAggregationResolver.ResolveAsync(
+            hourly, "dimming.level", AggregationFunctionDto.TimeWeightedAvg,
+            getArchive, getRollup, TestContext.Current.CancellationToken);
+
+        Assert.Null(result);
+    }
 }

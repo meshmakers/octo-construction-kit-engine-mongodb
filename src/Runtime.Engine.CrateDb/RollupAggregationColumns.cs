@@ -30,9 +30,12 @@ internal static class RollupAggregationColumns
     public static (string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets) Resolve(CkRollupAggregationSpec spec)
     {
         var sourceColumn = ColumnNameMapper.PathToColumnName(spec.SourcePath);
+        var functionToken = spec.Function == CkRollupFunction.TimeWeightedAvg
+            ? "twavg" // short default-name token, matching RollupColumnGenerator (AB#4336 D5)
+            : spec.Function.ToString().ToLowerInvariant();
         var baseName = !string.IsNullOrWhiteSpace(spec.TargetColumnName)
             ? spec.TargetColumnName!.ToLowerInvariant()
-            : $"{sourceColumn}_{spec.Function.ToString().ToLowerInvariant()}";
+            : $"{sourceColumn}_{functionToken}";
 
         var targets = spec.Function switch
         {
@@ -45,10 +48,24 @@ internal static class RollupAggregationColumns
             CkRollupFunction.Max => new[] { new RollupTargetColumn(baseName, "MAX") },
             CkRollupFunction.Sum => new[] { new RollupTargetColumn(baseName, "SUM") },
             CkRollupFunction.Count => new[] { new RollupTargetColumn(baseName, "COUNT") },
+            // TWA has no single SQL aggregate keyword — the SQL builder emits a dedicated
+            // LOCF-weighted expression per target column (AB#4336). The Function tokens below are
+            // markers the builder branches on, never emitted verbatim.
+            CkRollupFunction.TimeWeightedAvg => new[]
+            {
+                new RollupTargetColumn($"{baseName}_integral", TimeWeightedIntegral),
+                new RollupTargetColumn($"{baseName}_duration", TimeWeightedDuration),
+            },
             _ => throw new System.ArgumentOutOfRangeException(
                 nameof(spec), spec.Function, "Unknown rollup function.")
         };
 
         return (sourceColumn, targets);
     }
+
+    /// <summary>Marker function token for the TWA integral column (Σ value × Δt in value·ms).</summary>
+    public const string TimeWeightedIntegral = "TW_INTEGRAL";
+
+    /// <summary>Marker function token for the TWA covered-duration column (ms).</summary>
+    public const string TimeWeightedDuration = "TW_DURATION";
 }

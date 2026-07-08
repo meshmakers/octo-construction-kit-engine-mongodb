@@ -86,6 +86,15 @@ internal static class RollupColumnTypeResolver
                 : new CrateColumnType.Primitive("DOUBLE PRECISION");
         }
 
+        if (function == CkRollupFunction.TimeWeightedAvg)
+        {
+            // TWA emits {base}_integral (Σ value × Δt(ms), DOUBLE) and {base}_duration (covered
+            // milliseconds, BIGINT). Same suffix fork as AVG. AB#4336.
+            return columnName.EndsWith("_duration", StringComparison.Ordinal)
+                ? new CrateColumnType.Primitive("BIGINT")
+                : new CrateColumnType.Primitive("DOUBLE PRECISION");
+        }
+
         // SUM, MIN, MAX — all carry numeric values; DOUBLE is the safe envelope.
         return new CrateColumnType.Primitive("DOUBLE PRECISION");
     }

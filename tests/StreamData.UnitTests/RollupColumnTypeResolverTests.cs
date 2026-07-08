@@ -122,4 +122,23 @@ public class RollupColumnTypeResolverTests
         Assert.Equal("DOUBLE PRECISION", Assert.IsType<CrateColumnType.Primitive>(computed.Type).CrateTypeName);
         Assert.False(computed.Required);
     }
+
+    [Fact]
+    public void Resolve_TimeWeightedAvgAggregation_EmitsDoubleIntegralAndBigintDuration()
+    {
+        // AB#4336: TWA materialises as (integral, duration) — integral is value*ms (DOUBLE),
+        // duration is covered milliseconds (BIGINT). Same suffix fork as AVG's sum/count.
+        var aggregations = new[] { new CkRollupAggregationSpec("dimminglevel", CkRollupFunction.TimeWeightedAvg, null) };
+        var columns = RollupColumnGenerator.Generate(aggregations);
+
+        var resolved = RollupColumnTypeResolver.Resolve(columns, aggregations);
+
+        Assert.Equal(2, resolved.Count);
+        var integral = Assert.IsType<CrateColumnType.Primitive>(resolved[0].Type);
+        var duration = Assert.IsType<CrateColumnType.Primitive>(resolved[1].Type);
+        Assert.Equal("dimminglevel_twavg_integral", resolved[0].Path);
+        Assert.Equal("DOUBLE PRECISION", integral.CrateTypeName);
+        Assert.Equal("dimminglevel_twavg_duration", resolved[1].Path);
+        Assert.Equal("BIGINT", duration.CrateTypeName);
+    }
 }

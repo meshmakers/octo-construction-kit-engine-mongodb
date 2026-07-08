@@ -139,4 +139,44 @@ public class RollupQueryAggregationResolverTests
         Assert.Null(RollupQueryAggregationResolver.Resolve(
             Array.Empty<CkRollupAggregationSpec>(), "Voltage", AggregationFunctionDto.Avg));
     }
+
+    // ---- TimeWeightedAvg (AB#4336) ----
+
+    [Fact]
+    public void TimeWeightedAvgSpec_TargetTimeWeightedAvg_ResolvesToIntegralOverDuration()
+    {
+        var specs = new[] { new CkRollupAggregationSpec("DimmingLevel", CkRollupFunction.TimeWeightedAvg, null) };
+
+        var result = RollupQueryAggregationResolver.Resolve(specs, "DimmingLevel", AggregationFunctionDto.TimeWeightedAvg);
+
+        Assert.NotNull(result);
+        Assert.Equal(
+            "SUM(\"dimminglevel_twavg_integral\") / NULLIF(SUM(\"dimminglevel_twavg_duration\"), 0)",
+            result!.SqlExpression);
+        Assert.Equal("dimminglevel_twavg", result.SqlAlias);
+        Assert.Equal("DimmingLevel", result.OutputColumnName);
+    }
+
+    [Fact]
+    public void AvgSpec_TargetTimeWeightedAvg_IsUnresolvable()
+    {
+        // Sample-weighted AVG must never satisfy a time-weighted request — that is the exact
+        // wrong-number bug AB#4336 exists to fix.
+        var specs = new[] { new CkRollupAggregationSpec("DimmingLevel", CkRollupFunction.Avg, null) };
+
+        var result = RollupQueryAggregationResolver.Resolve(specs, "DimmingLevel", AggregationFunctionDto.TimeWeightedAvg);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void TimeWeightedAvgSpec_TargetSum_IsUnresolvable()
+    {
+        // The integral is value*ms, not a value sum.
+        var specs = new[] { new CkRollupAggregationSpec("DimmingLevel", CkRollupFunction.TimeWeightedAvg, null) };
+
+        var result = RollupQueryAggregationResolver.Resolve(specs, "DimmingLevel", AggregationFunctionDto.Sum);
+
+        Assert.Null(result);
+    }
 }

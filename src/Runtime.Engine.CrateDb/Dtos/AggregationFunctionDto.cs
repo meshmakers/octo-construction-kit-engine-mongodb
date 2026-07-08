@@ -25,4 +25,9 @@ public enum AggregationFunctionDto
     /// Sum
     /// </summary>
     Sum,
+    /// <summary>
+    /// Time-weighted average (LOCF interval weighting). Resolvable against rollup archives that
+    /// materialise a TimeWeightedAvg aggregation (integral/duration pair). AB#4336.
+    /// </summary>
+    TimeWeightedAvg,
 }

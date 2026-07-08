@@ -234,6 +234,9 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             // Optional IANA reference time zone for DST-correct calendar buckets (AB#4290 / O6).
             // Null (unset, or pre-1.6.4 entities) ⇒ UTC calendar boundaries.
             ReferenceTimeZone = string.IsNullOrWhiteSpace(entity.ReferenceTimeZone) ? null : entity.ReferenceTimeZone,
+            // Optional TWA carry-in lookback bound (AB#4336 / System.StreamData 1.6.5). Null
+            // (unset, or pre-1.6.5 entities) ⇒ the SQL builder's 35-day engine default.
+            CarryLookback = entity.CarryLookbackMs is { } carryMs ? TimeSpan.FromMilliseconds(carryMs) : null,
             // Recompute observability (AB#4184) — projected from the engine-maintained Archive-base
             // attributes so rollupsFor can surface recompute health. Counts fall back to 0 when the
             // RecordArray attribute was never written (steady state / pre-1.6.0 entities).

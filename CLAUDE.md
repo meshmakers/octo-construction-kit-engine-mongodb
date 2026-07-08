@@ -551,6 +551,14 @@ The shared `CkArchiveSnapshot` covers both subtypes. When the loaded entity is a
   - `COUNT` → `BIGINT`
   - `AVG` → `{base}_sum DOUBLE PRECISION`, `{base}_count BIGINT`
   - `SUM` / `MIN` / `MAX` → `DOUBLE PRECISION`
+  - `TimeWeightedAvg` (AB#4336) → `{base}_integral DOUBLE PRECISION` (Σ value × Δt in value·ms),
+    `{base}_duration BIGINT` (covered ms); default base name uses the short token `twavg`.
+    Forward aggregation over a raw source uses a LOCF statement (carry-in row per rtId bounded
+    by `RollupArchive.CarryLookbackMs`, default 35 d; interval weighting via `LEAD`) built by
+    `RollupAggregationSqlBuilder.BuildWithLocfCarry`; windowed sources weight by window length.
+    Read path recombines `SUM(_integral) / NULLIF(SUM(_duration), 0)` (alias suffix `_twavg`);
+    cascades chain the pair via SUM specs. Direct TWA over raw archive queries is guarded with
+    a `NotSupportedException` in `QueryVariable` (follow-up: concept-time-weighted §6.2).
 
   Rollup column names are storage identifiers (e.g. `temperature_avg_sum`), not CK-type
   attribute paths — the path-resolver would fail to resolve them.

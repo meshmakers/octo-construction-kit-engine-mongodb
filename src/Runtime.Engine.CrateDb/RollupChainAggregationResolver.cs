@@ -5,15 +5,16 @@ using Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 
 /// <summary>
-/// Role of a physical column when its origin function is AVG. Because AVG materialises as a
-/// <c>(sum, count)</c> pair, the chain walker has to track which slot a given physical column
-/// fills so the resolver can recombine them for an AVG / SUM / COUNT target.
+/// Role of a physical column when its origin function materialises as a ratio pair — AVG's
+/// <c>(sum, count)</c> and TimeWeightedAvg's <c>(integral, duration)</c> (AB#4336). The chain
+/// walker has to track which slot a given physical column fills so the resolver can recombine
+/// them for the ratio target (and, for AVG, the SUM / COUNT component targets).
 /// </summary>
 public enum LogicalAvgRole
 {
-    /// <summary>Holds the bucket-sum partial — feeds the numerator when target is AVG.</summary>
+    /// <summary>Holds the numerator partial (AVG's sum / TWA's integral).</summary>
     Numerator,
-    /// <summary>Holds the bucket-count partial — feeds the denominator when target is AVG.</summary>
+    /// <summary>Holds the denominator partial (AVG's count / TWA's covered duration).</summary>
     Denominator
 }
 
@@ -140,13 +141,14 @@ public static class RollupChainAggregationResolver
         foreach (var spec in rollup.Aggregations)
         {
             var (_, targets) = RollupAggregationColumns.Resolve(spec);
-            if (spec.Function == CkRollupFunction.Avg && targets.Count == 2)
+            if (spec.Function is CkRollupFunction.Avg or CkRollupFunction.TimeWeightedAvg && targets.Count == 2)
             {
-                // AVG materialises as (_sum, _count) pair — track both slots.
+                // Ratio-pair materialisation — AVG's (_sum, _count) / TWA's (_integral, _duration):
+                // track both slots so the resolver can recombine them.
                 result.Add(new LogicalOriginColumn(
-                    spec.SourcePath, CkRollupFunction.Avg, targets[0].ColumnName, LogicalAvgRole.Numerator));
+                    spec.SourcePath, spec.Function, targets[0].ColumnName, LogicalAvgRole.Numerator));
                 result.Add(new LogicalOriginColumn(
-                    spec.SourcePath, CkRollupFunction.Avg, targets[1].ColumnName, LogicalAvgRole.Denominator));
+                    spec.SourcePath, spec.Function, targets[1].ColumnName, LogicalAvgRole.Denominator));
             }
             else
             {
@@ -217,21 +219,19 @@ public static class RollupChainAggregationResolver
         LogicalOriginColumn parent,
         CkRollupFunction applied)
     {
-        // AVG materialised as (Numerator, Denominator): the numerator column behaves like a SUM
-        // accumulator under cascading; the denominator column behaves like a COUNT accumulator
-        // (which itself chains via SUM-of-counts).
+        // Ratio-pair materialisation (AVG's sum/count, TWA's integral/duration): both slots behave
+        // like SUM accumulators under cascading — summing partial numerators / denominators keeps
+        // the recombined ratio exact. The parent's logical function (AVG or TWA) is preserved.
         if (parent.AvgRole == LogicalAvgRole.Numerator)
         {
-            // SUM of an AVG-numerator = still numerator of the overall AVG.
             return applied == CkRollupFunction.Sum
-                ? (CkRollupFunction.Avg, LogicalAvgRole.Numerator)
+                ? (parent.LogicalFunction, LogicalAvgRole.Numerator)
                 : (null, null);
         }
         if (parent.AvgRole == LogicalAvgRole.Denominator)
         {
-            // SUM of an AVG-denominator (which itself was a COUNT) = still denominator.
             return applied == CkRollupFunction.Sum
-                ? (CkRollupFunction.Avg, LogicalAvgRole.Denominator)
+                ? (parent.LogicalFunction, LogicalAvgRole.Denominator)
                 : (null, null);
         }
 
@@ -321,6 +321,19 @@ public static class RollupChainAggregationResolver
                     SqlAlias: $"{alias}_avg",
                     OutputColumnName: outputColumnName);
             }
+            case AggregationFunctionDto.TimeWeightedAvg:
+            {
+                // TWA recombines exclusively from its own materialised (integral, duration) pair —
+                // unlike AVG there is no single-column fallback, and the AVG pair must not satisfy
+                // a TWA target (sample-weighted ≠ time-weighted). AB#4336.
+                var integralOrigin = FindPairRole(matching, CkRollupFunction.TimeWeightedAvg, LogicalAvgRole.Numerator);
+                var durationOrigin = FindPairRole(matching, CkRollupFunction.TimeWeightedAvg, LogicalAvgRole.Denominator);
+                if (integralOrigin is null || durationOrigin is null) return null;
+                return new RollupQueryAggregation(
+                    SqlExpression: $"SUM(\"{integralOrigin.PhysicalColumnName}\") / NULLIF(SUM(\"{durationOrigin.PhysicalColumnName}\"), 0)",
+                    SqlAlias: $"{alias}_twavg",
+                    OutputColumnName: outputColumnName);
+            }
             default:
                 return null;
         }
@@ -330,5 +343,9 @@ public static class RollupChainAggregationResolver
         => origins.FirstOrDefault(o => o.LogicalFunction == function && o.AvgRole is null);
 
     private static LogicalOriginColumn? FindAvgRole(IReadOnlyList<LogicalOriginColumn> origins, LogicalAvgRole role)
-        => origins.FirstOrDefault(o => o.LogicalFunction == CkRollupFunction.Avg && o.AvgRole == role);
+        => FindPairRole(origins, CkRollupFunction.Avg, role);
+
+    private static LogicalOriginColumn? FindPairRole(
+        IReadOnlyList<LogicalOriginColumn> origins, CkRollupFunction function, LogicalAvgRole role)
+        => origins.FirstOrDefault(o => o.LogicalFunction == function && o.AvgRole == role);
 }

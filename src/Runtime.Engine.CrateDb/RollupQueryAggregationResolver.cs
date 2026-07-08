@@ -40,6 +40,8 @@ public sealed record RollupQueryAggregation(
 /// <item><c>AVG</c> over source AVG: <c>SUM(_sum) / NULLIF(SUM(_count), 0)</c></item>
 /// <item><c>MIN</c> over source MIN: <c>MIN(_min)</c></item>
 /// <item><c>MAX</c> over source MAX: <c>MAX(_max)</c></item>
+/// <item><c>TimeWeightedAvg</c> over source TimeWeightedAvg (materialised <c>_integral</c> +
+/// <c>_duration</c>): <c>SUM(_integral) / NULLIF(SUM(_duration), 0)</c> — AB#4336</item>
 /// </list>
 /// All other combinations are unresolvable — the rollup's materialisation discarded the
 /// information required (e.g. a rollup that only stored AVG can't reconstruct MIN/MAX).
@@ -127,6 +129,16 @@ public static class RollupQueryAggregationResolver
                 => new RollupQueryAggregation(
                     SqlExpression: $"SUM(\"{targetColumns[1].ColumnName}\")",
                     SqlAlias: $"{outputColumnName.ToLowerInvariant()}_count",
+                    OutputColumnName: outputColumnName),
+
+            // Source TWA materialised as _integral + _duration. Re-aggregating the pair keeps the
+            // time weighting exact across any query window (AB#4336). Only the same-function
+            // target is well-defined — the integral is value·ms, not a value sum, so SUM/AVG
+            // targets stay unresolvable.
+            (CkRollupFunction.TimeWeightedAvg, AggregationFunctionDto.TimeWeightedAvg) when targetColumns.Count == 2
+                => new RollupQueryAggregation(
+                    SqlExpression: $"SUM(\"{targetColumns[0].ColumnName}\") / NULLIF(SUM(\"{targetColumns[1].ColumnName}\"), 0)",
+                    SqlAlias: $"{outputColumnName.ToLowerInvariant()}_twavg",
                     OutputColumnName: outputColumnName),
 
             // Single-column source aggregations: only same-function chaining is well-defined.

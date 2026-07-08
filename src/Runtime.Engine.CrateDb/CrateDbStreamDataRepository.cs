@@ -1308,7 +1308,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             rollup.Aggregations,
             bucketStart,
             bucketEnd,
-            sourceArchive.UsesWindowedStorage);
+            sourceArchive.UsesWindowedStorage,
+            carryLookback: rollup.CarryLookback);
 
         _logger.LogDebug(
             "Rollup aggregation SQL for {RollupRtId} bucket [{BucketStart:O}, {BucketEnd:O}): {Sql}",
@@ -2217,6 +2218,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             AggregationFunction.Maximum => AggregationFunctionDto.Max,
             AggregationFunction.Count   => AggregationFunctionDto.Count,
             AggregationFunction.Sum     => AggregationFunctionDto.Sum,
+            AggregationFunction.TimeWeightedAverage => AggregationFunctionDto.TimeWeightedAvg,
             _ => throw new ArgumentOutOfRangeException(nameof(func))
         };
     }

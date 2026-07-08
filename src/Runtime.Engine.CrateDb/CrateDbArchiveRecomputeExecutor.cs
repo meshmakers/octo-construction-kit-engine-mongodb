@@ -120,7 +120,10 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
                 bucketStart,
                 bucketEnd,
                 source.UsesWindowedStorage,
-                rtIdScope: scope);
+                rtIdScope: scope,
+                // TWA carry is derived from source data with the same bounded lookback the forward
+                // aggregation uses — identical inputs ⇒ identical staged rows (AB#4336 D1).
+                carryLookback: rollup.CarryLookback);
 
             // This per-bucket INSERT ... SELECT is the recompute source read. It runs through
             // CrateDatabaseClient.ExecuteNonQueryAsync, which is wrapped in the shared Polly resilience

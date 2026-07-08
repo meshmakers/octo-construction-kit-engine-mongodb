@@ -245,4 +245,96 @@ public class RollupAggregationSqlBuilderTests
             SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketEnd, BucketStart,
             sourceUsesWindowedStorage: false));
     }
+
+    // ---- TimeWeightedAvg / LOCF carry (AB#4336) ----
+
+    [Fact]
+    public void Build_TimeWeightedAvg_RawSource_EmitsLocfCarryStatement()
+    {
+        var aggregations = new[] { new CkRollupAggregationSpec("dimmingLevel", CkRollupFunction.TimeWeightedAvg, null) };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
+
+        // TWA → two stored columns: integral (value*ms) + covered duration (ms).
+        Assert.Contains("\"dimminglevel_twavg_integral\"", sql);
+        Assert.Contains("\"dimminglevel_twavg_duration\"", sql);
+        Assert.Contains(
+            "SUM(CASE WHEN \"dimminglevel\" IS NOT NULL THEN \"dimminglevel\" * \"dt_ms\" END) AS \"dimminglevel_twavg_integral\"",
+            sql);
+        Assert.Contains(
+            "SUM(CASE WHEN \"dimminglevel\" IS NOT NULL THEN \"dt_ms\" END) AS \"dimminglevel_twavg_duration\"",
+            sql);
+        // Carry-in: latest observation before the bucket, surfaced as a virtual event at B_start.
+        Assert.Contains("ROW_NUMBER() OVER (PARTITION BY \"rtid\" ORDER BY \"timestamp\" DESC) AS \"rn\"", sql);
+        Assert.Contains("TRUE AS \"is_carry\"", sql);
+        // Interval weighting via LEAD, carry ordered first on ties, capped at the bucket end.
+        Assert.Contains("LEAD(\"ts\") OVER (PARTITION BY \"rtid\" ORDER BY \"ts\", \"is_carry\" DESC)", sql);
+        // Default lookback bound: 35 days before the bucket start (2026-05-11 → 2026-04-06).
+        Assert.Contains("'2026-04-06T14:00:00.0000000Z'::timestamp", sql);
+        // Still an idempotent upsert on the standard conflict key.
+        Assert.Contains("ON CONFLICT (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\", \"generation\")", sql);
+    }
+
+    [Fact]
+    public void Build_TimeWeightedAvg_CustomCarryLookback_BoundsTheCarryScan()
+    {
+        var aggregations = new[] { new CkRollupAggregationSpec("dimmingLevel", CkRollupFunction.TimeWeightedAvg, null) };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false, carryLookback: TimeSpan.FromDays(7));
+
+        Assert.Contains("'2026-05-04T14:00:00.0000000Z'::timestamp", sql);
+    }
+
+    [Fact]
+    public void Build_TimeWeightedAvg_MixedWithPlainAggregation_GuardsPlainAggregatesAgainstCarryRow()
+    {
+        var aggregations = new[]
+        {
+            new CkRollupAggregationSpec("voltage", CkRollupFunction.Max, null),
+            new CkRollupAggregationSpec("dimmingLevel", CkRollupFunction.TimeWeightedAvg, null),
+        };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
+
+        // The plain MAX must not see the carry-in virtual row — it lies outside the bucket.
+        Assert.Contains("MAX(CASE WHEN NOT \"is_carry\" THEN \"voltage\" END) AS \"voltage_max\"", sql);
+    }
+
+    [Fact]
+    public void Build_TimeWeightedAvg_WindowedSource_WeightsByWindowLength_NoCarry()
+    {
+        // Over a windowed source (TimeRangeArchive) the weight is the row's own window length —
+        // the windows ARE the coverage; no LOCF machinery.
+        var aggregations = new[] { new CkRollupAggregationSpec("dimmingLevel", CkRollupFunction.TimeWeightedAvg, null) };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: true);
+
+        Assert.Contains(
+            "SUM(CASE WHEN \"dimminglevel\" IS NOT NULL THEN \"dimminglevel\" * (\"window_end\"::bigint - \"window_start\"::bigint) END)",
+            sql);
+        Assert.DoesNotContain("is_carry", sql);
+        Assert.DoesNotContain("LEAD(", sql);
+    }
+
+    [Fact]
+    public void Build_TimeWeightedAvg_RtIdScope_AppliesToCarryAndBucketScans()
+    {
+        var aggregations = new[] { new CkRollupAggregationSpec("dimmingLevel", CkRollupFunction.TimeWeightedAvg, null) };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false, rtIdScope: "mp-42");
+
+        // Both the carry-in scan and the in-bucket scan must be scoped.
+        var occurrences = sql.Split("AND \"rtid\" = 'mp-42'").Length - 1;
+        Assert.Equal(2, occurrences);
+    }
 }
