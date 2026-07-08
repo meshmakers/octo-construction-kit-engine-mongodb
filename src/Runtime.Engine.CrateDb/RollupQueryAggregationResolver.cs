@@ -132,8 +132,14 @@ public static class RollupQueryAggregationResolver
                     OutputColumnName: outputColumnName),
 
             // Source StateDuration materialised as a single ms column — the total time-in-state
-            // over the query window is the SUM of the per-bucket durations (AB#4336). Queried with
-            // target SUM; there is no dedicated query-surface function.
+            // over the query window is the SUM of the per-bucket durations (AB#4336). The
+            // dedicated StateDuration target (AB#4341) resolves identically.
+            (CkRollupFunction.StateDuration, AggregationFunctionDto.StateDuration) when targetColumns.Count == 1
+                => new RollupQueryAggregation(
+                    SqlExpression: $"SUM(\"{targetColumns[0].ColumnName}\")",
+                    SqlAlias: $"{outputColumnName.ToLowerInvariant()}_stateduration",
+                    OutputColumnName: outputColumnName),
+
             (CkRollupFunction.StateDuration, AggregationFunctionDto.Sum) when targetColumns.Count == 1
                 => new RollupQueryAggregation(
                     SqlExpression: $"SUM(\"{targetColumns[0].ColumnName}\")",

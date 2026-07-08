@@ -326,6 +326,17 @@ public static class RollupChainAggregationResolver
                     SqlAlias: $"{alias}_avg",
                     OutputColumnName: outputColumnName);
             }
+            case AggregationFunctionDto.StateDuration:
+            {
+                // Total ms-in-state over the window: SUM of the (possibly SUM-cascaded)
+                // per-bucket durations (AB#4336 / AB#4341).
+                var origin = FindSingle(matching, CkRollupFunction.StateDuration);
+                if (origin is null) return null;
+                return new RollupQueryAggregation(
+                    SqlExpression: $"SUM(\"{origin.PhysicalColumnName}\")",
+                    SqlAlias: $"{alias}_stateduration",
+                    OutputColumnName: outputColumnName);
+            }
             case AggregationFunctionDto.TimeWeightedAvg:
             {
                 // TWA recombines exclusively from its own materialised (integral, duration) pair —

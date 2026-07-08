@@ -588,7 +588,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // the standard single-scan builder cannot express the carry / interval weighting. Routed
         // before the query builder is assembled; plain columns ride along in the same statement.
         if (!snapshot.UsesWindowedStorage
-            && options.AggregationColumns.Any(c => c.Function == AggregationFunction.TimeWeightedAverage))
+            && options.AggregationColumns.Any(c =>
+                c.Function is AggregationFunction.TimeWeightedAverage or AggregationFunction.StateDuration))
         {
             return await ExecuteRawTimeWeightedAggregationAsync(
                 archiveRtId, fieldResolver, options, options.AggregationColumns, Array.Empty<string>());
@@ -710,7 +711,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // AB#4336 §6.2: TWA over a raw archive — LOCF statement, grouped variant. See
         // ExecuteAggregationQueryAsync for the same routing rationale.
         if (!snapshot.UsesWindowedStorage
-            && options.AggregationColumns.Any(c => c.Function == AggregationFunction.TimeWeightedAverage))
+            && options.AggregationColumns.Any(c =>
+                c.Function is AggregationFunction.TimeWeightedAverage or AggregationFunction.StateDuration))
         {
             return await ExecuteRawTimeWeightedAggregationAsync(
                 archiveRtId, fieldResolver, options, options.AggregationColumns, options.GroupByColumns);
@@ -2295,6 +2297,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             AggregationFunction.Count   => AggregationFunctionDto.Count,
             AggregationFunction.Sum     => AggregationFunctionDto.Sum,
             AggregationFunction.TimeWeightedAverage => AggregationFunctionDto.TimeWeightedAvg,
+            AggregationFunction.StateDuration => AggregationFunctionDto.StateDuration,
             _ => throw new ArgumentOutOfRangeException(nameof(func))
         };
     }
@@ -2338,6 +2341,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
 
         var twaColumns = new List<TimeWeightedQuerySqlBuilder.TwaColumn>();
+        var stateColumns = new List<TimeWeightedQuerySqlBuilder.StateColumn>();
         var plainColumns = new List<TimeWeightedQuerySqlBuilder.PlainColumn>();
         foreach (var col in aggregationColumns)
         {
@@ -2352,6 +2356,20 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 twaColumns.Add(new TimeWeightedQuerySqlBuilder.TwaColumn(resolved.CrateDbName, twaAlias));
                 outputColumnNames.Add(twaAlias);
                 outputNameBySqlAlias[twaAlias] = twaAlias;
+            }
+            else if (col.Function == AggregationFunction.StateDuration)
+            {
+                if (string.IsNullOrWhiteSpace(col.ComparisonValue))
+                {
+                    throw StreamDataException.InvalidQueryParameters(
+                        $"StateDuration on '{col.AttributePath}' requires a comparisonValue — the state literal to measure the duration of.");
+                }
+
+                var stateAlias = $"{resolved.CrateDbName}_stateduration";
+                stateColumns.Add(new TimeWeightedQuerySqlBuilder.StateColumn(
+                    resolved.CrateDbName, col.ComparisonValue!, stateAlias));
+                outputColumnNames.Add(stateAlias);
+                outputNameBySqlAlias[stateAlias] = stateAlias;
             }
             else
             {
@@ -2374,7 +2392,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             groupColumns,
             options.RtIds?.Select(id => id.ToString()).ToList(),
             RollupAggregationSqlBuilder.DefaultCarryLookback,
-            filterDtos);
+            filterDtos,
+            stateColumns);
 
         _logger.LogDebug("Executing raw time-weighted aggregation SQL: {Sql}", sql);
 

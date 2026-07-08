@@ -30,4 +30,9 @@ public enum AggregationFunctionDto
     /// materialise a TimeWeightedAvg aggregation (integral/duration pair). AB#4336.
     /// </summary>
     TimeWeightedAvg,
+    /// <summary>
+    /// Absolute ms-in-state with LOCF semantics (requires a comparison value). Supported over raw
+    /// event archives and rollups that materialise a StateDuration aggregation. AB#4336/AB#4341.
+    /// </summary>
+    StateDuration,
 }

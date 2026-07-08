@@ -35,6 +35,13 @@ internal static class TimeWeightedQuerySqlBuilder
     public sealed record PlainColumn(string SqlFunction, string SourceColumn, string OutputAlias);
 
     /// <summary>
+    /// One StateDuration output column: absolute ms the signal held <paramref name="ComparisonValue"/>
+    /// (the raw CK-model string form, rendered via <see cref="CrateSqlLiteral.StateLiteral"/>).
+    /// AB#4336 / AB#4341.
+    /// </summary>
+    public sealed record StateColumn(string SourceColumn, string ComparisonValue, string OutputAlias);
+
+    /// <summary>
     /// Builds the SELECT statement. The caller supplies the already-quoted, schema-qualified
     /// source table (see <see cref="TenantSchema.QualifiedArchiveTable"/>) and pre-resolved
     /// physical column names; output aliases become the result-row keys.
@@ -69,10 +76,14 @@ internal static class TimeWeightedQuerySqlBuilder
         IReadOnlyList<string> groupByColumns,
         IReadOnlyList<string>? rtIds,
         TimeSpan carryLookback,
-        IReadOnlyList<StreamDataFieldFilterDto>? fieldFilters = null)
+        IReadOnlyList<StreamDataFieldFilterDto>? fieldFilters = null,
+        IReadOnlyList<StateColumn>? stateColumns = null)
     {
+        stateColumns ??= Array.Empty<StateColumn>();
         if (string.IsNullOrWhiteSpace(sourceTable)) throw new ArgumentException("sourceTable must not be empty.", nameof(sourceTable));
-        if (twaColumns is null || twaColumns.Count == 0) throw new ArgumentException("At least one time-weighted column is required.", nameof(twaColumns));
+        if ((twaColumns is null || twaColumns.Count == 0) && stateColumns.Count == 0)
+            throw new ArgumentException("At least one time-weighted or state-duration column is required.", nameof(twaColumns));
+        twaColumns ??= Array.Empty<TwaColumn>();
         if (to <= from) throw new ArgumentException("to must be greater than from.", nameof(to));
         if (carryLookback <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(carryLookback));
 
@@ -85,6 +96,7 @@ internal static class TimeWeightedQuerySqlBuilder
         var carried = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal) { Constants.RtId, Constants.RtWellKnownName };
         foreach (var c in twaColumns.Select(t => t.SourceColumn)
+                     .Concat(stateColumns.Select(sc => sc.SourceColumn))
                      .Concat(plainColumns.Select(p => p.SourceColumn))
                      .Concat(groupByColumns))
         {
@@ -141,6 +153,16 @@ internal static class TimeWeightedQuerySqlBuilder
               .Append(t.SourceColumn).Append("\" * \"dt_ms\" END) / NULLIF(SUM(CASE WHEN \"")
               .Append(t.SourceColumn).Append("\" IS NOT NULL THEN \"dt_ms\" END), 0) AS \"")
               .Append(t.OutputAlias).Append('"');
+            first = false;
+        }
+        foreach (var sc in stateColumns)
+        {
+            if (!first) sb.Append(", ");
+            // Absolute ms the signal held the comparison value — the carry row participates so a
+            // state held across the whole window is fully counted (AB#4336 / AB#4341).
+            sb.Append("SUM(CASE WHEN \"").Append(sc.SourceColumn).Append("\" = ")
+              .Append(CrateSqlLiteral.StateLiteral(sc.ComparisonValue))
+              .Append(" THEN \"dt_ms\" END) AS \"").Append(sc.OutputAlias).Append('"');
             first = false;
         }
 
