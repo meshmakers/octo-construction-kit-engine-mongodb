@@ -1,4 +1,5 @@
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 
@@ -142,5 +143,70 @@ public class StreamDataFieldResolver
             StreamDataFieldCategory.Unknown,
             ColumnNameMapper.PathToColumnName(input),
             input.ToCamelCase());
+    }
+
+    /// <summary>
+    /// The canonical way to build a resolver from an <see cref="ArchiveSnapshot"/>. Ingested
+    /// columns feed the ctor's path mapping; computed columns (AB#4189) have an empty
+    /// <see cref="CkArchiveColumnSpec.Path"/> — passing them through the ctor throws — and are
+    /// registered explicitly under their logical <c>Name</c> mapped to the active versioned
+    /// physical column (see <see cref="ReadableComputedColumns"/>). Every consumer that starts
+    /// from a snapshot must go through here rather than <c>snapshot.Columns.Select(c => c.Path)</c>.
+    /// </summary>
+    /// <param name="archiveSnapshot">The archive whose column spec defines the queryable fields.</param>
+    /// <param name="additionalPaths">
+    /// Extra logical attribute paths to register alongside the snapshot's ingested columns —
+    /// e.g. the rollup source-chain's logical CK paths the chain-aware aggregation resolver
+    /// translates on the engine side.
+    /// </param>
+    public static StreamDataFieldResolver CreateForArchive(
+        ArchiveSnapshot archiveSnapshot,
+        IEnumerable<string>? additionalPaths = null)
+    {
+        var paths = archiveSnapshot.Columns.Where(c => !c.IsComputed).Select(c => c.Path);
+        if (additionalPaths is not null)
+        {
+            paths = paths.Concat(additionalPaths);
+        }
+
+        var resolver = new StreamDataFieldResolver(
+            paths,
+            usesWindowedStorage: archiveSnapshot.UsesWindowedStorage);
+
+        foreach (var (name, physical) in ReadableComputedColumns(archiveSnapshot))
+        {
+            resolver.RegisterComputedColumn(name, physical);
+        }
+
+        return resolver;
+    }
+
+    /// <summary>
+    /// The computed columns the read path may project, as (logical <c>Name</c>, active versioned
+    /// physical name) pairs. A computed column mid-backfill (<see cref="ComputedColumnState.Pending"/> /
+    /// <see cref="ComputedColumnState.Backfilling"/>) or whose backfill failed
+    /// (<see cref="ComputedColumnState.Failed"/>) is excluded, so consumers keep seeing the previous
+    /// archive state until the backfill commits (AB#4189 §8.3). A computed column created together with
+    /// its archive carries no lifecycle state (<c>null</c>) and is live from creation. The ingest / DDL
+    /// path (<c>CrateDbStreamDataRepository.ResolveTableAndColumns</c>) deliberately does <em>not</em>
+    /// gate on state — even a Pending column's physical column exists and must be written on ingest;
+    /// gating is a read concern.
+    /// </summary>
+    public static IEnumerable<(string Name, string Physical)> ReadableComputedColumns(ArchiveSnapshot snapshot)
+    {
+        foreach (var c in snapshot.Columns)
+        {
+            // Defensively skip a computed column missing its Name — activation DDL would have rejected
+            // it, but the read path must never throw on a malformed snapshot.
+            if (!c.IsComputed || string.IsNullOrWhiteSpace(c.Name))
+            {
+                continue;
+            }
+
+            if (c.ComputedState is null or ComputedColumnState.Active)
+            {
+                yield return (c.Name!, ComputedColumnNaming.Active(c));
+            }
+        }
     }
 }

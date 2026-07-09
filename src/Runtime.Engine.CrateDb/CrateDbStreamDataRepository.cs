@@ -1662,7 +1662,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// row's operands, and write the result into the column's physical cell. The physical column must
     /// already exist (the lifecycle adds it via <c>ALTER TABLE ADD COLUMN</c> before the backfill).
     /// For an add the target is in a non-readable state (Backfilling) so the read path hides it
-    /// (<see cref="ReadableComputedColumns"/>) until the caller flips it to
+    /// (<see cref="StreamDataFieldResolver.ReadableComputedColumns"/>) until the caller flips it to
     /// <see cref="ComputedColumnState.Active"/>; for a formula change the target stays Active at the
     /// previous version while the new formula is backfilled into the pending versioned column.
     /// <para>
@@ -1956,47 +1956,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // T17 archives are CK-type-agnostic: the queryable column set is exactly the columns the
         // archive was configured to capture. Windowed (rollup + time-range) archives swap the
         // single `timestamp` default for the `window_start` / `window_end` / `was_updated` triple.
-        var resolver = new StreamDataFieldResolver(
-            snapshot.Columns.Where(c => !c.IsComputed).Select(c => c.Path),
-            usesWindowedStorage: snapshot.UsesWindowedStorage);
-
-        // Computed columns are registered explicitly with their *versioned* active physical name
-        // (a formula change moves them to {base}__v{N}), which the generic PathToColumnName mapping
-        // the ctor uses for ingested columns can't produce.
-        foreach (var (name, physical) in ReadableComputedColumns(snapshot))
-        {
-            resolver.RegisterComputedColumn(name, physical);
-        }
-
-        return resolver;
-    }
-
-    /// <summary>
-    /// The computed columns the read path may project, as (logical <c>Name</c>, active versioned
-    /// physical name) pairs. A computed column mid-backfill (<see cref="ComputedColumnState.Pending"/> /
-    /// <see cref="ComputedColumnState.Backfilling"/>) or whose backfill failed
-    /// (<see cref="ComputedColumnState.Failed"/>) is excluded, so consumers keep seeing the previous
-    /// archive state until the backfill commits (AB#4189 §8.3). A computed column created together with
-    /// its archive carries no lifecycle state (<c>null</c>) and is live from creation. The ingest / DDL
-    /// path (<see cref="ResolveTableAndColumns"/>) deliberately does <em>not</em> gate on state — even a
-    /// Pending column's physical column exists and must be written on ingest; gating is a read concern.
-    /// </summary>
-    internal static IEnumerable<(string Name, string Physical)> ReadableComputedColumns(ArchiveSnapshot snapshot)
-    {
-        foreach (var c in snapshot.Columns)
-        {
-            // Defensively skip a computed column missing its Name — activation DDL would have rejected
-            // it, but the read path must never throw on a malformed snapshot.
-            if (!c.IsComputed || string.IsNullOrWhiteSpace(c.Name))
-            {
-                continue;
-            }
-
-            if (c.ComputedState is null or ComputedColumnState.Active)
-            {
-                yield return (c.Name!, ComputedColumnNaming.Active(c));
-            }
-        }
+        // Computed-column handling (empty Path, versioned physical name) lives in the factory.
+        return StreamDataFieldResolver.CreateForArchive(snapshot);
     }
 
     /// <summary>

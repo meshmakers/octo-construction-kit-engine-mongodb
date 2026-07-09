@@ -31,7 +31,7 @@ public class CrateDbReadableColumnIdentifiersTests
         };
 
     private static (string Name, string Physical)[] Readable(params CkArchiveColumnSpec[] columns) =>
-        CrateDbStreamDataRepository.ReadableComputedColumns(
+        StreamDataFieldResolver.ReadableComputedColumns(
                 new ArchiveSnapshot(Archive, SomeType, CkArchiveStatus.Activated, "energy", columns))
             .ToArray();
 

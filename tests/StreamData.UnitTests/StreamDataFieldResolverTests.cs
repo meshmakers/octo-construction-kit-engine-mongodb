@@ -1,3 +1,6 @@
+using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.Formulas;
+using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb.UnitTests;
@@ -177,5 +180,69 @@ public class StreamDataFieldResolverTests
         Assert.NotNull(resolver.Resolve("rtWellKnownName"));
         Assert.NotNull(resolver.Resolve("rtCreationDateTime"));
         Assert.NotNull(resolver.Resolve("rtChangedDateTime"));
+    }
+
+    // ─── CreateForArchive (snapshot factory) ─────────────────────────────────
+
+    private static ArchiveSnapshot SnapshotWith(params CkArchiveColumnSpec[] columns) =>
+        new(
+            OctoObjectId.GenerateNewId(),
+            new RtCkId<CkTypeId>("Basic.Energy", new CkTypeId("EnergyMeasurement")),
+            CkArchiveStatus.Activated,
+            "energy-measurements",
+            columns)
+        { IsTimeRange = true };
+
+    [Fact]
+    public void CreateForArchive_ComputedColumn_DoesNotThrowAndRegistersLogicalName()
+    {
+        // Regression: a computed column has an empty Path by design — feeding it through the
+        // ctor's PathToColumnName threw and broke every query on an archive with a computed
+        // column (voestalpine energy_measurements incident, 2026-07-06).
+        var resolver = StreamDataFieldResolver.CreateForArchive(SnapshotWith(
+            new CkArchiveColumnSpec("Amount.Value", Indexed: false, Required: true),
+            new CkArchiveColumnSpec(string.Empty, Indexed: true, Required: false)
+            {
+                Name = "amountkw3",
+                Formula = "amountvalue / 1000",
+                ResultType = FormulaResultType.Double,
+                ComputedState = ComputedColumnState.Active,
+                ComputedVersion = 2,
+            }));
+
+        var ingested = resolver.Resolve("Amount.Value");
+        Assert.NotNull(ingested);
+        Assert.Equal("amountvalue", ingested.CrateDbName);
+
+        // Computed column resolves under its logical name to the versioned physical column.
+        var computed = resolver.Resolve("amountkw3");
+        Assert.NotNull(computed);
+        Assert.Equal("amountkw3__v2", computed.CrateDbName);
+    }
+
+    [Fact]
+    public void CreateForArchive_AdditionalPaths_AreRegistered()
+    {
+        var resolver = StreamDataFieldResolver.CreateForArchive(
+            SnapshotWith(new CkArchiveColumnSpec("ObisCode", Indexed: true, Required: true)),
+            additionalPaths: ["amount.value"]);
+
+        Assert.NotNull(resolver.Resolve("amount.value"));
+        Assert.Equal("amountvalue", resolver.Resolve("amount.value")!.CrateDbName);
+    }
+
+    [Fact]
+    public void CreateForArchive_NonReadableComputedColumn_IsNotRegistered()
+    {
+        // Mid-backfill columns stay hidden from the read path (AB#4189 §8.3).
+        var resolver = StreamDataFieldResolver.CreateForArchive(SnapshotWith(
+            new CkArchiveColumnSpec(string.Empty, Indexed: false, Required: false)
+            {
+                Name = "pending",
+                Formula = "a + b",
+                ComputedState = ComputedColumnState.Backfilling,
+            }));
+
+        Assert.Null(resolver.Resolve("pending"));
     }
 }
