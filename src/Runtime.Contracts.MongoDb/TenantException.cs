@@ -17,6 +17,14 @@ public class TenantException : PersistenceException
     {
     }
 
+    /// <summary>
+    /// True when this exception represents a resource conflict (the tenant or its database already
+    /// exists) rather than a generic bad request. Lets the REST layer map it to 409 Conflict — and,
+    /// for the database case, signal that a previous deletion may still be completing so the caller
+    /// can retry (AB#4348).
+    /// </summary>
+    public bool IsConflict { get; private init; }
+
     internal static Exception SystemModelNotFoundInCatalog(CkModelId ckModelId)
     {
         return new TenantException($"System model {ckModelId} not found in any catalog.");
@@ -39,7 +47,7 @@ public class TenantException : PersistenceException
 
     public static Exception TenantDoesAlreadyExist(string tenantId)
     {
-        return new TenantException($"Tenant {tenantId} does already exist.");
+        return new TenantException($"Tenant {tenantId} does already exist.") { IsConflict = true };
     }
 
     public static Exception TenantDoesNotExist(string tenantId)
@@ -54,7 +62,10 @@ public class TenantException : PersistenceException
 
     public static Exception TenantDatabaseDoesAlreadyExist(string normalizedDatabaseName)
     {
-        return new TenantException($"Tenant database '{normalizedDatabaseName}' does already exist.");
+        return new TenantException(
+            $"Tenant database '{normalizedDatabaseName}' already exists. A previous tenant deletion may " +
+            "still be completing its database drop, or the database is orphaned. Retry shortly, or use " +
+            "Attach if you intend to reuse an existing database.") { IsConflict = true };
     }
 
     public static Exception TenantDatabaseDoesNotExist(string databaseName)
