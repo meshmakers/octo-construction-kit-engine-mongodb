@@ -80,6 +80,14 @@ public static class RuntimeEngineBuilderExtensions
         // database lookups happen inside each call.
         builder.Services.AddSingleton<IIndexUsageService, IndexUsageService>();
 
+        // AB#4348 durable tenant-lifecycle state. Persists one document per tenant in a non-CK
+        // tenant_lifecycle collection in the system database, resolved via ISystemContext + admin client
+        // (same pattern as IndexUsageService). Singleton because its dependencies are singletons and the
+        // per-call system-database lookup is cheap.
+        builder.Services
+            .AddSingleton<Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle.ITenantLifecycleStore,
+                Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantLifecycle.TenantLifecycleStore>();
+
         // Stage 2B explain cache — singleton, shared between admin and user MongoDB
         // connections so a tenant query's explain finishes wherever the listener that
         // dispatched it ran, and is reachable from the Diagnostics read endpoint. Disabled

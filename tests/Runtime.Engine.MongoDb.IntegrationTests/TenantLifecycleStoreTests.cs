@@ -1,0 +1,68 @@
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
+using Xunit;
+
+namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
+
+/// <summary>
+/// Integration tests for the durable tenant-lifecycle store (AB#4348). Exercises the state machine and
+/// the backfill / no-downgrade semantics against a real MongoDB system database.
+/// </summary>
+[Collection(SystemCollection.Name)]
+public class TenantLifecycleStoreTests(SystemFixture fixture)
+{
+    private ITenantLifecycleStore Store => fixture.GetService<ITenantLifecycleStore>();
+
+    [Fact]
+    public async Task Transitions_persist_and_backfill_semantics_hold()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var store = Store;
+        var tenantId = $"lc-{Guid.NewGuid():N}"[..20];
+
+        // Missing until the first write.
+        Assert.Null(await store.GetAsync(tenantId, ct));
+
+        // EnsureCreating inserts a Creating record.
+        var correlationId = Guid.NewGuid();
+        await store.EnsureCreatingAsync(tenantId, $"db-{tenantId}", correlationId, ct);
+        var creating = await store.GetAsync(tenantId, ct);
+        Assert.NotNull(creating);
+        Assert.Equal(TenantLifecycleState.Creating, creating!.State);
+        Assert.Equal(TenantLifecyclePhase.SetupStarted, creating.Phase);
+        Assert.Equal($"db-{tenantId}", creating.DatabaseName);
+        Assert.Equal(correlationId, creating.CorrelationId);
+
+        // Idempotent: a second EnsureCreating does not create a duplicate row.
+        await store.EnsureCreatingAsync(tenantId, null, Guid.Empty, ct);
+        Assert.Single(await store.ListAsync(ct), r => r.TenantId == tenantId);
+
+        // MarkActive -> Active.
+        await store.MarkActiveAsync(tenantId, cancellationToken: ct);
+        Assert.Equal(TenantLifecycleState.Active, (await store.GetAsync(tenantId, ct))!.State);
+
+        // EnsureCreating must NOT downgrade an already-Active tenant (this is the startup re-seed /
+        // lazy-backfill path — a healthy tenant re-running setup stays Active).
+        await store.EnsureCreatingAsync(tenantId, null, Guid.NewGuid(), ct);
+        Assert.Equal(TenantLifecycleState.Active, (await store.GetAsync(tenantId, ct))!.State);
+
+        // MarkFailed -> Failed, capturing the error and bumping the attempt count.
+        await store.MarkFailedAsync(tenantId, "boom", ct);
+        var failed = await store.GetAsync(tenantId, ct);
+        Assert.Equal(TenantLifecycleState.Failed, failed!.State);
+        Assert.Equal("boom", failed.LastError);
+        Assert.Equal(1, failed.AttemptCount);
+
+        // A fresh setup after a stale Failed/Deleting record resets it back to Creating (re-create).
+        await store.EnsureCreatingAsync(tenantId, null, Guid.Empty, ct);
+        Assert.Equal(TenantLifecycleState.Creating, (await store.GetAsync(tenantId, ct))!.State);
+
+        // MarkDeleting -> Deleting tombstone; Remove -> gone.
+        await store.MarkDeletingAsync(tenantId, ct);
+        Assert.Equal(TenantLifecycleState.Deleting, (await store.GetAsync(tenantId, ct))!.State);
+
+        await store.RemoveAsync(tenantId, ct);
+        Assert.Null(await store.GetAsync(tenantId, ct));
+    }
+}
