@@ -169,6 +169,52 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
         await collection.DeleteOneAsync(Eq(tenantId), cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<TenantLifecycleRecord?> TryClaimForReconcileAsync(string leaseOwner, TimeSpan leaseDuration,
+        CancellationToken cancellationToken = default)
+    {
+        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var now = DateTime.UtcNow;
+
+        // Claim the longest-waiting Creating tenant whose lease is free (null/missing) or expired. The
+        // find-and-update is atomic, so two instances can never claim the same tenant.
+        var filter = Builders<TenantLifecycleRecord>.Filter.And(
+            Builders<TenantLifecycleRecord>.Filter.Eq(r => r.State, TenantLifecycleState.Creating),
+            Builders<TenantLifecycleRecord>.Filter.Or(
+                Builders<TenantLifecycleRecord>.Filter.Eq(r => r.LeaseUntil, null),
+                Builders<TenantLifecycleRecord>.Filter.Lt(r => r.LeaseUntil, now)));
+
+        var update = Builders<TenantLifecycleRecord>.Update
+            .Set(r => r.LeaseOwner, leaseOwner)
+            .Set(r => r.LeaseUntil, now.Add(leaseDuration))
+            .Inc(r => r.AttemptCount, 1)
+            .Set(r => r.LastTransitionUtc, now);
+
+        var options = new FindOneAndUpdateOptions<TenantLifecycleRecord>
+        {
+            ReturnDocument = ReturnDocument.After,
+            Sort = Builders<TenantLifecycleRecord>.Sort.Ascending(r => r.LastTransitionUtc)
+        };
+
+        return await collection.FindOneAndUpdateAsync(filter, update, options, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task ReleaseLeaseAsync(string tenantId, string leaseOwner,
+        CancellationToken cancellationToken = default)
+    {
+        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+
+        var filter = Builders<TenantLifecycleRecord>.Filter.And(
+            Eq(tenantId),
+            Builders<TenantLifecycleRecord>.Filter.Eq(r => r.LeaseOwner, leaseOwner));
+
+        var update = Builders<TenantLifecycleRecord>.Update
+            .Set(r => r.LeaseOwner, (string?)null)
+            .Set(r => r.LeaseUntil, (DateTime?)null);
+
+        await collection.UpdateOneAsync(filter, update, cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
     private static FilterDefinition<TenantLifecycleRecord> Eq(string tenantId)
         => Builders<TenantLifecycleRecord>.Filter.Eq(r => r.TenantId, tenantId);
 

@@ -41,4 +41,20 @@ public interface ITenantLifecycleStore
 
     /// <summary>Removes the lifecycle record entirely (the tenant is fully gone).</summary>
     Task RemoveAsync(string tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Atomically claims one <see cref="TenantLifecycleState.Creating"/> tenant whose lease is free or
+    /// expired, stamping it with <paramref name="leaseOwner"/> for <paramref name="leaseDuration"/> and
+    /// bumping its attempt count. Returns the claimed record (with the incremented attempt count), or
+    /// <c>null</c> when nothing needs reconciling. The claim is a single MongoDB find-and-update, so at
+    /// most one service instance can own a given tenant at a time (Phase 2 single-flight — AB#4348).
+    /// </summary>
+    Task<TenantLifecycleRecord?> TryClaimForReconcileAsync(string leaseOwner, TimeSpan leaseDuration,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Releases a reconcile lease held by <paramref name="leaseOwner"/> so the tenant becomes immediately
+    /// claimable again. No-op if the lease is held by someone else or already cleared.
+    /// </summary>
+    Task ReleaseLeaseAsync(string tenantId, string leaseOwner, CancellationToken cancellationToken = default);
 }

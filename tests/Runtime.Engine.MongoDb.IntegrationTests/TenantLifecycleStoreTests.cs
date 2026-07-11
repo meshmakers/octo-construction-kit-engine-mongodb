@@ -65,4 +65,40 @@ public class TenantLifecycleStoreTests(SystemFixture fixture)
         await store.RemoveAsync(tenantId, ct);
         Assert.Null(await store.GetAsync(tenantId, ct));
     }
+
+    [Fact]
+    public async Task Reconcile_lease_is_single_flight()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var store = Store;
+        var tenantId = $"ll-{Guid.NewGuid():N}"[..20];
+
+        await store.EnsureCreatingAsync(tenantId, null, Guid.NewGuid(), ct);
+
+        // First claim leases the tenant and bumps the attempt count.
+        var first = await store.TryClaimForReconcileAsync("owner-a", TimeSpan.FromMinutes(5), ct);
+        Assert.NotNull(first);
+        Assert.Equal(tenantId, first!.TenantId);
+        Assert.Equal(1, first.AttemptCount);
+        Assert.Equal("owner-a", first.LeaseOwner);
+
+        // A second claim finds nothing — the only Creating tenant is leased and not yet expired.
+        Assert.Null(await store.TryClaimForReconcileAsync("owner-b", TimeSpan.FromMinutes(5), ct));
+
+        // Releasing the lease makes it claimable again (by a different owner), bumping the attempt again.
+        await store.ReleaseLeaseAsync(tenantId, "owner-a", ct);
+        var third = await store.TryClaimForReconcileAsync("owner-b", TimeSpan.FromMinutes(5), ct);
+        Assert.NotNull(third);
+        Assert.Equal(tenantId, third!.TenantId);
+        Assert.Equal(2, third.AttemptCount);
+
+        // Once Active, the lease is cleared and the tenant is no longer claimable.
+        await store.MarkActiveAsync(tenantId, cancellationToken: ct);
+        var active = await store.GetAsync(tenantId, ct);
+        Assert.Equal(TenantLifecycleState.Active, active!.State);
+        Assert.Null(active.LeaseOwner);
+        Assert.Null(await store.TryClaimForReconcileAsync("owner-c", TimeSpan.FromMinutes(5), ct));
+
+        await store.RemoveAsync(tenantId, ct);
+    }
 }
