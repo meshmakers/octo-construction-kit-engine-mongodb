@@ -64,6 +64,11 @@ public class TenantLifecycleStoreTests(SystemFixture fixture)
 
         await store.RemoveAsync(tenantId, ct);
         Assert.Null(await store.GetAsync(tenantId, ct));
+
+        // MarkDeleting is update-only: it must NOT resurrect a record for a tenant that has none
+        // (e.g. a legacy tenant), otherwise a re-create would be blocked by a phantom tombstone.
+        await store.MarkDeletingAsync(tenantId, ct);
+        Assert.Null(await store.GetAsync(tenantId, ct));
     }
 
     [Fact]

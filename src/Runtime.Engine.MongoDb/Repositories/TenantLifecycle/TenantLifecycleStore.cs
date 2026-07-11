@@ -149,17 +149,18 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
     public async Task MarkDeletingAsync(string tenantId, CancellationToken cancellationToken = default)
     {
         var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
-        var now = DateTime.UtcNow;
 
+        // Update-only (no upsert): a tenant with no lifecycle record (e.g. a legacy tenant created before
+        // this feature) needs no tombstone — there is nothing for a concurrent Create to serialize against
+        // beyond the existing metadata / database-exists guards. Upserting here would instead leave a
+        // phantom Deleting record for a non-existent tenant and permanently 409 any re-create.
         var update = Builders<TenantLifecycleRecord>.Update
             .Set(r => r.State, TenantLifecycleState.Deleting)
             .Set(r => r.LeaseOwner, (string?)null)
             .Set(r => r.LeaseUntil, (DateTime?)null)
-            .Set(r => r.LastTransitionUtc, now)
-            .SetOnInsert(r => r.CreatedUtc, now)
-            .SetOnInsert(r => r.CorrelationId, Guid.Empty);
+            .Set(r => r.LastTransitionUtc, DateTime.UtcNow);
 
-        await collection.UpdateOneAsync(Eq(tenantId), update, new UpdateOptions { IsUpsert = true }, cancellationToken)
+        await collection.UpdateOneAsync(Eq(tenantId), update, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
     }
 
