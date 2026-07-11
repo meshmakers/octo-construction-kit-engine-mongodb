@@ -57,4 +57,13 @@ public interface ITenantLifecycleStore
     /// claimable again. No-op if the lease is held by someone else or already cleared.
     /// </summary>
     Task ReleaseLeaseAsync(string tenantId, string leaseOwner, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Operator safety valve: re-open a tenant's record for reconciliation. Resets the state back to
+    /// <see cref="TenantLifecycleState.Creating"/>, zeroes the attempt budget, clears the last error and
+    /// any held lease, so the reconciler drives the tenant to completion again. Update-only: returns the
+    /// resulting record, or <c>null</c> when the tenant has no lifecycle record (AB#4348 Phase 4).
+    /// </summary>
+    Task<TenantLifecycleRecord?> RequeueForReconcileAsync(string tenantId,
+        CancellationToken cancellationToken = default);
 }

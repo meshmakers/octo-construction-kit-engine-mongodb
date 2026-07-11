@@ -216,6 +216,26 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
         await collection.UpdateOneAsync(filter, update, cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<TenantLifecycleRecord?> RequeueForReconcileAsync(string tenantId,
+        CancellationToken cancellationToken = default)
+    {
+        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+
+        var update = Builders<TenantLifecycleRecord>.Update
+            .Set(r => r.State, TenantLifecycleState.Creating)
+            .Set(r => r.Phase, TenantLifecyclePhase.SetupStarted)
+            .Set(r => r.AttemptCount, 0)
+            .Set(r => r.LastError, (string?)null)
+            .Set(r => r.LeaseOwner, (string?)null)
+            .Set(r => r.LeaseUntil, (DateTime?)null)
+            .Set(r => r.LastTransitionUtc, DateTime.UtcNow);
+
+        // Update-only (no upsert): returns the reset record, or null when the tenant has no record.
+        var options = new FindOneAndUpdateOptions<TenantLifecycleRecord> { ReturnDocument = ReturnDocument.After };
+        return await collection.FindOneAndUpdateAsync(Eq(tenantId), update, options, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     private static FilterDefinition<TenantLifecycleRecord> Eq(string tenantId)
         => Builders<TenantLifecycleRecord>.Filter.Eq(r => r.TenantId, tenantId);
 

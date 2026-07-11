@@ -106,4 +106,34 @@ public class TenantLifecycleStoreTests(SystemFixture fixture)
 
         await store.RemoveAsync(tenantId, ct);
     }
+
+    [Fact]
+    public async Task Requeue_reopens_a_failed_tenant_for_reconcile()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var store = Store;
+        var tenantId = $"lr-{Guid.NewGuid():N}"[..20];
+
+        // Requeue on a tenant with no record returns null (nothing to reopen).
+        Assert.Null(await store.RequeueForReconcileAsync(tenantId, ct));
+
+        await store.EnsureCreatingAsync(tenantId, null, Guid.NewGuid(), ct);
+        await store.MarkFailedAsync(tenantId, "gave up", ct);
+        Assert.Equal(TenantLifecycleState.Failed, (await store.GetAsync(tenantId, ct))!.State);
+
+        // Requeue re-opens it: Creating, attempt budget reset, error/lease cleared.
+        var reopened = await store.RequeueForReconcileAsync(tenantId, ct);
+        Assert.NotNull(reopened);
+        Assert.Equal(TenantLifecycleState.Creating, reopened!.State);
+        Assert.Equal(0, reopened.AttemptCount);
+        Assert.Null(reopened.LastError);
+        Assert.Null(reopened.LeaseOwner);
+
+        // A reopened tenant is claimable by the reconciler again.
+        var claim = await store.TryClaimForReconcileAsync("owner", TimeSpan.FromMinutes(5), ct);
+        Assert.NotNull(claim);
+        Assert.Equal(tenantId, claim!.TenantId);
+
+        await store.RemoveAsync(tenantId, ct);
+    }
 }
