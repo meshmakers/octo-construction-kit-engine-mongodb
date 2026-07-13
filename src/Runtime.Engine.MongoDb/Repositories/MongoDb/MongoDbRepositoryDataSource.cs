@@ -169,10 +169,16 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     public override async Task<IReadOnlyList<RtAssociationsMultiplicityResult>> GetRtAssociationsMultiplicityAsync(
         IOctoSession session, IEnumerable<RtEntityRoleIdDirectionPair> entityRoleIdDirectionPairs)
     {
-        List<FilterDefinition<RtAssociation>> filters = new();
-        IEnumerable<RtEntityRoleIdDirectionPair> rtEntityRoleIdDirectionPairs = entityRoleIdDirectionPairs.ToList();
-        foreach (var pair in rtEntityRoleIdDirectionPairs)
+        // Only Zero/One/Many is needed, so each count is capped at 2 — the server stops at the
+        // second match instead of walking the whole index range. Materializing the matching
+        // documents here scaled O(edge count) per association write and saturated MongoDB on
+        // high-frequency targets (e.g. a pipeline with 650k execution edges).
+        var multiplicityResults = new List<RtAssociationsMultiplicityResult>();
+
+        foreach (var pair in entityRoleIdDirectionPairs)
         {
+            List<FilterDefinition<RtAssociation>> filters = new();
+
             if (pair.Direction == GraphDirections.Inbound || pair.Direction == GraphDirections.Any)
             {
                 filters.Add(Builders<RtAssociation>.Filter.And(
@@ -190,31 +196,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     Builders<RtAssociation>.Filter.Eq(x => x.AssociationRoleId, pair.CkRoleId)
                 ));
             }
-        }
 
-        if (filters.Count == 0)
-        {
-            return [];
-        }
+            if (filters.Count == 0)
+            {
+                multiplicityResults.Add(new RtAssociationsMultiplicityResult(pair, CurrentMultiplicity.Zero));
+                continue;
+            }
 
-        var orFilter = Builders<RtAssociation>.Filter.Or(filters);
-
-        var aggregate = RtMongoDbDataSourceAssociations.Aggregate(session);
-        var aggregateFluent = aggregate.Match(orFilter);
-
-        var result = await aggregateFluent.ToListAsync();
-
-        var multiplicityResults = new List<RtAssociationsMultiplicityResult>();
-
-        foreach (var pair in rtEntityRoleIdDirectionPairs)
-        {
-            var count = result.Count(x => x.AssociationRoleId == pair.CkRoleId &&
-                                          (((pair.Direction == GraphDirections.Inbound ||
-                                             pair.Direction == GraphDirections.Any) &&
-                                            x.TargetRtId == pair.RtEntityId.RtId) ||
-                                           (pair.Direction == GraphDirections.Outbound ||
-                                            pair.Direction == GraphDirections.Any) &&
-                                           x.OriginRtId == pair.RtEntityId.RtId));
+            var count = await RtMongoDbDataSourceAssociations.GetTotalCountAsync(session,
+                Builders<RtAssociation>.Filter.Or(filters), 2);
 
             CurrentMultiplicity multiplicity = count switch
             {
@@ -225,7 +215,6 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
             multiplicityResults.Add(new RtAssociationsMultiplicityResult(pair, multiplicity));
         }
-
 
         return multiplicityResults;
     }

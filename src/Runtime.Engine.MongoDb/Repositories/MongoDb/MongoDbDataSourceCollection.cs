@@ -400,6 +400,13 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             filterDefinition);
     }
 
+    public async Task<long> GetTotalCountAsync(IOctoSession session, FilterDefinition<TDocument> filterDefinition,
+        long limit)
+    {
+        return await _documentCollection.CountDocumentsAsync(((IOctoSessionInternal)session).SessionHandle,
+            filterDefinition, new CountOptions { Limit = limit });
+    }
+
 
     public async Task<long> GetTotalCountAsync(IOctoSession session, Expression<Func<TDocument, bool>> expression)
     {

@@ -53,6 +53,13 @@ public interface IMongoDbDataSourceCollection<TKey, TDocument> : IDataSourceColl
 
     Task<long> GetTotalCountAsync(IOctoSession session, FilterDefinition<TDocument> filterDefinition);
 
+    /// <summary>
+    ///     Counts documents matching the filter, stopping at <paramref name="limit" />. Use when only a
+    ///     threshold matters (e.g. zero/one/many) — the server stops once the cap is reached instead of
+    ///     walking the whole index range.
+    /// </summary>
+    Task<long> GetTotalCountAsync(IOctoSession session, FilterDefinition<TDocument> filterDefinition, long limit);
+
     IMongoCollection<TDocument> GetMongoCollection();
 
     Task<TDocument?> FindOneAndUpsertAsync(IOctoSession session, FilterDefinition<TDocument> filter,
