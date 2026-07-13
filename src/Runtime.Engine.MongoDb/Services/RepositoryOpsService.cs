@@ -23,28 +23,33 @@ public class RepositoryOpsService(
     public async Task<CommandResult> ExecuteMongoShellScriptAsync(string databaseName, string scriptPath,
         CancellationToken? cancellationToken = null)
     {
-        var connectionString = GetConnectionString(databaseName);
-        var args = BuildMongoShellArguments();
         if (!File.Exists(scriptPath))
         {
             return CommandResult.Failure($"Script file not found: {scriptPath}");
         }
 
+        var args = new List<string> { GetConnectionString(databaseName).ToString() };
+        args.AddRange(MongoToolArguments.BuildMongoShellArguments(
+            systemConfigurationOptions.Value.AdminUser, systemConfigurationOptions.Value.AdminUserPassword));
+        args.Add(scriptPath);
+
         logger.LogInformation("Executing MongoDB shell script: {ScriptPath}", scriptPath);
-        return await ExecuteCommandAsync("mongosh", $"{connectionString} {args} {scriptPath}", null, null, cancellationToken);
+        return await ExecuteCommandAsync("mongosh", args, null, null, cancellationToken);
     }
 
     public async Task<CommandResult> ExecuteMongoShellCommandAsync(string databaseName, string command,
         CancellationToken? cancellationToken = null)
     {
-        var connectionString = GetConnectionString(databaseName);
-        var args = BuildMongoShellArguments();
-        var escapedCommand = command.Replace("\"", "\\\"");
+        var args = new List<string> { GetConnectionString(databaseName).ToString() };
+        args.AddRange(MongoToolArguments.BuildMongoShellArguments(
+            systemConfigurationOptions.Value.AdminUser, systemConfigurationOptions.Value.AdminUserPassword));
+        // ArgumentList passes the eval body verbatim — no manual quote escaping
+        args.Add("--eval");
+        args.Add(command);
 
         logger.LogInformation("Executing MongoDB shell command: {Command}", command);
 
-        return await ExecuteCommandAsync("mongosh", $"{connectionString} {args} --eval \"{escapedCommand}\"", null, null,
-            cancellationToken);
+        return await ExecuteCommandAsync("mongosh", args, null, null, cancellationToken);
     }
 
     #endregion
@@ -54,9 +59,12 @@ public class RepositoryOpsService(
     public async Task<CommandResult> ExecuteMongoDumpAsync(MongoDumpOptions options,
         TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
     {
-        var args = BuildMongoDumpArguments(options);
+        var args = MongoToolArguments.BuildMongoDumpArguments(options,
+            GetConnectionString(options.Database).ToString(),
+            systemConfigurationOptions.Value.AdminUser, systemConfigurationOptions.Value.AdminUserPassword);
 
-        logger.LogInformation("Executing mongodump with options: {Options}", args);
+        logger.LogInformation("Executing mongodump with options: {Options}",
+            MongoToolArguments.ToDisplayString("mongodump", args));
 
         return await ExecuteCommandAsync("mongodump", args, timeout: timeout, cancellationToken: cancellationToken);
     }
@@ -65,9 +73,12 @@ public class RepositoryOpsService(
     public async Task<CommandResult> ExecuteMongoRestoreAsync(MongoRestoreOptions options, TimeSpan? timeout = null,
         CancellationToken? cancellationToken = null)
     {
-        var args = BuildMongoRestoreArguments(options);
+        var args = MongoToolArguments.BuildMongoRestoreArguments(options,
+            GetConnectionString(options.Database).ToString(),
+            systemConfigurationOptions.Value.AdminUser, systemConfigurationOptions.Value.AdminUserPassword);
 
-        logger.LogInformation("Executing mongorestore with options: {Options}", args);
+        logger.LogInformation("Executing mongorestore with options: {Options}",
+            MongoToolArguments.ToDisplayString("mongorestore", args));
 
         // Mongorestore can hang - Standard timeout 2 minutes
         var restoreTimeout = timeout ?? TimeSpan.FromMinutes(2);
@@ -82,22 +93,49 @@ public class RepositoryOpsService(
     public async Task<CommandResult> ExecuteCommandAsync(string fileName, string arguments,
         string? workingDirectory = null, TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
     {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            Arguments = arguments
+        };
+
+        return await ExecuteProcessAsync(startInfo, $"{fileName} {arguments}", workingDirectory, timeout,
+            cancellationToken);
+    }
+
+    public async Task<CommandResult> ExecuteCommandAsync(string fileName, IReadOnlyList<string> arguments,
+        string? workingDirectory = null, TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
+    {
+        // ArgumentList passes each entry as one verbatim argv element — no re-tokenization, so
+        // values containing whitespace (e.g. passwords with a leading space) survive intact.
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = fileName
+        };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        return await ExecuteProcessAsync(startInfo, MongoToolArguments.ToDisplayString(fileName, arguments),
+            workingDirectory, timeout, cancellationToken);
+    }
+
+    private async Task<CommandResult> ExecuteProcessAsync(ProcessStartInfo startInfo, string displayCommand,
+        string? workingDirectory, TimeSpan? timeout, CancellationToken? cancellationToken)
+    {
+        var fileName = startInfo.FileName;
         var timeoutMs = timeout?.TotalMilliseconds ?? 300000; // Default 5 minutes
         var workingDirectoryPath = workingDirectory ?? Directory.GetCurrentDirectory();
         logger.LogInformation("Executing command: {Command}", fileName);
         logger.LogInformation("Using working-directory: {WorkingDirectory}", workingDirectoryPath);
-        logger.LogDebug("Using args: {Args}", arguments);
+        logger.LogDebug("Using args: {Args}", displayCommand);
 
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = fileName,
-            Arguments = arguments,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectoryPath
-        };
+        startInfo.RedirectStandardOutput = true;
+        startInfo.RedirectStandardError = true;
+        startInfo.UseShellExecute = false;
+        startInfo.CreateNoWindow = true;
+        startInfo.WorkingDirectory = workingDirectoryPath;
 
         var output = new StringBuilder();
         var error = new StringBuilder();
@@ -141,8 +179,8 @@ public class RepositoryOpsService(
 
         try
         {
-            logger.LogDebug("Starting process: {FileName} {Arguments} (Timeout: {TimeoutMs}ms)",
-                fileName, arguments, timeoutMs);
+            logger.LogDebug("Starting process: {Command} (Timeout: {TimeoutMs}ms)",
+                displayCommand, timeoutMs);
 
             process.Start();
             process.BeginOutputReadLine();
@@ -157,8 +195,8 @@ public class RepositoryOpsService(
 
             if (completedTask == timeoutTask)
             {
-                logger.LogWarning("Process timed out after {TimeoutMs}ms: {FileName} {Arguments}",
-                    timeoutMs, fileName, arguments);
+                logger.LogWarning("Process timed out after {TimeoutMs}ms: {Command}",
+                    timeoutMs, displayCommand);
 
                 try
                 {
@@ -180,7 +218,7 @@ public class RepositoryOpsService(
                     Output = output.ToString(),
                     Error = error + $"\nProcess timed out after {timeoutMs}ms",
                     Duration = duration,
-                    Command = $"{fileName} {arguments}"
+                    Command = displayCommand
                 };
             }
 
@@ -196,15 +234,15 @@ public class RepositoryOpsService(
                 Output = output.ToString(),
                 Error = error.ToString(),
                 Duration = duration,
-                Command = $"{fileName} {arguments}"
+                Command = displayCommand
             };
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to execute command: {FileName} {Arguments}", fileName, arguments);
+            logger.LogError(ex, "Failed to execute command: {Command}", displayCommand);
 
             return CommandResult.Failure($"Failed to start process '{fileName}': {ex.Message}")
-                .WithCommand($"{fileName} {arguments}");
+                .WithCommand(displayCommand);
         }
     }
 
@@ -243,166 +281,6 @@ public class RepositoryOpsService(
         urlBuilder.DatabaseName = databaseName;
 
         return urlBuilder.ToMongoUrl();
-    }
-
-    private string BuildMongoDumpArguments(MongoDumpOptions options)
-    {
-        // Connection
-        var args = new List<string>
-        {
-            $"--uri=\"{GetConnectionString(options.Database)}\""
-        };
-
-        // Authentication
-        if (!string.IsNullOrEmpty(systemConfigurationOptions.Value.AdminUser))
-        {
-            args.Add($"--username={systemConfigurationOptions.Value.AdminUser}");
-        }
-
-        if (!string.IsNullOrEmpty(systemConfigurationOptions.Value.AdminUserPassword))
-        {
-            args.Add($"--password={systemConfigurationOptions.Value.AdminUserPassword}");
-        }
-
-        // Database and Collection
-        if (!string.IsNullOrEmpty(options.Database))
-        {
-            args.Add($"--db={options.Database}");
-        }
-
-        if (!string.IsNullOrEmpty(options.Collection))
-        {
-            args.Add($"--collection={options.Collection}");
-        }
-
-        // Output
-        if (!string.IsNullOrEmpty(options.OutputDirectory))
-        {
-            args.Add($"--out=\"{options.OutputDirectory}\"");
-        }
-
-        if (!string.IsNullOrEmpty(options.Archive))
-        {
-            args.Add($"--archive=\"{options.Archive}\"");
-        }
-
-        // Options
-        if (options.Gzip)
-        {
-            args.Add("--gzip");
-        }
-
-        if (options.Pretty)
-        {
-            args.Add("--pretty");
-        }
-
-        if (options.Verbose)
-        {
-            args.Add("--verbose");
-        }
-
-        return string.Join(" ", args);
-    }
-
-    private string BuildMongoShellArguments()
-    {
-        var args = new List<string>();
-        // Authentication
-        if (!string.IsNullOrEmpty(systemConfigurationOptions.Value.AdminUser))
-        {
-            args.Add($"--username={systemConfigurationOptions.Value.AdminUser}");
-        }
-
-        if (!string.IsNullOrEmpty(systemConfigurationOptions.Value.AdminUserPassword))
-        {
-            args.Add($"--password={systemConfigurationOptions.Value.AdminUserPassword}");
-        }
-        return string.Join(" ", args);
-    }
-
-    private string BuildMongoRestoreArguments(MongoRestoreOptions options)
-    {
-        // Connection
-        var args = new List<string>
-        {
-            $"--uri=\"{GetConnectionString(options.Database)}\""
-        };
-
-        // Authentication
-        if (!string.IsNullOrEmpty(systemConfigurationOptions.Value.AdminUser))
-        {
-            args.Add($"--username={systemConfigurationOptions.Value.AdminUser}");
-        }
-
-        if (!string.IsNullOrEmpty(systemConfigurationOptions.Value.AdminUserPassword))
-        {
-            args.Add($"--password={systemConfigurationOptions.Value.AdminUserPassword}");
-        }
-
-        // Namespace mapping (for restoring to different database name)
-        if (!string.IsNullOrEmpty(options.NsFrom) && !string.IsNullOrEmpty(options.NsTo))
-        {
-            // Include collections from archive that match the source pattern
-            args.Add($"--nsInclude={options.NsFrom}");
-            // Map the source namespace to the target namespace
-            args.Add($"--nsFrom={options.NsFrom}");
-            args.Add($"--nsTo={options.NsTo}");
-        }
-        else
-        {
-            // Database and Collection (default behavior)
-            args.Add($"--nsInclude={options.Database}.{options.Collection}");
-        }
-
-        // Input
-        if (!string.IsNullOrEmpty(options.InputDirectory))
-        {
-            args.Add($"\"{options.InputDirectory}\"");
-        }
-
-        if (!string.IsNullOrEmpty(options.Archive))
-        {
-            args.Add($"--archive=\"{options.Archive}\"");
-        }
-
-        // Options
-        if (options.Drop)
-        {
-            args.Add("--drop");
-        }
-
-        if (options.Gzip)
-        {
-            args.Add("--gzip");
-        }
-
-        if (options.Verbose)
-        {
-            args.Add("--verbose");
-        }
-
-        if (options.DryRun)
-        {
-            args.Add("--dryRun");
-        }
-
-        if (options.OplogReplay)
-        {
-            args.Add("--oplogReplay");
-        }
-
-        if (options.RestoreDbUsersAndRoles)
-        {
-            args.Add("--restoreDbUsersAndRoles");
-        }
-
-        if (options.NumParallelCollections.HasValue)
-        {
-            args.Add($"--numParallelCollections={options.NumParallelCollections}");
-        }
-
-        return string.Join(" ", args);
     }
 
     #endregion private methods

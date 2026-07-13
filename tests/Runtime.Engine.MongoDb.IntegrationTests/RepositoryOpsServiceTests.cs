@@ -77,9 +77,9 @@ public class RepositoryOpsServiceTests(SystemFixture systemFixture)
     }
 
     [Fact]
-    public async Task ExecuteMongoShellCommandAsync_WithQuotesInCommand_ShouldEscapeQuotes()
+    public async Task ExecuteMongoShellCommandAsync_WithQuotesInCommand_ShouldPassCommandVerbatim()
     {
-        // Arrange
+        // Arrange — ArgumentList passes the eval body verbatim, no manual quote escaping (AB#4367)
         var command = "print(\"Hello World\")";
 
         // Act
@@ -88,7 +88,7 @@ public class RepositoryOpsServiceTests(SystemFixture systemFixture)
         // Assert
         result.Should().NotBeNull();
         result.Command.Should().Contain("mongosh");
-        result.Command.Should().Contain("print(\\\"Hello World\\\")");
+        result.Command.Should().Contain("print(\"Hello World\")");
     }
 
     #endregion
