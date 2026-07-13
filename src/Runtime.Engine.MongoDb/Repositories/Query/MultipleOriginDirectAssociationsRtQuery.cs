@@ -18,6 +18,26 @@ using MongoDB.Driver.GeoJsonObjectModel;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
+/// <summary>
+///     Tuning knobs for the adaptive association navigation (AB#4369). Non-generic on purpose —
+///     a static on the generic query class would exist once per closed target type.
+/// </summary>
+internal static class ReverseNavigationOptions
+{
+    /// <summary>
+    ///     Edge count per origin above which a sorted+limited navigation switches from the
+    ///     edge-driven lookup to the reversed, entity-driven query. The edge-driven optimized
+    ///     path collects every target id into a single $addToSet array and probes it with a
+    ///     non-indexable $expr $in — fine for thousands of edges, catastrophic for hundreds of
+    ///     thousands (observed: a pipeline with 650k execution edges timed out the Studio
+    ///     data-flow page). The reversed path walks the target collection in sort order
+    ///     (index-backed) and probes edge existence per candidate, so its cost scales with the
+    ///     page size for dense origins — but with the collection size for sparse ones, hence
+    ///     the adaptive split. Mutable for tests only.
+    /// </summary>
+    internal static int EdgeThreshold = 10_000;
+}
+
 internal class MultipleOriginDirectAssociationsRtQuery : MultipleOriginDirectAssociationsRtQuery<RtEntity>
 {
     internal MultipleOriginDirectAssociationsRtQuery(ICkCacheService ckCacheService, string tenantId,
@@ -139,20 +159,22 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         // Field names for the association lookup
         var innerLocalFieldRtIdName = "targetRtId";
         var innerLocalFieldCkIdName = "targetCkTypeId";
-        var connectToField = (FieldDefinition<RtAssociation, string>)"originRtId";
+        var connectToFieldName = "originRtId";
 
         switch (_graphDirection)
         {
             case GraphDirections.Inbound:
                 innerLocalFieldRtIdName = "originRtId";
                 innerLocalFieldCkIdName = "originCkTypeId";
-                connectToField = "targetRtId";
+                connectToFieldName = "targetRtId";
                 break;
             case GraphDirections.Outbound:
                 break;
             default:
                 throw OperationFailedException.GraphDirectionUnsupported(_graphDirection);
         }
+
+        var connectToField = (FieldDefinition<RtAssociation, string>)connectToFieldName;
 
         var connectFromField = (FieldDefinition<RtEntity, string[]>)"_id";
         var @as = (FieldDefinition<BsonDocument, TTargetEntity[]>)"_associations";
@@ -204,6 +226,82 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         }
 
         var sortStage = GetSortStageBsonDocument();
+
+        // Adaptive path selection (AB#4369): for sorted+limited navigations, origins with a huge
+        // edge count are answered by the reversed, entity-driven query instead of materializing
+        // their whole edge set. Origins below the threshold stay on the edge-driven path below.
+        var edgeDrivenOriginIds = _rtIds.ToList();
+        var reversedResults = new List<QueryMultipleResult<TTargetEntity>>();
+
+        if (HasSortDefinitions && take.HasValue && _geospatialFilters.Count == 0 && collectionGroups.Count == 1)
+        {
+            var denseOrigins = new List<(OctoObjectId OriginRtId, long EdgeCount)>();
+            var sparseOrigins = new List<OctoObjectId>();
+
+            foreach (var originId in edgeDrivenOriginIds)
+            {
+                // Capped, index-only count: stops scanning at threshold+1. Deliberately without
+                // the rtState filter — that would force a document fetch per index entry; the
+                // count is a routing signal (and, for dense origins, the display totalCount,
+                // where stray archived edges are an acceptable approximation).
+                var edgeCountFilter = BuildEdgeCountFilter(originId, connectToFieldName,
+                    innerLocalFieldCkIdName, allTargetCkIds);
+                var cappedCount = await _mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations
+                    .GetTotalCountAsync(session, edgeCountFilter, ReverseNavigationOptions.EdgeThreshold + 1);
+
+                if (cappedCount > ReverseNavigationOptions.EdgeThreshold)
+                {
+                    var totalEdgeCount = await _mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations
+                        .GetTotalCountAsync(session, edgeCountFilter);
+                    denseOrigins.Add((originId, totalEdgeCount));
+                }
+                else
+                {
+                    sparseOrigins.Add(originId);
+                }
+            }
+
+            if (denseOrigins.Count > 0)
+            {
+                var originCkTypeIds = await LoadOriginCkTypeIdsAsync(session,
+                    denseOrigins.Select(d => d.OriginRtId).ToList());
+
+                foreach (var (originId, edgeCount) in denseOrigins)
+                {
+                    if (!originCkTypeIds.TryGetValue(originId, out var originEntityCkTypeId))
+                    {
+                        // Origin entity no longer exists — the edge-driven path would not have
+                        // produced a result row for it either.
+                        continue;
+                    }
+
+                    var targets = await ExecuteReversedNavigationAsync(session, originId,
+                        collectionGroups[0].ToList(), renderedFieldFilter, sortStage!, skip, take.Value,
+                        innerLocalFieldRtIdName, connectToFieldName);
+
+                    reversedResults.Add(new QueryMultipleResult<TTargetEntity>
+                    {
+                        Id = new RtEntityId(originEntityCkTypeId, originId),
+                        TotalCount = edgeCount,
+                        Targets = targets
+                    });
+                }
+
+                edgeDrivenOriginIds = sparseOrigins;
+
+                if (edgeDrivenOriginIds.Count == 0)
+                {
+                    foreach (var reversedResult in reversedResults)
+                    {
+                        var reversedAggregations = CalculateAggregations(reversedResult.Targets);
+                        reversedResult.AggregationResult = reversedAggregations.Item1;
+                        reversedResult.FieldAggregationResults = reversedAggregations.Item2;
+                    }
+
+                    return new MultipleOriginResultSet<TTargetEntity>(reversedResults);
+                }
+            }
+        }
 
         if (HasSortDefinitions && take.HasValue && _geospatialFilters.Count == 0)
         {
@@ -442,7 +540,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
 
         var aggregate = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph)
             .Aggregate(session)
-            .Match(Builders<RtEntity>.Filter.In(x => x.RtId, _rtIds))
+            .Match(Builders<RtEntity>.Filter.In(x => x.RtId, edgeDrivenOriginIds))
             .Lookup(
                 _mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations.GetMongoCollection(),
                 connectFromField,
@@ -481,6 +579,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         }
 
         var result = await aggregate2.ToListAsync();
+        result.AddRange(reversedResults);
 
         foreach (var multipleResult in result)
         {
@@ -490,6 +589,127 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         }
 
         return new MultipleOriginResultSet<TTargetEntity>(result);
+    }
+
+    private FilterDefinition<RtAssociation> BuildEdgeCountFilter(OctoObjectId originRtId, string connectToFieldName,
+        string innerLocalFieldCkIdName, IReadOnlyList<RtCkId<CkTypeId>> allTargetCkIds)
+    {
+        return Builders<RtAssociation>.Filter.And(
+            Builders<RtAssociation>.Filter.Eq(connectToFieldName, originRtId),
+            Builders<RtAssociation>.Filter.Eq("associationRoleId", _roleId),
+            Builders<RtAssociation>.Filter.In(innerLocalFieldCkIdName, allTargetCkIds));
+    }
+
+    private async Task<Dictionary<OctoObjectId, RtCkId<CkTypeId>>> LoadOriginCkTypeIdsAsync(IOctoSession session,
+        IReadOnlyList<OctoObjectId> originRtIds)
+    {
+        var originEntities = await _mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph)
+            .Aggregate(session)
+            .Match(Builders<RtEntity>.Filter.In(x => x.RtId, originRtIds))
+            .ToListAsync();
+
+        return originEntities
+            .Where(e => e.CkTypeId != null)
+            .ToDictionary(e => e.RtId, e => e.CkTypeId!);
+    }
+
+    /// <summary>
+    ///     Entity-driven navigation for dense origins (AB#4369): walks the target collection in
+    ///     sort order (index-backed where the sort attribute is indexed) and probes edge
+    ///     existence per candidate via an indexed $lookup, stopping as soon as the requested
+    ///     page is filled. Cost scales with the page size instead of the origin's edge count.
+    /// </summary>
+    private async Task<List<TTargetEntity>> ExecuteReversedNavigationAsync(IOctoSession session,
+        OctoObjectId originRtId, IReadOnlyList<CkTypeGraph> groupGraphs, BsonDocument? renderedFieldFilter,
+        BsonDocument sortStage, int? skip, int take, string innerLocalFieldRtIdName, string connectToFieldName)
+    {
+        var groupTargetCkIds = groupGraphs
+            .SelectMany(graph => graph.GetAllDerivedTypes(true))
+            .Select(t => t.ToRtCkId())
+            .Distinct()
+            .ToList();
+
+        var entityRenderArgs = new RenderArgs<TTargetEntity>(
+            BsonSerializer.SerializerRegistry.GetSerializer<TTargetEntity>(),
+            BsonSerializer.SerializerRegistry);
+
+        List<FilterDefinition<TTargetEntity>> entityFilters =
+        [
+            Builders<TTargetEntity>.Filter.In("ckTypeId", groupTargetCkIds)
+        ];
+
+        if (!_includeArchivedEntities)
+        {
+            entityFilters.Add(Builders<TTargetEntity>.Filter.Ne(e => e.RtState, RtState.Archived));
+        }
+
+        var stages = new List<BsonDocument>
+        {
+            new("$match", Builders<TTargetEntity>.Filter.And(entityFilters).Render(entityRenderArgs))
+        };
+
+        if (renderedFieldFilter != null)
+        {
+            stages.Add(new BsonDocument("$match", renderedFieldFilter));
+        }
+
+        stages.Add(sortStage);
+
+        // Edge-existence probe. The candidate entity sits on the navigation's far side, so for
+        // an Inbound navigation the edge points FROM the candidate TO the origin (probe by
+        // originRtId, filter targetRtId == origin) and vice versa. Both directions have an
+        // RtAssociation index led by the probe field (originRtId / targetRtId), so the concise
+        // localField/foreignField join is index-backed and each probe touches only the
+        // candidate's few edges of this role.
+        var associationRenderArgs = new RenderArgs<RtAssociation>(
+            BsonSerializer.SerializerRegistry.GetSerializer<RtAssociation>(),
+            BsonSerializer.SerializerRegistry);
+
+        List<FilterDefinition<RtAssociation>> probeFilters =
+        [
+            Builders<RtAssociation>.Filter.Eq("associationRoleId", _roleId),
+            Builders<RtAssociation>.Filter.Eq(connectToFieldName, originRtId)
+        ];
+
+        if (!_includeArchivedEntities)
+        {
+            probeFilters.Add(Builders<RtAssociation>.Filter.Ne(a => a.RtState, RtState.Archived));
+        }
+
+        var probePipeline = new BsonArray
+        {
+            new BsonDocument("$match", Builders<RtAssociation>.Filter.And(probeFilters).Render(associationRenderArgs)),
+            new BsonDocument("$limit", 1),
+            new BsonDocument("$project", new BsonDocument("_id", 1))
+        };
+
+        stages.Add(new BsonDocument("$lookup", new BsonDocument
+        {
+            { "from", _mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations.CollectionName },
+            { "localField", "_id" },
+            { "foreignField", innerLocalFieldRtIdName },
+            { "pipeline", probePipeline },
+            { "as", "_edgeProbe" }
+        }));
+
+        stages.Add(new BsonDocument("$match", new BsonDocument("_edgeProbe.0", new BsonDocument("$exists", true))));
+        stages.Add(new BsonDocument("$project", new BsonDocument("_edgeProbe", 0)));
+
+        if (skip is > 0)
+        {
+            stages.Add(new BsonDocument("$skip", skip.Value));
+        }
+
+        stages.Add(new BsonDocument("$limit", take));
+
+        var fluent = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TTargetEntity>(groupGraphs[0])
+            .Aggregate(session);
+        foreach (var stage in stages)
+        {
+            fluent = fluent.AppendStage(new BsonDocumentPipelineStageDefinition<TTargetEntity, TTargetEntity>(stage));
+        }
+
+        return await fluent.ToListAsync();
     }
 
 

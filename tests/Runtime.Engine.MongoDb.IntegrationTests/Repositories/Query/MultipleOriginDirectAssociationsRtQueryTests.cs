@@ -3,6 +3,7 @@ using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
 
 using TestCkModel.Generated.Test.v1;
 
@@ -236,5 +237,139 @@ public class MultipleOriginDirectAssociationsRtQueryTests
         var tirol = result.First().Value;
         Assert.Equal(2, tirol.TotalCount); // Only non-archived districts
         Assert.Single(tirol.Items);
+    }
+
+    [Fact]
+    public async Task DenseOrigin_ReversedPath_MatchesEdgeDrivenPage()
+    {
+        // AB#4369: with the edge threshold forced to 0, every origin routes through the
+        // reversed, entity-driven navigation. The returned page must be identical to the
+        // edge-driven optimized path (same sort, same skip/take, same items).
+        var systemContext = _fixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var salzburgRtId = OctoObjectId.Parse("66803ecf4aa85720dda96a99");
+
+        var queryOptions = RtEntityQueryOptions.Create()
+            .SortOrder("Name", SortOrders.Descending);
+
+        var baseline = await tenantRepository.GetRtAssociationTargetsAsync(session,
+            [salzburgRtId], TestCkIds.RtCkStateOrProvinceTypeId,
+            SystemCkIds.RtCkParentChildRoleId,
+            TestCkIds.RtCkDistrictTypeId, GraphDirections.Inbound, null,
+            queryOptions, 2, 2);
+
+        var originalThreshold = ReverseNavigationOptions.EdgeThreshold;
+        ReverseNavigationOptions.EdgeThreshold = 0;
+        try
+        {
+            var reversed = await tenantRepository.GetRtAssociationTargetsAsync(session,
+                [salzburgRtId], TestCkIds.RtCkStateOrProvinceTypeId,
+                SystemCkIds.RtCkParentChildRoleId,
+                TestCkIds.RtCkDistrictTypeId, GraphDirections.Inbound, null,
+                queryOptions, 2, 2);
+
+            Assert.Single(reversed);
+            var baselineSet = baseline.First().Value;
+            var reversedSet = reversed.First().Value;
+
+            Assert.Equal(baselineSet.TotalCount, reversedSet.TotalCount);
+            Assert.Equal(
+                baselineSet.Items.Select(i => i.RtId).ToList(),
+                reversedSet.Items.Select(i => i.RtId).ToList());
+        }
+        finally
+        {
+            ReverseNavigationOptions.EdgeThreshold = originalThreshold;
+        }
+    }
+
+    [Fact]
+    public async Task DenseOrigin_ReversedPath_AppliesFieldFilter()
+    {
+        // Field filters must survive the reversed path (they run as a $match before the sort).
+        var systemContext = _fixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var salzburgRtId = OctoObjectId.Parse("66803ecf4aa85720dda96a99");
+
+        var queryOptions = RtEntityQueryOptions.Create()
+            .SortOrder("Name", SortOrders.Ascending)
+            .FieldFilter("Name", FieldFilterOperator.Equals, "Tennengau / Hallein");
+
+        var baseline = await tenantRepository.GetRtAssociationTargetsAsync(session,
+            [salzburgRtId], TestCkIds.RtCkStateOrProvinceTypeId,
+            SystemCkIds.RtCkParentChildRoleId,
+            TestCkIds.RtCkDistrictTypeId, GraphDirections.Inbound, null,
+            queryOptions, 0, 5);
+        Assert.Single(baseline.First().Value.Items);
+
+        var originalThreshold = ReverseNavigationOptions.EdgeThreshold;
+        ReverseNavigationOptions.EdgeThreshold = 0;
+        try
+        {
+            var result = await tenantRepository.GetRtAssociationTargetsAsync(session,
+                [salzburgRtId], TestCkIds.RtCkStateOrProvinceTypeId,
+                SystemCkIds.RtCkParentChildRoleId,
+                TestCkIds.RtCkDistrictTypeId, GraphDirections.Inbound, null,
+                queryOptions, 0, 5);
+
+            Assert.Single(result);
+            var salzburg = result.First().Value;
+            Assert.Single(salzburg.Items);
+            Assert.Equal("Tennengau / Hallein", salzburg.Items.Single().GetAttributeStringValue("Name"));
+        }
+        finally
+        {
+            ReverseNavigationOptions.EdgeThreshold = originalThreshold;
+        }
+    }
+
+    [Fact]
+    public async Task MixedOrigins_DenseAndSparse_BothAnswered()
+    {
+        // A dataloader batch can mix dense and sparse origins: dense ones go reversed,
+        // sparse ones stay on the edge-driven path, and the merged result must contain both.
+        var systemContext = _fixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var salzburgRtId = OctoObjectId.Parse("66803ecf4aa85720dda96a99");
+        var tirolRtId = OctoObjectId.Parse("68fded922b85e5d74c05a560");
+
+        var queryOptions = RtEntityQueryOptions.Create()
+            .SortOrder("Name", SortOrders.Ascending);
+
+        var originalThreshold = ReverseNavigationOptions.EdgeThreshold;
+        // Salzburg has 6 district edges, Tirol 4 -> threshold 5 splits the batch.
+        ReverseNavigationOptions.EdgeThreshold = 5;
+        try
+        {
+            var result = await tenantRepository.GetRtAssociationTargetsAsync(session,
+                [salzburgRtId, tirolRtId], TestCkIds.RtCkStateOrProvinceTypeId,
+                SystemCkIds.RtCkParentChildRoleId,
+                TestCkIds.RtCkDistrictTypeId, GraphDirections.Inbound, null,
+                queryOptions, 0, 3);
+
+            Assert.Equal(2, result.Count);
+            var salzburg = result.Single(r => r.Key.RtId == salzburgRtId).Value;
+            var tirol = result.Single(r => r.Key.RtId == tirolRtId).Value;
+
+            Assert.Equal(3, salzburg.Items.Count());
+            // Tirol has 4 districts, 2 archived -> 2 visible items on the edge-driven path
+            Assert.Equal(2, tirol.Items.Count());
+        }
+        finally
+        {
+            ReverseNavigationOptions.EdgeThreshold = originalThreshold;
+        }
     }
 }
