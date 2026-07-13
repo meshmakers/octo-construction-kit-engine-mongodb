@@ -127,5 +127,11 @@ public interface ISystemContext : ITenantContext
     Task<CommandResult> CloneTenantToTempAsync(string sourceTenantId, string tempTenantId,
         string tempDatabaseName, TimeSpan? timeout = null, CancellationToken? cancellationToken = null);
 
+    /// <summary>
+    /// Checks whether a physical database with the given name exists.
+    /// </summary>
+    /// <param name="databaseName">The database name to check (used verbatim, no normalization)</param>
+    Task<bool> IsDatabaseExistingAsync(string databaseName);
+
     #endregion
 }
