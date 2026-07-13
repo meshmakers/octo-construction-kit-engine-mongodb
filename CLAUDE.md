@@ -98,6 +98,18 @@ matching success/failed events for every started event, so growth is bounded by 
 When the lookup misses (started event lost), the listener falls back to `database="unknown"`
 rather than throwing.
 
+**Raw-BSON retention (AB#4368).** `CommandStartedEvent.Command` is only valid while the
+started-event handlers run: for bulk-write commands (insert/update/delete with OP_MSG
+payload-type-1 sections) it is a `RawBsonDocument` — or contains `RawBsonDocument`/`RawBsonArray`
+slices — over the connection's send buffer, which the driver returns to its pool right after
+the event. `MaterializeForRetention` therefore snapshots the command before it enters the
+`_pending` map: bulk payload arrays are replaced with a `"<N raw documents elided>"` placeholder
+(no megabyte bodies retained or fingerprinted), small raw sub-documents (lsid, writeConcern)
+are deep-cloned. Defense in depth: `TruncateBson`, `SlowQueryFingerprinter.Fingerprint`, and
+the explain-dispatch `DeepClone` all catch `ObjectDisposedException` and degrade gracefully —
+before this fix, identity-services startup (bulk seeding, everything above the slow threshold)
+flooded the log with ERROR entries and lost exactly those entries from the slow-query buffer.
+
 ### Exception Safety
 
 Driver command events fire on the driver's own thread pool. Every callback in

@@ -336,6 +336,117 @@ public sealed class MongoCommandObservabilityTests : IDisposable
         Assert.Equal("update", entry.CommandName);
     }
 
+    // ---- RawBsonDocument retention safety (AB#4368) ----
+    // For bulk-write commands the driver's CommandStartedEvent.Command is a RawBsonDocument
+    // (or a BsonDocument containing RawBsonDocument/RawBsonArray slices) over the connection's
+    // send buffer, which the driver returns to its pool right after the started-event handlers
+    // finish. These tests dispose the raw source between OnStarted and OnSucceeded — exactly
+    // the production sequence that flooded identity-services startup with
+    // ObjectDisposedException ERROR spam and dropped the slow entries from the buffer.
+
+    [Fact]
+    public void SlowBulkWrite_TopLevelRawCommand_DisposedAfterStarted_StillCapturedWithoutError()
+    {
+        var buffer = new SlowQueriesBuffer(capacity: 100);
+        var sut = new MongoCommandObservability(_logger, _config, buffer);
+        _config.Current.SlowQueryThresholdMs = 50;
+
+        var rawCommand = BuildRawInsertCommand();
+        var (started, succeeded) = BuildPair("insert", rawCommand, "tenant_a", durationMs: 250);
+
+        sut.OnStarted(started);
+        rawCommand.Dispose(); // driver returns the send buffer to its pool after the started event
+        sut.OnSucceeded(succeeded);
+
+        Assert.DoesNotContain(_logger.Entries, e => e.Level == LogLevel.Error);
+        var entry = Assert.Single(buffer.GetSnapshot());
+        Assert.Contains("rt_entities", entry.CommandBsonPreview);
+        Assert.Contains("elided", entry.CommandBsonPreview); // bulk payload replaced, not retained
+        Assert.NotEqual(new string('0', SlowQueryFingerprinter.FingerprintLength), entry.Fingerprint);
+    }
+
+    [Fact]
+    public void SlowBulkWrite_NestedRawSlices_DisposedAfterStarted_StillCapturedWithoutError()
+    {
+        var buffer = new SlowQueriesBuffer(capacity: 100);
+        var sut = new MongoCommandObservability(_logger, _config, buffer);
+        _config.Current.SlowQueryThresholdMs = 50;
+
+        // The second production shape: a materialized command document whose payload values
+        // are still raw slices over the source buffer.
+        var rawSource = BuildRawInsertCommand();
+        var command = new BsonDocument
+        {
+            { "insert", "rt_entities" },
+            { "documents", rawSource["documents"] },       // RawBsonArray slice
+            { "writeConcern", rawSource["writeConcern"] }  // RawBsonDocument slice
+        };
+        var (started, succeeded) = BuildPair("insert", command, "tenant_a", durationMs: 250);
+
+        sut.OnStarted(started);
+        rawSource.Dispose();
+        sut.OnSucceeded(succeeded);
+
+        Assert.DoesNotContain(_logger.Entries, e => e.Level == LogLevel.Error);
+        var entry = Assert.Single(buffer.GetSnapshot());
+        Assert.Contains("elided", entry.CommandBsonPreview);
+        // Small metadata sub-documents are cloned, not elided.
+        Assert.Contains("writeConcern", entry.CommandBsonPreview);
+    }
+
+    [Fact]
+    public void MaterializeForRetention_PlainDocument_ReturnsSameInstance()
+    {
+        // No raw content → no copy on the hot path.
+        var command = new BsonDocument
+        {
+            { "find", "ck_types" },
+            { "filter", new BsonDocument("name", "Asset") }
+        };
+
+        Assert.Same(command, MongoCommandObservability.MaterializeForRetention(command));
+    }
+
+    [Fact]
+    public void TruncateBson_DisposedRawDocument_ReturnsPlaceholder_InsteadOfThrowing()
+    {
+        // Defense in depth: even if a disposed raw document slips past the OnStarted snapshot
+        // (future driver change), the preview must degrade instead of throwing.
+        var raw = BuildRawInsertCommand();
+        raw.Dispose();
+
+        var result = MongoCommandObservability.TruncateBson(raw, maxBytes: 2048);
+
+        Assert.Equal("<command unavailable: driver buffer disposed>", result);
+    }
+
+    [Fact]
+    public void Fingerprint_DisposedRawDocument_ReturnsUnknownShape_InsteadOfThrowing()
+    {
+        var raw = BuildRawInsertCommand();
+        raw.Dispose();
+
+        Assert.Equal(
+            new string('0', SlowQueryFingerprinter.FingerprintLength),
+            SlowQueryFingerprinter.Fingerprint(raw));
+    }
+
+    private static RawBsonDocument BuildRawInsertCommand()
+    {
+        var command = new BsonDocument
+        {
+            { "insert", "rt_entities" },
+            { "documents", new BsonArray
+                {
+                    new BsonDocument("attributes", new BsonDocument("name", "a")),
+                    new BsonDocument("attributes", new BsonDocument("name", "b"))
+                }
+            },
+            { "writeConcern", new BsonDocument("w", 1) }
+        };
+        return new RawBsonDocument(command.ToBson());
+    }
+
     [Fact]
     public void NoBufferProvided_DoesNotThrow_AndStillLogs()
     {

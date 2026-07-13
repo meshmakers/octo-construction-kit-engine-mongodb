@@ -164,7 +164,7 @@ internal sealed class MongoCommandObservability
             _pending[e.RequestId] = new PendingCommand(
                 Database: e.DatabaseNamespace?.DatabaseName ?? "unknown",
                 Target: ExtractCommandTarget(e.Command),
-                Command: e.Command);
+                Command: MaterializeForRetention(e.Command));
         }
         catch (Exception ex)
         {
@@ -356,7 +356,17 @@ internal sealed class MongoCommandObservability
         // `this`. Null when no cache is wired (host without CK engine attached).
         var ckCacheService = _ckCacheService;
         var target = ctx.Target;
-        var commandClone = (BsonDocument)ctx.Command!.DeepClone();
+        BsonDocument commandClone;
+        try
+        {
+            commandClone = (BsonDocument)ctx.Command!.DeepClone();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposed RawBsonDocument (AB#4368) — nothing meaningful to explain. Prevented
+            // by MaterializeForRetention for everything OnStarted stores; degrade silently.
+            return;
+        }
         var previewBytes = cfg.SlowQueryExplainPreviewBytes;
         var timeoutSeconds = cfg.SlowQueryExplainTimeoutSeconds;
 
@@ -413,6 +423,60 @@ internal sealed class MongoCommandObservability
     }
 
     /// <summary>
+    /// <see cref="CommandStartedEvent.Command"/> is only valid WHILE the started-event handlers
+    /// run: for bulk-write commands (insert/update/delete with OP_MSG payload-type-1 sections)
+    /// it is a <see cref="RawBsonDocument"/> — or a <see cref="BsonDocument"/> whose payload
+    /// values are <see cref="RawBsonDocument"/> / <see cref="RawBsonArray"/> slices — over the
+    /// connection's send buffer, which the driver returns to its pool right after the event.
+    /// Retaining the reference in <c>_pending</c> and serializing it on the succeeded event
+    /// threw ObjectDisposedException and dropped exactly those slow commands from the buffer
+    /// (AB#4368). So: materialize the raw parts here, while the buffer is still alive. Bulk
+    /// payload arrays are replaced with a count placeholder instead of copied — the document
+    /// bodies carry no slow-query diagnostic value and would otherwise be retained per in-flight
+    /// command; the placeholder also keeps the fingerprint stable across batch sizes.
+    /// </summary>
+    internal static BsonDocument? MaterializeForRetention(BsonDocument? command)
+    {
+        if (command is null)
+        {
+            return null;
+        }
+
+        if (command is not RawBsonDocument && !ContainsRawValues(command))
+        {
+            return command;
+        }
+
+        var snapshot = new BsonDocument();
+        foreach (var element in command)
+        {
+            snapshot.Add(element.Name, element.Value switch
+            {
+                RawBsonArray rawArray => new BsonString($"<{rawArray.Count} raw documents elided>"),
+                // DeepClone copies the underlying byte slice into an independently-owned buffer;
+                // small metadata sub-documents (lsid, writeConcern, ...) — not bulk payloads.
+                RawBsonDocument rawDocument => rawDocument.DeepClone(),
+                _ => element.Value
+            });
+        }
+
+        return snapshot;
+    }
+
+    private static bool ContainsRawValues(BsonDocument command)
+    {
+        foreach (var element in command)
+        {
+            if (element.Value is RawBsonDocument or RawBsonArray)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// In a MongoDB command BSON, the first element's value is conventionally the operation
     /// target — e.g. <c>{ aggregate: "rt_entities", pipeline: [...] }</c> or
     /// <c>{ find: "ck_types", filter: {...} }</c>. We use it to make slow-log lines actionable.
@@ -452,7 +516,19 @@ internal sealed class MongoCommandObservability
             return string.Empty;
         }
 
-        var json = command.ToJson();
+        string json;
+        try
+        {
+            json = command.ToJson();
+        }
+        catch (ObjectDisposedException)
+        {
+            // A RawBsonDocument view whose driver buffer was already returned to the pool.
+            // MaterializeForRetention prevents this for everything OnStarted stores, but a
+            // future driver change must degrade the preview — never spam ERROR logs (AB#4368).
+            return "<command unavailable: driver buffer disposed>";
+        }
+
         if (System.Text.Encoding.UTF8.GetByteCount(json) <= maxBytes)
         {
             return json;

@@ -46,12 +46,30 @@ public static class SlowQueryFingerprinter
     /// </summary>
     public static string Fingerprint(BsonDocument? command)
     {
-        if (command is null || command.ElementCount == 0)
+        if (command is null)
         {
             return new string('0', FingerprintLength);
         }
 
-        var normalised = Normalise(command);
+        BsonValue normalised;
+        try
+        {
+            if (command.ElementCount == 0)
+            {
+                return new string('0', FingerprintLength);
+            }
+
+            normalised = Normalise(command);
+        }
+        catch (ObjectDisposedException)
+        {
+            // RawBsonDocument whose driver buffer was already returned (AB#4368) — the walk
+            // cannot read the shape anymore, so report "unknown shape" instead of throwing
+            // back into the driver's event pipeline. ElementCount is inside the guard too:
+            // even that touches the disposed buffer.
+            return new string('0', FingerprintLength);
+        }
+
         var json = normalised.ToJson(new JsonWriterSettings { OutputMode = JsonOutputMode.CanonicalExtendedJson });
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(json));
         var hex = Convert.ToHexString(bytes, 0, FingerprintLength / 2);
