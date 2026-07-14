@@ -163,6 +163,12 @@ internal static class RollupAggregationSqlBuilder
         // source is a TimeRangeArchive (concept-time-weighted §3: the windows ARE the coverage).
         var windowLengthMs =
             $"(\"{Constants.WindowEnd}\"::bigint - \"{Constants.WindowStart}\"::bigint)";
+        // First/Last (AB#4188): CrateDB has no arg_min / arg_max and its MIN / MAX do not accept an
+        // array argument, so the value at the earliest / latest observation is picked via a
+        // ROW_NUMBER window computed in a wrapping sub-select (AppendArgSourceSubquery below); the
+        // outer aggregate reads the value of the row ranked 1 (MAX over the single non-null CASE).
+        var hasArg = resolved.Any(r => r.Targets.Any(t =>
+            t.Function is RollupAggregationColumns.FirstMarker or RollupAggregationColumns.LastMarker));
         foreach (var (spec, sourceColumn, targets) in resolved)
         {
             foreach (var t in targets)
@@ -183,6 +189,17 @@ internal static class RollupAggregationSqlBuilder
                           .Append(CrateSqlLiteral.StateLiteral(spec.ComparisonValue ?? string.Empty))
                           .Append(" THEN ").Append(windowLengthMs).Append(" END)");
                         break;
+                    case RollupAggregationColumns.FirstMarker:
+                        // Value of the row ranked first by ascending time (see the rn window in the
+                        // wrapping sub-select). One row per rtId has rn = 1, so MAX over the single
+                        // non-null CASE yields that value.
+                        sb.Append("MAX(CASE WHEN \"").Append(RnFirstColumn).Append("\" = 1 THEN \"")
+                          .Append(sourceColumn).Append("\" END)");
+                        break;
+                    case RollupAggregationColumns.LastMarker:
+                        sb.Append("MAX(CASE WHEN \"").Append(RnLastColumn).Append("\" = 1 THEN \"")
+                          .Append(sourceColumn).Append("\" END)");
+                        break;
                     default:
                         sb.Append(t.Function).Append("(\"").Append(sourceColumn).Append("\")");
                         break;
@@ -191,30 +208,111 @@ internal static class RollupAggregationSqlBuilder
             }
         }
         sb.Append(", 0 AS \"").Append(Constants.Generation).Append('"');
-        sb.AppendLine().Append("FROM ").AppendLine(sourceTable);
+        sb.AppendLine();
+        if (hasArg)
+        {
+            AppendArgSourceSubquery(
+                sb, sourceTable, resolved, bucketStartLiteral, bucketEndLiteral,
+                sourceUsesWindowedStorage, rtIdScope);
+        }
+        else
+        {
+            sb.Append("FROM ").AppendLine(sourceTable);
+            AppendTimePredicate(sb, bucketStartLiteral, bucketEndLiteral, sourceUsesWindowedStorage, rtIdScope);
+        }
+        sb.Append("GROUP BY \"").Append(Constants.RtId).AppendLine("\"");
+
+        AppendConflictClause(sb, resolved);
+        return sb.ToString();
+    }
+
+    /// <summary>Rank column: earliest in-bucket observation per rtId (ROW_NUMBER, ascending time).</summary>
+    private const string RnFirstColumn = "_rn_first";
+
+    /// <summary>Rank column: latest in-bucket observation per rtId (ROW_NUMBER, descending time).</summary>
+    private const string RnLastColumn = "_rn_last";
+
+    /// <summary>
+    /// Emits the <c>FROM (SELECT …, ROW_NUMBER() …) src</c> sub-select that annotates every source
+    /// row with its ascending / descending time rank per <c>rtId</c>, so the outer GROUP BY can pick
+    /// the First / Last value (AB#4188). The projection carries every column the outer aggregates
+    /// reference (rtId, well-known-name, the windowed <c>was_updated</c> + window bounds, and each
+    /// distinct source column). Ordering key: the raw <c>timestamp</c> for a raw source, the child
+    /// <c>window_end</c> for a windowed / cascade source.
+    /// </summary>
+    private static void AppendArgSourceSubquery(
+        StringBuilder sb,
+        string sourceTable,
+        IReadOnlyList<(CkRollupAggregationSpec Spec, string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)> resolved,
+        string bucketStartLiteral,
+        string bucketEndLiteral,
+        bool sourceUsesWindowedStorage,
+        string? rtIdScope)
+    {
+        var orderColumn = sourceUsesWindowedStorage ? Constants.WindowEnd : Constants.Timestamp;
+
+        // Distinct source columns referenced by any spec — the outer aggregates read them by name.
+        var sourceColumns = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (_, sourceColumn, _) in resolved)
+        {
+            if (seen.Add(sourceColumn))
+            {
+                sourceColumns.Add(sourceColumn);
+            }
+        }
+
+        sb.AppendLine("FROM (");
+        sb.Append("    SELECT \"").Append(Constants.RtId).Append("\", \"").Append(Constants.RtWellKnownName).Append('"');
+        if (sourceUsesWindowedStorage)
+        {
+            sb.Append(", \"").Append(Constants.WasUpdated).Append("\", \"").Append(Constants.WindowStart)
+              .Append("\", \"").Append(Constants.WindowEnd).Append('"');
+        }
+        foreach (var col in sourceColumns)
+        {
+            sb.Append(", \"").Append(col).Append('"');
+        }
+        sb.Append(",\n           ROW_NUMBER() OVER (PARTITION BY \"").Append(Constants.RtId)
+          .Append("\" ORDER BY \"").Append(orderColumn).Append("\" ASC) AS \"").Append(RnFirstColumn).Append('"');
+        sb.Append(",\n           ROW_NUMBER() OVER (PARTITION BY \"").Append(Constants.RtId)
+          .Append("\" ORDER BY \"").Append(orderColumn).Append("\" DESC) AS \"").Append(RnLastColumn).Append('"');
+        sb.AppendLine().Append("    FROM ").AppendLine(sourceTable);
+        AppendTimePredicate(sb, bucketStartLiteral, bucketEndLiteral, sourceUsesWindowedStorage, rtIdScope, indent: "    ");
+        sb.AppendLine(") \"src\"");
+    }
+
+    /// <summary>
+    /// Emits the bucket time predicate (fully-contained window rule for a windowed source, half-open
+    /// timestamp rule for a raw source) plus the optional per-rtId recompute scope.
+    /// </summary>
+    private static void AppendTimePredicate(
+        StringBuilder sb,
+        string bucketStartLiteral,
+        string bucketEndLiteral,
+        bool sourceUsesWindowedStorage,
+        string? rtIdScope,
+        string indent = "")
+    {
         if (sourceUsesWindowedStorage)
         {
             // Fully-contained window predicate (concept §7): source windows must fit entirely
             // inside the target bucket. Straddling source rows drop out — operators must size
             // target buckets as multiples of the source window length.
-            sb.Append("WHERE \"").Append(Constants.WindowStart).Append("\" >= '").Append(bucketStartLiteral).Append("'::timestamp ")
+            sb.Append(indent).Append("WHERE \"").Append(Constants.WindowStart).Append("\" >= '").Append(bucketStartLiteral).Append("'::timestamp ")
               .Append("AND \"").Append(Constants.WindowEnd).Append("\" <= '").Append(bucketEndLiteral).AppendLine("'::timestamp");
         }
         else
         {
-            sb.Append("WHERE \"").Append(Constants.Timestamp).Append("\" >= '").Append(bucketStartLiteral).Append("'::timestamp ")
+            sb.Append(indent).Append("WHERE \"").Append(Constants.Timestamp).Append("\" >= '").Append(bucketStartLiteral).Append("'::timestamp ")
               .Append("AND \"").Append(Constants.Timestamp).Append("\" < '").Append(bucketEndLiteral).AppendLine("'::timestamp");
         }
         // Per-rtId scoped recompute (AB#4184): restrict the aggregation to a single source entity so
         // only that entity's rollup rows are recomputed (and later swept) for the range.
         if (!string.IsNullOrEmpty(rtIdScope))
         {
-            sb.Append("AND \"").Append(Constants.RtId).Append("\" = '").Append(EscapeLiteral(rtIdScope)).AppendLine("'");
+            sb.Append(indent).Append("AND \"").Append(Constants.RtId).Append("\" = '").Append(EscapeLiteral(rtIdScope)).AppendLine("'");
         }
-        sb.Append("GROUP BY \"").Append(Constants.RtId).AppendLine("\"");
-
-        AppendConflictClause(sb, resolved);
-        return sb.ToString();
     }
 
     /// <summary>
@@ -254,6 +352,12 @@ internal static class RollupAggregationSqlBuilder
         }
         var sourceColumnList = string.Join(", ", sourceColumns.Select(c => $"\"{c}\""));
 
+        // First / Last co-occurring with a time-weighted aggregation (AB#4188): the weighted
+        // sub-select gains two rank columns so the outer GROUP BY can pick the earliest / latest
+        // in-bucket value. Carry rows sort last (they are not real in-bucket observations).
+        var hasArg = resolved.Any(r => r.Targets.Any(t =>
+            t.Function is RollupAggregationColumns.FirstMarker or RollupAggregationColumns.LastMarker));
+
         var scopePredicate = string.IsNullOrEmpty(rtIdScope)
             ? string.Empty
             : $" AND \"{Constants.RtId}\" = '{EscapeLiteral(rtIdScope)}'";
@@ -288,6 +392,18 @@ internal static class RollupAggregationSqlBuilder
                           .Append(CrateSqlLiteral.StateLiteral(spec.ComparisonValue ?? string.Empty))
                           .Append(" THEN \"dt_ms\" END)");
                         break;
+                    case RollupAggregationColumns.FirstMarker:
+                        // First / Last pick the value of the earliest / latest in-bucket event via
+                        // the rn windows added to the weighted sub-select below. The carry-in
+                        // virtual row is ranked last and excluded here (AND NOT is_carry), so a
+                        // bucket with only a carry (no in-bucket events) yields NULL — correct.
+                        sb.Append("MAX(CASE WHEN \"").Append(RnFirstColumn).Append("\" = 1 AND NOT \"is_carry\" THEN \"")
+                          .Append(sourceColumn).Append("\" END)");
+                        break;
+                    case RollupAggregationColumns.LastMarker:
+                        sb.Append("MAX(CASE WHEN \"").Append(RnLastColumn).Append("\" = 1 AND NOT \"is_carry\" THEN \"")
+                          .Append(sourceColumn).Append("\" END)");
+                        break;
                     default:
                         // Plain aggregations must not see the carry-in virtual row — it lies
                         // outside the bucket. CASE-guard on is_carry keeps their semantics
@@ -312,7 +428,17 @@ internal static class RollupAggregationSqlBuilder
         }
         sb.Append(",\n           COALESCE(LEAD(\"ts\") OVER (PARTITION BY \"").Append(Constants.RtId)
           .Append("\" ORDER BY \"ts\", \"is_carry\" DESC), '").Append(bucketEndLiteral)
-          .AppendLine("'::timestamp)::bigint - \"ts\"::bigint AS \"dt_ms\"")
+          .Append("'::timestamp)::bigint - \"ts\"::bigint AS \"dt_ms\"");
+        if (hasArg)
+        {
+            // Carry rows (is_carry) sort last via the leading CASE so rank 1 is always the earliest
+            // / latest real in-bucket event.
+            sb.Append(",\n           ROW_NUMBER() OVER (PARTITION BY \"").Append(Constants.RtId)
+              .Append("\" ORDER BY (CASE WHEN \"is_carry\" THEN 1 ELSE 0 END) ASC, \"ts\" ASC) AS \"").Append(RnFirstColumn).Append('"');
+            sb.Append(",\n           ROW_NUMBER() OVER (PARTITION BY \"").Append(Constants.RtId)
+              .Append("\" ORDER BY (CASE WHEN \"is_carry\" THEN 1 ELSE 0 END) ASC, \"ts\" DESC) AS \"").Append(RnLastColumn).Append('"');
+        }
+        sb.AppendLine()
           .AppendLine("    FROM (")
           // ---- carry-in: latest observation before the bucket, per rtId, bounded lookback ----
           .Append("        SELECT \"").Append(Constants.RtId).Append("\", \"").Append(Constants.RtWellKnownName)

@@ -101,7 +101,8 @@ internal static class RollupColumnTypeResolver
                 : new CrateColumnType.Primitive("DOUBLE PRECISION");
         }
 
-        // SUM, MIN, MAX — all carry numeric values; DOUBLE is the safe envelope.
+        // SUM, MIN, MAX, First, Last — all carry a single numeric value; DOUBLE is the safe
+        // envelope (First/Last store the value at the earliest/latest observation, AB#4188).
         return new CrateColumnType.Primitive("DOUBLE PRECISION");
     }
 }

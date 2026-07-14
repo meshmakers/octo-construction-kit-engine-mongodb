@@ -62,6 +62,11 @@ internal static class RollupAggregationColumns
             {
                 new RollupTargetColumn(baseName, StateDurationMarker),
             },
+            // Markers — the SQL builders emit an arg_min / arg_max over time expression
+            // (the value at the earliest / latest observation in the bucket); the token is never
+            // emitted verbatim (AB#4188). Single DOUBLE column.
+            CkRollupFunction.First => new[] { new RollupTargetColumn(baseName, FirstMarker) },
+            CkRollupFunction.Last => new[] { new RollupTargetColumn(baseName, LastMarker) },
             _ => throw new System.ArgumentOutOfRangeException(
                 nameof(spec), spec.Function, "Unknown rollup function.")
         };
@@ -77,4 +82,10 @@ internal static class RollupAggregationColumns
 
     /// <summary>Marker function token for the StateDuration column (ms the signal held ComparisonValue).</summary>
     public const string StateDurationMarker = "STATE_DURATION";
+
+    /// <summary>Marker function token for the First column (value at the earliest timestamp in the bucket, AB#4188).</summary>
+    public const string FirstMarker = "ARG_FIRST";
+
+    /// <summary>Marker function token for the Last column (value at the latest timestamp in the bucket, AB#4188).</summary>
+    public const string LastMarker = "ARG_LAST";
 }

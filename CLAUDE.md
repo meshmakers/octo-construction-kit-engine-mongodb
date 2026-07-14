@@ -563,6 +563,15 @@ The shared `CkArchiveSnapshot` covers both subtypes. When the loaded entity is a
   - `COUNT` → `BIGINT`
   - `AVG` → `{base}_sum DOUBLE PRECISION`, `{base}_count BIGINT`
   - `SUM` / `MIN` / `MAX` → `DOUBLE PRECISION`
+  - `First` / `Last` (AB#4188) → a single `DOUBLE PRECISION` column holding the value at the
+    earliest / latest observation in the bucket. CrateDB has no `arg_min`/`arg_max` and `MIN`/`MAX`
+    reject arrays, so `RollupAggregationSqlBuilder` wraps the source in a `ROW_NUMBER()` sub-select
+    (`AppendArgSourceSubquery`) ranked by the raw `timestamp` (raw source) or child `window_end`
+    (windowed / cascade source), and the outer `GROUP BY` picks `MAX(CASE WHEN rn = 1 THEN value END)`
+    — a rollup-of-rollup thus re-picks the earliest / latest child bucket. Numeric source columns
+    only. In the LOCF path (a co-occurring TWA) the rank sorts the carry-in row last and the pick is
+    `AND NOT is_carry`-guarded. The stored column is read back directly as its own series
+    (`First`/`Last` are not ad-hoc query aggregates).
   - `TimeWeightedAvg` (AB#4336) → `{base}_integral DOUBLE PRECISION` (Σ value × Δt in value·ms),
     `{base}_duration BIGINT` (covered ms); default base name uses the short token `twavg`.
     Forward aggregation over a raw source uses a LOCF statement (carry-in row per rtId bounded

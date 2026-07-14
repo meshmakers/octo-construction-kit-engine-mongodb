@@ -247,6 +247,9 @@ public static class RollupChainAggregationResolver
             // Absolute durations accumulate — a cascade re-aggregates the ms column with SUM
             // and the result is still a StateDuration (AB#4336).
             (CkRollupFunction.StateDuration, CkRollupFunction.Sum) => (CkRollupFunction.StateDuration, null),
+            // First / Last chain via themselves (arg over the child window boundary). AB#4188.
+            (CkRollupFunction.First, CkRollupFunction.First) => (CkRollupFunction.First, null),
+            (CkRollupFunction.Last, CkRollupFunction.Last) => (CkRollupFunction.Last, null),
             _ => (null, null),
         };
     }

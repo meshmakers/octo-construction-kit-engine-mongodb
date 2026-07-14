@@ -388,4 +388,129 @@ public class RollupAggregationSqlBuilderTests
             sql);
         Assert.DoesNotContain("is_carry", sql);
     }
+
+    // ---- First / Last (AB#4188) ----
+
+    [Fact]
+    public void Build_First_RawSource_PicksValueOfEarliestRowViaRowNumber()
+    {
+        var aggregations = new[] { new CkRollupAggregationSpec("voltage", CkRollupFunction.First, null) };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
+
+        // CrateDB has no arg_min — the value at the earliest timestamp is picked via a ROW_NUMBER
+        // window in a wrapping sub-select, then MAX over the single rn = 1 row.
+        Assert.Contains(
+            "ROW_NUMBER() OVER (PARTITION BY \"rtid\" ORDER BY \"timestamp\" ASC) AS \"_rn_first\"",
+            sql);
+        Assert.Contains("MAX(CASE WHEN \"_rn_first\" = 1 THEN \"voltage\" END) AS \"voltage_first\"", sql);
+        Assert.Contains("FROM (", sql);
+        Assert.Contains(") \"src\"", sql);
+        // No invalid array-aggregate idiom.
+        Assert.DoesNotContain("ARRAY[", sql);
+    }
+
+    [Fact]
+    public void Build_Last_RawSource_PicksValueOfLatestRowViaRowNumber()
+    {
+        var aggregations = new[] { new CkRollupAggregationSpec("voltage", CkRollupFunction.Last, null) };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
+
+        Assert.Contains(
+            "ROW_NUMBER() OVER (PARTITION BY \"rtid\" ORDER BY \"timestamp\" DESC) AS \"_rn_last\"",
+            sql);
+        Assert.Contains("MAX(CASE WHEN \"_rn_last\" = 1 THEN \"voltage\" END) AS \"voltage_last\"", sql);
+    }
+
+    [Fact]
+    public void Build_First_WindowedSource_OrdersByWindowEnd()
+    {
+        // Cascade / time-range source: rank by the child window boundary, not a raw timestamp.
+        var aggregations = new[] { new CkRollupAggregationSpec("voltage_first", CkRollupFunction.First, null) };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: true);
+
+        Assert.Contains(
+            "ROW_NUMBER() OVER (PARTITION BY \"rtid\" ORDER BY \"window_end\" ASC) AS \"_rn_first\"",
+            sql);
+        Assert.Contains("MAX(CASE WHEN \"_rn_first\" = 1 THEN \"voltage_first\" END)", sql);
+    }
+
+    [Fact]
+    public void Build_Last_MixedWithTimeWeighted_GuardsAgainstCarryRow()
+    {
+        // In the LOCF path (a TWA aggregation forces it) First/Last rank the in-bucket events, with
+        // carry rows sorted last and excluded via AND NOT is_carry.
+        var aggregations = new[]
+        {
+            new CkRollupAggregationSpec("voltage", CkRollupFunction.Last, null),
+            new CkRollupAggregationSpec("dimmingLevel", CkRollupFunction.TimeWeightedAvg, null),
+        };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
+
+        Assert.Contains(
+            "ROW_NUMBER() OVER (PARTITION BY \"rtid\" ORDER BY (CASE WHEN \"is_carry\" THEN 1 ELSE 0 END) ASC, \"ts\" DESC) AS \"_rn_last\"",
+            sql);
+        Assert.Contains(
+            "MAX(CASE WHEN \"_rn_last\" = 1 AND NOT \"is_carry\" THEN \"voltage\" END) AS \"voltage_last\"",
+            sql);
+        Assert.DoesNotContain("ARRAY[", sql);
+    }
+
+    // ---- One-pass proof (AB#4188 acceptance criterion) ----
+
+    [Fact]
+    public void Build_NAggregationsDifferentAttributes_SingleInsertSingleGroupBy()
+    {
+        // The core AB#4188 guarantee: N aggregations across different attributes materialise in a
+        // single INSERT ... SELECT ... GROUP BY — one scan over the source window, not N.
+        var aggregations = new[]
+        {
+            new CkRollupAggregationSpec("energy", CkRollupFunction.Sum, null),
+            new CkRollupAggregationSpec("power", CkRollupFunction.Max, null),
+            new CkRollupAggregationSpec("power", CkRollupFunction.Min, null),
+            new CkRollupAggregationSpec("voltage", CkRollupFunction.First, null),
+            new CkRollupAggregationSpec("voltage", CkRollupFunction.Last, null),
+            new CkRollupAggregationSpec("current", CkRollupFunction.Avg, null),
+        };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
+
+        Assert.Equal(1, CountOccurrences(sql, "INSERT INTO "));
+        Assert.Equal(1, CountOccurrences(sql, "GROUP BY "));
+        Assert.Equal(1, CountOccurrences(sql, "FROM \"acmecorp\".\"archive_source\""));
+        // Every declared aggregate is present in the one statement.
+        Assert.Contains("SUM(\"energy\") AS \"energy_sum\"", sql);
+        Assert.Contains("MAX(\"power\") AS \"power_max\"", sql);
+        Assert.Contains("MIN(\"power\") AS \"power_min\"", sql);
+        Assert.Contains("AS \"voltage_first\"", sql);
+        Assert.Contains("AS \"voltage_last\"", sql);
+        Assert.Contains("SUM(\"current\") AS \"current_avg_sum\"", sql);
+        Assert.Contains("COUNT(\"current\") AS \"current_avg_count\"", sql);
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = haystack.IndexOf(needle, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += needle.Length;
+        }
+
+        return count;
+    }
 }
