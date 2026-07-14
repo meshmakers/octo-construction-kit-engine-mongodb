@@ -80,6 +80,11 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
     /// filtering out entities without associations.
     /// In <see cref="NavigationFilterMode.Include"/> mode, navigation stages are deferred as enrichment stages
     /// that run post-pagination, improving performance for large result sets.
+    /// The mode is resolved per pair: a pair that carries field-filter criteria (e.g. an association
+    /// field filter such as <c>parent.type-&gt;rtId EQUALS x</c>) must filter pre-pagination even when
+    /// the query-level mode is Include — the Include mode only exists so that pure column pairs
+    /// (::exists/::totalCount cells, first-match value navigation) don't drop entities without
+    /// associations; it must never disable an explicit filter.
     /// </summary>
     /// <param name="roleIdDirectionPairs">The navigation pairs to add.</param>
     /// <param name="navigationFilterMode">Controls whether entities without associations are filtered or included.</param>
@@ -100,7 +105,8 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                 CreateAssociationCountNavigation(roleIdDirectionPair, _ckTypeGraph, _associationStageDefinitions);
                 CreateInnerNavigation(roleIdDirectionPair, _ckTypeGraph, _enrichmentStageDefinitions, false);
             }
-            else if (navigationFilterMode == NavigationFilterMode.Filter)
+            else if (navigationFilterMode == NavigationFilterMode.Filter ||
+                     CarriesFieldFilters(roleIdDirectionPair))
             {
                 // Two-phase FILTER: lightweight existence check pre-pagination (for filtering + count),
                 // full data enrichment post-pagination (only on the paginated subset).
@@ -113,6 +119,17 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                 CreateInnerNavigation(roleIdDirectionPair, _ckTypeGraph, _enrichmentStageDefinitions, false);
             }
         }
+    }
+
+    /// <summary>
+    /// True when the navigation pair (or any inner pair on a deeper path segment) carries
+    /// explicit field-filter criteria that must narrow the origin result set.
+    /// </summary>
+    private static bool CarriesFieldFilters(NavigationPair pair)
+    {
+        return pair.FieldFilters is { Count: > 0 } ||
+               pair.NestedFilters is { Count: > 0 } ||
+               pair.InnerNavigationPairs.Any(CarriesFieldFilters);
     }
 
     /// <summary>
