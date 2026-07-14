@@ -162,6 +162,18 @@ internal static partial class MongoToolArguments
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Redacts secrets in a pre-joined command-line string — defense in depth for the string-based
+    /// ExecuteCommandAsync overload, whose caller-supplied arguments bypass the per-argument
+    /// redaction. Masks <c>--password</c> values (up to the next whitespace) and URI-embedded
+    /// credentials.
+    /// </summary>
+    public static string RedactCommandLine(string commandLine)
+    {
+        var redacted = PasswordTokenRegex().Replace(commandLine, "--password=***");
+        return UriCredentialsRegex().Replace(redacted, "$1:***@");
+    }
+
     private static void AddAuthentication(List<string> args, string? adminUser, string? adminUserPassword)
     {
         if (!string.IsNullOrEmpty(adminUser))
@@ -187,4 +199,7 @@ internal static partial class MongoToolArguments
 
     [GeneratedRegex(@"(://[^/@\s:]+):[^@\s]+@")]
     private static partial Regex UriCredentialsRegex();
+
+    [GeneratedRegex(@"--password[=\s]+\S+")]
+    private static partial Regex PasswordTokenRegex();
 }

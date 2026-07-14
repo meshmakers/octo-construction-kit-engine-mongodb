@@ -99,8 +99,10 @@ public class RepositoryOpsService(
             Arguments = arguments
         };
 
-        return await ExecuteProcessAsync(startInfo, $"{fileName} {arguments}", workingDirectory, timeout,
-            cancellationToken);
+        // Defense in depth: caller-supplied argument strings bypass the per-argument redaction,
+        // so mask password/URI credentials before the string reaches logs and CommandResult.Command.
+        return await ExecuteProcessAsync(startInfo, MongoToolArguments.RedactCommandLine($"{fileName} {arguments}"),
+            workingDirectory, timeout, cancellationToken);
     }
 
     public async Task<CommandResult> ExecuteCommandAsync(string fileName, IReadOnlyList<string> arguments,
@@ -129,7 +131,7 @@ public class RepositoryOpsService(
         var workingDirectoryPath = workingDirectory ?? Directory.GetCurrentDirectory();
         logger.LogInformation("Executing command: {Command}", fileName);
         logger.LogInformation("Using working-directory: {WorkingDirectory}", workingDirectoryPath);
-        logger.LogDebug("Using args: {Args}", displayCommand);
+        logger.LogDebug("Using command: {Command}", displayCommand);
 
         startInfo.RedirectStandardOutput = true;
         startInfo.RedirectStandardError = true;

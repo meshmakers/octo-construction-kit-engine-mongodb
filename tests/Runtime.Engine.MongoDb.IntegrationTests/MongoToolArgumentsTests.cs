@@ -93,6 +93,20 @@ public class MongoToolArgumentsTests
     }
 
     [Fact]
+    public void RedactCommandLine_MasksPasswordTokensAndUriCredentials()
+    {
+        var commandLine =
+            "mongodump --uri=mongodb://admin:secretvalue@localhost/db --password=topsecret --db=db";
+
+        var redacted = MongoToolArguments.RedactCommandLine(commandLine);
+
+        redacted.Should().NotContain("topsecret");
+        redacted.Should().NotContain("secretvalue");
+        redacted.Should().Contain("--password=***");
+        redacted.Should().Contain("mongodb://admin:***@localhost/db");
+    }
+
+    [Fact]
     public void ToDisplayString_MasksCredentialsEmbeddedInUri()
     {
         var args = new List<string> { "--uri=mongodb://octo-system-admin:secretvalue@localhost/wwc26" };

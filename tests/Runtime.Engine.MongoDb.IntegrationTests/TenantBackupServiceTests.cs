@@ -381,6 +381,7 @@ public class TenantBackupServiceTests(SystemFixture systemFixture)
         {
             await TryDropTenant(systemContext, targetTenantId);
             await TryDropTenant(systemContext, sourceTenantId);
+            TryDeleteFile(archivePath);
         }
     }
 
@@ -434,6 +435,22 @@ public class TenantBackupServiceTests(SystemFixture systemFixture)
         {
             await TryDropTenant(systemContext, targetTenantId);
             await TryDropTenant(systemContext, sourceTenantId);
+            TryDeleteFile(archivePath);
+        }
+    }
+
+    private static void TryDeleteFile(string filePath)
+    {
+        try
+        {
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+            }
+        }
+        catch
+        {
+            // Ignore cleanup errors
         }
     }
 
