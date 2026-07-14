@@ -431,6 +431,87 @@ public sealed class MongoCommandObservabilityTests : IDisposable
             SlowQueryFingerprinter.Fingerprint(raw));
     }
 
+    // ---- Aggregate pipelines must survive materialization (AB#4374) ----
+    // AB#4368's placeholder replacement hit EVERY raw array, including an aggregate's pipeline.
+    // The explain probe then sent {explain: {aggregate: ..., pipeline: "<7 raw documents elided>"}}
+    // and the server rejected it with error 14 ("'pipeline' option must be specified as an array"),
+    // producing a WARN+ERROR pair per cooldown window on prod. Only bulk-write payload fields
+    // (documents/updates/deletes) may be elided; other raw arrays are materialized.
+
+    [Fact]
+    public void MaterializeForRetention_RawAggregate_PreservesPipelineArray_AndSurvivesDispose()
+    {
+        var raw = BuildRawAggregateCommand();
+
+        var snapshot = MongoCommandObservability.MaterializeForRetention(raw);
+        raw.Dispose(); // driver reclaims the send buffer — the snapshot must own its bytes
+
+        Assert.NotNull(snapshot);
+        var pipeline = Assert.IsType<BsonArray>(snapshot!["pipeline"]);
+        Assert.Equal(3, pipeline.Count);
+        Assert.Equal("$match", pipeline[0].AsBsonDocument.GetElement(0).Name);
+        // Serializable after dispose — exactly what the explain envelope does with the clone.
+        Assert.Contains("$match", snapshot.ToJson());
+        Assert.False(MongoCommandObservability.ContainsElidedPlaceholder(snapshot));
+    }
+
+    [Fact]
+    public void MaterializeForRetention_RawUpdate_ElidesUpdatesPayload_AndGuardDetectsIt()
+    {
+        var command = new BsonDocument
+        {
+            { "update", "rt_entities" },
+            { "updates", new BsonArray { new BsonDocument("q", new BsonDocument("name", "a")) } },
+            { "writeConcern", new BsonDocument("w", 1) }
+        };
+        var raw = new RawBsonDocument(command.ToBson());
+
+        var snapshot = MongoCommandObservability.MaterializeForRetention(raw);
+        raw.Dispose();
+
+        // Bulk payload stays elided (retention safety), and the guard flags the command as
+        // not-explainable so DispatchExplain never round-trips a guaranteed server error.
+        Assert.IsType<BsonString>(snapshot!["updates"]);
+        Assert.True(MongoCommandObservability.ContainsElidedPlaceholder(snapshot));
+    }
+
+    [Fact]
+    public void SlowRawAggregate_PipelineRetainedInPreview_NotElided()
+    {
+        var buffer = new SlowQueriesBuffer(capacity: 100);
+        var sut = new MongoCommandObservability(_logger, _config, buffer);
+        _config.Current.SlowQueryThresholdMs = 50;
+
+        var raw = BuildRawAggregateCommand();
+        var (started, succeeded) = BuildPair("aggregate", raw, "tenant_a", durationMs: 250);
+
+        sut.OnStarted(started);
+        raw.Dispose();
+        sut.OnSucceeded(succeeded);
+
+        Assert.DoesNotContain(_logger.Entries, e => e.Level == LogLevel.Error);
+        var entry = Assert.Single(buffer.GetSnapshot());
+        Assert.Contains("$match", entry.CommandBsonPreview);
+        Assert.DoesNotContain("elided", entry.CommandBsonPreview);
+    }
+
+    private static RawBsonDocument BuildRawAggregateCommand()
+    {
+        var command = new BsonDocument
+        {
+            { "aggregate", "rt_entities" },
+            { "pipeline", new BsonArray
+                {
+                    new BsonDocument("$match", new BsonDocument("attributes.status", new BsonDocument("$ne", 0))),
+                    new BsonDocument("$sort", new BsonDocument("attributes.startedAt", 1)),
+                    new BsonDocument("$limit", 500)
+                }
+            },
+            { "cursor", new BsonDocument() }
+        };
+        return new RawBsonDocument(command.ToBson());
+    }
+
     private static RawBsonDocument BuildRawInsertCommand()
     {
         var command = new BsonDocument

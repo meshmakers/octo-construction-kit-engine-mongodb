@@ -38,6 +38,22 @@ internal sealed class MongoCommandObservability
     };
 
     /// <summary>
+    /// OP_MSG payload-type-1 fields whose raw arrays carry bulk-write document bodies. Only these
+    /// are elided by <see cref="MaterializeForRetention"/> — they can be megabytes, have no
+    /// slow-query diagnostic value, and the placeholder keeps the fingerprint stable across batch
+    /// sizes. Every other raw array (e.g. an aggregate's <c>pipeline</c>) IS the diagnostic value
+    /// and must be materialized instead: eliding it broke the explain probe with server error 14
+    /// ("'pipeline' option must be specified as an array") and blinded the fingerprint (AB#4374).
+    /// </summary>
+    private static readonly HashSet<string> BulkPayloadFields = new(StringComparer.Ordinal)
+    {
+        "documents", "updates", "deletes"
+    };
+
+    /// <summary>Suffix of the placeholder written for elided bulk payload arrays.</summary>
+    private const string ElidedPlaceholderSuffix = " raw documents elided>";
+
+    /// <summary>
     /// Per-request accumulator scope. The AsyncLocal value flows through ExecutionContext into
     /// the MongoDB driver's command-event callbacks, so commands issued during the scope are
     /// summed into the active <see cref="RequestMongoStats"/> instance. Out-of-scope work
@@ -384,6 +400,15 @@ internal sealed class MongoCommandObservability
             return;
         }
 
+        // A retained command with an elided bulk payload (raw update/delete batches) cannot be
+        // explained — the server would reject the placeholder string where it expects an array
+        // (error 14). Stamp Unsupported instead of round-tripping a guaranteed failure (AB#4374).
+        if (ContainsElidedPlaceholder(commandClone))
+        {
+            cache.Set(key, SlowQueryExplainParser.Unsupported(DateTimeOffset.UtcNow, commandName));
+            return;
+        }
+
         _ = Task.Run(async () =>
         {
             try
@@ -452,7 +477,12 @@ internal sealed class MongoCommandObservability
         {
             snapshot.Add(element.Name, element.Value switch
             {
-                RawBsonArray rawArray => new BsonString($"<{rawArray.Count} raw documents elided>"),
+                // Bulk payload arrays (documents/updates/deletes) are megabyte-scale and carry no
+                // diagnostic value → placeholder. Other raw arrays — an aggregate's pipeline above
+                // all — ARE the diagnostic value and stay explainable → materialize (AB#4374).
+                RawBsonArray rawArray => BulkPayloadFields.Contains(element.Name)
+                    ? new BsonString($"<{rawArray.Count}{ElidedPlaceholderSuffix}")
+                    : MaterializeRawArray(rawArray),
                 // DeepClone copies the underlying byte slice into an independently-owned buffer;
                 // small metadata sub-documents (lsid, writeConcern, ...) — not bulk payloads.
                 RawBsonDocument rawDocument => rawDocument.DeepClone(),
@@ -461,6 +491,49 @@ internal sealed class MongoCommandObservability
         }
 
         return snapshot;
+    }
+
+    /// <summary>
+    /// Copies a <see cref="RawBsonArray"/> into a plain <see cref="BsonArray"/> whose elements own
+    /// their bytes independently of the driver's send buffer. Element-wise on purpose rather than
+    /// relying on <c>RawBsonArray.DeepClone()</c> semantics: the result must be an ordinary array
+    /// value that stays valid after the driver reclaims the connection buffer AND serializes as a
+    /// real BSON array inside the explain envelope.
+    /// </summary>
+    private static BsonArray MaterializeRawArray(RawBsonArray rawArray)
+    {
+        var materialized = new BsonArray(rawArray.Count);
+        foreach (var value in rawArray)
+        {
+            materialized.Add(value switch
+            {
+                // DeepClone copies the byte slice into an independently-owned buffer (same
+                // contract MaterializeForRetention relies on for metadata sub-documents).
+                RawBsonDocument rawDocument => rawDocument.DeepClone(),
+                RawBsonArray nestedArray => MaterializeRawArray(nestedArray),
+                _ => value
+            });
+        }
+
+        return materialized;
+    }
+
+    /// <summary>
+    /// True when the retained command contains a bulk-payload placeholder written by
+    /// <see cref="MaterializeForRetention"/> — such a command must never be sent to the server
+    /// (e.g. wrapped in an explain), the placeholder string is not valid where an array is expected.
+    /// </summary>
+    internal static bool ContainsElidedPlaceholder(BsonDocument command)
+    {
+        foreach (var element in command)
+        {
+            if (element.Value is BsonString s && s.Value.EndsWith(ElidedPlaceholderSuffix, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool ContainsRawValues(BsonDocument command)

@@ -98,17 +98,27 @@ matching success/failed events for every started event, so growth is bounded by 
 When the lookup misses (started event lost), the listener falls back to `database="unknown"`
 rather than throwing.
 
-**Raw-BSON retention (AB#4368).** `CommandStartedEvent.Command` is only valid while the
-started-event handlers run: for bulk-write commands (insert/update/delete with OP_MSG
-payload-type-1 sections) it is a `RawBsonDocument` — or contains `RawBsonDocument`/`RawBsonArray`
-slices — over the connection's send buffer, which the driver returns to its pool right after
-the event. `MaterializeForRetention` therefore snapshots the command before it enters the
-`_pending` map: bulk payload arrays are replaced with a `"<N raw documents elided>"` placeholder
-(no megabyte bodies retained or fingerprinted), small raw sub-documents (lsid, writeConcern)
-are deep-cloned. Defense in depth: `TruncateBson`, `SlowQueryFingerprinter.Fingerprint`, and
-the explain-dispatch `DeepClone` all catch `ObjectDisposedException` and degrade gracefully —
-before this fix, identity-services startup (bulk seeding, everything above the slow threshold)
-flooded the log with ERROR entries and lost exactly those entries from the slow-query buffer.
+**Raw-BSON retention (AB#4368, refined by AB#4374).** `CommandStartedEvent.Command` is only
+valid while the started-event handlers run: for bulk-write commands (insert/update/delete with
+OP_MSG payload-type-1 sections) it is a `RawBsonDocument` — or contains
+`RawBsonDocument`/`RawBsonArray` slices — over the connection's send buffer, which the driver
+returns to its pool right after the event. `MaterializeForRetention` therefore snapshots the
+command before it enters the `_pending` map: raw arrays under the **bulk payload fields only**
+(`documents`, `updates`, `deletes`) are replaced with a `"<N raw documents elided>"` placeholder
+(no megabyte bodies retained or fingerprinted, fingerprint stable across batch sizes); every
+other raw array — above all an aggregate's `pipeline` — is materialized element-wise into an
+independently-owned `BsonArray`, and small raw sub-documents (lsid, writeConcern) are
+deep-cloned. AB#4374 background: the original AB#4368 fix elided *every* raw array, so a raw
+`aggregate` command lost its pipeline and the explain probe sent
+`{explain: {..., pipeline: "<7 raw documents elided>"}}` — server error 14 (`'pipeline' option
+must be specified as an array`), a WARN+ERROR pair per cooldown window, and a shape-blind
+fingerprint. `DispatchExplain` additionally guards via `ContainsElidedPlaceholder`: a command
+still carrying a placeholder (raw bulk update/delete) is stamped `Unsupported` in the explain
+cache instead of round-tripping a guaranteed failure. Defense in depth: `TruncateBson`,
+`SlowQueryFingerprinter.Fingerprint`, and the explain-dispatch `DeepClone` all catch
+`ObjectDisposedException` and degrade gracefully — before AB#4368, identity-services startup
+(bulk seeding, everything above the slow threshold) flooded the log with ERROR entries and lost
+exactly those entries from the slow-query buffer.
 
 ### Exception Safety
 
