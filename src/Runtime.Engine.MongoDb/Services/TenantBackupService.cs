@@ -183,6 +183,47 @@ internal class TenantBackupService(
                 return CommandResult.Failure(errorMessage);
             }
 
+            // AB#4367: determine the archive's source database(s) from its prelude so a restore
+            // under a different database name gets the namespace mapping instead of silently
+            // restoring nothing. Runs before the drop block so a doomed restore never destroys
+            // an existing target tenant.
+            var detectedDatabases = MongoArchivePreludeReader.TryReadSourceDatabases(archiveFilePath);
+            var effectiveSourceDatabaseName = sourceDatabaseName;
+            if (!string.IsNullOrEmpty(sourceDatabaseName))
+            {
+                if (detectedDatabases.Count > 0 && !detectedDatabases.Contains(sourceDatabaseName))
+                {
+                    var errorMessage =
+                        $"Archive contains database(s) '{string.Join("', '", detectedDatabases)}' but source " +
+                        $"database '{sourceDatabaseName}' was specified — nothing would be restored. " +
+                        "Pass the database name the archive was dumped from.";
+                    logger.LogError(
+                        "Restore of tenant '{TenantId}' rejected: {ErrorMessage}", tenantId, errorMessage);
+                    return CommandResult.Failure(errorMessage);
+                }
+            }
+            else if (detectedDatabases.Count == 1)
+            {
+                effectiveSourceDatabaseName = detectedDatabases[0];
+                logger.LogInformation(
+                    "Auto-detected source database '{SourceDatabaseName}' from archive prelude",
+                    effectiveSourceDatabaseName);
+            }
+            else if (detectedDatabases.Count > 1 && !detectedDatabases.Contains(databaseName))
+            {
+                var errorMessage =
+                    $"Archive contains multiple databases ('{string.Join("', '", detectedDatabases)}'). " +
+                    "Specify the source database name to restore.";
+                logger.LogError("Restore of tenant '{TenantId}' rejected: {ErrorMessage}", tenantId, errorMessage);
+                return CommandResult.Failure(errorMessage);
+            }
+            else if (detectedDatabases.Count == 0)
+            {
+                logger.LogWarning(
+                    "Could not detect the source database from archive '{ArchiveFilePath}' — assuming it matches the target database '{DatabaseName}'",
+                    archiveFilePath, databaseName);
+            }
+
             // Check if tenant exists and optionally drop it
             var existingTenantContext = await systemContext.TryFindTenantContextAsync(tenantId);
             if (existingTenantContext != null)
@@ -220,9 +261,9 @@ internal class TenantBackupService(
             };
 
             // Enable namespace mapping if restoring to a different database name
-            if (!string.IsNullOrEmpty(sourceDatabaseName) && sourceDatabaseName != databaseName)
+            if (!string.IsNullOrEmpty(effectiveSourceDatabaseName) && effectiveSourceDatabaseName != databaseName)
             {
-                restoreOptions.NsFrom = $"{sourceDatabaseName}.*";
+                restoreOptions.NsFrom = $"{effectiveSourceDatabaseName}.*";
                 restoreOptions.NsTo = $"{databaseName}.*";
                 logger.LogInformation(
                     "Using namespace mapping: '{NsFrom}' -> '{NsTo}'",
@@ -236,6 +277,21 @@ internal class TenantBackupService(
             {
                 logger.LogError("Restore failed for tenant '{TenantId}': {Error}", tenantId, result.Error);
                 return result;
+            }
+
+            // AB#4367: a mongorestore whose --nsInclude matched no namespace exits 0 with
+            // "0 documents restored" and never creates the target database — turn that silent
+            // no-op into a descriptive failure instead of a misleading downstream attach error.
+            if (!await systemContext.IsDatabaseExistingAsync(databaseName))
+            {
+                var archiveInfo = detectedDatabases.Count > 0
+                    ? $" The archive contains database(s) '{string.Join("', '", detectedDatabases)}'."
+                    : string.Empty;
+                var errorMessage =
+                    $"mongorestore completed but restored no data into database '{databaseName}' — " +
+                    $"no namespaces in the archive matched.{archiveInfo}";
+                logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
+                return CommandResult.Failure(errorMessage);
             }
 
             logger.LogInformation("Database '{DatabaseName}' restored successfully for tenant '{TenantId}'",

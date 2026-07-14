@@ -235,5 +235,12 @@ public class SystemContext : TenantContext, ISystemContext
             timeout, cancellationToken);
     }
 
+    Task<bool> ISystemContext.IsDatabaseExistingAsync(string databaseName)
+    {
+        // Bridges the protected TenantContext helper onto the interface so consumers
+        // (e.g. TenantBackupService post-restore verification) can check database existence.
+        return IsDatabaseExistingAsync(databaseName);
+    }
+
     #endregion
 }

@@ -335,6 +335,125 @@ public class TenantBackupServiceTests(SystemFixture systemFixture)
         Assert.Contains("not found", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
+    // AB#4367 — restoring an archive under a DIFFERENT database name without passing the
+    // source database name (the Refinery Studio restore path) must auto-detect the source
+    // from the archive prelude and restore the data instead of silently restoring nothing.
+
+    [Fact]
+    public async Task RestoreTenant_ToDifferentDatabaseName_WithoutSourceName_RestoresDocuments()
+    {
+        var systemContext = systemFixture.GetSystemContext();
+
+        var sourceTenantId = $"renamesrc_{Guid.NewGuid():N}";
+        var sourceDatabaseName = sourceTenantId.ToLower();
+        var targetTenantId = $"renametgt_{Guid.NewGuid():N}";
+        var targetDatabaseName = targetTenantId.ToLower();
+        var archivePath = Path.Combine(Path.GetTempPath(), $"backup_{Guid.NewGuid():N}.tar.gz");
+
+        try
+        {
+            // 1) Create a source tenant (its database carries CkModel + system collections)
+            using (var session = await systemContext.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await systemContext.CreateChildTenantAsync(session, sourceDatabaseName, sourceTenantId);
+                await session.CommitTransactionAsync();
+            }
+
+            // 2) Backup the source tenant
+            var backupResult = await systemContext.BackupTenantAsync(sourceTenantId, archivePath);
+            Assert.True(backupResult.Success, $"Backup should succeed. Error: {backupResult.Error}");
+
+            // 3) Restore under a different tenant id AND database name, without sourceDatabaseName
+            var restoreResult = await systemContext.RestoreTenantAsync(
+                targetTenantId, targetDatabaseName, archivePath,
+                dropExistingTenant: true, attachTenant: true);
+
+            // 4) The restore must succeed and the target database must actually contain the data
+            //    (attach fails when mongorestore restored nothing, because the database never exists)
+            Assert.True(restoreResult.Success, $"Restore should succeed. Error: {restoreResult.Error}");
+
+            var restoredContext = await systemContext.GetChildTenantContextAsync(targetTenantId);
+            Assert.NotNull(restoredContext);
+            Assert.Equal(targetDatabaseName, restoredContext.DatabaseName);
+        }
+        finally
+        {
+            await TryDropTenant(systemContext, targetTenantId);
+            await TryDropTenant(systemContext, sourceTenantId);
+            TryDeleteFile(archivePath);
+        }
+    }
+
+    [Fact]
+    public async Task RestoreTenant_WithWrongExplicitSourceName_FailsWithDescriptiveError_AndKeepsExistingTarget()
+    {
+        var systemContext = systemFixture.GetSystemContext();
+
+        var sourceTenantId = $"renamesrc_{Guid.NewGuid():N}";
+        var sourceDatabaseName = sourceTenantId.ToLower();
+        var targetTenantId = $"renametgt_{Guid.NewGuid():N}";
+        var targetDatabaseName = targetTenantId.ToLower();
+        var archivePath = Path.Combine(Path.GetTempPath(), $"backup_{Guid.NewGuid():N}.tar.gz");
+
+        try
+        {
+            // 1) Create source tenant + backup
+            using (var session = await systemContext.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await systemContext.CreateChildTenantAsync(session, sourceDatabaseName, sourceTenantId);
+                await session.CommitTransactionAsync();
+            }
+
+            var backupResult = await systemContext.BackupTenantAsync(sourceTenantId, archivePath);
+            Assert.True(backupResult.Success, $"Backup should succeed. Error: {backupResult.Error}");
+
+            // 2) Create the target tenant that a doomed restore must NOT destroy
+            using (var session = await systemContext.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await systemContext.CreateChildTenantAsync(session, targetDatabaseName, targetTenantId);
+                await session.CommitTransactionAsync();
+            }
+
+            // 3) Restore with a source database name that does not match the archive
+            var restoreResult = await systemContext.RestoreTenantAsync(
+                targetTenantId, targetDatabaseName, archivePath,
+                sourceDatabaseName: "database_not_in_archive",
+                dropExistingTenant: true, attachTenant: true);
+
+            // 4) Must fail loudly, naming the archive's actual database
+            Assert.False(restoreResult.Success);
+            Assert.Contains(sourceDatabaseName, restoreResult.Error, StringComparison.OrdinalIgnoreCase);
+
+            // 5) The pre-existing target tenant must not have been dropped
+            var targetStillAttached = await systemContext.TryFindTenantContextAsync(targetTenantId);
+            Assert.NotNull(targetStillAttached);
+        }
+        finally
+        {
+            await TryDropTenant(systemContext, targetTenantId);
+            await TryDropTenant(systemContext, sourceTenantId);
+            TryDeleteFile(archivePath);
+        }
+    }
+
+    private static void TryDeleteFile(string filePath)
+    {
+        try
+        {
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+            }
+        }
+        catch
+        {
+            // Ignore cleanup errors
+        }
+    }
+
     // AB#4209 Step 5 PR 2 — clone primitive coverage.
     // The clone is used by the DumpTenant --clean orchestrator (bot-services) to isolate
     // the cleanup pass from the live tenant. These tests pin the contract: clone produces
