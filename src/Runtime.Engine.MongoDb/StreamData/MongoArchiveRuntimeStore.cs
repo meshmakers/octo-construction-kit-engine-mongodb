@@ -115,6 +115,8 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
             RollupAggregations = rollupAggregations,
             IsTimeRange = isTimeRange,
             Period = period,
+            // Bounded retro reach (AB#4196): per-archive automatic-recompute cap; null = unbounded.
+            MaxRetroactiveReachMs = entity.MaxRetroactiveReachMs,
         };
     }
 

@@ -684,6 +684,28 @@ reachable from `TenantContext` DI:
   the lifecycle service (both optional ctor params, so the backward-compatible construction still
   works). Prevents a delete+re-import that reuses the same rtId from inheriting stale ranges/jobs.
 
+### Bounded Retro Reach — Automatic-Recompute Cap (AB#4196)
+
+Automatic recompute is driven by `RetroactiveWriteDetector.TryBuildDirtyWindow`, called from every
+`CrateDbStreamDataRepository` insert path. AB#4196 adds a cap on how far *before* the consumed
+watermark a single very-late write may drag that automatic recompute — otherwise one stray old
+timestamp schedules a recompute of years of history.
+
+- **Config:** `Archive.MaxRetroactiveReachMs` (per source archive, `System.StreamData` 1.6.8, config
+  not runtime-state, `null` = unbounded) + the host `StreamData:Recompute:MaxRetroactiveReachHardLimitMs`
+  fleet ceiling on `StreamDataConfiguration`. `CrateDbStreamDataRepository.ResolveEffectiveRetroReach`
+  computes `min(perArchive, hardLimit)`.
+- **Primary enforcement (detection):** the detector floors the automatic dirty window at
+  `consumedWatermark - effectiveCap`; a fully-out-of-reach batch records no window. When any
+  retroactive timestamp is dropped it sets `reachCapped`, and the repo logs a `WARN` so the operator
+  can run an unbounded manual `recomputeArchive` for the deeper tail.
+- **Belt-and-suspenders (propagation):** `RecomputeOrchestrator.PropagateDirtyWindowsAsync` loads the
+  source's per-archive cap and passes it to `EnqueueOnDirectDependentsAsync`, which floors each
+  dependent's stale-range start at `dependentWatermark - cap` (bucket-aligned). This bounds any dirty
+  window recorded before the cap existed. Chain propagation after a committed recompute passes a
+  `null` cap — manual/chained recompute stays unbounded, matching `recomputeArchive` /
+  `rewindRollupWatermark`.
+
 ### Extensible Enum Preservation on Import (WI #3324)
 
 `DatabaseCkModelRepository.PreserveExtensibleEnumValues` runs inside `ExecuteImport`

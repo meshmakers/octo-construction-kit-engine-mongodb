@@ -74,6 +74,18 @@ public class StreamDataConfiguration
     public int NumberOfReplicas { get; set; } = -1;
 
     /// <summary>
+    /// Bounded-retro-reach fleet ceiling (AB#4196), in milliseconds. A fleet-wide backstop on how
+    /// far before the consumed watermark a single retroactive write may drag an <b>automatic</b>
+    /// recompute of dependent rollups. The effective cap applied at detection is
+    /// <c>min(Archive.MaxRetroactiveReachMs, this)</c> — a per-archive value can only tighten the
+    /// ceiling, never loosen it. <c>null</c> (default) ⇒ no fleet ceiling, so behaviour is governed
+    /// purely by the per-archive cap (and unbounded when that is also null, the pre-1.6.8 default).
+    /// Bound to <c>StreamData:Recompute:MaxRetroactiveReachHardLimitMs</c>. Only bounds the automatic
+    /// path; manual <c>recomputeArchive</c> / <c>rewindRollupWatermark</c> stay unbounded.
+    /// </summary>
+    public long? MaxRetroactiveReachHardLimitMs { get; set; }
+
+    /// <summary>
     /// Helper method to build a connection string from individual settings. Omits the
     /// <c>Password</c> token entirely when no password is supplied so callers don't end up with a
     /// stray <c>Password=;</c> on the wire.

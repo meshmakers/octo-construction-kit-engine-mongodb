@@ -34,6 +34,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     private readonly string _tenantId;
     private readonly IFormulaEngine _formulaEngine;
     private readonly IArchiveRecomputeStateStore? _recomputeStateStore;
+    private readonly IArchiveAuditTrail? _archiveAuditTrail;
 
     public CrateDbStreamDataRepository(
         ILogger<CrateDbStreamDataRepository> logger,
@@ -45,7 +46,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         IArchiveRuntimeStore archiveStore,
         IFormulaEngine formulaEngine,
         IRollupArchiveRuntimeStore? rollupArchiveStore = null,
-        IArchiveRecomputeStateStore? recomputeStateStore = null)
+        IArchiveRecomputeStateStore? recomputeStateStore = null,
+        IArchiveAuditTrail? archiveAuditTrail = null)
     {
         _logger = logger;
         _ckCacheService = ckCacheService;
@@ -57,6 +59,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         _tenantId = tenantId;
         _formulaEngine = formulaEngine;
         _recomputeStateStore = recomputeStateStore;
+        _archiveAuditTrail = archiveAuditTrail;
     }
 
     public Task EnsureDatabaseCreatedAsync()
@@ -264,7 +267,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             new("archive", archiveRtId.ToString()));
 
         await DetectAndRecordRetroactiveWriteAsync(
-            archiveRtId, new[] { datapoint.Timestamp }, RecomputeChangeSource.Pipeline);
+            snapshot, new[] { datapoint.Timestamp }, RecomputeChangeSource.Pipeline);
     }
 
     public async Task InsertAsync(OctoObjectId archiveRtId, IEnumerable<StreamDataPoint> datapoints)
@@ -316,7 +319,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             new("archive", archiveRtId.ToString()));
 
         await DetectAndRecordRetroactiveWriteAsync(
-            archiveRtId, filtered.Select(p => p.Timestamp), RecomputeChangeSource.Pipeline);
+            snapshot, filtered.Select(p => p.Timestamp), RecomputeChangeSource.Pipeline);
     }
 
     /// <summary>
@@ -424,7 +427,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         // Time-range rows are keyed by their window start; a late window correction is retroactive.
         await DetectAndRecordRetroactiveWriteAsync(
-            archiveRtId, filtered.Select(p => p.From), RecomputeChangeSource.Pipeline);
+            snapshot, filtered.Select(p => p.From), RecomputeChangeSource.Pipeline);
     }
 
     private Dtos.TimeRangeDataPointDto MapToTimeRangeDataPointDto(TimeRangeStreamDataPoint point,
@@ -1443,22 +1446,66 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// enumeration so the common forward-ingest path stays untouched.
     /// </summary>
     private async Task DetectAndRecordRetroactiveWriteAsync(
-        OctoObjectId archiveRtId, IEnumerable<DateTime> timestamps, RecomputeChangeSource source)
+        ArchiveSnapshot snapshot, IEnumerable<DateTime> timestamps, RecomputeChangeSource source)
     {
         if (_recomputeStateStore is null || _rollupArchiveStore is null)
         {
             return;
         }
 
+        var archiveRtId = snapshot.RtId;
         var consumedWatermark = await GetConsumedWatermarkAsync(archiveRtId);
+        var effectiveReach = ResolveEffectiveRetroReach(snapshot);
         if (RetroactiveWriteDetector.TryBuildDirtyWindow(
-                consumedWatermark, timestamps, source, DateTime.UtcNow, out var window))
+                consumedWatermark, timestamps, source, DateTime.UtcNow, effectiveReach,
+                out var window, out var reachCapped))
         {
             await _recomputeStateStore.AppendDirtyWindowAsync(archiveRtId, window);
             _logger.LogInformation(
                 "Archive {ArchiveRtId}: retroactive write detected over [{Start:O}, {End:O}); dirty window recorded for recompute.",
                 archiveRtId, window.WindowStart, window.WindowEnd);
         }
+
+        if (reachCapped && effectiveReach is { } reach && consumedWatermark is { } watermark)
+        {
+            // AB#4196: at least one retroactive timestamp fell before the automatic reach cap and was
+            // dropped from the automatic recompute. Surface it (log for ops + audit for the platform
+            // event log) so an operator can decide to run an unbounded manual recomputeArchive for the
+            // deeper tail.
+            var cappedFloor = watermark - reach;
+            _logger.LogWarning(
+                "Archive {ArchiveRtId}: retroactive write reached beyond the automatic recompute cap " +
+                "({ReachMs} ms before the consumed watermark {Watermark:O}); the out-of-reach tail (older " +
+                "than {Floor:O}) was not scheduled automatically. Run a manual recomputeArchive over the " +
+                "deeper range if it must be corrected.",
+                archiveRtId, reach.TotalMilliseconds, watermark, cappedFloor);
+
+            if (_archiveAuditTrail is not null)
+            {
+                await _archiveAuditTrail.RecordRetroReachCappedAsync(
+                    _tenantId, archiveRtId, watermark, cappedFloor, reach);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The effective bounded-retro-reach cap (AB#4196) for a source archive:
+    /// <c>min(Archive.MaxRetroactiveReachMs, StreamData:Recompute:MaxRetroactiveReachHardLimitMs)</c>.
+    /// A per-archive value can only tighten the fleet ceiling, never loosen it. Null (unbounded) when
+    /// both are unset — the pre-1.6.8 behaviour.
+    /// </summary>
+    private TimeSpan? ResolveEffectiveRetroReach(ArchiveSnapshot snapshot)
+    {
+        var perArchive = snapshot.MaxRetroactiveReachMs;
+        var hardLimit = _configuration.MaxRetroactiveReachHardLimitMs;
+        long? effectiveMs = (perArchive, hardLimit) switch
+        {
+            (null, null) => null,
+            ({ } a, null) => a,
+            (null, { } h) => h,
+            ({ } a, { } h) => Math.Min(a, h),
+        };
+        return effectiveMs is { } ms && ms > 0 ? TimeSpan.FromMilliseconds(ms) : null;
     }
 
     /// <summary>

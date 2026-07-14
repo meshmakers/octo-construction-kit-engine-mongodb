@@ -21,6 +21,7 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
     private readonly IStreamDataDatabaseManagementClient _managementClient;
     private readonly IOptions<StreamDataConfiguration> _configuration;
     private readonly IFormulaEngine _formulaEngine;
+    private readonly IArchiveAuditTrail? _archiveAuditTrail;
 
     public CrateDbStreamDataRepositoryFactory(
         ILoggerFactory loggerFactory,
@@ -28,7 +29,8 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
         IStreamDataDatabaseClient databaseClient,
         IStreamDataDatabaseManagementClient managementClient,
         IOptions<StreamDataConfiguration> configuration,
-        IFormulaEngine formulaEngine)
+        IFormulaEngine formulaEngine,
+        IArchiveAuditTrail? archiveAuditTrail = null)
     {
         _loggerFactory = loggerFactory;
         _ckCacheService = ckCacheService;
@@ -36,6 +38,7 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
         _managementClient = managementClient;
         _configuration = configuration;
         _formulaEngine = formulaEngine;
+        _archiveAuditTrail = archiveAuditTrail;
     }
 
     public IStreamDataRepository Create(
@@ -54,6 +57,7 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
             archiveStore,
             _formulaEngine,
             rollupArchiveStore,
-            recomputeStateStore);
+            recomputeStateStore,
+            _archiveAuditTrail);
     }
 }
