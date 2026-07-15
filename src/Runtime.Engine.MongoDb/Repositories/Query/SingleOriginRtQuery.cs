@@ -80,11 +80,14 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
     /// filtering out entities without associations.
     /// In <see cref="NavigationFilterMode.Include"/> mode, navigation stages are deferred as enrichment stages
     /// that run post-pagination, improving performance for large result sets.
-    /// The mode is resolved per pair: a pair that carries field-filter criteria (e.g. an association
-    /// field filter such as <c>parent.type-&gt;rtId EQUALS x</c>) must filter pre-pagination even when
-    /// the query-level mode is Include — the Include mode only exists so that pure column pairs
+    /// The mode is resolved per pair: a pair that carries an explicit field-filter criterion (e.g. an
+    /// association field filter such as <c>parent.type-&gt;rtId EQUALS x</c>) must filter pre-pagination
+    /// even when the query-level mode is Include — the Include mode only exists so that pure column pairs
     /// (::exists/::totalCount cells, first-match value navigation) don't drop entities without
-    /// associations; it must never disable an explicit filter.
+    /// associations; it must never disable an explicit filter. An entity-selector pin
+    /// (<c>nav.type[key=value]-&gt;attr</c>) is NOT such an explicit filter: it is mirrored as a field
+    /// filter only so the enrichment lookup narrows to the pinned target value, and must stay in Include
+    /// mode so origin rows without a matching target keep a null cell instead of disappearing.
     /// </summary>
     /// <param name="roleIdDirectionPairs">The navigation pairs to add.</param>
     /// <param name="navigationFilterMode">Controls whether entities without associations are filtered or included.</param>
@@ -124,11 +127,15 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
     /// <summary>
     /// True when the navigation pair (or any inner pair on a deeper path segment) carries
     /// explicit field-filter criteria that must narrow the origin result set.
+    /// A pair whose only field filter is its entity-selector pin (<see cref="NavigationPair.EntitySelector"/>)
+    /// is excluded: the selector narrows the enrichment lookup to the pinned target value but must not
+    /// pre-filter origin rows — those without a matching target stay in the result with a null cell.
     /// </summary>
     private static bool CarriesFieldFilters(NavigationPair pair)
     {
-        return pair.FieldFilters is { Count: > 0 } ||
-               pair.NestedFilters is { Count: > 0 } ||
+        var hasOwnNarrowingFilters = pair.EntitySelector == null &&
+                                     (pair.FieldFilters is { Count: > 0 } || pair.NestedFilters is { Count: > 0 });
+        return hasOwnNarrowingFilters ||
                pair.InnerNavigationPairs.Any(CarriesFieldFilters);
     }
 
