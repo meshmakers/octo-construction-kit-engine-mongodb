@@ -244,4 +244,61 @@ public class GetRtAssociationTargetsAsyncTests
         Assert.Contains(expectedTechnicalRoomId, childRtIds);
         Assert.Contains(expectedMeasuringPointId, childRtIds);
     }
+
+    [Fact]
+    public async Task GetRtAssociationTargetsAsync_Any_ReturnsUnionOfInboundAndOutbound()
+    {
+        // Arrange
+        var systemContext = _sampleRtModelDataFixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var queryOptions = RtEntityQueryOptions.Create();
+
+        // Household "Zeller Fusch 153" sits in the MIDDLE of the ParentChild graph: it has three
+        // children (Room, TechnicalRoom, MeasuringPoint) reachable INBOUND and is itself the child
+        // of its Municipality, reachable OUTBOUND. GraphDirections.Any must return the union of both.
+        var householdRtId = new OctoObjectId("66803ecf4aa85720dda96b09");
+        var householdEntityId = new RtEntityId(TestCkIds.RtCkHouseHoldTypeId, householdRtId);
+
+        // Target types broad enough to cover both the children and the parent municipality.
+        RtCkId<CkTypeId>[] targetTypes =
+        [
+            TestCkIds.RtCkRoomTypeId,
+            TestCkIds.RtCkTechnicalRoomTypeId,
+            TestCkIds.RtCkMeasuringPointTypeId,
+            TestCkIds.RtCkMunicipalityTypeId
+        ];
+
+        // Act
+        var inbound = await tenantRepository.GetRtAssociationTargetsAsync(session, [householdRtId],
+            TestCkIds.RtCkHouseHoldTypeId, SystemCkIds.RtCkParentChildRoleId, targetTypes,
+            GraphDirections.Inbound, null, queryOptions);
+        var outbound = await tenantRepository.GetRtAssociationTargetsAsync(session, [householdRtId],
+            TestCkIds.RtCkHouseHoldTypeId, SystemCkIds.RtCkParentChildRoleId, targetTypes,
+            GraphDirections.Outbound, null, queryOptions);
+        // Previously threw GraphDirectionUnsupported — now returns the union.
+        var any = await tenantRepository.GetRtAssociationTargetsAsync(session, [householdRtId],
+            TestCkIds.RtCkHouseHoldTypeId, SystemCkIds.RtCkParentChildRoleId, targetTypes,
+            GraphDirections.Any, null, queryOptions);
+
+        // Assert
+        Assert.True(inbound.TryGetValue(householdEntityId, out var inSet));
+        Assert.True(outbound.TryGetValue(householdEntityId, out var outSet));
+        Assert.True(any.TryGetValue(householdEntityId, out var anySet));
+
+        Assert.Equal(3, inSet!.TotalCount); // the three children
+        Assert.True(outSet!.TotalCount >= 1, "household must have a ParentChild parent (outbound edge)");
+
+        // Union: counts sum (directed edges are disjoint) and the item id set is the union.
+        Assert.Equal(inSet.TotalCount + outSet.TotalCount, anySet!.TotalCount);
+
+        var expectedIds = inSet.Items.Select(x => x.RtId)
+            .Concat(outSet.Items.Select(x => x.RtId))
+            .ToHashSet();
+        var actualIds = anySet.Items.Select(x => x.RtId).ToHashSet();
+        Assert.Equal(expectedIds, actualIds);
+    }
 }
