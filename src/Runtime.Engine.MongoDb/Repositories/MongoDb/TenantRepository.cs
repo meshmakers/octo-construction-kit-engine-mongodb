@@ -481,23 +481,88 @@ internal class TenantRepository(
             targetTypeGraphs.Add(targetTypeGraph);
         }
 
-        var originHierarchicalRtQuery =
-            new MultipleOriginDirectAssociationsRtQuery<TTargetEntity>(ckCacheService, TenantId,
-                mongoDbRepositoryDataSource,
-                queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false,
-                originRtIds,
-                originTypeGraph, roleId, graphDirection, targetTypeGraphs);
+        // Materialise once — an "Any" traversal runs the same origin set through two directed queries.
+        var originRtIdList = originRtIds as IReadOnlyList<OctoObjectId> ?? originRtIds.ToList();
 
-        originHierarchicalRtQuery.AddFieldFilterCriteria(queryOptions);
-        originHierarchicalRtQuery.AddIdFilter(targetRtIds);
-        originHierarchicalRtQuery.AddTextSearchFilter(queryOptions.TextSearchFilter);
-        originHierarchicalRtQuery.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
-        originHierarchicalRtQuery.AddPostStagesToPipeline(queryOptions.SortOrders);
-        originHierarchicalRtQuery.AddFieldAggregation(queryOptions.FieldAggregation);
-        originHierarchicalRtQuery.AddResultAggregation(queryOptions.ResultAggregation);
-        originHierarchicalRtQuery.AddGeospatialFilters(queryOptions.GeospatialFilters);
+        async Task<IMultipleOriginResultSet<TTargetEntity>> RunAsync(GraphDirections direction)
+        {
+            var query =
+                new MultipleOriginDirectAssociationsRtQuery<TTargetEntity>(ckCacheService, TenantId,
+                    mongoDbRepositoryDataSource,
+                    queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false,
+                    originRtIdList,
+                    originTypeGraph, roleId, direction, targetTypeGraphs);
 
-        return await originHierarchicalRtQuery.ExecuteQuery(session, skip, take);
+            query.AddFieldFilterCriteria(queryOptions);
+            query.AddIdFilter(targetRtIds);
+            query.AddTextSearchFilter(queryOptions.TextSearchFilter);
+            query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
+            query.AddPostStagesToPipeline(queryOptions.SortOrders);
+            query.AddFieldAggregation(queryOptions.FieldAggregation);
+            query.AddResultAggregation(queryOptions.ResultAggregation);
+            query.AddGeospatialFilters(queryOptions.GeospatialFilters);
+
+            return await query.ExecuteQuery(session, skip, take);
+        }
+
+        // Inbound / Outbound follow a single directed lookup (unchanged behaviour).
+        if (graphDirection != GraphDirections.Any)
+        {
+            return await RunAsync(graphDirection);
+        }
+
+        // Any = Inbound | Outbound. Associations are stored directed (originRtId -> targetRtId), so a
+        // single MongoDB lookup can only follow one side; the direct-associations query therefore only
+        // supports one direction at a time. Run both directed queries and merge per origin. Directed
+        // edges are disjoint across the two directions, so the counts simply sum; targets are still
+        // de-duplicated by RtId to stay correct for a self/symmetric association where the same entity
+        // is reachable on both ends of the same role.
+        var inboundResult = await RunAsync(GraphDirections.Inbound);
+        var outboundResult = await RunAsync(GraphDirections.Outbound);
+        return MergeAssociationResultSets(inboundResult, outboundResult);
+    }
+
+    private static IMultipleOriginResultSet<TTargetEntity> MergeAssociationResultSets<TTargetEntity>(
+        IMultipleOriginResultSet<TTargetEntity> first, IMultipleOriginResultSet<TTargetEntity> second)
+        where TTargetEntity : RtEntity, new()
+    {
+        var merged = new List<QueryMultipleResult<TTargetEntity>>();
+
+        foreach (var originId in first.Keys.Union(second.Keys))
+        {
+            first.TryGetValue(originId, out var a);
+            second.TryGetValue(originId, out var b);
+
+            var targets = new List<TTargetEntity>();
+            var seen = new HashSet<OctoObjectId>();
+            long totalCount = 0;
+
+            foreach (var resultSet in new[] { a, b })
+            {
+                if (resultSet == null)
+                {
+                    continue;
+                }
+
+                totalCount += resultSet.TotalCount;
+                foreach (var target in resultSet.Items)
+                {
+                    if (seen.Add(target.RtId))
+                    {
+                        targets.Add(target);
+                    }
+                }
+            }
+
+            merged.Add(new QueryMultipleResult<TTargetEntity>
+            {
+                Id = originId,
+                TotalCount = totalCount,
+                Targets = targets
+            });
+        }
+
+        return new MultipleOriginResultSet<TTargetEntity>(merged);
     }
 
     public async Task<IResultSet<TTargetEntity>> GetIndirectRtAssociationTargetsAsync<TOriginEntity, TTargetEntity>(
