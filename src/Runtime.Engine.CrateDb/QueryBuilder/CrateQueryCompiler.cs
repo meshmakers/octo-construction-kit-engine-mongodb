@@ -228,6 +228,9 @@ internal class CrateQueryCompiler
             query.Append($" AND d.\"{Constants.CkTypeId}\" = '{queryBuilder.CkTypeId.SemanticVersionedFullName}'");
         }
 
+        // Downsampling needs a closed range to derive the bin width, so both boundaries are
+        // validated by ExecuteDownsamplingQueryAsync before we get here — unlike the general
+        // WHERE-clause path, this one never has to emit a one-sided predicate.
         if (queryBuilder is { From: not null, To: not null })
         {
             // UTC-normalised — see the comment in the WHERE-clause section for why.
@@ -279,7 +282,7 @@ internal class CrateQueryCompiler
 
     private static void AppendWhereClause(StringBuilder query, CrateQueryBuilder queryBuilder)
     {
-        if (queryBuilder.VariableInListVariables.Any() || queryBuilder is { From: not null, To: not null } || queryBuilder.CkTypeId != null || queryBuilder.HasFieldFilters || queryBuilder.GenerationTracked)
+        if (queryBuilder.VariableInListVariables.Any() || queryBuilder.HasTimeFilter || queryBuilder.CkTypeId != null || queryBuilder.HasFieldFilters || queryBuilder.GenerationTracked)
         {
             // we can only have one where clause, but we can connect it with AND
             query.Append(" WHERE ");
@@ -289,7 +292,7 @@ internal class CrateQueryCompiler
         {
             query.Append($"\"{Constants.CkTypeId}\" = '{queryBuilder.CkTypeId.SemanticVersionedFullName}'");
 
-            if (queryBuilder.VariableInListVariables.Any() || queryBuilder is { From: not null, To: not null } || queryBuilder.HasFieldFilters)
+            if (queryBuilder.VariableInListVariables.Any() || queryBuilder.HasTimeFilter || queryBuilder.HasFieldFilters)
             {
                 query.Append(" AND ");
             }
@@ -300,14 +303,14 @@ internal class CrateQueryCompiler
             query.Append(string.Join(" AND ",
                 queryBuilder.VariableInListVariables.Select(x => x.ToVariableInListString())));
 
-            if (queryBuilder is { From: not null, To: not null } || queryBuilder.HasFieldFilters)
+            if (queryBuilder.HasTimeFilter || queryBuilder.HasFieldFilters)
             {
                 // if we have a time filter as well, we have to connect the filter conditions with an AND
                 query.Append(" AND ");
             }
         }
 
-        if (queryBuilder is { From: not null, To: not null })
+        if (queryBuilder.HasTimeFilter)
         {
             // Use the QueryBuilder's TimeColumn — defaults to `timestamp` for raw archives,
             // becomes `window_end` for windowed-storage archives (rollup / time-range) so the
@@ -320,10 +323,11 @@ internal class CrateQueryCompiler
             // SD-queries hitting this path are the typical victim — the GraphQL input arrives
             // as Kind=Utc but the value round-trips through Mongo `_attributes` and comes back
             // as Local. ToUniversalTime() is a no-op for Kind=Utc values.
-            var fromUtc = queryBuilder.From.Value.ToUniversalTime();
-            var toUtc = queryBuilder.To.Value.ToUniversalTime();
-            var fromIso = fromUtc.ToString(Constants.DateTimeFormat);
-            var toIso = toUtc.ToString(Constants.DateTimeFormat);
+            //
+            // Each boundary is emitted independently so a one-sided range (only From or only To)
+            // still filters instead of degrading to "no time predicate at all" (AB#4617).
+            var fromIso = queryBuilder.From?.ToUniversalTime().ToString(Constants.DateTimeFormat);
+            var toIso = queryBuilder.To?.ToUniversalTime().ToString(Constants.DateTimeFormat);
             if (queryBuilder.TimeColumn == Constants.WindowEnd)
             {
                 // Windowed-storage time filter: bucket overlaps the requested range —
@@ -332,14 +336,21 @@ internal class CrateQueryCompiler
                 // falls exactly on or after `to` even though its body overlaps the range
                 // (e.g. a Monthly bucket [2026-01-01, 2026-02-01) with the operator's filter
                 // [2026-01-01, 2026-01-31] would be dropped). Overlap mirrors how operators
-                // think about time ranges over bucketed data.
-                query.Append(
-                    $"\"{Constants.WindowStart}\" < '{toIso}' AND \"{Constants.WindowEnd}\" > '{fromIso}'");
+                // think about time ranges over bucketed data. With one boundary open, only the
+                // half of the overlap test that the boundary constrains remains.
+                query.Append(string.Join(" AND ", new[]
+                {
+                    toIso is null ? null : $"\"{Constants.WindowStart}\" < '{toIso}'",
+                    fromIso is null ? null : $"\"{Constants.WindowEnd}\" > '{fromIso}'"
+                }.Where(predicate => predicate is not null)));
             }
             else
             {
-                query.Append(
-                    $"\"{queryBuilder.TimeColumn}\" >= '{fromIso}' AND \"{queryBuilder.TimeColumn}\" <= '{toIso}'");
+                query.Append(string.Join(" AND ", new[]
+                {
+                    fromIso is null ? null : $"\"{queryBuilder.TimeColumn}\" >= '{fromIso}'",
+                    toIso is null ? null : $"\"{queryBuilder.TimeColumn}\" <= '{toIso}'"
+                }.Where(predicate => predicate is not null)));
             }
 
             if (queryBuilder.HasFieldFilters)
@@ -361,7 +372,7 @@ internal class CrateQueryCompiler
         {
             var anyPrior = queryBuilder.CkTypeId != null
                            || queryBuilder.VariableInListVariables.Any()
-                           || queryBuilder is { From: not null, To: not null }
+                           || queryBuilder.HasTimeFilter
                            || queryBuilder.HasFieldFilters;
             if (anyPrior)
             {

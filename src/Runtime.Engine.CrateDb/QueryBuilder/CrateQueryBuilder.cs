@@ -59,6 +59,15 @@ internal class CrateQueryBuilder
     internal DateTime? To { get; private set; }
 
     /// <summary>
+    /// True when at least one boundary of the time filter is set. The range is half-open on the
+    /// unset side: <c>From</c> alone means "everything from that instant onwards", <c>To</c> alone
+    /// means "everything up to that instant". Before AB#4617 the compiler required BOTH boundaries
+    /// and silently emitted no time predicate at all for a one-sided range, so a query configured
+    /// with only a start returned the entire archive.
+    /// </summary>
+    internal bool HasTimeFilter => From is not null || To is not null;
+
+    /// <summary>
     /// True when the variable list contains at least one aggregation — either a classical one
     /// (<see cref="QueryVariable.AggregationFunction"/> set) or a raw-expression variable from
     /// the chain-aware rollup path which already carries the aggregation inside its SQL fragment
@@ -108,12 +117,15 @@ internal class CrateQueryBuilder
     }
 
     /// <summary>
-    /// Adds a time filter to the query
+    /// Adds a time filter to the query. Either boundary may be <c>null</c>, which leaves the range
+    /// open on that side — the compiler then emits only the predicate for the boundary that is set.
+    /// Downsampling and time-weighted aggregation still require both boundaries; their callers
+    /// validate that before building the query.
     /// </summary>
-    /// <param name="from"></param>
-    /// <param name="to"></param>
+    /// <param name="from">Inclusive start of the range, or <c>null</c> for an open start.</param>
+    /// <param name="to">Inclusive end of the range, or <c>null</c> for an open end.</param>
     /// <returns></returns>
-    public CrateQueryBuilder WithTimeFilter(DateTime from, DateTime to)
+    public CrateQueryBuilder WithTimeFilter(DateTime? from, DateTime? to)
     {
         From = from;
         To = to;

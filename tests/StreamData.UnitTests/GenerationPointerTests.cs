@@ -178,6 +178,24 @@ public class GenerationPointerTests
         Assert.Contains("AND \"generation\" = CASE", sql);
     }
 
+    // AB#4617: the generation predicate self-manages its leading AND based on whether any prior
+    // condition was emitted. That check has to count a ONE-SIDED time filter too, otherwise the
+    // SQL comes out as `… '…Z'"generation" = …` (missing AND) or `WHERE AND …`.
+    [Fact]
+    public void Compile_GenerationRange_AndsWithOneSidedTimeFilter()
+    {
+        var qb = new CrateQueryBuilder(Table);
+        qb.AddVariable("voltage_avg_sum", null, null);
+        qb.UseWindowedTimeAxis();
+        qb.WithTimeFilter(new DateTime(2026, 5, 11, 0, 0, 0, DateTimeKind.Utc), null);
+        qb.WithGenerationRanges(new[] { new GenerationRange(1000, 2000, "", 3) });
+
+        var sql = new CrateQueryCompiler().CompileQuery(qb);
+
+        Assert.Contains("\"window_end\" > '2026-05-11 00:00:00.000Z' AND \"generation\" = CASE", sql);
+        Assert.DoesNotContain("WHERE AND", sql);
+    }
+
     [Fact]
     public void Compile_ScopedGenerationRange_AddsRtIdPredicate()
     {

@@ -126,6 +126,156 @@ public class CrateQueryBuilderTests
         Assert.DoesNotContain("\"timestamp\" >=", query);
     }
 
+    // AB#4617: a one-sided range must filter on the boundary that IS set. Previously the compiler
+    // required BOTH boundaries and emitted no time predicate at all when only one was given, so a
+    // query configured with just a start silently returned the whole archive.
+    [Fact]
+    public void TimeFilter_OnlyFrom_EmitsLowerBoundOnly()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.AddVariable("voltage", null, null);
+
+        var startDate = DateTime.Parse("2022-01-01T00:00Z", CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal);
+        queryBuilder.WithTimeFilter(startDate, null);
+
+        var compiler = new CrateQueryCompiler();
+        var query = compiler.CompileQuery(queryBuilder);
+
+        Assert.Equal(
+            $"SELECT \"voltage\" FROM {Table} WHERE \"timestamp\" >= '2022-01-01 00:00:00.000Z'",
+            query);
+    }
+
+    [Fact]
+    public void TimeFilter_OnlyTo_EmitsUpperBoundOnly()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.AddVariable("voltage", null, null);
+
+        var endDate = DateTime.Parse("2022-12-31T23:59:59.999Z", CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal);
+        queryBuilder.WithTimeFilter(null, endDate);
+
+        var compiler = new CrateQueryCompiler();
+        var query = compiler.CompileQuery(queryBuilder);
+
+        Assert.Equal(
+            $"SELECT \"voltage\" FROM {Table} WHERE \"timestamp\" <= '2022-12-31 23:59:59.999Z'",
+            query);
+    }
+
+    [Fact]
+    public void TimeFilter_NeitherBoundary_EmitsNoWhereClause()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.AddVariable("voltage", null, null);
+        queryBuilder.WithTimeFilter(null, null);
+
+        var compiler = new CrateQueryCompiler();
+        var query = compiler.CompileQuery(queryBuilder);
+
+        Assert.Equal($"SELECT \"voltage\" FROM {Table}", query);
+    }
+
+    [Fact]
+    public void TimeFilter_OnlyFrom_AndsWithCkTypeAndFieldFilter()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.AddVariable("voltage", null, null);
+        queryBuilder.WithCkTypeIdFilter("Test/123");
+
+        var startDate = DateTime.Parse("2022-01-01T00:00Z", CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal);
+        queryBuilder.WithTimeFilter(startDate, null);
+        queryBuilder.AddFieldFilter(Constants.RtId, StreamDataFieldFilterOperator.In, string.Empty,
+            valueList: ["r1", "r2"]);
+
+        var compiler = new CrateQueryCompiler();
+        var query = compiler.CompileQuery(queryBuilder);
+
+        // The one-sided predicate has to participate in the AND chain exactly like a closed range.
+        Assert.Equal(
+            $"SELECT \"voltage\" FROM {Table} WHERE \"cktypeid\" = 'Test/123' AND " +
+            "\"timestamp\" >= '2022-01-01 00:00:00.000Z' AND \"rtid\" IN ('r1', 'r2')",
+            query);
+    }
+
+    [Fact]
+    public void CompileCountQuery_OnlyFrom_EmitsLowerBoundOnly()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.IncludeDefaultVariables();
+
+        var startDate = DateTime.Parse("2022-01-01T00:00Z", CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal);
+        queryBuilder.WithTimeFilter(startDate, null);
+
+        var compiler = new CrateQueryCompiler();
+        var countQuery = compiler.CompileCountQuery(queryBuilder);
+
+        // The count query shares AppendWhereClause, so the total must be scoped the same way as
+        // the page — otherwise TotalCount would report the unfiltered archive size.
+        Assert.Equal(
+            $"SELECT COUNT(*) FROM {Table} WHERE \"timestamp\" >= '2022-01-01 00:00:00.000Z'",
+            countQuery);
+    }
+
+    [Fact]
+    public void UseWindowedTimeAxis_TimeFilterOnlyFrom_KeepsWindowEndHalfOfOverlapTest()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.UseWindowedTimeAxis();
+        queryBuilder.AddVariable("voltage_avg_sum", null, null);
+
+        var startDate = DateTime.Parse("2022-01-01T00:00Z", CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal);
+        queryBuilder.WithTimeFilter(startDate, null);
+
+        var compiler = new CrateQueryCompiler();
+        var query = compiler.CompileQuery(queryBuilder);
+
+        // Overlap with an open end reduces to "the bucket ends after From".
+        Assert.Contains("\"window_end\" > '2022-01-01 00:00:00.000Z'", query);
+        Assert.DoesNotContain("\"window_start\" <", query);
+    }
+
+    [Fact]
+    public void UseWindowedTimeAxis_TimeFilterOnlyTo_KeepsWindowStartHalfOfOverlapTest()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.UseWindowedTimeAxis();
+        queryBuilder.AddVariable("voltage_avg_sum", null, null);
+
+        var endDate = DateTime.Parse("2022-12-31T23:59:59.999Z", CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal);
+        queryBuilder.WithTimeFilter(null, endDate);
+
+        var compiler = new CrateQueryCompiler();
+        var query = compiler.CompileQuery(queryBuilder);
+
+        // Overlap with an open start reduces to "the bucket starts before To".
+        Assert.Contains("\"window_start\" < '2022-12-31 23:59:59.999Z'", query);
+        Assert.DoesNotContain("\"window_end\" >", query);
+    }
+
+    [Fact]
+    public void TimeFilter_OnlyFrom_LocalKind_IsNormalisedToUtc()
+    {
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.AddVariable("voltage", null, null);
+
+        // Constants.DateTimeFormat stamps a literal `Z`, so the value must be converted first —
+        // same rationale as the closed-range path.
+        var localStart = new DateTime(2022, 1, 1, 0, 0, 0, DateTimeKind.Utc).ToLocalTime();
+        queryBuilder.WithTimeFilter(localStart, null);
+
+        var compiler = new CrateQueryCompiler();
+        var query = compiler.CompileQuery(queryBuilder);
+
+        Assert.Contains("\"timestamp\" >= '2022-01-01 00:00:00.000Z'", query);
+    }
+
     [Fact]
     public void IncludeSingleVariableWithAggregationFunctionAndDefaultVariables_ReturnsValidQuery()
     {

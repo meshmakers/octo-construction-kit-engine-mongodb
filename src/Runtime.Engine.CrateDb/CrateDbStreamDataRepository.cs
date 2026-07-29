@@ -558,10 +558,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // Resolve and add columns
         var resolvedColumnNames = ResolveAndAddColumns(q, fieldResolver, options.Columns);
 
-        // Time filter
-        if (options.From is not null && options.To is not null)
+        // Time filter — a one-sided range (only From or only To) is honoured and leaves the other
+        // side open. Before AB#4617 both boundaries were required here and a one-sided range was
+        // dropped without trace, so a query with just a start read the whole archive.
+        if (options.From is not null || options.To is not null)
         {
-            q.WithTimeFilter(options.From.Value, options.To.Value);
+            q.WithTimeFilter(options.From, options.To);
         }
 
         // RtId scope filter
@@ -686,10 +688,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             outputNameBySqlAlias[sqlAlias] = outputName2;
         }
 
-        // Time filter
-        if (options.From is not null && options.To is not null)
+        // Time filter — one-sided ranges supported, see the simple-query path (AB#4617).
+        if (options.From is not null || options.To is not null)
         {
-            q.WithTimeFilter(options.From.Value, options.To.Value);
+            q.WithTimeFilter(options.From, options.To);
         }
 
         AddRtIdFilter(q, options.RtIds);
@@ -815,9 +817,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             outputNameBySqlAlias[sqlAlias] = outputName2;
         }
 
-        if (options.From is not null && options.To is not null)
+        // Time filter — one-sided ranges supported, see the simple-query path (AB#4617).
+        if (options.From is not null || options.To is not null)
         {
-            q.WithTimeFilter(options.From.Value, options.To.Value);
+            q.WithTimeFilter(options.From, options.To);
         }
 
         AddRtIdFilter(q, options.RtIds);

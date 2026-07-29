@@ -706,6 +706,33 @@ timestamp schedules a recompute of years of history.
   `null` cap — manual/chained recompute stays unbounded, matching `recomputeArchive` /
   `rewindRollupWatermark`.
 
+### Query Time Filter — One-sided Ranges (AB#4617)
+
+`StreamDataQueryOptionsBase.From` / `.To` are independently optional. The three read paths
+(`ExecuteQueryAsync`, `ExecuteAggregationQueryAsync`, `ExecuteGroupedAggregationQueryAsync`) pass
+whatever is set to `CrateQueryBuilder.WithTimeFilter(DateTime?, DateTime?)`, and
+`CrateQueryCompiler.AppendWhereClause` emits **one predicate per set boundary**:
+
+| Boundaries | Raw axis (`timestamp`) | Windowed axis (`window_end`, overlap semantics) |
+|---|---|---|
+| From + To | `ts >= from AND ts <= to` | `window_start < to AND window_end > from` |
+| From only | `ts >= from` | `window_end > from` |
+| To only | `ts <= to` | `window_start < to` |
+| neither | no time predicate | no time predicate |
+
+`CrateQueryBuilder.HasTimeFilter` (`From is not null || To is not null`) is the single condition
+driving the `WHERE` emission and the inter-condition `AND` wiring (ckType, IN-lists, field filters,
+generation predicate) — never a `{ From: not null, To: not null }` pattern. Before AB#4617 both
+boundaries were required at every level, and a one-sided range was dropped **silently**: a
+persisted SD-query or a `GetQueryById@1` pipeline node configured with only a start returned the
+entire archive. `CompileCountQuery` shares `AppendWhereClause`, so `TotalCount` is scoped
+identically to the page.
+
+**Still closed-range-only:** downsampling (needs both to derive the bin width — validated in
+`ExecuteDownsamplingQueryAsync`, so `AppendDownsamplingSourceFilters` never sees a one-sided range)
+and `TimeWeightedAverage` / `StateDuration` over a raw archive (the LOCF carry-in is defined
+relative to the window — explicit `InvalidQueryParameters` guard).
+
 ### Extensible Enum Preservation on Import (WI #3324)
 
 `DatabaseCkModelRepository.PreserveExtensibleEnumValues` runs inside `ExecuteImport`
