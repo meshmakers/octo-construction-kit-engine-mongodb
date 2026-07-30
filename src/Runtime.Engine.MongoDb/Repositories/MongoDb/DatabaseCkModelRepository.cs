@@ -254,6 +254,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 ValueCkRecordId = a.ValueCkRecordId,
                 DefaultValues = a.DefaultValues?.ToList(),
                 Description = a.Description,
+                IsRuntimeState = a.IsRuntimeState,
                 MetaData = a.MetaData?.Select(m =>
                     new CkAttributeMetaDataDto { Key = m.Key, Value = m.Value, Description = m.Description }).ToList()
             }).ToList(),
@@ -999,6 +1000,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     DefaultValues = ckAttributeDto.DefaultValues?.Select(dv =>
                         AttributeValueConverter.ConvertAttributeValue(ckAttributeDto.ValueType, dv)!).ToList(),
                     Description = ckAttributeDto.Description,
+                    IsRuntimeState = ckAttributeDto.IsRuntimeState,
                     MetaData = ckAttributeDto.MetaData?.Select(m =>
                         new CkAttributeMetaData { Key = m.Key, Value = m.Value, Description = m.Description }).ToList()
                 };

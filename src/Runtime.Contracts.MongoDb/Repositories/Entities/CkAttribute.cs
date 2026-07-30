@@ -51,6 +51,14 @@ public class CkAttribute
     public string? Description { get; set; }
 
     /// <summary>
+    ///     Marks the attribute as runtime state owned by services/operators/users at runtime
+    ///     (e.g. deployment status, archive lifecycle status, sync counters). When true, an Upsert
+    ///     import preserves the existing value instead of overwriting it with the imported value
+    ///     (see ImportRtModelCommand.PreserveRuntimeStateAttributesAsync, AB#4582 / AB#4589).
+    /// </summary>
+    public bool IsRuntimeState { get; set; }
+
+    /// <summary>
     ///     Optional meta data of the attribute
     /// </summary>
     public ICollection<CkAttributeMetaData>? MetaData { get; set; }
