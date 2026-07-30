@@ -733,6 +733,29 @@ identically to the page.
 and `TimeWeightedAverage` / `StateDuration` over a raw archive (the LOCF carry-in is defined
 relative to the window — explicit `InvalidQueryParameters` guard).
 
+### CkAttribute.isRuntimeState Round-Trip (AB#4589)
+
+The runtime CK cache is rebuilt by reading each model **back out of MongoDB**
+(`RepositoryDependencyResolver` → `IModelRepository.TryLookupCkModelAsync` → the
+reconstructed `CkAttributeDto` → `CkAttributeGraph.IsRuntimeState`), NOT from the compiled
+catalog JSON. So any `CkAttributeDto` field that must reach the runtime cache has to survive
+the full Mongo round-trip, in **three** places (same pattern as `CkEnum.IsExtensible`):
+
+1. the persistence entity `Repositories/Entities/CkAttribute.cs` must declare the property;
+2. `DatabaseCkModelRepository.ProcessCkAttributes` (import, `CkAttributeDto → CkAttribute`) must copy it;
+3. `DatabaseCkModelRepository.TryLookupCkModelAsync` (read-back, `CkAttribute → CkAttributeDto`) must copy it.
+
+`isRuntimeState` (AB#4582/AB#4589 runtime-state preservation) originally shipped with the DTO +
+compiler emitting it but **all three** Mongo steps missing, so the stored `CkAttribute` doc had no
+`isRuntimeState` field and the cache always read `false` — the preservation
+(`ImportRtModelCommand.PreserveRuntimeStateAttributesAsync`) silently never fired at runtime even
+though its unit tests (which build the graph directly) were green. Fixed by adding the property +
+both mappings. **Operational:** a tenant that imported a model before the fix keeps flag-less
+`CkAttribute` docs (BSON deserialises the missing bool to `false`); a model **re-import** is
+required to repopulate the flag — which is why the fix is paired with a `System.StreamData`
+patch bump (`ImportCkModelAsync` short-circuits on an already-installed version). Field name in
+Mongo is camelCase `isRuntimeState` (global `CamelCaseElementNameConvention`).
+
 ### Extensible Enum Preservation on Import (WI #3324)
 
 `DatabaseCkModelRepository.PreserveExtensibleEnumValues` runs inside `ExecuteImport`
