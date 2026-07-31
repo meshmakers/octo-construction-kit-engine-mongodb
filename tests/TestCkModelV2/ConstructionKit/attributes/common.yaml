@@ -10,3 +10,5 @@ attributes:
     valueType: BinaryLinked
   - id: DataCount
     valueType: Int
+    # Kept in sync with TestCkModel V1 (AB#4589 isRuntimeState round-trip coverage).
+    isRuntimeState: true

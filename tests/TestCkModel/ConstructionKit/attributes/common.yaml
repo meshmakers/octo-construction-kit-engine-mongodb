@@ -10,3 +10,7 @@ attributes:
     valueType: BinaryLinked
   - id: DataCount
     valueType: Int
+    # isRuntimeState round-trip coverage (AB#4589): verifies the flag survives the
+    # CkAttributeDto -> Mongo CkAttribute -> CkAttributeDto persistence cycle and
+    # reaches the runtime CK cache. Asserted by CkAttributeRuntimeStatePersistenceTests.
+    isRuntimeState: true
