@@ -22,7 +22,13 @@ internal class RtEntityMapConvention(ICkClassMappingService ckClassMappingServic
 {
     public void Apply(BsonClassMap classMap)
     {
-        Delegate @delegate = CreateInstance;
+        // Capture the mapped class as the fallback: a CK type without a generated CLR class
+        // (e.g. a customer model's Configuration-derived type) must still deserialize to the
+        // NOMINAL type of the query (RtConfiguration, ...), not to bare RtEntity — otherwise a
+        // typed read such as the pipeline Uses-configuration lookup fails with an InvalidCastException.
+        var fallbackType = classMap.ClassType.IsAbstract ? typeof(RtEntity) : classMap.ClassType;
+        Delegate @delegate = (RtCkId<CkTypeId> ckTypeId, OctoObjectId rtId) =>
+            CreateInstance(fallbackType, ckTypeId, rtId);
         var mapCreator = classMap.MapCreator(@delegate);
         mapCreator.SetArguments([nameof(RtEntity.CkTypeId), nameof(RtEntity.RtId)]);
     }
@@ -34,11 +40,11 @@ internal class RtEntityMapConvention(ICkClassMappingService ckClassMappingServic
 
     public string Name => "RtEntityMapConvention";
 
-    private RtEntity CreateInstance(RtCkId<CkTypeId> ckTypeId, OctoObjectId rtId)
+    private RtEntity CreateInstance(Type fallbackType, RtCkId<CkTypeId> ckTypeId, OctoObjectId rtId)
     {
-        var type = ckClassMappingService.GetCkTypeClass(ckTypeId);
+        var type = ckClassMappingService.GetCkTypeClass(ckTypeId) ?? fallbackType;
 
-        var rtEntity = (type == null ? new RtEntity() : (RtEntity?)Activator.CreateInstance(type)) ?? new RtEntity();
+        var rtEntity = (RtEntity?)Activator.CreateInstance(type) ?? new RtEntity();
         rtEntity.CkTypeId = ckTypeId;
         rtEntity.RtId = rtId;
 
