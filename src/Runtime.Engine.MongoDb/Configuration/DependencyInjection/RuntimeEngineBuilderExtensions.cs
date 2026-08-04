@@ -88,6 +88,13 @@ public static class RuntimeEngineBuilderExtensions
             .AddSingleton<Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle.ITenantLifecycleStore,
                 Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantLifecycle.TenantLifecycleStore>();
 
+        // AB#4690 durable per-service retry queue for tenant setup. Unlike the lifecycle store above (single
+        // writer: the asset repository), every service records its own setup failures here so the background
+        // retry can drive them to completion instead of losing them with the process that observed them.
+        builder.Services
+            .AddSingleton<Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle.ITenantSetupRetryStore,
+                Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantLifecycle.TenantSetupRetryStore>();
+
         // Stage 2B explain cache — singleton, shared between admin and user MongoDB
         // connections so a tenant query's explain finishes wherever the listener that
         // dispatched it ran, and is reachable from the Diagnostics read endpoint. Disabled

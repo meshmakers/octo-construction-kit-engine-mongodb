@@ -879,6 +879,34 @@ The pipeline addresses fields by their **stored element name** (the typed builde
 pins them against the class map — a property rename or a change to the camelCase convention would
 otherwise make the update write to fields nobody reads, silently and without error.
 
+### Tenant Setup Retry Store — durable per-service retry (AB#4690)
+
+`TenantSetupRetryStore` (`Repositories/TenantLifecycle/`, non-CK collection `tenant_setup_retry` in the
+SYSTEM database) holds one document per **(service, tenant)** whose default-configuration setup threw.
+
+Deliberately separate from `tenant_lifecycle`: that record describes the tenant and has a single writer
+(the asset repository), whereas *every* service runs its own `SetupTenantAsync` and needs its own retry
+bookkeeping. The `serviceId` (the creator's assembly name by default) keys them apart, so two services
+can have an independent pending entry for the same tenant.
+
+| Method | Purpose |
+|---|---|
+| `RecordFailureAsync` | Upsert on failure: `$inc` attempt count, store the error, stamp `lastAttemptUtc`, release the lease so the entry is claimable again after the retry interval. |
+| `ClearAsync` | Delete after a successful setup. |
+| `TryClaimAsync` | Atomic find-and-update claim of the longest-waiting entry that is inside its attempt budget and whose last attempt is older than the retry interval. |
+| `ReleaseLeaseAsync` / `ListAsync` | Lease release and diagnostics. |
+
+Consumed by `DefaultConfigurationCreatorServiceBase` in `octo-common-services`: `SetupAsync` records on
+failure and clears on success, and `RetryFailedTenantsAsync` drains the queue from the
+`FailedTenantRetryBackgroundService` timer that every service already runs. Entries that exhaust the
+attempt budget stay in the collection for operators but are no longer handed out.
+
+Background: before this, a tenant setup that failed once was logged and forgotten — services on the base
+creator had no retry at all. A tenant whose database was briefly unreachable right after a delete +
+recreate under the same name (Mongo `errorCode 13`) therefore stayed half-provisioned until the pod was
+restarted; for Identity, which owns the roles/groups seed, that meant no administrator could be
+provisioned for that tenant at all.
+
 ## Test Data Structure
 
 The test CK model includes this hierarchy:
