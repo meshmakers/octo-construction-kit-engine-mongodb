@@ -1,6 +1,8 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantLifecycle;
+using MongoDB.Bson.Serialization;
 using Xunit;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
@@ -105,6 +107,126 @@ public class TenantLifecycleStoreTests(SystemFixture fixture)
         Assert.Null(await store.TryClaimForReconcileAsync("owner-c", TimeSpan.FromMinutes(5), ct));
 
         await store.RemoveAsync(tenantId, ct);
+    }
+
+    /// <summary>
+    /// AB#4690 regression. A tenant whose setup keeps being re-run (PosCreateTenant / PosUpdateTenant
+    /// arrive continuously in a live cluster) must not have the reconciler's bookkeeping wiped by
+    /// <see cref="ITenantLifecycleStore.EnsureCreatingAsync"/>. Before the fix this reset the lease and
+    /// reverted the attempt increment, so a stalled tenant stayed at AttemptCount 0 forever, never
+    /// exhausted its retry budget and never reached Failed with a diagnosable LastError.
+    /// </summary>
+    [Fact]
+    public async Task EnsureCreating_keeps_the_reconcile_lease_and_attempt_count_of_a_creating_tenant()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var store = Store;
+        var tenantId = $"lk-{Guid.NewGuid():N}"[..20];
+
+        await store.EnsureCreatingAsync(tenantId, $"db-{tenantId}", Guid.NewGuid(), ct);
+
+        var claimed = await ClaimAsync(store, tenantId, "owner-a", ct);
+        Assert.Equal(1, claimed.AttemptCount);
+        Assert.Equal("owner-a", claimed.LeaseOwner);
+
+        // The setup run that races the reconciler.
+        await store.EnsureCreatingAsync(tenantId, $"db-{tenantId}", Guid.Empty, ct);
+
+        var afterSetup = await store.GetAsync(tenantId, ct);
+        Assert.NotNull(afterSetup);
+        Assert.Equal(TenantLifecycleState.Creating, afterSetup!.State);
+        Assert.Equal(1, afterSetup.AttemptCount);
+        Assert.Equal("owner-a", afterSetup.LeaseOwner);
+        Assert.Equal(claimed.LeaseUntil, afterSetup.LeaseUntil);
+        Assert.Equal(claimed.CreatedUtc, afterSetup.CreatedUtc);
+
+        // ... and the tenant is still single-flight: the live lease keeps a second reconciler out.
+        Assert.Null(await store.TryClaimForReconcileAsync("owner-b", TimeSpan.FromMinutes(5), ct));
+
+        await store.RemoveAsync(tenantId, ct);
+    }
+
+    /// <summary>
+    /// The counterpart of the test above: a record that is NOT already Creating (a stale Failed or
+    /// Deleting tombstone from a previous incarnation of the tenant) starts a genuinely new creation
+    /// cycle, so the attempt budget, the lease and the last error are reset.
+    /// </summary>
+    [Fact]
+    public async Task EnsureCreating_resets_the_attempt_budget_for_a_new_creation_cycle()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var store = Store;
+        var tenantId = $"ln-{Guid.NewGuid():N}"[..20];
+
+        await store.EnsureCreatingAsync(tenantId, $"db-{tenantId}", Guid.NewGuid(), ct);
+        await store.MarkFailedAsync(tenantId, "boom", ct);
+        Assert.Equal(1, (await store.GetAsync(tenantId, ct))!.AttemptCount);
+
+        await store.EnsureCreatingAsync(tenantId, null, Guid.Empty, ct);
+
+        var restarted = await store.GetAsync(tenantId, ct);
+        Assert.Equal(TenantLifecycleState.Creating, restarted!.State);
+        Assert.Equal(TenantLifecyclePhase.SetupStarted, restarted.Phase);
+        Assert.Equal(0, restarted.AttemptCount);
+        Assert.Null(restarted.LastError);
+        Assert.Null(restarted.LeaseOwner);
+        Assert.Null(restarted.LeaseUntil);
+        // A null database name keeps the one already stored instead of erasing it.
+        Assert.Equal($"db-{tenantId}", restarted.DatabaseName);
+
+        await store.RemoveAsync(tenantId, ct);
+    }
+
+    /// <summary>
+    /// <see cref="TenantLifecycleStore.EnsureCreatingAsync"/> is a hand-written aggregation-pipeline update
+    /// (the typed builders cannot express <c>$cond</c>), so it addresses fields by their stored element
+    /// name. A property rename or a change to the camelCase convention would make the pipeline write to
+    /// fields nobody reads — silently, with no error. Pin the names against the class map.
+    /// </summary>
+    [Fact]
+    public async Task Stored_element_names_match_the_class_map()
+    {
+        // Touch the store first so it has registered the class map through the production code path
+        // (which is also what applies the engine's global camelCase convention).
+        await Store.GetAsync("does-not-exist", TestContext.Current.CancellationToken);
+
+        var classMap = BsonClassMap.LookupClassMap(typeof(TenantLifecycleRecord));
+        string ElementNameOf(string propertyName) => classMap.GetMemberMap(propertyName).ElementName;
+
+        Assert.Equal(TenantLifecycleStore.Fields.TenantId, ElementNameOf(nameof(TenantLifecycleRecord.TenantId)));
+        Assert.Equal(TenantLifecycleStore.Fields.DatabaseName, ElementNameOf(nameof(TenantLifecycleRecord.DatabaseName)));
+        Assert.Equal(TenantLifecycleStore.Fields.CorrelationId, ElementNameOf(nameof(TenantLifecycleRecord.CorrelationId)));
+        Assert.Equal(TenantLifecycleStore.Fields.State, ElementNameOf(nameof(TenantLifecycleRecord.State)));
+        Assert.Equal(TenantLifecycleStore.Fields.Phase, ElementNameOf(nameof(TenantLifecycleRecord.Phase)));
+        Assert.Equal(TenantLifecycleStore.Fields.AttemptCount, ElementNameOf(nameof(TenantLifecycleRecord.AttemptCount)));
+        Assert.Equal(TenantLifecycleStore.Fields.LastError, ElementNameOf(nameof(TenantLifecycleRecord.LastError)));
+        Assert.Equal(TenantLifecycleStore.Fields.CreatedUtc, ElementNameOf(nameof(TenantLifecycleRecord.CreatedUtc)));
+        Assert.Equal(TenantLifecycleStore.Fields.LastTransitionUtc, ElementNameOf(nameof(TenantLifecycleRecord.LastTransitionUtc)));
+        Assert.Equal(TenantLifecycleStore.Fields.LeaseOwner, ElementNameOf(nameof(TenantLifecycleRecord.LeaseOwner)));
+        Assert.Equal(TenantLifecycleStore.Fields.LeaseUntil, ElementNameOf(nameof(TenantLifecycleRecord.LeaseUntil)));
+    }
+
+    /// <summary>
+    /// Claims until the expected tenant is the one handed out. The store deliberately claims the
+    /// longest-waiting Creating tenant of the whole system database, so a leftover record from an
+    /// earlier run must not make the test flaky. Foreign claims are released again immediately.
+    /// </summary>
+    private static async Task<TenantLifecycleRecord> ClaimAsync(ITenantLifecycleStore store, string tenantId,
+        string owner, CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            var claimed = await store.TryClaimForReconcileAsync(owner, TimeSpan.FromMinutes(5), ct);
+            Assert.NotNull(claimed);
+            if (claimed!.TenantId == tenantId)
+            {
+                return claimed;
+            }
+
+            await store.ReleaseLeaseAsync(claimed.TenantId, owner, ct);
+        }
+
+        throw new InvalidOperationException($"Tenant '{tenantId}' was never handed out for reconcile.");
     }
 
     [Fact]

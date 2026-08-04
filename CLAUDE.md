@@ -849,6 +849,36 @@ now ordered before the drop) for callers with no concurrent resolver: create-rol
 and the integration tests. Complements the AB#4294 guard invalidation above (which handles the
 *same-process delete+recreate* import-guard, a different facet of the same resurrection mechanism).
 
+### Tenant Lifecycle Store — `EnsureCreatingAsync` is an atomic branch on the stored state (AB#4690)
+
+`TenantLifecycleStore` (`Repositories/TenantLifecycle/`, non-CK collection `tenant_lifecycle` in the
+SYSTEM database) is written from two directions at once: `SetupTenantAsync` calls
+`EnsureCreatingAsync` on **every** tenant setup run, while the reconciler in `octo-common-services`
+concurrently claims tenants with `TryClaimForReconcileAsync` (single-flight via a 2-minute lease plus
+an `AttemptCount` retry budget). In a live cluster `PosCreateTenant` / `PosUpdateTenant` events arrive
+continuously, so those two writers overlap constantly.
+
+`EnsureCreatingAsync` is therefore a **single `UpdateOneAsync` with an aggregation-pipeline update**
+(`$set` + `$cond`, upsert), not the former `Find` → build record → `ReplaceOneAsync` round trip. Three
+branches, decided on the state that is already stored:
+
+| Stored state | Effect |
+|---|---|
+| `Active` | Metadata refresh only (`LastTransitionUtc`, `DatabaseName`) — a healthy tenant re-running setup is never downgraded. |
+| `Creating` | Re-opens the phase (`SetupStarted`, `LastError` cleared) but **leaves `AttemptCount`, `LeaseOwner`, `LeaseUntil` untouched** — that bookkeeping belongs to whoever is currently driving the tenant. |
+| missing / `Deleting` / `Failed` | New creation cycle: attempt budget, lease and last error are reset; `CreatedUtc` is preserved via `$ifNull`. |
+
+Why it matters (AB#4690): the old read-modify-write cleared `LeaseOwner`/`LeaseUntil` on every setup
+run and could revert a concurrent claim's `AttemptCount` increment (lost update). A tenant stuck in
+`Creating` therefore stayed at `AttemptCount = 0` with no lease forever — it never exhausted the retry
+budget, never reached `Failed`, and never recorded a diagnosable `LastError`, which made the reconciler
+look dead when it was in fact running.
+
+The pipeline addresses fields by their **stored element name** (the typed builders cannot express
+`$cond`), so the names live in `TenantLifecycleStore.Fields` and `TenantLifecycleStoreTests`
+pins them against the class map — a property rename or a change to the camelCase convention would
+otherwise make the update write to fields nobody reads, silently and without error.
+
 ## Test Data Structure
 
 The test CK model includes this hierarchy:

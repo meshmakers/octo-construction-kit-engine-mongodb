@@ -20,6 +20,27 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
 {
     private const string CollectionName = "tenant_lifecycle";
 
+    /// <summary>
+    /// Stored element names of <see cref="TenantLifecycleRecord"/>, needed by the hand-written
+    /// aggregation-pipeline update in <see cref="EnsureCreatingAsync"/> (the typed builders cannot express
+    /// <c>$cond</c>). They follow the engine's global camelCase convention; a rename that breaks the mapping
+    /// would otherwise fail silently, so <c>TenantLifecycleStoreTests</c> asserts them against the class map.
+    /// </summary>
+    internal static class Fields
+    {
+        public const string TenantId = "tenantId";
+        public const string DatabaseName = "databaseName";
+        public const string CorrelationId = "correlationId";
+        public const string State = "state";
+        public const string Phase = "phase";
+        public const string AttemptCount = "attemptCount";
+        public const string LastError = "lastError";
+        public const string CreatedUtc = "createdUtc";
+        public const string LastTransitionUtc = "lastTransitionUtc";
+        public const string LeaseOwner = "leaseOwner";
+        public const string LeaseUntil = "leaseUntil";
+    }
+
     private readonly ISystemContext _systemContext;
     private readonly IAdminRepositoryAccess _adminRepositoryAccess;
     private readonly ILogger<TenantLifecycleStore> _logger;
@@ -54,41 +75,90 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
         CancellationToken cancellationToken = default)
     {
         var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
-        var now = DateTime.UtcNow;
-        var filter = Eq(tenantId);
-        var existing = await collection.Find(filter).FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
 
-        // A healthy tenant re-running setup (e.g. on every service startup) must NOT be downgraded to
-        // Creating — just refresh its metadata. Missing / Creating / Deleting / Failed records are (re)set
-        // to Creating, so a re-created tenant that still carries a stale tombstone starts fresh.
-        if (existing is { State: TenantLifecycleState.Active })
+        // Single atomic upsert via an aggregation-pipeline update (AB#4690). This used to be a
+        // Find -> build record -> ReplaceOneAsync round trip, which had two defects that together made a
+        // stalled tenant unrecoverable:
+        //   * the replacement record carried LeaseOwner/LeaseUntil = null, so every repeated setup run
+        //     (PosCreateTenant / PosUpdateTenant arrive continuously) wiped the reconciler's lease; and
+        //   * AttemptCount was read before and written after a concurrent TryClaimForReconcileAsync,
+        //     silently reverting its increment (lost update). The reconciler could therefore never
+        //     exhaust its retry budget, never reach Failed, and never record a diagnosable LastError —
+        //     it looked frozen at AttemptCount = 0 with no lease.
+        // The pipeline below branches on the *stored* state inside the single write, so a concurrent
+        // claim is either fully before or fully after it.
+        var update = Builders<TenantLifecycleRecord>.Update.Pipeline(
+            BuildEnsureCreatingPipeline(databaseName, correlationId, DateTime.UtcNow));
+
+        await collection.UpdateOneAsync(Eq(tenantId), update, new UpdateOptions { IsUpsert = true },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Builds the <see cref="EnsureCreatingAsync"/> pipeline. Three branches, decided on the state that is
+    /// already stored:
+    /// <list type="bullet">
+    ///   <item>
+    ///     <b>Active</b> — a healthy tenant re-running setup (every service startup does) must NOT be
+    ///     downgraded. Only its metadata is refreshed.
+    ///   </item>
+    ///   <item>
+    ///     <b>Creating</b> — setup for this creation cycle is already in flight. The phase is re-opened,
+    ///     but the reconciler's bookkeeping (<c>AttemptCount</c>, <c>LeaseOwner</c>, <c>LeaseUntil</c>) is
+    ///     left untouched: it belongs to whoever is currently driving the tenant, not to this caller.
+    ///   </item>
+    ///   <item>
+    ///     <b>Missing / Deleting / Failed</b> — a new creation cycle starts, so the attempt budget, the
+    ///     lease and the last error are all reset. A re-created tenant that still carries a stale
+    ///     tombstone therefore starts genuinely fresh (the previous implementation inherited the old
+    ///     <c>AttemptCount</c>, which contradicted its own comment and shortened the retry budget).
+    ///   </item>
+    /// </list>
+    /// </summary>
+    private static PipelineDefinition<TenantLifecycleRecord, TenantLifecycleRecord> BuildEnsureCreatingPipeline(
+        string? databaseName, Guid correlationId, DateTime now)
+    {
+        // On an upsert-insert every field path resolves to "missing", so both comparisons are false and the
+        // new-cycle branch applies — which is exactly the semantics we want for a brand-new record.
+        var isActive = new BsonDocument("$eq",
+            new BsonArray { $"${Fields.State}", (int)TenantLifecycleState.Active });
+        var isCreating = new BsonDocument("$eq",
+            new BsonArray { $"${Fields.State}", (int)TenantLifecycleState.Creating });
+        var keepsReconcileState = new BsonDocument("$or", new BsonArray { isActive, isCreating });
+
+        // Guid.Empty is a legitimate value here (callers that have no correlation id pass it), so the
+        // representation must match the class map's Standard-Guid serializer.
+        var correlation = new BsonBinaryData(GuidConverter.ToBytes(correlationId, GuidRepresentation.Standard),
+            BsonBinarySubType.UuidStandard);
+
+        var databaseNameValue = string.IsNullOrEmpty(databaseName)
+            ? (BsonValue)new BsonDocument("$ifNull", new BsonArray { $"${Fields.DatabaseName}", BsonNull.Value })
+            : new BsonString(databaseName);
+
+        var set = new BsonDocument
         {
-            var touch = Builders<TenantLifecycleRecord>.Update.Set(r => r.LastTransitionUtc, now);
-            if (!string.IsNullOrEmpty(databaseName))
+            { Fields.State, Cond(isActive, $"${Fields.State}", (int)TenantLifecycleState.Creating) },
+            { Fields.Phase, Cond(isActive, $"${Fields.Phase}", (int)TenantLifecyclePhase.SetupStarted) },
+            { Fields.LastError, Cond(isActive, $"${Fields.LastError}", BsonNull.Value) },
+            { Fields.CorrelationId, Cond(isActive, $"${Fields.CorrelationId}", correlation) },
             {
-                touch = touch.Set(r => r.DatabaseName, databaseName);
-            }
-
-            await collection.UpdateOneAsync(filter, touch, cancellationToken: cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
-        var record = new TenantLifecycleRecord
-        {
-            TenantId = tenantId,
-            DatabaseName = databaseName ?? existing?.DatabaseName,
-            CorrelationId = correlationId,
-            State = TenantLifecycleState.Creating,
-            Phase = TenantLifecyclePhase.SetupStarted,
-            AttemptCount = existing?.AttemptCount ?? 0,
-            LastError = null,
-            CreatedUtc = existing?.CreatedUtc ?? now,
-            LastTransitionUtc = now
+                Fields.AttemptCount,
+                Cond(keepsReconcileState,
+                    new BsonDocument("$ifNull", new BsonArray { $"${Fields.AttemptCount}", 0 }), 0)
+            },
+            { Fields.LeaseOwner, Cond(keepsReconcileState, $"${Fields.LeaseOwner}", BsonNull.Value) },
+            { Fields.LeaseUntil, Cond(keepsReconcileState, $"${Fields.LeaseUntil}", BsonNull.Value) },
+            { Fields.CreatedUtc, new BsonDocument("$ifNull", new BsonArray { $"${Fields.CreatedUtc}", now }) },
+            { Fields.LastTransitionUtc, now },
+            { Fields.DatabaseName, databaseNameValue }
         };
 
-        await collection.ReplaceOneAsync(filter, record, new ReplaceOptions { IsUpsert = true }, cancellationToken)
-            .ConfigureAwait(false);
+        return new BsonDocumentStagePipelineDefinition<TenantLifecycleRecord, TenantLifecycleRecord>(
+            [new BsonDocument("$set", set)]);
     }
+
+    private static BsonDocument Cond(BsonDocument condition, BsonValue whenTrue, BsonValue whenFalse)
+        => new("$cond", new BsonArray { condition, whenTrue, whenFalse });
 
     public async Task SetPhaseAsync(string tenantId, TenantLifecyclePhase phase, string? lastError = null,
         CancellationToken cancellationToken = default)
