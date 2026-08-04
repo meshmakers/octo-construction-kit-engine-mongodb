@@ -78,6 +78,30 @@ public interface ISystemContext : ITenantContext
     /// <param name="tenantId">The tenant whose resolve-import guards should be cleared.</param>
     void InvalidateTenantResolveImportGuards(string tenantId);
 
+    /// <summary>
+    /// Drops the cached MongoDB repository clients — and with them their connection pools — for a tenant's
+    /// database, so the next access builds a fresh client that authenticates anew.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The admin and user repository clients are cached per database name for the lifetime of the process.
+    /// Dropping a tenant also drops its database user, which invalidates the authentication of every
+    /// connection already open in those pools: the driver does not re-authenticate an existing connection,
+    /// so each one keeps failing with MongoDB error 13 (<c>"... requires authentication"</c>) even after the
+    /// tenant is re-created and the user exists again. That is what left a re-created tenant unusable until
+    /// the process was restarted (AB#4690).
+    /// </para>
+    /// <para>
+    /// Call this from the tenant delete and create lifecycle events. The database name is resolved from the
+    /// tenant record when <paramref name="databaseName"/> is not supplied; pass it explicitly when the
+    /// record is already gone. Safe no-op when nothing is cached.
+    /// </para>
+    /// </remarks>
+    /// <param name="tenantId">The tenant whose cached repository clients should be dropped.</param>
+    /// <param name="databaseName">Its database name; resolved from the tenant record when omitted.</param>
+    Task InvalidateTenantRepositoryClientsAsync(string tenantId, string? databaseName = null,
+        CancellationToken cancellationToken = default);
+
     #region Backup and Restore
 
     /// <summary>

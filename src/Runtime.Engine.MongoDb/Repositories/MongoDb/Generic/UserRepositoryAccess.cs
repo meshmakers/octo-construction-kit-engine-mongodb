@@ -31,4 +31,27 @@ internal class UserRepositoryAccess(IServiceProvider serviceProvider) : IUserRep
 
         return client;
     }
+
+    public void Invalidate(string databaseName)
+    {
+        var key = databaseName.NormalizeString();
+        if (!_cache.TryGetValue(key, out IRepositoryClient? cached))
+        {
+            return;
+        }
+
+        _cache.Remove(key);
+
+        // Disposing tears down the cluster, so the stale (now unauthenticated) connections go away
+        // immediately instead of lingering until the server or the pool happens to close them.
+        try
+        {
+            cached?.Dispose();
+        }
+        catch (Exception)
+        {
+            // A client that fails to shut down cleanly must not break the tenant lifecycle event that
+            // triggered the invalidation — it is already out of the cache and will not be handed out again.
+        }
+    }
 }

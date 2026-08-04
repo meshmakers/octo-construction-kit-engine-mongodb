@@ -752,6 +752,12 @@ public class TenantContext : ITenantContext
         }
         finally
         {
+            // Dropping the database also drops its database user, which invalidates every connection
+            // already open in this process's cached clients for it. Throw them away so a tenant re-created
+            // under the same name does not inherit a pool that can only answer "requires authentication"
+            // (AB#4690). Other processes do the same from the tenant lifecycle events.
+            await InvalidateTenantRepositoryClientsAsync(tenantId, handle.DatabaseName).ConfigureAwait(false);
+
             await _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId, handle.CorrelationId);
         }
     }
@@ -1039,6 +1045,47 @@ public class TenantContext : ITenantContext
     /// <inheritdoc cref="ISystemContext.InvalidateTenantResolveImportGuards" />
     public void InvalidateTenantResolveImportGuards(string tenantId) =>
         ClearTenantResolveImportGuards(tenantId);
+
+    /// <inheritdoc cref="ISystemContext.InvalidateTenantRepositoryClientsAsync" />
+    public async Task InvalidateTenantRepositoryClientsAsync(string tenantId, string? databaseName = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
+        var normalizedTenantId = tenantId.NormalizeString();
+
+        if (string.IsNullOrEmpty(databaseName))
+        {
+            // Resolve from the tenant record while it still exists (delete publishes its pre-notification
+            // before removing the record). Once it is gone the caller must supply the name.
+            try
+            {
+                using var session = await GetAdminSessionAsync().ConfigureAwait(false);
+                var tenant = await TryGetChildTenantAsync(session, normalizedTenantId).ConfigureAwait(false);
+                databaseName = tenant?.DatabaseName;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Could not resolve the database name of tenant '{TenantId}' to invalidate its cached " +
+                    "repository clients.", normalizedTenantId);
+                return;
+            }
+        }
+
+        if (string.IsNullOrEmpty(databaseName))
+        {
+            _logger.LogDebug(
+                "No database name known for tenant '{TenantId}'; nothing to invalidate.", normalizedTenantId);
+            return;
+        }
+
+        _logger.LogInformation(
+            "Dropping cached repository clients of tenant '{TenantId}' (database '{DatabaseName}')",
+            normalizedTenantId, databaseName);
+
+        _serviceProvider.GetRequiredService<IAdminRepositoryAccess>().Invalidate(databaseName);
+        _serviceProvider.GetRequiredService<IUserRepositoryAccess>().Invalidate(databaseName);
+    }
 
     /// <summary>
     /// Removes the per-process tenant-resolve auto-import guards (<see cref="_serviceManagedCkModelsAttempted"/>

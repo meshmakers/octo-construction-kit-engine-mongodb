@@ -879,6 +879,32 @@ The pipeline addresses fields by their **stored element name** (the typed builde
 pins them against the class map — a property rename or a change to the camelCase convention would
 otherwise make the update write to fields nobody reads, silently and without error.
 
+### Repository-Client Cache Invalidation on Tenant Delete (AB#4690)
+
+`UserRepositoryAccess` / `AdminRepositoryAccess` cache one `MongoRepositoryClient` — and therefore one
+`MongoClient` with its own connection pool — **per database name**, for the lifetime of the process.
+
+Dropping a tenant also drops its database user. MongoDB then invalidates the authentication of every
+connection already open in those pools, and **the driver never re-authenticates an existing
+connection**: each one keeps failing with error 13 (`"... requires authentication"`) even after the
+tenant is re-created and the user exists again. Connections are only retired when the server or the pool
+happens to close them, so a re-created tenant could be unusable for hours — this is the root cause of
+AB#4690, where a delete + recreate under the same database name left Identity unable to read the new
+tenant database, so its `SetupTenantAsync` aborted and the tenant ended up with no roles.
+
+Both accessors therefore expose `Invalidate(databaseName)`, which evicts **and disposes** the cached
+client (`IRepositoryClient : IDisposable`; `Dispose` tears down the cluster, closing the pool). Reached
+through `ISystemContext.InvalidateTenantRepositoryClientsAsync(tenantId, databaseName?)`, which resolves
+the database name from the tenant record when it is not supplied.
+
+Called from three places:
+
+| Where | Why |
+|---|---|
+| `TenantContext.DropTenantDatabaseAsync` (engine, explicit database name) | The process performing the drop, independent of any event delivery. |
+| `PreUpdatePreDeleteTenantConsumer` on `PreDeleteTenant` (`octo-common-services`) | Every other service, while the tenant record still exists so the name resolves. |
+| `PosCreatePosUpdateTenantConsumer` on `PosCreateTenant` / `PosUpdateTenant` | Belt and braces: closes the window where a resolve between the pre-delete event and the physical drop re-populated the cache. Best-effort — on create the tenant record may not be committed yet, in which case the durable setup retry covers the next attempt. |
+
 ### Tenant Setup Retry Store — durable per-service retry (AB#4690)
 
 `TenantSetupRetryStore` (`Repositories/TenantLifecycle/`, non-CK collection `tenant_setup_retry` in the
