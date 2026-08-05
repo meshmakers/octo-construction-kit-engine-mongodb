@@ -15,7 +15,7 @@
              2.7.5 is the first patched release. NuGetAudit fails the build otherwise (warnings as errors). -->
         <PackageReference Include="Microsoft.OpenApi" Version="2.7.5" />
         <PackageReference Include="NLog.Web.AspNetCore" Version="6.1.3" />
-        <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.2.1" />
+        <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.2.3" />
     </ItemGroup>
 
     <ItemGroup>
