@@ -5,6 +5,10 @@
         <RootNamespace>Meshmakers.Octo.Runtime.Engine.UnitTests</RootNamespace>
         <IsPackable>false</IsPackable>
         <IsTestProject>true</IsTestProject>
+        <!-- xUnit.net v3 requires test projects to be executable. Set explicitly instead of
+             relying on Microsoft.NET.Test.Sdk's implicit OutputType flip, which failed to apply
+             on a CI agent (build 41591: "xUnit.net v3 test projects must be executable"). -->
+        <OutputType>Exe</OutputType>
         <Configurations>Debug;Release;DebugL</Configurations>
         <Platforms>AnyCPU</Platforms>
     </PropertyGroup>
