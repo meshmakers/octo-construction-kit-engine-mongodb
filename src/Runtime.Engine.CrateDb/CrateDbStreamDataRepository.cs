@@ -885,9 +885,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var fieldResolver = CreateFieldResolver(snapshot);
 
         var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
-        // Windowed-storage downsampling: the LEFT JOIN keys on window_start (the bin that contains
-        // the window); the compiler adds the fully-contained predicate so straddling windows are
-        // dropped (concept-time-range §7). UseWindowedTimeAxis sets the time axis to window_end.
+        // Windowed-storage downsampling: the aggregate-then-join subquery (AB#4713) bins on
+        // window_start (the bin that contains the window); the compiler adds the fully-contained
+        // predicate so straddling windows are dropped (concept-time-range §7). UseWindowedTimeAxis
+        // sets the time axis to window_end.
         if (snapshot.UsesWindowedStorage)
         {
             q.UseWindowedTimeAxis();

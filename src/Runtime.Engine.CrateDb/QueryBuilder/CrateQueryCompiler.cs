@@ -79,9 +79,14 @@ internal class CrateQueryCompiler
     }
 
     /// <summary>
-    /// Compiles a downsampling query using generate_series LEFT JOIN to produce all time bins
-    /// including empty ones. Adds COUNT(d."Timestamp") AS "__binCount" to detect empty bins
-    /// (COUNT(*) would always return 1 due to LEFT JOIN producing a row for every bin).
+    /// Compiles a downsampling query as aggregate-then-join (AB#4713): an inner subquery reduces
+    /// the filtered source rows per DATE_BIN bucket in a single scan, and generate_series is then
+    /// LEFT JOINed onto the pre-aggregated result with a plain equi-join to materialize empty bins.
+    /// The former shape joined generate_series directly against the source table ON
+    /// <c>DATE_BIN(...) = bins.ts</c> — a function-expression join CrateDB cannot hash, so it
+    /// degenerated to a nested loop of cost O(bins × rows) and month-range chart queries blew the
+    /// 30 s per-attempt timeout ("Job killed"). The subquery's COUNT(time axis) AS "__binCount"
+    /// detects empty bins; the outer COALESCE keeps it 0 (not NULL) for bins with no source row.
     /// </summary>
     private static string CompileDownsamplingQuery(CrateQueryBuilder queryBuilder)
     {
@@ -108,27 +113,47 @@ internal class CrateQueryCompiler
         var seriesEndLiteral = $"'{seriesEnd.ToString(Constants.DateTimeFormat)}'::TIMESTAMP";
 
         // Windowed-storage downsampling: source is a rollup or time-range archive whose time
-        // axis is `(window_start, window_end)`. The DATE_BIN expression and the bucket-membership
-        // predicate target `window_end`; an extra fully-contained check (`window_start >= bin`)
-        // drops source windows that straddle target bucket boundaries — concept-time-range §7
-        // says straddling windows are dropped from the target rather than pro-rated.
+        // axis is `(window_start, window_end)`. Concept-time-range §7: a source window
+        // contributes to a bin only when it is fully contained; straddling windows are dropped
+        // from the target rather than pro-rated.
         var isWindowed = queryBuilder.TimeColumn == Constants.WindowEnd;
         var timeColumn = queryBuilder.TimeColumn;
-        // Bin-membership column for the LEFT JOIN. For windowed archives a source row's bin is the
-        // one that CONTAINS the window, identified by its window_start. Keying DATE_BIN on
-        // window_end (the time axis) assigns a boundary-aligned window to the NEXT bin, so the
-        // fully-contained predicate (window_start >= bins.ts) then always fails and the bin reads
-        // empty — the all-null bug. window_start keeps the §7 containment semantic intact
-        // (straddling windows still fail window_end <= bins.ts + interval and are dropped).
+        // Bin-membership column. For windowed archives a source row's bin is the one that
+        // CONTAINS the window, identified by its window_start. Keying DATE_BIN on window_end
+        // (the time axis) assigns a boundary-aligned window to the NEXT bin, so the
+        // fully-contained predicate then always fails and the bin reads empty — the all-null
+        // bug (AB#4246). window_start keeps the §7 containment semantic intact.
         var binColumn = isWindowed ? Constants.WindowStart : timeColumn;
+        var binExpression = $"DATE_BIN({intervalLiteral}, d.\"{binColumn}\", {fromLiteral})";
 
-        // After T17 every attribute is a first-class typed column on the per-archive table — no
-        // more `data['x']` indirection — so each variable becomes a qualified column reference.
-        // SELECT bins.ts AS "T", AGG(d."voltage") AS "alias", COUNT(d."timestamp") AS "__binCount"
+        // ---- Outer SELECT: bin axis + pass-through of the pre-aggregated columns ----
         query.Append("SELECT bins.ts AS \"T\"");
 
-        // Per-series group columns (e.g. d."rtid") are selected verbatim so the result carries the
-        // series identity; they are added to GROUP BY / ORDER BY below.
+        // Per-series group columns (e.g. src."rtid") carry the series identity out of the
+        // subquery; they extend ORDER BY below (no outer GROUP BY needed — the subquery is
+        // already unique per (bin, series)).
+        foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
+        {
+            query.Append($", src.\"{groupColumn}\" AS \"{groupColumn}\"");
+        }
+
+        foreach (var variable in queryBuilder.QueryVariablesWithoutTimestamp)
+        {
+            var alias = variable.Alias ?? variable.Name;
+            query.Append($", src.\"{alias}\" AS \"{alias}\"");
+        }
+
+        // Empty bins have no subquery row, so src."__binCount" reads NULL — COALESCE keeps the
+        // 0-means-empty contract the row mapper relies on.
+        query.Append(", COALESCE(src.\"__binCount\", 0) AS \"__binCount\"");
+
+        // FROM generate_series(from, seriesEnd, interval) — exactly Limit bins
+        query.Append($" FROM generate_series({fromLiteral}, {seriesEndLiteral}, {intervalLiteral}) AS bins(ts)");
+
+        // ---- Inner subquery: single scan over the filtered source rows, reduced per bin ----
+        query.Append(" LEFT JOIN (");
+        query.Append($"SELECT {binExpression} AS bin_ts");
+
         foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
         {
             query.Append($", d.\"{groupColumn}\" AS \"{groupColumn}\"");
@@ -142,8 +167,7 @@ internal class CrateQueryCompiler
                 // Both classical aggregations (`AVG("col")`) and raw chain-aware expressions
                 // (`SUM("col_sum") / NULLIF(SUM("col_count"), 0)`) embed column references the
                 // same way: `<func>("<col>")`. The `(\"` → `(d.\"` rewrite pins every column to
-                // the joined table alias `d` without having to teach the resolver about the
-                // join-side prefix.
+                // the table alias `d` without having to teach the resolver about the prefix.
                 var selectStr = variable.ToSelectString();
                 query.Append(selectStr.Replace("(\"", "(d.\""));
             }
@@ -155,39 +179,34 @@ internal class CrateQueryCompiler
 
         query.Append($", COUNT(d.\"{timeColumn}\") AS \"__binCount\"");
 
-        // FROM generate_series(from, seriesEnd, interval) — exactly Limit bins
-        query.Append($" FROM generate_series({fromLiteral}, {seriesEndLiteral}, {intervalLiteral}) AS bins(ts)");
+        query.Append($" FROM {queryBuilder.TenantId} AS d");
+        query.Append(" WHERE 1 = 1");
 
-        // LEFT JOIN — bin membership keyed on the bin column (timestamp for raw archives,
-        // window_start for windowed archives — see binColumn above).
-        query.Append($" LEFT JOIN {queryBuilder.TenantId} AS d ON DATE_BIN({intervalLiteral}, d.\"{binColumn}\", {fromLiteral}) = bins.ts");
-
-        // Fully-contained predicate (concept-time-range §7): a windowed source row contributes
-        // to bin B only when its entire [window_start, window_end) fits inside B. Without this,
-        // a source window that crosses a bin boundary would land in whichever bin its
-        // window_end falls into and silently double-count or misattribute values.
+        // Fully-contained predicate (concept-time-range §7). The former half
+        // `window_start >= bins.ts` is implied here: DATE_BIN keys on window_start, and a bin
+        // start is by definition <= the value it was derived from. Only the upper half remains.
         if (isWindowed)
         {
-            query.Append($" AND d.\"{Constants.WindowStart}\" >= bins.ts");
-            query.Append($" AND d.\"{Constants.WindowEnd}\" <= bins.ts + {intervalLiteral}");
+            query.Append($" AND d.\"{Constants.WindowEnd}\" <= {binExpression} + {intervalLiteral}");
         }
 
-        // Source-row filter conditions (ckType, time range, IN-lists, field filters) go into the
-        // ON clause — not WHERE — since this is a LEFT JOIN against the generated bin axis.
+        // Source-row filter conditions (ckType, time range, IN-lists, field filters, generation).
         AppendDownsamplingSourceFilters(query, queryBuilder, isWindowed, timeColumn);
 
-        // GROUP BY and ORDER BY — no LIMIT needed since generate_series produces exactly Limit bins.
-        // Per-series group columns extend both clauses so each series gets its own run of bins.
-        query.Append(" GROUP BY bins.ts");
+        query.Append($" GROUP BY {binExpression}");
         foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
         {
             query.Append($", d.\"{groupColumn}\"");
         }
 
+        // Equi-join on the pre-computed bin timestamp — hash-joinable, unlike the former
+        // function-expression ON clause.
+        query.Append(") AS src ON src.bin_ts = bins.ts");
+
         query.Append(" ORDER BY bins.ts ASC");
         foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
         {
-            query.Append($", d.\"{groupColumn}\" ASC");
+            query.Append($", src.\"{groupColumn}\" ASC");
         }
 
         return query.ToString();
@@ -216,8 +235,9 @@ internal class CrateQueryCompiler
 
     /// <summary>
     /// Appends the downsampling source-row filter conditions (each prefixed with <c> AND </c>,
-    /// referencing the joined/aliased table <c>d</c>): ckType, time-range overlap, IN-lists and
-    /// field filters. Shared by <see cref="CompileDownsamplingQuery"/> (ON clause) and
+    /// referencing the aliased table <c>d</c>): ckType, time-range overlap, IN-lists, field
+    /// filters and the active-generation predicate. Shared by
+    /// <see cref="CompileDownsamplingQuery"/> (subquery WHERE clause) and
     /// <see cref="CompileDownsamplingBucketCountQuery"/> (WHERE clause) so the two can never drift.
     /// </summary>
     private static void AppendDownsamplingSourceFilters(StringBuilder query, CrateQueryBuilder queryBuilder,
@@ -266,6 +286,18 @@ internal class CrateQueryCompiler
             {
                 query.Append($" AND d.{CompileFieldFilter(filter)}");
             }
+        }
+
+        // Phase 6 (AB#4184): per-window active-generation filter for rollup archives. Was
+        // previously only emitted on the general WHERE-clause path, so a downsampling read during
+        // a recompute saw BOTH generations of the swapped windows and double-counted. The filter
+        // references its columns unqualified — inside the aggregate-then-join subquery (and the
+        // bucket-count probe) the single table alias `d` is the only column scope, so unqualified
+        // names resolve to it.
+        if (queryBuilder.GenerationTracked)
+        {
+            query.Append(" AND ");
+            query.Append(CompileGenerationFilter(queryBuilder));
         }
     }
 

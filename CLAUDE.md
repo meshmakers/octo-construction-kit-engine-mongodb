@@ -733,6 +733,51 @@ identically to the page.
 and `TimeWeightedAverage` / `StateDuration` over a raw archive (the LOCF carry-in is defined
 relative to the window — explicit `InvalidQueryParameters` guard).
 
+### Downsampling Query — Aggregate-then-Join (AB#4713)
+
+`CrateQueryCompiler.CompileDownsamplingQuery` emits an **aggregate-then-join** shape: an inner
+subquery reduces the filtered source rows per `DATE_BIN` bucket in a single scan, and
+`generate_series` is LEFT JOINed onto the pre-aggregated result with a plain equi-join
+(`src.bin_ts = bins.ts`) to materialize empty bins:
+
+```sql
+SELECT bins.ts AS "T", src."<alias>" AS "<alias>", COALESCE(src."__binCount", 0) AS "__binCount"
+FROM generate_series(<from>, <seriesEnd>, <interval>) AS bins(ts)
+LEFT JOIN (
+  SELECT DATE_BIN(<interval>, d."<binColumn>", <from>) AS bin_ts,
+         AVG(d."<col>") AS "<alias>", COUNT(d."<timeAxis>") AS "__binCount"
+  FROM <archive_table> AS d
+  WHERE 1 = 1 AND <source filters>
+  GROUP BY DATE_BIN(<interval>, d."<binColumn>", <from>)[, d."<groupCol>"]
+) AS src ON src.bin_ts = bins.ts
+ORDER BY bins.ts ASC[, src."<groupCol>" ASC]
+```
+
+Background: the former shape joined `generate_series` directly against the source table
+`ON DATE_BIN(...) = bins.ts`. CrateDB cannot hash-join a function expression, so the join
+degenerated to a nested loop of cost **O(bins × source rows)** — a month-range chart query on a
+15-minute archive (~90k rows × 670 bins) ran past the 30 s `CrateResiliencePipeline` per-attempt
+timeout and was cancelled server-side (`XX000: Job killed. Cancellation request by: <db-user>`),
+surfacing as ASSET1002 / "Failed to load data" in chart widgets. The subquery form scans the
+source rows once (time filter prunes partitions) and joins ≤ `Limit` pre-aggregated rows.
+
+Semantics preserved from the old shape:
+
+- **§7 fully-contained predicate (windowed archives):** the subquery bins on `window_start`; the
+  lower half (`window_start >= bin start`) is implied by `DATE_BIN` keying on `window_start`, so
+  only `window_end <= DATE_BIN(...) + interval` is emitted. Straddling windows are still dropped.
+- **Empty bins:** the subquery's `COUNT(<timeAxis>) AS "__binCount"` never reaches empty bins, so
+  the outer projection wraps it in `COALESCE(..., 0)` to keep the 0-means-empty contract the row
+  mapper relies on.
+- **Per-series group columns (AB#4233):** grouped in the subquery, passed through and appended to
+  the outer `ORDER BY`. No outer `GROUP BY` — the subquery is already unique per (bin, series).
+- **Bucket-count clamp (AB#4246):** `CompileDownsamplingBucketCountQuery` is unchanged and shares
+  `AppendDownsamplingSourceFilters` with the subquery's WHERE clause.
+- **Generation filter (AB#4184):** `AppendDownsamplingSourceFilters` now also emits the
+  active-generation predicate when `GenerationTracked` — previously the downsampling path missed
+  it entirely, so a read during a recompute double-counted the swapped windows. The predicate's
+  unqualified column references resolve against the single table alias `d`.
+
 ### CkAttribute.isRuntimeState Round-Trip (AB#4589)
 
 The runtime CK cache is rebuilt by reading each model **back out of MongoDB**

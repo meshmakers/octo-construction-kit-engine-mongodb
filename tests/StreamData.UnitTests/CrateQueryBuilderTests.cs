@@ -407,9 +407,16 @@ public class CrateQueryBuilderTests
         var sql = compiler.CompileQuery(queryBuilder);
 
         Assert.Contains("SELECT bins.ts AS \"T\"", sql);
+        // Aggregate-then-join (AB#4713): the reducer runs inside a subquery over the filtered
+        // source rows; generate_series equi-joins onto the pre-aggregated result.
+        Assert.Contains("LEFT JOIN (SELECT DATE_BIN('360 seconds'::INTERVAL, d.\"timestamp\"", sql);
+        Assert.Contains($" FROM {Table} AS d WHERE 1 = 1", sql);
         Assert.Contains("AVG(d.\"voltage\") AS \"Avg_voltage\"", sql);
         Assert.Contains("COUNT(d.\"timestamp\") AS \"__binCount\"", sql);
-        Assert.Contains($"LEFT JOIN {Table} AS d ON DATE_BIN('360 seconds'::INTERVAL, d.\"timestamp\"", sql);
+        Assert.Contains(") AS src ON src.bin_ts = bins.ts", sql);
+        // Outer projection passes the reduced columns through and keeps __binCount 0 for empty bins.
+        Assert.Contains("src.\"Avg_voltage\" AS \"Avg_voltage\"", sql);
+        Assert.Contains("COALESCE(src.\"__binCount\", 0) AS \"__binCount\"", sql);
         Assert.Contains("d.\"cktypeid\" = 'Test/123'", sql);
     }
 
@@ -432,15 +439,16 @@ public class CrateQueryBuilderTests
         var compiler = new CrateQueryCompiler();
         var sql = compiler.CompileQuery(queryBuilder);
 
-        // Series identity selected verbatim alongside the bin timestamp.
-        Assert.Contains("SELECT bins.ts AS \"T\", d.\"rtid\" AS \"rtid\"", sql);
-        // Envelope reducers: AVG centre line + MIN/MAX band, all per (bin, series).
+        // Series identity passed through from the subquery alongside the bin timestamp.
+        Assert.Contains("SELECT bins.ts AS \"T\", src.\"rtid\" AS \"rtid\"", sql);
+        // Envelope reducers: AVG centre line + MIN/MAX band, all per (bin, series) in the subquery.
         Assert.Contains("AVG(d.\"amountValue\") AS \"amountValue_avg\"", sql);
         Assert.Contains("MIN(d.\"amountValue\") AS \"amountValue_min\"", sql);
         Assert.Contains("MAX(d.\"amountValue\") AS \"amountValue_max\"", sql);
-        // Group + order extended with the series column.
-        Assert.Contains("GROUP BY bins.ts, d.\"rtid\"", sql);
-        Assert.Contains("ORDER BY bins.ts ASC, d.\"rtid\" ASC", sql);
+        // Subquery group extended with the series column; outer order follows.
+        Assert.Contains("GROUP BY DATE_BIN('360 seconds'::INTERVAL, d.\"timestamp\"", sql);
+        Assert.Contains(", d.\"rtid\") AS src", sql);
+        Assert.Contains("ORDER BY bins.ts ASC, src.\"rtid\" ASC", sql);
     }
 
     [Fact]
@@ -457,8 +465,9 @@ public class CrateQueryBuilderTests
         var compiler = new CrateQueryCompiler();
         var sql = compiler.CompileQuery(queryBuilder);
 
-        Assert.Contains("GROUP BY bins.ts ORDER BY bins.ts ASC", sql);
-        Assert.DoesNotContain("d.\"rtid\"", sql);
+        Assert.Contains(") AS src ON src.bin_ts = bins.ts ORDER BY bins.ts ASC", sql);
+        Assert.EndsWith("ORDER BY bins.ts ASC", sql);
+        Assert.DoesNotContain("\"rtid\"", sql);
     }
 
     [Fact]
@@ -476,19 +485,20 @@ public class CrateQueryBuilderTests
 
         // AB#4246: DATE_BIN keys on window_start — the bin that CONTAINS the window. Keying on
         // window_end assigned a boundary-aligned window to the next bin, so the fully-contained
-        // predicate (window_start >= bins.ts) always failed and the bin read empty (all-null bug).
+        // predicate always failed and the bin read empty (all-null bug).
         Assert.Contains("DATE_BIN('600 seconds'::INTERVAL, d.\"window_start\"", sql);
         // __binCount still counts the time axis (window_end).
         Assert.Contains("COUNT(d.\"window_end\") AS \"__binCount\"", sql);
         Assert.DoesNotContain("DATE_BIN('600 seconds'::INTERVAL, d.\"window_end\"", sql);
-        // Outer range filter uses bucket-overlap semantics — buckets whose body overlaps
+        // Range filter uses bucket-overlap semantics — buckets whose body overlaps
         // [from, to] participate. Strict bin-containment (§7) is enforced separately below.
         Assert.Contains("d.\"window_start\" < '2024-01-01", sql);
         Assert.Contains("d.\"window_end\" > '2024-01-01", sql);
-        // Concept-time-range §7 fully-contained predicate: source windows that straddle a bin
-        // boundary are dropped, not pro-rated.
-        Assert.Contains("d.\"window_start\" >= bins.ts", sql);
-        Assert.Contains("d.\"window_end\" <= bins.ts +", sql);
+        // Concept-time-range §7 fully-contained predicate (aggregate-then-join form): the lower
+        // half (window_start >= bin start) is implied by DATE_BIN keying on window_start; the
+        // upper half compares window_end against the derived bin's end.
+        Assert.Contains("d.\"window_end\" <= DATE_BIN('600 seconds'::INTERVAL, d.\"window_start\"", sql);
+        Assert.Contains("+ '600 seconds'::INTERVAL", sql);
         // No reference to the non-existent `timestamp` column on a windowed table.
         Assert.DoesNotContain("d.\"timestamp\"", sql);
     }
@@ -514,7 +524,7 @@ public class CrateQueryBuilderTests
     }
 
     [Fact]
-    public void DownsamplingWithAggregation_AndFieldFilter_EmitsFilterInOnClause()
+    public void DownsamplingWithAggregation_AndFieldFilter_EmitsFilterInSubqueryWhereClause()
     {
         var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
         var to = DateTime.Parse("2024-01-01T01:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
@@ -528,9 +538,54 @@ public class CrateQueryBuilderTests
         var compiler = new CrateQueryCompiler();
         var sql = compiler.CompileQuery(queryBuilder);
 
-        Assert.Contains($"LEFT JOIN {Table} AS d ON", sql);
+        // Aggregate-then-join (AB#4713): source filters live in the subquery's WHERE clause so
+        // the single source scan is filtered before reduction.
+        Assert.Contains($"FROM {Table} AS d WHERE 1 = 1", sql);
         Assert.Contains("d.\"voltage\" > '0'", sql);
-        Assert.DoesNotContain(" WHERE ", sql);
+    }
+
+    [Fact]
+    public void DownsamplingWithGenerationRanges_EmitsGenerationFilterInSubquery()
+    {
+        // AB#4184 Phase 6 follow-up: the downsampling path must constrain reads to the active
+        // generation per window, exactly like the other windowed query paths — otherwise a read
+        // during a recompute sees both generations of the swapped windows and double-counts.
+        var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var to = DateTime.Parse("2024-01-01T01:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.UseWindowedTimeAxis();
+        queryBuilder.WithDownsampling(6, from, to);
+        queryBuilder.AddAggregationVariable("voltage", AggregationFunctionDto.Max, "Max_voltage");
+        queryBuilder.WithGenerationRanges([new GenerationRange(1000, 2000, "", 3)]);
+
+        var compiler = new CrateQueryCompiler();
+        var sql = compiler.CompileQuery(queryBuilder);
+
+        Assert.Contains("\"generation\" = CASE WHEN (\"window_start\" >= 1000 AND \"window_start\" < 2000) THEN 3 ELSE 0 END", sql);
+    }
+
+    [Fact]
+    public void DownsamplingGenerationTracked_EmptyRanges_EmitsBaselineGenerationFilter()
+    {
+        // Empty genmap during a staged-but-uncommitted recompute: the baseline generation = 0
+        // predicate must still be emitted so next-generation rows stay hidden.
+        var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var to = DateTime.Parse("2024-01-01T01:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.UseWindowedTimeAxis();
+        queryBuilder.WithDownsampling(6, from, to);
+        queryBuilder.AddAggregationVariable("voltage", AggregationFunctionDto.Max, "Max_voltage");
+        queryBuilder.WithGenerationRanges([]);
+
+        var compiler = new CrateQueryCompiler();
+        var sql = compiler.CompileQuery(queryBuilder);
+
+        Assert.Contains("\"generation\" = 0", sql);
+
+        // The bucket-count probe shares the source filters, so the clamp counts exactly the rows
+        // the downsampling query will read.
+        var countSql = compiler.CompileDownsamplingBucketCountQuery(queryBuilder);
+        Assert.Contains("\"generation\" = 0", countSql);
     }
 
     // Regression for the rtIds source-scope bug: AddRtIdFilter called AddWhereIn with the literal
