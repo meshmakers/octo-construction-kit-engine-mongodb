@@ -31,24 +31,14 @@ internal class AdminRepositoryAccess(IServiceProvider serviceProvider) : IAdminR
 
     public void Invalidate(string databaseName)
     {
-        var key = databaseName.NormalizeString();
-        if (!_cache.TryGetValue(key, out IAdminRepositoryClient? cached))
-        {
-            return;
-        }
-
-        _cache.Remove(key);
-
-        // Disposing tears down the cluster, so the stale (now unauthenticated) connections go away
-        // immediately instead of lingering until the server or the pool happens to close them.
-        try
-        {
-            cached?.Dispose();
-        }
-        catch (Exception)
-        {
-            // A client that fails to shut down cleanly must not break the tenant lifecycle event that
-            // triggered the invalidation — it is already out of the cache and will not be handed out again.
-        }
+        // Evict only — never dispose. Handed-out clients are captured by live TenantContext /
+        // MongoDbRepositoryDataSource instances beyond this cache, and disposing tears down the shared
+        // cluster underneath them: every in-flight operation then fails with
+        // ObjectDisposedException('CoreServerSessionPool') — this broke sequential CK batch imports
+        // (FixAll), whose PosUpdateTenant event disposed the client between two batch steps.
+        // Eviction alone is sufficient for AB#4690: future resolves build a fresh, freshly-authenticated
+        // client; the evicted one is collected once its holders let go, and its stale connections are
+        // closed by the server / pool idle handling.
+        _cache.Remove(databaseName.NormalizeString());
     }
 }

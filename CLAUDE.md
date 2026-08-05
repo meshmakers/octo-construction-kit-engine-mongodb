@@ -937,18 +937,28 @@ happens to close them, so a re-created tenant could be unusable for hours — th
 AB#4690, where a delete + recreate under the same database name left Identity unable to read the new
 tenant database, so its `SetupTenantAsync` aborted and the tenant ended up with no roles.
 
-Both accessors therefore expose `Invalidate(databaseName)`, which evicts **and disposes** the cached
-client (`IRepositoryClient : IDisposable`; `Dispose` tears down the cluster, closing the pool). Reached
-through `ISystemContext.InvalidateTenantRepositoryClientsAsync(tenantId, databaseName?)`, which resolves
+Both accessors therefore expose `Invalidate(databaseName)`, which **evicts** the cached client so the
+next resolve builds a fresh, freshly-authenticated one. Reached through
+`ISystemContext.InvalidateTenantRepositoryClientsAsync(tenantId, databaseName?)`, which resolves
 the database name from the tenant record when it is not supplied.
 
-Called from three places:
+**Eviction only — never dispose.** The first AB#4690 iteration disposed the evicted client
+(`Dispose` → `Cluster.Dispose`). That was a regression: handed-out clients are captured by live
+`TenantContext` / `MongoDbRepositoryDataSource` instances beyond the cache, and disposing tears the
+cluster down underneath them — every in-flight operation then fails with
+`ObjectDisposedException('CoreServerSessionPool')`. Observable as: a sequential CK batch import
+(LibraryStatus **FixAll**) whose per-import `PosUpdateTenant` event disposed the tenant's client
+between two batch steps, so each FixAll run imported exactly one model and then failed at the next
+`AcquireModelImportLockAsync` (staging-1 meshtest, test-2 tenant-setup storms, 2026-08-05). The evicted
+client is collected once its holders let go; its stale connections are closed by server/pool idle
+handling.
+
+Called from two places:
 
 | Where | Why |
 |---|---|
 | `TenantContext.DropTenantDatabaseAsync` (engine, explicit database name) | The process performing the drop, independent of any event delivery. |
-| `PreUpdatePreDeleteTenantConsumer` on `PreDeleteTenant` (`octo-common-services`) | Every other service, while the tenant record still exists so the name resolves. |
-| `PosCreatePosUpdateTenantConsumer` on `PosCreateTenant` / `PosUpdateTenant` | Belt and braces: closes the window where a resolve between the pre-delete event and the physical drop re-populated the cache. Best-effort — on create the tenant record may not be committed yet, in which case the durable setup retry covers the next attempt. |
+| `PreUpdatePreDeleteTenantConsumer` on `PreDeleteTenant` + `PosCreatePosUpdateTenantConsumer` on `PosCreateTenant` (`octo-common-services`) | Every other service: pre-delete while the tenant record still exists so the name resolves; post-create closes the window where a resolve between the pre-delete event and the physical drop re-populated the cache. NOT called on `PosUpdateTenant` — that event fires on every CK model import and eviction there would churn a fresh client per import for no benefit (an update drops no database user). |
 
 ### Tenant Setup Retry Store — durable per-service retry (AB#4690)
 
