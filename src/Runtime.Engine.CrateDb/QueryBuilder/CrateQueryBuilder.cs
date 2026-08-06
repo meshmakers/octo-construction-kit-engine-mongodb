@@ -364,8 +364,40 @@ internal class CrateQueryBuilder
         To = to;
         QueryMode = QueryModeDto.Downsampling;
         Limit = limit;
+
+        // Bin geometry is computed here, once, because two places must agree on it exactly: the
+        // SQL's DATE_BIN expression and the caller-side bin axis that materializes empty bins
+        // (CrateDbStreamDataRepository — the SQL no longer emits them, see AB#4713).
+        //
+        // Round (not truncate) to the nearest second and never go below 1s. Integer truncation
+        // (e.g. 70.7 -> 70 for 1222 bins over a day) shrinks the bin below the source resolution
+        // and, combined with the windowed containment predicate, can drop every source row. The
+        // caller clamps Limit to the source's distinct bucket count so the bin is never finer
+        // than the data; this rounding keeps the bin aligned to that clamp.
+        DownsamplingIntervalSeconds = Math.Max(1,
+            (int)Math.Round((to - from).TotalSeconds / limit, MidpointRounding.AwayFromZero));
+
+        // Truncated to millisecond precision — that is what Constants.DateTimeFormat renders into
+        // the SQL literal, and DATE_BIN's origin must equal the axis origin to the tick or the
+        // caller-side merge would miss every bin.
+        var fromUtc = from.ToUniversalTime();
+        DownsamplingOrigin = new DateTime(
+            fromUtc.Ticks - fromUtc.Ticks % TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);
         return this;
     }
+
+    /// <summary>
+    /// Width of one downsampling bin in seconds, derived from the requested range and bucket count
+    /// by <see cref="WithDownsampling"/>. Zero until downsampling is configured.
+    /// </summary>
+    internal int DownsamplingIntervalSeconds { get; private set; }
+
+    /// <summary>
+    /// Origin of the downsampling bin axis (UTC, millisecond precision) — the <c>DATE_BIN</c>
+    /// origin the compiled SQL uses. Bin <c>i</c> starts at
+    /// <c>DownsamplingOrigin + i * DownsamplingIntervalSeconds</c>.
+    /// </summary>
+    internal DateTime DownsamplingOrigin { get; private set; }
 
     /// <summary>
     /// Extra non-aggregated columns to group the downsampling result by, in addition to the time

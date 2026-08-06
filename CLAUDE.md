@@ -733,50 +733,60 @@ identically to the page.
 and `TimeWeightedAverage` / `StateDuration` over a raw archive (the LOCF carry-in is defined
 relative to the window — explicit `InvalidQueryParameters` guard).
 
-### Downsampling Query — Aggregate-then-Join (AB#4713)
+### Downsampling Query — Single Grouped Scan, Bin Axis Built Caller-Side (AB#4713)
 
-`CrateQueryCompiler.CompileDownsamplingQuery` emits an **aggregate-then-join** shape: an inner
-subquery reduces the filtered source rows per `DATE_BIN` bucket in a single scan, and
-`generate_series` is LEFT JOINed onto the pre-aggregated result with a plain equi-join
-(`src.bin_ts = bins.ts`) to materialize empty bins:
+`CrateQueryCompiler.CompileDownsamplingQuery` emits **one grouped aggregation over the filtered
+source rows — no join at all**:
 
 ```sql
-SELECT bins.ts AS "T", src."<alias>" AS "<alias>", COALESCE(src."__binCount", 0) AS "__binCount"
-FROM generate_series(<from>, <seriesEnd>, <interval>) AS bins(ts)
-LEFT JOIN (
-  SELECT DATE_BIN(<interval>, d."<binColumn>", <from>) AS bin_ts,
-         AVG(d."<col>") AS "<alias>", COUNT(d."<timeAxis>") AS "__binCount"
-  FROM <archive_table> AS d
-  WHERE 1 = 1 AND <source filters>
-  GROUP BY DATE_BIN(<interval>, d."<binColumn>", <from>)[, d."<groupCol>"]
-) AS src ON src.bin_ts = bins.ts
-ORDER BY bins.ts ASC[, src."<groupCol>" ASC]
+SELECT DATE_BIN(<interval>, d."<binColumn>", <origin>) AS "T"
+     [, d."<groupCol>" AS "<groupCol>"]
+     , AVG(d."<col>") AS "<alias>"
+     , COUNT(d."<timeAxis>") AS "__binCount"
+FROM <archive_table> AS d
+WHERE 1 = 1 [AND d."window_end" <= DATE_BIN(...) + <interval>] AND <source filters>
+GROUP BY DATE_BIN(<interval>, d."<binColumn>", <origin>)[, d."<groupCol>"]
+ORDER BY DATE_BIN(...) ASC[, d."<groupCol>" ASC]
 ```
 
-Background: the former shape joined `generate_series` directly against the source table
-`ON DATE_BIN(...) = bins.ts`. CrateDB cannot hash-join a function expression, so the join
-degenerated to a nested loop of cost **O(bins × source rows)** — a month-range chart query on a
-15-minute archive (~90k rows × 670 bins) ran past the 30 s `CrateResiliencePipeline` per-attempt
-timeout and was cancelled server-side (`XX000: Job killed. Cancellation request by: <db-user>`),
-surfacing as ASSET1002 / "Failed to load data" in chart widgets. The subquery form scans the
-source rows once (time filter prunes partitions) and joins ≤ `Limit` pre-aggregated rows.
+Bins with no source row are **not** in the result set. `CrateDbStreamDataRepository.
+ExecuteDownsamplingQueryAsync` materializes the full axis instead: it walks bin
+`0..effectiveLimit-1`, emits the SQL rows for bins that have data and one all-null row
+(`__binCount = 0` semantics) for every gap, via `MapDownsamplingRow`. Rows whose bin falls outside
+the axis — possible when interval rounding makes `limit × interval` fall short of the range — are
+dropped, matching the old inner-join-to-axis behaviour.
 
-Semantics preserved from the old shape:
+**Why no bin-axis join.** Two earlier shapes joined a `generate_series` axis against the data:
+first directly against the source table (`ON DATE_BIN(...) = bins.ts`), then against a
+pre-aggregated subquery. CrateDB cannot hash-join a table function, so either way the join is a
+nested loop whose cost grows with bins × joined-rows. The subquery variant helped only while the
+aggregated side stayed small; with per-series grouping the aggregated side is itself
+`bins × series`, making the whole thing **quadratic in the bucket count**. Measured live on a
+31-day, 31-series chart (energydemo): 50 buckets 0.5 s, 200 buckets 3.9 s, 670 buckets past the
+30 s `CrateResiliencePipeline` timeout — while the same range at 50 buckets scanned exactly the
+same source rows in half a second, proving the scan was never the problem. Without the join the
+query is O(source rows); the caller-side axis fill is O(bins).
 
-- **§7 fully-contained predicate (windowed archives):** the subquery bins on `window_start`; the
-  lower half (`window_start >= bin start`) is implied by `DATE_BIN` keying on `window_start`, so
-  only `window_end <= DATE_BIN(...) + interval` is emitted. Straddling windows are still dropped.
-- **Empty bins:** the subquery's `COUNT(<timeAxis>) AS "__binCount"` never reaches empty bins, so
-  the outer projection wraps it in `COALESCE(..., 0)` to keep the 0-means-empty contract the row
-  mapper relies on.
-- **Per-series group columns (AB#4233):** grouped in the subquery, passed through and appended to
-  the outer `ORDER BY`. No outer `GROUP BY` — the subquery is already unique per (bin, series).
+**Shared bin geometry.** `CrateQueryBuilder.WithDownsampling` computes
+`DownsamplingIntervalSeconds` (rounded to whole seconds, min 1 — truncation would put the bin below
+the source resolution and, with the windowed containment predicate, drop every row) and
+`DownsamplingOrigin` (UTC, truncated to the millisecond precision `Constants.DateTimeFormat`
+renders). The compiler and the repository both read those, so the SQL's `DATE_BIN` grid and the
+caller-side axis can never drift — a sub-millisecond origin would otherwise make every per-bin
+lookup miss.
+
+Semantics preserved:
+
+- **§7 fully-contained predicate (windowed archives):** bins on `window_start`; the lower half
+  (`window_start >= bin start`) is implied by `DATE_BIN` keying on `window_start`, so only
+  `window_end <= DATE_BIN(...) + interval` is emitted. Straddling windows are still dropped.
+- **Per-series group columns (AB#4233):** grouped and ordered in SQL; the caller's gap-fill emits
+  a single null row per empty bin, as the old LEFT JOIN did.
 - **Bucket-count clamp (AB#4246):** `CompileDownsamplingBucketCountQuery` is unchanged and shares
-  `AppendDownsamplingSourceFilters` with the subquery's WHERE clause.
-- **Generation filter (AB#4184):** `AppendDownsamplingSourceFilters` now also emits the
+  `AppendDownsamplingSourceFilters`, so the clamp counts exactly the rows the query will read.
+- **Generation filter (AB#4184):** `AppendDownsamplingSourceFilters` also emits the
   active-generation predicate when `GenerationTracked` — previously the downsampling path missed
-  it entirely, so a read during a recompute double-counted the swapped windows. The predicate's
-  unqualified column references resolve against the single table alias `d`.
+  it entirely, so a read during a recompute double-counted the swapped windows.
 
 ### CkAttribute.isRuntimeState Round-Trip (AB#4589)
 

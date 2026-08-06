@@ -79,38 +79,31 @@ internal class CrateQueryCompiler
     }
 
     /// <summary>
-    /// Compiles a downsampling query as aggregate-then-join (AB#4713): an inner subquery reduces
-    /// the filtered source rows per DATE_BIN bucket in a single scan, and generate_series is then
-    /// LEFT JOINed onto the pre-aggregated result with a plain equi-join to materialize empty bins.
-    /// The former shape joined generate_series directly against the source table ON
-    /// <c>DATE_BIN(...) = bins.ts</c> — a function-expression join CrateDB cannot hash, so it
-    /// degenerated to a nested loop of cost O(bins × rows) and month-range chart queries blew the
-    /// 30 s per-attempt timeout ("Job killed"). The subquery's COUNT(time axis) AS "__binCount"
-    /// detects empty bins; the outer COALESCE keeps it 0 (not NULL) for bins with no source row.
+    /// Compiles a downsampling query as a single grouped aggregation over the filtered source
+    /// rows — one scan, no join (AB#4713). Bins that have no source row are NOT emitted here;
+    /// <c>CrateDbStreamDataRepository.ExecuteDownsamplingQueryAsync</c> materializes the full bin
+    /// axis and fills the gaps, using the same geometry via
+    /// <see cref="CrateQueryBuilder.DownsamplingIntervalSeconds"/> /
+    /// <see cref="CrateQueryBuilder.DownsamplingOrigin"/>.
+    /// <para>
+    /// Both earlier shapes joined a <c>generate_series</c> bin axis against the data — first
+    /// directly against the source table (<c>ON DATE_BIN(...) = bins.ts</c>), then against a
+    /// pre-aggregated subquery. CrateDB cannot hash-join a table function, so either way the join
+    /// degenerated to a nested loop: cost grew with bins × joined-rows, i.e. quadratically in the
+    /// bucket count once per-series grouping made the aggregated side itself scale with the bins
+    /// (measured on a 31-day, 31-series chart: 50 buckets 0.5 s, 200 buckets 3.9 s, 670 buckets
+    /// past the 30 s timeout). Dropping the join makes the query O(source rows).
+    /// </para>
     /// </summary>
     private static string CompileDownsamplingQuery(CrateQueryBuilder queryBuilder)
     {
         var query = new StringBuilder();
 
-        var interval = queryBuilder.To!.Value - queryBuilder.From!.Value;
-        // Round (not truncate) to the nearest second and never go below 1s. Integer truncation
-        // (e.g. 70.7 -> 70 for 1222 bins over a day) shrinks the bin below the source resolution
-        // and, combined with the windowed containment predicate below, can drop every source row.
-        // The caller clamps Limit to the source's distinct bucket count so the bin is never finer
-        // than the data; this rounding keeps the bin aligned to that clamp.
-        var intervalSeconds = Math.Max(1,
-            (int)Math.Round(interval.TotalSeconds / queryBuilder.Limit!.Value, MidpointRounding.AwayFromZero));
-        var intervalLiteral = $"'{intervalSeconds} seconds'::INTERVAL";
-        // Normalise to UTC before formatting — Constants.DateTimeFormat appends a literal `Z`
-        // suffix, so a Kind=Local DateTime would otherwise have its local-time digits stamped
-        // with `Z` and end up off by the local offset on the CrateDB side. See the WHERE-clause
-        // branch lower down for the full rationale.
-        var fromUtc = queryBuilder.From.Value.ToUniversalTime();
-        var fromLiteral = $"'{fromUtc.ToString(Constants.DateTimeFormat)}'::TIMESTAMP";
-        // Compute exclusive upper bound: From + (Limit - 1) * interval
-        // generate_series is inclusive on both ends, so we use Limit-1 intervals to get exactly Limit bins
-        var seriesEnd = fromUtc.AddSeconds(intervalSeconds * (queryBuilder.Limit!.Value - 1));
-        var seriesEndLiteral = $"'{seriesEnd.ToString(Constants.DateTimeFormat)}'::TIMESTAMP";
+        var intervalLiteral = $"'{queryBuilder.DownsamplingIntervalSeconds} seconds'::INTERVAL";
+        // Constants.DateTimeFormat appends a literal `Z`, so the value must be UTC or the digits
+        // would be stamped `Z` while carrying a local-time offset. DownsamplingOrigin is already
+        // normalised + truncated to the format's millisecond precision.
+        var fromLiteral = $"'{queryBuilder.DownsamplingOrigin.ToString(Constants.DateTimeFormat)}'::TIMESTAMP";
 
         // Windowed-storage downsampling: source is a rollup or time-range archive whose time
         // axis is `(window_start, window_end)`. Concept-time-range §7: a source window
@@ -126,34 +119,10 @@ internal class CrateQueryCompiler
         var binColumn = isWindowed ? Constants.WindowStart : timeColumn;
         var binExpression = $"DATE_BIN({intervalLiteral}, d.\"{binColumn}\", {fromLiteral})";
 
-        // ---- Outer SELECT: bin axis + pass-through of the pre-aggregated columns ----
-        query.Append("SELECT bins.ts AS \"T\"");
+        query.Append($"SELECT {binExpression} AS \"T\"");
 
-        // Per-series group columns (e.g. src."rtid") carry the series identity out of the
-        // subquery; they extend ORDER BY below (no outer GROUP BY needed — the subquery is
-        // already unique per (bin, series)).
-        foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
-        {
-            query.Append($", src.\"{groupColumn}\" AS \"{groupColumn}\"");
-        }
-
-        foreach (var variable in queryBuilder.QueryVariablesWithoutTimestamp)
-        {
-            var alias = variable.Alias ?? variable.Name;
-            query.Append($", src.\"{alias}\" AS \"{alias}\"");
-        }
-
-        // Empty bins have no subquery row, so src."__binCount" reads NULL — COALESCE keeps the
-        // 0-means-empty contract the row mapper relies on.
-        query.Append(", COALESCE(src.\"__binCount\", 0) AS \"__binCount\"");
-
-        // FROM generate_series(from, seriesEnd, interval) — exactly Limit bins
-        query.Append($" FROM generate_series({fromLiteral}, {seriesEndLiteral}, {intervalLiteral}) AS bins(ts)");
-
-        // ---- Inner subquery: single scan over the filtered source rows, reduced per bin ----
-        query.Append(" LEFT JOIN (");
-        query.Append($"SELECT {binExpression} AS bin_ts");
-
+        // Per-series group columns (e.g. d."rtid") carry the series identity; they extend
+        // GROUP BY / ORDER BY below.
         foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
         {
             query.Append($", d.\"{groupColumn}\" AS \"{groupColumn}\"");
@@ -177,13 +146,14 @@ internal class CrateQueryCompiler
             }
         }
 
+        // Always >= 1 for a row that exists at all; the caller stamps 0 on the bins it synthesizes.
         query.Append($", COUNT(d.\"{timeColumn}\") AS \"__binCount\"");
 
         query.Append($" FROM {queryBuilder.TenantId} AS d");
         query.Append(" WHERE 1 = 1");
 
         // Fully-contained predicate (concept-time-range §7). The former half
-        // `window_start >= bins.ts` is implied here: DATE_BIN keys on window_start, and a bin
+        // `window_start >= bin start` is implied here: DATE_BIN keys on window_start, and a bin
         // start is by definition <= the value it was derived from. Only the upper half remains.
         if (isWindowed)
         {
@@ -199,14 +169,10 @@ internal class CrateQueryCompiler
             query.Append($", d.\"{groupColumn}\"");
         }
 
-        // Equi-join on the pre-computed bin timestamp — hash-joinable, unlike the former
-        // function-expression ON clause.
-        query.Append(") AS src ON src.bin_ts = bins.ts");
-
-        query.Append(" ORDER BY bins.ts ASC");
+        query.Append($" ORDER BY {binExpression} ASC");
         foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
         {
-            query.Append($", src.\"{groupColumn}\" ASC");
+            query.Append($", d.\"{groupColumn}\" ASC");
         }
 
         return query.ToString();

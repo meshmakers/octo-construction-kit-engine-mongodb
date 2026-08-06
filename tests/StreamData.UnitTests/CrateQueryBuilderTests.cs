@@ -393,7 +393,7 @@ public class CrateQueryBuilderTests
     }
 
     [Fact]
-    public void DownsamplingWithAggregation_EmitsGenerateSeriesLeftJoin()
+    public void DownsamplingWithAggregation_EmitsSingleGroupedScanWithoutJoin()
     {
         var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
         var to = DateTime.Parse("2024-01-01T01:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
@@ -406,18 +406,66 @@ public class CrateQueryBuilderTests
         var compiler = new CrateQueryCompiler();
         var sql = compiler.CompileQuery(queryBuilder);
 
-        Assert.Contains("SELECT bins.ts AS \"T\"", sql);
-        // Aggregate-then-join (AB#4713): the reducer runs inside a subquery over the filtered
-        // source rows; generate_series equi-joins onto the pre-aggregated result.
-        Assert.Contains("LEFT JOIN (SELECT DATE_BIN('360 seconds'::INTERVAL, d.\"timestamp\"", sql);
+        // AB#4713: one grouped scan, no bin-axis join — CrateDB cannot hash-join a table function,
+        // so any generate_series join degenerates to a nested loop that scales with the bucket count.
+        Assert.Contains("SELECT DATE_BIN('360 seconds'::INTERVAL, d.\"timestamp\"", sql);
         Assert.Contains($" FROM {Table} AS d WHERE 1 = 1", sql);
         Assert.Contains("AVG(d.\"voltage\") AS \"Avg_voltage\"", sql);
         Assert.Contains("COUNT(d.\"timestamp\") AS \"__binCount\"", sql);
-        Assert.Contains(") AS src ON src.bin_ts = bins.ts", sql);
-        // Outer projection passes the reduced columns through and keeps __binCount 0 for empty bins.
-        Assert.Contains("src.\"Avg_voltage\" AS \"Avg_voltage\"", sql);
-        Assert.Contains("COALESCE(src.\"__binCount\", 0) AS \"__binCount\"", sql);
+        Assert.Contains("GROUP BY DATE_BIN('360 seconds'::INTERVAL, d.\"timestamp\"", sql);
         Assert.Contains("d.\"cktypeid\" = 'Test/123'", sql);
+        Assert.DoesNotContain("generate_series", sql);
+        Assert.DoesNotContain("JOIN", sql);
+    }
+
+    [Fact]
+    public void Downsampling_BinGeometry_IsSharedBetweenSqlAndCallerAxis()
+    {
+        // The SQL's DATE_BIN origin/width and the caller-side bin axis (which materializes the
+        // empty bins the SQL no longer emits) must be derived from one source of truth, or the
+        // repository's per-bin lookup would miss every bucket.
+        var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var to = DateTime.Parse("2024-01-01T01:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.WithDownsampling(10, from, to);
+        queryBuilder.AddAggregationVariable("voltage", AggregationFunctionDto.Avg, "Avg_voltage");
+
+        Assert.Equal(360, queryBuilder.DownsamplingIntervalSeconds);
+        Assert.Equal(from, queryBuilder.DownsamplingOrigin);
+        Assert.Equal(DateTimeKind.Utc, queryBuilder.DownsamplingOrigin.Kind);
+
+        // The compiled SQL must use exactly that geometry.
+        var sql = new CrateQueryCompiler().CompileQuery(queryBuilder);
+        Assert.Contains("'360 seconds'::INTERVAL", sql);
+        Assert.Contains($"'{queryBuilder.DownsamplingOrigin.ToString(Constants.DateTimeFormat)}'::TIMESTAMP", sql);
+    }
+
+    [Fact]
+    public void Downsampling_BinOrigin_IsTruncatedToSqlLiteralPrecision()
+    {
+        // Constants.DateTimeFormat renders milliseconds; a sub-millisecond origin would make the
+        // caller-side axis drift off the SQL's DATE_BIN grid by ticks and match nothing.
+        var from = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddTicks(7654);
+        var to = from.AddHours(1);
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.WithDownsampling(10, from, to);
+        queryBuilder.AddAggregationVariable("voltage", AggregationFunctionDto.Avg, "Avg_voltage");
+
+        Assert.Equal(0, queryBuilder.DownsamplingOrigin.Ticks % TimeSpan.TicksPerMillisecond);
+    }
+
+    [Fact]
+    public void Downsampling_LocalKindRange_NormalisesOriginToUtc()
+    {
+        // Persisted SD queries round-trip through Mongo and come back as Kind=Local; the origin
+        // must be converted, not just stamped with the format's literal `Z`.
+        var utc = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var local = utc.ToLocalTime();
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.WithDownsampling(10, local, local.AddHours(1));
+        queryBuilder.AddAggregationVariable("voltage", AggregationFunctionDto.Avg, "Avg_voltage");
+
+        Assert.Equal(utc, queryBuilder.DownsamplingOrigin);
     }
 
     [Fact]
@@ -439,16 +487,16 @@ public class CrateQueryBuilderTests
         var compiler = new CrateQueryCompiler();
         var sql = compiler.CompileQuery(queryBuilder);
 
-        // Series identity passed through from the subquery alongside the bin timestamp.
-        Assert.Contains("SELECT bins.ts AS \"T\", src.\"rtid\" AS \"rtid\"", sql);
-        // Envelope reducers: AVG centre line + MIN/MAX band, all per (bin, series) in the subquery.
+        // Series identity selected alongside the bin timestamp.
+        Assert.Contains(", d.\"rtid\" AS \"rtid\"", sql);
+        // Envelope reducers: AVG centre line + MIN/MAX band, all per (bin, series).
         Assert.Contains("AVG(d.\"amountValue\") AS \"amountValue_avg\"", sql);
         Assert.Contains("MIN(d.\"amountValue\") AS \"amountValue_min\"", sql);
         Assert.Contains("MAX(d.\"amountValue\") AS \"amountValue_max\"", sql);
-        // Subquery group extended with the series column; outer order follows.
+        // Group + order extended with the series column.
         Assert.Contains("GROUP BY DATE_BIN('360 seconds'::INTERVAL, d.\"timestamp\"", sql);
-        Assert.Contains(", d.\"rtid\") AS src", sql);
-        Assert.Contains("ORDER BY bins.ts ASC, src.\"rtid\" ASC", sql);
+        Assert.Contains(", d.\"rtid\" ASC", sql);
+        Assert.EndsWith(", d.\"rtid\" ASC", sql);
     }
 
     [Fact]
@@ -465,8 +513,8 @@ public class CrateQueryBuilderTests
         var compiler = new CrateQueryCompiler();
         var sql = compiler.CompileQuery(queryBuilder);
 
-        Assert.Contains(") AS src ON src.bin_ts = bins.ts ORDER BY bins.ts ASC", sql);
-        Assert.EndsWith("ORDER BY bins.ts ASC", sql);
+        Assert.EndsWith("ORDER BY DATE_BIN('360 seconds'::INTERVAL, d.\"timestamp\", "
+                        + $"'{queryBuilder.DownsamplingOrigin.ToString(Constants.DateTimeFormat)}'::TIMESTAMP) ASC", sql);
         Assert.DoesNotContain("\"rtid\"", sql);
     }
 

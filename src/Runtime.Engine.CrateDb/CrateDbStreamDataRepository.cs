@@ -986,65 +986,106 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var data = await _databaseClient.GetDataAsync(_tenantId, sql);
 
-        // Detect empty bins via __binCount (COUNT(d."Timestamp") from generate_series LEFT JOIN).
-        // For empty bins, force aggregation values to null regardless of what CrateDB returned.
-        const string binCountKey = "__binCount";
-        var rows = new List<StreamDataRow>();
+        // The SQL emits only bins that have source rows (AB#4713: joining a generate_series bin
+        // axis inside CrateDB is a nested loop and scales quadratically in the bucket count).
+        // Materialize the axis here instead and fill the gaps: walk bin 0..effectiveLimit-1 and,
+        // for every bin the query returned nothing for, emit one all-null row — the shape the
+        // former LEFT JOIN produced. Rows whose bin falls outside the axis (possible when the
+        // interval rounding makes limit × interval fall short of the requested range) are dropped,
+        // matching the old behaviour where they had no bins.ts to join onto.
+        var rowsByBin = new Dictionary<DateTime, List<DataPointDto>>();
         foreach (var dp in data)
         {
-            var isEmptyBin =
-                dp.Attributes?.TryGetValue(binCountKey, out var binCountObj) == true &&
-                binCountObj != null &&
-                Convert.ToInt64(binCountObj) == 0;
-
-            var values = new Dictionary<string, object?>();
-            foreach (var col in outputColumnNames)
+            if (!rowsByBin.TryGetValue(dp.Timestamp, out var bucket))
             {
-                if (col == Constants.Timestamp)
-                {
-                    values[col] = dp.Timestamp;
-                    continue;
-                }
-
-                if (isEmptyBin)
-                {
-                    values[col] = null;
-                    continue;
-                }
-
-                // Find the SQL alias that maps to this output column name
-                var sqlAlias = outputNameBySqlAlias
-                    .FirstOrDefault(kvp => kvp.Value == col).Key;
-                object? value = null;
-                if (sqlAlias != null)
-                {
-                    dp.Attributes?.TryGetValue(sqlAlias, out value);
-                }
-                else
-                {
-                    dp.Attributes?.TryGetValue(col, out value);
-                }
-
-                values[col] = value;
+                bucket = [];
+                rowsByBin[dp.Timestamp] = bucket;
             }
 
-            rows.Add(new StreamDataRow
+            bucket.Add(dp);
+        }
+
+        var rows = new List<StreamDataRow>();
+        for (var binIndex = 0; binIndex < effectiveLimit; binIndex++)
+        {
+            var binTimestamp = q.DownsamplingOrigin.AddSeconds((double)q.DownsamplingIntervalSeconds * binIndex);
+            if (rowsByBin.TryGetValue(binTimestamp, out var binRows))
             {
-                Timestamp = dp.Timestamp,
-                RtId = dp.RtId,
-                // The downsampling projection doesn't select cktypeid (it isn't grouped), so every
-                // bin row — populated or empty — comes back with an empty/absent type. Stamp the
-                // query's target Ck type unconditionally so the non-null GraphQL ckTypeId field
-                // resolves; all rows of one archive share the same type anyway. (dp.CkTypeId here
-                // is an empty RtCkId, not null, so a null-coalesce wouldn't fire.)
-                CkTypeId = options.CkTypeId ?? dp.CkTypeId,
-                RtCreationDateTime = dp.RtCreationDateTime,
-                RtChangedDateTime = dp.RtChangedDateTime,
-                Values = values
-            });
+                foreach (var dp in binRows)
+                {
+                    rows.Add(MapDownsamplingRow(dp, dp.Timestamp, false, outputColumnNames,
+                        outputNameBySqlAlias, options.CkTypeId));
+                }
+            }
+            else
+            {
+                rows.Add(MapDownsamplingRow(null, binTimestamp, true, outputColumnNames,
+                    outputNameBySqlAlias, options.CkTypeId));
+            }
         }
 
         return new StreamDataQueryResult { Rows = rows, TotalCount = rows.Count };
+    }
+
+    /// <summary>
+    /// Projects one downsampling bin onto a <see cref="StreamDataRow"/>. <paramref name="dp"/> is
+    /// null for a synthesized empty bin (no source row in that bucket); every aggregation column
+    /// then reads null while the timestamp still carries the bin start, so the wire shape is
+    /// identical for populated and empty bins.
+    /// </summary>
+    private static StreamDataRow MapDownsamplingRow(
+        DataPointDto? dp,
+        DateTime binTimestamp,
+        bool isEmptyBin,
+        IEnumerable<string> outputColumnNames,
+        Dictionary<string, string> outputNameBySqlAlias,
+        RtCkId<CkTypeId>? ckTypeId)
+    {
+        var values = new Dictionary<string, object?>();
+        foreach (var col in outputColumnNames)
+        {
+            if (col == Constants.Timestamp)
+            {
+                values[col] = binTimestamp;
+                continue;
+            }
+
+            if (isEmptyBin)
+            {
+                values[col] = null;
+                continue;
+            }
+
+            // Find the SQL alias that maps to this output column name
+            var sqlAlias = outputNameBySqlAlias
+                .FirstOrDefault(kvp => kvp.Value == col).Key;
+            object? value = null;
+            if (sqlAlias != null)
+            {
+                dp?.Attributes?.TryGetValue(sqlAlias, out value);
+            }
+            else
+            {
+                dp?.Attributes?.TryGetValue(col, out value);
+            }
+
+            values[col] = value;
+        }
+
+        return new StreamDataRow
+        {
+            Timestamp = binTimestamp,
+            RtId = dp?.RtId ?? default,
+            // The downsampling projection doesn't select cktypeid (it isn't grouped), so every
+            // bin row — populated or empty — comes back with an empty/absent type. Stamp the
+            // query's target Ck type unconditionally so the non-null GraphQL ckTypeId field
+            // resolves; all rows of one archive share the same type anyway. (dp.CkTypeId here
+            // is an empty RtCkId, not null, so a null-coalesce wouldn't fire.)
+            CkTypeId = ckTypeId ?? dp?.CkTypeId ?? default,
+            RtCreationDateTime = dp?.RtCreationDateTime ?? default,
+            RtChangedDateTime = dp?.RtChangedDateTime ?? default,
+            Values = values
+        };
     }
 
     /// <summary>
