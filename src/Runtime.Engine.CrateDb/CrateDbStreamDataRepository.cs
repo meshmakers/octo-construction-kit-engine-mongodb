@@ -837,13 +837,18 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     /// <summary>
-    /// Returns the bucket count to actually downsample to: the requested <paramref name="requestedLimit"/>,
-    /// clamped down to the number of distinct source bins in range when the request is finer than the
-    /// data. Runs one cheap <c>COUNT(DISTINCT)</c> against the same source filters already configured on
-    /// <paramref name="q"/>. On any probe failure it falls back to the requested limit (the query still
-    /// runs; worst case is the pre-fix behaviour). See AB#4246.
+    /// Returns the bucket count to actually downsample to. Runs one cheap <c>COUNT(DISTINCT)</c>
+    /// against the same source filters already configured on <paramref name="q"/> to learn how many
+    /// distinct source bins the range holds, then hands that to <see cref="DownsamplingBinQuantizer"/>:
+    /// raw archives are clamped down when the request is finer than the data (AB#4246); windowed
+    /// archives are additionally quantized so every output bin merges a whole number of source grain
+    /// windows — otherwise a bin width that is not an integer multiple of the grain makes the §7
+    /// fully-contained predicate drop straddling windows and the series undercounts (AB#4714). On any
+    /// probe failure it falls back to the requested limit (the query still runs; worst case is the
+    /// pre-fix behaviour).
     /// </summary>
-    private async Task<int> ResolveEffectiveDownsamplingLimitAsync(CrateQueryBuilder q, int requestedLimit)
+    private async Task<int> ResolveEffectiveDownsamplingLimitAsync(
+        CrateQueryBuilder q, int requestedLimit, bool isWindowed)
     {
         try
         {
@@ -854,13 +859,16 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             if (first?.Attributes != null && first.Attributes.TryGetValue("c", out var countObj) && countObj != null)
             {
                 var distinctBins = Convert.ToInt32(countObj);
-                if (distinctBins > 0 && distinctBins < requestedLimit)
+                var effective = DownsamplingBinQuantizer.Quantize(requestedLimit, distinctBins, isWindowed);
+                if (effective != requestedLimit)
                 {
                     _logger.LogDebug(
-                        "Clamping downsampling bucket count from {Requested} to {Effective} (distinct source bins in range)",
-                        requestedLimit, distinctBins);
-                    return distinctBins;
+                        "Quantizing downsampling bucket count from {Requested} to {Effective} "
+                        + "(distinct source bins in range = {DistinctBins}, windowed = {Windowed})",
+                        requestedLimit, effective, distinctBins, isWindowed);
                 }
+
+                return effective;
             }
         }
         catch (Exception ex)
@@ -916,7 +924,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // this, a chart asking for more buckets than the data has distinct timestamps yields a bin
         // finer than the source resolution; for windowed archives the fully-contained predicate
         // then drops every window and every bin reads null (AB#4246). One cheap COUNT(DISTINCT).
-        var effectiveLimit = await ResolveEffectiveDownsamplingLimitAsync(q, options.Limit.Value);
+        var effectiveLimit = await ResolveEffectiveDownsamplingLimitAsync(
+            q, options.Limit.Value, snapshot.UsesWindowedStorage);
         q.WithDownsampling(effectiveLimit, options.From.Value, options.To.Value);
 
         // Timestamp is always first in the output for downsampling (the bin start time).

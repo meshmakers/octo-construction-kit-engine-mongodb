@@ -782,8 +782,22 @@ Semantics preserved:
   `window_end <= DATE_BIN(...) + interval` is emitted. Straddling windows are still dropped.
 - **Per-series group columns (AB#4233):** grouped and ordered in SQL; the caller's gap-fill emits
   a single null row per empty bin, as the old LEFT JOIN did.
-- **Bucket-count clamp (AB#4246):** `CompileDownsamplingBucketCountQuery` is unchanged and shares
-  `AppendDownsamplingSourceFilters`, so the clamp counts exactly the rows the query will read.
+- **Bucket-count clamp + grain quantization (AB#4246 / AB#4714):** the
+  `COUNT(DISTINCT window_start)` from `CompileDownsamplingBucketCountQuery` feeds
+  `DownsamplingBinQuantizer.Quantize(requestedLimit, distinctBins, isWindowed)`.
+  For **raw** archives it only clamps a too-fine request down (AB#4246). For **windowed**
+  archives it additionally quantizes the bucket count so every output bin merges a *whole*
+  number of source grain windows (`merge = round(distinctBins / requestedLimit)`,
+  `effectiveLimit = round(distinctBins / merge)`). This is required because §7 keys the bin on
+  `window_start` and drops any window whose `window_end` overruns the bin: a bin width that is
+  not an integer multiple of the grain drops every straddling window. Before AB#4714 the clamp
+  only fired when `requestedLimit > distinctBins`, so a request just under the distinct count
+  (670 pixels over 720 hourly windows) kept a 1.07 h bin and read ~6% of the true sum. The
+  quantizer assumes the query origin (`From`) sits on a grain boundary — the resolver-driven
+  path guarantees this because `SeriesResolutionPlanner` now returns a grain-multiple
+  `EffectiveBucketMs` (see octo-construction-kit-engine) that the frontend aligns the window to;
+  the server-side quantizer is defence-in-depth for any caller (incl. non-resolution-aware
+  charts). `DownsamplingBinQuantizer` is a pure, unit-tested helper (`DownsamplingBinQuantizerTests`).
 - **Generation filter (AB#4184):** `AppendDownsamplingSourceFilters` also emits the
   active-generation predicate when `GenerationTracked` — previously the downsampling path missed
   it entirely, so a read during a recompute double-counted the swapped windows.
