@@ -169,9 +169,10 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // CK-derived primitive type), so the legacy `unnest(@arr,...)` bulk path no longer fits:
         // it required `NpgsqlDbType.Array|Json` for the dynamic `data` blob, but typed columns
         // need their own native param types and silently drop values when forced through JSON.
-        // Looping single-row inserts trades raw throughput for correct typing across heterogeneous
-        // column sets — fine for the volumes the pipeline produces; revisit if profiling flags
-        // this as a hot spot.
+        // AB#4773: the rows go out as an NpgsqlBatch of single-row commands — parameter typing
+        // stays per-row/per-column (unlike unnest), but the whole sub-batch is pipelined in one
+        // round trip. The previous command-per-row loop capped bulk restores at well under
+        // 1k rows/s, which turned multi-million-row archive restores into multi-hour jobs.
         var sql = BuildSingleRowInsertSql(qualifiedTable, userColumnNames);
 
         // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
@@ -183,11 +184,15 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             await _resilience.ExecuteAsync(async _ =>
             {
                 await using var lease = await LeaseConnectionAsync(tenantId);
-                var connection = lease.Connection;
+                await using var batch = new NpgsqlBatch(lease.Connection);
                 for (var i = start; i < end; i++)
                 {
-                    await ExecuteSingleInsertAsync(connection, sql, d[i], userColumnNames);
+                    var cmd = new NpgsqlBatchCommand(sql);
+                    AddInsertParameters(cmd.Parameters, d[i], userColumnNames);
+                    batch.BatchCommands.Add(cmd);
                 }
+
+                await batch.ExecuteNonQueryAsync();
             });
         }
     }
@@ -209,8 +214,9 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         var d = datapoints.ToArray();
         if (d.Length == 0) return;
 
-        // Same single-row loop rationale as InsertDataAsync — typed columns need their own
-        // native param types per row, the bulk-unnest path can't carry that information.
+        // Same batching rationale as InsertDataAsync (AB#4773) — typed columns need their own
+        // native param types per row, the bulk-unnest path can't carry that information, and the
+        // NpgsqlBatch pipelines the sub-batch in one round trip.
         var sql = BuildTimeRangeInsertSql(qualifiedTable, userColumnNames);
 
         // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
@@ -222,11 +228,15 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             await _resilience.ExecuteAsync(async _ =>
             {
                 await using var lease = await LeaseConnectionAsync(tenantId);
-                var connection = lease.Connection;
+                await using var batch = new NpgsqlBatch(lease.Connection);
                 for (var i = start; i < end; i++)
                 {
-                    await ExecuteSingleTimeRangeInsertAsync(connection, sql, d[i], userColumnNames);
+                    var cmd = new NpgsqlBatchCommand(sql);
+                    AddTimeRangeInsertParameters(cmd.Parameters, d[i], userColumnNames);
+                    batch.BatchCommands.Add(cmd);
                 }
+
+                await batch.ExecuteNonQueryAsync();
             });
         }
     }
@@ -235,17 +245,23 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         NpgsqlConnection connection, string sql, TimeRangeDataPointDto dto, IReadOnlyList<string> userColumnNames)
     {
         await using var cmd = new NpgsqlCommand(sql, connection);
-        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.WindowStart}", dto.From));
-        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.WindowEnd}", dto.To));
-        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.RtId}", (object?)dto.RtId?.ToString() ?? DBNull.Value));
-        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.CkTypeId}", (object?)dto.CkTypeId?.ToString() ?? DBNull.Value));
-        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.RtWellKnownName}", (object?)dto.RtWellKnownName ?? DBNull.Value));
+        AddTimeRangeInsertParameters(cmd.Parameters, dto, userColumnNames);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private static void AddTimeRangeInsertParameters(
+        NpgsqlParameterCollection parameters, TimeRangeDataPointDto dto, IReadOnlyList<string> userColumnNames)
+    {
+        parameters.Add(new NpgsqlParameter($"@{Constants.WindowStart}", dto.From));
+        parameters.Add(new NpgsqlParameter($"@{Constants.WindowEnd}", dto.To));
+        parameters.Add(new NpgsqlParameter($"@{Constants.RtId}", (object?)dto.RtId?.ToString() ?? DBNull.Value));
+        parameters.Add(new NpgsqlParameter($"@{Constants.CkTypeId}", (object?)dto.CkTypeId?.ToString() ?? DBNull.Value));
+        parameters.Add(new NpgsqlParameter($"@{Constants.RtWellKnownName}", (object?)dto.RtWellKnownName ?? DBNull.Value));
         foreach (var col in userColumnNames)
         {
             var value = dto.Attributes != null && dto.Attributes.TryGetValue(col, out var v) ? v : null;
-            cmd.Parameters.Add(new NpgsqlParameter($"@{col}", value ?? (object)DBNull.Value));
+            parameters.Add(new NpgsqlParameter($"@{col}", value ?? (object)DBNull.Value));
         }
-        await cmd.ExecuteNonQueryAsync();
     }
 
     private static string BuildTimeRangeInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames)
@@ -287,16 +303,22 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         NpgsqlConnection connection, string sql, DataPointDto dto, IReadOnlyList<string> userColumnNames)
     {
         await using var cmd = new NpgsqlCommand(sql, connection);
-        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.RtId}", (object?)dto.RtId?.ToString() ?? DBNull.Value));
-        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.CkTypeId}", (object?)dto.CkTypeId?.ToString() ?? DBNull.Value));
-        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.Timestamp}", dto.Timestamp));
-        cmd.Parameters.Add(new NpgsqlParameter($"@{Constants.RtWellKnownName}", (object?)dto.RtWellKnownName ?? DBNull.Value));
+        AddInsertParameters(cmd.Parameters, dto, userColumnNames);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private static void AddInsertParameters(
+        NpgsqlParameterCollection parameters, DataPointDto dto, IReadOnlyList<string> userColumnNames)
+    {
+        parameters.Add(new NpgsqlParameter($"@{Constants.RtId}", (object?)dto.RtId?.ToString() ?? DBNull.Value));
+        parameters.Add(new NpgsqlParameter($"@{Constants.CkTypeId}", (object?)dto.CkTypeId?.ToString() ?? DBNull.Value));
+        parameters.Add(new NpgsqlParameter($"@{Constants.Timestamp}", dto.Timestamp));
+        parameters.Add(new NpgsqlParameter($"@{Constants.RtWellKnownName}", (object?)dto.RtWellKnownName ?? DBNull.Value));
         foreach (var col in userColumnNames)
         {
             var value = dto.Attributes != null && dto.Attributes.TryGetValue(col, out var v) ? v : null;
-            cmd.Parameters.Add(new NpgsqlParameter($"@{col}", value ?? (object)DBNull.Value));
+            parameters.Add(new NpgsqlParameter($"@{col}", value ?? (object)DBNull.Value));
         }
-        await cmd.ExecuteNonQueryAsync();
     }
 
     private static string BuildSingleRowInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames)
