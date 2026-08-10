@@ -1262,6 +1262,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             .Select(c => ColumnNameMapper.PathToColumnName(c.Path))
             .ToList();
         var windowed = snapshot.UsesWindowedStorage;
+        // Rollup tables key their PK with `generation` (AB#4184 Phase 6); the windowed insert must
+        // name it in the conflict target and write the always-live generation 0 (AB#4773).
+        var generationTracked = snapshot.RollupAggregations is not null;
 
         using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.importRows");
         activity?.SetTag("streamdata.tenant", _tenantId);
@@ -1278,7 +1281,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 windowedBatch.Add(MapImportedWindowedRow(row, userColumnNames, rowIndex));
                 if (windowedBatch.Count >= ExportPageSize)
                 {
-                    await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, windowedBatch);
+                    await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, windowedBatch, generationTracked);
                     windowedBatch.Clear();
                 }
             }
@@ -1297,7 +1300,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         if (windowed && windowedBatch.Count > 0)
         {
-            await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, windowedBatch);
+            await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, windowedBatch, generationTracked);
         }
         else if (!windowed && rawBatch.Count > 0)
         {

@@ -24,12 +24,19 @@ public interface IStreamDataDatabaseClient
     Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints);
 
     /// <summary>
-    /// Inserts time-range data points into a <c>TimeRangeArchive</c> table. Schema is the
+    /// Inserts time-range data points into a windowed archive table. Schema is the
     /// <c>(window_start, window_end, rtid, ckTypeId)</c>-keyed variant emitted by
-    /// <see cref="ArchiveDdlGenerator.GenerateCreateTimeRangeTable"/>; ON CONFLICT on the natural
+    /// <see cref="ArchiveDdlGenerator.GenerateCreateWindowedTable"/>; ON CONFLICT on the natural
     /// key overwrites user columns and flips <c>was_updated</c> to TRUE.
     /// </summary>
-    Task InsertTimeRangeDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<TimeRangeDataPointDto> datapoints);
+    /// <param name="generationTracked">
+    /// True for rollup archive tables (AB#4184 Phase 6), whose primary key additionally carries the
+    /// <c>generation</c> column — CrateDB requires the conflict target to name the full PK, so the
+    /// insert then writes <c>generation = 0</c> explicitly and includes it in the conflict target
+    /// (AB#4773: archive data import into rollup tables collapses onto the always-live generation 0).
+    /// Time-range archive tables have no generation column and pass false.
+    /// </param>
+    Task InsertTimeRangeDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false);
 
     /// <summary>
     /// Get data from the stream data database.

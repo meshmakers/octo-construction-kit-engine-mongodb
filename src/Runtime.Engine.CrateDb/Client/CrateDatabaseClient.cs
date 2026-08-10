@@ -209,7 +209,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     }
 
     public async Task InsertTimeRangeDataAsync(
-        string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<TimeRangeDataPointDto> datapoints)
+        string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
+        IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false)
     {
         var d = datapoints.ToArray();
         if (d.Length == 0) return;
@@ -217,7 +218,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // Same batching rationale as InsertDataAsync (AB#4773) — typed columns need their own
         // native param types per row, the bulk-unnest path can't carry that information, and the
         // NpgsqlBatch pipelines the sub-batch in one round trip.
-        var sql = BuildTimeRangeInsertSql(qualifiedTable, userColumnNames);
+        var sql = BuildTimeRangeInsertSql(qualifiedTable, userColumnNames, generationTracked);
 
         // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
         // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
@@ -264,16 +265,25 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         }
     }
 
-    private static string BuildTimeRangeInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames)
+    private static string BuildTimeRangeInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames,
+        bool generationTracked = false)
     {
-        // Column order matches the DDL emitted by GenerateCreateTimeRangeTable: window_start,
+        // Column order matches the DDL emitted by GenerateCreateWindowedTable: window_start,
         // window_end, rtid, ckTypeId, rtWellKnownName, then user columns. The CONFLICT clause's
         // natural key is the full window (start, end) + entity (rtid, ckTypeId) — a re-delivery
         // of the same window for the same entity upserts; different windows even for the same
         // entity are independent rows. was_updated flips to TRUE on any conflict, regardless of
         // whether the user-column values actually changed (concept §5: "ever updated" signal,
         // not value-change detection).
-        var allColumns = new List<string>(5 + userColumnNames.Count)
+        //
+        // AB#4773: rollup tables key their PK with the additional `generation` column (AB#4184
+        // Phase 6), and CrateDB rejects a conflict target that does not name the full PK. For
+        // those, generation 0 is written explicitly and joins the conflict target: an archive
+        // data import always lands in a freshly provisioned table with an empty generation map,
+        // where generation 0 is the active lane. Exported rows of a swept table carry exactly
+        // one (the active) generation per window, so collapsing onto 0 is faithful; transient
+        // unswept duplicates collapse via the upsert.
+        var allColumns = new List<string>(6 + userColumnNames.Count)
         {
             Constants.WindowStart, Constants.WindowEnd, Constants.RtId, Constants.CkTypeId, Constants.RtWellKnownName
         };
@@ -281,12 +291,19 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
         var columnList = string.Join(", ", allColumns.Select(c => $"\"{c}\""));
         var paramList = string.Join(", ", allColumns.Select(c => $"@{c}"));
+        if (generationTracked)
+        {
+            columnList += $", \"{Constants.Generation}\"";
+            paramList += ", 0";
+        }
+
+        var conflictGenerationSuffix = generationTracked ? $", \"{Constants.Generation}\"" : string.Empty;
         var conflictUpdates = userColumnNames.Count == 0
             ? string.Empty
             : ", " + string.Join(", ", userColumnNames.Select(c => $"\"{c}\" = EXCLUDED.\"{c}\""));
 
         return $"INSERT INTO {qualifiedTable} ({columnList}) VALUES ({paramList}) "
-             + $"ON CONFLICT (\"{Constants.WindowStart}\", \"{Constants.WindowEnd}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\") "
+             + $"ON CONFLICT (\"{Constants.WindowStart}\", \"{Constants.WindowEnd}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\"{conflictGenerationSuffix}) "
              + $"DO UPDATE SET \"{Constants.RtChangedDateTime}\" = CURRENT_TIMESTAMP, "
              + $"\"{Constants.WasUpdated}\" = TRUE"
              + conflictUpdates;
