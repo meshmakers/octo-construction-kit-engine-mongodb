@@ -175,6 +175,78 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
     }
 
     /// <inheritdoc />
+    public async Task<bool> TryPersistDerivedColumnsAsync(OctoObjectId rollupRtId)
+    {
+        var session = await _tenantRepository.GetSessionAsync();
+        // Load via the abstract base for the same Bson down-cast reason as GetAsync: the RtId may
+        // belong to a sibling Archive subtype, which callers treat as "not a rollup" (false).
+        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtArchive>(session, rollupRtId);
+        if (entity is not RtRollupArchive rollup || entity.RtState == RtState.Archived)
+        {
+            return false;
+        }
+
+        if (HasPersistedAggregateColumns(rollup.Columns))
+        {
+            return false; // healthy — the dehydrated cache is present
+        }
+
+        // Safe attribute reads (OrDefault) — this path exists for ImportRt-seeded entities, where
+        // even mandatory record attributes can be absent and the generated getters throw.
+        var aggregations = (rollup.Aggregations ?? Enumerable.Empty<RtCkRollupAggregationRecord>())
+            .Select(a => (SourcePath: a.GetAttributeStringValueOrDefault("SourcePath"), Record: a))
+            .Where(a => !string.IsNullOrWhiteSpace(a.SourcePath))
+            .Select(a => new CkRollupAggregationSpec(
+                a.SourcePath!,
+                (CkRollupFunction)(int)a.Record.Function,
+                a.Record.TargetColumnName,
+                a.Record.ComparisonValue))
+            .ToList();
+        if (aggregations.Count == 0)
+        {
+            return false; // nothing to derive from — an empty Aggregations list is its own defect
+        }
+
+        var rebuilt = new AttributeRecordValueList<RtCkArchiveColumnRecord>();
+        rebuilt.AddRange(RollupColumnGenerator.Generate(aggregations).Select(c => new RtCkArchiveColumnRecord
+        {
+            Path = c.Path,
+            Indexed = c.Indexed,
+            Required = c.Required,
+        }));
+
+        // Preserve computed columns (concept §11) — they live exclusively in the entity's Columns
+        // slot and would be lost by a plain regenerate. Rebuild-and-reassign is the mandatory
+        // idiom for AttributeRecordValueList (see MutateComputedColumnAsync in the archive store).
+        foreach (var column in rollup.Columns ?? Enumerable.Empty<RtCkArchiveColumnRecord>())
+        {
+            if (!string.IsNullOrWhiteSpace(column.GetAttributeStringValueOrDefault("Formula")))
+            {
+                rebuilt.Add(column);
+            }
+        }
+
+        rollup.Columns = rebuilt;
+        await _tenantRepository.UpdateOneRtEntityByIdAsync<RtRollupArchive>(session, rollupRtId, rollup);
+        return true;
+    }
+
+    /// <summary>
+    /// True when at least one persisted (ingested, non-computed) column is present — i.e. the
+    /// dehydrated <see cref="RollupColumnGenerator"/> cache exists on the entity. Computed columns
+    /// alone don't count: they are user additions on top of the aggregate columns. Reads go
+    /// through the OrDefault accessors, NOT the generated properties: this helper exists exactly
+    /// for records from ImportRt seeds, where a mandatory attribute (Path) can be absent and the
+    /// generated getter throws <c>InvalidAttributeValueException</c>.
+    /// </summary>
+    private static bool HasPersistedAggregateColumns(IEnumerable<RtCkArchiveColumnRecord>? columns)
+    {
+        return columns?.Any(c =>
+            !string.IsNullOrWhiteSpace(c.GetAttributeStringValueOrDefault("Path")) &&
+            string.IsNullOrWhiteSpace(c.GetAttributeStringValueOrDefault("Formula"))) ?? false;
+    }
+
+    /// <inheritdoc />
     public async Task<int> CountActiveRollupsForSourceAsync(OctoObjectId sourceArchiveRtId)
     {
         // Counting client-side keeps the store DB-neutral (the runtime repo doesn't expose a
@@ -237,6 +309,10 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             entity.FrozenUntil)
         {
             BucketAlignment = bucketAlignment,
+            // AB#4772: flags entities lacking the dehydrated aggregate-column cache (ImportRt
+            // seeds) so the orchestrator tick / lifecycle can heal via
+            // TryPersistDerivedColumnsAsync. Computed-only columns don't count as persisted.
+            HasPersistedColumns = HasPersistedAggregateColumns(entity.Columns),
             // Optional IANA reference time zone for DST-correct calendar buckets (AB#4290 / O6).
             // Null (unset, or pre-1.6.4 entities) ⇒ UTC calendar boundaries.
             ReferenceTimeZone = string.IsNullOrWhiteSpace(entity.ReferenceTimeZone) ? null : entity.ReferenceTimeZone,
