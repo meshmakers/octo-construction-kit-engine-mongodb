@@ -12,10 +12,7 @@ public enum StreamDataFieldCategory
     Default,
 
     /// <summary>A CK model data stream attribute backed by a typed archive column</summary>
-    DataStream,
-
-    /// <summary>Field not recognized as default or data stream</summary>
-    Unknown
+    DataStream
 }
 
 /// <summary>
@@ -132,18 +129,13 @@ public class StreamDataFieldResolver
     }
 
     /// <summary>
-    /// Resolves a field name, falling back to the camelCased path for unknown fields. Use this
-    /// for filter and sort paths that may reference attributes the caller didn't pre-declare —
-    /// the underlying SQL column either exists on the archive table or the query fails at
-    /// execution time, which is the right place to surface "unknown attribute" errors.
+    /// Every name this resolver accepts: the storage shape's default fields plus the archive's
+    /// ingested and readable computed columns. Exposed so a caller that rejects an unresolvable
+    /// name can say what the valid ones are — a bare "unknown column" leaves the author guessing
+    /// at exactly the moment they already guessed wrong. Lookup is case-insensitive, so these are
+    /// the canonical spellings rather than the only accepted ones.
     /// </summary>
-    public ResolvedField ResolveOrFallback(string input)
-    {
-        return Resolve(input) ?? new ResolvedField(
-            StreamDataFieldCategory.Unknown,
-            ColumnNameMapper.PathToColumnName(input),
-            input.ToCamelCase());
-    }
+    public IReadOnlyCollection<string> KnownFieldNames => _fields.Keys;
 
     /// <summary>
     /// The canonical way to build a resolver from an <see cref="ArchiveSnapshot"/>. Ingested
