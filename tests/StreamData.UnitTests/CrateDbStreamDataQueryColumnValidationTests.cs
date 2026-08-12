@@ -47,10 +47,12 @@ public class CrateDbStreamDataQueryColumnValidationTests
             });
     }
 
+    private readonly IRollupArchiveRuntimeStore _rollupStore = A.Fake<IRollupArchiveRuntimeStore>();
+
     private CrateDbStreamDataRepository NewSut() =>
         new(NullLogger<CrateDbStreamDataRepository>.Instance,
             _cache, _db, _mgmt, Config, "tenant-x",
-            _store, _formula);
+            _store, _formula, _rollupStore);
 
     /// <summary>The query must not reach CrateDB — that is the whole point of validating up front.</summary>
     private void AssertNoSqlExecuted() =>
@@ -167,6 +169,134 @@ public class CrateDbStreamDataQueryColumnValidationTests
 
         // Got past validation and issued its query.
         A.CallTo(() => _db.GetDataAsync(A<string>._, A<string>._)).MustHaveHappened();
+    }
+
+    [Fact]
+    public async Task RollupAggregation_OnALogicalChainPath_IsAccepted()
+    {
+        // Regression: AB#4765 validated aggregation columns against the archive's own columns, but on
+        // a rollup an aggregation column may name a LOGICAL source path that is deliberately not a
+        // column of the rollup table. A TWA rollup stores voltage_twavg_integral /
+        // voltage_twavg_duration; the query asks to aggregate "Voltage" and the chain resolver rewrites
+        // that into an expression over the stored pair — a branch that runs before the field resolver
+        // is ever consulted. Rejecting it broke the cascade-TWA integration tests in
+        // octo-asset-repo-services and every GetStreamData fixture in the mesh adapter.
+        var rollupRt = OctoObjectId.GenerateNewId();
+        var sourceRt = OctoObjectId.GenerateNewId();
+
+        A.CallTo(() => _store.GetAsync(rollupRt)).Returns(
+            new ArchiveSnapshot(rollupRt, SomeType, CkArchiveStatus.Activated, "rollup",
+                [
+                    new CkArchiveColumnSpec("voltage_twavg_integral", Indexed: false, Required: false),
+                    new CkArchiveColumnSpec("voltage_twavg_duration", Indexed: false, Required: false)
+                ])
+            {
+                IsTimeRange = true,
+                RollupAggregations = [new CkRollupAggregationSpec("Voltage", CkRollupFunction.TimeWeightedAvg, null)]
+            });
+
+        A.CallTo(() => _rollupStore.GetAsync(rollupRt)).Returns(
+            new RollupArchiveSnapshot(rollupRt, SomeType, CkArchiveStatus.Activated, null, sourceRt,
+                TimeSpan.FromHours(1), TimeSpan.Zero, null,
+                [new CkRollupAggregationSpec("Voltage", CkRollupFunction.TimeWeightedAvg, null)],
+                null));
+
+        // The chain terminates at a raw archive, where the spec's source path is already logical.
+        A.CallTo(() => _store.GetAsync(sourceRt)).Returns(
+            new ArchiveSnapshot(sourceRt, SomeType, CkArchiveStatus.Activated, "source",
+                [new CkArchiveColumnSpec("Voltage", Indexed: false, Required: false)]));
+        A.CallTo(() => _rollupStore.GetAsync(sourceRt))
+            .Returns(Task.FromResult<RollupArchiveSnapshot?>(null));
+
+        var options = StreamDataAggregationQueryOptions.Create()
+            .WithCkTypeId(SomeType)
+            .WithAggregationColumns([new AggregationColumn("Voltage", AggregationFunction.TimeWeightedAverage)])
+            .WithTimeRange(new DateTime(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc),
+                new DateTime(2026, 7, 2, 0, 0, 0, DateTimeKind.Utc));
+
+        // Must get past validation. Whether the chain resolver then finds a pair is a different
+        // concern — the point is that validation no longer refuses the query outright.
+        await NewSut().ExecuteAggregationQueryAsync(rollupRt, options);
+    }
+
+    [Fact]
+    public async Task RollupValidation_ReadsEachChainSnapshotOnce_RegardlessOfSpecCount()
+    {
+        // The chain walk descends once per aggregation spec, and every spec of one rollup walks the
+        // same chain. Unmemoised, a rollup with several aggregations over a cascade multiplies store
+        // reads on every aggregating query — where validation previously did none at all.
+        var rollupRt = OctoObjectId.GenerateNewId();
+        var sourceRt = OctoObjectId.GenerateNewId();
+
+        CkRollupAggregationSpec[] specs =
+        [
+            new("Voltage", CkRollupFunction.Sum, null),
+            new("Voltage", CkRollupFunction.Max, null),
+            new("Current", CkRollupFunction.Sum, null),
+            new("Current", CkRollupFunction.Avg, null)
+        ];
+
+        A.CallTo(() => _store.GetAsync(rollupRt)).Returns(
+            new ArchiveSnapshot(rollupRt, SomeType, CkArchiveStatus.Activated, "rollup",
+                [new CkArchiveColumnSpec("voltage_sum", Indexed: false, Required: false)])
+            {
+                IsTimeRange = true,
+                RollupAggregations = specs
+            });
+        A.CallTo(() => _rollupStore.GetAsync(rollupRt)).Returns(
+            new RollupArchiveSnapshot(rollupRt, SomeType, CkArchiveStatus.Activated, null, sourceRt,
+                TimeSpan.FromHours(1), TimeSpan.Zero, null, specs, null));
+        A.CallTo(() => _store.GetAsync(sourceRt)).Returns(
+            new ArchiveSnapshot(sourceRt, SomeType, CkArchiveStatus.Activated, "source",
+                [
+                    new CkArchiveColumnSpec("Voltage", Indexed: false, Required: false),
+                    new CkArchiveColumnSpec("Current", Indexed: false, Required: false)
+                ]));
+        A.CallTo(() => _rollupStore.GetAsync(sourceRt))
+            .Returns(Task.FromResult<RollupArchiveSnapshot?>(null));
+
+        await NewSut().ExecuteAggregationQueryAsync(rollupRt,
+            StreamDataAggregationQueryOptions.Create()
+                .WithCkTypeId(SomeType)
+                .WithAggregationColumns([new AggregationColumn("Voltage", AggregationFunction.Sum)]));
+
+        // The reads must not scale with the spec count. Memoised, validation reads the source once
+        // (2 total here — the query path's own ResolveRollupChainAggregationAsync walks the chain with
+        // its own uncached loaders, which this fix does not touch). Unmemoised, validation alone would
+        // read it once per spec, so 4 + 1 = 5. The bound below separates the two without pinning the
+        // other path's behaviour.
+        A.CallTo(() => _store.GetAsync(sourceRt))
+            .MustHaveHappened(specs.Length - 1, Times.OrLess);
+        A.CallTo(() => _rollupStore.GetAsync(sourceRt))
+            .MustHaveHappened(specs.Length - 1, Times.OrLess);
+    }
+
+    [Fact]
+    public async Task RollupAggregation_OnAnUnknownPath_IsStillRejected()
+    {
+        // The widening must not become a blanket exemption for rollups: a name that is neither a
+        // column nor a resolvable chain path stays refused.
+        var rollupRt = OctoObjectId.GenerateNewId();
+
+        A.CallTo(() => _store.GetAsync(rollupRt)).Returns(
+            new ArchiveSnapshot(rollupRt, SomeType, CkArchiveStatus.Activated, "rollup",
+                [new CkArchiveColumnSpec("voltage_twavg_integral", Indexed: false, Required: false)])
+            {
+                IsTimeRange = true,
+                RollupAggregations = [new CkRollupAggregationSpec("Voltage", CkRollupFunction.TimeWeightedAvg, null)]
+            });
+        A.CallTo(() => _rollupStore.GetAsync(rollupRt))
+            .Returns(Task.FromResult<RollupArchiveSnapshot?>(null));
+
+        var options = StreamDataAggregationQueryOptions.Create()
+            .WithCkTypeId(SomeType)
+            .WithAggregationColumns([new AggregationColumn("Voltaage", AggregationFunction.Sum)]);
+
+        var ex = await Assert.ThrowsAsync<StreamDataException>(
+            () => NewSut().ExecuteAggregationQueryAsync(rollupRt, options));
+
+        Assert.Contains("Voltaage", ex.Message);
+        AssertNoSqlExecuted();
     }
 
     [Fact]

@@ -295,6 +295,17 @@ Every one of the four query methods validates its column names against the archi
 `StreamDataFieldResolver` **before any SQL is built**, and rejects the query naming each offending
 name together with the valid ones — projection, aggregation, group-by, sort and filter alike.
 
+**Rollups widen the aggregation universe.** On a rollup an aggregation column may name a *logical* CK
+source path that is deliberately not a column of the rollup table — a TWA rollup stores
+`{col}_twavg_integral` / `{col}_twavg_duration` while the query asks to aggregate `Voltage`, and the
+chain-aware resolver rewrites that into an expression over the stored pair, in a branch that runs
+*before* the field resolver is consulted. The three aggregating paths therefore validate against a
+resolver widened with the rollup's logical paths (`RollupLogicalPathResolver`), mirroring what the
+GraphQL layer already does. It is a **separate** resolver from the one that builds SQL: widening that
+one would let a chain path the chain resolver *declined* resolve to a physical column that does not
+exist, turning a clear rejection into a CrateDB column-not-found error. Where the rollup store is not
+wired, the narrow resolver is used — the same degradation the chain resolver itself takes.
+
 Only names, not values: a filter whose operator needs a comparison value but carries none is still
 skipped further down. That is deliberate — the GraphQL layer excludes exactly those filters from its
 own validation, which reads as a tolerated no-op for half-filled filter rows coming from the query
