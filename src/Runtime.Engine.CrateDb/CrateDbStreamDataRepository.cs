@@ -533,6 +533,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(snapshot);
 
+        StreamDataQueryColumnValidator.Validate(fieldResolver, archiveRtId,
+            columns: options.Columns,
+            sortOrders: options.SortOrders,
+            fieldFilters: options.FieldFilters);
+
         var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
         // Windowed-storage archives (rollup / time-range, Phase 7+) have no `timestamp` column —
         // their time axis is `(window_start, window_end)`. Wire the query builder to use the
@@ -588,6 +593,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     {
         var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(snapshot);
+
+        // Validated ahead of the time-weighted branch below so that path is covered too. Sort orders
+        // are deliberately not checked here: this query kind returns a single row and ignores them,
+        // so rejecting a name that has no effect would only turn a harmless input into an error.
+        StreamDataQueryColumnValidator.Validate(fieldResolver, archiveRtId,
+            fieldFilters: options.FieldFilters,
+            aggregationColumns: options.AggregationColumns);
 
         // AB#4336 §6.2: TimeWeightedAvg over a raw (event-based) archive needs the LOCF statement —
         // the standard single-scan builder cannot express the carry / interval weighting. Routed
@@ -661,6 +673,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             if (col.Function == AggregationFunction.TimeWeightedAverage && snapshot.RollupAggregations is null)
             {
                 var resolvedTwa = fieldResolver.Resolve(col.AttributePath);
+                // Defensive only — see StreamDataQueryColumnValidator (AB#4765).
                 if (resolvedTwa == null) continue;
                 var windowLenMs = $"(\"{Constants.WindowEnd}\"::bigint - \"{Constants.WindowStart}\"::bigint)";
                 var twaAlias = $"{resolvedTwa.CrateDbName}_twavg";
@@ -674,6 +687,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             }
 
             var resolved = fieldResolver.Resolve(col.AttributePath);
+            // Defensive only — every entry point validates its column names up front
+            // (StreamDataQueryColumnValidator). Skipping silently here is the AB#4765 bug.
             if (resolved == null) continue;
 
             var aggFunc = MapAggregationFunction(col.Function);
@@ -713,6 +728,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
         var fieldResolver = CreateFieldResolver(snapshot);
 
+        // The group-by columns matter most here: dropping one used to merge groups that should have
+        // stayed apart, which does not look like an error — it looks like fewer rows with larger
+        // numbers.
+        StreamDataQueryColumnValidator.Validate(fieldResolver, archiveRtId,
+            fieldFilters: options.FieldFilters,
+            groupByColumns: options.GroupByColumns,
+            aggregationColumns: options.AggregationColumns);
+
         // AB#4336 §6.2: TWA over a raw archive — LOCF statement, grouped variant. See
         // ExecuteAggregationQueryAsync for the same routing rationale.
         if (!snapshot.UsesWindowedStorage
@@ -749,6 +772,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         foreach (var groupCol in options.GroupByColumns)
         {
             var resolved = fieldResolver.Resolve(groupCol);
+            // Defensive only — every entry point validates its column names up front
+            // (StreamDataQueryColumnValidator). Skipping silently here is the AB#4765 bug.
             if (resolved == null) continue;
 
             q.AddVariable(resolved.CrateDbName, resolved.CrateDbName, null);
@@ -790,6 +815,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             if (col.Function == AggregationFunction.TimeWeightedAverage && snapshot.RollupAggregations is null)
             {
                 var resolvedTwa = fieldResolver.Resolve(col.AttributePath);
+                // Defensive only — see StreamDataQueryColumnValidator (AB#4765).
                 if (resolvedTwa == null) continue;
                 var windowLenMs = $"(\"{Constants.WindowEnd}\"::bigint - \"{Constants.WindowStart}\"::bigint)";
                 var twaAlias = $"{resolvedTwa.CrateDbName}_twavg";
@@ -803,6 +829,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             }
 
             var resolved = fieldResolver.Resolve(col.AttributePath);
+            // Defensive only — every entry point validates its column names up front
+            // (StreamDataQueryColumnValidator). Skipping silently here is the AB#4765 bug.
             if (resolved == null) continue;
 
             var aggFunc = MapAggregationFunction(col.Function);
@@ -892,6 +920,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var fieldResolver = CreateFieldResolver(snapshot);
 
+        StreamDataQueryColumnValidator.Validate(fieldResolver, archiveRtId,
+            fieldFilters: options.FieldFilters,
+            groupByColumns: options.GroupByColumnPaths,
+            aggregationColumns: options.AggregationColumns);
+
         var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
         // Windowed-storage downsampling: the aggregate-then-join subquery (AB#4713) bins on
         // window_start (the bin that contains the window); the compiler adds the fully-contained
@@ -963,6 +996,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             }
 
             var resolved = fieldResolver.Resolve(col.AttributePath);
+            // Defensive only — every entry point validates its column names up front
+            // (StreamDataQueryColumnValidator). Skipping silently here is the AB#4765 bug.
             if (resolved == null) continue;
 
             var aggFunc = MapAggregationFunction(col.Function);
@@ -979,14 +1014,20 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         // Per-series grouping (AB#4233): group each requested column by an extra series-identity
         // column (typically the source rtId) in addition to the time bin, so interleaved series
-        // stay separated. Resolve via the field resolver where possible; fall back to the
-        // camelCase column form for identity columns (e.g. "rtId" → "rtid") that aren't part of
-        // the configured archive column set the resolver was built from.
+        // stay separated.
+        //
+        // This used to fall back to a guessed column name for anything the resolver did not know,
+        // justified by identity columns such as "rtId". That justification never held — rtId is a
+        // default field (Constants.DefaultStreamDataFields) and resolves like any other. All the
+        // fallback actually did was turn a typo into a column-not-found error from CrateDB, naming
+        // the guessed physical column rather than what the caller wrote. The names are validated
+        // above now, so the resolver is authoritative here (AB#4765).
         foreach (var groupPath in options.GroupByColumnPaths ?? [])
         {
-            var groupColumn = fieldResolver.Resolve(groupPath)?.CrateDbName
-                ?? ColumnNameMapper.PathToColumnName(groupPath);
-            q.WithDownsamplingGroupBy(groupColumn);
+            var resolvedGroupBy = fieldResolver.Resolve(groupPath);
+            // Defensive only — see StreamDataQueryColumnValidator.
+            if (resolvedGroupBy == null) continue;
+            q.WithDownsamplingGroupBy(resolvedGroupBy.CrateDbName);
         }
 
         var compiler = new CrateQueryCompiler();
@@ -2139,6 +2180,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         foreach (var column in columns)
         {
             var resolved = fieldResolver.Resolve(column);
+            // Defensive only — every entry point validates its column names up front
+            // (StreamDataQueryColumnValidator). Skipping silently here is the AB#4765 bug.
             if (resolved == null) continue;
 
             // CrateDbName is the lower-case concatenated form (see ColumnNameMapper) and is what
@@ -2185,6 +2228,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         foreach (var sort in sortOrders)
         {
             var resolved = fieldResolver.Resolve(sort.AttributePath);
+            // Defensive only — every entry point validates its column names up front
+            // (StreamDataQueryColumnValidator). Skipping silently here is the AB#4765 bug.
             if (resolved == null) continue;
 
             // SQL aliases now use CrateDbName (PascalCase) for both default and data fields.
@@ -2223,11 +2268,19 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         foreach (var filter in fieldFilters)
         {
-            // IsNull and IsNotNull have no comparison value — allow them through
+            // IsNull and IsNotNull have no comparison value — allow them through. For the rest a
+            // missing value means the filter is skipped, which widens the result rather than narrowing
+            // it. Left as-is on purpose: the GraphQL layer excludes valueless filters from its own
+            // column validation, which reads as a tolerated no-op for half-filled filter rows from the
+            // query builder, and rejecting them here would turn an unfinished row into an error. The
+            // column *names* are validated up front (StreamDataQueryColumnValidator, AB#4765); this
+            // particular silence is a separate, smaller call.
             var isNullCheck = filter.Operator is FieldFilterOperator.IsNull or FieldFilterOperator.IsNotNull;
             if (!isNullCheck && filter.ComparisonValue == null) continue;
 
             var resolved = fieldResolver.Resolve(filter.AttributePath);
+            // Defensive only — every entry point validates its column names up front
+            // (StreamDataQueryColumnValidator). Skipping silently here is the AB#4765 bug.
             if (resolved == null) continue;
 
             var op = MapFieldFilterOperator(filter.Operator);
@@ -2399,6 +2452,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         foreach (var groupCol in groupByColumnPaths)
         {
             var resolvedGroup = fieldResolver.Resolve(groupCol);
+            // Defensive only — see StreamDataQueryColumnValidator (AB#4765).
             if (resolvedGroup == null) continue;
             groupColumns.Add(resolvedGroup.CrateDbName);
             outputColumnNames.Add(resolvedGroup.CrateDbName);
@@ -2411,6 +2465,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         foreach (var col in aggregationColumns)
         {
             var resolved = fieldResolver.Resolve(col.AttributePath);
+            // Defensive only — every entry point validates its column names up front
+            // (StreamDataQueryColumnValidator). Skipping silently here is the AB#4765 bug.
             if (resolved == null) continue;
 
             var aggFunc = MapAggregationFunction(col.Function);

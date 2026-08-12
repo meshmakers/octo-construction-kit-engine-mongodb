@@ -289,6 +289,30 @@ Task DeleteArchiveAsync(CkArchive archive);
 
 The repository resolves `archiveRtId` → `CkArchive` entity → table; verifies `Status == Activated`; otherwise throws `ArchiveNotActivatedException`.
 
+#### Column-name validation (AB#4765)
+
+Every one of the four query methods validates its column names against the archive's
+`StreamDataFieldResolver` **before any SQL is built**, and rejects the query naming each offending
+name together with the valid ones — projection, aggregation, group-by, sort and filter alike.
+
+Only names, not values: a filter whose operator needs a comparison value but carries none is still
+skipped further down. That is deliberate — the GraphQL layer excludes exactly those filters from its
+own validation, which reads as a tolerated no-op for half-filled filter rows coming from the query
+builder, so rejecting them here would turn an unfinished row in the UI into an error.
+
+This used to be the opposite: an unresolvable name was dropped without a trace, and what that cost
+depended on where it sat. A mistyped sort returned rows in storage order, so the sort looked broken.
+A mistyped filter returned **more** rows than requested — a typo silently turned a narrow query into
+a full read. A dropped group-by column merged groups that should have stayed apart, which reads as
+fewer rows with larger numbers rather than as an error. A dropped aggregation left its key figure
+missing altogether. All four produce a plausible-looking result, which is what made the silence
+dangerous.
+
+Names are matched case-insensitively but **not** separator-insensitively, so the standard columns
+must be written in their physical spelling: `window_start`, not `WindowStart`. Computed columns are
+addressed by their logical `Name` — their physical column is versioned after a formula change and is
+registered on the resolver rather than derived (AB#4764).
+
 ### Bulk insert semantics
 
 `InsertAsync(OctoObjectId archiveRtId, IEnumerable<StreamDataPoint> points)` follows an **all-or-nothing pre-validation** model:
@@ -623,6 +647,7 @@ All in `Runtime.Contracts/StreamData/`. Common base: `StreamDataException` (exte
 | `ArchiveColumnTypeUnsupportedException` | An attribute type cannot be mapped to a CrateDB column type. |
 | `RequiredAttributeMissingException` | Insert lacks a value for a `required: true` scalar path. |
 | `ArchiveActivationFailedException` | DDL execution failed during `Created → Activated` (transient or schema error). Wraps the underlying SQL error. |
+| `StreamDataException` (base, from `StreamDataQueryColumnValidator`) | A query names a column the archive's field resolver cannot resolve — in projection, aggregation, group-by, sort or filter (AB#4765). Thrown before any SQL runs. Deliberately the **contracts** base type rather than the connection-level `StreamDataException` local to `Runtime.Engine.CrateDb`, so one `catch` covers it together with `ArchiveNotFoundException` / `ArchiveNotActivatedException`, which the same query methods throw. No consumer distinguishes the two types today, so this is about catchability, not the response code. Note the remaining inconsistency: the `InvalidQueryParameters` guards in the same methods (missing `From`/`To`/`Limit`, `StateDuration` without a comparison value) still throw the **local** type, so "invalid query input" cannot be caught uniformly. |
 
 Each exception carries the offending `archiveRtId` (where applicable) and a stable error code string for client-side handling.
 

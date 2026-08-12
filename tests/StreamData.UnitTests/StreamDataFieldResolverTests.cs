@@ -100,14 +100,17 @@ public class StreamDataFieldResolverTests
     }
 
     [Fact]
-    public void UnknownField_ResolveOrFallback_ReturnsLowerCased()
+    public void KnownFieldNames_ContainsDefaultsAndDataStreamAttributes()
     {
+        // The names an unresolvable-column error can offer as alternatives. Guessing them from the
+        // archive snapshot instead is what left every caller of this resolver without a usable
+        // message (AB#4765).
         var resolver = new StreamDataFieldResolver(["voltage"]);
 
-        var result = resolver.ResolveOrFallback("unknownField");
-
-        Assert.Equal(StreamDataFieldCategory.Unknown, result.Category);
-        Assert.Equal("unknownfield", result.CrateDbName);
+        Assert.Contains("voltage", resolver.KnownFieldNames);
+        Assert.Contains(Constants.Timestamp, resolver.KnownFieldNames);
+        Assert.Contains(Constants.RtId, resolver.KnownFieldNames);
+        Assert.DoesNotContain("nonExistent", resolver.KnownFieldNames);
     }
 
     [Fact]
