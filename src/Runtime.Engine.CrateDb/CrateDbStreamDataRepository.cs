@@ -1933,6 +1933,19 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     /// <inheritdoc />
+    public Task<string> NormalizeComputedFormulaAsync(
+        OctoObjectId archiveRtId,
+        IReadOnlyList<CkArchiveColumnSpec> columns,
+        string formula,
+        CancellationToken cancellationToken = default)
+    {
+        // Pure (no I/O), and here rather than in the lifecycle service because the logical→physical
+        // rule is ColumnNameMapper's, which is internal to this layer — the same reason
+        // ValidateComputedColumnsAsync sits on this contract (concept §9).
+        return Task.FromResult(ComputedColumnFormulaRewriter.ToPhysicalForm(formula, columns));
+    }
+
+    /// <inheritdoc />
     public async Task AddComputedColumnStorageAsync(
         ArchiveSnapshot snapshot, string columnName, CancellationToken cancellationToken = default)
     {

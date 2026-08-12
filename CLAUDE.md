@@ -594,6 +594,37 @@ The shared `CkArchiveSnapshot` covers both subtypes. When the loaded entity is a
   Rollup column names are storage identifiers (e.g. `temperature_avg_sum`), not CK-type
   attribute paths — the path-resolver would fail to resolve them.
 
+### Computed Columns — Formula Names (AB#4779)
+
+A computed-column formula is evaluated in .NET via mXparser at ingest, **never in SQL** — it appears
+in no DDL. Operands are bound as mXparser `Argument`s whose names cannot contain a dot, and the row
+dictionaries the evaluator reads are keyed by the **physical** column name (`ColumnNameMapper`:
+dot-stripped, lower-cased). So the stored formula is always physical: `amountvalue / 1000`.
+
+Callers may nevertheless write the **logical** vocabulary the Studio lists and the query surface uses
+(`Amount.Value`, `ObisCode`). `ComputedColumnFormulaRewriter` translates it, reached through
+`IStreamDataRepository.NormalizeComputedFormulaAsync` because the naming rule is `ColumnNameMapper`'s
+and that is internal to this layer — the same reason `ValidateComputedColumnsAsync` sits on that
+contract. `ArchiveLifecycleService` calls it at exactly two points, `AddComputedColumnAsync` and
+`UpdateComputedColumnFormulaAsync`; **everything downstream is unchanged** and still sees only
+physical names, which is why no stored formula needed migrating.
+
+Three properties worth keeping when touching the rewriter:
+
+- It replaces an identifier run **only when the whole run matches** a column name. A prefix match
+  would turn `Amount.Foo` into `amount.Foo` — broken output instead of an honest unknown-column
+  error — and whole-run matching makes longest-match fall out for free.
+- Numeric literals are skipped wholesale, exponent included. Runs start only on a letter or `_`, so
+  `1.5` is safe by construction, but `1.5e3` would otherwise start a run at `e` and a column named
+  `e3` would land inside a number.
+- A run that matches nothing is left as written: that is what keeps physical names (and mXparser
+  function names) working, and it lets the validator reject an unknown name by the caller's spelling.
+
+In `UpdateComputedColumnFormulaAsync` the rewrite happens **before** the no-op check. The stored form
+is physical, so comparing the caller's logical spelling against it would always look like a change —
+re-saving the identical formula from the UI would version the column (`power__v1`, `__v2`, …),
+backfill it and swap the pointer, every time.
+
 ### Rollup Lifecycle
 
 - `MongoCkRollupArchiveRuntimeStore` extends the runtime-store contract with:

@@ -64,22 +64,10 @@ internal static class ComputedColumnValidator
         }
 
         // Physical names of every column (ingested + computed) — the reference universe a formula
-        // may draw from.
-        var allPhysical = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var c in columns)
-        {
-            if (c.IsComputed)
-            {
-                if (!string.IsNullOrWhiteSpace(c.Name))
-                {
-                    allPhysical.Add(ColumnNameMapper.PathToColumnName(c.Name!));
-                }
-            }
-            else if (!string.IsNullOrWhiteSpace(c.Path))
-            {
-                allPhysical.Add(ColumnNameMapper.PathToColumnName(c.Path));
-            }
-        }
+        // may draw from. Taken from the rewriter's map so the "ingested by Path, computed by Name"
+        // rule lives in one place: whatever a caller may write there, this resolves here.
+        var allPhysical = new HashSet<string>(
+            ComputedColumnFormulaRewriter.BuildNameMap(columns).Values, StringComparer.Ordinal);
 
         // Syntax + reference resolution: a formula may reference any column except itself.
         foreach (var (spec, physical) in computed)
