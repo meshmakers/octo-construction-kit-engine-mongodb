@@ -597,7 +597,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // Validated ahead of the time-weighted branch below so that path is covered too. Sort orders
         // are deliberately not checked here: this query kind returns a single row and ignores them,
         // so rejecting a name that has no effect would only turn a harmless input into an error.
-        StreamDataQueryColumnValidator.Validate(fieldResolver, archiveRtId,
+        StreamDataQueryColumnValidator.Validate(
+            await CreateValidationFieldResolverAsync(snapshot, CancellationToken.None), archiveRtId,
             fieldFilters: options.FieldFilters,
             aggregationColumns: options.AggregationColumns);
 
@@ -731,7 +732,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // The group-by columns matter most here: dropping one used to merge groups that should have
         // stayed apart, which does not look like an error — it looks like fewer rows with larger
         // numbers.
-        StreamDataQueryColumnValidator.Validate(fieldResolver, archiveRtId,
+        StreamDataQueryColumnValidator.Validate(
+            await CreateValidationFieldResolverAsync(snapshot, CancellationToken.None), archiveRtId,
             fieldFilters: options.FieldFilters,
             groupByColumns: options.GroupByColumns,
             aggregationColumns: options.AggregationColumns);
@@ -920,7 +922,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var fieldResolver = CreateFieldResolver(snapshot);
 
-        StreamDataQueryColumnValidator.Validate(fieldResolver, archiveRtId,
+        StreamDataQueryColumnValidator.Validate(
+            await CreateValidationFieldResolverAsync(snapshot, CancellationToken.None), archiveRtId,
             fieldFilters: options.FieldFilters,
             groupByColumns: options.GroupByColumnPaths,
             aggregationColumns: options.AggregationColumns);
@@ -2107,6 +2110,78 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
 
         return snapshot;
+    }
+
+    /// <summary>
+    /// The resolver the <b>column-name validation</b> (AB#4765) checks against on the aggregating
+    /// query paths — deliberately wider than <see cref="CreateFieldResolver" />, and used for nothing
+    /// else.
+    /// <para>
+    /// On a rollup an aggregation column may name a <em>logical</em> CK path that is not a column of
+    /// the rollup table at all: a TWA rollup stores <c>voltage_twavg_integral</c> and
+    /// <c>voltage_twavg_duration</c>, while the query legitimately asks to aggregate <c>Voltage</c>,
+    /// and <see cref="ResolveRollupChainAggregationAsync" /> rewrites that into an expression over the
+    /// stored pair. That branch runs <em>before</em> the field resolver is consulted, so validating
+    /// against the narrow resolver rejected a query the engine can answer perfectly well — which is
+    /// exactly what AB#4765 did to the cascade-TWA tests. The GraphQL layer already widens its own
+    /// resolver the same way (<c>StreamDataFieldResolverExtensions</c>).
+    /// </para>
+    /// <para>
+    /// Kept separate from the query resolver on purpose: widening the one that builds SQL would let a
+    /// chain path the chain resolver <em>declined</em> resolve to a physical column that does not
+    /// exist, turning a clear rejection into a CrateDB column-not-found error.
+    /// </para>
+    /// </summary>
+    private async Task<StreamDataFieldResolver> CreateValidationFieldResolverAsync(
+        ArchiveSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        if (snapshot.RollupAggregations is null || _rollupArchiveStore is null)
+        {
+            return CreateFieldResolver(snapshot);
+        }
+
+        var rollup = await _rollupArchiveStore.GetAsync(snapshot.RtId).ConfigureAwait(false);
+        if (rollup is null)
+        {
+            return CreateFieldResolver(snapshot);
+        }
+
+        // The loaders are memoised for the duration of this call. RollupLogicalPathResolver descends
+        // the chain once per aggregation spec, and every spec of one rollup walks the SAME chain — so
+        // without a cache a rollup with ten aggregations over a three-level cascade costs about sixty
+        // store reads on every aggregating query, where validation previously did none. The cache is
+        // local, so it cannot serve a stale snapshot to a later query.
+        var archives = new Dictionary<OctoObjectId, ArchiveSnapshot?> { [snapshot.RtId] = snapshot };
+        var rollups = new Dictionary<OctoObjectId, RollupArchiveSnapshot?> { [snapshot.RtId] = rollup };
+
+        async Task<ArchiveSnapshot?> GetArchiveAsync(OctoObjectId id)
+        {
+            if (archives.TryGetValue(id, out var cached))
+            {
+                return cached;
+            }
+
+            var loaded = await _archiveStore.GetAsync(id).ConfigureAwait(false);
+            archives[id] = loaded;
+            return loaded;
+        }
+
+        async Task<RollupArchiveSnapshot?> GetRollupAsync(OctoObjectId id)
+        {
+            if (rollups.TryGetValue(id, out var cached))
+            {
+                return cached;
+            }
+
+            var loaded = await _rollupArchiveStore.GetAsync(id).ConfigureAwait(false);
+            rollups[id] = loaded;
+            return loaded;
+        }
+
+        var logicalPaths = await RollupLogicalPathResolver.ResolveAsync(
+            rollup, GetArchiveAsync, GetRollupAsync, cancellationToken).ConfigureAwait(false);
+
+        return StreamDataFieldResolver.CreateForArchive(snapshot, logicalPaths);
     }
 
     private static StreamDataFieldResolver CreateFieldResolver(ArchiveSnapshot snapshot)
