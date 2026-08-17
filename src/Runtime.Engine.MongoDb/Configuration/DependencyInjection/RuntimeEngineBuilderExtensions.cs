@@ -125,6 +125,7 @@ public static class RuntimeEngineBuilderExtensions
 
         // Add pre-document modification services
         builder.Services.AddTransient<IPreDocumentModification<RtEntity>, AutoIncrementModifier>();
+        builder.Services.AddTransient<IPreDocumentModification<RtEntity>, DisplayNameModifier>();
 
         // Register MongoDB-specific CK model migration support by default
         // This enables automatic migration detection when CK models are updated
