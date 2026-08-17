@@ -95,6 +95,13 @@ public static class RuntimeEngineBuilderExtensions
             .AddSingleton<Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle.ITenantSetupRetryStore,
                 Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantLifecycle.TenantSetupRetryStore>();
 
+        // AB#4812 durable display-rule backfill sweep tasks. The import hook (TenantContext) enqueues a
+        // task per type whose display rules changed; the sweep background service (opt-in via
+        // AddDisplayRuleSweepBackgroundService) drains them lease-protected.
+        builder.Services
+            .AddSingleton<Meshmakers.Octo.Runtime.Contracts.MongoDb.DisplayRules.IDisplayRuleSweepStore,
+                Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.DisplayRules.DisplayRuleSweepStore>();
+
         // Stage 2B explain cache — singleton, shared between admin and user MongoDB
         // connections so a tenant query's explain finishes wherever the listener that
         // dispatched it ran, and is reachable from the Diagnostics read endpoint. Disabled
@@ -232,6 +239,21 @@ public static class RuntimeEngineBuilderExtensions
             Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.IRollupTenantSource,
             Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.ConfigBasedRollupTenantSource>();
         builder.Services.AddHostedService<Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.RecomputeOrchestratorHostedService>();
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Registers the display-rule backfill sweep background service (AB#4812). It drains the
+    /// durable sweep tasks that CK model imports enqueue when a type's display rules change and
+    /// recomputes rtDisplayName/rtDisplayDescription for the affected entities. Bind options from
+    /// <c>DisplayRules:Sweep</c> or rely on the defaults (60 s tick, 60 s startup delay, page size
+    /// 500, 10 attempts).
+    /// </summary>
+    public static IRuntimeEngineBuilder AddDisplayRuleSweepBackgroundService(this IRuntimeEngineBuilder builder)
+    {
+        builder.Services.AddOptions<Meshmakers.Octo.Runtime.Engine.MongoDb.DisplayRules.DisplayRuleSweepOptions>();
+        builder.Services.AddHostedService<Meshmakers.Octo.Runtime.Engine.MongoDb.DisplayRules.DisplayRuleSweepHostedService>();
 
         return builder;
     }

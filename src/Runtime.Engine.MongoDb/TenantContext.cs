@@ -488,6 +488,80 @@ public class TenantContext : ITenantContext
         return versions;
     }
 
+    /// <summary>
+    /// Reads the declared display rules of all available CK types directly from the database
+    /// (AB#4812). Mirrors <see cref="GetSchemaVersionsDirectAsync" />: called before and after a
+    /// model import to detect rule changes, because the import hard-deletes the previous version's
+    /// CkType documents (there is no old-model snapshot afterwards).
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, DisplayRules.DeclaredDisplayRules>>
+        GetDeclaredDisplayRulesDirectAsync(TenantDatabaseSourceIdentifier databaseSourceIdentifier)
+    {
+        var rules = new Dictionary<string, DisplayRules.DeclaredDisplayRules>();
+
+        try
+        {
+            var session = await databaseSourceIdentifier.MongoDbRepositoryDataSource.CreateSessionAsync();
+            try
+            {
+                var ckTypes = await databaseSourceIdentifier.MongoDbRepositoryDataSource.CkTypes
+                    .FindManyAsync(session, type => type.ModelState == ModelState.Available);
+
+                foreach (var ckType in ckTypes)
+                {
+                    rules[ckType.CkTypeId.FullName] =
+                        new DisplayRules.DeclaredDisplayRules(ckType.DisplayNameRule, ckType.DisplayDescriptionRule);
+                }
+            }
+            finally
+            {
+                session.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error getting declared display rules directly from database");
+        }
+
+        return rules;
+    }
+
+    /// <summary>
+    /// Diffs the declared display rules before/after a model import and enqueues a backfill sweep
+    /// task per changed type (AB#4812). Failures are logged but never fail the import — the sweep
+    /// is a repair mechanism, not part of the import contract.
+    /// </summary>
+    private async Task EnqueueDisplayRuleSweepsAsync(
+        IReadOnlyDictionary<string, DisplayRules.DeclaredDisplayRules> rulesBeforeImport,
+        TenantDatabaseSourceIdentifier databaseSourceIdentifier)
+    {
+        try
+        {
+            var sweepStore = _serviceProvider.GetService<Contracts.MongoDb.DisplayRules.IDisplayRuleSweepStore>();
+            if (sweepStore == null)
+            {
+                return;
+            }
+
+            var rulesAfterImport = await GetDeclaredDisplayRulesDirectAsync(databaseSourceIdentifier);
+            var changedTypeIds =
+                DisplayRules.DisplayRuleChangeDetector.GetChangedTypeIds(rulesBeforeImport, rulesAfterImport);
+            foreach (var changedTypeId in changedTypeIds)
+            {
+                await sweepStore.EnqueueAsync(TenantId, changedTypeId);
+                _logger.LogInformation(
+                    "Display rules of type '{CkTypeId}' changed on import; backfill sweep enqueued for tenant '{TenantId}'",
+                    changedTypeId, TenantId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Failed to enqueue display rule backfill sweeps for tenant '{TenantId}' — existing entities keep stale display names until their next save",
+                TenantId);
+        }
+    }
+
     protected async Task CreateTenantInternalAsync(string databaseName)
     {
         ArgumentValidation.ValidateString(nameof(databaseName), databaseName);
@@ -1582,6 +1656,9 @@ public class TenantContext : ITenantContext
         // Capture schema versions BEFORE importing (for migration detection)
         var previousSchemaVersions = await GetSchemaVersionsDirectAsync(tenantDatabaseSourceIdentifier);
 
+        // Capture declared display rules BEFORE importing (for backfill sweep detection, AB#4812)
+        var displayRulesBeforeImport = await GetDeclaredDisplayRulesDirectAsync(tenantDatabaseSourceIdentifier);
+
         // If the compiled model contains inline migration data, make it available
         // to the migration content provider so migrations can run without NuGet references
         CompiledModelCkMigrationContentProvider? compiledMigrationProvider = null;
@@ -1616,6 +1693,9 @@ public class TenantContext : ITenantContext
                 {
                     _cacheService.Unload(TenantId);
                 }
+
+                // Enqueue backfill sweeps for types whose display rules changed (AB#4812)
+                await EnqueueDisplayRuleSweepsAsync(displayRulesBeforeImport, tenantDatabaseSourceIdentifier);
             }
             catch (ModelValidationException ex)
             {
@@ -1663,6 +1743,9 @@ public class TenantContext : ITenantContext
         // Capture schema versions BEFORE importing (for migration detection)
         var previousSchemaVersions = await GetSchemaVersionsDirectAsync(tenantDatabaseSourceIdentifier);
 
+        // Capture declared display rules BEFORE importing (for backfill sweep detection, AB#4812)
+        var displayRulesBeforeImport = await GetDeclaredDisplayRulesDirectAsync(tenantDatabaseSourceIdentifier);
+
         _logger.LogInformation("Importing CK Model '{CkModelId}' into tenant '{TenantId}'", ckModelId, TenantId);
 
         await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
@@ -1694,6 +1777,9 @@ public class TenantContext : ITenantContext
             {
                 _cacheService.Unload(TenantId);
             }
+
+            // Enqueue backfill sweeps for types whose display rules changed (AB#4812)
+            await EnqueueDisplayRuleSweepsAsync(displayRulesBeforeImport, tenantDatabaseSourceIdentifier);
         }
         catch (ModelValidationException ex)
         {

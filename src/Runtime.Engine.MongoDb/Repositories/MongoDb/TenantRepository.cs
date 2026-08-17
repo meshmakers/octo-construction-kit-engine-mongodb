@@ -32,6 +32,12 @@ internal class TenantRepository(
     IBulkRtMutation bulkRtMutation)
     : RuntimeRepositoryBase(tenantId, ckCacheService, mongoDbRepositoryDataSource, bulkRtMutation), ITenantRepository
 {
+    /// <summary>
+    ///     Direct access to the Mongo data source for engine-internal maintenance work that needs
+    ///     collection-level writes without the ApplyChanges pipeline (e.g. the display-rule sweep).
+    /// </summary>
+    internal IMongoDbRepositoryDataSource DataSource => mongoDbRepositoryDataSource;
+
     #region Transaction Handling
 
     protected override async Task RefreshCkCacheServiceAsync(ICkCacheService ckCacheService)
