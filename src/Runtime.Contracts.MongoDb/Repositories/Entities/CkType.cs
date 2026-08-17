@@ -50,6 +50,17 @@ public class CkType
     public string? Description { get; set; }
 
     /// <summary>
+    ///     Optional rule computing rtDisplayName from attribute values on save (declared on this type,
+    ///     inheritance is resolved when the dependency graph is built).
+    /// </summary>
+    public string? DisplayNameRule { get; set; }
+
+    /// <summary>
+    ///     Optional rule computing rtDisplayDescription from attribute values on save.
+    /// </summary>
+    public string? DisplayDescriptionRule { get; set; }
+
+    /// <summary>
     ///     Gets or sets a list of attributes
     /// </summary>
     public ICollection<CkTypeAttribute> Attributes { get; set; }

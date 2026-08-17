@@ -266,6 +266,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 IsFinal = t.IsFinal,
                 IsCollectionRoot = t.IsCollectionRoot,
                 EnableChangeStreamPreAndPostImages = t.EnableChangeStreamPreAndPostImages,
+                DisplayNameRule = t.DisplayNameRule,
+                DisplayDescriptionRule = t.DisplayDescriptionRule,
                 Attributes = t.Attributes.Select(a => new CkTypeAttributeDto
                 {
                     AttributeName = a.AttributeName,
@@ -1050,6 +1052,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 IsAbstract = ckTypeDto.IsAbstract,
                 IsCollectionRoot = ckTypeDto.IsCollectionRoot,
                 EnableChangeStreamPreAndPostImages = ckTypeDto.EnableChangeStreamPreAndPostImages,
+                DisplayNameRule = ckTypeDto.DisplayNameRule,
+                DisplayDescriptionRule = ckTypeDto.DisplayDescriptionRule,
                 Attributes = ckTypeAttributes,
                 Indexes = textSearchDefinitions
             };
