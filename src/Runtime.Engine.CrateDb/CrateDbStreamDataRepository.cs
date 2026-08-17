@@ -956,13 +956,36 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         AddRtIdFilter(q, options.RtIds);
         AddFieldFilters(q, fieldResolver, options.FieldFilters);
 
-        // Clamp the requested bucket count to the number of distinct source bins in range. Without
-        // this, a chart asking for more buckets than the data has distinct timestamps yields a bin
-        // finer than the source resolution; for windowed archives the fully-contained predicate
-        // then drops every window and every bin reads null (AB#4246). One cheap COUNT(DISTINCT).
-        var effectiveLimit = await ResolveEffectiveDownsamplingLimitAsync(
-            q, options.Limit.Value, snapshot.UsesWindowedStorage);
-        q.WithDownsampling(effectiveLimit, options.From.Value, options.To.Value);
+        // Bin geometry. Rollup archives get a bin width that is an exact integer multiple of
+        // their bucket size (AB#4817): deriving the width from a bucket count — whether the
+        // requested one or one clamped to COUNT(DISTINCT window_start) — rounds to a near-grain
+        // width whose per-bin drift makes the §7 fully-contained predicate drop almost every
+        // source window as soon as the range has a single empty grain slot (or the merge does
+        // not divide the count evenly). The grain route needs no probe at all; a too-fine
+        // request quantizes up to one grain per bin. Time-range archives stay on the probe
+        // route: their Period is advisory and their windows may be irregular, so a declared
+        // grain is no basis for the bin axis there.
+        int effectiveLimit;
+        if (snapshot.RollupAggregations is not null
+            && snapshot.Period is { } grain
+            && DownsamplingBinQuantizer.QuantizeToGrain(options.Limit.Value,
+                options.To.Value - options.From.Value, grain) is { } quantized)
+        {
+            effectiveLimit = quantized.EffectiveLimit;
+            q.WithDownsampling(effectiveLimit, options.From.Value, options.To.Value,
+                quantized.IntervalSeconds);
+        }
+        else
+        {
+            // Raw archives (and windowed ones without a usable grain): clamp the requested bucket
+            // count to the number of distinct source bins in range. Without this, a chart asking
+            // for more buckets than the data has distinct timestamps yields a bin finer than the
+            // source resolution; for windowed archives the fully-contained predicate then drops
+            // every window and every bin reads null (AB#4246). One cheap COUNT(DISTINCT).
+            effectiveLimit = await ResolveEffectiveDownsamplingLimitAsync(
+                q, options.Limit.Value, snapshot.UsesWindowedStorage);
+            q.WithDownsampling(effectiveLimit, options.From.Value, options.To.Value);
+        }
 
         // Timestamp is always first in the output for downsampling (the bin start time).
         // It maps from the "T" alias set by the downsampling SQL generator.

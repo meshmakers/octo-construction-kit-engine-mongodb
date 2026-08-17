@@ -73,4 +73,86 @@ public class DownsamplingBinQuantizerTests
     {
         Assert.Equal(requested, DownsamplingBinQuantizer.Quantize(requested, distinct, windowed));
     }
+
+    // --- Grain-based quantization (AB#4817) ------------------------------------------------------
+    // The distinct-bin route breaks as soon as a grain slot has no data (the count falls short of
+    // the range's grain count and the re-derived width stops being a grain multiple). These pin the
+    // declared-grain route: the width is a grain multiple by construction, independent of data.
+
+    [Fact]
+    public void Grain_RequestMatchesGrainCount_KeepsNativeGrain()
+    {
+        // The prod-1 regression: 288 requested over 24 h of 5-min grain. The distinct-bin route saw
+        // 285 populated slots → 303 s bins → §7 dropped all but 5 buckets. Grain route: merge 1,
+        // 300 s bins, 288 buckets — gaps in the data are irrelevant.
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(
+            288, TimeSpan.FromHours(24), TimeSpan.FromMinutes(5));
+        Assert.Equal((288, 300), result);
+    }
+
+    [Fact]
+    public void Grain_RequestJustBelowGrainCount_SnapsUpToNativeGrain()
+    {
+        // The AB#4714 case, grain-based: 670 requested over 720 hourly windows → merge 1 → hourly.
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(
+            670, TimeSpan.FromDays(30), TimeSpan.FromHours(1));
+        Assert.Equal((720, 3600), result);
+    }
+
+    [Fact]
+    public void Grain_MergeThatDoesNotDivideRangeEvenly_StaysOnGrainMultiple()
+    {
+        // 100 requested over 720 hourly windows → merge 7 → 25 200 s bins, 103 buckets. The
+        // distinct-bin route re-derived round(range/103) = 25 165 s — NOT a grain multiple, so the
+        // §7 predicate dropped straddling windows even without any data gap.
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(
+            100, TimeSpan.FromDays(30), TimeSpan.FromHours(1));
+        Assert.NotNull(result);
+        var (limit, interval) = result.Value;
+        Assert.Equal(0, interval % 3600);
+        Assert.Equal(25200, interval);
+        Assert.Equal(103, limit);
+    }
+
+    [Fact]
+    public void Grain_RequestFinerThanGrain_QuantizesUpToOneGrainPerBin()
+    {
+        // 670 requested over 30 daily windows → merge 1 → one bin per day.
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(
+            670, TimeSpan.FromDays(30), TimeSpan.FromDays(1));
+        Assert.Equal((30, 86400), result);
+    }
+
+    [Fact]
+    public void Grain_RangeNotAMultipleOfInterval_RoundsBucketCountUp()
+    {
+        // 25 h over 5-min grain, 288 requested: merge 1, 300 s bins, ceil(90000/300) = 300 buckets.
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(
+            288, TimeSpan.FromHours(25), TimeSpan.FromMinutes(5));
+        Assert.Equal((300, 300), result);
+    }
+
+    [Theory]
+    [InlineData(0, 24, 300)]     // non-positive request
+    [InlineData(288, 0, 300)]    // empty range
+    [InlineData(288, 24, 0)]     // zero grain
+    public void Grain_OutOfContractInputs_ReturnNull(int requested, int rangeHours, int grainSeconds)
+    {
+        Assert.Null(DownsamplingBinQuantizer.QuantizeToGrain(
+            requested, TimeSpan.FromHours(rangeHours), TimeSpan.FromSeconds(grainSeconds)));
+    }
+
+    [Fact]
+    public void Grain_SubSecondGrain_ReturnsNull_CallerFallsBack()
+    {
+        Assert.Null(DownsamplingBinQuantizer.QuantizeToGrain(
+            288, TimeSpan.FromHours(24), TimeSpan.FromMilliseconds(500)));
+    }
+
+    [Fact]
+    public void Grain_FractionalSecondGrain_ReturnsNull_CallerFallsBack()
+    {
+        Assert.Null(DownsamplingBinQuantizer.QuantizeToGrain(
+            288, TimeSpan.FromHours(24), TimeSpan.FromMilliseconds(1500)));
+    }
 }

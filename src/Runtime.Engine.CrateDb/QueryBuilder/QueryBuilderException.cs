@@ -36,6 +36,11 @@ internal class QueryBuilderException : Exception
         return new QueryBuilderException("Limit must be greater than zero");
     }
     
+    internal static QueryBuilderException IntervalMustBeGreaterThanZero()
+    {
+        return new QueryBuilderException("Downsampling interval must be at least one second");
+    }
+
     internal static QueryBuilderException OffsetMustBeGreaterThanZero()
     {
         return new QueryBuilderException("Offset must be a positive integer");

@@ -387,6 +387,31 @@ internal class CrateQueryBuilder
     }
 
     /// <summary>
+    /// Adds a downsampling with an explicitly chosen bin width (AB#4817). Used for windowed
+    /// archives, where the width must be an exact integer multiple of the source grain — deriving
+    /// it from <c>range / limit</c> (the other overload) rounds to a near-grain width whose
+    /// per-bin drift makes the §7 fully-contained predicate drop straddling source windows.
+    /// <paramref name="limit"/> and <paramref name="intervalSeconds"/> must describe the same axis
+    /// (<c>limit = ceil(range / interval)</c>); <see cref="DownsamplingBinQuantizer.QuantizeToGrain"/>
+    /// computes the pair.
+    /// </summary>
+    /// <param name="limit">Amount of bins on the axis</param>
+    /// <param name="from"></param>
+    /// <param name="to"></param>
+    /// <param name="intervalSeconds">Bin width in whole seconds, &gt;= 1</param>
+    public CrateQueryBuilder WithDownsampling(int limit, DateTime from, DateTime to, int intervalSeconds)
+    {
+        if (intervalSeconds < 1)
+        {
+            throw QueryBuilderException.IntervalMustBeGreaterThanZero();
+        }
+
+        WithDownsampling(limit, from, to);
+        DownsamplingIntervalSeconds = intervalSeconds;
+        return this;
+    }
+
+    /// <summary>
     /// Width of one downsampling bin in seconds, derived from the requested range and bucket count
     /// by <see cref="WithDownsampling"/>. Zero until downsampling is configured.
     /// </summary>

@@ -813,22 +813,27 @@ Semantics preserved:
   `window_end <= DATE_BIN(...) + interval` is emitted. Straddling windows are still dropped.
 - **Per-series group columns (AB#4233):** grouped and ordered in SQL; the caller's gap-fill emits
   a single null row per empty bin, as the old LEFT JOIN did.
-- **Bucket-count clamp + grain quantization (AB#4246 / AB#4714):** the
-  `COUNT(DISTINCT window_start)` from `CompileDownsamplingBucketCountQuery` feeds
-  `DownsamplingBinQuantizer.Quantize(requestedLimit, distinctBins, isWindowed)`.
-  For **raw** archives it only clamps a too-fine request down (AB#4246). For **windowed**
-  archives it additionally quantizes the bucket count so every output bin merges a *whole*
-  number of source grain windows (`merge = round(distinctBins / requestedLimit)`,
-  `effectiveLimit = round(distinctBins / merge)`). This is required because §7 keys the bin on
-  `window_start` and drops any window whose `window_end` overruns the bin: a bin width that is
-  not an integer multiple of the grain drops every straddling window. Before AB#4714 the clamp
-  only fired when `requestedLimit > distinctBins`, so a request just under the distinct count
-  (670 pixels over 720 hourly windows) kept a 1.07 h bin and read ~6% of the true sum. The
-  quantizer assumes the query origin (`From`) sits on a grain boundary — the resolver-driven
-  path guarantees this because `SeriesResolutionPlanner` now returns a grain-multiple
-  `EffectiveBucketMs` (see octo-construction-kit-engine) that the frontend aligns the window to;
-  the server-side quantizer is defence-in-depth for any caller (incl. non-resolution-aware
-  charts). `DownsamplingBinQuantizer` is a pure, unit-tested helper (`DownsamplingBinQuantizerTests`).
+- **Bin geometry — declared grain for rollups, distinct-bin clamp otherwise (AB#4246 / AB#4714 /
+  AB#4817):** §7 keys the bin on `window_start` and drops any window whose `window_end` overruns
+  the bin, so for windowed archives the bin width must be an *integer multiple of the grain*.
+  **Rollup archives** get that by construction:
+  `DownsamplingBinQuantizer.QuantizeToGrain(requestedLimit, range, snapshot.Period)` derives
+  `merge = round((range/limit)/grain)`, `interval = merge × grain`,
+  `effectiveLimit = ceil(range/interval)` and passes the interval *explicitly* into
+  `WithDownsampling(limit, from, to, intervalSeconds)` — no probe, no data dependence. The former
+  AB#4714 route (probe `COUNT(DISTINCT window_start)` → `Quantize` → re-derive the width as
+  `round(range/effectiveLimit)`) is wrong in two ways (AB#4817): the count is of windows *with
+  data*, so a single empty grain slot (event-driven series) makes the re-derived width drift off
+  the grain (288 five-minute slots with 3 empty → 303 s bins → all but ~5 buckets read null,
+  observed on prod-1 as "sensor data stopped hours ago"); and even a complete count only yields a
+  grain multiple when the merge divides it evenly (720 windows at merge 7 → 103 bins → 25 165 s
+  ≠ 7 h). **Raw archives** keep the probe + clamp-down (AB#4246: a request finer than the data
+  only yields sparse bins). **Time-range archives** also stay on the probe route — their `Period`
+  is advisory and their windows may be irregular, so a declared grain is no basis for the axis.
+  Both quantizer routes assume the query origin (`From`) sits on a grain boundary — the
+  resolver-driven path guarantees this because `SeriesResolutionPlanner` returns a grain-multiple
+  `EffectiveBucketMs` (see octo-construction-kit-engine) that the frontend aligns the window to.
+  `DownsamplingBinQuantizer` is a pure, unit-tested helper (`DownsamplingBinQuantizerTests`).
 - **Generation filter (AB#4184):** `AppendDownsamplingSourceFilters` also emits the
   active-generation predicate when `GenerationTracked` — previously the downsampling path missed
   it entirely, so a read during a recompute double-counted the swapped windows.

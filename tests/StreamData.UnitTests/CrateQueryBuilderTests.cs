@@ -441,6 +441,37 @@ public class CrateQueryBuilderTests
     }
 
     [Fact]
+    public void Downsampling_ExplicitInterval_OverridesDerivedWidth()
+    {
+        // AB#4817: windowed archives pass a grain-multiple bin width explicitly — the derived
+        // round(range/limit) width would drift off the grain and the §7 fully-contained predicate
+        // would drop straddling source windows. 285 bins over 24 h derive 303 s; the caller forces
+        // the 300 s grain.
+        var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var to = from.AddHours(24);
+        var queryBuilder = new CrateQueryBuilder(Table);
+        queryBuilder.WithDownsampling(288, from, to, intervalSeconds: 300);
+        queryBuilder.AddVariable("timestamp", "T", null);
+        queryBuilder.AddAggregationVariable("voltage", AggregationFunctionDto.Avg, "Avg_voltage");
+
+        Assert.Equal(300, queryBuilder.DownsamplingIntervalSeconds);
+        Assert.Equal(from, queryBuilder.DownsamplingOrigin);
+
+        var sql = new CrateQueryCompiler().CompileQuery(queryBuilder);
+        Assert.Contains("'300 seconds'::INTERVAL", sql);
+    }
+
+    [Fact]
+    public void Downsampling_ExplicitInterval_BelowOneSecond_Throws()
+    {
+        var from = DateTime.Parse("2024-01-01T00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        var queryBuilder = new CrateQueryBuilder(Table);
+
+        Assert.ThrowsAny<Exception>(() =>
+            queryBuilder.WithDownsampling(288, from, from.AddHours(24), intervalSeconds: 0));
+    }
+
+    [Fact]
     public void Downsampling_BinOrigin_IsTruncatedToSqlLiteralPrecision()
     {
         // Constants.DateTimeFormat renders milliseconds; a sub-millisecond origin would make the
