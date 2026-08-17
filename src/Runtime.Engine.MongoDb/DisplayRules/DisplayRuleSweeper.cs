@@ -98,10 +98,11 @@ internal sealed class DisplayRuleSweeper(
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            // "_id" (= rtId) is the stable paging cursor; the sweep only writes display fields and
-            // rtVersion, so the sort key and filter membership never change while paging.
+            // rtId (resolved to "_id" by the field filter resolver) is the stable paging cursor;
+            // the sweep only writes display fields and rtVersion, so the sort key and filter
+            // membership never change while paging.
             var queryOptions = RtEntityQueryOptions.Create()
-                .SortOrder(Constants.IdField, SortOrders.Ascending);
+                .SortOrder("rtId", SortOrders.Ascending);
             var page = await tenantRepository
                 .GetRtEntitiesByTypeAsync(session, rtCkTypeId, queryOptions, skip, pageSize)
                 .ConfigureAwait(false);
