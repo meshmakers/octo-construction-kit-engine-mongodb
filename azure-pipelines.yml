@@ -97,9 +97,13 @@ stages:
           # hard-failed the auto-train cascade on r3.4.31 (build #38044).
           # Gating a floor on a version the build never restores is a false
           # positive; the core-lib floor is the only relevant guard here.
+          # test/0.2-dev line: this branch builds against the 0.2.* channel
+          # (update-build-number resolves OctoCoreLibVersion from the branch
+          # name), so the floor is 0.2 here. Restore '3.4' when merging to a
+          # 3.4-line branch — a lower floor weakens the guard there.
           - template: templates/steps/verify-libs-floor.yml@pipelineTemplates
             parameters:
-              coreLibFloor: '3.4'
+              coreLibFloor: '0.2'
           - task: DotNetCoreCLI@2
             retryCountOnTaskFailure: 2
             displayName: 'Restore NuGet packages'
