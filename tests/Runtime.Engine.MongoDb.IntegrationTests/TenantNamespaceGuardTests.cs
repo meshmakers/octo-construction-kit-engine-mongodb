@@ -281,6 +281,105 @@ public class TenantNamespaceGuardTests(TenantNamespaceFixture fixture)
     }
 
     [Fact]
+    public async Task AttachChildTenant_WithMissingDatabase_ConflictsIndistinguishablyFromAClaimedOne()
+    {
+        var ownerId = NewName("oracle");
+        var absentDatabase = NewName("absentdb");
+
+        await CreateTenantAsync(SystemContext, ownerId, ownerId);
+
+        try
+        {
+            async Task<TenantException> AttachAsync(string database, string tenantId)
+                => await Assert.ThrowsAsync<TenantException>(async () =>
+                {
+                    using var session = await SystemContext.GetAdminSessionAsync();
+                    session.StartTransaction();
+                    await SystemContext.AttachChildTenantAsync(session, database, tenantId);
+                    await session.CommitTransactionAsync();
+                });
+
+            var claimed = await AttachAsync(ownerId, NewName("thief"));
+            var absent = await AttachAsync(absentDatabase, NewName("prober"));
+
+            // Both must be the same conflict. Answering "does not exist" for the free name turned attach
+            // into a cluster-wide database-existence oracle (AB#4763).
+            Assert.True(claimed.IsConflict);
+            Assert.True(absent.IsConflict);
+            Assert.Equal(
+                claimed.Message.Replace(ownerId, "X"),
+                absent.Message.Replace(absentDatabase, "X"));
+        }
+        finally
+        {
+            await DropTenantQuietlyAsync(SystemContext, ownerId);
+        }
+    }
+
+    [Theory]
+    [InlineData("admin")]
+    [InlineData("local")]
+    [InlineData("config")]
+    public async Task AttachChildTenant_WithAMongoDbOwnedDatabase_Conflicts(string reservedDatabase)
+    {
+        // These exist, so attach would otherwise adopt them as ordinary tenant databases — and the next
+        // delete would drop MongoDB's own state.
+        var exception = await Assert.ThrowsAsync<TenantException>(async () =>
+        {
+            using var session = await SystemContext.GetAdminSessionAsync();
+            session.StartTransaction();
+            await SystemContext.AttachChildTenantAsync(session, reservedDatabase, NewName("adopt"));
+            await session.CommitTransactionAsync();
+        });
+
+        Assert.True(exception.IsConflict);
+        Assert.Contains("is not available", exception.Message);
+        Assert.True(await SystemContext.IsDatabaseExistingAsync(reservedDatabase));
+    }
+
+    [Fact]
+    public async Task CreateChildTenant_WithALongButLegalDatabaseName_Works()
+    {
+        // The driver caps the connection ApplicationName at 128 bytes and the database name appears in
+        // it twice (once directly, once inside the per-tenant user), so names beyond roughly 30
+        // characters used to produce a tenant that provisioned halfway and then threw on every
+        // background tick forever. The name is now clamped where it is built, so any name MongoDB
+        // itself accepts must work.
+        var longDatabase = "ab4762long" + new string('y', 40);
+        var tenantId = NewName("longdb");
+        Assert.True(longDatabase.Length > 30 && longDatabase.Length <= 63);
+
+        await CreateTenantAsync(SystemContext, longDatabase, tenantId);
+
+        try
+        {
+            Assert.True(await SystemContext.IsDatabaseExistingAsync(longDatabase));
+
+            using var session = await SystemContext.GetAdminSessionAsync();
+            session.StartTransaction();
+            var resolved = await SystemContext.GetChildTenantAsync(session, tenantId);
+            await session.CommitTransactionAsync();
+
+            Assert.Equal(longDatabase, resolved.DatabaseName);
+        }
+        finally
+        {
+            await DropTenantQuietlyAsync(SystemContext, tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task CreateChildTenant_WithAnIllegalDatabaseName_IsRejectedBeforeAnySideEffect()
+    {
+        var illegal = "ab4762$bad";
+
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await CreateTenantAsync(SystemContext, illegal, NewName("illegal")));
+
+        Assert.False(await SystemContext.IsDatabaseExistingAsync(illegal));
+    }
+
+    [Fact]
     public async Task ClearChildTenant_RecreatesTheSameTenant()
     {
         var tenantId = NewName("clear");

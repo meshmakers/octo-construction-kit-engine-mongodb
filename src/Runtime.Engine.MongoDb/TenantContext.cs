@@ -47,6 +47,10 @@ public class TenantContext : ITenantContext
     /// <summary>Characters MongoDB does not accept in a database name.</summary>
     private static readonly char[] InvalidDatabaseNameCharacters = ['/', '\\', '.', ' ', '"', '$', '*', '<', '>', ':', '|', '?'];
 
+    /// <summary>Databases MongoDB owns. They must never be adopted as a tenant database.</summary>
+    private static readonly HashSet<string> ReservedDatabaseNames =
+        new(StringComparer.OrdinalIgnoreCase) { "admin", "local", "config" };
+
     private readonly ILogger<TenantContext> _logger;
     private readonly IBulkRtMutation _bulkRtMutation;
     private readonly ICkCacheService _cacheService;
@@ -884,13 +888,30 @@ public class TenantContext : ITenantContext
         try
         {
             await _adminRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
+
+            // Drop the tenant's database user too. dropDatabase does NOT remove it — the account lives
+            // in the authentication database, so every delete used to leave a live credential behind
+            // whose database was gone, and a database later re-created under the same name would
+            // silently inherit it. Best-effort: a failure here must not fail the delete, which has
+            // already removed the tenant.
+            try
+            {
+                await _adminRepositoryClient.DropUser(_systemConfiguration.Value.AuthenticationDatabaseName,
+                    string.Format(_systemConfiguration.Value.DatabaseUser, normalizedDatabaseName));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Dropped database {DatabaseName} of tenant {TenantId} but failed to drop its database user; " +
+                    "the credential has to be removed manually", normalizedDatabaseName, tenantId);
+            }
         }
         finally
         {
-            // Dropping the database also drops its database user, which invalidates every connection
-            // already open in this process's cached clients for it. Throw them away so a tenant re-created
-            // under the same name does not inherit a pool that can only answer "requires authentication"
-            // (AB#4690). Other processes do the same from the tenant lifecycle events.
+            // Dropping the database invalidates every connection already open in this process's cached
+            // clients for it. Throw them away so a tenant re-created under the same name does not
+            // inherit a pool that can only answer "requires authentication" (AB#4690). Other processes
+            // do the same from the tenant lifecycle events.
             await InvalidateTenantRepositoryClientsAsync(tenantId, normalizedDatabaseName).ConfigureAwait(false);
 
             await _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId, handle.CorrelationId);
@@ -953,6 +974,15 @@ public class TenantContext : ITenantContext
                 "the database name is reserved for the system tenant");
         }
 
+        // MongoDB's own databases are never tenant databases. The create path already refuses them
+        // because they exist, but attach adopts any existing database — without this an operator
+        // could bind 'admin' or 'config' as a tenant, and the next delete would drop it.
+        if (ReservedDatabaseNames.Contains(normalizedDatabaseName))
+        {
+            throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
+                "the database name is reserved by MongoDB itself");
+        }
+
         var existingById = await GetRtSystemTenantAsync(adminSession, normalizedTenantId);
         if (existingById != null)
         {
@@ -981,7 +1011,12 @@ public class TenantContext : ITenantContext
 
         if (mode == TenantNamespaceMode.AttachExistingDatabase && !databaseExists)
         {
-            throw TenantException.TenantDatabaseDoesNotExist(normalizedDatabaseName);
+            // Same generic conflict as every other rejection, NOT "the database does not exist".
+            // Answering the absent case differently turned attach into a cluster-wide existence
+            // oracle: 409 meant taken, 400 meant free, and 204 meant free-and-adoptable, so any
+            // caller could confirm a guessed database name anywhere on the platform (AB#4763).
+            throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
+                "no database with this name exists, so there is nothing to attach");
         }
     }
 
@@ -1039,12 +1074,17 @@ public class TenantContext : ITenantContext
     /// </summary>
     private static void ValidateDatabaseNameFormat(string normalizedDatabaseName)
     {
-        if (normalizedDatabaseName.Length > MaxDatabaseNameLength ||
+        // MongoDB measures its limit in BYTES, so a name of multi-byte characters can pass a character
+        // count and still be rejected at the first write - inside the create path, i.e. on exactly the
+        // code path AB#4762 was about.
+        var byteLength = System.Text.Encoding.UTF8.GetByteCount(normalizedDatabaseName);
+
+        if (byteLength > MaxDatabaseNameLength ||
             normalizedDatabaseName.Any(c => InvalidDatabaseNameCharacters.Contains(c) || char.IsControl(c)))
         {
             throw new ArgumentException(
                 $"Database name '{normalizedDatabaseName}' is invalid. Use at most {MaxDatabaseNameLength} " +
-                $"characters and none of {new string(InvalidDatabaseNameCharacters)}.",
+                $"bytes and none of {new string(InvalidDatabaseNameCharacters)}.",
                 nameof(normalizedDatabaseName));
         }
     }

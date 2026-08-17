@@ -59,6 +59,18 @@ internal sealed class TenantSetupRetryStore : ITenantSetupRetryStore
         await collection.DeleteOneAsync(Key(serviceId, tenantId), cancellationToken).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public async Task<long> ClearAllForTenantAsync(string tenantId, CancellationToken cancellationToken = default)
+    {
+        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var result = await collection
+            .DeleteManyAsync(Builders<TenantSetupRetryRecord>.Filter.Eq(r => r.TenantId, tenantId),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return result.DeletedCount;
+    }
+
     public async Task<TenantSetupRetryRecord?> TryClaimAsync(string serviceId, string leaseOwner,
         TimeSpan leaseDuration, TimeSpan minRetryInterval, int maxAttempts,
         CancellationToken cancellationToken = default)
