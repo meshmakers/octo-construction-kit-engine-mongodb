@@ -1,3 +1,4 @@
+using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
@@ -248,6 +249,21 @@ internal class TenantBackupService(
             else
             {
                 logger.LogInformation("Tenant '{TenantId}' does not exist, proceeding with restore", tenantId);
+            }
+
+            // The restore below runs with Drop = true against an operator-supplied database name, so it
+            // silently overwrites whatever lives there. Everything else validating that name happens
+            // AFTER the data is already gone (the attach at the end), which made this a second route to
+            // the AB#4762 data loss. Refuse up front when the name belongs to a different tenant.
+            var claimingTenantId = await systemContext.TryGetTenantIdByDatabaseNameAsync(databaseName);
+            if (claimingTenantId != null && !string.Equals(claimingTenantId, tenantId.NormalizeString(),
+                    StringComparison.Ordinal))
+            {
+                var errorMessage =
+                    $"Database '{databaseName}' is registered to tenant '{claimingTenantId}'. Refusing to restore " +
+                    $"tenant '{tenantId}' into it, because the restore would overwrite that tenant's data.";
+                logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
+                return CommandResult.Failure(errorMessage);
             }
 
             // Perform the restore
