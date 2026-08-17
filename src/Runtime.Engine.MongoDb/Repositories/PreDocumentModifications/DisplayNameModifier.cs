@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Meshmakers.Octo.ConstructionKit.Contracts.DisplayRules;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
@@ -18,12 +17,6 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.PreDocumentModific
 /// </summary>
 public class DisplayNameModifier(ICkCacheService ckCacheService) : IPreDocumentModification<RtEntity>
 {
-    /// <summary>
-    ///     Rules are validated at model compile time; parsing is memoized by rule text (identical
-    ///     rules across types and tenants share one entry).
-    /// </summary>
-    private static readonly ConcurrentDictionary<string, DisplayRuleParseResult> ParsedRules = new();
-
     public Task RunAsync(IOctoSession session, IRepositoryDataSource repositoryDataSource,
         IEnumerable<RtEntity> documents)
     {
@@ -50,7 +43,7 @@ public class DisplayNameModifier(ICkCacheService ckCacheService) : IPreDocumentM
             return null;
         }
 
-        var parseResult = ParsedRules.GetOrAdd(rule!, DisplayRuleParser.Parse);
+        var parseResult = DisplayRuleParser.ParseCached(rule!);
         if (!parseResult.IsValid)
         {
             // Rules are validated at compile time; a stale invalid rule must not block the save.

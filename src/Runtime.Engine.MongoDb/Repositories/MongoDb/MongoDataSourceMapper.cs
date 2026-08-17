@@ -43,6 +43,23 @@ public class RtEntityMongoDataSourceMapper<TEntity> : IMongoDataSourceMapper<Oct
             list.Add(Builders<TEntity>.Update.Set("rtWellKnownName", document.RtWellKnownName));
         }
 
+        // Display fields are engine-computed (AB#4811): null on the partial document means
+        // "not recomputed, leave unchanged"; an empty string is the explicit clear sentinel
+        // written by the update recompute when a rule evaluates to no value.
+        if (document.RtDisplayName != null)
+        {
+            list.Add(document.RtDisplayName.Length == 0
+                ? Builders<TEntity>.Update.Unset("rtDisplayName")
+                : Builders<TEntity>.Update.Set("rtDisplayName", document.RtDisplayName));
+        }
+
+        if (document.RtDisplayDescription != null)
+        {
+            list.Add(document.RtDisplayDescription.Length == 0
+                ? Builders<TEntity>.Update.Unset("rtDisplayDescription")
+                : Builders<TEntity>.Update.Set("rtDisplayDescription", document.RtDisplayDescription));
+        }
+
         if (document.RtState.HasValue)
         {
             list.Add(Builders<TEntity>.Update.Set("rtState", document.RtState.Value));
