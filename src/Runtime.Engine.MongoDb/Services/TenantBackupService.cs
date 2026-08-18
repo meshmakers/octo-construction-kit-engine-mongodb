@@ -184,6 +184,33 @@ internal class TenantBackupService(
                 return CommandResult.Failure(errorMessage);
             }
 
+            // The restore runs mongorestore --drop against the operator-supplied database name. The
+            // registry check further down cannot protect the system database (the system tenant has
+            // no RtTenant self-record — the same blind spot the namespace gate covers via the
+            // configuration, AB#4762) nor MongoDB's own databases, so both are refused explicitly
+            // here — and BEFORE the dropExistingTenant block, which is itself destructive.
+            var normalizedTargetDatabaseName = databaseName.Trim();
+            if (string.Equals(normalizedTargetDatabaseName, systemContext.DatabaseName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                var errorMessage =
+                    $"Database '{databaseName}' is the system database. Refusing to restore tenant " +
+                    $"'{tenantId}' into it, because the restore would overwrite the entire platform.";
+                logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
+                return CommandResult.Failure(errorMessage);
+            }
+
+            if (string.Equals(normalizedTargetDatabaseName, "admin", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(normalizedTargetDatabaseName, "local", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(normalizedTargetDatabaseName, "config", StringComparison.OrdinalIgnoreCase))
+            {
+                var errorMessage =
+                    $"Database '{databaseName}' is reserved by MongoDB itself and can never be a tenant " +
+                    $"database. Refusing to restore tenant '{tenantId}' into it.";
+                logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
+                return CommandResult.Failure(errorMessage);
+            }
+
             // AB#4367: determine the archive's source database(s) from its prelude so a restore
             // under a different database name gets the namespace mapping instead of silently
             // restoring nothing. Runs before the drop block so a doomed restore never destroys
@@ -255,6 +282,8 @@ internal class TenantBackupService(
             // silently overwrites whatever lives there. Everything else validating that name happens
             // AFTER the data is already gone (the attach at the end), which made this a second route to
             // the AB#4762 data loss. Refuse up front when the name belongs to a different tenant.
+            // (The system database and MongoDB's own databases are refused earlier — they carry no
+            // RtTenant registry record, so this lookup is blind to them.)
             var claimingTenantId = await systemContext.TryGetTenantIdByDatabaseNameAsync(databaseName);
             if (claimingTenantId != null && !string.Equals(claimingTenantId, tenantId.NormalizeString(),
                     StringComparison.Ordinal))

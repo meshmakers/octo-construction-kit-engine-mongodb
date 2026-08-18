@@ -256,17 +256,14 @@ public class SystemContext : TenantContext, ISystemContext
     /// <inheritdoc />
     public async Task<string?> TryGetTenantIdByDatabaseNameAsync(string databaseName)
     {
+        // Commit on success only — a commit in a finally block would run after a failed read and
+        // its own failure would mask the original exception. Disposing the session aborts an
+        // uncommitted transaction, matching the read-session pattern used elsewhere.
         using var session = await GetAdminSessionAsync();
         session.StartTransaction();
-        try
-        {
-            var owner = await GetRtSystemTenantByDatabaseNameAsync(session, NormalizeDatabaseName(databaseName));
-            return owner?.TenantId;
-        }
-        finally
-        {
-            await session.CommitTransactionAsync();
-        }
+        var owner = await GetRtSystemTenantByDatabaseNameAsync(session, NormalizeDatabaseName(databaseName));
+        await session.CommitTransactionAsync();
+        return owner?.TenantId;
     }
 
     #endregion

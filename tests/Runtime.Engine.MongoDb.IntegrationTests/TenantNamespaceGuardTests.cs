@@ -1,4 +1,5 @@
 using Meshmakers.Common.Shared;
+using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
@@ -377,6 +378,71 @@ public class TenantNamespaceGuardTests(TenantNamespaceFixture fixture)
             await CreateTenantAsync(SystemContext, illegal, NewName("illegal")));
 
         Assert.False(await SystemContext.IsDatabaseExistingAsync(illegal));
+    }
+
+    [Fact]
+    public async Task DropChildTenant_WithLegacyRawCasedRegistryRecord_RemovesRecordAndDatabase()
+    {
+        // The pre-AB#4763 attach wrote the operator's RAW casing into the subtree-local registry
+        // (only the system-registry record was normalized) and adopted the physical database under
+        // whatever casing it had. The registry-delete filter must therefore match the stored value
+        // verbatim, and the physical drop must cover both spellings — a normalized-only filter/drop
+        // makes such a tenant survive its own deletion (record and database both stay behind).
+        var parentId = NewName("legparent");
+        var childId = NewName("legchild");
+        var mixedCaseDatabase = $"Ab4762Legacy{Guid.NewGuid():N}"[..20];
+        Assert.NotEqual(mixedCaseDatabase, mixedCaseDatabase.ToLowerInvariant());
+
+        await CreateTenantAsync(SystemContext, parentId, parentId);
+        var parent = await SystemContext.GetChildTenantContextAsync(parentId);
+
+        try
+        {
+            // Adopted physical database, with its original mixed casing.
+            await CreateAdminClient().GetDatabase(mixedCaseDatabase)
+                .CreateCollectionAsync("legacy_marker", cancellationToken: TestContext.Current.CancellationToken);
+
+            // Registry records exactly as the legacy attach wrote them: raw into the parent's local
+            // registry, normalized into the platform-wide system registry.
+            using (var session = await parent.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await parent.GetTenantRepositoryAsAdmin().InsertOneRtEntityAsync(session,
+                    new RtTenant { TenantId = childId, DatabaseName = mixedCaseDatabase });
+                await parent.GetSystemTenantRepositoryAsAdmin().InsertOneRtEntityAsync(session,
+                    new RtTenant
+                    {
+                        TenantId = childId, ParentTenantId = parentId,
+                        DatabaseName = mixedCaseDatabase.ToLowerInvariant()
+                    });
+                await session.CommitTransactionAsync();
+            }
+
+            Assert.True(await IsChildTenantExistingAsync(parent, childId));
+            Assert.True(await SystemContext.IsDatabaseExistingAsync(mixedCaseDatabase));
+
+            using (var session = await parent.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await parent.DropChildTenantAsync(session, childId);
+                await session.CommitTransactionAsync();
+            }
+
+            // Local record gone (verbatim filter) and physical database gone (both-spellings drop).
+            Assert.False(await IsChildTenantExistingAsync(parent, childId));
+            Assert.False(await SystemContext.IsDatabaseExistingAsync(mixedCaseDatabase));
+
+            // The system-registry record is gone too: the now-global tenant-id check would otherwise
+            // reject this re-create.
+            var recreateDatabase = NewName("legredo");
+            await CreateTenantAsync(parent, recreateDatabase, childId);
+            Assert.True(await IsChildTenantExistingAsync(parent, childId));
+        }
+        finally
+        {
+            await DropTenantQuietlyAsync(parent, childId);
+            await DropTenantQuietlyAsync(SystemContext, parentId);
+        }
     }
 
     [Fact]

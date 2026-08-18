@@ -769,12 +769,15 @@ public class TenantContext : ITenantContext
             // Detach must be the exact inverse of attach across BOTH registries. Leaving the
             // platform-wide record behind kept a "detached" tenant fully resolvable from the system
             // context, and once the uniqueness check became global it would also have blocked every
-            // re-attach of that tenant id (AB#4763).
+            // re-attach of that tenant id (AB#4763). The system registry has always been written
+            // normalized, so its filter takes the normalized name — unlike the local delete above,
+            // which must match the record's stored (possibly legacy raw-cased) value.
             if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
             {
                 var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
                 await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
-                    TenantRegistryFilter(tenantId, octoTenant.DatabaseName), DeleteOptions.Erase);
+                    TenantRegistryFilter(tenantId, NormalizeDatabaseName(octoTenant.DatabaseName)),
+                    DeleteOptions.Erase);
             }
         }
         finally
@@ -793,12 +796,21 @@ public class TenantContext : ITenantContext
     ///     produced, one parent's detach or delete could unregister a different parent's live tenant.
     ///     The database name is chosen over ParentTenantId because it is populated on every record,
     ///     including ones written before ParentTenantId existed.
+    ///     <para>
+    ///     The database name is matched VERBATIM, not normalized: the comparison is case-sensitive
+    ///     and the caller's value comes from the very record the filter has to re-identify. The
+    ///     pre-AB#4763 attach wrote the operator's raw casing into the subtree-local registry, so
+    ///     normalizing here made the local delete silently miss every such legacy record — the
+    ///     tenant then survived its own deletion. Callers pass the value as stored in the registry
+    ///     they are deleting from (raw from the local record; normalized for the system registry,
+    ///     which has always been written normalized).
+    ///     </para>
     /// </remarks>
-    private static FieldFilterCriteria TenantRegistryFilter(string tenantId, string databaseName)
+    private static FieldFilterCriteria TenantRegistryFilter(string tenantId, string databaseNameAsStored)
     {
         return FieldFilterCriteria.Create()
             .FieldEquals(nameof(RtTenant.TenantId), tenantId.NormalizeString())
-            .FieldEquals(nameof(RtTenant.DatabaseName), NormalizeDatabaseName(databaseName));
+            .FieldEquals(nameof(RtTenant.DatabaseName), databaseNameAsStored);
     }
 
     // ReSharper disable once UnusedMember.Global
@@ -860,15 +872,19 @@ public class TenantContext : ITenantContext
 
         // Deletes the tenant entry from the current tenant. Qualified with the database name so a
         // leftover duplicate tenant id cannot make this remove a different parent's record (AB#4763).
+        // The stored value is passed verbatim — a legacy attach record may hold the operator's raw
+        // casing, and a normalized filter would silently miss it (see TenantRegistryFilter).
         await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
             TenantRegistryFilter(tenantId, octoTenant.DatabaseName), DeleteOptions.Erase);
 
-        // If the current tenant is not the system tenant, we need to delete the tenant entry in system tenant too.
+        // If the current tenant is not the system tenant, we need to delete the tenant entry in system
+        // tenant too. That registry has always been written normalized, so it filters normalized.
         if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
         {
             var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
             await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
-                TenantRegistryFilter(tenantId, octoTenant.DatabaseName), DeleteOptions.Erase);
+                TenantRegistryFilter(tenantId, NormalizeDatabaseName(octoTenant.DatabaseName)),
+                DeleteOptions.Erase);
         }
 
         return new TenantDeletionHandle(octoTenant.DatabaseName, correlationId);
@@ -887,7 +903,16 @@ public class TenantContext : ITenantContext
 
         try
         {
+            // Drop BOTH spellings: databases from the create path are physically normalized, but a
+            // legacy attach adopted the physical database under whatever casing the record holds.
+            // MongoDB forbids two databases differing only in case, so at most one of the two
+            // exists — and the registry-qualified metadata delete guarantees it is this tenant's.
+            // dropDatabase on an absent name is a silent no-op.
             await _adminRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
+            if (!string.Equals(handle.DatabaseName, normalizedDatabaseName, StringComparison.Ordinal))
+            {
+                await _adminRepositoryClient.DropRepositoryAsync(handle.DatabaseName);
+            }
 
             // Drop the tenant's database user too. dropDatabase does NOT remove it — the account lives
             // in the authentication database, so every delete used to leave a live credential behind
@@ -2169,9 +2194,12 @@ public class TenantContext : ITenantContext
     /// <remarks>
     ///     Deliberately does NOT impose a sort order. Which row wins decides which database a tenant
     ///     resolves to and which database a delete drops, so ordering rows that were already ambiguous
-    ///     could silently move a live tenant onto a different database. Duplicates are a leftover of
-    ///     AB#4763 and cannot be created any more; surfacing them so an operator can clean them up is
-    ///     the useful behaviour, changing resolution underneath a running tenant is not.
+    ///     could silently move a live tenant onto a different database. Duplicates are typically a
+    ///     leftover of AB#4763; the namespace gate no longer lets them through, but nothing at the
+    ///     database level enforces uniqueness (the Tenant CK type's TenantId index is NOT unique), so
+    ///     two creates racing through the gate in separate transactions can still both commit.
+    ///     Surfacing duplicates so an operator can clean them up is the useful behaviour, changing
+    ///     resolution underneath a running tenant is not.
     /// </remarks>
     private RtTenant? FirstAndWarnOnDuplicates(IResultSet<RtTenant> resultSet, string lookupDescription,
         string registryDescription)
@@ -2181,8 +2209,9 @@ public class TenantContext : ITenantContext
         {
             _logger.LogWarning(
                 "Ambiguous tenant lookup for {Lookup} in {Registry}: {Count} records match, mapped to databases " +
-                "[{DatabaseNames}]. This is leftover corruption from AB#4763 and must be cleaned up manually; " +
-                "resolution is left unchanged and picks an arbitrary one.",
+                "[{DatabaseNames}]. This is corruption (typically an AB#4763 leftover, or two creates that raced " +
+                "the namespace gate) and must be cleaned up manually; resolution is left unchanged and picks an " +
+                "arbitrary one.",
                 lookupDescription, registryDescription, matches.Count,
                 string.Join(", ", matches.Select(m => m.DatabaseName)));
         }

@@ -971,12 +971,15 @@ now ordered before the drop) for callers with no concurrent resolver: create-rol
 and the integration tests. Complements the AB#4294 guard invalidation above (which handles the
 *same-process delete+recreate* import-guard, a different facet of the same resurrection mechanism).
 
-`DropTenantDatabaseAsync` additionally **drops the tenant's MongoDB user** and normalizes the database
-name first (AB#4762). Both matter: `dropDatabase` does *not* remove the account — it lives in the
-authentication database — so every delete used to leave a live credential behind that a database
-re-created under the same name would silently inherit; and `dropDatabase` is case-sensitive while
-`IsRepositoryExistingAsync` compares case-insensitively, so a record holding a mixed-case name dropped
-nothing at all. The user drop is best-effort: it is logged, never allowed to fail the delete.
+`DropTenantDatabaseAsync` additionally **drops the tenant's MongoDB user** and drops the database
+under **both spellings** — normalized and as stored in the record (AB#4762). Both matter:
+`dropDatabase` does *not* remove the account — it lives in the authentication database — so every
+delete used to leave a live credential behind that a database re-created under the same name would
+silently inherit; and `dropDatabase` is case-sensitive while `IsRepositoryExistingAsync` compares
+case-insensitively, so dropping only one spelling missed either the normalized physical database of a
+mixed-case record or the mixed-case physical database a legacy attach adopted. MongoDB forbids two
+databases differing only in case, so at most one spelling exists. The user drop is best-effort: it is
+logged, never allowed to fail the delete.
 
 **The resurrection window is not fully closed, and since AB#4762 it bites harder.** Background work
 that outlives the delete — above all a `tenant_setup_retry` entry, whose retry loop keeps calling
@@ -1002,13 +1005,16 @@ database name, and finally physical existence — required for attach, forbidden
 
 Two rules to preserve when touching it:
 
-- **Both conflicts are uniform and reason-free.** Exactly two messages exist —
+- **Both conflicts are uniform and reason-free.** Exactly two conflict messages exist —
   `Tenant ID '<x>' is already in use.` and `Database name '<x>' is not available.` — and every reason
   collapses into one of them, including "does not exist" on the attach path. A distinguishable answer
   turns the endpoint into a cluster-wide existence oracle for callers who cannot see the colliding
   resource. The real reason goes to the log, never to the response, and rejections are **logged, not
   audited**: an audit event per rejected attempt would be an unbounded write amplifier into the system
-  database, since nothing rate-limits the callers.
+  database, since nothing rate-limits the callers. (Format validation is different: a tenant id or
+  database name that is syntactically invalid throws a descriptive `ArgumentException` before the
+  conflict checks — that reason is about the caller's own input, leaks nothing about other tenants,
+  and both REST endpoints map it to 400, not 409.)
 - **The rollback is gated on `databaseCreated`**, a local set only after `CreateTenantInternalAsync`
   returns. The exists-check inside that method is kept as a TOCTOU net and deliberately throws while
   the flag is still `false`, so a racer's database is never dropped.
@@ -1021,7 +1027,13 @@ order: which row wins decides which database a tenant resolves to and which one 
 ordering already-ambiguous rows could move a live tenant. Ambiguity is **logged as a warning**
 instead, and the registry deletes in `DetachChildTenantAsync` / `DeleteChildTenantMetadataAsync` are
 qualified with the database name so a leftover duplicate cannot make them unregister a different
-parent's tenant.
+parent's tenant. The qualification matches the name **as stored in the registry being deleted from**
+(verbatim for the subtree-local record — the pre-AB#4763 attach wrote the operator's raw casing
+there — and normalized for the system registry, which has always been written normalized); a
+normalized filter against the local registry silently missed every legacy mixed-case record. Note the
+gate prevents new duplicates but nothing at the database level enforces uniqueness (the Tenant CK
+type's `TenantId` index is not unique), so two creates racing the gate in separate transactions can
+still both commit — `FirstAndWarnOnDuplicates` surfaces the result.
 
 Detach removes the platform-wide row too, so detach and attach are exact inverses. Without that the
 now-global id check would reject every re-attach, and a "detached" tenant stayed fully resolvable from
