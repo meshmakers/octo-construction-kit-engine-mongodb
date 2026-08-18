@@ -38,6 +38,19 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 [DebuggerDisplay("TenantId = {TenantId}")]
 public class TenantContext : ITenantContext
 {
+    /// <summary>A tenant id travels in URL route segments, so keep it to an unambiguous ASCII subset.</summary>
+    private const int MaxTenantIdLength = 64;
+
+    /// <summary>MongoDB rejects database names longer than 63 bytes (64 on Windows hosts).</summary>
+    private const int MaxDatabaseNameLength = 63;
+
+    /// <summary>Characters MongoDB does not accept in a database name.</summary>
+    private static readonly char[] InvalidDatabaseNameCharacters = ['/', '\\', '.', ' ', '"', '$', '*', '<', '>', ':', '|', '?'];
+
+    /// <summary>Databases MongoDB owns. They must never be adopted as a tenant database.</summary>
+    private static readonly HashSet<string> ReservedDatabaseNames =
+        new(StringComparer.OrdinalIgnoreCase) { "admin", "local", "config" };
+
     private readonly ILogger<TenantContext> _logger;
     private readonly IBulkRtMutation _bulkRtMutation;
     private readonly ICkCacheService _cacheService;
@@ -130,22 +143,31 @@ public class TenantContext : ITenantContext
         ArgumentValidation.ValidateString(nameof(databaseName), databaseName);
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
-        var normalizedDatabaseName = databaseName.ToLower();
+        var normalizedDatabaseName = NormalizeDatabaseName(databaseName);
         var normalizedTenantId = tenantId.NormalizeString();
-        if (await IsTenantExistingAsync(adminSession, normalizedTenantId))
-        {
-            throw TenantException.TenantDoesAlreadyExist(tenantId);
-        }
 
         Guid correlationId = Guid.NewGuid();
+
+        // Validate both namespaces BEFORE anything with a side effect runs - including the pre-create
+        // notification. Everything below this point is inside the try whose catch rolls the tenant
+        // back by dropping the database and its user, so a precondition failure raised down there
+        // destroys a database that belongs to somebody else (AB#4762).
+        await EnsureTenantNamespaceAvailableAsync(adminSession, normalizedTenantId, normalizedDatabaseName,
+            TenantNamespaceMode.CreateNewDatabase, correlationId);
+
+        // Guards the destructive rollback below: it stays false until we have provably created the
+        // database ourselves. Nothing that runs before it is set may ever reach the drop.
+        var databaseCreated = false;
 
         try
         {
             // Distribute updates (pre) to inform other services.
             await _tenantNotifications.NotifyPreTenantCreateAsync(tenantId, correlationId);
 
-            // Create the database
-            await CreateTenantInternalAsync(databaseName);
+            // Create the database. Throws when the name was taken between the check above and here,
+            // while databaseCreated is still false - so the racer's database is never dropped.
+            await CreateTenantInternalAsync(normalizedDatabaseName);
+            databaseCreated = true;
 
             // Restore the tenant system model on the newly created repository
             await UpdateSystemCkModelAsync(normalizedDatabaseName, normalizedTenantId, true);
@@ -174,11 +196,12 @@ public class TenantContext : ITenantContext
         }
         catch (Exception ex)
         {
-            // Roll back the database + database user that may have been created and surface the
-            // failure in the platform event log. The octosystem tenant entries are part of the
-            // caller's transaction and are rolled back when it is aborted (AB#1958).
+            // Roll back the database + database user, but ONLY when this operation created them.
+            // Dropping a database we merely found would destroy another tenant's data, and dropping
+            // its user would revoke that tenant's access (AB#4762). The octosystem tenant entries are
+            // part of the caller's transaction and are rolled back when it is aborted (AB#1958).
             await CleanupFailedTenantCreationAsync(normalizedDatabaseName, tenantId, correlationId, ex,
-                dropDatabaseAndUser: true);
+                dropDatabaseAndUser: databaseCreated);
             throw;
         }
     }
@@ -562,15 +585,25 @@ public class TenantContext : ITenantContext
         }
     }
 
-    protected async Task CreateTenantInternalAsync(string databaseName)
+    /// <summary>
+    ///     Creates the tenant database and its database user.
+    /// </summary>
+    /// <param name="normalizedDatabaseName">Database name, already normalized by the caller.</param>
+    /// <remarks>
+    ///     Callers must have validated availability up front via
+    ///     <see cref="EnsureTenantNamespaceAvailableAsync" />. The existence check kept here is only a
+    ///     defence-in-depth net against a concurrent create materializing the database in between:
+    ///     without it, two racing creates would both proceed and silently share one database. It
+    ///     deliberately throws before the caller marks the database as created, so the rollback can
+    ///     never drop a database this operation did not create (AB#4762).
+    /// </remarks>
+    protected async Task CreateTenantInternalAsync(string normalizedDatabaseName)
     {
-        ArgumentValidation.ValidateString(nameof(databaseName), databaseName);
-
-        var normalizedDatabaseName = databaseName.ToLower();
+        ArgumentValidation.ValidateString(nameof(normalizedDatabaseName), normalizedDatabaseName);
 
         if (await IsDatabaseExistingAsync(normalizedDatabaseName))
         {
-            throw TenantException.TenantDatabaseDoesAlreadyExist(normalizedDatabaseName);
+            throw TenantException.DatabaseNameNotAvailable(normalizedDatabaseName);
         }
 
         await _adminRepositoryClient.CreateRepositoryAsync(normalizedDatabaseName);
@@ -585,20 +618,16 @@ public class TenantContext : ITenantContext
     {
         ArgumentValidation.ValidateString(nameof(databaseName), databaseName);
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
-        var normalizedDatabaseName = databaseName.ToLower();
+        var normalizedDatabaseName = NormalizeDatabaseName(databaseName);
         var normalizedTenantId = tenantId.NormalizeString();
 
-        if (await IsTenantExistingAsync(adminSession, tenantId))
-        {
-            throw TenantException.TenantDoesAlreadyExist(tenantId);
-        }
-
-        if (!await IsDatabaseExistingAsync(databaseName))
-        {
-            throw TenantException.TenantDatabaseDoesNotExist(databaseName);
-        }
-
         Guid correlationId = Guid.NewGuid();
+
+        // Attach shares both namespaces with create, so it goes through the same gate: it must not be
+        // able to claim the system tenant id, the system database, or a database that another tenant
+        // is already registered against (AB#4763).
+        await EnsureTenantNamespaceAvailableAsync(adminSession, normalizedTenantId, normalizedDatabaseName,
+            TenantNamespaceMode.AttachExistingDatabase, correlationId);
 
         try
         {
@@ -608,7 +637,12 @@ public class TenantContext : ITenantContext
             // Add the new tenant as child tenant of the current one
             if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
             {
-                var octoTenant = new RtTenant { TenantId = tenantId, DatabaseName = databaseName };
+                // Normalized, like the system-registry record below: every lookup normalizes, so a
+                // mixed-case attach used to write a record its own reads could never find.
+                var octoTenant = new RtTenant
+                {
+                    TenantId = normalizedTenantId, DatabaseName = normalizedDatabaseName
+                };
 
                 var tenantRepository = GetTenantRepositoryAsAdmin();
                 await tenantRepository.InsertOneRtEntityAsync(adminSession, octoTenant);
@@ -730,14 +764,53 @@ public class TenantContext : ITenantContext
 
             var tenantRepository = GetTenantRepositoryAsAdmin();
             await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
-                FieldFilterCriteria.Create().FieldEquals(nameof(RtTenant.TenantId),
-                    tenantId.NormalizeString()), DeleteOptions.Erase);
+                TenantRegistryFilter(tenantId, octoTenant.DatabaseName), DeleteOptions.Erase);
+
+            // Detach must be the exact inverse of attach across BOTH registries. Leaving the
+            // platform-wide record behind kept a "detached" tenant fully resolvable from the system
+            // context, and once the uniqueness check became global it would also have blocked every
+            // re-attach of that tenant id (AB#4763). The system registry has always been written
+            // normalized, so its filter takes the normalized name — unlike the local delete above,
+            // which must match the record's stored (possibly legacy raw-cased) value.
+            if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
+            {
+                var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
+                await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
+                    TenantRegistryFilter(tenantId, NormalizeDatabaseName(octoTenant.DatabaseName)),
+                    DeleteOptions.Erase);
+            }
         }
         finally
         {
             // Distribute updates (post) to inform other services.
             await _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId, correlationId);
         }
+    }
+
+    /// <summary>
+    ///     Filter that identifies exactly one registry record.
+    /// </summary>
+    /// <remarks>
+    ///     Qualified with the database name on purpose. A delete filtered on the tenant id alone
+    ///     removes an arbitrary match, so in an environment still holding the duplicates AB#4763
+    ///     produced, one parent's detach or delete could unregister a different parent's live tenant.
+    ///     The database name is chosen over ParentTenantId because it is populated on every record,
+    ///     including ones written before ParentTenantId existed.
+    ///     <para>
+    ///     The database name is matched VERBATIM, not normalized: the comparison is case-sensitive
+    ///     and the caller's value comes from the very record the filter has to re-identify. The
+    ///     pre-AB#4763 attach wrote the operator's raw casing into the subtree-local registry, so
+    ///     normalizing here made the local delete silently miss every such legacy record — the
+    ///     tenant then survived its own deletion. Callers pass the value as stored in the registry
+    ///     they are deleting from (raw from the local record; normalized for the system registry,
+    ///     which has always been written normalized).
+    ///     </para>
+    /// </remarks>
+    private static FieldFilterCriteria TenantRegistryFilter(string tenantId, string databaseNameAsStored)
+    {
+        return FieldFilterCriteria.Create()
+            .FieldEquals(nameof(RtTenant.TenantId), tenantId.NormalizeString())
+            .FieldEquals(nameof(RtTenant.DatabaseName), databaseNameAsStored);
     }
 
     // ReSharper disable once UnusedMember.Global
@@ -797,18 +870,21 @@ public class TenantContext : ITenantContext
 
         await _tenantNotifications.NotifyPreTenantDeleteAsync(tenantId, correlationId);
 
-        // Deletes the tenant entry from the current tenant
+        // Deletes the tenant entry from the current tenant. Qualified with the database name so a
+        // leftover duplicate tenant id cannot make this remove a different parent's record (AB#4763).
+        // The stored value is passed verbatim — a legacy attach record may hold the operator's raw
+        // casing, and a normalized filter would silently miss it (see TenantRegistryFilter).
         await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
-            FieldFilterCriteria.Create().FieldEquals(nameof(RtTenant.TenantId),
-                tenantId.NormalizeString()), DeleteOptions.Erase);
+            TenantRegistryFilter(tenantId, octoTenant.DatabaseName), DeleteOptions.Erase);
 
-        // If the current tenant is not the system tenant, we need to delete the tenant entry in system tenant too.
+        // If the current tenant is not the system tenant, we need to delete the tenant entry in system
+        // tenant too. That registry has always been written normalized, so it filters normalized.
         if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
         {
             var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
             await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
-                FieldFilterCriteria.Create().FieldEquals(nameof(RtTenant.TenantId),
-                    tenantId.NormalizeString()), DeleteOptions.Erase);
+                TenantRegistryFilter(tenantId, NormalizeDatabaseName(octoTenant.DatabaseName)),
+                DeleteOptions.Erase);
         }
 
         return new TenantDeletionHandle(octoTenant.DatabaseName, correlationId);
@@ -820,17 +896,48 @@ public class TenantContext : ITenantContext
         ArgumentValidation.Validate(nameof(handle), handle);
         ArgumentValidation.ValidateString(nameof(handle.DatabaseName), handle.DatabaseName);
 
+        // dropDatabase is case-sensitive while the existence check compares case-insensitively, so a
+        // record holding a mixed-case name used to drop nothing at all - and the orphaned database
+        // then permanently blocked its own name behind a deliberately reason-free conflict (AB#4762).
+        var normalizedDatabaseName = NormalizeDatabaseName(handle.DatabaseName);
+
         try
         {
-            await _adminRepositoryClient.DropRepositoryAsync(handle.DatabaseName);
+            // Drop BOTH spellings: databases from the create path are physically normalized, but a
+            // legacy attach adopted the physical database under whatever casing the record holds.
+            // MongoDB forbids two databases differing only in case, so at most one of the two
+            // exists — and the registry-qualified metadata delete guarantees it is this tenant's.
+            // dropDatabase on an absent name is a silent no-op.
+            await _adminRepositoryClient.DropRepositoryAsync(normalizedDatabaseName);
+            if (!string.Equals(handle.DatabaseName, normalizedDatabaseName, StringComparison.Ordinal))
+            {
+                await _adminRepositoryClient.DropRepositoryAsync(handle.DatabaseName);
+            }
+
+            // Drop the tenant's database user too. dropDatabase does NOT remove it — the account lives
+            // in the authentication database, so every delete used to leave a live credential behind
+            // whose database was gone, and a database later re-created under the same name would
+            // silently inherit it. Best-effort: a failure here must not fail the delete, which has
+            // already removed the tenant.
+            try
+            {
+                await _adminRepositoryClient.DropUser(_systemConfiguration.Value.AuthenticationDatabaseName,
+                    string.Format(_systemConfiguration.Value.DatabaseUser, normalizedDatabaseName));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Dropped database {DatabaseName} of tenant {TenantId} but failed to drop its database user; " +
+                    "the credential has to be removed manually", normalizedDatabaseName, tenantId);
+            }
         }
         finally
         {
-            // Dropping the database also drops its database user, which invalidates every connection
-            // already open in this process's cached clients for it. Throw them away so a tenant re-created
-            // under the same name does not inherit a pool that can only answer "requires authentication"
-            // (AB#4690). Other processes do the same from the tenant lifecycle events.
-            await InvalidateTenantRepositoryClientsAsync(tenantId, handle.DatabaseName).ConfigureAwait(false);
+            // Dropping the database invalidates every connection already open in this process's cached
+            // clients for it. Throw them away so a tenant re-created under the same name does not
+            // inherit a pool that can only answer "requires authentication" (AB#4690). Other processes
+            // do the same from the tenant lifecycle events.
+            await InvalidateTenantRepositoryClientsAsync(tenantId, normalizedDatabaseName).ConfigureAwait(false);
 
             await _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId, handle.CorrelationId);
         }
@@ -845,12 +952,166 @@ public class TenantContext : ITenantContext
         return octoTenant != null;
     }
 
-    private async Task<bool> IsTenantExistingAsync(IOctoAdminSession adminSession, string tenantId)
+    /// <summary>
+    ///     Whether the caller intends to create a new database or to adopt an existing one.
+    /// </summary>
+    private enum TenantNamespaceMode
     {
-        ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
+        CreateNewDatabase,
+        AttachExistingDatabase
+    }
 
-        var octoTenant = await GetRtSystemTenantAsync(adminSession, tenantId);
-        return octoTenant != null;
+    /// <summary>
+    ///     Single authority for both platform-wide namespaces: the tenant id and the database name.
+    ///     Throws a conflict <see cref="TenantException" /> when either is unavailable.
+    /// </summary>
+    /// <remarks>
+    ///     Must be called before any side effect. Both conflicts surface as a deliberately uniform,
+    ///     reason-free message, because a caller may have neither knowledge of nor access to the
+    ///     colliding resource; the real reason is logged here and nowhere else (AB#4763).
+    ///     Rejections are logged, not audited: an audit event per rejected attempt would be an
+    ///     unbounded write amplifier into the system database, since nothing rate-limits the callers
+    ///     and runtime events are retained indefinitely.
+    /// </remarks>
+    private async Task EnsureTenantNamespaceAvailableAsync(IOctoAdminSession adminSession,
+        string normalizedTenantId, string normalizedDatabaseName, TenantNamespaceMode mode, Guid correlationId)
+    {
+        ArgumentValidation.ValidateString(nameof(normalizedTenantId), normalizedTenantId);
+        ArgumentValidation.ValidateString(nameof(normalizedDatabaseName), normalizedDatabaseName);
+
+        ValidateTenantIdFormat(normalizedTenantId);
+        ValidateDatabaseNameFormat(normalizedDatabaseName);
+
+        var systemTenantId = _systemConfiguration.Value.SystemTenantId.NormalizeString();
+        var systemDatabaseName = NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName);
+
+        // The system tenant has no RtTenant self-record anywhere, so the registry lookup below cannot
+        // reserve it - the reservation has to come from the configuration.
+        if (normalizedTenantId == systemTenantId)
+        {
+            throw RejectTenantId(normalizedTenantId, normalizedDatabaseName, correlationId,
+                "the tenant id is reserved for the system tenant");
+        }
+
+        if (normalizedDatabaseName == systemDatabaseName)
+        {
+            throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
+                "the database name is reserved for the system tenant");
+        }
+
+        // MongoDB's own databases are never tenant databases. The create path already refuses them
+        // because they exist, but attach adopts any existing database — without this an operator
+        // could bind 'admin' or 'config' as a tenant, and the next delete would drop it.
+        if (ReservedDatabaseNames.Contains(normalizedDatabaseName))
+        {
+            throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
+                "the database name is reserved by MongoDB itself");
+        }
+
+        var existingById = await GetRtSystemTenantAsync(adminSession, normalizedTenantId);
+        if (existingById != null)
+        {
+            throw RejectTenantId(normalizedTenantId, normalizedDatabaseName, correlationId,
+                $"the tenant id is already registered in the system tenant registry (parent " +
+                $"'{existingById.ParentTenantId}', database '{existingById.DatabaseName}')");
+        }
+
+        var existingByDatabase = await GetRtSystemTenantByDatabaseNameAsync(adminSession, normalizedDatabaseName);
+        if (existingByDatabase != null)
+        {
+            throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
+                $"the database is already registered to tenant '{existingByDatabase.TenantId}' (parent " +
+                $"'{existingByDatabase.ParentTenantId}')");
+        }
+
+        var databaseExists = await IsDatabaseExistingAsync(normalizedDatabaseName);
+        if (mode == TenantNamespaceMode.CreateNewDatabase && databaseExists)
+        {
+            // Cluster-wide and case-insensitive, so this also covers databases of other subtrees and
+            // non-tenant databases. All of them collapse into the same generic message.
+            throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
+                "a database with this name already exists in the cluster (another tenant's database, " +
+                "a non-tenant database, or an orphan of a previous deletion)");
+        }
+
+        if (mode == TenantNamespaceMode.AttachExistingDatabase && !databaseExists)
+        {
+            // Same generic conflict as every other rejection, NOT "the database does not exist".
+            // Answering the absent case differently turned attach into a cluster-wide existence
+            // oracle: 409 meant taken, 400 meant free, and 204 meant free-and-adoptable, so any
+            // caller could confirm a guessed database name anywhere on the platform (AB#4763).
+            throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
+                "no database with this name exists, so there is nothing to attach");
+        }
+    }
+
+    private Exception RejectTenantId(string normalizedTenantId, string normalizedDatabaseName, Guid correlationId,
+        string reason)
+    {
+        _logger.LogWarning(
+            "Rejected tenant id '{TenantId}' (requested database '{DatabaseName}', correlation {CorrelationId}) " +
+            "because {Reason}. The caller only sees a generic conflict message.",
+            normalizedTenantId, normalizedDatabaseName, correlationId, reason);
+
+        return TenantException.TenantIdNotAvailable(normalizedTenantId);
+    }
+
+    private Exception RejectDatabaseName(string normalizedTenantId, string normalizedDatabaseName, Guid correlationId,
+        string reason)
+    {
+        _logger.LogWarning(
+            "Rejected database name '{DatabaseName}' (requested for tenant '{TenantId}', correlation " +
+            "{CorrelationId}) because {Reason}. The caller only sees a generic conflict message.",
+            normalizedDatabaseName, normalizedTenantId, correlationId, reason);
+
+        return TenantException.DatabaseNameNotAvailable(normalizedDatabaseName);
+    }
+
+    /// <summary>
+    ///     Normalizes a database name. Culture-invariant on purpose: a culture-sensitive ToLower can
+    ///     map characters differently than the case-insensitive comparison MongoDB does, which would
+    ///     let a name pass the availability check and then collide.
+    /// </summary>
+    protected static string NormalizeDatabaseName(string databaseName)
+    {
+        return databaseName.Trim().ToLowerInvariant();
+    }
+
+    /// <summary>
+    ///     Rejects tenant ids that cannot safely round-trip through a URL route segment. Validated up
+    ///     front because an invalid id would otherwise fail deep inside the create path - inside the
+    ///     try whose catch drops the database (AB#4762).
+    /// </summary>
+    private static void ValidateTenantIdFormat(string normalizedTenantId)
+    {
+        if (normalizedTenantId.Length > MaxTenantIdLength ||
+            normalizedTenantId.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '-' && c != '_'))
+        {
+            throw new ArgumentException(
+                $"Tenant ID '{normalizedTenantId}' is invalid. Use at most {MaxTenantIdLength} ASCII " +
+                "letters, digits, '-' or '_'.", nameof(normalizedTenantId));
+        }
+    }
+
+    /// <summary>
+    ///     Rejects database names MongoDB cannot accept, for the same reason as
+    ///     <see cref="ValidateTenantIdFormat" />.
+    /// </summary>
+    private static void ValidateDatabaseNameFormat(string normalizedDatabaseName)
+    {
+        // MongoDB measures its limit in BYTES, so a name of multi-byte characters can pass a character
+        // count and still be rejected at the first write - inside the create path, i.e. on exactly the
+        // code path AB#4762 was about.
+        var byteLength = System.Text.Encoding.UTF8.GetByteCount(normalizedDatabaseName);
+
+        if (byteLength > MaxDatabaseNameLength ||
+            normalizedDatabaseName.Any(c => InvalidDatabaseNameCharacters.Contains(c) || char.IsControl(c)))
+        {
+            throw new ArgumentException(
+                $"Database name '{normalizedDatabaseName}' is invalid. Use at most {MaxDatabaseNameLength} " +
+                $"bytes and none of {new string(InvalidDatabaseNameCharacters)}.",
+                nameof(normalizedDatabaseName));
+        }
     }
 
     public async Task<IResultSet<OctoTenant>> GetChildTenantsAsync(IOctoAdminSession adminSession, int? skip = null,
@@ -956,7 +1217,7 @@ public class TenantContext : ITenantContext
 
     public ITenantRepository GetSystemTenantRepository()
     {
-        var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
+        var normalizedDatabaseName = NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName);
         var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.NormalizeString();
 
         var result = GetTenantRepository(normalizedTenantId, normalizedDatabaseName);
@@ -965,7 +1226,7 @@ public class TenantContext : ITenantContext
 
     public ITenantRepository GetSystemTenantRepositoryAsAdmin()
     {
-        var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
+        var normalizedDatabaseName = NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName);
         var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.NormalizeString();
 
         var result = GetTenantRepositoryAsAdmin(normalizedTenantId, normalizedDatabaseName);
@@ -1866,6 +2127,11 @@ public class TenantContext : ITenantContext
             _adminRepositoryClient, databaseName, tenantId);
     }
 
+    /// <summary>
+    ///     Looks a tenant up in THIS context's own registry, i.e. among the caller's direct children.
+    ///     The counterpart <see cref="GetRtSystemTenantAsync" /> searches the platform-wide registry -
+    ///     the two must never be swapped (AB#4763).
+    /// </summary>
     private async Task<RtTenant?> GetRtTenantAsync(IOctoAdminSession adminSession,
         string tenantId)
     {
@@ -1875,19 +2141,82 @@ public class TenantContext : ITenantContext
             .FieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.NormalizeString());
 
         var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions);
-        return resultSet.Items.FirstOrDefault();
+        return FirstAndWarnOnDuplicates(resultSet, $"tenant id '{tenantId.NormalizeString()}'",
+            $"the registry of tenant '{TenantId}'");
     }
 
+    /// <summary>
+    ///     Looks a tenant up in the PLATFORM-WIDE registry held by the system tenant. This is the
+    ///     authority for tenant-id uniqueness; the subtree-local counterpart is
+    ///     <see cref="GetRtTenantAsync" />.
+    /// </summary>
+    /// <remarks>
+    ///     This used to be a verbatim copy of <see cref="GetRtTenantAsync" /> and therefore queried the
+    ///     current tenant's own database, which made the "global" uniqueness check blind to everything
+    ///     outside the caller's own children (AB#4763). Passing this context's admin session to a
+    ///     repository on the system database is safe: <see cref="CreateRepositoryDataSourceAsAdmin" />
+    ///     reuses this context's admin client and only re-targets the database name, exactly like the
+    ///     registry insert and delete already do.
+    /// </remarks>
     private async Task<RtTenant?> GetRtSystemTenantAsync(IOctoAdminSession adminSession,
         string tenantId)
     {
-        var tenantRepository = GetTenantRepositoryAsAdmin();
+        var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
 
         var queryOptions = RtEntityQueryOptions.Create()
             .FieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, tenantId.NormalizeString());
 
-        var resultSet = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions);
-        return resultSet.Items.FirstOrDefault();
+        var resultSet = await systemTenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions);
+        return FirstAndWarnOnDuplicates(resultSet, $"tenant id '{tenantId.NormalizeString()}'",
+            "the system tenant registry");
+    }
+
+    /// <summary>
+    ///     Finds the tenant that the platform-wide registry maps to a database name, so a database
+    ///     already claimed by another tenant cannot be claimed a second time (AB#4763).
+    /// </summary>
+    protected async Task<RtTenant?> GetRtSystemTenantByDatabaseNameAsync(IOctoAdminSession adminSession,
+        string normalizedDatabaseName)
+    {
+        var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
+
+        var queryOptions = RtEntityQueryOptions.Create()
+            .FieldFilter(nameof(RtTenant.DatabaseName), FieldFilterOperator.Equals, normalizedDatabaseName);
+
+        var resultSet = await systemTenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions);
+        return FirstAndWarnOnDuplicates(resultSet, $"database name '{normalizedDatabaseName}'",
+            "the system tenant registry");
+    }
+
+    /// <summary>
+    ///     Returns the first match and warns when the lookup was ambiguous.
+    /// </summary>
+    /// <remarks>
+    ///     Deliberately does NOT impose a sort order. Which row wins decides which database a tenant
+    ///     resolves to and which database a delete drops, so ordering rows that were already ambiguous
+    ///     could silently move a live tenant onto a different database. Duplicates are typically a
+    ///     leftover of AB#4763; the namespace gate no longer lets them through, but nothing at the
+    ///     database level enforces uniqueness (the Tenant CK type's TenantId index is NOT unique), so
+    ///     two creates racing through the gate in separate transactions can still both commit.
+    ///     Surfacing duplicates so an operator can clean them up is the useful behaviour, changing
+    ///     resolution underneath a running tenant is not.
+    /// </remarks>
+    private RtTenant? FirstAndWarnOnDuplicates(IResultSet<RtTenant> resultSet, string lookupDescription,
+        string registryDescription)
+    {
+        var matches = resultSet.Items.ToList();
+        if (matches.Count > 1)
+        {
+            _logger.LogWarning(
+                "Ambiguous tenant lookup for {Lookup} in {Registry}: {Count} records match, mapped to databases " +
+                "[{DatabaseNames}]. This is corruption (typically an AB#4763 leftover, or two creates that raced " +
+                "the namespace gate) and must be cleaned up manually; resolution is left unchanged and picks an " +
+                "arbitrary one.",
+                lookupDescription, registryDescription, matches.Count,
+                string.Join(", ", matches.Select(m => m.DatabaseName)));
+        }
+
+        return matches.FirstOrDefault();
     }
 
     protected async Task<bool> IsDatabaseExistingAsync(string databaseName)

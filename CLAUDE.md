@@ -43,6 +43,23 @@ USE_LOCAL_MONGODB=true dotnet test -c DebugL
 }
 ```
 
+## Connection ApplicationName is clamped (AB#4762)
+
+Both repository clients label their connection
+`OctoMesh-{database}-{instanceId:guid}-{user}` so it is identifiable in MongoDB's `currentOp` and
+logs. The driver rejects an ApplicationName longer than **128 bytes**, and the database name appears
+in that string **twice** — once directly and once inside the per-tenant user
+(`string.Format(DatabaseUser, database)`). A database name beyond roughly 30 characters therefore
+threw `ArgumentException` from `MongoUrlBuilder.set_ApplicationName` deep inside tenant provisioning:
+the tenant came up half-built and then failed on every background tick forever, and a service that
+iterates all tenants at startup (identity's `DynamicAuthSchemeServiceInitializer`) refused to boot at
+all.
+
+`MongoRepositoryClient.BuildApplicationName` truncates it on a UTF-8 character boundary instead.
+Clamping a diagnostic label is strictly better than refusing to serve the tenant, so **do not** turn
+this back into a validation rule on the database name — MongoDB's own 63-byte limit is the only one
+callers should have to satisfy.
+
 ## Observability — MongoDB Command Profiling
 
 `MongoCommandObservability` (in `Repositories/MongoDb/Generic/`) subscribes to
@@ -953,6 +970,74 @@ now ordered before the drop) for callers with no concurrent resolver: create-rol
 (`CreateChildTenantAsync` blueprint path), `ClearChildTenantAsync`, `TenantBackupService` temp cleanup,
 and the integration tests. Complements the AB#4294 guard invalidation above (which handles the
 *same-process delete+recreate* import-guard, a different facet of the same resurrection mechanism).
+
+`DropTenantDatabaseAsync` additionally **drops the tenant's MongoDB user** and drops the database
+under **both spellings** — normalized and as stored in the record (AB#4762). Both matter:
+`dropDatabase` does *not* remove the account — it lives in the authentication database — so every
+delete used to leave a live credential behind that a database re-created under the same name would
+silently inherit; and `dropDatabase` is case-sensitive while `IsRepositoryExistingAsync` compares
+case-insensitively, so dropping only one spelling missed either the normalized physical database of a
+mixed-case record or the mixed-case physical database a legacy attach adopted. MongoDB forbids two
+databases differing only in case, so at most one spelling exists. The user drop is best-effort: it is
+logged, never allowed to fail the delete.
+
+**The resurrection window is not fully closed, and since AB#4762 it bites harder.** Background work
+that outlives the delete — above all a `tenant_setup_retry` entry, whose retry loop keeps calling
+`SetupAsync` for a tenant that no longer exists — re-creates the database as an empty `CkModel` +
+`SysLock` shell seconds after the drop. The create path no longer reclaims such a shell (it used to,
+by dropping it — that was the AB#4762 data-loss bug), so the leftover permanently blocks its own
+database name behind a deliberately reason-free conflict. `TenantsController.Delete` therefore clears
+the tenant's setup-retry entries via `ITenantSetupRetryStore.ClearAllForTenantAsync`. A peer service
+still racing its own CK-model import into the tenant can produce the same shell; when a database name
+is refused and nothing seems to own it, look for that shell and remove it.
+
+### Tenant Namespace Gate — one authority for tenant ids and database names (AB#4762 / AB#4763)
+
+`EnsureTenantNamespaceAvailableAsync` is the single gate for both platform-wide namespaces, shared by
+`CreateChildTenantAsync` and `AttachChildTenantAsync`. It runs **before any side effect** — including
+the pre-create notification — because everything after it sits inside the `try` whose `catch` rolls the
+tenant back, and that rollback used to drop whatever database the name pointed at.
+
+Checks, in order: the configured system tenant id (reserved — the system tenant has no `RtTenant`
+self-record, so a registry lookup alone cannot cover it), the configured system database name,
+MongoDB's own `admin` / `local` / `config`, the platform-wide registry by tenant id, the registry by
+database name, and finally physical existence — required for attach, forbidden for create.
+
+Two rules to preserve when touching it:
+
+- **Both conflicts are uniform and reason-free.** Exactly two conflict messages exist —
+  `Tenant ID '<x>' is already in use.` and `Database name '<x>' is not available.` — and every reason
+  collapses into one of them, including "does not exist" on the attach path. A distinguishable answer
+  turns the endpoint into a cluster-wide existence oracle for callers who cannot see the colliding
+  resource. The real reason goes to the log, never to the response, and rejections are **logged, not
+  audited**: an audit event per rejected attempt would be an unbounded write amplifier into the system
+  database, since nothing rate-limits the callers. (Format validation is different: a tenant id or
+  database name that is syntactically invalid throws a descriptive `ArgumentException` before the
+  conflict checks — that reason is about the caller's own input, leaks nothing about other tenants,
+  and both REST endpoints map it to 400, not 409.)
+- **The rollback is gated on `databaseCreated`**, a local set only after `CreateTenantInternalAsync`
+  returns. The exists-check inside that method is kept as a TOCTOU net and deliberately throws while
+  the flag is still `false`, so a racer's database is never dropped.
+
+Registry lookups (`GetRtSystemTenantAsync`, `GetRtSystemTenantByDatabaseNameAsync`) query the
+**platform-wide** registry via `GetSystemTenantRepositoryAsAdmin()`; the subtree-local
+`GetRtTenantAsync` is a different thing and the two must never be swapped — they were byte-identical
+copies, which is what made the "global" uniqueness check blind (AB#4763). Neither imposes a sort
+order: which row wins decides which database a tenant resolves to and which one a delete drops, so
+ordering already-ambiguous rows could move a live tenant. Ambiguity is **logged as a warning**
+instead, and the registry deletes in `DetachChildTenantAsync` / `DeleteChildTenantMetadataAsync` are
+qualified with the database name so a leftover duplicate cannot make them unregister a different
+parent's tenant. The qualification matches the name **as stored in the registry being deleted from**
+(verbatim for the subtree-local record — the pre-AB#4763 attach wrote the operator's raw casing
+there — and normalized for the system registry, which has always been written normalized); a
+normalized filter against the local registry silently missed every legacy mixed-case record. Note the
+gate prevents new duplicates but nothing at the database level enforces uniqueness (the Tenant CK
+type's `TenantId` index is not unique), so two creates racing the gate in separate transactions can
+still both commit — `FirstAndWarnOnDuplicates` surfaces the result.
+
+Detach removes the platform-wide row too, so detach and attach are exact inverses. Without that the
+now-global id check would reject every re-attach, and a "detached" tenant stayed fully resolvable from
+the system context.
 
 ### Tenant Lifecycle Store — `EnsureCreatingAsync` is an atomic branch on the stored state (AB#4690)
 

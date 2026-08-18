@@ -1,3 +1,4 @@
+using System.Text;
 using System.Diagnostics;
 
 using Meshmakers.Common.Shared;
@@ -40,6 +41,9 @@ public abstract class MongoRepositoryClient : IRepositoryClient
     private static volatile bool _isRegistered;
     private static volatile bool _isSerializerRegistered;
     private static readonly Lock ObjectIdLock = new();
+
+    /// <summary>The MongoDB driver rejects an ApplicationName longer than this once UTF-8 encoded.</summary>
+    private const int ApplicationNameLimitInBytes = 128;
 
     private readonly ILogger<MongoRepositoryClient> _logger;
     protected readonly Guid _instanceId = Guid.NewGuid();
@@ -718,5 +722,38 @@ public abstract class MongoRepositoryClient : IRepositoryClient
 
             cm.MapMember(c => c.Stream).SetShouldSerializeMethod(_ => false);
         });
+    }
+
+    /// <summary>
+    ///     Builds the connection's ApplicationName, clamped to what the driver accepts.
+    /// </summary>
+    /// <remarks>
+    ///     The name is purely diagnostic (it identifies the connection in MongoDB's currentOp and logs)
+    ///     but the driver throws when it exceeds 128 bytes — and the database name appears in it twice,
+    ///     once directly and once inside the per-tenant user name. A tenant whose database name was
+    ///     merely long therefore provisioned halfway and then threw on every background tick forever.
+    ///     Truncating a diagnostic label is strictly better than refusing to serve the tenant, so the
+    ///     value is cut on a UTF-8 character boundary and marked with an ellipsis.
+    /// </remarks>
+    protected static string BuildApplicationName(string databaseName, Guid instanceId, string userName)
+    {
+        var applicationName = $"OctoMesh-{databaseName}-{instanceId}-{userName}";
+        if (Encoding.UTF8.GetByteCount(applicationName) <= ApplicationNameLimitInBytes)
+        {
+            return applicationName;
+        }
+
+        const string ellipsis = "…";
+        var budget = ApplicationNameLimitInBytes - Encoding.UTF8.GetByteCount(ellipsis);
+
+        var bytes = Encoding.UTF8.GetBytes(applicationName);
+        var length = budget;
+        // Never split a multi-byte character: back off while sitting on a continuation byte.
+        while (length > 0 && (bytes[length] & 0xC0) == 0x80)
+        {
+            length--;
+        }
+
+        return Encoding.UTF8.GetString(bytes, 0, length) + ellipsis;
     }
 }

@@ -28,7 +28,7 @@ public class SystemContext : TenantContext, ISystemContext
         IServiceProvider serviceProvider)
         : base(loggerFactory, systemConfiguration, serviceProvider,
             systemConfiguration.Value.SystemTenantId.NormalizeString(),
-            systemConfiguration.Value.SystemDatabaseName.ToLower())
+            NormalizeDatabaseName(systemConfiguration.Value.SystemDatabaseName))
     {
         _serviceProvider = serviceProvider;
     }
@@ -43,8 +43,19 @@ public class SystemContext : TenantContext, ISystemContext
             throw TenantException.SystemTenantAlreadyExisting();
         }
 
-        var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
+        var normalizedDatabaseName = NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName);
         var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.NormalizeString();
+
+        // IsSystemTenantExistingAsync above is false whenever the System CK model is missing or not
+        // at the exact expected version - even when the database itself is present and full of data.
+        // Bootstrapping over it used to run into the database-exists guard inside the try below, whose
+        // catch then dropped the entire platform database (AB#4762). Refuse instead: the caller must
+        // repair the CK model, not re-create the tenant. Deliberately explicit rather than generic -
+        // this path has no untrusted caller and it fails host startup.
+        if (await IsDatabaseExistingAsync(normalizedDatabaseName))
+        {
+            throw TenantException.SystemTenantDatabaseNotBootstrappable(normalizedDatabaseName);
+        }
 
         try
         {
@@ -109,7 +120,7 @@ public class SystemContext : TenantContext, ISystemContext
             throw TenantException.SystemTenantDatabaseNotExisting();
         }
 
-        var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
+        var normalizedDatabaseName = NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName);
         var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.NormalizeString();
         Guid correlationId = Guid.NewGuid();
 
@@ -185,7 +196,7 @@ public class SystemContext : TenantContext, ISystemContext
     // ReSharper disable once MemberCanBePrivate.Global
     public async Task<bool> IsSystemTenantExistingAsync()
     {
-        var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
+        var normalizedDatabaseName = NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName);
 
         if (await IsDatabaseExistingAsync(normalizedDatabaseName))
         {
@@ -240,6 +251,19 @@ public class SystemContext : TenantContext, ISystemContext
         // Bridges the protected TenantContext helper onto the interface so consumers
         // (e.g. TenantBackupService post-restore verification) can check database existence.
         return IsDatabaseExistingAsync(databaseName);
+    }
+
+    /// <inheritdoc />
+    public async Task<string?> TryGetTenantIdByDatabaseNameAsync(string databaseName)
+    {
+        // Commit on success only — a commit in a finally block would run after a failed read and
+        // its own failure would mask the original exception. Disposing the session aborts an
+        // uncommitted transaction, matching the read-session pattern used elsewhere.
+        using var session = await GetAdminSessionAsync();
+        session.StartTransaction();
+        var owner = await GetRtSystemTenantByDatabaseNameAsync(session, NormalizeDatabaseName(databaseName));
+        await session.CommitTransactionAsync();
+        return owner?.TenantId;
     }
 
     #endregion

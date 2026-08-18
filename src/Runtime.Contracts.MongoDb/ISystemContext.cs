@@ -157,5 +157,17 @@ public interface ISystemContext : ITenantContext
     /// <param name="databaseName">The database name to check (used verbatim, no normalization)</param>
     Task<bool> IsDatabaseExistingAsync(string databaseName);
 
+    /// <summary>
+    /// Returns the id of the tenant that the platform-wide registry maps to the given database name,
+    /// or <c>null</c> when no tenant claims it.
+    /// </summary>
+    /// <remarks>
+    /// Lets callers that write to a database outside the tenant create/attach paths — above all the
+    /// restore, which runs <c>mongorestore --drop</c> against an operator-supplied name — check first
+    /// that they are not about to overwrite another tenant's data (AB#4762).
+    /// </remarks>
+    /// <param name="databaseName">The database name to look up; normalized internally.</param>
+    Task<string?> TryGetTenantIdByDatabaseNameAsync(string databaseName);
+
     #endregion
 }
