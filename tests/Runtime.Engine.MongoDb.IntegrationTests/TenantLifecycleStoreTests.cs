@@ -90,6 +90,7 @@ public class TenantLifecycleStoreTests(SystemFixture fixture)
         var correlationId = Guid.NewGuid();
         await store.EnsureCreatingAsync(tenantId, $"db-{tenantId}", correlationId, ct);
         await store.MarkDeletingAsync(tenantId, ct);
+        var tombstone = await store.GetAsync(tenantId, ct);
 
         await store.EnsureCreatingAsync(tenantId, "some-other-db", Guid.NewGuid(), ct);
 
@@ -98,6 +99,10 @@ public class TenantLifecycleStoreTests(SystemFixture fixture)
         Assert.Equal(TenantLifecycleState.Deleting, record!.State);
         Assert.Equal($"db-{tenantId}", record.DatabaseName);
         Assert.Equal(correlationId, record.CorrelationId);
+        // The settle clock is the most load-bearing preserved field: if EnsureCreating restamped
+        // LastTransitionUtc, a stream of PosUpdateTenant echoes would keep the tombstone younger than
+        // the settle period forever and the sweep would never complete the delete.
+        Assert.Equal(tombstone!.LastTransitionUtc, record.LastTransitionUtc);
 
         await store.RemoveAsync(tenantId, ct);
     }
@@ -129,12 +134,77 @@ public class TenantLifecycleStoreTests(SystemFixture fixture)
         Assert.Equal(correlationId, inserted.CorrelationId);
         Assert.Null(inserted.LeaseOwner);
 
-        // On an existing record it transitions to Deleting and refreshes the stored database name.
+        // On an existing NON-Deleting record it transitions to Deleting and refreshes the stored
+        // database name (start from a genuine Active record, not the tombstone from the first phase).
+        await store.RemoveAsync(tenantId, ct);
         await store.EnsureCreatingAsync(tenantId, null, Guid.Empty, ct);
+        await store.MarkActiveAsync(tenantId, cancellationToken: ct);
         await store.EnsureDeletingAsync(tenantId, $"db2-{tenantId}", correlationId, ct);
         var updated = await store.GetAsync(tenantId, ct);
         Assert.Equal(TenantLifecycleState.Deleting, updated!.State);
         Assert.Equal($"db2-{tenantId}", updated.DatabaseName);
+
+        await store.RemoveAsync(tenantId, ct);
+    }
+
+    /// <summary>
+    /// AB#4829 review follow-up. The Deleting-preservation invariant must hold for EVERY writer, not
+    /// just EnsureCreating: MarkActive is the terminal write of exactly the in-flight setup pass the
+    /// invariant defends against — a pass that entered before the delete's tombstone and completes
+    /// after it would flip the tombstone to Active, and the settle sweep (which only processes
+    /// Deleting records) would never finish the delete; a resurrected shell database would then
+    /// permanently block its own name. Same for MarkFailed via a late reconciler give-up, and for
+    /// RequeueForReconcileAsync via the operator rerunSetup endpoint, which the lifecycle GET showing
+    /// "Deleting" practically invites during the settle window. Only EnsureDeleting/Remove may leave
+    /// the Deleting state.
+    /// </summary>
+    [Fact]
+    public async Task No_writer_overwrites_a_Deleting_tombstone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var store = Store;
+        var tenantId = $"lw-{Guid.NewGuid():N}"[..20];
+
+        await store.EnsureCreatingAsync(tenantId, $"db-{tenantId}", Guid.NewGuid(), ct);
+        await store.MarkDeletingAsync(tenantId, ct);
+        var tombstone = await store.GetAsync(tenantId, ct);
+
+        await store.MarkActiveAsync(tenantId, "hijacked-db", ct);
+        var afterActive = await store.GetAsync(tenantId, ct);
+        Assert.Equal(TenantLifecycleState.Deleting, afterActive!.State);
+        Assert.Equal($"db-{tenantId}", afterActive.DatabaseName);
+        Assert.Equal(tombstone!.LastTransitionUtc, afterActive.LastTransitionUtc);
+
+        await store.MarkFailedAsync(tenantId, "late reconciler give-up", ct);
+        var afterFailed = await store.GetAsync(tenantId, ct);
+        Assert.Equal(TenantLifecycleState.Deleting, afterFailed!.State);
+        Assert.Null(afterFailed.LastError);
+
+        Assert.Null(await store.RequeueForReconcileAsync(tenantId, ct));
+        Assert.Equal(TenantLifecycleState.Deleting, (await store.GetAsync(tenantId, ct))!.State);
+
+        await store.RemoveAsync(tenantId, ct);
+    }
+
+    [Fact]
+    public async Task MarkActive_still_backfills_a_missing_record_and_activates_a_Creating_one()
+    {
+        // The Deleting guard must not break MarkActive's two legitimate jobs: lazy backfill (a legacy
+        // tenant without a record reaches MarkActive on startup) and the normal Creating -> Active
+        // transition.
+        var ct = TestContext.Current.CancellationToken;
+        var store = Store;
+        var tenantId = $"lb-{Guid.NewGuid():N}"[..20];
+
+        await store.MarkActiveAsync(tenantId, $"db-{tenantId}", ct);
+        var backfilled = await store.GetAsync(tenantId, ct);
+        Assert.Equal(TenantLifecycleState.Active, backfilled!.State);
+        Assert.Equal($"db-{tenantId}", backfilled.DatabaseName);
+        await store.RemoveAsync(tenantId, ct);
+
+        await store.EnsureCreatingAsync(tenantId, null, Guid.Empty, ct);
+        await store.MarkActiveAsync(tenantId, cancellationToken: ct);
+        Assert.Equal(TenantLifecycleState.Active, (await store.GetAsync(tenantId, ct))!.State);
 
         await store.RemoveAsync(tenantId, ct);
     }

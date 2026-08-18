@@ -320,6 +320,41 @@ public class TenantBackupServiceTests(SystemFixture systemFixture)
         }
     }
 
+    /// <summary>
+    /// AB#4829 review follow-up. The restore flow mongorestores into an UNREGISTERED database first
+    /// and attaches only afterwards — so a restore targeting the tenant id or database name of a
+    /// tenant deleted moments ago raced the delete settle sweep, which sees "registry absent +
+    /// database exists + no owner" and drops the restore mid-flight. A standing Deleting tombstone
+    /// for either name refuses the restore up front.
+    /// </summary>
+    [Fact]
+    public async Task RestoreTenant_RefusesWhileADeleteIsStillSettling()
+    {
+        var systemContext = systemFixture.GetSystemContext();
+        var lifecycleStore = systemFixture.GetService<Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle.ITenantLifecycleStore>();
+        var tenantId = $"rst-{Guid.NewGuid():N}"[..20];
+        var archivePath = Path.Combine(Path.GetTempPath(), $"settling_{Guid.NewGuid():N}.tar.gz");
+        var ct = TestContext.Current.CancellationToken;
+        await File.WriteAllBytesAsync(archivePath, [1, 2, 3], ct);
+        await lifecycleStore.EnsureDeletingAsync(tenantId, tenantId, Guid.NewGuid(), ct);
+
+        try
+        {
+            var byTenantId = await systemContext.RestoreTenantAsync(tenantId, $"other-{tenantId}"[..20], archivePath);
+            Assert.False(byTenantId.Success);
+            Assert.Contains("settling", byTenantId.Error, StringComparison.OrdinalIgnoreCase);
+
+            var byDatabaseName = await systemContext.RestoreTenantAsync($"other-{tenantId}"[..20], tenantId, archivePath);
+            Assert.False(byDatabaseName.Success);
+            Assert.Contains("settling", byDatabaseName.Error, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            await lifecycleStore.RemoveAsync(tenantId, ct);
+            File.Delete(archivePath);
+        }
+    }
+
     [Fact]
     public async Task RestoreTenant_WithNonExistentArchive_Fails()
     {

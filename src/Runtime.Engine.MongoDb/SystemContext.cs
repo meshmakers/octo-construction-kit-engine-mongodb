@@ -149,6 +149,29 @@ public class SystemContext : TenantContext, ISystemContext
         return tenantContext;
     }
 
+    public async Task<bool> IsTenantRegisteredAsync(string tenantId)
+    {
+        if (tenantId.NormalizeString() == TenantId)
+        {
+            return await IsSystemTenantExistingAsync();
+        }
+
+        if (!await IsSystemTenantExistingAsync())
+        {
+            // Without the system tenant the registry is unreadable; report unregistered so callers
+            // treat this like the quiet bootstrap skip the setup path already performs.
+            return false;
+        }
+
+        // Pure registry read — deliberately NOT TryGetChildTenantContextAsync, whose resolve runs the
+        // CK model auto-imports; this probe gates per-CK-import events and must stay cheap (AB#4829).
+        using var session = await GetAdminSessionAsync();
+        session.StartTransaction();
+        var exists = await IsChildTenantExistingAsync(session, tenantId);
+        await session.CommitTransactionAsync();
+        return exists;
+    }
+
     public async Task<ITenantContext?> TryFindTenantContextAsync(string tenantId)
     {
         if (!await IsSystemTenantExistingAsync())

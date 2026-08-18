@@ -207,29 +207,75 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
         CancellationToken cancellationToken = default)
     {
         var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
-        var now = DateTime.UtcNow;
 
-        var update = Builders<TenantLifecycleRecord>.Update
-            .Set(r => r.State, TenantLifecycleState.Active)
-            .Set(r => r.Phase, TenantLifecyclePhase.Started)
-            .Set(r => r.LastError, (string?)null)
-            .Set(r => r.LeaseOwner, (string?)null)
-            .Set(r => r.LeaseUntil, (DateTime?)null)
-            .Set(r => r.LastTransitionUtc, now)
-            .SetOnInsert(r => r.CreatedUtc, now)
-            .SetOnInsert(r => r.CorrelationId, Guid.Empty);
-        if (!string.IsNullOrEmpty(databaseName))
-        {
-            update = update.Set(r => r.DatabaseName, databaseName);
-        }
+        // Aggregation-pipeline upsert like EnsureCreatingAsync, for the same reason (AB#4829): a
+        // Deleting tombstone survives untouched — state, metadata and settle clock alike. MarkActive
+        // is the terminal write of exactly the in-flight setup pass the tombstone defends against; an
+        // unconditional Set(State=Active) here let such a pass flip the tombstone after the delete's
+        // EnsureDeleting, and the settle sweep (which only processes Deleting records) then never
+        // completed the delete — a resurrected shell database permanently blocked its own name. Only
+        // EnsureDeletingAsync/RemoveAsync may leave the Deleting state. The upsert branch (lazy
+        // backfill of legacy tenants) and the Creating -> Active transition are unchanged.
+        var update = Builders<TenantLifecycleRecord>.Update.Pipeline(
+            BuildMarkActivePipeline(databaseName, DateTime.UtcNow));
 
         await collection.UpdateOneAsync(Eq(tenantId), update, new UpdateOptions { IsUpsert = true }, cancellationToken)
             .ConfigureAwait(false);
     }
 
+    private static PipelineDefinition<TenantLifecycleRecord, TenantLifecycleRecord> BuildMarkActivePipeline(
+        string? databaseName, DateTime now)
+    {
+        // On an upsert-insert every field path resolves to "missing", so isDeleting is false and the
+        // Active branch applies — the lazy-backfill semantics of the previous implementation.
+        var isDeleting = new BsonDocument("$eq",
+            new BsonArray { $"${Fields.State}", (int)TenantLifecycleState.Deleting });
+
+        BsonValue Kept(string field) => new BsonDocument("$ifNull", new BsonArray { $"${field}", BsonNull.Value });
+
+        var databaseNameValue = string.IsNullOrEmpty(databaseName)
+            ? Kept(Fields.DatabaseName)
+            : new BsonString(databaseName);
+
+        var correlationKeptOrEmpty = new BsonDocument("$ifNull", new BsonArray
+        {
+            $"${Fields.CorrelationId}",
+            new BsonBinaryData(GuidConverter.ToBytes(Guid.Empty, GuidRepresentation.Standard),
+                BsonBinarySubType.UuidStandard),
+        });
+
+        var set = new BsonDocument
+        {
+            { Fields.State, Cond(isDeleting, $"${Fields.State}", (int)TenantLifecycleState.Active) },
+            { Fields.Phase, Cond(isDeleting, $"${Fields.Phase}", (int)TenantLifecyclePhase.Started) },
+            { Fields.LastError, Cond(isDeleting, Kept(Fields.LastError), BsonNull.Value) },
+            { Fields.LeaseOwner, Cond(isDeleting, Kept(Fields.LeaseOwner), BsonNull.Value) },
+            { Fields.LeaseUntil, Cond(isDeleting, Kept(Fields.LeaseUntil), BsonNull.Value) },
+            { Fields.AttemptCount, new BsonDocument("$ifNull", new BsonArray { $"${Fields.AttemptCount}", 0 }) },
+            { Fields.CreatedUtc, new BsonDocument("$ifNull", new BsonArray { $"${Fields.CreatedUtc}", now }) },
+            {
+                Fields.LastTransitionUtc,
+                Cond(isDeleting, new BsonDocument("$ifNull", new BsonArray { $"${Fields.LastTransitionUtc}", now }),
+                    now)
+            },
+            { Fields.DatabaseName, Cond(isDeleting, Kept(Fields.DatabaseName), databaseNameValue) },
+            { Fields.CorrelationId, correlationKeptOrEmpty },
+        };
+
+        return new BsonDocumentStagePipelineDefinition<TenantLifecycleRecord, TenantLifecycleRecord>(
+            [new BsonDocument("$set", set)]);
+    }
+
     public async Task MarkFailedAsync(string tenantId, string error, CancellationToken cancellationToken = default)
     {
         var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+
+        // Never overwrite a Deleting tombstone (AB#4829): a reconciler give-up landing after the
+        // delete's tombstone would hide the record from the settle sweep, which only processes
+        // Deleting records. Update-only, so the compound filter cannot upsert-conflict.
+        var filter = Builders<TenantLifecycleRecord>.Filter.And(
+            Eq(tenantId),
+            Builders<TenantLifecycleRecord>.Filter.Ne(r => r.State, TenantLifecycleState.Deleting));
 
         var update = Builders<TenantLifecycleRecord>.Update
             .Set(r => r.State, TenantLifecycleState.Failed)
@@ -237,7 +283,7 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
             .Inc(r => r.AttemptCount, 1)
             .Set(r => r.LastTransitionUtc, DateTime.UtcNow);
 
-        await collection.UpdateOneAsync(Eq(tenantId), update, cancellationToken: cancellationToken)
+        await collection.UpdateOneAsync(filter, update, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -351,8 +397,14 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
             .Set(r => r.LastTransitionUtc, DateTime.UtcNow);
 
         // Update-only (no upsert): returns the reset record, or null when the tenant has no record.
+        // A Deleting tombstone is refused too (null, AB#4829): the settle sweep owns that record, and
+        // the operator rerunSetup endpoint — which the lifecycle GET showing "Deleting" practically
+        // invites during the settle window — must not flip the sweep's anchor back to Creating.
+        var filter = Builders<TenantLifecycleRecord>.Filter.And(
+            Eq(tenantId),
+            Builders<TenantLifecycleRecord>.Filter.Ne(r => r.State, TenantLifecycleState.Deleting));
         var options = new FindOneAndUpdateOptions<TenantLifecycleRecord> { ReturnDocument = ReturnDocument.After };
-        return await collection.FindOneAndUpdateAsync(Eq(tenantId), update, options, cancellationToken)
+        return await collection.FindOneAndUpdateAsync(filter, update, options, cancellationToken)
             .ConfigureAwait(false);
     }
 

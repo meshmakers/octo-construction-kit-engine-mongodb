@@ -47,6 +47,16 @@ public interface ISystemContext : ITenantContext
     Task<ITenantContext?> TryFindTenantContextAsync(string tenantId);
 
     /// <summary>
+    /// Lightweight registry-only probe: whether <paramref name="tenantId"/> is the system tenant or
+    /// has a tenant record in the system registry. Unlike <see cref="TryFindTenantContextAsync"/> it
+    /// builds no tenant context and triggers no resolve-time CK model imports, so it is cheap enough
+    /// to gate high-frequency event consumers (AB#4829). Returns false when the system tenant itself
+    /// is not available (the registry is unreadable then — callers treat that like the quiet
+    /// bootstrap skip the setup path already performs).
+    /// </summary>
+    Task<bool> IsTenantRegisteredAsync(string tenantId);
+
+    /// <summary>
     /// Gets based on the tenant id the tenant repository.
     /// </summary>
     /// <param name="tenantId">The tenant id (also supports the system tenant id)</param>
