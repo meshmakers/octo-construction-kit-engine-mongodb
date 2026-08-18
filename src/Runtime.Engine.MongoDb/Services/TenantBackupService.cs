@@ -1,5 +1,6 @@
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 
@@ -14,7 +15,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 internal class TenantBackupService(
     ISystemContext systemContext,
     IRepositoryOpsService repositoryOpsService,
-    ILogger<TenantBackupService> logger) : ITenantBackupService
+    ILogger<TenantBackupService> logger,
+    ITenantLifecycleStore? tenantLifecycleStore = null) : ITenantBackupService
 {
     /// <inheritdoc />
     public async Task<CommandResult> BackupTenantAsync(string tenantId, string archiveFilePath,
@@ -209,6 +211,34 @@ internal class TenantBackupService(
                     $"database. Refusing to restore tenant '{tenantId}' into it.";
                 logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
                 return CommandResult.Failure(errorMessage);
+            }
+
+            // AB#4829: the restore mongorestores into an UNREGISTERED database first and attaches
+            // only afterwards — so a restore that targets the tenant id or database name of a tenant
+            // deleted moments ago races the delete settle sweep, which sees "registry absent +
+            // database exists + no owner" and would drop the restore mid-flight. Refuse while the
+            // Deleting tombstone stands; the sweep clears it within roughly two minutes.
+            if (tenantLifecycleStore is not null)
+            {
+                var normalizedTenantId = tenantId.NormalizeString();
+                var lifecycleRecords = await tenantLifecycleStore
+                    .ListAsync(cancellationToken ?? CancellationToken.None);
+                var settling = lifecycleRecords.FirstOrDefault(r =>
+                    r.State == TenantLifecycleState.Deleting
+                    && (r.TenantId == normalizedTenantId
+                        || string.Equals(r.DatabaseName, normalizedTargetDatabaseName,
+                            StringComparison.OrdinalIgnoreCase)));
+                if (settling is not null)
+                {
+                    var errorMessage =
+                        $"A deletion involving tenant '{settling.TenantId}' (database " +
+                        $"'{settling.DatabaseName}') is still settling. Refusing to restore into its " +
+                        "namespace until the settle sweep has completed the delete; retry in a couple " +
+                        "of minutes.";
+                    logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId,
+                        errorMessage);
+                    return CommandResult.Failure(errorMessage);
+                }
             }
 
             // AB#4367: determine the archive's source database(s) from its prelude so a restore

@@ -25,6 +25,15 @@ public class TenantException : PersistenceException
     /// </summary>
     public bool IsConflict { get; private init; }
 
+    /// <summary>
+    /// True when this exception means the tenant is not present in the tenant registry. Terminal for
+    /// retry-style consumers: a setup retried against a tenant that no longer exists can never complete,
+    /// and each attempt used to re-record the failure durably — and re-create the deleted tenant's
+    /// database as an empty shell that permanently blocked its own name (AB#4829). Flag-based so
+    /// consumers do not have to parse the message text.
+    /// </summary>
+    public bool IsTenantNotFound { get; private init; }
+
     internal static Exception SystemModelNotFoundInCatalog(CkModelId ckModelId)
     {
         return new TenantException($"System model {ckModelId} not found in any catalog.");
@@ -62,7 +71,7 @@ public class TenantException : PersistenceException
 
     public static Exception TenantDoesNotExist(string tenantId)
     {
-        return new TenantException($"Tenant '{tenantId}' does not exist.");
+        return new TenantException($"Tenant '{tenantId}' does not exist.") { IsTenantNotFound = true };
     }
 
     public static Exception SystemTenantAlreadyExisting()
