@@ -42,12 +42,10 @@ internal sealed class DisplayRuleSweeper(
             await mongoTenantRepository.LoadCacheForTenantAsync(ckCacheService).ConfigureAwait(false);
         }
 
-        var rootCkTypeId = new CkId<CkTypeId>(sweepRecord.CkTypeId);
-        if (!ckCacheService.TryGetCkType(tenantId, rootCkTypeId, out var rootTypeGraph) || rootTypeGraph == null)
+        var rootTypeGraph = await ResolveRootTypeGraphAsync(ckCacheService, tenantId, sweepRecord.CkTypeId,
+            () => mongoTenantRepository.LoadCacheForTenantAsync(ckCacheService), logger).ConfigureAwait(false);
+        if (rootTypeGraph == null)
         {
-            logger.LogInformation(
-                "Display rule sweep: type '{CkTypeId}' no longer exists in tenant '{TenantId}'; completing task.",
-                sweepRecord.CkTypeId, tenantId);
             return 0;
         }
 
@@ -84,6 +82,39 @@ internal sealed class DisplayRuleSweeper(
         {
             session.Dispose();
         }
+    }
+
+    /// <summary>
+    ///     Resolves the sweep task's root type graph against the tenant cache. Sweep keys are fully
+    ///     versioned (<c>CkId.FullName</c>, e.g. <c>Basic-2.0.3/NamedEntity-1</c>) and the task is
+    ///     usually enqueued by an import running in another service, so this process's cache may
+    ///     still hold the pre-import model — cache invalidation arrives asynchronously. A stale
+    ///     cache can therefore never resolve the new key; reload from the database before deciding
+    ///     the type is gone, because completing on a stale miss silently drops the backfill
+    ///     (AB#4822). Returns null only when the type is missing from a verified-fresh cache.
+    /// </summary>
+    internal static async Task<ConstructionKit.Contracts.DependencyGraph.CkTypeGraph?> ResolveRootTypeGraphAsync(
+        ICkCacheService ckCacheService, string tenantId, string ckTypeId, Func<Task> reloadCacheAsync,
+        ILogger logger)
+    {
+        var rootCkTypeId = new CkId<CkTypeId>(ckTypeId);
+        if (ckCacheService.TryGetCkType(tenantId, rootCkTypeId, out var rootTypeGraph) && rootTypeGraph != null)
+        {
+            return rootTypeGraph;
+        }
+
+        ckCacheService.Unload(tenantId);
+        await reloadCacheAsync().ConfigureAwait(false);
+
+        if (ckCacheService.TryGetCkType(tenantId, rootCkTypeId, out rootTypeGraph) && rootTypeGraph != null)
+        {
+            return rootTypeGraph;
+        }
+
+        logger.LogWarning(
+            "Display rule sweep: type '{CkTypeId}' does not exist in tenant '{TenantId}' even after a cache refresh; completing task.",
+            ckTypeId, tenantId);
+        return null;
     }
 
     private async Task<long> SweepEntitiesAsync(TenantRepository tenantRepository, IOctoSession session,
