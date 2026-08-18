@@ -39,6 +39,20 @@ public interface ITenantLifecycleStore
     /// <summary>Marks the tenant as being deleted (tombstone) until the database drop is confirmed complete.</summary>
     Task MarkDeletingAsync(string tenantId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Writes (or refreshes) the delete's settle tombstone, upserting when the tenant has no lifecycle
+    /// record yet. Called by the delete endpoint after the database drop: the tombstone then holds the
+    /// tenant id and database name until the settle sweep has verified nothing resurrected them
+    /// (AB#4829). Unlike <see cref="MarkDeletingAsync"/> this upserts — the caller has already proven
+    /// the tenant existed, and a legacy tenant without a record would otherwise end its delete without
+    /// the anchor the sweep needs; a mistaken tombstone self-heals, because the sweep removes any
+    /// Deleting record whose tenant turns out to still be registered. Also refreshes
+    /// <see cref="TenantLifecycleRecord.LastTransitionUtc"/>, so the settle period is measured from the
+    /// drop rather than from the delete's start.
+    /// </summary>
+    Task EnsureDeletingAsync(string tenantId, string? databaseName, Guid correlationId,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Removes the lifecycle record entirely (the tenant is fully gone).</summary>
     Task RemoveAsync(string tenantId, CancellationToken cancellationToken = default);
 

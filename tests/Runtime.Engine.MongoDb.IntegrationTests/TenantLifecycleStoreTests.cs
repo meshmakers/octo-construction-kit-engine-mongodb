@@ -73,6 +73,72 @@ public class TenantLifecycleStoreTests(SystemFixture fixture)
         Assert.Null(await store.GetAsync(tenantId, ct));
     }
 
+    /// <summary>
+    /// AB#4829. A setup pass that slipped past the Deleting gate (its lifecycle read predates the
+    /// delete's MarkDeleting) used to flip the delete's tombstone back to Creating via EnsureCreating's
+    /// new-cycle branch — corroding the very marker the settle sweep needs to finish the delete, and
+    /// resurrecting the tenant for the reconciler. A Deleting record must survive EnsureCreating
+    /// untouched, including its metadata (the sweep re-drops by the stored database name).
+    /// </summary>
+    [Fact]
+    public async Task EnsureCreating_does_not_resurrect_a_Deleting_tombstone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var store = Store;
+        var tenantId = $"ld-{Guid.NewGuid():N}"[..20];
+
+        var correlationId = Guid.NewGuid();
+        await store.EnsureCreatingAsync(tenantId, $"db-{tenantId}", correlationId, ct);
+        await store.MarkDeletingAsync(tenantId, ct);
+
+        await store.EnsureCreatingAsync(tenantId, "some-other-db", Guid.NewGuid(), ct);
+
+        var record = await store.GetAsync(tenantId, ct);
+        Assert.NotNull(record);
+        Assert.Equal(TenantLifecycleState.Deleting, record!.State);
+        Assert.Equal($"db-{tenantId}", record.DatabaseName);
+        Assert.Equal(correlationId, record.CorrelationId);
+
+        await store.RemoveAsync(tenantId, ct);
+    }
+
+    /// <summary>
+    /// AB#4829. The delete writes its settle tombstone AFTER the database drop, via EnsureDeleting.
+    /// MarkDeleting stays update-only (phantom-tombstone guard for arbitrary callers), but the delete
+    /// endpoint has already proven the tenant exists — and a legacy tenant without a lifecycle record
+    /// would otherwise end its delete without the anchor the settle sweep needs. The upsert also
+    /// carries the database name so the sweep can re-drop a resurrected shell.
+    /// </summary>
+    [Fact]
+    public async Task EnsureDeleting_upserts_the_settle_tombstone_even_for_a_legacy_tenant()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var store = Store;
+        var tenantId = $"le-{Guid.NewGuid():N}"[..20];
+
+        // Legacy tenant: no lifecycle record at all.
+        Assert.Null(await store.GetAsync(tenantId, ct));
+
+        var correlationId = Guid.NewGuid();
+        await store.EnsureDeletingAsync(tenantId, $"db-{tenantId}", correlationId, ct);
+
+        var inserted = await store.GetAsync(tenantId, ct);
+        Assert.NotNull(inserted);
+        Assert.Equal(TenantLifecycleState.Deleting, inserted!.State);
+        Assert.Equal($"db-{tenantId}", inserted.DatabaseName);
+        Assert.Equal(correlationId, inserted.CorrelationId);
+        Assert.Null(inserted.LeaseOwner);
+
+        // On an existing record it transitions to Deleting and refreshes the stored database name.
+        await store.EnsureCreatingAsync(tenantId, null, Guid.Empty, ct);
+        await store.EnsureDeletingAsync(tenantId, $"db2-{tenantId}", correlationId, ct);
+        var updated = await store.GetAsync(tenantId, ct);
+        Assert.Equal(TenantLifecycleState.Deleting, updated!.State);
+        Assert.Equal($"db2-{tenantId}", updated.DatabaseName);
+
+        await store.RemoveAsync(tenantId, ct);
+    }
+
     [Fact]
     public async Task Reconcile_lease_is_single_flight()
     {

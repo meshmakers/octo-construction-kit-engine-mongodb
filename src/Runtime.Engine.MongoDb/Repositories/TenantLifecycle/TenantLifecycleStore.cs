@@ -108,10 +108,16 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
     ///     left untouched: it belongs to whoever is currently driving the tenant, not to this caller.
     ///   </item>
     ///   <item>
-    ///     <b>Missing / Deleting / Failed</b> — a new creation cycle starts, so the attempt budget, the
-    ///     lease and the last error are all reset. A re-created tenant that still carries a stale
-    ///     tombstone therefore starts genuinely fresh (the previous implementation inherited the old
-    ///     <c>AttemptCount</c>, which contradicted its own comment and shortened the retry budget).
+    ///     <b>Deleting</b> — the tombstone survives untouched, state and metadata alike (AB#4829). A
+    ///     setup pass that slipped past the Deleting gate must not corrode the settle sweep's anchor;
+    ///     re-creation of the tenant id is serialized by the create endpoint's 409 until the sweep has
+    ///     removed the tombstone.
+    ///   </item>
+    ///   <item>
+    ///     <b>Missing / Failed</b> — a new creation cycle starts, so the attempt budget, the lease and
+    ///     the last error are all reset. A re-created tenant over a stale Failed record therefore starts
+    ///     genuinely fresh (the previous implementation inherited the old <c>AttemptCount</c>, which
+    ///     contradicted its own comment and shortened the retry budget).
     ///   </item>
     /// </list>
     /// </summary>
@@ -124,7 +130,17 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
             new BsonArray { $"${Fields.State}", (int)TenantLifecycleState.Active });
         var isCreating = new BsonDocument("$eq",
             new BsonArray { $"${Fields.State}", (int)TenantLifecycleState.Creating });
-        var keepsReconcileState = new BsonDocument("$or", new BsonArray { isActive, isCreating });
+
+        // AB#4829: a Deleting tombstone survives EnsureCreating untouched — state AND metadata. The
+        // new-cycle branch used to reset it to Creating, letting a setup pass that slipped past the
+        // Deleting gate corrode the delete's tombstone (the settle sweep's only anchor) and resurrect
+        // the tenant for the reconciler. Starting a fresh cycle over a tombstone is not the setup
+        // path's call: the create endpoint 409s while the tombstone lives, and the sweep removes it
+        // once the delete has settled.
+        var isDeleting = new BsonDocument("$eq",
+            new BsonArray { $"${Fields.State}", (int)TenantLifecycleState.Deleting });
+        var keepsState = new BsonDocument("$or", new BsonArray { isActive, isDeleting });
+        var keepsReconcileState = new BsonDocument("$or", new BsonArray { isActive, isCreating, isDeleting });
 
         // Guid.Empty is a legitimate value here (callers that have no correlation id pass it), so the
         // representation must match the class map's Standard-Guid serializer.
@@ -137,10 +153,10 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
 
         var set = new BsonDocument
         {
-            { Fields.State, Cond(isActive, $"${Fields.State}", (int)TenantLifecycleState.Creating) },
-            { Fields.Phase, Cond(isActive, $"${Fields.Phase}", (int)TenantLifecyclePhase.SetupStarted) },
-            { Fields.LastError, Cond(isActive, $"${Fields.LastError}", BsonNull.Value) },
-            { Fields.CorrelationId, Cond(isActive, $"${Fields.CorrelationId}", correlation) },
+            { Fields.State, Cond(keepsState, $"${Fields.State}", (int)TenantLifecycleState.Creating) },
+            { Fields.Phase, Cond(keepsState, $"${Fields.Phase}", (int)TenantLifecyclePhase.SetupStarted) },
+            { Fields.LastError, Cond(keepsState, $"${Fields.LastError}", BsonNull.Value) },
+            { Fields.CorrelationId, Cond(keepsState, $"${Fields.CorrelationId}", correlation) },
             {
                 Fields.AttemptCount,
                 Cond(keepsReconcileState,
@@ -149,8 +165,17 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
             { Fields.LeaseOwner, Cond(keepsReconcileState, $"${Fields.LeaseOwner}", BsonNull.Value) },
             { Fields.LeaseUntil, Cond(keepsReconcileState, $"${Fields.LeaseUntil}", BsonNull.Value) },
             { Fields.CreatedUtc, new BsonDocument("$ifNull", new BsonArray { $"${Fields.CreatedUtc}", now }) },
-            { Fields.LastTransitionUtc, now },
-            { Fields.DatabaseName, databaseNameValue }
+            {
+                Fields.LastTransitionUtc,
+                Cond(isDeleting,
+                    new BsonDocument("$ifNull", new BsonArray { $"${Fields.LastTransitionUtc}", now }), now)
+            },
+            {
+                Fields.DatabaseName,
+                Cond(isDeleting,
+                    new BsonDocument("$ifNull", new BsonArray { $"${Fields.DatabaseName}", BsonNull.Value }),
+                    databaseNameValue)
+            }
         };
 
         return new BsonDocumentStagePipelineDefinition<TenantLifecycleRecord, TenantLifecycleRecord>(
@@ -232,6 +257,31 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
 
         await collection.UpdateOneAsync(Eq(tenantId), update, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    public async Task EnsureDeletingAsync(string tenantId, string? databaseName, Guid correlationId,
+        CancellationToken cancellationToken = default)
+    {
+        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+
+        // Upsert, unlike MarkDeletingAsync: the delete endpoint has already proven the tenant exists,
+        // and the settle sweep needs the tombstone (with the database name to re-drop) even for a
+        // legacy tenant that never got a lifecycle record. A mistaken tombstone self-heals — the sweep
+        // removes any Deleting record whose tenant turns out to still be registered (AB#4829).
+        var update = Builders<TenantLifecycleRecord>.Update
+            .Set(r => r.State, TenantLifecycleState.Deleting)
+            .Set(r => r.CorrelationId, correlationId)
+            .Set(r => r.LeaseOwner, (string?)null)
+            .Set(r => r.LeaseUntil, (DateTime?)null)
+            .Set(r => r.LastTransitionUtc, DateTime.UtcNow)
+            .SetOnInsert(r => r.CreatedUtc, DateTime.UtcNow);
+        if (!string.IsNullOrEmpty(databaseName))
+        {
+            update = update.Set(r => r.DatabaseName, databaseName);
+        }
+
+        await collection.UpdateOneAsync(Eq(tenantId), update, new UpdateOptions { IsUpsert = true },
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task RemoveAsync(string tenantId, CancellationToken cancellationToken = default)
