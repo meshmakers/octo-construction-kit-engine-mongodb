@@ -5,6 +5,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.DisplayRules;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.UnitTests;
@@ -167,5 +168,72 @@ public class DisplayRuleSweepTests
         var entity = CreateEntity(new() { ["Name"] = "Wohnbereich" });
 
         Assert.Null(DisplayRuleSweeper.CreatePartialUpdate(cache, TenantId, entity));
+    }
+
+    // ── Root type resolution against a possibly-stale cache (AB#4822) ───────────────────
+
+    private const string SweepTypeId = "Test-1.0.1/Space-1";
+
+    private static CkTypeGraph CreateTypeGraph()
+    {
+        return new CkTypeGraph(new CkId<CkTypeId>(SweepTypeId), new CkCompiledTypeDto { TypeId = "Space" });
+    }
+
+    [Fact]
+    public async Task ResolveRootTypeGraph_CacheHit_NoReload()
+    {
+        var graph = CreateTypeGraph();
+        var cache = A.Fake<ICkCacheService>();
+        CkTypeGraph? outGraph;
+        A.CallTo(() => cache.TryGetCkType(TenantId, A<CkId<CkTypeId>>._, out outGraph))
+            .Returns(true)
+            .AssignsOutAndRefParameters(graph);
+        var reloads = 0;
+
+        var resolved = await DisplayRuleSweeper.ResolveRootTypeGraphAsync(cache, TenantId, SweepTypeId,
+            () => { reloads++; return Task.CompletedTask; }, NullLogger.Instance);
+
+        Assert.Same(graph, resolved);
+        Assert.Equal(0, reloads);
+        A.CallTo(() => cache.Unload(TenantId)).MustNotHaveHappened();
+    }
+
+    [Fact]
+    public async Task ResolveRootTypeGraph_StaleCacheMiss_ReloadsAndResolves()
+    {
+        // The sweep task's fully versioned key only exists after the import; a cache loaded
+        // before the import misses it. The resolver must reload before giving up.
+        var graph = CreateTypeGraph();
+        var cache = A.Fake<ICkCacheService>();
+        CkTypeGraph? outGraph;
+        A.CallTo(() => cache.TryGetCkType(TenantId, A<CkId<CkTypeId>>._, out outGraph))
+            .Returns(false).Once()
+            .Then
+            .Returns(true)
+            .AssignsOutAndRefParameters(graph);
+        var reloads = 0;
+
+        var resolved = await DisplayRuleSweeper.ResolveRootTypeGraphAsync(cache, TenantId, SweepTypeId,
+            () => { reloads++; return Task.CompletedTask; }, NullLogger.Instance);
+
+        Assert.Same(graph, resolved);
+        Assert.Equal(1, reloads);
+        A.CallTo(() => cache.Unload(TenantId)).MustHaveHappenedOnceExactly();
+    }
+
+    [Fact]
+    public async Task ResolveRootTypeGraph_MissAfterReload_ReturnsNull()
+    {
+        var cache = A.Fake<ICkCacheService>();
+        CkTypeGraph? outGraph;
+        A.CallTo(() => cache.TryGetCkType(TenantId, A<CkId<CkTypeId>>._, out outGraph))
+            .Returns(false);
+        var reloads = 0;
+
+        var resolved = await DisplayRuleSweeper.ResolveRootTypeGraphAsync(cache, TenantId, SweepTypeId,
+            () => { reloads++; return Task.CompletedTask; }, NullLogger.Instance);
+
+        Assert.Null(resolved);
+        Assert.Equal(1, reloads);
     }
 }
