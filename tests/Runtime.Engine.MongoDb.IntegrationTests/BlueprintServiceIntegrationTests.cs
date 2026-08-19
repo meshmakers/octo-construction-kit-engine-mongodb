@@ -303,6 +303,94 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
     }
 
     [Fact]
+    public async Task ApplyUpdate_MergeMode_RecordsTargetVersionInInstallationRow()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var installations = _fixture.GetService<ITenantBlueprintInstallations>();
+        var tenantId = await _fixture.CreateTestTenantAsync("apply-inst-row");
+
+        try
+        {
+            await blueprintService.ApplyBlueprintAsync(tenantId, TestBpV1, force: false, ct);
+
+            var beforeUpdate = await installations.GetByBlueprintNameAsync(tenantId, "TestBp", ct);
+            beforeUpdate.Should().NotBeNull();
+            beforeUpdate!.BlueprintId.Should().Be(TestBpV1);
+
+            var result = await blueprintService.ApplyUpdateAsync(
+                tenantId, TestBpV2, BlueprintUpdateMode.Merge, null, ct);
+            result.Success.Should().BeTrue();
+
+            var rows = await installations.GetInstalledAsync(tenantId, ct);
+            rows.Should().HaveCount(1, "an update must not add a second row for the same blueprint");
+
+            var row = rows.Single();
+            row.BlueprintId.Should().Be(TestBpV2,
+                "the installation row is the live view and must name the version now in effect");
+            row.InstalledAt.Should().Be(beforeUpdate.InstalledAt,
+                "InstalledAt is the first-install timestamp and is never overwritten");
+            row.LastUpdatedAt.Should().BeAfter(beforeUpdate.LastUpdatedAt,
+                "the update must stamp LastUpdatedAt");
+            row.IsDependency.Should().BeFalse("TestBp was applied explicitly, not as a dependency");
+            // Same apply timestamp for both records; BSON stores DateTime with millisecond
+            // precision, so the persisted value is the in-memory one truncated.
+            row.LastUpdatedAt.Should().BeCloseTo(result.NewBlueprintInfo!.AppliedAt,
+                TimeSpan.FromMilliseconds(1),
+                "installation row and history entry share the apply timestamp");
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyUpdate_DryRun_WritesNothing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var installations = _fixture.GetService<ITenantBlueprintInstallations>();
+        var history = _fixture.GetBlueprintHistory();
+        var tenantId = await _fixture.CreateTestTenantAsync("apply-inst-dryrun");
+
+        try
+        {
+            await blueprintService.ApplyBlueprintAsync(tenantId, TestBpV1, force: false, ct);
+
+            var rowBefore = await installations.GetByBlueprintNameAsync(tenantId, "TestBp", ct);
+            rowBefore.Should().NotBeNull();
+            var historyCountBefore = (await history.GetHistoryAsync(tenantId, ct)).Count;
+
+            var result = await blueprintService.ApplyUpdateAsync(
+                tenantId, TestBpV2, BlueprintUpdateMode.Merge,
+                new BlueprintUpdateOptions { DryRun = true }, ct);
+
+            result.Success.Should().BeTrue();
+
+            // A dry run is a promise about every write path, not just the installation row.
+            var row = await installations.GetByBlueprintNameAsync(tenantId, "TestBp", ct);
+            row.Should().NotBeNull();
+            row!.BlueprintId.Should().Be(TestBpV1, "the installed version must not move");
+            row.InstalledAt.Should().Be(rowBefore!.InstalledAt);
+            row.LastUpdatedAt.Should().Be(rowBefore.LastUpdatedAt,
+                "even a same-version upsert would be a write and must not happen");
+
+            (await history.GetHistoryAsync(tenantId, ct)).Count
+                .Should().Be(historyCountBefore, "a dry run must not append a history entry");
+
+            var customers = await QueryAllCustomersAsync(tenantId);
+            customers.Should().NotContain(c => c.RtWellKnownName == "Gamma",
+                "the v2 seed must not be applied");
+            customers.Should().HaveCount(2, "Alpha + Beta, exactly as v1 left them");
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    [Fact]
     public async Task ApplyUpdate_FullMode_DeletesOrphanLockedEntities()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -520,6 +608,44 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
                 .Should().BeNull("installation row removed");
 
             (await QueryAllCustomersAsync(tenantId)).Should().BeEmpty("locked owned entities erased");
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task Uninstall_AfterUpdate_RemovesEntitiesOfUpdatedVersion()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var tenantId = await _fixture.CreateTestTenantAsync("uninst-updated");
+
+        try
+        {
+            await blueprintService.ApplyBlueprintAsync(tenantId, TestBpV1, force: false, ct);
+
+            var update = await blueprintService.ApplyUpdateAsync(
+                tenantId, TestBpV2, BlueprintUpdateMode.Merge, null, ct);
+            update.Success.Should().BeTrue();
+
+            var result = await blueprintService.UninstallAsync(tenantId, "TestBp", cascade: false, ct);
+
+            result.Success.Should().BeTrue();
+            result.UninstalledBlueprintId.Should().Be(TestBpV2,
+                "uninstall works off the installation row, which the update advanced to v2");
+
+            var customers = await QueryAllCustomersAsync(tenantId);
+            customers.Should().NotContain(c => c.RtWellKnownName == "Alpha",
+                "Alpha was re-stamped with the v2 id by the update and is owned by the uninstalled version");
+            customers.Should().NotContain(c => c.RtWellKnownName == "Gamma",
+                "Gamma only exists in the v2 seed");
+
+            // Not asserted on purpose: entities the target version dropped (Beta, and the
+            // v1 continents) currently survive, because uninstall only walks the seed of
+            // the installed version. That is a known gap — pinning it here would turn a
+            // future uninstall improvement into a failing test.
         }
         finally
         {
