@@ -953,7 +953,9 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
             .GetRepositoryAsync(tenantId);
         repository.Should().NotBeNull();
 
-        var session = await repository!.GetSessionAsync();
+        // GetSessionAsync starts a new server session per call - dispose it, or a shared
+        // helper like this one piles them up over a full integration run.
+        using var session = await repository!.GetSessionAsync();
         var resultSet = await repository.GetRtEntitiesByTypeAsync(
             session, ckTypeId, RtEntityQueryOptions.Create());
         return resultSet.Items.ToList();
@@ -965,7 +967,7 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
             .GetRepositoryAsync(tenantId);
         repository.Should().NotBeNull();
 
-        var session = await repository!.GetSessionAsync();
+        using var session = await repository!.GetSessionAsync();
         var customers = await repository.GetRtEntitiesByTypeAsync(
             session, CustomerCkType, RtEntityQueryOptions.Create());
 
