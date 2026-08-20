@@ -1,0 +1,7 @@
+$schema: https://schemas.meshmakers.cloud/blueprint-meta.schema.json
+blueprintId: TestMigBp-1.0.0
+description: Migration test blueprint v1 - one kept customer, one legacy customer
+ckModelDependencies:
+  - System-[2.0,3.0)
+  - Test-[1.0,2.0)
+seedDataPath: seed-data/entities.yaml
