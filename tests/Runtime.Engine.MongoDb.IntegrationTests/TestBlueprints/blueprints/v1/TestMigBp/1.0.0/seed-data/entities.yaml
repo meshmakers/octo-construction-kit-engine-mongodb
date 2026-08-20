@@ -1,0 +1,23 @@
+$schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+dependencies:
+  - System-2.0.0
+  - Test-1.0.0
+entities:
+  - rtId: 507f1f77bcf86cd79943b001
+    ckTypeId: Test/Customer
+    rtWellKnownName: MigKept
+    attributes:
+      - id: Test/Contacts.Address
+        value: Mig Street 1
+  - rtId: 507f1f77bcf86cd79943b002
+    ckTypeId: Test/Customer
+    rtWellKnownName: MigLegacy
+    attributes:
+      - id: Test/Contacts.Address
+        value: Mig Street 2
+  - rtId: 507f1f77bcf86cd79943b010
+    ckTypeId: Test/Continent
+    rtWellKnownName: MigRegion
+    attributes:
+      - id: Test/Name
+        value: Region v1
