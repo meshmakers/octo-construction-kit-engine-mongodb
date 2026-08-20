@@ -14,7 +14,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.DisplayRules;
 /// </summary>
 internal sealed class DisplayRuleSweepStore : IDisplayRuleSweepStore
 {
-    private const string CollectionName = "display_rule_sweep";
+    private const string CollectionName = InfrastructureCollections.DisplayRuleSweep;
 
     private readonly ISystemContext _systemContext;
     private readonly IAdminRepositoryAccess _adminRepositoryAccess;
@@ -35,7 +35,7 @@ internal sealed class DisplayRuleSweepStore : IDisplayRuleSweepStore
 
     public async Task EnqueueAsync(string tenantId, string ckTypeId, CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: true, cancellationToken).ConfigureAwait(false);
         var now = DateTime.UtcNow;
 
         // Reset attempts/lease on re-enqueue: a newer rule change must sweep again even if a
@@ -55,7 +55,7 @@ internal sealed class DisplayRuleSweepStore : IDisplayRuleSweepStore
     public async Task<DisplayRuleSweepRecord?> TryClaimAsync(string leaseOwner, TimeSpan leaseDuration,
         TimeSpan minRetryInterval, int maxAttempts, CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
         var now = DateTime.UtcNow;
 
         var filter = Builders<DisplayRuleSweepRecord>.Filter.And(
@@ -82,14 +82,14 @@ internal sealed class DisplayRuleSweepStore : IDisplayRuleSweepStore
 
     public async Task CompleteAsync(string tenantId, string ckTypeId, CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
         await collection.DeleteOneAsync(Key(tenantId, ckTypeId), cancellationToken).ConfigureAwait(false);
     }
 
     public async Task RecordFailureAsync(string tenantId, string ckTypeId, string error,
         CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: true, cancellationToken).ConfigureAwait(false);
         var now = DateTime.UtcNow;
 
         // Releasing the lease here is deliberate: the attempt that just failed is over, so the entry
@@ -109,7 +109,7 @@ internal sealed class DisplayRuleSweepStore : IDisplayRuleSweepStore
     public async Task<IReadOnlyList<DisplayRuleSweepRecord>> ListAsync(string? tenantId = null,
         CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
         var filter = tenantId is null
             ? FilterDefinition<DisplayRuleSweepRecord>.Empty
             : Builders<DisplayRuleSweepRecord>.Filter.Eq(r => r.TenantId, tenantId);
@@ -122,7 +122,7 @@ internal sealed class DisplayRuleSweepStore : IDisplayRuleSweepStore
             Builders<DisplayRuleSweepRecord>.Filter.Eq(r => r.TenantId, tenantId),
             Builders<DisplayRuleSweepRecord>.Filter.Eq(r => r.CkTypeId, ckTypeId));
 
-    private async Task<IMongoCollection<DisplayRuleSweepRecord>> GetCollectionAsync(
+    private async Task<IMongoCollection<DisplayRuleSweepRecord>> GetCollectionAsync(bool ensureIndexes,
         CancellationToken cancellationToken)
     {
         var databaseName = _systemContext.DatabaseName;
@@ -135,7 +135,14 @@ internal sealed class DisplayRuleSweepStore : IDisplayRuleSweepStore
         var repository = (MongoRepository)client.GetRepository(databaseName);
         var collection = repository.Database.GetCollection<DisplayRuleSweepRecord>(CollectionName);
 
-        await EnsureIndexAsync(collection, cancellationToken).ConfigureAwait(false);
+        // Only the upserts (EnqueueAsync/RecordFailureAsync) may ensure the index: createIndexes
+        // materializes the collection AND the system database, which must not happen from reads or
+        // the claim ticker before the system-tenant bootstrap decided whether to create it (AB#4854).
+        if (ensureIndexes)
+        {
+            await EnsureIndexAsync(collection, cancellationToken).ConfigureAwait(false);
+        }
+
         return collection;
     }
 

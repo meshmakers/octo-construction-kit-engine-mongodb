@@ -1133,6 +1133,41 @@ recreate under the same name (Mongo `errorCode 13`) therefore stayed half-provis
 restarted; for Identity, which owns the roles/groups seed, that meant no administrator could be
 provisioned for that tenant at all.
 
+### Infrastructure-Only Shell of the System Database (AB#4854)
+
+The engine's own plumbing writes non-CK bookkeeping into the SYSTEM database — `tenant_lifecycle`,
+`tenant_setup_retry`, `display_rule_sweep`, `SysLock` (registry: `InfrastructureCollections`). On a
+virgin server such a write may materialize the system database BEFORE the system-tenant bootstrap
+runs; in r3.4.93 the bootstrap then refused over the "existing" database and the datasource user was
+never created — every fresh install wedged permanently on a MongoDB authentication error.
+
+Rules that keep this closed:
+
+- **Reads and update-only claims never materialize the database.** The stores ensure their indexes
+  only on document-creating operations (`GetCollectionAsync(ensureIndexes: ...)`).
+- **A database containing nothing but infrastructure collections is a "shell"** —
+  `IsDatabaseMaterializedOnlyByInfrastructureAsync`. `IsSystemTenantExistingAsync` reports a shell
+  as not existing (checked BEFORE the CK-model read, which would otherwise fail with an
+  authentication error on the missing datasource user); `ISystemContext.IsSystemDatabaseBootstrappableAsync`
+  answers absent-or-shell; the system bootstrap's refusal guard (AB#4762) exempts shells.
+- **The seed-decision guard lives in `UpdateSystemCkModelAsync`, not in callers.** Seeding the model
+  (as admin) into a shell would make the shell look like a real system database and skip the
+  bootstrap — the only creator of the datasource user — forever. The check sits immediately before
+  the seed so a shell that materializes after a caller's earlier probe cannot slip through a
+  check-then-act window; `EnsureSystemCkModelAsync` deliberately has no guard of its own.
+- **The bootstrap rollback drops only what it created from nothing.** `CreateSystemTenantAsync`
+  gates `CleanupFailedTenantCreationAsync(dropDatabaseAndUser: ...)` on
+  `databaseCreated && !databaseExisted` (mirrors `CreateChildTenantAsync`, AB#4762): a failed
+  attempt that started over a pre-existing shell keeps the shell (it holds other services' durable
+  bookkeeping — setup-retry queue, lifecycle records, locks), and a racing replica whose create
+  throws inside the try can never drop the winner's database.
+- **The allowlist is closed.** Any new pre-bootstrap writer into the system database must either use
+  a collection registered in `InfrastructureCollections` or run after the bootstrap — anything else
+  re-arms the fresh-install wedge. Renames are compile-protected through the shared constants;
+  additions are not, so review them explicitly.
+
+Pinned by `SystemTenantVirginBootstrapTests` (isolated `VirginSystemFixture` container).
+
 ## Test Data Structure
 
 The test CK model includes this hierarchy:

@@ -295,6 +295,20 @@ public class TenantContext : ITenantContext
             return;
         }
 
+        // Never seed the System CK model into an infrastructure-only shell of the SYSTEM database
+        // (AB#4854): the shell has no datasource user, and a model seeded here (as admin) makes
+        // IsSystemTenantExistingAsync treat the shell as a real system database — the bootstrap, the
+        // only legitimate creator of the datasource user, would then be skipped forever. Checked
+        // here, at the seed decision itself, so a shell that materializes after a caller's earlier
+        // probe (EnsureSystemCkModelAsync saw no database at all) cannot slip through a
+        // check-then-act window.
+        if (!isRepositoryInCreation
+            && normalizedDatabaseName == NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName)
+            && await IsDatabaseMaterializedOnlyByInfrastructureAsync(normalizedDatabaseName))
+        {
+            return;
+        }
+
         // Capture schema versions BEFORE updating (for migration detection)
         // Note: We read directly from the database to avoid recursion through IRuntimeRepositoryProvider
         // which would call TryFindTenantContextAsync and trigger UpdateSystemCkModelAsync again
@@ -589,6 +603,15 @@ public class TenantContext : ITenantContext
     ///     Creates the tenant database and its database user.
     /// </summary>
     /// <param name="normalizedDatabaseName">Database name, already normalized by the caller.</param>
+    /// <param name="allowInfrastructureMaterializedDatabase">
+    ///     When true, a database that was materialized only by the engine's own infrastructure
+    ///     collections does not count as taken. Only the system-tenant bootstrap passes true: on a
+    ///     virgin server the engine's plumbing (lifecycle probe index, a setup-retry record from an
+    ///     earlier failed attempt) can create the system database as an empty shell before the
+    ///     bootstrap runs, and refusing to bootstrap over that shell wedged every fresh install
+    ///     (AB#4854). Child creates keep the strict guard — for them any existing database, shell or
+    ///     not, is another tenant's namespace.
+    /// </param>
     /// <remarks>
     ///     Callers must have validated availability up front via
     ///     <see cref="EnsureTenantNamespaceAvailableAsync" />. The existence check kept here is only a
@@ -597,11 +620,14 @@ public class TenantContext : ITenantContext
     ///     deliberately throws before the caller marks the database as created, so the rollback can
     ///     never drop a database this operation did not create (AB#4762).
     /// </remarks>
-    protected async Task CreateTenantInternalAsync(string normalizedDatabaseName)
+    protected async Task CreateTenantInternalAsync(string normalizedDatabaseName,
+        bool allowInfrastructureMaterializedDatabase = false)
     {
         ArgumentValidation.ValidateString(nameof(normalizedDatabaseName), normalizedDatabaseName);
 
-        if (await IsDatabaseExistingAsync(normalizedDatabaseName))
+        if (await IsDatabaseExistingAsync(normalizedDatabaseName)
+            && !(allowInfrastructureMaterializedDatabase
+                 && await IsDatabaseMaterializedOnlyByInfrastructureAsync(normalizedDatabaseName)))
         {
             throw TenantException.DatabaseNameNotAvailable(normalizedDatabaseName);
         }
@@ -610,6 +636,19 @@ public class TenantContext : ITenantContext
         await _adminRepositoryClient.CreateUser(_systemConfiguration.Value.AuthenticationDatabaseName,
             normalizedDatabaseName, string.Format(_systemConfiguration.Value.DatabaseUser, normalizedDatabaseName),
             _systemConfiguration.Value.DatabaseUserPassword);
+    }
+
+    /// <summary>
+    ///     Whether the given database contains nothing but the engine's own infrastructure
+    ///     collections (see <see cref="InfrastructureCollections" />) — an "infrastructure-only
+    ///     shell", typically materialized by an index creation or a setup-retry record on a virgin
+    ///     server before the system tenant was bootstrapped (AB#4854). A non-existing database
+    ///     counts as a shell too (no collections at all).
+    /// </summary>
+    protected async Task<bool> IsDatabaseMaterializedOnlyByInfrastructureAsync(string databaseName)
+    {
+        var collectionNames = await _adminRepositoryClient.ListCollectionNamesAsync(databaseName);
+        return collectionNames.All(InfrastructureCollections.IsInfrastructure);
     }
 
     // ReSharper disable once UnusedMember.Global

@@ -168,6 +168,15 @@ public interface ISystemContext : ITenantContext
     Task<bool> IsDatabaseExistingAsync(string databaseName);
 
     /// <summary>
+    /// Whether the system tenant may be bootstrapped: true when the system database does not exist,
+    /// or exists only as an infrastructure shell — materialized by the engine's own plumbing
+    /// collections (tenant lifecycle, setup retry, locks) before the system tenant was created
+    /// (AB#4854). A system database carrying any real collection reports false; the AB#4762
+    /// protection (never bootstrap over — let alone drop — a database with data) is unchanged.
+    /// </summary>
+    Task<bool> IsSystemDatabaseBootstrappableAsync();
+
+    /// <summary>
     /// Returns the id of the tenant that the platform-wide registry maps to the given database name,
     /// or <c>null</c> when no tenant claims it.
     /// </summary>
