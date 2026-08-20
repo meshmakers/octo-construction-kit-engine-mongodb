@@ -56,11 +56,17 @@ public class SystemContext : TenantContext, ISystemContext
         // engine's own plumbing (lifecycle probe index, a setup-retry record from an earlier failed
         // attempt) can materialize the system database before this bootstrap runs, and refusing to
         // bootstrap over that shell wedged every fresh install — the datasource user was never created.
-        if (await IsDatabaseExistingAsync(normalizedDatabaseName)
-            && !await IsDatabaseMaterializedOnlyByInfrastructureAsync(normalizedDatabaseName))
+        var databaseExisted = await IsDatabaseExistingAsync(normalizedDatabaseName);
+        if (databaseExisted && !await IsDatabaseMaterializedOnlyByInfrastructureAsync(normalizedDatabaseName))
         {
             throw TenantException.SystemTenantDatabaseNotBootstrappable(normalizedDatabaseName);
         }
+
+        // Guards the destructive rollback below (mirrors CreateChildTenantAsync, AB#4762): it stays
+        // false until we have provably created the database ourselves. Nothing that runs before it
+        // is set may ever reach the drop — in particular a racing second replica whose
+        // CreateTenantInternalAsync throws because the name was taken in the meantime.
+        var databaseCreated = false;
 
         try
         {
@@ -70,6 +76,7 @@ public class SystemContext : TenantContext, ISystemContext
 
             // Create the database
             await CreateTenantInternalAsync(normalizedDatabaseName, allowInfrastructureMaterializedDatabase: true);
+            databaseCreated = true;
 
             // Restore the tenant system model on the newly created repository
             var ckModelRepository = CreateRepositoryDataSourceAsAdmin(normalizedDatabaseName, normalizedTenantId);
@@ -98,8 +105,12 @@ public class SystemContext : TenantContext, ISystemContext
             // Roll back the (partially) created system database + user before surfacing the failure
             // (AB#1958). The event-log write is a no-op while the system tenant itself does not yet
             // exist, but the database/user rollback prevents a half-created system tenant.
+            // Drop ONLY what this operation created from nothing (AB#4854): a pre-existing
+            // infrastructure shell holds other services' durable bookkeeping (setup-retry queue,
+            // lifecycle records, locks) and was possibly just fully bootstrapped by a racing
+            // replica — the database of an attempt that started over an existing shell is kept.
             await CleanupFailedTenantCreationAsync(normalizedDatabaseName, normalizedTenantId,
-                Guid.NewGuid(), e, dropDatabaseAndUser: true);
+                Guid.NewGuid(), e, dropDatabaseAndUser: databaseCreated && !databaseExisted);
             throw TenantException.CreateSystemTenantFailed(e);
         }
     }
@@ -259,19 +270,12 @@ public class SystemContext : TenantContext, ISystemContext
 
     #region Construction Kit Model Handling
 
-    public async Task EnsureSystemCkModelAsync()
+    public Task EnsureSystemCkModelAsync()
     {
-        // Never seed the System CK model into an infrastructure-only shell (AB#4854): the shell has
-        // no datasource user, and a model seeded here (as admin) made IsSystemTenantExistingAsync
-        // treat the shell as a real system database — the bootstrap, the only legitimate creator of
-        // a fresh system database and of its datasource user, was then skipped forever.
-        if (await IsDatabaseExistingAsync(DatabaseName)
-            && await IsDatabaseMaterializedOnlyByInfrastructureAsync(DatabaseName))
-        {
-            return;
-        }
-
-        await UpdateSystemCkModelAsync(DatabaseName, TenantId);
+        // The infrastructure-shell guard (AB#4854) lives inside UpdateSystemCkModelAsync, at the
+        // seed decision itself. A guard here would be check-then-act: a shell that materializes
+        // between this method's probe and the seed would still be seeded, re-creating the wedge.
+        return UpdateSystemCkModelAsync(DatabaseName, TenantId);
     }
 
     #endregion Construction Kit Model Handling

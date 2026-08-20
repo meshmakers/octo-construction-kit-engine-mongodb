@@ -1,3 +1,6 @@
+using FakeItEasy;
+
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.DisplayRules;
@@ -6,6 +9,8 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 using MongoDB.Bson;
@@ -131,6 +136,87 @@ public class SystemTenantVirginBootstrapTests(VirginSystemFixture fixture)
         await sweepStore.EnqueueAsync("index-tenant", "index-ck-type", TestContext.Current.CancellationToken);
         Assert.Contains("display_rule_sweep_tenant_type_unique",
             await ListIndexNamesAsync("display_rule_sweep"));
+    }
+
+    [Fact]
+    public async Task FailedBootstrap_OverInfrastructureShell_DoesNotDropTheShell()
+    {
+        await ResetToVirginAsync();
+
+        // The shell holds another service's durable bookkeeping — here a setup-retry record. A failed
+        // bootstrap attempt must not destroy it: the rollback may only remove what it created itself.
+        var retryStore = fixture.GetService<ITenantSetupRetryStore>();
+        await retryStore.RecordFailureAsync("IdentityServerPersistence", Configuration.SystemTenantId,
+            "transient failure before bootstrap", TestContext.Current.CancellationToken);
+
+        await using var brokenProvider = BuildProviderWithEmptyCatalog();
+        var brokenContext = brokenProvider.GetRequiredService<ISystemContext>();
+        await Assert.ThrowsAsync<TenantException>(() => brokenContext.CreateSystemTenantAsync());
+
+        Assert.True(await SystemContext.IsDatabaseExistingAsync(Configuration.SystemDatabaseName));
+        Assert.Single(await retryStore.ListAsync(cancellationToken: TestContext.Current.CancellationToken));
+        Assert.True(await SystemContext.IsSystemDatabaseBootstrappableAsync());
+    }
+
+    [Fact]
+    public async Task FailedBootstrap_OnVirginServer_RollsBackDatabaseAndUser()
+    {
+        await ResetToVirginAsync();
+
+        // Pins the AB#1958 rollback for the case it is meant for: the database did not exist before,
+        // so a failed bootstrap removes everything it created and the next attempt starts clean.
+        await using var brokenProvider = BuildProviderWithEmptyCatalog();
+        var brokenContext = brokenProvider.GetRequiredService<ISystemContext>();
+        await Assert.ThrowsAsync<TenantException>(() => brokenContext.CreateSystemTenantAsync());
+
+        Assert.False(await SystemContext.IsDatabaseExistingAsync(Configuration.SystemDatabaseName));
+        Assert.False(await IsDatabaseUserExistingAsync(Configuration.SystemDatabaseName));
+    }
+
+    [Fact]
+    public async Task UpdateSystemCkModel_OverInfrastructureShell_DoesNotSeedModel()
+    {
+        await ResetToVirginAsync();
+
+        var retryStore = fixture.GetService<ITenantSetupRetryStore>();
+        await retryStore.RecordFailureAsync("IdentityServerPersistence", Configuration.SystemTenantId,
+            "transient failure before bootstrap", TestContext.Current.CancellationToken);
+
+        // Models the check-then-act race deterministically: a caller probed before the shell existed
+        // and the seed itself runs after the shell materialized. The seed decision must re-check.
+        var probeContext = new UpdateProbeSystemContext(fixture.GetService<ILoggerFactory>(),
+            fixture.GetService<IOptions<OctoSystemConfiguration>>(), fixture.Provider!);
+        await probeContext.UpdateSystemCkModelDirectAsync();
+
+        Assert.DoesNotContain("CkModel", await ListSystemCollectionNamesAsync());
+        Assert.True(await SystemContext.IsSystemDatabaseBootstrappableAsync());
+    }
+
+    /// <summary>
+    ///     Copies the fixture's registrations and swaps in an empty CK catalog, so a bootstrap fails
+    ///     AFTER the database/user creation step — inside the try whose catch performs the rollback.
+    /// </summary>
+    private ServiceProvider BuildProviderWithEmptyCatalog()
+    {
+        var services = new ServiceCollection();
+        foreach (var descriptor in fixture.Services)
+        {
+            ((IList<ServiceDescriptor>)services).Add(descriptor);
+        }
+
+        services.Replace(ServiceDescriptor.Singleton(A.Fake<ICatalogService>()));
+        return services.BuildServiceProvider();
+    }
+
+    /// <summary>Exposes the protected seed step so the race window can be pinned directly.</summary>
+    private sealed class UpdateProbeSystemContext(ILoggerFactory loggerFactory,
+        IOptions<OctoSystemConfiguration> systemConfiguration, IServiceProvider serviceProvider)
+        : SystemContext(loggerFactory, systemConfiguration, serviceProvider)
+    {
+        public Task UpdateSystemCkModelDirectAsync()
+        {
+            return UpdateSystemCkModelAsync(DatabaseName, TenantId);
+        }
     }
 
     /// <summary>

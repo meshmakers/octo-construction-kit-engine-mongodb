@@ -295,6 +295,20 @@ public class TenantContext : ITenantContext
             return;
         }
 
+        // Never seed the System CK model into an infrastructure-only shell of the SYSTEM database
+        // (AB#4854): the shell has no datasource user, and a model seeded here (as admin) makes
+        // IsSystemTenantExistingAsync treat the shell as a real system database — the bootstrap, the
+        // only legitimate creator of the datasource user, would then be skipped forever. Checked
+        // here, at the seed decision itself, so a shell that materializes after a caller's earlier
+        // probe (EnsureSystemCkModelAsync saw no database at all) cannot slip through a
+        // check-then-act window.
+        if (!isRepositoryInCreation
+            && normalizedDatabaseName == NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName)
+            && await IsDatabaseMaterializedOnlyByInfrastructureAsync(normalizedDatabaseName))
+        {
+            return;
+        }
+
         // Capture schema versions BEFORE updating (for migration detection)
         // Note: We read directly from the database to avoid recursion through IRuntimeRepositoryProvider
         // which would call TryFindTenantContextAsync and trigger UpdateSystemCkModelAsync again
