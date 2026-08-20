@@ -18,7 +18,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantLifecycle;
 /// </summary>
 internal sealed class TenantLifecycleStore : ITenantLifecycleStore
 {
-    private const string CollectionName = "tenant_lifecycle";
+    private const string CollectionName = InfrastructureCollections.TenantLifecycle;
 
     /// <summary>
     /// Stored element names of <see cref="TenantLifecycleRecord"/>, needed by the hand-written
@@ -60,13 +60,13 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
 
     public async Task<TenantLifecycleRecord?> GetAsync(string tenantId, CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
         return await collection.Find(Eq(tenantId)).FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<TenantLifecycleRecord>> ListAsync(CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
         return await collection.Find(FilterDefinition<TenantLifecycleRecord>.Empty)
             .ToListAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -74,7 +74,7 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
     public async Task EnsureCreatingAsync(string tenantId, string? databaseName, Guid correlationId,
         CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: true, cancellationToken).ConfigureAwait(false);
 
         // Single atomic upsert via an aggregation-pipeline update (AB#4690). This used to be a
         // Find -> build record -> ReplaceOneAsync round trip, which had two defects that together made a
@@ -188,7 +188,7 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
     public async Task SetPhaseAsync(string tenantId, TenantLifecyclePhase phase, string? lastError = null,
         CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
 
         // Only advance the phase while the tenant is still Creating — never re-open an Active/Deleting tenant.
         var filter = Builders<TenantLifecycleRecord>.Filter.And(
@@ -206,7 +206,7 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
     public async Task MarkActiveAsync(string tenantId, string? databaseName = null,
         CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: true, cancellationToken).ConfigureAwait(false);
 
         // Aggregation-pipeline upsert like EnsureCreatingAsync, for the same reason (AB#4829): a
         // Deleting tombstone survives untouched — state, metadata and settle clock alike. MarkActive
@@ -268,7 +268,7 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
 
     public async Task MarkFailedAsync(string tenantId, string error, CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
 
         // Never overwrite a Deleting tombstone (AB#4829): a reconciler give-up landing after the
         // delete's tombstone would hide the record from the settle sweep, which only processes
@@ -289,7 +289,7 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
 
     public async Task MarkDeletingAsync(string tenantId, CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
 
         // Update-only (no upsert): a tenant with no lifecycle record (e.g. a legacy tenant created before
         // this feature) needs no tombstone — there is nothing for a concurrent Create to serialize against
@@ -308,7 +308,7 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
     public async Task EnsureDeletingAsync(string tenantId, string? databaseName, Guid correlationId,
         CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: true, cancellationToken).ConfigureAwait(false);
 
         // Upsert, unlike MarkDeletingAsync: the delete endpoint has already proven the tenant exists,
         // and the settle sweep needs the tombstone (with the database name to re-drop) even for a
@@ -332,14 +332,14 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
 
     public async Task RemoveAsync(string tenantId, CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
         await collection.DeleteOneAsync(Eq(tenantId), cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<TenantLifecycleRecord?> TryClaimForReconcileAsync(string leaseOwner, TimeSpan leaseDuration,
         CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
         var now = DateTime.UtcNow;
 
         // Claim the longest-waiting Creating tenant whose lease is free (null/missing) or expired. The
@@ -369,7 +369,7 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
     public async Task ReleaseLeaseAsync(string tenantId, string leaseOwner,
         CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
 
         var filter = Builders<TenantLifecycleRecord>.Filter.And(
             Eq(tenantId),
@@ -385,7 +385,7 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
     public async Task<TenantLifecycleRecord?> RequeueForReconcileAsync(string tenantId,
         CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
 
         var update = Builders<TenantLifecycleRecord>.Update
             .Set(r => r.State, TenantLifecycleState.Creating)
@@ -411,7 +411,8 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
     private static FilterDefinition<TenantLifecycleRecord> Eq(string tenantId)
         => Builders<TenantLifecycleRecord>.Filter.Eq(r => r.TenantId, tenantId);
 
-    private async Task<IMongoCollection<TenantLifecycleRecord>> GetCollectionAsync(CancellationToken cancellationToken)
+    private async Task<IMongoCollection<TenantLifecycleRecord>> GetCollectionAsync(bool ensureIndexes,
+        CancellationToken cancellationToken)
     {
         // ISystemContext IS the system tenant context (ISystemContext : ITenantContext), so its
         // DatabaseName is the system database. Resolve the raw IMongoDatabase the same way IndexUsageService
@@ -426,7 +427,17 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
         var repository = (MongoRepository)client.GetRepository(databaseName);
         var collection = repository.Database.GetCollection<TenantLifecycleRecord>(CollectionName);
 
-        await EnsureIndexAsync(collection, cancellationToken).ConfigureAwait(false);
+        // Only operations that can create documents (the upserts) may ensure the index: createIndexes
+        // materializes the collection AND the system database, and doing that from a read or an
+        // update-only write let the very first lifecycle probe of service startup create an empty
+        // system database before the system-tenant bootstrap decided whether to create it (AB#4854).
+        // Every inserting operation still ensures first, so the unique index exists before-or-with
+        // the first document.
+        if (ensureIndexes)
+        {
+            await EnsureIndexAsync(collection, cancellationToken).ConfigureAwait(false);
+        }
+
         return collection;
     }
 

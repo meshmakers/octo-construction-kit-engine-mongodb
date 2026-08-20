@@ -14,7 +14,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantLifecycle;
 /// </summary>
 internal sealed class TenantSetupRetryStore : ITenantSetupRetryStore
 {
-    private const string CollectionName = "tenant_setup_retry";
+    private const string CollectionName = InfrastructureCollections.TenantSetupRetry;
 
     private readonly ISystemContext _systemContext;
     private readonly IAdminRepositoryAccess _adminRepositoryAccess;
@@ -36,7 +36,7 @@ internal sealed class TenantSetupRetryStore : ITenantSetupRetryStore
     public async Task RecordFailureAsync(string serviceId, string tenantId, string error,
         CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: true, cancellationToken).ConfigureAwait(false);
         var now = DateTime.UtcNow;
 
         // Releasing the lease here is deliberate: the attempt that just failed is over, so the entry may be
@@ -55,14 +55,14 @@ internal sealed class TenantSetupRetryStore : ITenantSetupRetryStore
 
     public async Task ClearAsync(string serviceId, string tenantId, CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
         await collection.DeleteOneAsync(Key(serviceId, tenantId), cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     public async Task<long> ClearAllForTenantAsync(string tenantId, CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
         var result = await collection
             .DeleteManyAsync(Builders<TenantSetupRetryRecord>.Filter.Eq(r => r.TenantId, tenantId),
                 cancellationToken)
@@ -75,7 +75,7 @@ internal sealed class TenantSetupRetryStore : ITenantSetupRetryStore
         TimeSpan leaseDuration, TimeSpan minRetryInterval, int maxAttempts,
         CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
         var now = DateTime.UtcNow;
 
         var filter = Builders<TenantSetupRetryRecord>.Filter.And(
@@ -104,7 +104,7 @@ internal sealed class TenantSetupRetryStore : ITenantSetupRetryStore
     public async Task ReleaseLeaseAsync(string serviceId, string tenantId, string leaseOwner,
         CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
 
         var filter = Builders<TenantSetupRetryRecord>.Filter.And(
             Key(serviceId, tenantId),
@@ -120,7 +120,7 @@ internal sealed class TenantSetupRetryStore : ITenantSetupRetryStore
     public async Task<IReadOnlyList<TenantSetupRetryRecord>> ListAsync(string? serviceId = null,
         CancellationToken cancellationToken = default)
     {
-        var collection = await GetCollectionAsync(cancellationToken).ConfigureAwait(false);
+        var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
         var filter = serviceId is null
             ? FilterDefinition<TenantSetupRetryRecord>.Empty
             : Builders<TenantSetupRetryRecord>.Filter.Eq(r => r.ServiceId, serviceId);
@@ -133,7 +133,7 @@ internal sealed class TenantSetupRetryStore : ITenantSetupRetryStore
             Builders<TenantSetupRetryRecord>.Filter.Eq(r => r.ServiceId, serviceId),
             Builders<TenantSetupRetryRecord>.Filter.Eq(r => r.TenantId, tenantId));
 
-    private async Task<IMongoCollection<TenantSetupRetryRecord>> GetCollectionAsync(
+    private async Task<IMongoCollection<TenantSetupRetryRecord>> GetCollectionAsync(bool ensureIndexes,
         CancellationToken cancellationToken)
     {
         var databaseName = _systemContext.DatabaseName;
@@ -146,7 +146,14 @@ internal sealed class TenantSetupRetryStore : ITenantSetupRetryStore
         var repository = (MongoRepository)client.GetRepository(databaseName);
         var collection = repository.Database.GetCollection<TenantSetupRetryRecord>(CollectionName);
 
-        await EnsureIndexAsync(collection, cancellationToken).ConfigureAwait(false);
+        // Only the upsert (RecordFailureAsync) may ensure the index: createIndexes materializes the
+        // collection AND the system database, which must not happen from reads or the background
+        // claim ticker before the system-tenant bootstrap decided whether to create it (AB#4854).
+        if (ensureIndexes)
+        {
+            await EnsureIndexAsync(collection, cancellationToken).ConfigureAwait(false);
+        }
+
         return collection;
     }
 

@@ -69,5 +69,16 @@ public class SystemTenantBootstrapGuardTests(SystemTenantBootstrapFixture fixtur
             .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         Assert.NotNull(survivor);
+
+        // AB#4854 widened the guard: an infrastructure-ONLY shell is bootstrappable. Infrastructure
+        // collections sitting NEXT to real ones must not soften the refusal — this database still
+        // carries data, so it is still not bootstrappable and still refuses.
+        await systemDatabase.GetCollection<BsonDocument>("tenant_setup_retry")
+            .InsertOneAsync(new BsonDocument { { "serviceId", "test" }, { "tenantId", "test" } },
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.False(await systemContext.IsSystemDatabaseBootstrappableAsync());
+        await Assert.ThrowsAsync<TenantException>(
+            async () => await systemContext.CreateSystemTenantAsync());
     }
 }

@@ -52,7 +52,12 @@ public class SystemContext : TenantContext, ISystemContext
         // catch then dropped the entire platform database (AB#4762). Refuse instead: the caller must
         // repair the CK model, not re-create the tenant. Deliberately explicit rather than generic -
         // this path has no untrusted caller and it fails host startup.
-        if (await IsDatabaseExistingAsync(normalizedDatabaseName))
+        // An infrastructure-only shell is exempt from the refusal (AB#4854): on a virgin server the
+        // engine's own plumbing (lifecycle probe index, a setup-retry record from an earlier failed
+        // attempt) can materialize the system database before this bootstrap runs, and refusing to
+        // bootstrap over that shell wedged every fresh install — the datasource user was never created.
+        if (await IsDatabaseExistingAsync(normalizedDatabaseName)
+            && !await IsDatabaseMaterializedOnlyByInfrastructureAsync(normalizedDatabaseName))
         {
             throw TenantException.SystemTenantDatabaseNotBootstrappable(normalizedDatabaseName);
         }
@@ -64,7 +69,7 @@ public class SystemContext : TenantContext, ISystemContext
             await _tenantNotifications.NotifyPreTenantCreateAsync(normalizedTenantId, correlationId);
 
             // Create the database
-            await CreateTenantInternalAsync(normalizedDatabaseName);
+            await CreateTenantInternalAsync(normalizedDatabaseName, allowInfrastructureMaterializedDatabase: true);
 
             // Restore the tenant system model on the newly created repository
             var ckModelRepository = CreateRepositoryDataSourceAsAdmin(normalizedDatabaseName, normalizedTenantId);
@@ -223,6 +228,15 @@ public class SystemContext : TenantContext, ISystemContext
 
         if (await IsDatabaseExistingAsync(normalizedDatabaseName))
         {
+            // An infrastructure-only shell is not an existing system tenant (AB#4854). The check must
+            // run BEFORE the CK model read below: that read uses the datasource-user connection, and
+            // on a shell that user does not exist yet — the read then fails the whole probe with an
+            // authentication error instead of answering "false", wedging every caller at startup.
+            if (await IsDatabaseMaterializedOnlyByInfrastructureAsync(normalizedDatabaseName))
+            {
+                return false;
+            }
+
             if (await IsCkModelExistingAsync(SystemCkIds.CkModelId))
             {
                 return true;
@@ -232,13 +246,32 @@ public class SystemContext : TenantContext, ISystemContext
         return false;
     }
 
+    /// <inheritdoc />
+    public async Task<bool> IsSystemDatabaseBootstrappableAsync()
+    {
+        var normalizedDatabaseName = NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName);
+
+        return !await IsDatabaseExistingAsync(normalizedDatabaseName)
+               || await IsDatabaseMaterializedOnlyByInfrastructureAsync(normalizedDatabaseName);
+    }
+
     #endregion TenantId Context Handling
 
     #region Construction Kit Model Handling
 
-    public Task EnsureSystemCkModelAsync()
+    public async Task EnsureSystemCkModelAsync()
     {
-        return UpdateSystemCkModelAsync(DatabaseName, TenantId);
+        // Never seed the System CK model into an infrastructure-only shell (AB#4854): the shell has
+        // no datasource user, and a model seeded here (as admin) made IsSystemTenantExistingAsync
+        // treat the shell as a real system database — the bootstrap, the only legitimate creator of
+        // a fresh system database and of its datasource user, was then skipped forever.
+        if (await IsDatabaseExistingAsync(DatabaseName)
+            && await IsDatabaseMaterializedOnlyByInfrastructureAsync(DatabaseName))
+        {
+            return;
+        }
+
+        await UpdateSystemCkModelAsync(DatabaseName, TenantId);
     }
 
     #endregion Construction Kit Model Handling
