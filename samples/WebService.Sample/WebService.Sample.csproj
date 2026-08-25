@@ -10,9 +10,10 @@
 
     <ItemGroup>
         <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11" />
-        <!-- Pin transitive Microsoft.OpenApi to 2.7.5: 2.0.0 (pulled in by AspNetCore.OpenApi 10.0.9)
-             is in the vulnerable range of advisory GHSA-v5pm-xwqc-g5wc (>= 2.0.0-preview11, <= 2.7.4);
-             2.7.5 is the first patched release. NuGetAudit fails the build otherwise (warnings as errors). -->
+        <!-- Pin transitive Microsoft.OpenApi to 2.7.5: the version AspNetCore.OpenApi 10.0.11 pulls in
+             falls in the vulnerable range of advisory GHSA-v5pm-xwqc-g5wc (>= 2.0.0-preview11, <= 2.7.4);
+             2.7.5 is the first patched release. NuGetAudit fails the build otherwise (warnings as errors).
+             The pin cannot move to 3.x: AspNetCore.OpenApi 10.0.11 requires Microsoft.OpenApi < 3.0.0. -->
         <PackageReference Include="Microsoft.OpenApi" Version="2.7.5" />
         <PackageReference Include="NLog.Web.AspNetCore" Version="6.2.0" />
         <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.2.3" />
