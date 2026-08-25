@@ -1556,6 +1556,20 @@ public class TenantContext : ITenantContext
     /// <inheritdoc />
     public async Task DisableStreamDataAsync()
     {
+        // AB#4255: disabling is a verified precondition, not a teardown. An Activated archive still
+        // accepts ingest and is still ticked by the rollup/recompute orchestrators (they gate on the
+        // archive status, not on this flag), so the flag is only switched off once nothing is live.
+        // Disabled/Failed/Created archives keep their entities and tables; the tenant drop removes
+        // the tables with the database.
+        var activated = await GetActivatedArchivesAsync();
+        if (activated.Count > 0)
+        {
+            _logger.LogWarning(
+                "Refused to disable stream data for tenant '{TenantId}': {Count} archive(s) still activated",
+                TenantId, activated.Count);
+            throw StreamDataDisableBlockedException.Create(TenantId, activated);
+        }
+
         _logger.LogInformation("Disabling stream data for tenant '{TenantId}'", TenantId);
 
         using var session = await GetAdminSessionAsync();
@@ -1572,6 +1586,33 @@ public class TenantContext : ITenantContext
             await session.AbortTransactionAsync();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Every non-soft-deleted archive of the tenant whose status is <see cref="CkArchiveStatus.Activated"/>,
+    /// or an empty list when the tenant has not imported the System.StreamData model (without the
+    /// model no archive entity can exist, and enumerating the store would throw CkCacheException).
+    /// Read failures propagate: an unreadable state must never read as "nothing is activated".
+    /// </summary>
+    private async Task<IReadOnlyList<ArchiveSnapshot>> GetActivatedArchivesAsync()
+    {
+        // Same tenant-level gate as GetRollupOrchestrator: the store's EnumerateAsync resolves the
+        // RtArchive CK type from the cache and throws when the model was never imported.
+        if (!_cacheService.TryGetRtCkType(TenantId, ArchiveRtCkTypeId, out _))
+        {
+            return [];
+        }
+
+        var activated = new List<ArchiveSnapshot>();
+        await foreach (var archive in GetArchiveRuntimeStore().EnumerateAsync())
+        {
+            if (archive.Status == CkArchiveStatus.Activated)
+            {
+                activated.Add(archive);
+            }
+        }
+
+        return activated;
     }
 
     /// <inheritdoc />
@@ -1740,6 +1781,13 @@ public class TenantContext : ITenantContext
 
     private static readonly RtCkId<CkTypeId> RollupArchiveRtCkTypeId =
         new("System.StreamData", "RollupArchive");
+
+    /// <summary>
+    /// The abstract archive base type; present exactly when the System.StreamData model is imported.
+    /// Used as the tenant-level gate before enumerating archives (AB#4255).
+    /// </summary>
+    private static readonly RtCkId<CkTypeId> ArchiveRtCkTypeId =
+        new("System.StreamData", "Archive");
 
     /// <inheritdoc />
     public IRollupOrchestrator? GetRollupOrchestrator()

@@ -170,9 +170,18 @@ public interface ITenantContext
     Task EnableStreamDataAsync();
 
     /// <summary>
-    /// Disables stream data for this tenant: sets the configuration flag to disabled.
-    /// Does not delete the existing data table.
+    /// Disables stream data for this tenant: sets the configuration flag to disabled. The
+    /// System.StreamData model, the archive entities and their tables are kept (re-enabling
+    /// restores access; the tenant drop removes the tables with the database).
     /// </summary>
+    /// <remarks>
+    /// Verified precondition, not a teardown (AB#4255): refused with
+    /// <see cref="StreamDataDisableBlockedException"/> - naming the archives - while any archive of
+    /// the tenant is still <see cref="Meshmakers.Octo.Runtime.Contracts.StreamData.CkArchiveStatus.Activated"/>,
+    /// because an activated archive still accepts ingest and is still processed by the rollup and
+    /// recompute orchestrators. The check runs regardless of the current flag value. A tenant
+    /// without the System.StreamData model has no archives and disables without a check.
+    /// </remarks>
     Task DisableStreamDataAsync();
 
     /// <summary>
