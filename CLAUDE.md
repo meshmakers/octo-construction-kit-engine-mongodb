@@ -1000,7 +1000,12 @@ table, including those of Disabled/Failed archives — through the new
 with the database, so this is the last moment the tables can be attributed to the tenant; the guard in
 `DisableStreamDataAsync` (see *StreamData: Archives and Rollups*) only ensures nothing is *live* by
 then. Best-effort like the user drop: skipped when no factory is registered or `StreamData:Enabled` is
-false at instance level, a failure is an ERROR log and the schema has to be dropped by hand. Every
+false at instance level, a failure is an ERROR log and the schema has to be dropped by hand. Two
+consequences are deliberate: it runs only after the Mongo drop succeeded — when `dropDatabase` itself
+throws, the user drop and the namespace drop are both skipped and the exception propagates (same
+placement as the user drop); and it goes through the CrateDB resilience pipeline, so with CrateDB
+unreachable every tenant drop (Delete, Clear, create-rollback, `TenantBackupService` temp cleanup)
+blocks for up to ~2 min (timeout × retries) before logging the error — it never fails the drop. Every
 `DropChildTenantAsync` host inherits it — `ClearChildTenantAsync` therefore also drops the tables (it
 has no Activated-archive guard of its own); `DetachChildTenantAsync` keeps the namespace for a later
 attach.
