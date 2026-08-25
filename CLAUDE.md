@@ -581,6 +581,19 @@ The shared `CkArchiveSnapshot` covers both subtypes. When the loaded entity is a
    slot is treated as a dehydrated cache; the spec list is authoritative).
 2. Sets `CkArchiveSnapshot.RollupAggregations` so the activation / DDL path can branch.
 
+### Tenant-level Disable is a verified precondition (AB#4255)
+
+`TenantContext.DisableStreamDataAsync` enumerates the tenant's archives (`GetArchiveRuntimeStore().EnumerateAsync()`,
+gated on `System.StreamData/Archive` being in the CK cache — no model, no archives, no check) and
+throws `StreamDataDisableBlockedException` (`Runtime.Contracts.MongoDb`, a `StreamDataException`)
+while any archive is **Activated**: an Activated archive still accepts ingest and is still ticked by
+the rollup/recompute orchestrators, which gate on archive status, not on the tenant flag. The message
+names every blocking archive as `Kind 'Name' (Activated)` in a deterministic order; the asset
+repository maps the exception to HTTP 409 and appends the operator verbs. Disabled/Failed/Created
+archives never block, the flag flip keeps the model, the entities and the tables, and the check runs
+regardless of the current flag value. Read failures propagate — an unreadable state never reads as
+"nothing is activated".
+
 ### Activation DDL Branch (`CrateDbStreamDataRepository.EnsureArchiveCreatedAsync`)
 
 - Raw archive snapshots → `ArchivePathTypeResolver` walks the CK type tree to resolve each
@@ -980,6 +993,17 @@ case-insensitively, so dropping only one spelling missed either the normalized p
 mixed-case record or the mixed-case physical database a legacy attach adopted. MongoDB forbids two
 databases differing only in case, so at most one spelling exists. The user drop is best-effort: it is
 logged, never allowed to fail the delete.
+
+`DropTenantDatabaseAsync` also **drops the tenant's stream data namespace** — every CrateDB archive
+table, including those of Disabled/Failed archives — through the new
+`IStreamDataRepositoryFactory.DeleteDatabaseAsync(tenantId)` (AB#4255). The archive entities are gone
+with the database, so this is the last moment the tables can be attributed to the tenant; the guard in
+`DisableStreamDataAsync` (see *StreamData: Archives and Rollups*) only ensures nothing is *live* by
+then. Best-effort like the user drop: skipped when no factory is registered or `StreamData:Enabled` is
+false at instance level, a failure is an ERROR log and the schema has to be dropped by hand. Every
+`DropChildTenantAsync` host inherits it — `ClearChildTenantAsync` therefore also drops the tables (it
+has no Activated-archive guard of its own); `DetachChildTenantAsync` keeps the namespace for a later
+attach.
 
 **The resurrection window is not fully closed, and since AB#4762 it bites harder.** Background work
 that outlives the delete — above all a `tenant_setup_retry` entry, whose retry loop keeps calling

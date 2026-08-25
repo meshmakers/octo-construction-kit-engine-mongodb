@@ -244,6 +244,13 @@ public interface ITenantContext
     ///     committed, so a concurrent tenant-resolve can no longer find the tenant record and
     ///     re-create the database.
     /// </summary>
+    /// <remarks>
+    ///     Also drops the tenant's stream data namespace (every CrateDB archive table) when a stream
+    ///     data backend is registered and stream data is enabled at instance level (AB#4255). Like the
+    ///     database-user drop this is best-effort: the tenant is already deleted, a failure is logged
+    ///     as an error and the schema has to be dropped manually. Detach does not go through here and
+    ///     keeps the namespace for a later attach.
+    /// </remarks>
     /// <param name="handle">The handle returned by <see cref="DeleteChildTenantMetadataAsync" />.</param>
     /// <param name="tenantId">The tenant whose database is dropped (used for the notification).</param>
     Task DropTenantDatabaseAsync(TenantDeletionHandle handle, string tenantId);

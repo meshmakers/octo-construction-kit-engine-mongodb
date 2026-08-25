@@ -878,6 +878,43 @@ public class TenantContext : ITenantContext
         }
     }
 
+    /// <summary>
+    ///     Drops the tenant's stream data namespace (every CrateDB archive table) together with its
+    ///     database (AB#4255). The archive entities are gone with the database, so this is the last
+    ///     moment the tables can be attributed to the tenant; the Activated-archive guard in
+    ///     <see cref="DisableStreamDataAsync" /> only ensures nothing is live at this point, the tables
+    ///     of Disabled/Failed archives are still there. Best-effort like the user drop: the tenant is
+    ///     already deleted, so a failure is logged and the schema has to be dropped by hand.
+    ///     Skipped when no stream data backend is registered or stream data is disabled at instance
+    ///     level (no CrateDB configured).
+    /// </summary>
+    private async Task DropStreamDataNamespaceAsync(string tenantId, string databaseName)
+    {
+        var factory = _serviceProvider.GetService<IStreamDataRepositoryFactory>();
+        if (factory is null)
+        {
+            return;
+        }
+
+        var instanceConfig = _serviceProvider.GetService<IOptions<StreamDataInstanceConfiguration>>();
+        if (instanceConfig?.Value.Enabled != true)
+        {
+            return;
+        }
+
+        try
+        {
+            await factory.DeleteDatabaseAsync(tenantId);
+            _logger.LogInformation("Dropped the stream data namespace of tenant {TenantId}", tenantId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Dropped database {DatabaseName} of tenant {TenantId} but failed to drop its stream data (CrateDB) " +
+                "namespace; the schema has to be dropped manually", databaseName, tenantId);
+        }
+    }
+
     // ReSharper disable once MemberCanBePrivate.Global
     public async Task DropChildTenantAsync(IOctoAdminSession adminSession, string tenantId)
     {
@@ -969,6 +1006,8 @@ public class TenantContext : ITenantContext
                     "Dropped database {DatabaseName} of tenant {TenantId} but failed to drop its database user; " +
                     "the credential has to be removed manually", normalizedDatabaseName, tenantId);
             }
+
+            await DropStreamDataNamespaceAsync(tenantId, normalizedDatabaseName);
         }
         finally
         {

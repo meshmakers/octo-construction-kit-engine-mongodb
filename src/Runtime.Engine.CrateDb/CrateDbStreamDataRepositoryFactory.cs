@@ -60,4 +60,9 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
             recomputeStateStore,
             _archiveAuditTrail);
     }
+
+    public Task DeleteDatabaseAsync(string tenantId)
+    {
+        return _managementClient.DeleteStreamDataDatabaseAsync(tenantId);
+    }
 }

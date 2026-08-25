@@ -26,4 +26,13 @@ public interface IStreamDataRepositoryFactory
         IArchiveRuntimeStore archiveStore,
         IRollupArchiveRuntimeStore? rollupArchiveStore = null,
         IArchiveRecomputeStateStore? recomputeStateStore = null);
+
+    /// <summary>
+    /// Drops the tenant's entire stream data namespace - every archive table, including the
+    /// tables of Disabled/Failed archives and any legacy table. Idempotent: a tenant that never
+    /// activated an archive has nothing to drop. Takes only the tenant id (no runtime stores) so the
+    /// tenant drop can call it after the tenant's own database, and with it every archive entity,
+    /// is gone (AB#4255). Same operation as <see cref="IStreamDataRepository.DeleteDatabaseAsync"/>.
+    /// </summary>
+    Task DeleteDatabaseAsync(string tenantId);
 }
