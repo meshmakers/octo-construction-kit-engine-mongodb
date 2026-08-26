@@ -994,21 +994,33 @@ mixed-case record or the mixed-case physical database a legacy attach adopted. M
 databases differing only in case, so at most one spelling exists. The user drop is best-effort: it is
 logged, never allowed to fail the delete.
 
-`DropTenantDatabaseAsync` also **drops the tenant's stream data namespace** — every CrateDB archive
-table, including those of Disabled/Failed archives — through the new
-`IStreamDataRepositoryFactory.DeleteDatabaseAsync(tenantId)` (AB#4255). The archive entities are gone
-with the database, so this is the last moment the tables can be attributed to the tenant; the guard in
-`DisableStreamDataAsync` (see *StreamData: Archives and Rollups*) only ensures nothing is *live* by
-then. Best-effort like the user drop: skipped when no factory is registered or `StreamData:Enabled` is
-false at instance level, a failure is an ERROR log and the schema has to be dropped by hand. Two
-consequences are deliberate: it runs only after the Mongo drop succeeded — when `dropDatabase` itself
-throws, the user drop and the namespace drop are both skipped and the exception propagates (same
-placement as the user drop); and it goes through the CrateDB resilience pipeline, so with CrateDB
-unreachable every tenant drop (Delete, Clear, create-rollback, `TenantBackupService` temp cleanup)
-blocks for up to ~2 min (timeout × retries) before logging the error — it never fails the drop. Every
-`DropChildTenantAsync` host inherits it — `ClearChildTenantAsync` therefore also drops the tables (it
-has no Activated-archive guard of its own); `DetachChildTenantAsync` keeps the namespace for a later
-attach.
+**Dropping a tenant for good also drops the CrateDB tables of its archives** (AB#4255) — but only
+when the caller says so. `DeleteChildTenantMetadataAsync` / `DropChildTenantAsync` take
+`dropStreamData` (default **false**): with `true` the archives of the child are collected into the
+`TenantDeletionHandle.StreamDataArchives` *before* the record is deleted (the last moment the child
+resolves — the entities are gone with the database), and `DropTenantDatabaseAsync` drops exactly those
+archives' tables (data table + `__genmap` side-table, each `DROP TABLE IF EXISTS`, all statuses) through
+`IStreamDataRepositoryFactory.DeleteArchiveTablesAsync(tenantId, rtIds)` after the Mongo drop. The
+guard in `DisableStreamDataAsync` (see *StreamData: Archives and Rollups*) only ensures nothing is
+*live* by then. Who passes `true`: the tenant delete REST endpoint and `ClearChildTenantAsync` (Clear
+empties the tenant; its archive entities go with the database, keeping their tables would only orphan
+them). Who keeps the default: `TenantBackupService.RestoreTenantAsync` (restore over an existing
+tenant is a *database swap* — the same archives exist afterwards and find their tables again, so a
+Mongo-only restore keeps the stream data), the blueprint create-rollback, the deleting-settle sweep in
+octo-common-services (builds its handle from the lifecycle record, no archives) and the test cleanups.
+`DetachChildTenantAsync` keeps everything for a later attach.
+
+Two rules of that drop are deliberate. **Per-archive, never "everything in the tenant's schema"**:
+`TenantSchema.SchemaName` strips `-` and `_` from the tenant id, so `acme-corp`, `acme_corp` and
+`acmecorp` share one CrateDB schema — a schema-wide drop (the previously unused
+`DeleteStreamDataDatabaseAsync`) would take a neighbour's tables with it. **Best-effort like the user
+drop**: skipped (with a warning naming the tables) when no factory is registered or `StreamData:Enabled`
+is false at instance level; a failure is an ERROR log listing the `archive_<rtId>` tables to drop by hand
+(every statement is idempotent). It runs only after the Mongo drop succeeded — when `dropDatabase`
+itself throws, the user drop and the table drop are both skipped and the exception propagates — and it
+goes through the CrateDB resilience pipeline: the factory stops at the first failure, so with CrateDB
+unreachable a Delete/Clear of a tenant *with archives* blocks for up to ~2 min (timeout × retries) before
+logging the error; it never fails the drop, and tenants without archives never touch CrateDB.
 
 **The resurrection window is not fully closed, and since AB#4762 it bites harder.** Background work
 that outlives the delete — above all a `tenant_setup_retry` entry, whose retry loop keeps calling
