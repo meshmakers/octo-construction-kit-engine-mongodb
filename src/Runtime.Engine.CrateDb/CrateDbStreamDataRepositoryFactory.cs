@@ -1,3 +1,4 @@
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
@@ -61,8 +62,11 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
             _archiveAuditTrail);
     }
 
-    public Task DeleteDatabaseAsync(string tenantId)
+    public async Task DeleteArchiveTablesAsync(string tenantId, IReadOnlyList<OctoObjectId> archiveRtIds)
     {
-        return _managementClient.DeleteStreamDataDatabaseAsync(tenantId);
+        foreach (var archiveRtId in archiveRtIds)
+        {
+            await ArchiveTableDrop.DropAsync(_managementClient, tenantId, archiveRtId.ToString());
+        }
     }
 }
