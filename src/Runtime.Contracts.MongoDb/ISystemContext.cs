@@ -47,6 +47,16 @@ public interface ISystemContext : ITenantContext
     Task<ITenantContext?> TryFindTenantContextAsync(string tenantId);
 
     /// <summary>
+    /// Lightweight registry-only probe: whether <paramref name="tenantId"/> is the system tenant or
+    /// has a tenant record in the system registry. Unlike <see cref="TryFindTenantContextAsync"/> it
+    /// builds no tenant context and triggers no resolve-time CK model imports, so it is cheap enough
+    /// to gate high-frequency event consumers (AB#4829). Returns false when the system tenant itself
+    /// is not available (the registry is unreadable then — callers treat that like the quiet
+    /// bootstrap skip the setup path already performs).
+    /// </summary>
+    Task<bool> IsTenantRegisteredAsync(string tenantId);
+
+    /// <summary>
     /// Gets based on the tenant id the tenant repository.
     /// </summary>
     /// <param name="tenantId">The tenant id (also supports the system tenant id)</param>
@@ -156,6 +166,27 @@ public interface ISystemContext : ITenantContext
     /// </summary>
     /// <param name="databaseName">The database name to check (used verbatim, no normalization)</param>
     Task<bool> IsDatabaseExistingAsync(string databaseName);
+
+    /// <summary>
+    /// Whether the system tenant may be bootstrapped: true when the system database does not exist,
+    /// or exists only as an infrastructure shell — materialized by the engine's own plumbing
+    /// collections (tenant lifecycle, setup retry, locks) before the system tenant was created
+    /// (AB#4854). A system database carrying any real collection reports false; the AB#4762
+    /// protection (never bootstrap over — let alone drop — a database with data) is unchanged.
+    /// </summary>
+    Task<bool> IsSystemDatabaseBootstrappableAsync();
+
+    /// <summary>
+    /// Returns the id of the tenant that the platform-wide registry maps to the given database name,
+    /// or <c>null</c> when no tenant claims it.
+    /// </summary>
+    /// <remarks>
+    /// Lets callers that write to a database outside the tenant create/attach paths — above all the
+    /// restore, which runs <c>mongorestore --drop</c> against an operator-supplied name — check first
+    /// that they are not about to overwrite another tenant's data (AB#4762).
+    /// </remarks>
+    /// <param name="databaseName">The database name to look up; normalized internally.</param>
+    Task<string?> TryGetTenantIdByDatabaseNameAsync(string databaseName);
 
     #endregion
 }

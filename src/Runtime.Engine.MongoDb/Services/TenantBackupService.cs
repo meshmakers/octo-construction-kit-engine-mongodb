@@ -1,4 +1,6 @@
+using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 
@@ -13,7 +15,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 internal class TenantBackupService(
     ISystemContext systemContext,
     IRepositoryOpsService repositoryOpsService,
-    ILogger<TenantBackupService> logger) : ITenantBackupService
+    ILogger<TenantBackupService> logger,
+    ITenantLifecycleStore? tenantLifecycleStore = null) : ITenantBackupService
 {
     /// <inheritdoc />
     public async Task<CommandResult> BackupTenantAsync(string tenantId, string archiveFilePath,
@@ -183,6 +186,61 @@ internal class TenantBackupService(
                 return CommandResult.Failure(errorMessage);
             }
 
+            // The restore runs mongorestore --drop against the operator-supplied database name. The
+            // registry check further down cannot protect the system database (the system tenant has
+            // no RtTenant self-record — the same blind spot the namespace gate covers via the
+            // configuration, AB#4762) nor MongoDB's own databases, so both are refused explicitly
+            // here — and BEFORE the dropExistingTenant block, which is itself destructive.
+            var normalizedTargetDatabaseName = databaseName.Trim();
+            if (string.Equals(normalizedTargetDatabaseName, systemContext.DatabaseName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                var errorMessage =
+                    $"Database '{databaseName}' is the system database. Refusing to restore tenant " +
+                    $"'{tenantId}' into it, because the restore would overwrite the entire platform.";
+                logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
+                return CommandResult.Failure(errorMessage);
+            }
+
+            if (string.Equals(normalizedTargetDatabaseName, "admin", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(normalizedTargetDatabaseName, "local", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(normalizedTargetDatabaseName, "config", StringComparison.OrdinalIgnoreCase))
+            {
+                var errorMessage =
+                    $"Database '{databaseName}' is reserved by MongoDB itself and can never be a tenant " +
+                    $"database. Refusing to restore tenant '{tenantId}' into it.";
+                logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
+                return CommandResult.Failure(errorMessage);
+            }
+
+            // AB#4829: the restore mongorestores into an UNREGISTERED database first and attaches
+            // only afterwards — so a restore that targets the tenant id or database name of a tenant
+            // deleted moments ago races the delete settle sweep, which sees "registry absent +
+            // database exists + no owner" and would drop the restore mid-flight. Refuse while the
+            // Deleting tombstone stands; the sweep clears it within roughly two minutes.
+            if (tenantLifecycleStore is not null)
+            {
+                var normalizedTenantId = tenantId.NormalizeString();
+                var lifecycleRecords = await tenantLifecycleStore
+                    .ListAsync(cancellationToken ?? CancellationToken.None);
+                var settling = lifecycleRecords.FirstOrDefault(r =>
+                    r.State == TenantLifecycleState.Deleting
+                    && (r.TenantId == normalizedTenantId
+                        || string.Equals(r.DatabaseName, normalizedTargetDatabaseName,
+                            StringComparison.OrdinalIgnoreCase)));
+                if (settling is not null)
+                {
+                    var errorMessage =
+                        $"A deletion involving tenant '{settling.TenantId}' (database " +
+                        $"'{settling.DatabaseName}') is still settling. Refusing to restore into its " +
+                        "namespace until the settle sweep has completed the delete; retry in a couple " +
+                        "of minutes.";
+                    logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId,
+                        errorMessage);
+                    return CommandResult.Failure(errorMessage);
+                }
+            }
+
             // AB#4367: determine the archive's source database(s) from its prelude so a restore
             // under a different database name gets the namespace mapping instead of silently
             // restoring nothing. Runs before the drop block so a doomed restore never destroys
@@ -248,6 +306,23 @@ internal class TenantBackupService(
             else
             {
                 logger.LogInformation("Tenant '{TenantId}' does not exist, proceeding with restore", tenantId);
+            }
+
+            // The restore below runs with Drop = true against an operator-supplied database name, so it
+            // silently overwrites whatever lives there. Everything else validating that name happens
+            // AFTER the data is already gone (the attach at the end), which made this a second route to
+            // the AB#4762 data loss. Refuse up front when the name belongs to a different tenant.
+            // (The system database and MongoDB's own databases are refused earlier — they carry no
+            // RtTenant registry record, so this lookup is blind to them.)
+            var claimingTenantId = await systemContext.TryGetTenantIdByDatabaseNameAsync(databaseName);
+            if (claimingTenantId != null && !string.Equals(claimingTenantId, tenantId.NormalizeString(),
+                    StringComparison.Ordinal))
+            {
+                var errorMessage =
+                    $"Database '{databaseName}' is registered to tenant '{claimingTenantId}'. Refusing to restore " +
+                    $"tenant '{tenantId}' into it, because the restore would overwrite that tenant's data.";
+                logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
+                return CommandResult.Failure(errorMessage);
             }
 
             // Perform the restore

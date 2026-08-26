@@ -78,7 +78,7 @@ public class RtEntityMongoDataSourceMapper<TEntity> : IMongoDataSourceMapper<Oct
 
 public class LockMongoDataSourceMapper : IMongoDataSourceMapper<string, SysLock>
 {
-    public string CollectionNamePrefix => nameof(SysLock);
+    public string CollectionNamePrefix => Generic.InfrastructureCollections.SysLock;
 
     public string GetId(SysLock document)
     {

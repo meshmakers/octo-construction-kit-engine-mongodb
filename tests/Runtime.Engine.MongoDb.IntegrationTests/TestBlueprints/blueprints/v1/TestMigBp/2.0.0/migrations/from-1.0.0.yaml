@@ -1,0 +1,28 @@
+$schema: https://schemas.meshmakers.cloud/blueprint-migration.schema.json
+sourceVersion: "1.0.0"
+targetVersion: "2.0.0"
+description: Drop the legacy customer and rename the region
+
+steps:
+  - stepId: delete-legacy-customer
+    description: Non-additive change that only a migration script can perform
+    action: Delete
+    target:
+      ckTypeId: Test/Customer
+      rtWellKnownName: MigLegacy
+      blueprintSourceOnly: false
+
+  - stepId: rename-region
+    description: >
+      Writes a value that appears in no seed file. Modelled as a SetValue transform rather
+      than an Update step because MigrationStepDto.Data is a JsonElement, which YamlDotNet
+      cannot populate from a YAML mapping.
+    action: Transform
+    target:
+      ckTypeId: Test/Continent
+      rtWellKnownName: MigRegion
+      blueprintSourceOnly: false
+    transform:
+      type: SetValue
+      targetAttribute: Name
+      value: Region renamed by migration

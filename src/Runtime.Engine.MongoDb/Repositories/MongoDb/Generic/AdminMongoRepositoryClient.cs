@@ -59,6 +59,28 @@ public class AdminMongoRepositoryClient(
             StringComparison.InvariantCultureIgnoreCase) == 0);
     }
 
+    public async Task<IReadOnlyList<string>> ListCollectionNamesAsync(string databaseName)
+    {
+        ArgumentValidation.ValidateString(nameof(databaseName), databaseName);
+
+        // GetDatabase(name) is case-sensitive while IsRepositoryExistingAsync matches ignore-case, so
+        // resolve the actually stored database name(s) the same ignore-case way — otherwise a
+        // differently-cased existing database would report no collections and misclassify as an
+        // empty, bootstrappable shell (AB#4854).
+        var databaseNames = await Client.ListDatabaseNamesAsync();
+        var matchingNames = databaseNames.ToList().Where(x => string.Compare(x, databaseName,
+            StringComparison.InvariantCultureIgnoreCase) == 0);
+
+        var collectionNames = new List<string>();
+        foreach (var matchingName in matchingNames)
+        {
+            var cursor = await Client.GetDatabase(matchingName).ListCollectionNamesAsync();
+            collectionNames.AddRange(await cursor.ToListAsync());
+        }
+
+        return collectionNames;
+    }
+
     public async Task CreateUser(string authenticationDatabaseName, string userDatabaseName,
         string user,
         string? password)
@@ -88,7 +110,15 @@ public class AdminMongoRepositoryClient(
             }
         };
 
-        await database.RunCommandAsync(new BsonDocumentCommand<BsonDocument>(createUserCommand));
+        try
+        {
+            await database.RunCommandAsync(new BsonDocumentCommand<BsonDocument>(createUserCommand));
+        }
+        catch (MongoCommandException e) when (e.Code == 51003)
+        {
+            // 51003 = user already exists: a second replica raced us between the usersInfo check and
+            // the createUser command. The user is there, which is all this method guarantees.
+        }
     }
 
     public async Task DropUser(string authenticationDatabaseName, string user)
@@ -137,7 +167,7 @@ public class AdminMongoRepositoryClient(
             throw TenantException.AdminCredentialsMissing();
         }
 
-        urlBuilder.ApplicationName = $"OctoMesh-{databaseName}-{_instanceId}-{urlBuilder.Username}";
+        urlBuilder.ApplicationName = BuildApplicationName(databaseName, _instanceId, urlBuilder.Username);
         urlBuilder.UseTls = systemConfiguration.UseTls;
         urlBuilder.AllowInsecureTls = systemConfiguration.AllowInsecureTls;
         urlBuilder.RetryReads = true;

@@ -34,6 +34,17 @@ public interface ITenantSetupRetryStore
     Task ClearAsync(string serviceId, string tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Removes the pending entries of EVERY service for a tenant. Returns how many were removed.
+    /// </summary>
+    /// <remarks>
+    /// Called when a tenant is deleted. Without it the retry loop keeps invoking setup for a tenant
+    /// that no longer exists, and that setup re-creates its database as an empty shell moments after
+    /// the delete dropped it. Since AB#4762 the create path no longer reclaims such an orphan, so the
+    /// leftover permanently blocks its own database name — the delete has to take its retries with it.
+    /// </remarks>
+    Task<long> ClearAllForTenantAsync(string tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Atomically claims the longest-waiting pending tenant of <paramref name="serviceId"/> that is still
     /// within its retry budget and whose last attempt is older than <paramref name="minRetryInterval"/>,
     /// stamping it with <paramref name="leaseOwner"/> for <paramref name="leaseDuration"/>. Returns

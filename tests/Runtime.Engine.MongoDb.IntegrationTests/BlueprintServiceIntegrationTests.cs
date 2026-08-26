@@ -30,7 +30,10 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
 
     private static readonly BlueprintId TestBpV1 = new("TestBp", "1.0.0");
     private static readonly BlueprintId TestBpV2 = new("TestBp", "2.0.0");
+    private static readonly BlueprintId TestMigBpV1 = new("TestMigBp", "1.0.0");
+    private static readonly BlueprintId TestMigBpV2 = new("TestMigBp", "2.0.0");
     private static readonly RtCkId<CkTypeId> CustomerCkType = new("Test/Customer");
+    private static readonly RtCkId<CkTypeId> ContinentCkType = new("Test/Continent");
 
     /// <summary>
     /// Diagnostic to pin down WHY the Mongo provider returns null for a fresh
@@ -303,6 +306,94 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
     }
 
     [Fact]
+    public async Task ApplyUpdate_MergeMode_RecordsTargetVersionInInstallationRow()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var installations = _fixture.GetService<ITenantBlueprintInstallations>();
+        var tenantId = await _fixture.CreateTestTenantAsync("apply-inst-row");
+
+        try
+        {
+            await blueprintService.ApplyBlueprintAsync(tenantId, TestBpV1, force: false, ct);
+
+            var beforeUpdate = await installations.GetByBlueprintNameAsync(tenantId, "TestBp", ct);
+            beforeUpdate.Should().NotBeNull();
+            beforeUpdate!.BlueprintId.Should().Be(TestBpV1);
+
+            var result = await blueprintService.ApplyUpdateAsync(
+                tenantId, TestBpV2, BlueprintUpdateMode.Merge, null, ct);
+            result.Success.Should().BeTrue();
+
+            var rows = await installations.GetInstalledAsync(tenantId, ct);
+            rows.Should().HaveCount(1, "an update must not add a second row for the same blueprint");
+
+            var row = rows.Single();
+            row.BlueprintId.Should().Be(TestBpV2,
+                "the installation row is the live view and must name the version now in effect");
+            row.InstalledAt.Should().Be(beforeUpdate.InstalledAt,
+                "InstalledAt is the first-install timestamp and is never overwritten");
+            row.LastUpdatedAt.Should().BeAfter(beforeUpdate.LastUpdatedAt,
+                "the update must stamp LastUpdatedAt");
+            row.IsDependency.Should().BeFalse("TestBp was applied explicitly, not as a dependency");
+            // Same apply timestamp for both records; BSON stores DateTime with millisecond
+            // precision, so the persisted value is the in-memory one truncated.
+            row.LastUpdatedAt.Should().BeCloseTo(result.NewBlueprintInfo!.AppliedAt,
+                TimeSpan.FromMilliseconds(1),
+                "installation row and history entry share the apply timestamp");
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyUpdate_DryRun_WritesNothing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var installations = _fixture.GetService<ITenantBlueprintInstallations>();
+        var history = _fixture.GetBlueprintHistory();
+        var tenantId = await _fixture.CreateTestTenantAsync("apply-inst-dryrun");
+
+        try
+        {
+            await blueprintService.ApplyBlueprintAsync(tenantId, TestBpV1, force: false, ct);
+
+            var rowBefore = await installations.GetByBlueprintNameAsync(tenantId, "TestBp", ct);
+            rowBefore.Should().NotBeNull();
+            var historyCountBefore = (await history.GetHistoryAsync(tenantId, ct)).Count;
+
+            var result = await blueprintService.ApplyUpdateAsync(
+                tenantId, TestBpV2, BlueprintUpdateMode.Merge,
+                new BlueprintUpdateOptions { DryRun = true }, ct);
+
+            result.Success.Should().BeTrue();
+
+            // A dry run is a promise about every write path, not just the installation row.
+            var row = await installations.GetByBlueprintNameAsync(tenantId, "TestBp", ct);
+            row.Should().NotBeNull();
+            row!.BlueprintId.Should().Be(TestBpV1, "the installed version must not move");
+            row.InstalledAt.Should().Be(rowBefore!.InstalledAt);
+            row.LastUpdatedAt.Should().Be(rowBefore.LastUpdatedAt,
+                "even a same-version upsert would be a write and must not happen");
+
+            (await history.GetHistoryAsync(tenantId, ct)).Count
+                .Should().Be(historyCountBefore, "a dry run must not append a history entry");
+
+            var customers = await QueryAllCustomersAsync(tenantId);
+            customers.Should().NotContain(c => c.RtWellKnownName == "Gamma",
+                "the v2 seed must not be applied");
+            customers.Should().HaveCount(2, "Alpha + Beta, exactly as v1 left them");
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    [Fact]
     public async Task ApplyUpdate_FullMode_DeletesOrphanLockedEntities()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -528,6 +619,44 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
     }
 
     [Fact]
+    public async Task Uninstall_AfterUpdate_RemovesEntitiesOfUpdatedVersion()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var tenantId = await _fixture.CreateTestTenantAsync("uninst-updated");
+
+        try
+        {
+            await blueprintService.ApplyBlueprintAsync(tenantId, TestBpV1, force: false, ct);
+
+            var update = await blueprintService.ApplyUpdateAsync(
+                tenantId, TestBpV2, BlueprintUpdateMode.Merge, null, ct);
+            update.Success.Should().BeTrue();
+
+            var result = await blueprintService.UninstallAsync(tenantId, "TestBp", cascade: false, ct);
+
+            result.Success.Should().BeTrue();
+            result.UninstalledBlueprintId.Should().Be(TestBpV2,
+                "uninstall works off the installation row, which the update advanced to v2");
+
+            var customers = await QueryAllCustomersAsync(tenantId);
+            customers.Should().NotContain(c => c.RtWellKnownName == "Alpha",
+                "Alpha was re-stamped with the v2 id by the update and is owned by the uninstalled version");
+            customers.Should().NotContain(c => c.RtWellKnownName == "Gamma",
+                "Gamma only exists in the v2 seed");
+
+            // Not asserted on purpose: entities the target version dropped (Beta, and the
+            // v1 continents) currently survive, because uninstall only walks the seed of
+            // the installed version. That is a known gap — pinning it here would turn a
+            // future uninstall improvement into a failing test.
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    [Fact]
     public async Task Uninstall_BlueprintWithDependents_RefusesWithoutCascade()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -639,15 +768,196 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
         }
     }
 
-    private async Task<List<RtEntity>> QueryAllCustomersAsync(string tenantId)
+    /// <summary>
+    /// AB#4832: on a tenant carrying more than one blueprint, the update path used to resolve
+    /// "the current version" from the newest history entry of the whole tenant. The migration
+    /// lookup therefore never matched and the update degraded to Merge with a warning, while
+    /// still reporting success. Merge cannot delete, so the deleted legacy customer is the
+    /// discriminator between "the script ran" and the old silent fallback.
+    /// </summary>
+    [Fact]
+    public async Task ApplyUpdate_MigrationMode_MultiBlueprintTenant_ExecutesScript()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var tenantId = await _fixture.CreateTestTenantAsync("mig-multi-bp");
+
+        try
+        {
+            await blueprintService.ApplyBlueprintAsync(tenantId, TestMigBpV1, force: false, ct);
+
+            // A second, unrelated blueprint applied afterwards - this is what the name-less
+            // history lookup used to return as "the current version".
+            await blueprintService.ApplyBlueprintAsync(tenantId, TestBpV1, force: false, ct);
+
+            var history = _fixture.GetBlueprintHistory();
+            var lastOfTenant = await history.GetCurrentAsync(tenantId, ct);
+            lastOfTenant!.BlueprintId.Should().Be(TestBpV1,
+                "precondition: the newest history entry of the tenant belongs to the other blueprint");
+
+            var result = await blueprintService.ApplyUpdateAsync(
+                tenantId, TestMigBpV2, BlueprintUpdateMode.Migration, null, ct);
+
+            result.Success.Should().BeTrue(
+                "the migration script for 1.0.0 must be found even though another blueprint was applied later: "
+                + string.Join(" | ", result.Errors));
+            result.Errors.Should().BeEmpty();
+            result.Warnings.Should().NotContain(w => w.Contains("No migration script found"),
+                "the script exists for the installed version - no Merge fallback");
+
+            result.NewBlueprintInfo.Should().NotBeNull();
+            result.NewBlueprintInfo!.ApplicationMode.Should().Be(BlueprintApplicationMode.Migration);
+            result.NewBlueprintInfo.PreviousVersion.Should().Be(TestMigBpV1,
+                "PreviousVersion is the previous version of *this* blueprint, not of whatever was applied last");
+
+            var customers = await QueryAllCustomersAsync(tenantId);
+            customers.Should().NotContain(c => c.RtWellKnownName == "MigLegacy",
+                "the Delete step of the migration script must have run - Merge mode never deletes");
+
+            var continents = await QueryAllAsync(tenantId, ContinentCkType);
+            var region = continents.Single(c => c.RtWellKnownName == "MigRegion");
+            region.GetAttributeStringValueOrDefault("Name").Should().Be("Region renamed by migration",
+                "the Update step of the migration script must have run - the value appears in no seed file");
+
+            customers.Should().Contain(c => c.RtWellKnownName == "MigKept");
+
+            // The other blueprint is untouched by the update of this one.
+            customers.Should().Contain(c => c.RtWellKnownName == "Alpha");
+            customers.Should().Contain(c => c.RtWellKnownName == "Beta");
+
+            var currentOfMigBp = await history.GetCurrentByBlueprintNameAsync(tenantId, "TestMigBp", ct);
+            currentOfMigBp!.BlueprintId.Should().Be(TestMigBpV2);
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    /// <summary>
+    /// AB#4832: an explicitly requested Migration update without a matching script must fail
+    /// loudly instead of quietly applying the seed data in Merge mode and reporting success.
+    /// </summary>
+    [Fact]
+    public async Task ApplyUpdate_MigrationMode_WithoutMatchingScript_Fails()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var installations = _fixture.GetService<ITenantBlueprintInstallations>();
+        var tenantId = await _fixture.CreateTestTenantAsync("mig-no-script");
+
+        try
+        {
+            // TestBp ships no migrations at all.
+            await blueprintService.ApplyBlueprintAsync(tenantId, TestBpV1, force: false, ct);
+
+            var result = await blueprintService.ApplyUpdateAsync(
+                tenantId, TestBpV2, BlueprintUpdateMode.Migration, null, ct);
+
+            result.Success.Should().BeFalse();
+            result.Errors.Should().NotBeEmpty();
+            var errorText = string.Join(" | ", result.Errors);
+            errorText.Should().Contain("1.0.0", "the error names the installed version");
+
+            // Neither record moved on.
+            var row = await installations.GetByBlueprintNameAsync(tenantId, "TestBp", ct);
+            row!.BlueprintId.Should().Be(TestBpV1);
+
+            var history = _fixture.GetBlueprintHistory();
+            var current = await history.GetCurrentByBlueprintNameAsync(tenantId, "TestBp", ct);
+            current!.BlueprintId.Should().Be(TestBpV1);
+
+            // The seed diff of 2.0.0 must not have been applied either.
+            var customers = await QueryAllCustomersAsync(tenantId);
+            customers.Should().Contain(c => c.RtWellKnownName == "Beta",
+                "Beta is dropped by the 2.0.0 seed - nothing may have been imported");
+            customers.Should().NotContain(c => c.RtWellKnownName == "Gamma",
+                "Gamma only exists in the 2.0.0 seed, which must not have been imported");
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    /// <summary>
+    /// AB#4832: the preview agrees with the apply - a missing migration script is a blocking
+    /// conflict, not a warning that scrolls past.
+    /// </summary>
+    [Fact]
+    public async Task PreviewUpdate_MigrationMode_WithoutMatchingScript_ReportsConflict()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var tenantId = await _fixture.CreateTestTenantAsync("mig-preview-no-script");
+
+        try
+        {
+            await blueprintService.ApplyBlueprintAsync(tenantId, TestBpV1, force: false, ct);
+
+            var preview = await blueprintService.PreviewUpdateAsync(
+                tenantId, TestBpV2, BlueprintUpdateMode.Migration, ct);
+
+            var conflict = preview.Conflicts.Should()
+                .ContainSingle(c => c.ConflictType == ConflictType.MissingMigrationScript).Subject;
+            conflict.EntityId.Should().Be("migration:" + TestBpV2.FullName);
+            conflict.Description.Should().Contain("1.0.0");
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    /// <summary>
+    /// AB#4832: the name-filtered history query itself, against a real MongoDB tenant - the
+    /// compound (BlueprintName, AppliedAt) index on System/BlueprintHistory is what makes it
+    /// answer per blueprint.
+    /// </summary>
+    [Fact]
+    public async Task GetCurrentByBlueprintName_ReturnsVersionOfThatBlueprintOnly()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var history = _fixture.GetBlueprintHistory();
+        var tenantId = await _fixture.CreateTestTenantAsync("hist-by-name");
+
+        try
+        {
+            await blueprintService.ApplyBlueprintAsync(tenantId, TestMigBpV1, force: false, ct);
+            await blueprintService.ApplyBlueprintAsync(tenantId, TestBpV1, force: false, ct);
+
+            (await history.GetCurrentByBlueprintNameAsync(tenantId, "TestMigBp", ct))!
+                .BlueprintId.Should().Be(TestMigBpV1);
+            (await history.GetCurrentByBlueprintNameAsync(tenantId, "TestBp", ct))!
+                .BlueprintId.Should().Be(TestBpV1);
+            (await history.GetCurrentByBlueprintNameAsync(tenantId, "NotInstalledBp", ct))
+                .Should().BeNull();
+            (await history.GetCurrentAsync(tenantId, ct))!
+                .BlueprintId.Should().Be(TestBpV1, "the name-less lookup keeps its last-applied semantics");
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    private Task<List<RtEntity>> QueryAllCustomersAsync(string tenantId)
+    {
+        return QueryAllAsync(tenantId, CustomerCkType);
+    }
+
+    private async Task<List<RtEntity>> QueryAllAsync(string tenantId, RtCkId<CkTypeId> ckTypeId)
     {
         var repository = await _fixture.GetRuntimeRepositoryProvider()
             .GetRepositoryAsync(tenantId);
         repository.Should().NotBeNull();
 
-        var session = await repository!.GetSessionAsync();
+        // GetSessionAsync starts a new server session per call - dispose it, or a shared
+        // helper like this one piles them up over a full integration run.
+        using var session = await repository!.GetSessionAsync();
         var resultSet = await repository.GetRtEntitiesByTypeAsync(
-            session, CustomerCkType, RtEntityQueryOptions.Create());
+            session, ckTypeId, RtEntityQueryOptions.Create());
         return resultSet.Items.ToList();
     }
 
@@ -657,7 +967,7 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
             .GetRepositoryAsync(tenantId);
         repository.Should().NotBeNull();
 
-        var session = await repository!.GetSessionAsync();
+        using var session = await repository!.GetSessionAsync();
         var customers = await repository.GetRtEntitiesByTypeAsync(
             session, CustomerCkType, RtEntityQueryOptions.Create());
 

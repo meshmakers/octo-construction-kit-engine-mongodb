@@ -28,7 +28,7 @@ public class SystemContext : TenantContext, ISystemContext
         IServiceProvider serviceProvider)
         : base(loggerFactory, systemConfiguration, serviceProvider,
             systemConfiguration.Value.SystemTenantId.NormalizeString(),
-            systemConfiguration.Value.SystemDatabaseName.ToLower())
+            NormalizeDatabaseName(systemConfiguration.Value.SystemDatabaseName))
     {
         _serviceProvider = serviceProvider;
     }
@@ -43,8 +43,30 @@ public class SystemContext : TenantContext, ISystemContext
             throw TenantException.SystemTenantAlreadyExisting();
         }
 
-        var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
+        var normalizedDatabaseName = NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName);
         var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.NormalizeString();
+
+        // IsSystemTenantExistingAsync above is false whenever the System CK model is missing or not
+        // at the exact expected version - even when the database itself is present and full of data.
+        // Bootstrapping over it used to run into the database-exists guard inside the try below, whose
+        // catch then dropped the entire platform database (AB#4762). Refuse instead: the caller must
+        // repair the CK model, not re-create the tenant. Deliberately explicit rather than generic -
+        // this path has no untrusted caller and it fails host startup.
+        // An infrastructure-only shell is exempt from the refusal (AB#4854): on a virgin server the
+        // engine's own plumbing (lifecycle probe index, a setup-retry record from an earlier failed
+        // attempt) can materialize the system database before this bootstrap runs, and refusing to
+        // bootstrap over that shell wedged every fresh install — the datasource user was never created.
+        var databaseExisted = await IsDatabaseExistingAsync(normalizedDatabaseName);
+        if (databaseExisted && !await IsDatabaseMaterializedOnlyByInfrastructureAsync(normalizedDatabaseName))
+        {
+            throw TenantException.SystemTenantDatabaseNotBootstrappable(normalizedDatabaseName);
+        }
+
+        // Guards the destructive rollback below (mirrors CreateChildTenantAsync, AB#4762): it stays
+        // false until we have provably created the database ourselves. Nothing that runs before it
+        // is set may ever reach the drop — in particular a racing second replica whose
+        // CreateTenantInternalAsync throws because the name was taken in the meantime.
+        var databaseCreated = false;
 
         try
         {
@@ -53,7 +75,8 @@ public class SystemContext : TenantContext, ISystemContext
             await _tenantNotifications.NotifyPreTenantCreateAsync(normalizedTenantId, correlationId);
 
             // Create the database
-            await CreateTenantInternalAsync(normalizedDatabaseName);
+            await CreateTenantInternalAsync(normalizedDatabaseName, allowInfrastructureMaterializedDatabase: true);
+            databaseCreated = true;
 
             // Restore the tenant system model on the newly created repository
             var ckModelRepository = CreateRepositoryDataSourceAsAdmin(normalizedDatabaseName, normalizedTenantId);
@@ -82,8 +105,12 @@ public class SystemContext : TenantContext, ISystemContext
             // Roll back the (partially) created system database + user before surfacing the failure
             // (AB#1958). The event-log write is a no-op while the system tenant itself does not yet
             // exist, but the database/user rollback prevents a half-created system tenant.
+            // Drop ONLY what this operation created from nothing (AB#4854): a pre-existing
+            // infrastructure shell holds other services' durable bookkeeping (setup-retry queue,
+            // lifecycle records, locks) and was possibly just fully bootstrapped by a racing
+            // replica — the database of an attempt that started over an existing shell is kept.
             await CleanupFailedTenantCreationAsync(normalizedDatabaseName, normalizedTenantId,
-                Guid.NewGuid(), e, dropDatabaseAndUser: true);
+                Guid.NewGuid(), e, dropDatabaseAndUser: databaseCreated && !databaseExisted);
             throw TenantException.CreateSystemTenantFailed(e);
         }
     }
@@ -109,7 +136,7 @@ public class SystemContext : TenantContext, ISystemContext
             throw TenantException.SystemTenantDatabaseNotExisting();
         }
 
-        var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
+        var normalizedDatabaseName = NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName);
         var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.NormalizeString();
         Guid correlationId = Guid.NewGuid();
 
@@ -136,6 +163,29 @@ public class SystemContext : TenantContext, ISystemContext
             throw TenantException.TenantDoesNotExist(tenantId);
         }
         return tenantContext;
+    }
+
+    public async Task<bool> IsTenantRegisteredAsync(string tenantId)
+    {
+        if (tenantId.NormalizeString() == TenantId)
+        {
+            return await IsSystemTenantExistingAsync();
+        }
+
+        if (!await IsSystemTenantExistingAsync())
+        {
+            // Without the system tenant the registry is unreadable; report unregistered so callers
+            // treat this like the quiet bootstrap skip the setup path already performs.
+            return false;
+        }
+
+        // Pure registry read — deliberately NOT TryGetChildTenantContextAsync, whose resolve runs the
+        // CK model auto-imports; this probe gates per-CK-import events and must stay cheap (AB#4829).
+        using var session = await GetAdminSessionAsync();
+        session.StartTransaction();
+        var exists = await IsChildTenantExistingAsync(session, tenantId);
+        await session.CommitTransactionAsync();
+        return exists;
     }
 
     public async Task<ITenantContext?> TryFindTenantContextAsync(string tenantId)
@@ -185,10 +235,19 @@ public class SystemContext : TenantContext, ISystemContext
     // ReSharper disable once MemberCanBePrivate.Global
     public async Task<bool> IsSystemTenantExistingAsync()
     {
-        var normalizedDatabaseName = _systemConfiguration.Value.SystemDatabaseName.ToLower();
+        var normalizedDatabaseName = NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName);
 
         if (await IsDatabaseExistingAsync(normalizedDatabaseName))
         {
+            // An infrastructure-only shell is not an existing system tenant (AB#4854). The check must
+            // run BEFORE the CK model read below: that read uses the datasource-user connection, and
+            // on a shell that user does not exist yet — the read then fails the whole probe with an
+            // authentication error instead of answering "false", wedging every caller at startup.
+            if (await IsDatabaseMaterializedOnlyByInfrastructureAsync(normalizedDatabaseName))
+            {
+                return false;
+            }
+
             if (await IsCkModelExistingAsync(SystemCkIds.CkModelId))
             {
                 return true;
@@ -198,12 +257,24 @@ public class SystemContext : TenantContext, ISystemContext
         return false;
     }
 
+    /// <inheritdoc />
+    public async Task<bool> IsSystemDatabaseBootstrappableAsync()
+    {
+        var normalizedDatabaseName = NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName);
+
+        return !await IsDatabaseExistingAsync(normalizedDatabaseName)
+               || await IsDatabaseMaterializedOnlyByInfrastructureAsync(normalizedDatabaseName);
+    }
+
     #endregion TenantId Context Handling
 
     #region Construction Kit Model Handling
 
     public Task EnsureSystemCkModelAsync()
     {
+        // The infrastructure-shell guard (AB#4854) lives inside UpdateSystemCkModelAsync, at the
+        // seed decision itself. A guard here would be check-then-act: a shell that materializes
+        // between this method's probe and the seed would still be seeded, re-creating the wedge.
         return UpdateSystemCkModelAsync(DatabaseName, TenantId);
     }
 
@@ -240,6 +311,19 @@ public class SystemContext : TenantContext, ISystemContext
         // Bridges the protected TenantContext helper onto the interface so consumers
         // (e.g. TenantBackupService post-restore verification) can check database existence.
         return IsDatabaseExistingAsync(databaseName);
+    }
+
+    /// <inheritdoc />
+    public async Task<string?> TryGetTenantIdByDatabaseNameAsync(string databaseName)
+    {
+        // Commit on success only — a commit in a finally block would run after a failed read and
+        // its own failure would mask the original exception. Disposing the session aborts an
+        // uncommitted transaction, matching the read-session pattern used elsewhere.
+        using var session = await GetAdminSessionAsync();
+        session.StartTransaction();
+        var owner = await GetRtSystemTenantByDatabaseNameAsync(session, NormalizeDatabaseName(databaseName));
+        await session.CommitTransactionAsync();
+        return owner?.TenantId;
     }
 
     #endregion

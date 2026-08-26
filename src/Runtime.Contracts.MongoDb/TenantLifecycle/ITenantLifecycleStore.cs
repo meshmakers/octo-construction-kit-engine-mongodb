@@ -16,8 +16,10 @@ public interface ITenantLifecycleStore
 
     /// <summary>
     /// Inserts a <see cref="TenantLifecycleState.Creating"/> record if none exists yet. Never downgrades an
-    /// existing record (an already-Active tenant re-running setup on startup stays Active), it only refreshes
-    /// the database name / correlation id and transition timestamp.
+    /// existing record: an already-Active tenant re-running setup on startup stays Active (only its database
+    /// name / correlation id and transition timestamp are refreshed), and a Deleting tombstone survives
+    /// completely untouched — state, metadata and settle clock alike (AB#4829). Only a missing or Failed
+    /// record starts a fresh creation cycle.
     /// </summary>
     Task EnsureCreatingAsync(string tenantId, string? databaseName, Guid correlationId,
         CancellationToken cancellationToken = default);
@@ -29,15 +31,37 @@ public interface ITenantLifecycleStore
     Task SetPhaseAsync(string tenantId, TenantLifecyclePhase phase, string? lastError = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Marks the tenant fully provisioned and operational, clearing any pending error.</summary>
+    /// <summary>
+    /// Marks the tenant fully provisioned and operational, clearing any pending error. Upserts (lazy
+    /// backfill of legacy tenants), but never overwrites a <see cref="TenantLifecycleState.Deleting"/>
+    /// tombstone — MarkActive is the terminal write of exactly the in-flight setup pass the tombstone
+    /// defends against (AB#4829).
+    /// </summary>
     Task MarkActiveAsync(string tenantId, string? databaseName = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Marks provisioning as terminally failed (retry budget exhausted); the tenant awaits an operator.</summary>
+    /// <summary>
+    /// Marks provisioning as terminally failed (retry budget exhausted); the tenant awaits an operator.
+    /// Never overwrites a Deleting tombstone (AB#4829).
+    /// </summary>
     Task MarkFailedAsync(string tenantId, string error, CancellationToken cancellationToken = default);
 
     /// <summary>Marks the tenant as being deleted (tombstone) until the database drop is confirmed complete.</summary>
     Task MarkDeletingAsync(string tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Writes (or refreshes) the delete's settle tombstone, upserting when the tenant has no lifecycle
+    /// record yet. Called by the delete endpoint after the database drop: the tombstone then holds the
+    /// tenant id and database name until the settle sweep has verified nothing resurrected them
+    /// (AB#4829). Unlike <see cref="MarkDeletingAsync"/> this upserts — the caller has already proven
+    /// the tenant existed, and a legacy tenant without a record would otherwise end its delete without
+    /// the anchor the sweep needs; a mistaken tombstone self-heals, because the sweep removes any
+    /// Deleting record whose tenant turns out to still be registered. Also refreshes
+    /// <see cref="TenantLifecycleRecord.LastTransitionUtc"/>, so the settle period is measured from the
+    /// drop rather than from the delete's start.
+    /// </summary>
+    Task EnsureDeletingAsync(string tenantId, string? databaseName, Guid correlationId,
+        CancellationToken cancellationToken = default);
 
     /// <summary>Removes the lifecycle record entirely (the tenant is fully gone).</summary>
     Task RemoveAsync(string tenantId, CancellationToken cancellationToken = default);
@@ -62,7 +86,9 @@ public interface ITenantLifecycleStore
     /// Operator safety valve: re-open a tenant's record for reconciliation. Resets the state back to
     /// <see cref="TenantLifecycleState.Creating"/>, zeroes the attempt budget, clears the last error and
     /// any held lease, so the reconciler drives the tenant to completion again. Update-only: returns the
-    /// resulting record, or <c>null</c> when the tenant has no lifecycle record (AB#4348 Phase 4).
+    /// resulting record, or <c>null</c> when the tenant has no lifecycle record (AB#4348 Phase 4) — or
+    /// when the record is a Deleting tombstone, which the settle sweep owns and this valve must not
+    /// flip back to Creating (AB#4829).
     /// </summary>
     Task<TenantLifecycleRecord?> RequeueForReconcileAsync(string tenantId,
         CancellationToken cancellationToken = default);

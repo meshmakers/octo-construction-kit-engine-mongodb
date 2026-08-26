@@ -36,7 +36,7 @@ internal class UserMongoRepositoryClient(
             urlBuilder.AuthenticationSource = systemConfiguration.AuthenticationDatabaseName;
         }
 
-        urlBuilder.ApplicationName = $"OctoMesh-{databaseName}-{_instanceId}-{urlBuilder.Username}";
+        urlBuilder.ApplicationName = BuildApplicationName(databaseName, _instanceId, urlBuilder.Username);
         urlBuilder.UseTls = systemConfiguration.UseTls;
         urlBuilder.AllowInsecureTls = systemConfiguration.AllowInsecureTls;
         urlBuilder.RetryReads = true;

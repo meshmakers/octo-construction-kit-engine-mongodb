@@ -17,6 +17,15 @@ public interface IAdminRepositoryClient : IRepositoryClient
 
     Task<bool> IsRepositoryExistingAsync(string name);
 
+    /// <summary>
+    ///     Lists all collection names of the given database. The database name is matched
+    ///     case-insensitively, like <see cref="IsRepositoryExistingAsync" />; when several stored
+    ///     databases match, the union of their collection names is returned. An empty list means the
+    ///     database does not exist. Used to classify an infrastructure-only system database shell
+    ///     during bootstrap (AB#4854).
+    /// </summary>
+    Task<IReadOnlyList<string>> ListCollectionNamesAsync(string databaseName);
+
     Task CreateUser(string authenticationDatabaseName, string userDatabaseName, string user,
         string? password);
 

@@ -17,8 +17,11 @@ public enum TenantLifecycleState
     Active = 1,
 
     /// <summary>
-    /// Deletion requested. The record is a tombstone until the physical database drop is confirmed
-    /// complete, so a concurrent Create can serialize against it (Phase 3).
+    /// Deletion requested or settling. The record is a tombstone from the moment the delete starts
+    /// until the settle sweep has confirmed nothing in flight resurrected the tenant's retry rows or
+    /// database (~90–120 s after the drop, AB#4829); a concurrent Create serializes against it with a
+    /// retryable 409 (Phase 3). No writer other than the delete/sweep may leave this state — every
+    /// other transition preserves a Deleting record untouched.
     /// </summary>
     Deleting = 2,
 
