@@ -122,7 +122,9 @@ internal sealed class RollupOrchestratorHostedService : BackgroundService
         var orchestrator = tenantContext.GetRollupOrchestrator();
         if (orchestrator is null)
         {
-            // Stream data disabled for this tenant, or no rollup store wired — quietly skip.
+            // Tenant has not imported the System.StreamData model (never opted in), or no rollup
+            // store wired — quietly skip. Note the gate is model presence, not the tenant's enabled
+            // flag: DisableStreamDataAsync keeps the model, and refuses while rollups are Activated.
             return;
         }
 
