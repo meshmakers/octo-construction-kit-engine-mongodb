@@ -29,8 +29,11 @@ namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 public sealed record TenantDeletionHandle(
     string DatabaseName,
     Guid CorrelationId,
-    IReadOnlyList<OctoObjectId>? StreamDataArchives = null)
+    IReadOnlyList<OctoObjectId> StreamDataArchives)
 {
-    /// <summary>The archives whose stream data tables are dropped with the database; never null.</summary>
-    public IReadOnlyList<OctoObjectId> StreamDataArchives { get; init; } = StreamDataArchives ?? [];
+    /// <summary>A handle for a plain database drop: no stream data tables go with the database.</summary>
+    public TenantDeletionHandle(string databaseName, Guid correlationId)
+        : this(databaseName, correlationId, [])
+    {
+    }
 }

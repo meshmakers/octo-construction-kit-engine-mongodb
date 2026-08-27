@@ -920,14 +920,15 @@ public class TenantContext : ITenantContext
         {
             _logger.LogError(ex,
                 "Dropped database {DatabaseName} of tenant {TenantId} but failed to drop the stream data (CrateDB) " +
-                "tables of its archives; drop them manually in the tenant's schema (each with its __genmap " +
-                "side-table, if any): {Tables}", databaseName, tenantId, DescribeArchiveTables(archives));
+                "tables of its archives; drop them manually in the tenant's schema (the __genmap side-table " +
+                "exists only for rollup archives): {Tables}", databaseName, tenantId, DescribeArchiveTables(archives));
         }
     }
 
+    /// <summary>Both table names of every archive, so the manual remediation in the log is complete.</summary>
     private static string DescribeArchiveTables(IReadOnlyList<OctoObjectId> archives)
     {
-        return string.Join(", ", archives.Select(rtId => $"archive_{rtId}"));
+        return string.Join(", ", archives.Select(rtId => $"archive_{rtId}, archive_{rtId}__genmap"));
     }
 
     /// <summary>
