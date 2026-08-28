@@ -49,6 +49,11 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         _configuration = configuration.Value;
         _resilience = CrateResiliencePipeline.Build(resilienceOptions.Value);
 
+        // AB#4946: configure the process-wide schema instance prefix from the bound options. The
+        // client is the singleton every CrateDB path flows through, so this runs before any
+        // schema name is computed; SetInstancePrefix is idempotent and fails loud on conflict.
+        TenantSchema.SetInstancePrefix(_configuration.SchemaInstancePrefix);
+
         SqlMapper.AddTypeHandler(new JsonTypeHandler<Dictionary<string, object>>());
         SqlMapper.AddTypeHandler(new CkIdTypeHandler());
         SqlMapper.AddTypeHandler(new OctoIdTypeHandler());

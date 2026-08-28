@@ -563,6 +563,33 @@ This works for **any** CK model, not just the System model.
 
 ## StreamData: Archives and Rollups
 
+### Schema Instance Prefix (AB#4946 / Epic AB#4944)
+
+`TenantSchema.SchemaName` derives the per-tenant CrateDB schema from the tenant id alone, so two
+OctoMesh instances sharing one CrateDB cluster collide on identical tenant ids.
+`StreamDataConfiguration.SchemaInstancePrefix` (optional, **default empty**) prepends an instance
+prefix: `{prefix}_{tenant}`. Rules:
+
+- **Empty prefix ⇒ byte-identical legacy naming** — pinned by
+  `TenantSchemaInstancePrefixTests.SchemaName_WithoutPrefix_IsByteIdenticalToLegacyNaming`.
+  Existing instances must never set it, or their tenants' schemas would move. Deliberately a
+  separate setting, NOT derived from the RabbitMQ `instancePrefix` (test-2 main already runs
+  prefix `main` with un-prefixed CrateDB schemas).
+- The prefix is cleaned (lowercase alphanumeric) and applied **process-wide, set-once**
+  (`TenantSchema.SetInstancePrefix`, initialized from the bound options in the
+  `CrateDatabaseClient` / `CrateDbStreamDataRepository` ctors): schema naming is one-per-instance
+  and threading a constant through every static SQL builder (genmap, recompute staging, DDL)
+  would churn the whole surface. A conflicting second value throws at startup — two prefixes in
+  one process would silently split a tenant's data across two schemas. A late empty value never
+  clears a configured prefix.
+- The `MaxSchemaLength` hash-suffix fallback keeps the prefix (plus separators) inside the
+  budget; the hash stays over the cleaned tenant id (its job is per-tenant uniqueness).
+- Genmap / recompute-staging side tables derive from the schema-qualified name and follow
+  automatically.
+- Tests mutating the process-wide prefix forced `[assembly: CollectionBehavior(DisableTestParallelization = true)]`
+  on `StreamData.UnitTests` (pure-logic assembly, serialization costs ~nothing); the naming
+  matrix itself tests the pure `SchemaName(tenantId, prefix)` core.
+
 ### Storage Layout
 
 Per-tenant CrateDB schemas hold one table per `CkArchive` (and per `CkRollupArchive`). The Mongo

@@ -28,12 +28,81 @@ internal static class TenantSchema
 
     private static readonly Regex NonAlphanumeric = new("[^A-Za-z0-9]+", RegexOptions.Compiled);
 
+    // AB#4946 (Epic AB#4944): optional per-process instance prefix so two OctoMesh instances can
+    // share one CrateDB cluster without colliding on identical tenant ids. Process-wide and
+    // set-once by design — schema naming is inherently one-per-instance, and threading the value
+    // through every static SQL builder would churn the whole DDL/DML surface for a constant.
+    // Empty (the default) keeps every schema name byte-identical to the pre-AB#4946 behaviour —
+    // REQUIRED for existing instances, whose schemas must not move.
+    private static volatile string _instancePrefix = string.Empty;
+
+    /// <summary>
+    /// The active instance prefix ('' = today's un-prefixed naming). Set once at startup via
+    /// <see cref="SetInstancePrefix"/> from <c>StreamDataConfiguration.SchemaInstancePrefix</c>.
+    /// </summary>
+    internal static string InstancePrefix => _instancePrefix;
+
+    /// <summary>
+    /// Configures the instance prefix. Idempotent for the same effective value; a CONFLICTING
+    /// second value throws — two different prefixes inside one process would silently split the
+    /// tenant's data across two schemas, so a misconfiguration must fail loud at startup.
+    /// Null/empty keeps the un-prefixed naming (the backward-compatible default; existing
+    /// instances must never set a prefix, or their schemas would move).
+    /// </summary>
+    public static void SetInstancePrefix(string? rawPrefix)
+    {
+        var cleaned = string.IsNullOrWhiteSpace(rawPrefix)
+            ? string.Empty
+            : NonAlphanumeric.Replace(rawPrefix, string.Empty).ToLowerInvariant();
+
+        if (!string.IsNullOrWhiteSpace(rawPrefix) && cleaned.Length == 0)
+        {
+            throw new ArgumentException(
+                $"Schema instance prefix '{rawPrefix}' contains no alphanumeric characters and cannot be used.",
+                nameof(rawPrefix));
+        }
+
+        var current = _instancePrefix;
+        if (current == cleaned)
+        {
+            return;
+        }
+
+        if (current.Length != 0 && cleaned.Length != 0)
+        {
+            throw new InvalidOperationException(
+                $"The CrateDB schema instance prefix is already set to '{current}' and cannot be changed to " +
+                $"'{cleaned}' within the same process — check for conflicting StreamData configuration.");
+        }
+
+        // One of the two is empty: a late-arriving empty value (a second consumer without the
+        // setting) must not clear an already-configured prefix, and a configured prefix may
+        // arrive after an early empty initialization.
+        if (cleaned.Length != 0)
+        {
+            _instancePrefix = cleaned;
+        }
+    }
+
+    /// <summary>Test-only: resets the process-wide prefix so naming tests are order-independent.</summary>
+    internal static void ResetInstancePrefixForTests() => _instancePrefix = string.Empty;
+
     /// <summary>
     /// Returns the schema name for the given tenant id. Strips non-alphanumeric characters,
     /// lowercases, and falls back to a SHA-256 hash suffix when the cleaned name exceeds
-    /// <see cref="MaxSchemaLength"/>.
+    /// <see cref="MaxSchemaLength"/>. With a configured instance prefix (AB#4946) the schema is
+    /// <c>{prefix}_{tenant}</c>; without one the naming is byte-identical to the pre-prefix
+    /// behaviour.
     /// </summary>
     public static string SchemaName(string tenantId)
+    {
+        return SchemaName(tenantId, _instancePrefix);
+    }
+
+    /// <summary>
+    ///     Pure naming core (testable without touching the process-wide prefix state).
+    /// </summary>
+    internal static string SchemaName(string tenantId, string prefix)
     {
         if (string.IsNullOrWhiteSpace(tenantId))
         {
@@ -48,14 +117,30 @@ internal static class TenantSchema
                 nameof(tenantId));
         }
 
-        if (cleaned.Length <= MaxSchemaLength)
+        if (prefix.Length == 0)
         {
-            return cleaned;
+            if (cleaned.Length <= MaxSchemaLength)
+            {
+                return cleaned;
+            }
+
+            var hash = ShortHash(cleaned);
+            var keep = MaxSchemaLength - 1 - hash.Length;
+            return cleaned.Substring(0, keep) + "_" + hash;
         }
 
-        var hash = ShortHash(cleaned);
-        var keep = MaxSchemaLength - 1 - hash.Length;
-        return cleaned.Substring(0, keep) + "_" + hash;
+        var combined = prefix + "_" + cleaned;
+        if (combined.Length <= MaxSchemaLength)
+        {
+            return combined;
+        }
+
+        // Same hash-suffix fallback, with the prefix (and its separator) inside the budget. The
+        // hash is over the cleaned tenant id — its job is per-tenant uniqueness; the prefix is
+        // constant per instance.
+        var overflowHash = ShortHash(cleaned);
+        var keepTenant = MaxSchemaLength - prefix.Length - 2 - overflowHash.Length;
+        return prefix + "_" + cleaned.Substring(0, keepTenant) + "_" + overflowHash;
     }
 
     /// <summary>
