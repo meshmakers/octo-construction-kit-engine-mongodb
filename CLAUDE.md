@@ -567,8 +567,9 @@ This works for **any** CK model, not just the System model.
 
 `TenantSchema.SchemaName` derives the per-tenant CrateDB schema from the tenant id alone, so two
 OctoMesh instances sharing one CrateDB cluster collide on identical tenant ids.
-`StreamDataConfiguration.SchemaInstancePrefix` (optional, **default empty**) prepends an instance
-prefix: `{prefix}_{tenant}`. Rules:
+`StreamDataInstanceConfiguration.SchemaInstancePrefix` (optional, **default empty**, root
+`StreamData` config section ⇒ uniform env var `OCTO_STREAMDATA__SCHEMAINSTANCEPREFIX` across all
+services) prepends an instance prefix: `{prefix}_{tenant}`. Rules:
 
 - **Empty prefix ⇒ byte-identical legacy naming** — pinned by
   `TenantSchemaInstancePrefixTests.SchemaName_WithoutPrefix_IsByteIdenticalToLegacyNaming`.
@@ -576,8 +577,8 @@ prefix: `{prefix}_{tenant}`. Rules:
   separate setting, NOT derived from the RabbitMQ `instancePrefix` (test-2 main already runs
   prefix `main` with un-prefixed CrateDB schemas).
 - The prefix is cleaned (lowercase alphanumeric) and applied **process-wide, set-once**
-  (`TenantSchema.SetInstancePrefix`, initialized from the bound options in the
-  `CrateDatabaseClient` / `CrateDbStreamDataRepository` ctors): schema naming is one-per-instance
+  (`TenantSchema.SetInstancePrefix`, initialized from the bound instance options in the
+  `CrateDatabaseClient` ctor — the singleton every CrateDB path flows through): schema naming is one-per-instance
   and threading a constant through every static SQL builder (genmap, recompute staging, DDL)
   would churn the whole surface. A conflicting second value throws at startup — two prefixes in
   one process would silently split a tenant's data across two schemas. A late empty value never

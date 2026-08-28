@@ -1,5 +1,6 @@
 ﻿using Dapper;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Dapper;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
@@ -42,17 +43,19 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     /// <param name="resilienceOptions">Tunables for the timeout/retry/circuit-breaker pipeline (concept §8 T13).</param>
     public CrateDatabaseClient(ILogger<CrateDatabaseClient> logger, ICrateDbConnectionAccess connectionAccess,
         IOptions<StreamDataConfiguration> configuration,
-        IOptions<CrateResilienceOptions> resilienceOptions)
+        IOptions<CrateResilienceOptions> resilienceOptions,
+        IOptions<StreamDataInstanceConfiguration> instanceConfiguration)
     {
         _logger = logger;
         _connectionAccess = connectionAccess;
         _configuration = configuration.Value;
         _resilience = CrateResiliencePipeline.Build(resilienceOptions.Value);
 
-        // AB#4946: configure the process-wide schema instance prefix from the bound options. The
+        // AB#4946: configure the process-wide schema instance prefix from the root "StreamData"
+        // section (env OCTO_STREAMDATA__SCHEMAINSTANCEPREFIX — uniform across services). The
         // client is the singleton every CrateDB path flows through, so this runs before any
         // schema name is computed; SetInstancePrefix is idempotent and fails loud on conflict.
-        TenantSchema.SetInstancePrefix(_configuration.SchemaInstancePrefix);
+        TenantSchema.SetInstancePrefix(instanceConfiguration.Value.SchemaInstancePrefix);
 
         SqlMapper.AddTypeHandler(new JsonTypeHandler<Dictionary<string, object>>());
         SqlMapper.AddTypeHandler(new CkIdTypeHandler());

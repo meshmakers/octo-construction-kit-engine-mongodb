@@ -60,10 +60,6 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         _formulaEngine = formulaEngine;
         _recomputeStateStore = recomputeStateStore;
         _archiveAuditTrail = archiveAuditTrail;
-
-        // AB#4946: defense in depth next to CrateDatabaseClient — idempotent, fails loud on a
-        // conflicting prefix (see TenantSchema.SetInstancePrefix).
-        TenantSchema.SetInstancePrefix(_configuration.SchemaInstancePrefix);
     }
 
     public Task EnsureDatabaseCreatedAsync()
