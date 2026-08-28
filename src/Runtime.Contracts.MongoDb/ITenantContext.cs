@@ -170,9 +170,18 @@ public interface ITenantContext
     Task EnableStreamDataAsync();
 
     /// <summary>
-    /// Disables stream data for this tenant: sets the configuration flag to disabled.
-    /// Does not delete the existing data table.
+    /// Disables stream data for this tenant: sets the configuration flag to disabled. The
+    /// System.StreamData model, the archive entities and their tables are kept (re-enabling
+    /// restores access; the tenant drop removes the tables with the database).
     /// </summary>
+    /// <remarks>
+    /// Verified precondition, not a teardown (AB#4255): refused with
+    /// <see cref="StreamDataDisableBlockedException"/> - naming the archives - while any archive of
+    /// the tenant is still <see cref="Meshmakers.Octo.Runtime.Contracts.StreamData.CkArchiveStatus.Activated"/>,
+    /// because an activated archive still accepts ingest and is still processed by the rollup and
+    /// recompute orchestrators. The check runs regardless of the current flag value. A tenant
+    /// without the System.StreamData model has no archives and disables without a check.
+    /// </remarks>
     Task DisableStreamDataAsync();
 
     /// <summary>
@@ -207,9 +216,25 @@ public interface ITenantContext
 
     Task DetachChildTenantAsync(IOctoAdminSession adminSession, string tenantId);
 
+    /// <summary>
+    ///     Empties a child tenant: drops it - including the stream data tables of its archives, the
+    ///     entities are gone with the database - and re-creates it under the same database name.
+    /// </summary>
     Task ClearChildTenantAsync(IOctoAdminSession adminSession, string tenantId);
 
-    Task DropChildTenantAsync(IOctoAdminSession adminSession, string tenantId);
+    /// <summary>
+    ///     Deletes the tenant metadata and drops the tenant database in one go, within the caller's
+    ///     transaction (see <see cref="DeleteChildTenantMetadataAsync" /> for when that is safe).
+    /// </summary>
+    /// <param name="adminSession">Admin session to perform the operation.</param>
+    /// <param name="tenantId">The tenant to drop.</param>
+    /// <param name="dropStreamData">
+    ///     Whether the tenant's stream data (CrateDB) tables go with the database. True means "the
+    ///     tenant and everything it owns is gone"; the default false is for callers that only swap
+    ///     the database - a restore over an existing tenant, a create-rollback - and must leave the
+    ///     tables of the archives that continue to exist afterwards alone (AB#4255).
+    /// </param>
+    Task DropChildTenantAsync(IOctoAdminSession adminSession, string tenantId, bool dropStreamData = false);
 
     /// <summary>
     ///     Deletes only the tenant metadata records (in the current and system tenant repositories)
@@ -226,8 +251,16 @@ public interface ITenantContext
     /// </remarks>
     /// <param name="adminSession">Admin session whose transaction the record deletion joins.</param>
     /// <param name="tenantId">The tenant to delete.</param>
-    /// <returns>A handle carrying the database name and correlation id for the drop phase.</returns>
-    Task<TenantDeletionHandle> DeleteChildTenantMetadataAsync(IOctoAdminSession adminSession, string tenantId);
+    /// <param name="dropStreamData">
+    ///     When true, the tenant's archives are collected into the handle (while the tenant is still
+    ///     resolvable - before the record is deleted) so that <see cref="DropTenantDatabaseAsync" />
+    ///     drops their stream data tables with the database. A read failure propagates before
+    ///     anything is deleted. False (the default) leaves the tables alone, see
+    ///     <see cref="DropChildTenantAsync" /> (AB#4255).
+    /// </param>
+    /// <returns>A handle carrying the database name, correlation id and archives for the drop phase.</returns>
+    Task<TenantDeletionHandle> DeleteChildTenantMetadataAsync(IOctoAdminSession adminSession, string tenantId,
+        bool dropStreamData = false);
 
     /// <summary>
     ///     Drops the physical tenant database and raises the post-delete notification. Must be called
@@ -235,6 +268,15 @@ public interface ITenantContext
     ///     committed, so a concurrent tenant-resolve can no longer find the tenant record and
     ///     re-create the database.
     /// </summary>
+    /// <remarks>
+    ///     Also drops the stream data (CrateDB) tables of the archives listed in the handle - exactly
+    ///     those, never "everything in the tenant's schema" (two tenants whose ids differ only in
+    ///     <c>-</c>/<c>_</c> share a schema) - when a stream data backend is registered and stream data
+    ///     is enabled at instance level (AB#4255). Like the database-user drop this is best-effort:
+    ///     the tenant is already deleted, a failure is logged as an error naming the tables that have
+    ///     to be dropped manually. Detach does not go through here and keeps the tables for a later
+    ///     attach.
+    /// </remarks>
     /// <param name="handle">The handle returned by <see cref="DeleteChildTenantMetadataAsync" />.</param>
     /// <param name="tenantId">The tenant whose database is dropped (used for the notification).</param>
     Task DropTenantDatabaseAsync(TenantDeletionHandle handle, string tenantId);

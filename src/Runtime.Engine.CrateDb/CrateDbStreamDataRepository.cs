@@ -221,15 +221,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// <inheritdoc />
     public async Task DeleteArchiveAsync(OctoObjectId archiveRtId)
     {
-        var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString());
-        var sql = ArchiveDdlGenerator.GenerateDropTable(qualifiedTable);
-        _logger.LogDebug("Dropping archive table {Table} for tenant {TenantId}", qualifiedTable, _tenantId);
-        await _managementClient.ExecuteDdlAsync(_tenantId, sql);
-
-        // Drop the Phase-6 generation-map side-table too (IF EXISTS — no-op for raw / time-range
-        // archives that never had one).
-        var genMapTable = GenerationMapSqlBuilder.GenMapTable(_tenantId, archiveRtId.ToString());
-        await _managementClient.ExecuteDdlAsync(_tenantId, GenerationMapSqlBuilder.BuildDropIfExists(genMapTable));
+        _logger.LogDebug("Dropping archive table {Table} for tenant {TenantId}",
+            TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()), _tenantId);
+        await ArchiveTableDrop.DropAsync(_managementClient, _tenantId, archiveRtId.ToString());
     }
 
     public async Task InsertAsync(OctoObjectId archiveRtId, StreamDataPoint datapoint)

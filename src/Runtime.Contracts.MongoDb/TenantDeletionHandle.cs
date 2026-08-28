@@ -1,3 +1,5 @@
+using Meshmakers.Octo.ConstructionKit.Contracts;
+
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 
 /// <summary>
@@ -16,4 +18,22 @@ namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 ///     The correlation id shared between the pre-delete notification (raised during metadata
 ///     deletion) and the post-delete notification (raised after the physical database drop).
 /// </param>
-public sealed record TenantDeletionHandle(string DatabaseName, Guid CorrelationId);
+/// <param name="StreamDataArchives">
+///     The archives whose stream data (CrateDB) tables are dropped together with the database
+///     (AB#4255). Collected by the metadata deletion while the tenant is still resolvable - the
+///     entities are gone with the database, so the drop phase cannot enumerate them itself. Empty
+///     when the caller did not ask for the stream data to be dropped (a database swap such as a
+///     restore, where the same archives continue to exist afterwards), when the tenant has no
+///     archives, or for a handle built from a lifecycle record after the fact.
+/// </param>
+public sealed record TenantDeletionHandle(
+    string DatabaseName,
+    Guid CorrelationId,
+    IReadOnlyList<OctoObjectId> StreamDataArchives)
+{
+    /// <summary>A handle for a plain database drop: no stream data tables go with the database.</summary>
+    public TenantDeletionHandle(string databaseName, Guid correlationId)
+        : this(databaseName, correlationId, [])
+    {
+    }
+}

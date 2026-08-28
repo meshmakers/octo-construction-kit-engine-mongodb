@@ -1,3 +1,4 @@
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
@@ -26,4 +27,21 @@ public interface IStreamDataRepositoryFactory
         IArchiveRuntimeStore archiveStore,
         IRollupArchiveRuntimeStore? rollupArchiveStore = null,
         IArchiveRecomputeStateStore? recomputeStateStore = null);
+
+    /// <summary>
+    /// Drops the tables of the given archives of a tenant - the archive table and, for rollups, the
+    /// generation-map side-table - each as <c>DROP TABLE IF EXISTS</c>, so archives that never had a
+    /// table (Created, or Failed before the DDL) are harmless. Takes only ids so the tenant drop can
+    /// call it after the tenant's own database, and with it the archive entities and runtime stores,
+    /// is gone (AB#4255).
+    /// </summary>
+    /// <remarks>
+    /// Deliberately per-archive rather than "everything in the tenant's schema": the CrateDB schema
+    /// name is derived from the tenant id with <c>-</c> and <c>_</c> stripped, so tenants whose ids
+    /// differ only in those characters share one schema, and a schema-wide drop would take another
+    /// tenant's tables with it. Stops at the first failure and lets the exception propagate, so an
+    /// unreachable CrateDB costs one resilience timeout rather than one per archive; every statement
+    /// is idempotent, the caller logs the full list for a manual retry.
+    /// </remarks>
+    Task DeleteArchiveTablesAsync(string tenantId, IReadOnlyList<OctoObjectId> archiveRtIds);
 }

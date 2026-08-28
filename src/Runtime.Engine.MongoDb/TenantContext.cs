@@ -869,7 +869,9 @@ public class TenantContext : ITenantContext
         {
             await _tenantNotifications.NotifyPreTenantUpdateAsync(tenantId, correlationId);
 
-            await DropChildTenantAsync(adminSession, tenantId);
+            // Clear empties the tenant: its archive entities go with the database, so their stream
+            // data tables go too - keeping them would only orphan them (AB#4255).
+            await DropChildTenantAsync(adminSession, tenantId, dropStreamData: true);
             await CreateChildTenantAsync(adminSession, octoTenant.DatabaseName, tenantId);
         }
         finally
@@ -878,8 +880,85 @@ public class TenantContext : ITenantContext
         }
     }
 
+    /// <summary>
+    ///     Drops the stream data (CrateDB) tables of the archives collected into the deletion handle,
+    ///     after the tenant database is gone (AB#4255). Exactly those archives' tables - the CrateDB
+    ///     schema is shared by tenants whose ids differ only in <c>-</c>/<c>_</c>, so a schema-wide
+    ///     drop would take another tenant's data. The Activated-archive guard in
+    ///     <see cref="DisableStreamDataAsync" /> only ensures nothing is live at this point; the
+    ///     tables of Disabled/Failed archives are still there. Best-effort like the user drop: the
+    ///     tenant is already deleted, so a failure is logged with the tables that have to be dropped
+    ///     by hand (every statement is idempotent). Skipped when no stream data backend is registered
+    ///     or stream data is disabled at instance level (no CrateDB configured).
+    /// </summary>
+    private async Task DropStreamDataArchiveTablesAsync(string tenantId, string databaseName,
+        IReadOnlyList<OctoObjectId> archives)
+    {
+        if (archives.Count == 0)
+        {
+            return;
+        }
+
+        var factory = _serviceProvider.GetService<IStreamDataRepositoryFactory>();
+        var instanceConfig = _serviceProvider.GetService<IOptions<StreamDataInstanceConfiguration>>();
+        if (factory is null || instanceConfig?.Value.Enabled != true)
+        {
+            _logger.LogWarning(
+                "Dropped database {DatabaseName} of tenant {TenantId}; the stream data tables of its {Count} " +
+                "archive(s) were left alone because no stream data backend is enabled on this instance: {Tables}",
+                databaseName, tenantId, archives.Count, DescribeArchiveTables(archives));
+            return;
+        }
+
+        try
+        {
+            await factory.DeleteArchiveTablesAsync(tenantId, archives);
+            _logger.LogInformation("Dropped the stream data tables of {Count} archive(s) of tenant {TenantId}",
+                archives.Count, tenantId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Dropped database {DatabaseName} of tenant {TenantId} but failed to drop the stream data (CrateDB) " +
+                "tables of its archives; drop them manually in the tenant's schema (the __genmap side-table " +
+                "exists only for rollup archives): {Tables}", databaseName, tenantId, DescribeArchiveTables(archives));
+        }
+    }
+
+    /// <summary>Both table names of every archive, so the manual remediation in the log is complete.</summary>
+    private static string DescribeArchiveTables(IReadOnlyList<OctoObjectId> archives)
+    {
+        return string.Join(", ", archives.Select(rtId => $"archive_{rtId}, archive_{rtId}__genmap"));
+    }
+
+    /// <summary>
+    ///     The ids of every archive of the child tenant - all statuses, a Created archive's
+    ///     <c>DROP TABLE IF EXISTS</c> is harmless and a Failed one may own a partial table - or an
+    ///     empty list when the tenant does not exist or never imported the System.StreamData model
+    ///     (without the model no archive entity can exist, and enumerating the store would throw
+    ///     CkCacheException). Read failures propagate: called before anything is deleted, so an
+    ///     unreadable tenant fails the delete instead of leaking its tables.
+    /// </summary>
+    private async Task<IReadOnlyList<OctoObjectId>> CollectStreamDataArchivesAsync(IOctoAdminSession adminSession,
+        string tenantId)
+    {
+        var child = await TryGetChildTenantContextAsync(adminSession, tenantId);
+        if (child is null || !_cacheService.TryGetRtCkType(child.TenantId, ArchiveRtCkTypeId, out _))
+        {
+            return [];
+        }
+
+        var archives = new List<OctoObjectId>();
+        await foreach (var archive in child.GetArchiveRuntimeStore().EnumerateAsync())
+        {
+            archives.Add(archive.RtId);
+        }
+
+        return archives;
+    }
+
     // ReSharper disable once MemberCanBePrivate.Global
-    public async Task DropChildTenantAsync(IOctoAdminSession adminSession, string tenantId)
+    public async Task DropChildTenantAsync(IOctoAdminSession adminSession, string tenantId, bool dropStreamData = false)
     {
         // Single-call convenience: delete the metadata and drop the database in one go, within the
         // caller's transaction. Suitable for callers that have no concurrent tenant-resolve to race
@@ -887,13 +966,13 @@ public class TenantContext : ITenantContext
         // delete a live tenant (e.g. the tenant delete REST endpoint) must instead call
         // DeleteChildTenantMetadataAsync, commit, then DropTenantDatabaseAsync so the physical drop
         // happens after the record deletion is durably gone. See DeleteChildTenantMetadataAsync.
-        var handle = await DeleteChildTenantMetadataAsync(adminSession, tenantId);
+        var handle = await DeleteChildTenantMetadataAsync(adminSession, tenantId, dropStreamData);
         await DropTenantDatabaseAsync(handle, tenantId);
     }
 
     /// <inheritdoc />
     public async Task<TenantDeletionHandle> DeleteChildTenantMetadataAsync(IOctoAdminSession adminSession,
-        string tenantId)
+        string tenantId, bool dropStreamData = false)
     {
         ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
 
@@ -904,6 +983,13 @@ public class TenantContext : ITenantContext
         {
             throw TenantException.TenantDoesNotExist(tenantId);
         }
+
+        // Collected BEFORE the record deletion: this is the last moment the child resolves, and the
+        // archive entities are gone with its database. Only when the caller drops the tenant for good;
+        // a database swap (restore over an existing tenant) keeps the archives and their tables.
+        var streamDataArchives = dropStreamData
+            ? await CollectStreamDataArchivesAsync(adminSession, tenantId)
+            : [];
 
         Guid correlationId = Guid.NewGuid();
 
@@ -926,7 +1012,7 @@ public class TenantContext : ITenantContext
                 DeleteOptions.Erase);
         }
 
-        return new TenantDeletionHandle(octoTenant.DatabaseName, correlationId);
+        return new TenantDeletionHandle(octoTenant.DatabaseName, correlationId, streamDataArchives);
     }
 
     /// <inheritdoc />
@@ -969,6 +1055,8 @@ public class TenantContext : ITenantContext
                     "Dropped database {DatabaseName} of tenant {TenantId} but failed to drop its database user; " +
                     "the credential has to be removed manually", normalizedDatabaseName, tenantId);
             }
+
+            await DropStreamDataArchiveTablesAsync(tenantId, normalizedDatabaseName, handle.StreamDataArchives);
         }
         finally
         {
@@ -1556,6 +1644,20 @@ public class TenantContext : ITenantContext
     /// <inheritdoc />
     public async Task DisableStreamDataAsync()
     {
+        // AB#4255: disabling is a verified precondition, not a teardown. An Activated archive still
+        // accepts ingest and is still ticked by the rollup/recompute orchestrators (they gate on the
+        // archive status, not on this flag), so the flag is only switched off once nothing is live.
+        // Disabled/Failed/Created archives keep their entities and tables; the tenant drop removes
+        // the tables with the database.
+        var activated = await GetActivatedArchivesAsync();
+        if (activated.Count > 0)
+        {
+            _logger.LogWarning(
+                "Refused to disable stream data for tenant '{TenantId}': {Count} archive(s) still activated",
+                TenantId, activated.Count);
+            throw StreamDataDisableBlockedException.Create(TenantId, activated);
+        }
+
         _logger.LogInformation("Disabling stream data for tenant '{TenantId}'", TenantId);
 
         using var session = await GetAdminSessionAsync();
@@ -1572,6 +1674,33 @@ public class TenantContext : ITenantContext
             await session.AbortTransactionAsync();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Every non-soft-deleted archive of the tenant whose status is <see cref="CkArchiveStatus.Activated"/>,
+    /// or an empty list when the tenant has not imported the System.StreamData model (without the
+    /// model no archive entity can exist, and enumerating the store would throw CkCacheException).
+    /// Read failures propagate: an unreadable state must never read as "nothing is activated".
+    /// </summary>
+    private async Task<IReadOnlyList<ArchiveSnapshot>> GetActivatedArchivesAsync()
+    {
+        // Same tenant-level gate as GetRollupOrchestrator: the store's EnumerateAsync resolves the
+        // RtArchive CK type from the cache and throws when the model was never imported.
+        if (!_cacheService.TryGetRtCkType(TenantId, ArchiveRtCkTypeId, out _))
+        {
+            return [];
+        }
+
+        var activated = new List<ArchiveSnapshot>();
+        await foreach (var archive in GetArchiveRuntimeStore().EnumerateAsync())
+        {
+            if (archive.Status == CkArchiveStatus.Activated)
+            {
+                activated.Add(archive);
+            }
+        }
+
+        return activated;
     }
 
     /// <inheritdoc />
@@ -1740,6 +1869,13 @@ public class TenantContext : ITenantContext
 
     private static readonly RtCkId<CkTypeId> RollupArchiveRtCkTypeId =
         new("System.StreamData", "RollupArchive");
+
+    /// <summary>
+    /// The abstract archive base type; present exactly when the System.StreamData model is imported.
+    /// Used as the tenant-level gate before enumerating archives (AB#4255).
+    /// </summary>
+    private static readonly RtCkId<CkTypeId> ArchiveRtCkTypeId =
+        new("System.StreamData", "Archive");
 
     /// <inheritdoc />
     public IRollupOrchestrator? GetRollupOrchestrator()
