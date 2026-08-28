@@ -1080,6 +1080,41 @@ Detach removes the platform-wide row too, so detach and attach are exact inverse
 now-global id check would reject every re-attach, and a "detached" tenant stayed fully resolvable from
 the system context.
 
+### Tenant Database Ownership Marker — cross-instance attach guard (AB#4945 / Epic AB#4944)
+
+The namespace gate's registry lookups only cover the OWN instance's system database. On a shared
+MongoDB server a **second OctoMesh instance** (different `SystemDatabaseName` — the instance
+separator per Epic AB#4944) could therefore attach a tenant database this instance still owns:
+two controllers, trigger schedulers and lifecycle watchdogs on one tenant DB — split-brain.
+
+`TenantOwnershipStore` (`Repositories/TenantOwnership/`, non-CK collection `tenant_ownership` in
+the **tenant database itself**, one document with fixed id `owner`) closes that gap. The marker
+travels with the database, so every instance that can physically reach it can read who owns it.
+Instance identity = the normalized `SystemDatabaseName` (ordinal compare).
+
+Lifecycle:
+
+| Point | Effect |
+|---|---|
+| `CreateChildTenantAsync` | Stamps right after the physical create — owned from birth; a stamp failure fails the create and the rollback drops the database we provably created. |
+| `AttachChildTenantAsync` | The gate consults the marker (attach mode, after the existence check): foreign owner → **uniform, reason-free rejection** per the AB#4763 rule (the owner is logged, never returned — no cross-instance oracle). **STRICT by decision: no force override** — the owning instance must detach first. On pass, the attach stamps first thing in the try; a marker THIS call created is removed again in the catch (best-effort) so a failed attach never leaves the database locked for other instances. |
+| `DetachChildTenantAsync` | Removes the marker LAST inside the try — the one sanctioned ownership handover. Deliberately not best-effort: a removal failure aborts the caller's transaction, the registry rows are restored, and the database stays consistently attached here. |
+| Tenant-resolve (`TryGetChildTenantContextAsync`) | Lazy claim: stamps insert-if-absent (once per process per tenant, guard cleared by `ClearTenantResolveImportGuards`), so the existing fleet becomes owned without a migration script. Insert-if-absent means a pre-guard double attachment across two instances is won by the first writer and never flaps. |
+| `ClearChildTenantAsync` / delete | Clear re-stamps via its internal `CreateChildTenantAsync`; delete drops the database and the marker with it. |
+
+The collection is deliberately NOT in `InfrastructureCollections` — that registry is the
+system-database shell allowlist (AB#4854), and the marker is never written into a system database
+(the gate reserves the system database name before any marker access). Reads never materialize a
+database: every caller operates on a database whose existence the gate has already established.
+
+Known residual: `TenantBackupService.RestoreTenantAsync` restores whatever marker the backup
+carries (own-instance backups restore their own marker — correct); restoring another instance's
+backup into this instance requires a detach-style marker removal first, which is intentional.
+
+Tests: `TenantOwnershipGuardTests` (create stamps; detach removes + re-attach re-stamps;
+foreign-owned attach conflicts uniformly with the foreign claim untouched; unstamped legacy DB is
+adopted and stamped; tenant-resolve lazily stamps an unmarked DB).
+
 ### Tenant Lifecycle Store — `EnsureCreatingAsync` is an atomic branch on the stored state (AB#4690)
 
 `TenantLifecycleStore` (`Repositories/TenantLifecycle/`, non-CK collection `tenant_lifecycle` in the

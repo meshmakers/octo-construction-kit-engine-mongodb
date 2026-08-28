@@ -22,6 +22,7 @@ using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.CkModelMigrations;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData;
@@ -168,6 +169,12 @@ public class TenantContext : ITenantContext
             // while databaseCreated is still false - so the racer's database is never dropped.
             await CreateTenantInternalAsync(normalizedDatabaseName);
             databaseCreated = true;
+
+            // AB#4945: stamp the ownership marker right after the physical create, so the database
+            // is owned by this instance from birth. A stamp failure fails the create; the rollback
+            // below drops the database we provably created.
+            await GetTenantOwnershipStore().StampAsync(normalizedDatabaseName, normalizedTenantId,
+                OwnerInstanceIdentity);
 
             // Restore the tenant system model on the newly created repository
             await UpdateSystemCkModelAsync(normalizedDatabaseName, normalizedTenantId, true);
@@ -664,14 +671,28 @@ public class TenantContext : ITenantContext
 
         // Attach shares both namespaces with create, so it goes through the same gate: it must not be
         // able to claim the system tenant id, the system database, or a database that another tenant
-        // is already registered against (AB#4763).
+        // is already registered against (AB#4763). The gate also rejects a database owned by another
+        // instance (AB#4945), so any marker still present after it belongs to this instance.
         await EnsureTenantNamespaceAvailableAsync(adminSession, normalizedTenantId, normalizedDatabaseName,
             TenantNamespaceMode.AttachExistingDatabase, correlationId);
+
+        // Tracked for the rollback below: a marker we created on a failed attach must be removed
+        // again, or the database would stay locked for every other instance even though it was
+        // never attached. A marker that predates this call (an earlier failed attach of this
+        // instance, or a detach that crashed mid-way) is left alone — it is ours and self-heals.
+        var hadOwnMarkerBefore = await GetTenantOwnershipStore().GetAsync(normalizedDatabaseName) != null;
 
         try
         {
             // Distribute updates (pre) to inform other services.
             await _tenantNotifications.NotifyPreTenantCreateAsync(tenantId, correlationId);
+
+            // AB#4945: claim the database for this instance before anything else in the try — the
+            // marker is the cross-instance lock, so the claim window should be as small as
+            // possible. The registry rows below roll back with the caller's transaction; the
+            // marker is compensated in the catch.
+            await GetTenantOwnershipStore().StampAsync(normalizedDatabaseName, normalizedTenantId,
+                OwnerInstanceIdentity);
 
             // Add the new tenant as child tenant of the current one
             if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
@@ -704,6 +725,15 @@ public class TenantContext : ITenantContext
         }
         catch (Exception ex)
         {
+            // AB#4945: remove the ownership marker again when THIS call created it — otherwise a
+            // failed attach leaves the database locked for every other instance without any
+            // registry row backing the claim. Best-effort; a leftover marker of this instance
+            // self-heals on the next attach by this instance.
+            if (!hadOwnMarkerBefore)
+            {
+                await GetTenantOwnershipStore().TryRemoveAsync(normalizedDatabaseName);
+            }
+
             // Attach reuses an already existing database, so it is never dropped here; only the
             // database user we may have created is rolled back, plus an event-log entry. The
             // octosystem tenant entries roll back with the caller's transaction (AB#1958).
@@ -818,6 +848,15 @@ public class TenantContext : ITenantContext
                     TenantRegistryFilter(tenantId, NormalizeDatabaseName(octoTenant.DatabaseName)),
                     DeleteOptions.Erase);
             }
+
+            // AB#4945: detach is the one sanctioned ownership handover (the attach guard is strict,
+            // no force override) — removing the marker releases the database for any instance.
+            // Deliberately LAST and not best-effort: if the removal throws, the caller's transaction
+            // aborts, the registry rows are restored, and the database stays consistently attached
+            // here. The marker delete itself is non-transactional, but a marker removed just before
+            // a registry rollback only means the tenant is re-claimable — the next resolve of this
+            // instance re-stamps it lazily.
+            await GetTenantOwnershipStore().RemoveAsync(NormalizeDatabaseName(octoTenant.DatabaseName));
         }
         finally
         {
@@ -1170,7 +1209,37 @@ public class TenantContext : ITenantContext
             throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
                 "no database with this name exists, so there is nothing to attach");
         }
+
+        if (mode == TenantNamespaceMode.AttachExistingDatabase)
+        {
+            // AB#4945 cross-instance guard: the registry lookups above only cover THIS instance's
+            // system database. On a shared MongoDB server another OctoMesh instance (different
+            // SystemDatabaseName, Epic AB#4944) may own this database — its ownership marker lives
+            // in the tenant database itself, so it is visible here. STRICT by decision: no force
+            // override; the owning instance has to detach first (the one sanctioned handover).
+            // The rejection stays uniform and reason-free per the AB#4763 rule — the owner goes to
+            // the log, never to the caller.
+            var ownership = await GetTenantOwnershipStore().GetAsync(normalizedDatabaseName);
+            if (ownership != null &&
+                !string.Equals(ownership.OwnerSystemDatabaseName, OwnerInstanceIdentity, StringComparison.Ordinal))
+            {
+                throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
+                    $"the database is owned by another OctoMesh instance (owner system database " +
+                    $"'{ownership.OwnerSystemDatabaseName}', stamped {ownership.AttachedAtUtc:u} for tenant " +
+                    $"'{ownership.TenantId}'); detach it in the owning instance first");
+            }
+        }
     }
+
+    /// <summary>
+    ///     The identity of THIS OctoMesh instance for tenant-database ownership (AB#4945): the
+    ///     normalized system database name — the one value that is unique per instance on a shared
+    ///     MongoDB server (Epic AB#4944 instance separation).
+    /// </summary>
+    private string OwnerInstanceIdentity => NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName);
+
+    private TenantOwnershipStore GetTenantOwnershipStore() =>
+        _serviceProvider.GetRequiredService<TenantOwnershipStore>();
 
     private Exception RejectTenantId(string normalizedTenantId, string normalizedDatabaseName, Guid correlationId,
         string reason)
@@ -1339,7 +1408,41 @@ public class TenantContext : ITenantContext
         await context.EnsureStreamDataCkModelIfEnabledAsync();
         await context.EnsureServiceManagedCkModelsImportedAsync();
 
+        // AB#4945 lazy ownership claim: tenants attached/created before the ownership marker
+        // shipped get stamped on their next resolve, so the existing fleet becomes owned without a
+        // migration script. Insert-if-absent — a pre-guard double attachment across two instances
+        // is won by the first writer and never flaps.
+        await StampOwnershipIfAbsentBestEffortAsync(tenant.TenantId, tenant.DatabaseName);
+
         return context;
+    }
+
+    /// <summary>
+    ///     Best-effort, once-per-process-per-tenant lazy stamp of the ownership marker (AB#4945).
+    ///     Mirrors the auto-import guard pattern: the guard entry is removed again on failure so a
+    ///     transient error retries on the next resolve, and
+    ///     <see cref="ClearTenantResolveImportGuards"/> clears it on tenant delete/update.
+    /// </summary>
+    private async Task StampOwnershipIfAbsentBestEffortAsync(string tenantId, string databaseName)
+    {
+        var key = tenantId.NormalizeString();
+        if (!_ownershipStampAttempted.TryAdd(key, true))
+        {
+            return;
+        }
+
+        try
+        {
+            await GetTenantOwnershipStore().StampIfAbsentAsync(NormalizeDatabaseName(databaseName), key,
+                OwnerInstanceIdentity);
+        }
+        catch (Exception ex)
+        {
+            _ownershipStampAttempted.TryRemove(key, out _);
+            _logger.LogDebug(ex,
+                "Could not lazily stamp the ownership marker for tenant '{TenantId}' (database '{DatabaseName}'); " +
+                "will retry on a later resolve", tenantId, databaseName);
+        }
     }
 
     public ITenantRepository GetSystemTenantRepository()
@@ -1497,12 +1600,22 @@ public class TenantContext : ITenantContext
     private static readonly ConcurrentDictionary<string, bool> _serviceManagedCkModelsAttempted = new();
 
     /// <summary>
+    /// Per-process guard of the lazy ownership stamp (AB#4945), keyed by normalized tenant id.
+    /// Same lifecycle as the auto-import guards: cleared per tenant by
+    /// <see cref="ClearTenantResolveImportGuards"/> on delete/update.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, bool> _ownershipStampAttempted = new();
+
+    /// <summary>
     /// Test-only: clears the per-process service-managed auto-import guard so a test can re-trigger
     /// <see cref="EnsureServiceManagedCkModelsImportedAsync"/> for a tenant/model already attempted in
-    /// this process. Not used by production code.
+    /// this process. Also clears the lazy ownership-stamp guard (AB#4945). Not used by production code.
     /// </summary>
-    internal static void ResetServiceManagedCkModelImportGuardForTests() =>
+    internal static void ResetServiceManagedCkModelImportGuardForTests()
+    {
         _serviceManagedCkModelsAttempted.Clear();
+        _ownershipStampAttempted.Clear();
+    }
 
     /// <inheritdoc cref="ISystemContext.InvalidateTenantResolveImportGuards" />
     public void InvalidateTenantResolveImportGuards(string tenantId) =>
@@ -1581,6 +1694,14 @@ public class TenantContext : ITenantContext
             if (key.Equals(tenantId, StringComparison.OrdinalIgnoreCase))
             {
                 _streamDataAutoImportAttempted.TryRemove(key, out _);
+            }
+        }
+
+        foreach (var key in _ownershipStampAttempted.Keys)
+        {
+            if (key.Equals(tenantId, StringComparison.OrdinalIgnoreCase))
+            {
+                _ownershipStampAttempted.TryRemove(key, out _);
             }
         }
     }

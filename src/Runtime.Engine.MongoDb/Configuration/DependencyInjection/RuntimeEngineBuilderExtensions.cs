@@ -95,6 +95,13 @@ public static class RuntimeEngineBuilderExtensions
             .AddSingleton<Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle.ITenantSetupRetryStore,
                 Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantLifecycle.TenantSetupRetryStore>();
 
+        // AB#4945 tenant-database ownership marker (Epic AB#4944). Engine-internal: TenantContext
+        // stamps it on create/attach/resolve and the namespace gate consults it on attach so a
+        // second OctoMesh instance on the same MongoDB server cannot adopt a database this
+        // instance still owns.
+        builder.Services
+            .AddSingleton<Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership.TenantOwnershipStore>();
+
         // AB#4812 durable display-rule backfill sweep tasks. The import hook (TenantContext) enqueues a
         // task per type whose display rules changed; the sweep background service (opt-in via
         // AddDisplayRuleSweepBackgroundService) drains them lease-protected.
