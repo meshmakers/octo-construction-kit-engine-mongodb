@@ -14,9 +14,21 @@ internal class Engine<TEntity> where TEntity : class, new()
         _fieldFilterResolver = fieldFilterResolver;
     }
 
+    private FilterDefinition<TEntity>? _securityPreFilter;
+
     internal void AddFieldFilterCriteria(FieldFilterCriteria? fieldFilterCriteria)
     {
         _fieldFilterResolver.AddFieldFilterCriteria(fieldFilterCriteria);
+    }
+
+    /// <summary>
+    ///     Sets the mandatory data-permission predicate (AB#4973). It participates in every filter this
+    ///     query family builds via <see cref="CreateFilterDefinitions" /> — root match, count path and
+    ///     the lookup pipelines that re-apply the rendered filter — and cannot be bypassed by callers.
+    /// </summary>
+    internal void SetSecurityPreFilter(FilterDefinition<TEntity>? securityPreFilter)
+    {
+        _securityPreFilter = securityPreFilter;
     }
 
     protected virtual void AddPreFieldFilters(List<FilterDefinition<TEntity>> filters)
@@ -32,6 +44,11 @@ internal class Engine<TEntity> where TEntity : class, new()
     protected FilterDefinition<TEntity>? CreateFilterDefinitions()
     {
         var filters = new List<FilterDefinition<TEntity>>();
+
+        if (_securityPreFilter != null)
+        {
+            filters.Add(_securityPreFilter);
+        }
 
         // Allow adding filter definitions before field filters are applied
         AddPreFieldFilters(filters);

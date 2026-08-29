@@ -4,6 +4,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.DataPermissions;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Entities;
@@ -42,6 +43,20 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         _geospatialFilters = new List<IPipelineStageDefinition>();
         _associationStageDefinitions = new List<IPipelineStageDefinition>();
         _enrichmentStageDefinitions = new List<IPipelineStageDefinition>();
+    }
+
+    private RtDataSecurityQueryFilter? _securityFilter;
+
+    /// <summary>
+    ///     Applies the caller's data-permission filter (AB#4973): as mandatory pre-filter on the root
+    ///     match (covers page results, TotalCount and the cache-population id collection) and as a
+    ///     $match inside every navigation/existence lookup pipeline, so denied or foreign owned-only
+    ///     entities never surface as navigation payload either.
+    /// </summary>
+    internal void AddSecurityFilter(RtDataSecurityQueryFilter? securityFilter)
+    {
+        _securityFilter = securityFilter;
+        SetSecurityPreFilter(DataSecurityFilterRenderer.Build<TEntity>(securityFilter));
     }
 
     /// <summary>
@@ -219,6 +234,12 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
 
         var innerLookupPipelineStages = new List<IPipelineStageDefinition>();
 
+        var securityLookupMatch = DataSecurityFilterRenderer.Build<RtEntityGraphItem>(_securityFilter);
+        if (securityLookupMatch != null)
+        {
+            innerLookupPipelineStages.Add(PipelineStageDefinitionBuilder.Match(securityLookupMatch));
+        }
+
         var targetCkTypeFilter = new List<FilterDefinition<RtEntityGraphItem>>();
         var fieldFilterResolver =
             new RtEntityGraphItemFieldFilterResolver(_ckCacheService, _tenantId, targetCkTypeGraph);
@@ -390,6 +411,12 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
 
         // Build the same inner lookup pipeline for field filters (needed for correctness)
         var innerLookupPipelineStages = new List<IPipelineStageDefinition>();
+
+        var securityLookupMatch = DataSecurityFilterRenderer.Build<RtEntityGraphItem>(_securityFilter);
+        if (securityLookupMatch != null)
+        {
+            innerLookupPipelineStages.Add(PipelineStageDefinitionBuilder.Match(securityLookupMatch));
+        }
 
         var targetCkTypeFilter = new List<FilterDefinition<RtEntityGraphItem>>();
         var fieldFilterResolver =

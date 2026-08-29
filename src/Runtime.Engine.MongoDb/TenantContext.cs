@@ -10,6 +10,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.DataPermissions;
 using Meshmakers.Octo.Runtime.Contracts.AuditTrails;
 using Meshmakers.Octo.Runtime.Contracts.Blueprints;
 using Meshmakers.Octo.Runtime.Contracts.CkModelMigrations;
@@ -2397,7 +2398,10 @@ public class TenantContext : ITenantContext
 
         var tenantRepository = new TenantRepository(tenantId, _metricsContext, _cacheService, _modelLoaderService,
             repositoryDataSource,
-            _bulkRtMutation);
+            _bulkRtMutation,
+            _serviceProvider.GetService<IDataSecurityFilterFactory>(),
+            _serviceProvider.GetService<IDataPermissionResolver>(),
+            _serviceProvider.GetService<IAuditEventSink>());
         return tenantRepository;
     }
 
@@ -2407,7 +2411,10 @@ public class TenantContext : ITenantContext
 
         var tenantRepository = new TenantRepository(tenantId, _metricsContext, _cacheService, _modelLoaderService,
             repositoryDataSource,
-            _bulkRtMutation);
+            _bulkRtMutation,
+            _serviceProvider.GetService<IDataSecurityFilterFactory>(),
+            _serviceProvider.GetService<IDataPermissionResolver>(),
+            _serviceProvider.GetService<IAuditEventSink>());
         return tenantRepository;
     }
 

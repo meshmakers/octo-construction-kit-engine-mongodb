@@ -6,6 +6,8 @@ using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.AuditTrails;
+using Meshmakers.Octo.Runtime.Contracts.DataPermissions;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
@@ -29,8 +31,12 @@ internal class TenantRepository(
     ICkCacheService ckCacheService,
     IModelLoaderService modelLoaderService,
     IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
-    IBulkRtMutation bulkRtMutation)
-    : RuntimeRepositoryBase(tenantId, ckCacheService, mongoDbRepositoryDataSource, bulkRtMutation), ITenantRepository,
+    IBulkRtMutation bulkRtMutation,
+    IDataSecurityFilterFactory? dataSecurityFilterFactory = null,
+    IDataPermissionResolver? dataPermissionResolver = null,
+    IAuditEventSink? auditEventSink = null)
+    : RuntimeRepositoryBase(tenantId, ckCacheService, mongoDbRepositoryDataSource, bulkRtMutation,
+        dataPermissionResolver, auditEventSink), ITenantRepository,
         ISecureSessionFactory
 {
     /// <summary>
@@ -71,6 +77,49 @@ internal class TenantRepository(
         return mongoDbRepositoryDataSource.GetSession(securityContext);
     }
 
+    /// <summary>
+    ///     Builds the caller's data-permission read filter for this query (AB#4973). Null for system
+    ///     sessions and unrestricted tenants — query shapes and cache keys then stay byte-identical to
+    ///     the pre-permission behavior. Publishes an audit event when the queried type is restricted by
+    ///     AuditOnly policies only.
+    /// </summary>
+    private async Task<RtDataSecurityQueryFilter?> CreateSecurityFilterAsync(IOctoSession session,
+        CkTypeGraph queriedCkTypeGraph)
+    {
+        if (dataSecurityFilterFactory == null)
+        {
+            return null;
+        }
+
+        var securityContext = session.GetSecurityContext();
+        if (securityContext.IsSystem)
+        {
+            return null;
+        }
+
+        var securityFilter = await dataSecurityFilterFactory.CreateAsync(this, securityContext).ConfigureAwait(false);
+        if (securityFilter == null)
+        {
+            return null;
+        }
+
+        if (securityFilter.AuditDeniedCkTypeIds.Count > 0 && AuditEventSink != null)
+        {
+            var queriedTypeIds = queriedCkTypeGraph.GetAllDerivedTypes(true).Select(t => t.ToRtCkId().FullName);
+            if (queriedTypeIds.Any(t => securityFilter.AuditDeniedCkTypeIds.Contains(t)))
+            {
+                await AuditEventSink.PublishAsync(new AuditEvent(TenantId, AuditEventLevel.Warning,
+                        "DataPermissions.ReadViolation",
+                        $"Subject '{securityContext.SubjectId}' read protected type " +
+                        $"'{queriedCkTypeGraph.CkTypeId.ToRtCkId().FullName}' without a grant " +
+                        "(AuditOnly policy — not blocked)."))
+                    .ConfigureAwait(false);
+            }
+        }
+
+        return securityFilter;
+    }
+
     #endregion Transaction Handling
 
     #region Data manipulation
@@ -83,6 +132,8 @@ internal class TenantRepository(
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation,
             mongoDbRepositoryDataSource, deleteOptions);
         mutation.AddFieldFilterCriteria(fieldFilterCriteria);
+        mutation.SetSecurityPreFilter(
+            DataSecurityFilterRenderer.Build<TEntity>(await CreateSecurityFilterAsync(session, ckTypeGraph)));
         await mutation.DeleteManyAsync(session).ConfigureAwait(false);
     }
 
@@ -94,6 +145,8 @@ internal class TenantRepository(
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation,
             mongoDbRepositoryDataSource, deleteOptions);
         mutation.AddFieldFilterCriteria(fieldFilterCriteria);
+        mutation.SetSecurityPreFilter(
+            DataSecurityFilterRenderer.Build<TEntity>(await CreateSecurityFilterAsync(session, ckTypeGraph)));
         await mutation.DeleteOneAsync(session).ConfigureAwait(false);
     }
 
@@ -105,6 +158,8 @@ internal class TenantRepository(
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation,
             mongoDbRepositoryDataSource, DeleteOptions.Default);
         mutation.AddFieldFilterCriteria(fieldFilterCriteria);
+        mutation.SetSecurityPreFilter(
+            DataSecurityFilterRenderer.Build<TEntity>(await CreateSecurityFilterAsync(session, ckTypeGraph)));
         await mutation.UpdateOneAsync(session, rtEntity).ConfigureAwait(false);
     }
 
@@ -116,6 +171,8 @@ internal class TenantRepository(
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation,
             mongoDbRepositoryDataSource, DeleteOptions.Default);
         mutation.AddFieldFilterCriteria(fieldFilterCriteria);
+        mutation.SetSecurityPreFilter(
+            DataSecurityFilterRenderer.Build<TEntity>(await CreateSecurityFilterAsync(session, ckTypeGraph)));
         await mutation.UpdateManyAsync(session, rtEntity).ConfigureAwait(false);
     }
 
@@ -127,6 +184,8 @@ internal class TenantRepository(
         var mutation = new Mutation<TEntity>(ckCacheService, TenantId, ckTypeGraph, BulkRtMutation,
             mongoDbRepositoryDataSource, DeleteOptions.Default);
         mutation.AddFieldFilterCriteria(fieldFilterCriteria);
+        mutation.SetSecurityPreFilter(
+            DataSecurityFilterRenderer.Build<TEntity>(await CreateSecurityFilterAsync(session, ckTypeGraph)));
         await mutation.ReplaceOneAsync(session, rtEntity).ConfigureAwait(false);
     }
 
@@ -501,6 +560,8 @@ internal class TenantRepository(
         // Materialise once — an "Any" traversal runs the same origin set through two directed queries.
         var originRtIdList = originRtIds as IReadOnlyList<OctoObjectId> ?? originRtIds.ToList();
 
+        var securityFilter = await CreateSecurityFilterAsync(session, originTypeGraph);
+
         async Task<IMultipleOriginResultSet<TTargetEntity>> RunAsync(GraphDirections direction)
         {
             var query =
@@ -518,6 +579,7 @@ internal class TenantRepository(
             query.AddFieldAggregation(queryOptions.FieldAggregation);
             query.AddResultAggregation(queryOptions.ResultAggregation);
             query.AddGeospatialFilters(queryOptions.GeospatialFilters);
+            query.SetSecurityPreFilter(DataSecurityFilterRenderer.Build<TTargetEntity>(securityFilter));
 
             return await query.ExecuteQuery(session, skip, take);
         }
@@ -641,6 +703,8 @@ internal class TenantRepository(
         hierarchicalRtQuery.AddFieldAggregation(queryOptions.FieldAggregation);
         hierarchicalRtQuery.AddResultAggregation(queryOptions.ResultAggregation);
         hierarchicalRtQuery.AddGeospatialFilters(queryOptions.GeospatialFilters);
+        hierarchicalRtQuery.SetSecurityPreFilter(
+            DataSecurityFilterRenderer.Build<TTargetEntity>(await CreateSecurityFilterAsync(session, targetTypeGraph)));
 
         return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
     }
@@ -670,6 +734,8 @@ internal class TenantRepository(
         hierarchicalRtQuery.AddFieldAggregation(queryOptions.FieldAggregation);
         hierarchicalRtQuery.AddResultAggregation(queryOptions.ResultAggregation);
         hierarchicalRtQuery.AddGeospatialFilters(queryOptions.GeospatialFilters);
+        hierarchicalRtQuery.SetSecurityPreFilter(
+            DataSecurityFilterRenderer.Build<RtEntity>(await CreateSecurityFilterAsync(session, targetTypeGraph)));
 
         return await hierarchicalRtQuery.ExecuteQuery(session, skip, take);
     }
@@ -706,6 +772,7 @@ internal class TenantRepository(
             new SingleOriginRtQuery<TEntity>(metricsContext, ckCacheService, TenantId, ckTypeGraph,
                 mongoDbRepositoryDataSource,
                 queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false);
+        query.AddSecurityFilter(await CreateSecurityFilterAsync(session, ckTypeGraph));
         query.AddFieldFilterCriteria(queryOptions);
         query.AddTextSearchFilter(queryOptions.TextSearchFilter);
         query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
@@ -734,6 +801,7 @@ internal class TenantRepository(
             new SingleOriginRtQuery<TEntity>(metricsContext, ckCacheService, TenantId, ckTypeGraph,
                 mongoDbRepositoryDataSource,
                 queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false);
+        query.AddSecurityFilter(await CreateSecurityFilterAsync(session, ckTypeGraph));
         query.AddFieldFilterCriteria(queryOptions);
         query.AddIdFilter(rtIds);
         query.AddTextSearchFilter(queryOptions.TextSearchFilter);
@@ -761,10 +829,12 @@ internal class TenantRepository(
                 navigationPairs.ToArray(), queryOptions.FieldFilters);
         }
 
+        var securityQueryFilter = await CreateSecurityFilterAsync(session, ckTypeGraph);
         var query =
             new SingleOriginRtQuery<RtEntityGraphItem>(metricsContext, ckCacheService, TenantId, ckTypeGraph,
                 mongoDbRepositoryDataSource,
                 queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false);
+        query.AddSecurityFilter(securityQueryFilter);
         query.AddFieldFilterCriteria(queryOptions);
         query.AddTextSearchFilter(queryOptions.TextSearchFilter);
         query.AddAttributeSearchFilter(queryOptions.AttributeSearchFilter);
@@ -779,7 +849,10 @@ internal class TenantRepository(
             && queryOptions.NavigationFilterMode == NavigationFilterMode.Filter
             && navigationPairs.Count > 0 && (skip.HasValue || take.HasValue))
         {
-            var cacheKey = QueryResultCacheService.ComputeCacheKey(ckTypeId, queryOptions, navigationPairs);
+            // The security segment keeps cached id lists caller-classification-specific (AB#4973);
+            // unrestricted callers keep byte-identical keys.
+            var cacheKey = QueryResultCacheService.ComputeCacheKey(ckTypeId, queryOptions, navigationPairs) +
+                           DataSecurityFilterRenderer.ComputeCacheKeySegment(securityQueryFilter);
             var cacheService = ((MongoDbRepositoryDataSource)mongoDbRepositoryDataSource).CreateQueryResultCacheService();
 
             var cached = await cacheService.TryGetAsync(cacheKey);
@@ -820,6 +893,7 @@ internal class TenantRepository(
             new SingleOriginRtQuery<RtEntityGraphItem>(metricsContext, ckCacheService, TenantId, ckTypeGraph,
                 mongoDbRepositoryDataSource,
                 queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false);
+        query.AddSecurityFilter(await CreateSecurityFilterAsync(session, ckTypeGraph));
         query.AddFieldFilterCriteria(queryOptions);
         query.AddIdFilter(rtIds);
         query.AddTextSearchFilter(queryOptions.TextSearchFilter);
