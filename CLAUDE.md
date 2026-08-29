@@ -227,12 +227,29 @@ the task:
    cooldown ticking so we don't re-walk this branch on every fire of the same shape
 
 When the task does run, it deep-clones the BSON command (the driver may still retry the
-original on its own connection), wraps it in
-`{explain: <clone>, verbosity: "queryPlanner"}`, runs against
+original on its own connection), **strips the wire envelope** via `StripWireEnvelope`, wraps
+the result in `{explain: <clone>, verbosity: "queryPlanner"}`, runs against
 `client.GetDatabase(database)`, parses, stores. Cancellation token derived from
 `SlowQueryExplainTimeoutSeconds`; on timeout we store `Status = Failed` /
 `ErrorMessage = "timeout"`. All exceptions are caught and logged via the same `SafeLogError`
 path the rest of the listener uses — a broken sink must never poison the driver pipeline.
+
+**Wire envelope must be stripped before wrapping (AB#4958).** `CommandStartedEvent.Command` is
+the command *as it goes over the wire*, so it carries `$db`, `$readPreference`, `$clusterTime`,
+`lsid`, … `RunCommandAsync` attaches `$db` itself, so wrapping the capture as-is made the server
+reject **every** dispatch with `BSON field 'aggregate.$db' is a duplicate field` — the probe
+never produced a plan from AB#4216 (2026-06-22) until this fix, which also means no COLLSCAN
+detection and no index suggestions (AB#4220 / AB#4222) for any shape. It only became visible
+after AB#4374 stopped the earlier error-14 failure on the elided pipeline array; before that the
+dispatch died one step sooner. `StripWireEnvelope` removes **every `$`-prefixed top-level field**
+(prefix-based on purpose — the driver may attach further ones in a future version) plus the
+session/transaction and concern fields in `WireEnvelopeFields`; the query itself (filter, sort,
+pipeline, hint, collation) is untouched, or the explained plan would not be the one that was
+measured. The strip happens on the explain clone only — the buffer preview and the fingerprint
+are computed from `ctx.Command` and are meant to show the command as it actually went over the
+wire. `Explain_DispatchedCommand_CarriesNoWireEnvelope` pins the shape of the **dispatched**
+document, which no test covered before: that gap is why two consecutive defects (AB#4374,
+AB#4958) shipped unnoticed in the same three lines.
 
 **Configuration (`OctoSystemConfiguration`):**
 

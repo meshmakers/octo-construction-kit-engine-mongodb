@@ -54,6 +54,20 @@ internal sealed class MongoCommandObservability
     private const string ElidedPlaceholderSuffix = " raw documents elided>";
 
     /// <summary>
+    /// Non-<c>$</c>-prefixed fields the driver attaches as part of the wire envelope rather than as
+    /// part of the query itself. They must be stripped before a retained command is wrapped in an
+    /// explain — see <see cref="StripWireEnvelope"/>. Session and transaction state cannot be
+    /// replayed from the observability listener, and the read/write concerns are not part of the
+    /// plan the probe is after.
+    /// </summary>
+    private static readonly HashSet<string> WireEnvelopeFields = new(StringComparer.Ordinal)
+    {
+        "lsid", "txnNumber", "autocommit", "startTransaction",
+        "readConcern", "writeConcern",
+        "apiVersion", "apiStrict", "apiDeprecationErrors"
+    };
+
+    /// <summary>
     /// Per-request accumulator scope. The AsyncLocal value flows through ExecutionContext into
     /// the MongoDB driver's command-event callbacks, so commands issued during the scope are
     /// summed into the active <see cref="RequestMongoStats"/> instance. Out-of-scope work
@@ -375,7 +389,12 @@ internal sealed class MongoCommandObservability
         BsonDocument commandClone;
         try
         {
-            commandClone = (BsonDocument)ctx.Command!.DeepClone();
+            // AB#4958: the retained command still carries the driver's wire envelope ($db,
+            // $readPreference, lsid, …). RunCommandAsync adds $db again, so wrapping it as-is
+            // made the server reject every dispatch as a duplicate field. Strip it here rather
+            // than at retention time — the buffer preview and the fingerprint are computed from
+            // ctx.Command and are meant to show the command as it went over the wire.
+            commandClone = StripWireEnvelope((BsonDocument)ctx.Command!.DeepClone());
         }
         catch (ObjectDisposedException)
         {
@@ -523,6 +542,41 @@ internal sealed class MongoCommandObservability
     /// <see cref="MaterializeForRetention"/> — such a command must never be sent to the server
     /// (e.g. wrapped in an explain), the placeholder string is not valid where an array is expected.
     /// </summary>
+    /// <summary>
+    /// Removes the driver's wire envelope from a retained command so it can be wrapped in an
+    /// <c>explain</c>. Strips every <c>$</c>-prefixed top-level field (<c>$db</c>,
+    /// <c>$readPreference</c>, <c>$clusterTime</c>, …) plus the session/transaction and
+    /// concern fields in <see cref="WireEnvelopeFields"/>; everything that describes the query
+    /// itself (filter, sort, pipeline, hint, collation, …) is left untouched.
+    /// </summary>
+    /// <remarks>
+    /// AB#4958: <c>RunCommandAsync</c> attaches <c>$db</c> itself, so leaving the captured one in
+    /// place made the server reject every single dispatch with
+    /// <c>BSON field 'aggregate.$db' is a duplicate field</c> — the probe never produced a plan
+    /// since it was introduced (AB#4216). The removal is deliberately prefix-based rather than an
+    /// allow-list: the driver may attach further <c>$</c>-fields in a future version, and each one
+    /// would silently break the probe again.
+    /// </remarks>
+    /// <param name="command">The cloned command. Mutated in place and returned for chaining.</param>
+    internal static BsonDocument StripWireEnvelope(BsonDocument command)
+    {
+        var toRemove = new List<string>();
+        foreach (var element in command)
+        {
+            if (element.Name.StartsWith('$') || WireEnvelopeFields.Contains(element.Name))
+            {
+                toRemove.Add(element.Name);
+            }
+        }
+
+        foreach (var name in toRemove)
+        {
+            command.Remove(name);
+        }
+
+        return command;
+    }
+
     internal static bool ContainsElidedPlaceholder(BsonDocument command)
     {
         foreach (var element in command)

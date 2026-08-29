@@ -1,6 +1,8 @@
 using System.Diagnostics.Metrics;
 using System.Net;
 
+using FakeItEasy;
+
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 
@@ -392,6 +394,168 @@ public sealed class MongoCommandObservabilityTests : IDisposable
         Assert.Contains("elided", entry.CommandBsonPreview);
         // Small metadata sub-documents are cloned, not elided.
         Assert.Contains("writeConcern", entry.CommandBsonPreview);
+    }
+
+    [Fact]
+    public async Task Explain_DispatchedCommand_CarriesNoWireEnvelope()
+    {
+        // The end-to-end guard that was missing: it asserts what actually goes to the server,
+        // not just what the helper returns. Two consecutive defects shipped in these three lines
+        // (AB#4374 elided pipeline, AB#4958 duplicate $db) because no test looked at the
+        // dispatched document. Remove the StripWireEnvelope call from DispatchExplain and this
+        // test fails.
+        BsonDocument? dispatched = null;
+
+        var database = A.Fake<IMongoDatabase>();
+        A.CallTo(database)
+            .Where(call => call.Method.Name == nameof(IMongoDatabase.RunCommandAsync))
+            .WithReturnType<Task<BsonDocument>>()
+            .Invokes(call => dispatched = ((BsonDocumentCommand<BsonDocument>)call.Arguments[0]!).Document)
+            .Returns(Task.FromResult(new BsonDocument("ok", 1)));
+
+        var client = A.Fake<IMongoClient>();
+        A.CallTo(() => client.GetDatabase(A<string>._, A<MongoDatabaseSettings>._)).Returns(database);
+
+        var buffer = new SlowQueriesBuffer(capacity: 100);
+        var cache = new SlowQueryExplainCache(capacity: 100, cooldown: TimeSpan.Zero);
+        var sut = new MongoCommandObservability(_logger, _config, buffer, cache);
+        sut.SetMongoClient(client);
+        _config.Current.SlowQueryThresholdMs = 1;
+        _config.Current.SlowQueryExplainEnabled = true;
+
+        // A realistic capture: the command as the driver reports it, envelope included.
+        var command = new BsonDocument
+        {
+            { "aggregate", "RtEntity_EnergyQuantity" },
+            { "pipeline", new BsonArray { new BsonDocument("$match", new BsonDocument("ckTypeId", "EnergyCommunity/EnergyQuantity")) } },
+            { "cursor", new BsonDocument() },
+            { "lsid", new BsonDocument("id", "session") },
+            { "$db", "eegroider" },
+            { "$readPreference", new BsonDocument("mode", "primary") }
+        };
+
+        var (started, succeeded) = BuildPair("aggregate", command, "eegroider", durationMs: 250);
+        sut.OnStarted(started);
+        sut.OnSucceeded(succeeded);
+
+        // The dispatch runs on a background task.
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (dispatched is null && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        Assert.NotNull(dispatched);
+        Assert.True(dispatched!.Contains("explain"));
+
+        var inner = dispatched["explain"].AsBsonDocument;
+        Assert.DoesNotContain(inner.Names, n => n.StartsWith('$'));
+        Assert.False(inner.Contains("lsid"));
+
+        // ... while the query itself is fully intact, or the plan would not be the one we measured.
+        Assert.Equal("RtEntity_EnergyQuantity", inner["aggregate"].AsString);
+        Assert.True(inner.Contains("pipeline"));
+        Assert.Single(inner["pipeline"].AsBsonArray);
+    }
+
+    [Fact]
+    public void StripWireEnvelope_RemovesDriverEnvelope_AndKeepsTheQuery()
+    {
+        // AB#4958: the retained command is the full wire command. RunCommandAsync attaches $db
+        // itself, so anything left here made the server reject the explain with
+        // "BSON field 'aggregate.$db' is a duplicate field".
+        var command = new BsonDocument
+        {
+            { "aggregate", "RtEntity_Asset" },
+            { "pipeline", new BsonArray { new BsonDocument("$match", new BsonDocument("ckTypeId", "Basic/Asset")) } },
+            { "cursor", new BsonDocument() },
+            { "hint", new BsonDocument("ckTypeId", 1) },
+            { "lsid", new BsonDocument("id", "session") },
+            { "txnNumber", 7L },
+            { "readConcern", new BsonDocument("level", "local") },
+            { "$db", "tenant_a" },
+            { "$readPreference", new BsonDocument("mode", "secondaryPreferred") },
+            { "$clusterTime", new BsonDocument("clusterTime", 1) }
+        };
+
+        var stripped = MongoCommandObservability.StripWireEnvelope(command);
+
+        // Everything describing the query survives - the plan depends on it.
+        Assert.Equal("RtEntity_Asset", stripped["aggregate"].AsString);
+        Assert.True(stripped.Contains("pipeline"));
+        Assert.True(stripped.Contains("cursor"));
+        Assert.True(stripped.Contains("hint"));
+
+        // Envelope is gone.
+        Assert.False(stripped.Contains("$db"));
+        Assert.False(stripped.Contains("$readPreference"));
+        Assert.False(stripped.Contains("$clusterTime"));
+        Assert.False(stripped.Contains("lsid"));
+        Assert.False(stripped.Contains("txnNumber"));
+        Assert.False(stripped.Contains("readConcern"));
+    }
+
+    [Fact]
+    public void StripWireEnvelope_RemovesEveryDollarPrefixedField_NotJustTheKnownOnes()
+    {
+        // Prefix-based on purpose: a future driver version attaching another $-field must not
+        // silently break the probe again the way $db did.
+        var command = new BsonDocument
+        {
+            { "find", "ck_types" },
+            { "filter", new BsonDocument("name", "Asset") },
+            { "$somethingTheDriverAddsLater", "value" }
+        };
+
+        var stripped = MongoCommandObservability.StripWireEnvelope(command);
+
+        Assert.False(stripped.Contains("$somethingTheDriverAddsLater"));
+        Assert.True(stripped.Contains("filter"));
+    }
+
+    [Fact]
+    public void StripWireEnvelope_CommandWithoutEnvelope_IsUnchanged()
+    {
+        var command = new BsonDocument
+        {
+            { "find", "ck_types" },
+            { "filter", new BsonDocument("name", "Asset") },
+            { "sort", new BsonDocument("name", 1) }
+        };
+
+        var stripped = MongoCommandObservability.StripWireEnvelope(command);
+
+        Assert.Equal(3, stripped.ElementCount);
+    }
+
+    [Fact]
+    public void ExplainCommand_BuiltFromAStrippedClone_CarriesNoDollarFieldOfItsOwn()
+    {
+        // Pins the SHAPE OF THE DISPATCHED DOCUMENT, which no test covered before - which is how
+        // two consecutive defects (AB#4374 elided pipeline, AB#4958 duplicate $db) shipped in the
+        // same three lines unnoticed.
+        var captured = new BsonDocument
+        {
+            { "find", "fs.chunks" },
+            { "filter", new BsonDocument("files_id", "abc") },
+            { "sort", new BsonDocument("n", 1) },
+            { "$db", "sbeg" },
+            { "$readPreference", new BsonDocument("mode", "primary") }
+        };
+
+        var explainCommand = new BsonDocument
+        {
+            { "explain", MongoCommandObservability.StripWireEnvelope((BsonDocument)captured.DeepClone()) },
+            { "verbosity", "queryPlanner" }
+        };
+
+        var inner = explainCommand["explain"].AsBsonDocument;
+        Assert.DoesNotContain(inner.Names, n => n.StartsWith('$'));
+        Assert.Equal("fs.chunks", inner["find"].AsString);
+
+        // The captured original keeps its envelope - the buffer preview and the fingerprint are
+        // meant to show the command as it actually went over the wire.
+        Assert.True(captured.Contains("$db"));
     }
 
     [Fact]
