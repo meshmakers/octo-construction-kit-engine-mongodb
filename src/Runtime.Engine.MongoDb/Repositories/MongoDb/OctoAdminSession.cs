@@ -1,3 +1,4 @@
+using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Microsoft.Extensions.Logging;
 using MongoDB.Driver;
@@ -14,4 +15,4 @@ internal class OctoAdminSession(
     ILogger<OctoAdminSession> logger,
     IClientSessionHandle clientSessionHandle,
     string applicationName)
-    : OctoSession(logger, clientSessionHandle, applicationName), IOctoAdminSession;
+    : OctoSession(logger, clientSessionHandle, applicationName), IOctoAdminSession, IOctoSecureSession;

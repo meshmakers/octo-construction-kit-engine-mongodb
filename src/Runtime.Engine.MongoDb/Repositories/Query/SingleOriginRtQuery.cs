@@ -325,6 +325,8 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                     OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
                 OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtWellKnownName",
                     OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtCreatedBy",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
                 OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("_associations",
                     OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.ConcatArrays(
                         OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.IfNull(
@@ -482,6 +484,8 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                     OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
                 OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtWellKnownName",
                     OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtCreatedBy",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
             ])));
     }
 
@@ -606,6 +610,8 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                 OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtVersion",
                     OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
                 OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtWellKnownName",
+                    OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
+                OctoBuilder<RtAssociationWithEntities, TEntity>.Projection.SingleField("rtCreatedBy",
                     OctoBuilder<RtAssociationWithEntities, TEntity>.AggregateOperators.Int32(1)),
             ])));
     }

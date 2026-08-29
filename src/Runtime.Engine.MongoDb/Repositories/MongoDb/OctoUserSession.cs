@@ -13,5 +13,6 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 internal class OctoUserSession(
     ILogger<OctoUserSession> logger,
     IClientSessionHandle clientSessionHandle,
-    string applicationName)
-    : OctoSession(logger, clientSessionHandle, applicationName), IOctoSession;
+    string applicationName,
+    RtSecurityContext? securityContext = null)
+    : OctoSession(logger, clientSessionHandle, applicationName, securityContext), IOctoSecureSession;

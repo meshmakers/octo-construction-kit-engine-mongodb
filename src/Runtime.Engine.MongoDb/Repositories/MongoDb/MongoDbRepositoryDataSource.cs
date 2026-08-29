@@ -78,10 +78,21 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return session;
     }
 
+    public async Task<IOctoSession> GetSessionAsync(RtSecurityContext securityContext)
+    {
+        var session = await _repositoryClient.GetSessionAsync(securityContext);
+        return session;
+    }
 
     public IOctoSession GetSession()
     {
         var session = _repositoryClient.GetSession();
+        return session;
+    }
+
+    public IOctoSession GetSession(RtSecurityContext securityContext)
+    {
+        var session = _repositoryClient.GetSession(securityContext);
         return session;
     }
 
@@ -629,6 +640,26 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             };
             await CreateOrUpdateIndex(collection.CollectionName, rtStateIndex, repositoryIndices, collection,
                 uniqueIndexNumber: 9000);
+
+            // System-level compound index for (ckTypeId, rtCreatedBy) — supports the OwnedOnly
+            // data-permission filter (AB#4971)
+            var rtCreatedByIndex = new CkTypeIndex
+            {
+                IndexType = IndexTypes.Ascending,
+                Fields =
+                [
+                    new CkIndexFields
+                    {
+                        AttributeNames =
+                        [
+                            nameof(RtEntity.CkTypeId).ToCamelCase(),
+                            nameof(RtEntity.RtCreatedBy).ToCamelCase()
+                        ]
+                    }
+                ]
+            };
+            await CreateOrUpdateIndex(collection.CollectionName, rtCreatedByIndex, repositoryIndices, collection,
+                uniqueIndexNumber: 9001);
 
             // Drop any remaining indexes that are no longer needed
             foreach (var repositoryIndex in repositoryIndices)

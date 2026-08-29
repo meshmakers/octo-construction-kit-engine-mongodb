@@ -128,16 +128,26 @@ public abstract class MongoRepositoryClient : IRepositoryClient
 
     public async Task<IOctoSession> GetSessionAsync()
     {
+        return await GetSessionAsync(RtSecurityContext.System);
+    }
+
+    public async Task<IOctoSession> GetSessionAsync(RtSecurityContext securityContext)
+    {
         var session = await Client.StartSessionAsync();
         var logger = _serviceProvider.GetRequiredService<ILogger<OctoUserSession>>();
-        return new OctoUserSession(logger, session, Client.Settings.ApplicationName);
+        return new OctoUserSession(logger, session, Client.Settings.ApplicationName, securityContext);
     }
 
     public IOctoSession GetSession()
     {
+        return GetSession(RtSecurityContext.System);
+    }
+
+    public IOctoSession GetSession(RtSecurityContext securityContext)
+    {
         var session = Client.StartSession();
         var logger = _serviceProvider.GetRequiredService<ILogger<OctoUserSession>>();
-        return new OctoUserSession(logger, session, Client.Settings.ApplicationName);
+        return new OctoUserSession(logger, session, Client.Settings.ApplicationName, securityContext);
     }
 
     public IRepository GetRepository(string name)
@@ -641,6 +651,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.RtChangedDateTime).SetIsRequired(true);
             cm.MapMember(c => c.CkTypeId).SetIsRequired(true);
             cm.MapMember(c => c.RtWellKnownName).SetIgnoreIfDefault(true);
+            // IgnoreIfDefault: legacy rows keep no rtCreatedBy field instead of an explicit null
+            cm.MapMember(c => c.RtCreatedBy).SetIgnoreIfDefault(true);
             cm.MapMember(c => c.RtArchivedDateTime).SetIgnoreIfDefault(true);
             cm.MapMember(c => c.RtState).SetIgnoreIfDefault(true);
         });

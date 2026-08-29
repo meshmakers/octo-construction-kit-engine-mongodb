@@ -1,5 +1,6 @@
 using System.Diagnostics;
 
+using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 
 using Microsoft.Extensions.Logging;
@@ -16,7 +17,8 @@ internal abstract class OctoSession : IOctoSessionInternal
     private bool _isSessionStarted;
     private bool _isDisposed;
 
-    internal OctoSession(ILogger<OctoSession> logger, IClientSessionHandle clientSessionHandle, string applicationName)
+    internal OctoSession(ILogger<OctoSession> logger, IClientSessionHandle clientSessionHandle, string applicationName,
+        RtSecurityContext? securityContext = null)
     {
         _logger = logger;
         _logger.LogDebug("[{ApplicationName}] Create session", applicationName);
@@ -25,9 +27,12 @@ internal abstract class OctoSession : IOctoSessionInternal
         _isDisposed = false;
         SessionHandle = clientSessionHandle;
         ApplicationName = applicationName;
+        SecurityContext = securityContext ?? RtSecurityContext.System;
     }
 
     public string ApplicationName { get; set; }
+
+    public RtSecurityContext SecurityContext { get; }
 
     public void Dispose()
     {

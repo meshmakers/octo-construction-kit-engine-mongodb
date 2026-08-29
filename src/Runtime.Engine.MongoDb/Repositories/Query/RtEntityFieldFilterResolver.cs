@@ -35,6 +35,7 @@ internal class RtEntityFieldFilterResolver<TEntity>(
                attributePath.ToPascalCase() == nameof(RtEntity.RtChangedDateTime) ||
                attributePath.ToPascalCase() == nameof(RtEntity.RtVersion) ||
                attributePath.ToPascalCase() == nameof(RtEntity.RtWellKnownName) ||
+               attributePath.ToPascalCase() == nameof(RtEntity.RtCreatedBy) ||
                attributePath.ToPascalCase() == nameof(RtEntity.RtDisplayName) ||
                attributePath.ToPascalCase() == nameof(RtEntity.RtDisplayDescription);
     }
@@ -55,6 +56,7 @@ internal class RtEntityFieldFilterResolver<TEntity>(
             nameof(RtEntity.RtChangedDateTime) => nameof(RtEntity.RtChangedDateTime).ToCamelCase(),
             nameof(RtEntity.RtVersion) => nameof(RtEntity.RtVersion).ToCamelCase(),
             nameof(RtEntity.RtWellKnownName) => nameof(RtEntity.RtWellKnownName).ToCamelCase(),
+            nameof(RtEntity.RtCreatedBy) => nameof(RtEntity.RtCreatedBy).ToCamelCase(),
             nameof(RtEntity.RtDisplayName) => nameof(RtEntity.RtDisplayName).ToCamelCase(),
             nameof(RtEntity.RtDisplayDescription) => nameof(RtEntity.RtDisplayDescription).ToCamelCase(),
             _ => null
@@ -87,6 +89,7 @@ internal class RtEntityFieldFilterResolver<TEntity>(
             nameof(RtEntity.RtChangedDateTime) => Get(attributePath, searchTerm, GetAsDateTime),
             nameof(RtEntity.RtVersion) => Get(attributePath, searchTerm, GetAsInteger),
             nameof(RtEntity.RtWellKnownName) => Get(attributePath, searchTerm, GetAsString),
+            nameof(RtEntity.RtCreatedBy) => Get(attributePath, searchTerm, GetAsString),
             nameof(RtEntity.RtDisplayName) => Get(attributePath, searchTerm, GetAsString),
             nameof(RtEntity.RtDisplayDescription) => Get(attributePath, searchTerm, GetAsString),
             _ => base.ResolveSearchAttributeValue(attributePath, searchTerm, filterOperator, out isEnum)

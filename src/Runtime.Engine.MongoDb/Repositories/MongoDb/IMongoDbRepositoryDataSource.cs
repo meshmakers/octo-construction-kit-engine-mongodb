@@ -59,7 +59,20 @@ public interface IMongoDbRepositoryDataSource : ICkMongoDbRepositoryDataSource, 
         IOctoSession session, string ckTypeIdValue) where TEntity : RtEntity, new();
 
     Task<IOctoSession> GetSessionAsync();
+
+    /// <summary>
+    ///     Gets a session acting for the given caller (carries the security context for RtCreatedBy
+    ///     stamping and data-level permissions).
+    /// </summary>
+    Task<IOctoSession> GetSessionAsync(RtSecurityContext securityContext);
+
     IOctoSession GetSession();
+
+    /// <summary>
+    ///     Gets a session acting for the given caller (carries the security context for RtCreatedBy
+    ///     stamping and data-level permissions).
+    /// </summary>
+    IOctoSession GetSession(RtSecurityContext securityContext);
 
     /// <summary>
     ///     Creates indexes for the RtAssociations collection if they don't already exist.

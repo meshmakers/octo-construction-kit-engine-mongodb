@@ -30,7 +30,8 @@ internal class TenantRepository(
     IModelLoaderService modelLoaderService,
     IMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
     IBulkRtMutation bulkRtMutation)
-    : RuntimeRepositoryBase(tenantId, ckCacheService, mongoDbRepositoryDataSource, bulkRtMutation), ITenantRepository
+    : RuntimeRepositoryBase(tenantId, ckCacheService, mongoDbRepositoryDataSource, bulkRtMutation), ITenantRepository,
+        ISecureSessionFactory
 {
     /// <summary>
     ///     Direct access to the Mongo data source for engine-internal maintenance work that needs
@@ -55,9 +56,19 @@ internal class TenantRepository(
         return await mongoDbRepositoryDataSource.GetSessionAsync();
     }
 
+    public async Task<IOctoSession> GetSessionAsync(RtSecurityContext securityContext)
+    {
+        return await mongoDbRepositoryDataSource.GetSessionAsync(securityContext);
+    }
+
     public IOctoSession GetSession()
     {
         return mongoDbRepositoryDataSource.GetSession();
+    }
+
+    public IOctoSession GetSession(RtSecurityContext securityContext)
+    {
+        return mongoDbRepositoryDataSource.GetSession(securityContext);
     }
 
     #endregion Transaction Handling
