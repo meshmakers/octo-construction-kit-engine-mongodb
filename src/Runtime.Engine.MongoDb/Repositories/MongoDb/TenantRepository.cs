@@ -105,13 +105,13 @@ internal class TenantRepository(
 
         if (securityFilter.AuditDeniedCkTypeIds.Count > 0 && AuditEventSink != null)
         {
-            var queriedTypeIds = queriedCkTypeGraph.GetAllDerivedTypes(true).Select(t => t.ToRtCkId().FullName);
+            var queriedTypeIds = queriedCkTypeGraph.GetAllDerivedTypes(true).Select(t => t.ToRtCkId().SemanticVersionedFullName);
             if (queriedTypeIds.Any(t => securityFilter.AuditDeniedCkTypeIds.Contains(t)))
             {
                 await AuditEventSink.PublishAsync(new AuditEvent(TenantId, AuditEventLevel.Warning,
                         "DataPermissions.ReadViolation",
                         $"Subject '{securityContext.SubjectId}' read protected type " +
-                        $"'{queriedCkTypeGraph.CkTypeId.ToRtCkId().FullName}' without a grant " +
+                        $"'{queriedCkTypeGraph.CkTypeId.ToRtCkId().SemanticVersionedFullName}' without a grant " +
                         "(AuditOnly policy — not blocked)."))
                     .ConfigureAwait(false);
             }

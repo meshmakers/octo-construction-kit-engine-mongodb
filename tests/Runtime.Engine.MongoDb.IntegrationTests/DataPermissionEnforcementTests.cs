@@ -34,7 +34,11 @@ public class DataPermissionEnforcementTests(DataPermissionTestFixture fixture)
     private static readonly RtSecurityContext Outsider =
         RtSecurityContext.ForUser("user-x", ["TestOther"]);
 
-    private static string ContinentTypeId => TestCkIds.RtCkContinentTypeId.FullName;
+    // Deliberately the wire/CLI form (element version elided when 1) — exactly what operators enter
+    // as a policy target. The element-versioned RtCkId.FullName here masked the E2E format-mismatch
+    // bug (classification silently Open for every real-world target) because both comparison sides
+    // came from the same versioned accessor.
+    private static string ContinentTypeId => TestCkIds.RtCkContinentTypeId.SemanticVersionedFullName;
 
     private static RtDataPolicyTable BuildTable(bool auditOnly = false)
     {
