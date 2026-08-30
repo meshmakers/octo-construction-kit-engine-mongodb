@@ -51,7 +51,10 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
     ///     Guard against pathological fan-out when an abstract navigation target spans many entity
     ///     collections (AB#5000): each collection root costs one $lookup per association document.
     /// </summary>
-    private const int MaxNavigationTargetCollectionRoots = 32;
+    // 64 covers System/Entity-targeted navigations (Related/Tag) on real tenants — measured 38
+    // collection roots on a stock tenant. The cap stays as a fail-fast brake against pathological
+    // models, not as a functional limit for shipped ones (AB#5000).
+    private const int MaxNavigationTargetCollectionRoots = 64;
 
     /// <summary>
     ///     Resolves the entity collection graphs a navigation target spans (AB#5000). A target at or
