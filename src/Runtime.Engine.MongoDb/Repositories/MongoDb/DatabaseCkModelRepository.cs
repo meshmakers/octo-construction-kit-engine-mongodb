@@ -268,6 +268,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 EnableChangeStreamPreAndPostImages = t.EnableChangeStreamPreAndPostImages,
                 DisplayNameRule = t.DisplayNameRule,
                 DisplayDescriptionRule = t.DisplayDescriptionRule,
+                OwnerAttributePath = t.OwnerAttributePath,
                 Attributes = t.Attributes.Select(a => new CkTypeAttributeDto
                 {
                     AttributeName = a.AttributeName,
@@ -1054,6 +1055,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 EnableChangeStreamPreAndPostImages = ckTypeDto.EnableChangeStreamPreAndPostImages,
                 DisplayNameRule = ckTypeDto.DisplayNameRule,
                 DisplayDescriptionRule = ckTypeDto.DisplayDescriptionRule,
+                OwnerAttributePath = ckTypeDto.OwnerAttributePath,
                 Attributes = ckTypeAttributes,
                 Indexes = textSearchDefinitions
             };

@@ -1,0 +1,12 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+attributes:
+  - id: AssigneeId
+    description: Subject id of the assignee owning the ticket (AB#4978 owner attribute).
+    valueType: String
+  - id: OwnerInfo.UserId
+    description: Subject id inside the OwnerInfo record (AB#4978 record-path owner).
+    valueType: String
+  - id: Owner
+    description: Owner record of a review task (AB#4978 record-path owner).
+    valueType: Record
+    valueCkRecordId: ${this}/OwnerInfo

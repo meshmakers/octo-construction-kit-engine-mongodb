@@ -1051,6 +1051,23 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 textIndex.Fields = textIndex.Fields.Union(index.Fields).ToList();
             }
         }
+
+        // AB#4978: a declared owner attribute gets an implicit ascending index — the OwnedOnly
+        // data-permission predicate filters (ckTypeId, attributes.<owner>) on every read.
+        // PrepareAndCreateIndex prepends ckTypeId, so the synthesized index matches that shape.
+        // Appended after the declared indexes so their uniqueIndexNumber-based names stay stable;
+        // synthesized only at the declaring type — derived types share the collection's index.
+        if (!string.IsNullOrWhiteSpace(ckTypeInfo.OwnerAttributePath))
+        {
+            indices.Add(new CkTypeIndex
+            {
+                IndexType = IndexTypes.Ascending,
+                Fields =
+                [
+                    new CkIndexFields { AttributeNames = [ckTypeInfo.OwnerAttributePath] }
+                ]
+            });
+        }
     }
 
     public async Task<IOctoSession> CreateSessionAsync()

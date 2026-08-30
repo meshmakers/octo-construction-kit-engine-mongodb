@@ -1,0 +1,34 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+types:
+# AB#4978: owned-only data permissions with a CK-model-declared owner attribute.
+# Ticket declares AssigneeId as its owner attribute (instead of the stamped rtCreatedBy);
+# EscalationTicket inherits the declaration. Asserted by DataPermissionEnforcementTests
+# and CkTypeOwnerAttributePersistenceTests.
+- typeId: Ticket
+  derivedFromCkTypeId: ${System}/Entity
+  isFinal: false
+  isAbstract: false
+  ownerAttributePath: AssigneeId
+  attributes:
+  - id: ${this}/Name
+    name: Name
+  - id: ${this}/AssigneeId
+    name: AssigneeId
+    isOptional: true
+- typeId: EscalationTicket
+  derivedFromCkTypeId: ${this}/Ticket
+  isFinal: false
+  isAbstract: false
+# ReviewTask declares a record path as its owner (AB#4978 path semantics):
+# the owning subject lives at Owner.UserId inside the OwnerInfo record.
+- typeId: ReviewTask
+  derivedFromCkTypeId: ${System}/Entity
+  isFinal: false
+  isAbstract: false
+  ownerAttributePath: Owner.UserId
+  attributes:
+  - id: ${this}/Name
+    name: Name
+  - id: ${this}/Owner
+    name: Owner
+    isOptional: true

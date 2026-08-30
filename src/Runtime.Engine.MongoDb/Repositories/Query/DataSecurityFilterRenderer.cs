@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 
+using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.DataPermissions;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
@@ -41,9 +42,34 @@ internal static class DataSecurityFilterRenderer
 
         if (securityFilter.OwnedOnlyCkTypeIds.Count > 0 && securityFilter.SubjectId != null)
         {
-            orFilters.Add(Builders<TEntity>.Filter.And(
-                Builders<TEntity>.Filter.In(x => x.CkTypeId, ToRtCkIds(securityFilter.OwnedOnlyCkTypeIds)),
-                Builders<TEntity>.Filter.Eq(x => x.RtCreatedBy, securityFilter.SubjectId)));
+            // AB#4978: types whose CK model declares an owner attribute compare that attribute's
+            // stored value against the subject; all remaining owned-only types use the stamped
+            // rtCreatedBy. One Or-branch per distinct owner attribute (deterministic order).
+            var ownerAttributes = securityFilter.OwnedOnlyOwnerAttributes;
+            var defaultOwnedTypeIds = ownerAttributes is { Count: > 0 }
+                ? securityFilter.OwnedOnlyCkTypeIds.Where(t => !ownerAttributes.ContainsKey(t)).ToList()
+                : (IReadOnlyCollection<string>)securityFilter.OwnedOnlyCkTypeIds;
+
+            if (defaultOwnedTypeIds.Count > 0)
+            {
+                orFilters.Add(Builders<TEntity>.Filter.And(
+                    Builders<TEntity>.Filter.In(x => x.CkTypeId, ToRtCkIds(defaultOwnedTypeIds)),
+                    Builders<TEntity>.Filter.Eq(x => x.RtCreatedBy, securityFilter.SubjectId)));
+            }
+
+            if (ownerAttributes is { Count: > 0 })
+            {
+                foreach (var attributeGroup in ownerAttributes
+                             .GroupBy(x => x.Value, StringComparer.Ordinal)
+                             .OrderBy(g => g.Key, StringComparer.Ordinal))
+                {
+                    orFilters.Add(Builders<TEntity>.Filter.And(
+                        Builders<TEntity>.Filter.In(x => x.CkTypeId,
+                            ToRtCkIds(attributeGroup.Select(x => x.Key).OrderBy(x => x, StringComparer.Ordinal))),
+                        Builders<TEntity>.Filter.Eq(ToMongoFieldPath(attributeGroup.Key),
+                            securityFilter.SubjectId)));
+                }
+            }
         }
 
         return orFilters.Count == 1 ? orFilters[0] : Builders<TEntity>.Filter.Or(orFilters);
@@ -62,6 +88,21 @@ internal static class DataSecurityFilterRenderer
 
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(securityFilter.ComputeCacheSegment()));
         return "|sec:" + Convert.ToHexStringLower(bytes)[..16];
+    }
+
+    /// <summary>
+    ///     Translates a CK owner attribute path ("AssigneeId", "Owner.UserId") to the stored BSON
+    ///     field path. Scalar values sit directly at attributes.{camelCase}
+    ///     (RtAttributeDictionarySerializer — no .value wrapper); each Record hop nests another
+    ///     attributes document, mirroring MongoDbAttributePathResolver ("Owner.UserId" →
+    ///     "attributes.owner.attributes.userId"). CK compile-time validation guarantees the shape:
+    ///     single-valued Record segments with a String terminal.
+    /// </summary>
+    private static string ToMongoFieldPath(string ownerAttributePath)
+    {
+        var segments = ownerAttributePath.Split('.').Select(s => s.ToCamelCase());
+        return Constants.AttributesName + Constants.PathSeparator +
+               string.Join(Constants.PathSeparator + Constants.AttributesName + Constants.PathSeparator, segments);
     }
 
     private static List<RtCkId<CkTypeId>?> ToRtCkIds(IEnumerable<string> fullNames)

@@ -362,6 +362,200 @@ public class DataPermissionEnforcementTests(DataPermissionTestFixture fixture)
         Assert.False(operationResult.HasErrors);
     }
 
+    /// <summary>
+    ///     AB#4978: Test/Ticket declares AssigneeId as its owner attribute — the owned-only predicate
+    ///     compares that attribute against the subject instead of the stamped rtCreatedBy, on reads
+    ///     and on the write-guard ownership check; Test/EscalationTicket inherits the declaration.
+    /// </summary>
+    [Fact]
+    public async Task OwnerAttribute_ReplacesCreatedByForOwnedOnly()
+    {
+        fixture.Resolver.Table = RtDataPolicyTable.Empty;
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+
+        // All created by Employee2 — creator must NOT matter for the owner-attribute type.
+        var assignedTo1 = await InsertTicketAsync(repository, Employee2, "Assigned-1", "user-1");
+        var assignedTo2 = await InsertTicketAsync(repository, Employee2, "Assigned-2", "user-2");
+        var unassigned = await InsertTicketAsync(repository, Employee2, "Unassigned", null);
+        var escalation = await InsertEscalationTicketAsync(repository, Employee2, "Escalation-1", "user-1");
+
+        fixture.Resolver.Table = new RtDataPolicyTable(
+        [
+            new RtDataPolicyRule("test.tickets",
+                new HashSet<string> { TestCkIds.RtCkTicketTypeId.SemanticVersionedFullName },
+                [RtDataAction.Read, RtDataAction.Write],
+                OwnedOnly: true, AuditOnly: false, new HashSet<string> { "TestEmployee" })
+        ]);
+        try
+        {
+            // Reads: Employee1 sees exactly the tickets assigned to user-1 — including the derived
+            // EscalationTicket (inherited owner attribute); the unassigned ticket is nobody's.
+            var employee1Tickets = await ReadAllTicketsAsync(repository, Employee1);
+            Assert.Equal(
+                new HashSet<OctoObjectId> { assignedTo1, escalation },
+                employee1Tickets.Items.Select(t => t.RtId).ToHashSet());
+
+            var employee2Tickets = await ReadAllTicketsAsync(repository, Employee2);
+            var employee2Id = Assert.Single(employee2Tickets.Items).RtId;
+            Assert.Equal(assignedTo2, employee2Id);
+
+            // Writes: the assignee may update; the creator (Employee2) may NOT update a ticket
+            // that is assigned to someone else; nobody owns the unassigned ticket.
+            await UpdateTicketNameAsync(repository, Employee1, assignedTo1, "Updated-By-Assignee");
+            await Assert.ThrowsAsync<RuntimeRepositoryException>(() =>
+                UpdateTicketNameAsync(repository, Employee2, assignedTo1, "Creator-Must-Not-Win"));
+            await Assert.ThrowsAsync<RuntimeRepositoryException>(() =>
+                UpdateTicketNameAsync(repository, Employee1, unassigned, "Nobody-Owns-This"));
+
+            // System bypasses as always.
+            var systemTickets = await ReadAllTicketsAsync(repository, null);
+            Assert.Equal(4, systemTickets.Items.Count());
+        }
+        finally
+        {
+            fixture.Resolver.Table = RtDataPolicyTable.Empty;
+        }
+    }
+
+    /// <summary>
+    ///     AB#4978 path semantics: Test/ReviewTask declares the record path Owner.UserId as its owner
+    ///     — the read predicate targets the nested BSON path (attributes.owner.attributes.userId) and
+    ///     the write-guard resolves the value via the path evaluator.
+    /// </summary>
+    [Fact]
+    public async Task OwnerAttributePath_RecordPath_IsEnforced()
+    {
+        fixture.Resolver.Table = RtDataPolicyTable.Empty;
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+
+        var ownedBy1 = await InsertReviewTaskAsync(repository, "Task-1", "user-1");
+        var ownedBy2 = await InsertReviewTaskAsync(repository, "Task-2", "user-2");
+        var ownerless = await InsertReviewTaskAsync(repository, "Task-None", null);
+
+        fixture.Resolver.Table = new RtDataPolicyTable(
+        [
+            new RtDataPolicyRule("test.reviewtasks",
+                new HashSet<string> { TestCkIds.RtCkReviewTaskTypeId.SemanticVersionedFullName },
+                [RtDataAction.Read, RtDataAction.Write],
+                OwnedOnly: true, AuditOnly: false, new HashSet<string> { "TestEmployee" })
+        ]);
+        try
+        {
+            using (var session = await repository.GetSessionAsync(Employee1))
+            {
+                session.StartTransaction();
+                var result = await repository.GetRtEntitiesByTypeAsync<RtReviewTask>(session,
+                    RtEntityQueryOptions.Create());
+                await session.CommitTransactionAsync();
+                var visible = Assert.Single(result.Items);
+                Assert.Equal(ownedBy1, visible.RtId);
+            }
+
+            await UpdateReviewTaskNameAsync(repository, Employee1, ownedBy1, "Updated-By-Owner");
+            await Assert.ThrowsAsync<RuntimeRepositoryException>(() =>
+                UpdateReviewTaskNameAsync(repository, Employee1, ownedBy2, "Foreign-Owner"));
+            await Assert.ThrowsAsync<RuntimeRepositoryException>(() =>
+                UpdateReviewTaskNameAsync(repository, Employee1, ownerless, "Nobody-Owns-This"));
+        }
+        finally
+        {
+            fixture.Resolver.Table = RtDataPolicyTable.Empty;
+        }
+    }
+
+    private static async Task<OctoObjectId> InsertReviewTaskAsync(ITenantRepository tenantRepository,
+        string name, string? ownerUserId)
+    {
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+        var task = await tenantRepository.CreateTransientRtEntityAsync<RtReviewTask>();
+        task.RtId = OctoObjectId.GenerateNewId();
+        task.Name = name;
+        if (ownerUserId != null)
+        {
+            task.Owner = new RtOwnerInfoRecord { UserId = ownerUserId };
+        }
+
+        await tenantRepository.InsertOneRtEntityAsync(session, task);
+        await session.CommitTransactionAsync();
+        return task.RtId;
+    }
+
+    private static async Task UpdateReviewTaskNameAsync(ITenantRepository tenantRepository,
+        RtSecurityContext securityContext, OctoObjectId rtId, string name)
+    {
+        using var session = await tenantRepository.GetSessionAsync(securityContext);
+        session.StartTransaction();
+        var operationResult = new OperationResult();
+        var update = new RtEntity(TestCkIds.RtCkReviewTaskTypeId, rtId,
+            new Dictionary<string, object?> { { "Name", name } });
+        var entityUpdates = new List<IEntityUpdateInfo<RtEntity>>
+        {
+            EntityUpdateInfo<RtEntity>.CreateUpdate(new RtEntityId(TestCkIds.RtCkReviewTaskTypeId, rtId), update)
+        };
+        await tenantRepository.ApplyChangesAsync(session, entityUpdates, operationResult);
+        await session.CommitTransactionAsync();
+    }
+
+    private static async Task<IResultSet<RtTicket>> ReadAllTicketsAsync(ITenantRepository tenantRepository,
+        RtSecurityContext? securityContext)
+    {
+        using var session = securityContext == null
+            ? await tenantRepository.GetSessionAsync()
+            : await tenantRepository.GetSessionAsync(securityContext);
+        session.StartTransaction();
+        var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtTicket>(session,
+            RtEntityQueryOptions.Create());
+        await session.CommitTransactionAsync();
+        return result;
+    }
+
+    private static async Task<OctoObjectId> InsertTicketAsync(ITenantRepository tenantRepository,
+        RtSecurityContext securityContext, string name, string? assigneeId)
+    {
+        using var session = await tenantRepository.GetSessionAsync(securityContext);
+        session.StartTransaction();
+        var ticket = await tenantRepository.CreateTransientRtEntityAsync<RtTicket>();
+        ticket.RtId = OctoObjectId.GenerateNewId();
+        ticket.Name = name;
+        ticket.AssigneeId = assigneeId;
+        await tenantRepository.InsertOneRtEntityAsync(session, ticket);
+        await session.CommitTransactionAsync();
+        return ticket.RtId;
+    }
+
+    private static async Task<OctoObjectId> InsertEscalationTicketAsync(ITenantRepository tenantRepository,
+        RtSecurityContext securityContext, string name, string? assigneeId)
+    {
+        using var session = await tenantRepository.GetSessionAsync(securityContext);
+        session.StartTransaction();
+        var ticket = await tenantRepository.CreateTransientRtEntityAsync<RtEscalationTicket>();
+        ticket.RtId = OctoObjectId.GenerateNewId();
+        ticket.Name = name;
+        ticket.AssigneeId = assigneeId;
+        await tenantRepository.InsertOneRtEntityAsync(session, ticket);
+        await session.CommitTransactionAsync();
+        return ticket.RtId;
+    }
+
+    private static async Task UpdateTicketNameAsync(ITenantRepository tenantRepository,
+        RtSecurityContext securityContext, OctoObjectId rtId, string name)
+    {
+        using var session = await tenantRepository.GetSessionAsync(securityContext);
+        session.StartTransaction();
+        var operationResult = new OperationResult();
+        var update = new RtEntity(TestCkIds.RtCkTicketTypeId, rtId,
+            new Dictionary<string, object?> { { "Name", name } });
+        var entityUpdates = new List<IEntityUpdateInfo<RtEntity>>
+        {
+            EntityUpdateInfo<RtEntity>.CreateUpdate(new RtEntityId(TestCkIds.RtCkTicketTypeId, rtId), update)
+        };
+        await tenantRepository.ApplyChangesAsync(session, entityUpdates, operationResult);
+        await session.CommitTransactionAsync();
+    }
+
     private static async Task<IResultSet<RtEntityGraphItem>> QueryContinentsWithChildCountAsync(
         ITenantRepository repository, ICkCacheService ckCacheService, string tenantId,
         RtSecurityContext? securityContext, FieldFilterOperator countOperator, int comparisonValue)

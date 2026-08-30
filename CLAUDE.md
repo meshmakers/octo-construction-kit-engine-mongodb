@@ -913,6 +913,35 @@ Semantics preserved:
   active-generation predicate when `GenerationTracked` — previously the downsampling path missed
   it entirely, so a read during a recompute double-counted the swapped windows.
 
+### CkType.ownerAttributePath Round-Trip + OwnedOnly Owner Attribute (AB#4978)
+
+`CkTypeDto.OwnerAttributePath` (the CK-model-declared owner attribute for owned-only data
+permissions — a top-level String attribute compared against the caller's subject id instead of the
+server-stamped `rtCreatedBy`) follows the same three-place Mongo round-trip rule as
+`isRuntimeState` below: the `CkType` persistence entity declares the property, the import mapping
+(`ExecuteImport` → `new CkType {...}`) and the read-back mapping (`TryLookupCkModelAsync`) both
+copy it. Inheritance (nearest declared name wins along `derivedFromCkTypeId`) is resolved when the
+dependency graph is rebuilt from the read-back DTOs — only the declaring type persists the value.
+Pinned by `CkTypeOwnerAttributePersistenceTests`.
+
+Consumers in this layer:
+
+- `DataSecurityFilterRenderer` renders one Or-branch per distinct owner attribute path:
+  `In(ckTypeId, <types>) AND Eq(<mongo path>, subjectId)`. `ToMongoFieldPath` translates the CK
+  path — scalar values are stored directly at `attributes.{camelCase}`
+  (`RtAttributeDictionarySerializer` — no `.value` wrapper) and each Record hop nests another
+  `attributes` document (`Owner.UserId` → `attributes.owner.attributes.userId`, mirroring
+  `MongoDbAttributePathResolver`). The CK compiler guarantees the shape: single-valued Record
+  segments (RecordArray rejected) with a String terminal. Types without a declaration stay on the
+  `rtCreatedBy` Eq-branch.
+- `MongoDbRepositoryDataSource.AnalyseIndex` synthesizes an implicit ascending index on the owner
+  attribute at the declaring type (appended after declared indexes so their uniqueIndexNumber-based
+  names stay stable; `PrepareAndCreateIndex` prepends `ckTypeId`/appends `rtState` as usual).
+- End-to-end enforcement (read filter, write-guard ownership via the attribute, inheritance to
+  derived types) is pinned by `DataPermissionEnforcementTests.OwnerAttribute_ReplacesCreatedByForOwnedOnly`
+  using `Test/Ticket` (`ownerAttributePath: AssigneeId`), `Test/EscalationTicket` and the
+  record-path case `Test/ReviewTask` (`ownerAttributePath: Owner.UserId`).
+
 ### CkAttribute.isRuntimeState Round-Trip (AB#4589)
 
 The runtime CK cache is rebuilt by reading each model **back out of MongoDB**

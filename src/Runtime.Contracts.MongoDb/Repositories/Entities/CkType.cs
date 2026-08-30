@@ -56,6 +56,13 @@ public class CkType
     public string? DisplayNameRule { get; set; }
 
     /// <summary>
+    ///     Optional name of the top-level String attribute identifying the owner (subject id) for
+    ///     owned-only data permissions (AB#4978; declared on this type, inheritance is resolved when
+    ///     the dependency graph is built).
+    /// </summary>
+    public string? OwnerAttributePath { get; set; }
+
+    /// <summary>
     ///     Optional rule computing rtDisplayDescription from attribute values on save.
     /// </summary>
     public string? DisplayDescriptionRule { get; set; }
