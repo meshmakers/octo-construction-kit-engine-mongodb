@@ -16,3 +16,5 @@ types:
     associations:
     - id: ${this}/CustomerMeasuringPoint
       targetCkTypeId: ${this}/MeasuringPoint
+    - id: ${this}/References
+      targetCkTypeId: ${System}/Entity

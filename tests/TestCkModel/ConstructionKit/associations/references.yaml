@@ -1,0 +1,8 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+associationRoles:
+  - id: References
+    description: "N:M association whose target is the abstract System/Entity above the collection-root level (mirrors System/Related; AB#5000 repro: navigation targets spanning multiple entity collections)."
+    inboundName: ReferencedBy
+    inboundMultiplicity: N
+    outboundName: References
+    outboundMultiplicity: N

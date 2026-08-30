@@ -75,6 +75,14 @@ public class OperationFailedException : PersistenceException
         return new OperationFailedException($"CkType '{ckTypeId}' has no defining collection root.");
     }
 
+    public static Exception NavigationTargetSpansTooManyCollections(CkId<CkTypeId> ckTypeId, int rootCount,
+        int maxRoots)
+    {
+        return new OperationFailedException(
+            $"Navigation target '{ckTypeId}' spans {rootCount} entity collections; at most {maxRoots} " +
+            "collection roots are supported for association navigation and count lookups.");
+    }
+
     public static Exception PreImageCaptureNotEnabled(CkId<CkTypeId> rootCkTypeId)
     {
         return new OperationFailedException(

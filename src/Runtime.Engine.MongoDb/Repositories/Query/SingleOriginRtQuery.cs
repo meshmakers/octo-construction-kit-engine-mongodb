@@ -48,6 +48,103 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
     private RtDataSecurityQueryFilter? _securityFilter;
 
     /// <summary>
+    ///     Guard against pathological fan-out when an abstract navigation target spans many entity
+    ///     collections (AB#5000): each collection root costs one $lookup per association document.
+    /// </summary>
+    private const int MaxNavigationTargetCollectionRoots = 32;
+
+    /// <summary>
+    ///     Resolves the entity collection graphs a navigation target spans (AB#5000). A target at or
+    ///     below its collection root maps to exactly one collection — the pre-existing path, its
+    ///     pipeline stays byte-identical. An abstract target ABOVE the collection-root level (e.g.
+    ///     System/Entity, the target of System/Related) has no defining collection root; its concrete
+    ///     derived types are grouped by their roots and every group contributes one entity lookup,
+    ///     merged via $concatArrays so all downstream stages keep operating on the canonical field.
+    ///     Root order is sorted for deterministic pipelines (query-result cache keys).
+    /// </summary>
+    private IReadOnlyList<CkTypeGraph> ResolveTargetCollectionGraphs(CkTypeGraph targetCkTypeGraph)
+    {
+        if (targetCkTypeGraph.DefiningCollectionRootCkTypeId != null)
+        {
+            return [targetCkTypeGraph];
+        }
+
+        var collectionGraphs = targetCkTypeGraph.GetAllDerivedTypes(false)
+            .Select(derivedCkTypeId => _ckCacheService.GetCkType(_tenantId, derivedCkTypeId))
+            .Where(graph => graph.DefiningCollectionRootCkTypeId != null)
+            .GroupBy(graph => graph.DefiningCollectionRootCkTypeId)
+            .Select(group => group.First())
+            .OrderBy(graph => graph.DefiningCollectionRootCkTypeId!.ToString(), StringComparer.Ordinal)
+            .ToList();
+
+        if (collectionGraphs.Count == 0)
+        {
+            throw OperationFailedException.CkTypeHasNoDefiningCollectionRoot(targetCkTypeGraph.CkTypeId);
+        }
+
+        if (collectionGraphs.Count > MaxNavigationTargetCollectionRoots)
+        {
+            throw OperationFailedException.NavigationTargetSpansTooManyCollections(targetCkTypeGraph.CkTypeId,
+                collectionGraphs.Count, MaxNavigationTargetCollectionRoots);
+        }
+
+        return collectionGraphs;
+    }
+
+    /// <summary>
+    ///     Appends the target-entity lookup(s) for the resolved collection graphs (AB#5000). One
+    ///     collection keeps the historic single $lookup into <paramref name="asFieldName" />
+    ///     (byte-identical pipeline). Multiple collections emit one $lookup per root into numbered
+    ///     part fields and merge them into <paramref name="asFieldName" /> via $concatArrays, so the
+    ///     downstream $size checks and projections are the same in both shapes. The declared stage
+    ///     input/output types must chain — the driver validates them when the pipeline is built.
+    /// </summary>
+    private void AddTargetEntityLookupStages<TStage>(List<IPipelineStageDefinition> lookupPipelineStages,
+        IReadOnlyList<CkTypeGraph> collectionGraphs, string localFieldName, string asFieldName,
+        PipelineDefinition<TEntity, TEntity>? innerLookupPipeline)
+    {
+        if (collectionGraphs.Count == 1)
+        {
+            lookupPipelineStages.Add(OctoPipelineStageBuilder
+                .Lookup<RtAssociation, TEntity, TEntity, IEnumerable<TEntity>, TStage>(
+                    _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(collectionGraphs[0])
+                        .GetMongoCollection(),
+                    localFieldName,
+                    "_id",
+                    (FieldDefinition<TStage, IEnumerable<TEntity>>)asFieldName,
+                    innerLookupPipeline));
+            return;
+        }
+
+        var partFieldRefs = new BsonArray();
+        for (var i = 0; i < collectionGraphs.Count; i++)
+        {
+            var partField = asFieldName + i;
+            partFieldRefs.Add("$" + partField);
+            var collection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(collectionGraphs[i])
+                .GetMongoCollection();
+            if (i == 0)
+            {
+                lookupPipelineStages.Add(OctoPipelineStageBuilder
+                    .Lookup<RtAssociation, TEntity, TEntity, IEnumerable<TEntity>, TStage>(
+                        collection, localFieldName, "_id",
+                        (FieldDefinition<TStage, IEnumerable<TEntity>>)partField, innerLookupPipeline));
+            }
+            else
+            {
+                lookupPipelineStages.Add(OctoPipelineStageBuilder
+                    .Lookup<TStage, TEntity, TEntity, IEnumerable<TEntity>, TStage>(
+                        collection, localFieldName, "_id",
+                        (FieldDefinition<TStage, IEnumerable<TEntity>>)partField, innerLookupPipeline));
+            }
+        }
+
+        lookupPipelineStages.Add(new BsonDocumentPipelineStageDefinition<TStage, TStage>(
+            new BsonDocument("$addFields",
+                new BsonDocument(asFieldName, new BsonDocument("$concatArrays", partFieldRefs)))));
+    }
+
+    /// <summary>
     ///     Applies the caller's data-permission filter (AB#4973): as mandatory pre-filter on the root
     ///     match (covers page results, TotalCount and the cache-population id collection) and as a
     ///     $match inside every navigation/existence lookup pipeline, so denied or foreign owned-only
@@ -189,7 +286,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         var baseCkTypeIds = targetCkTypeGraph.BaseTypes.Select(b => b.BaseCkTypeId).ToList();
         baseCkTypeIds.Add(targetCkTypeGraph.CkTypeId);
 
-        var innerLocalFieldRtId = (FieldDefinition<RtAssociation, string>)"originRtId";
+        var innerLocalFieldRtId = "originRtId";
         var foreignFieldRtId = (FieldDefinition<RtAssociation>)"targetRtId";
         // We ensure that the association role exists.
         // Because navigation properties are centralized in the definition, all
@@ -265,6 +362,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         var innerLookupPipeline =
             PipelineDefinition<TEntity, TEntity>.Create(innerLookupPipelineStages);
 
+        var collectionGraphs = ResolveTargetCollectionGraphs(targetCkTypeGraph);
         var lookupPipelineStages = new List<IPipelineStageDefinition>
         {
             PipelineStageDefinitionBuilder.Match(
@@ -272,22 +370,15 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                     Builders<RtAssociation>.Filter.Eq(f => f.AssociationRoleId, roleIdDirectionPair.CkRoleId),
                     Builders<RtAssociation>.Filter.In(ckTypeIdFilterField, ckTypeIdsToMatch)
                 )
-            ),
-            OctoPipelineStageBuilder
-                .Lookup<RtAssociation, TEntity, TEntity, IEnumerable<TEntity>,
-                    RtEntityGraphItem>(
-                    _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(targetCkTypeGraph)
-                        .GetMongoCollection(),
-                    innerLocalFieldRtId,
-                    "_id",
-                    (FieldDefinition<RtEntityGraphItem, IEnumerable<TEntity>>)"targets",
-                    innerLookupPipeline),
-            PipelineStageDefinitionBuilder.Match(
-                Builders<RtEntityGraphItem>.Filter.SizeGt("targets", 0)
-            ),
-            PipelineStageDefinitionBuilder.Project<TEntity, RtAssociationWithEntities>(
-                new BsonDocument { { "_id", 1 }, { "rtAssociationRoleId", "$associationRoleId" }, { "attributes", 1 }, { "targets", 1 } }),
+            )
         };
+        AddTargetEntityLookupStages<RtEntityGraphItem>(lookupPipelineStages, collectionGraphs,
+            innerLocalFieldRtId, "targets", innerLookupPipeline);
+        lookupPipelineStages.Add(PipelineStageDefinitionBuilder.Match(
+            Builders<RtEntityGraphItem>.Filter.SizeGt("targets", 0)
+        ));
+        lookupPipelineStages.Add(PipelineStageDefinitionBuilder.Project<RtEntityGraphItem, RtAssociationWithEntities>(
+            new BsonDocument { { "_id", 1 }, { "rtAssociationRoleId", "$associationRoleId" }, { "attributes", 1 }, { "targets", 1 } }));
 
         var fieldTargetRtCkTypeId =
             Tuple.Create<FieldDefinition<RtAssociationWithEntities, RtAssociationWithEntities>,
@@ -373,7 +464,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         var baseCkTypeIds = targetCkTypeGraph.BaseTypes.Select(b => b.BaseCkTypeId).ToList();
         baseCkTypeIds.Add(targetCkTypeGraph.CkTypeId);
 
-        var innerLocalFieldRtId = (FieldDefinition<RtAssociation, string>)"originRtId";
+        var innerLocalFieldRtId = "originRtId";
         var foreignFieldRtId = (FieldDefinition<RtAssociation>)"targetRtId";
         CkTypeAssociationGraph? association;
 
@@ -446,6 +537,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
 
         // Simplified lookup pipeline: match + inner lookup + match targets + $limit:1 + minimal $project
         // Skips full $addFields (metadata not needed for existence check)
+        var collectionGraphs = ResolveTargetCollectionGraphs(targetCkTypeGraph);
         var lookupPipelineStages = new List<IPipelineStageDefinition>
         {
             PipelineStageDefinitionBuilder.Match(
@@ -453,25 +545,18 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                     Builders<RtAssociation>.Filter.Eq(f => f.AssociationRoleId, roleIdDirectionPair.CkRoleId),
                     Builders<RtAssociation>.Filter.In(ckTypeIdFilterField, ckTypeIdsToMatch)
                 )
-            ),
-            OctoPipelineStageBuilder
-                .Lookup<RtAssociation, TEntity, TEntity, IEnumerable<TEntity>,
-                    RtEntityGraphItem>(
-                    _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(targetCkTypeGraph)
-                        .GetMongoCollection(),
-                    innerLocalFieldRtId,
-                    "_id",
-                    (FieldDefinition<RtEntityGraphItem, IEnumerable<TEntity>>)"targets",
-                    innerLookupPipeline),
-            PipelineStageDefinitionBuilder.Match(
-                Builders<RtEntityGraphItem>.Filter.SizeGt("targets", 0)
-            ),
-            // Stop after finding the first valid association (existence check optimization)
-            PipelineStageDefinitionBuilder.Limit<RtEntityGraphItem>(1),
-            // Minimal projection to match expected output type
-            PipelineStageDefinitionBuilder.Project<RtEntityGraphItem, RtAssociationWithEntities>(
-                new BsonDocument { { "_id", 1 } }),
+            )
         };
+        AddTargetEntityLookupStages<RtEntityGraphItem>(lookupPipelineStages, collectionGraphs,
+            innerLocalFieldRtId, "targets", innerLookupPipeline);
+        lookupPipelineStages.Add(PipelineStageDefinitionBuilder.Match(
+            Builders<RtEntityGraphItem>.Filter.SizeGt("targets", 0)
+        ));
+        // Stop after finding the first valid association (existence check optimization)
+        lookupPipelineStages.Add(PipelineStageDefinitionBuilder.Limit<RtEntityGraphItem>(1));
+        // Minimal projection to match expected output type
+        lookupPipelineStages.Add(PipelineStageDefinitionBuilder.Project<RtEntityGraphItem, RtAssociationWithEntities>(
+            new BsonDocument { { "_id", 1 } }));
 
         var lookupPipeline =
             PipelineDefinition<RtAssociation, RtAssociationWithEntities>.Create(lookupPipelineStages);
@@ -539,7 +624,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         // The entity on the counted (other) end of each association — needed when the caller's
         // data-permission filter must hide foreign entities from the count (AB#4986).
         CkTypeGraph countedCkTypeGraph;
-        FieldDefinition<RtAssociation> countedEndRtIdField;
+        string countedEndRtIdField;
 
         switch (roleIdDirectionPair.Direction)
         {
@@ -599,18 +684,14 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
             ckTypeIdsToMatch.Any(t => _securityFilter!.ProtectedCkTypeIds.Contains(t.SemanticVersionedFullName)))
         {
             visibilityJoinAdded = true;
-            lookupPipelineStages.Add(
-                OctoPipelineStageBuilder
-                    .Lookup<RtAssociation, TEntity, TEntity, IEnumerable<TEntity>, RtAssociationWithEntities>(
-                        _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(countedCkTypeGraph)
-                            .GetMongoCollection(),
-                        countedEndRtIdField,
-                        "_id",
-                        (FieldDefinition<RtAssociationWithEntities, IEnumerable<TEntity>>)"__visibleEnds",
-                        PipelineDefinition<TEntity, TEntity>.Create(
-                        [
-                            PipelineStageDefinitionBuilder.Match(countSecurityMatch)
-                        ])));
+            // The counted other end may live in several collections when the target is abstract
+            // above the collection-root level (AB#5000) — one lookup per root, merged.
+            AddTargetEntityLookupStages<RtAssociationWithEntities>(lookupPipelineStages,
+                ResolveTargetCollectionGraphs(countedCkTypeGraph), countedEndRtIdField, "__visibleEnds",
+                PipelineDefinition<TEntity, TEntity>.Create(
+                [
+                    PipelineStageDefinitionBuilder.Match(countSecurityMatch)
+                ]));
             lookupPipelineStages.Add(PipelineStageDefinitionBuilder.Match(
                 Builders<RtAssociationWithEntities>.Filter.SizeGt("__visibleEnds", 0)));
         }
