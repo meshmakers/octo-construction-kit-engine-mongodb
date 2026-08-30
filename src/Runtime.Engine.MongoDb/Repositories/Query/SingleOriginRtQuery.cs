@@ -535,7 +535,11 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         // Inbound: we join on targetRtId, filter by originCkTypeId (the type that created the association)
         // Outbound: we join on originRtId, filter by targetCkTypeId
         FieldDefinition<RtAssociation, RtCkId<CkTypeId>> ckTypeIdFilterField;
-        IEnumerable<RtCkId<CkTypeId>> ckTypeIdsToMatch;
+        IReadOnlyList<RtCkId<CkTypeId>> ckTypeIdsToMatch;
+        // The entity on the counted (other) end of each association — needed when the caller's
+        // data-permission filter must hide foreign entities from the count (AB#4986).
+        CkTypeGraph countedCkTypeGraph;
+        FieldDefinition<RtAssociation> countedEndRtIdField;
 
         switch (roleIdDirectionPair.Direction)
         {
@@ -546,7 +550,9 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                     a.CkRoleId.Equals(roleIdDirectionPair.CkRoleId));
                 // Outbound: filter by targetCkTypeId in association = the target type
                 ckTypeIdFilterField = "targetCkTypeId";
-                ckTypeIdsToMatch = targetCkTypeGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
+                ckTypeIdsToMatch = targetCkTypeGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId()).ToList();
+                countedCkTypeGraph = targetCkTypeGraph;
+                countedEndRtIdField = "targetRtId";
                 break;
             case GraphDirections.Inbound:
                 // Inbound: filter by originCkTypeId in association = the origin type (who created the association)
@@ -554,7 +560,9 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                 var (inboundAssociation, reachedCkTypeGraph) = ResolveInboundNavigation(originCkTypeGraph,
                     roleIdDirectionPair, baseCkTypeIds, targetCkTypeGraph);
                 association = inboundAssociation;
-                ckTypeIdsToMatch = reachedCkTypeGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId());
+                ckTypeIdsToMatch = reachedCkTypeGraph.GetAllDerivedTypes(true).Select(e => e.ToRtCkId()).ToList();
+                countedCkTypeGraph = reachedCkTypeGraph;
+                countedEndRtIdField = "originRtId";
                 break;
             default:
                 throw OperationFailedException.GraphDirectionUnsupported(roleIdDirectionPair.Direction);
@@ -576,11 +584,44 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
                     Builders<RtAssociation>.Filter.Eq(f => f.AssociationRoleId, roleIdDirectionPair.CkRoleId),
                     Builders<RtAssociation>.Filter.In(ckTypeIdFilterField, ckTypeIdsToMatch)
                 )
-            ),
-            // Minimal projection — we only need the count
-            PipelineStageDefinitionBuilder.Project<RtAssociation, RtAssociationWithEntities>(
-                new BsonDocument { { "_id", 1 } }),
+            )
         };
+
+        // AB#4986: a ::totalCount/::exists criterion must count only associations whose other-end
+        // entity the caller may see — otherwise the count filter contradicts the (already security-
+        // filtered) enrichment cells and leaks the existence of foreign entities through counts.
+        // The extra entity lookup is added only when the caller is restricted AND the counted types
+        // are actually protected, so unrestricted callers and unprotected types keep the
+        // byte-identical cheap pipeline (dormant guarantee).
+        var countSecurityMatch = DataSecurityFilterRenderer.Build<TEntity>(_securityFilter);
+        var visibilityJoinAdded = false;
+        if (countSecurityMatch != null &&
+            ckTypeIdsToMatch.Any(t => _securityFilter!.ProtectedCkTypeIds.Contains(t.SemanticVersionedFullName)))
+        {
+            visibilityJoinAdded = true;
+            lookupPipelineStages.Add(
+                OctoPipelineStageBuilder
+                    .Lookup<RtAssociation, TEntity, TEntity, IEnumerable<TEntity>, RtAssociationWithEntities>(
+                        _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(countedCkTypeGraph)
+                            .GetMongoCollection(),
+                        countedEndRtIdField,
+                        "_id",
+                        (FieldDefinition<RtAssociationWithEntities, IEnumerable<TEntity>>)"__visibleEnds",
+                        PipelineDefinition<TEntity, TEntity>.Create(
+                        [
+                            PipelineStageDefinitionBuilder.Match(countSecurityMatch)
+                        ])));
+            lookupPipelineStages.Add(PipelineStageDefinitionBuilder.Match(
+                Builders<RtAssociationWithEntities>.Filter.SizeGt("__visibleEnds", 0)));
+        }
+
+        // Minimal projection — we only need the count. The declared input type must match the
+        // previous stage's output — the driver validates the stage chain when the pipeline is built.
+        lookupPipelineStages.Add(visibilityJoinAdded
+            ? PipelineStageDefinitionBuilder.Project<RtAssociationWithEntities, RtAssociationWithEntities>(
+                new BsonDocument { { "_id", 1 } })
+            : PipelineStageDefinitionBuilder.Project<RtAssociation, RtAssociationWithEntities>(
+                new BsonDocument { { "_id", 1 } }));
 
         var lookupPipeline =
             PipelineDefinition<RtAssociation, RtAssociationWithEntities>.Create(lookupPipelineStages);

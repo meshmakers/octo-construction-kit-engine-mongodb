@@ -1,4 +1,6 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.DataPermissions;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
@@ -280,5 +282,114 @@ public class DataPermissionEnforcementTests(DataPermissionTestFixture fixture)
         };
         await tenantRepository.ApplyChangesAsync(session, entityUpdates, operationResult);
         await session.CommitTransactionAsync();
+    }
+
+    /// <summary>
+    ///     AB#4986: a ::totalCount/::exists count criterion counts only associations whose other-end
+    ///     entity the caller may see. Two countries under one continent, created by different
+    ///     employees; the policy protects Country (owned-only). System counts 2, the employee counts
+    ///     only their own country.
+    /// </summary>
+    [Fact]
+    public async Task AssociationCountFilter_CountsOnlyVisibleChildren()
+    {
+        fixture.Resolver.Table = RtDataPolicyTable.Empty;
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var ckCacheService = fixture.GetService<ICkCacheService>();
+        var tenantId = fixture.GetSystemContext().TenantId;
+
+        OctoObjectId continentId;
+        using (var session = await repository.GetSessionAsync())
+        {
+            session.StartTransaction();
+            var continent = await repository.CreateTransientRtEntityAsync<RtContinent>();
+            continent.RtId = OctoObjectId.GenerateNewId();
+            continent.Name = "Count-Continent";
+            await repository.InsertOneRtEntityAsync(session, continent);
+            await session.CommitTransactionAsync();
+            continentId = continent.RtId;
+        }
+
+        await InsertCountryAsync(repository, Employee1, "Emp1-Country", continentId);
+        await InsertCountryAsync(repository, Employee2, "Emp2-Country", continentId);
+
+        var countryTarget = TestCkIds.RtCkCountryTypeId;
+        fixture.Resolver.Table = new RtDataPolicyTable(
+        [
+            new RtDataPolicyRule("test.countries", new HashSet<string> { countryTarget.SemanticVersionedFullName },
+                [RtDataAction.Read], OwnedOnly: true, AuditOnly: false, new HashSet<string> { "TestEmployee" })
+        ]);
+        try
+        {
+            // System context: both children count — the continent matches count >= 2.
+            Assert.Single((await QueryContinentsWithChildCountAsync(repository, ckCacheService, tenantId,
+                null, FieldFilterOperator.GreaterEqualThan, 2)).Items);
+
+            // Employee1 sees one visible child: count >= 2 excludes the continent, count >= 1 keeps it.
+            Assert.Empty((await QueryContinentsWithChildCountAsync(repository, ckCacheService, tenantId,
+                Employee1, FieldFilterOperator.GreaterEqualThan, 2)).Items);
+            Assert.Single((await QueryContinentsWithChildCountAsync(repository, ckCacheService, tenantId,
+                Employee1, FieldFilterOperator.GreaterEqualThan, 1)).Items);
+        }
+        finally
+        {
+            fixture.Resolver.Table = RtDataPolicyTable.Empty;
+        }
+    }
+
+    private static async Task InsertCountryAsync(ITenantRepository repository,
+        RtSecurityContext securityContext, string name, OctoObjectId parentContinentId)
+    {
+        using var session = await repository.GetSessionAsync(securityContext);
+        session.StartTransaction();
+        var country = await repository.CreateTransientRtEntityAsync<RtCountry>();
+        country.RtId = OctoObjectId.GenerateNewId();
+        country.Name = name;
+        country.ISOCode = name.Substring(0, 2).ToUpperInvariant();
+        // Entity and its (mandatory) parent edge must land in one ApplyChanges — the graph rule
+        // engine validates multiplicities per change set.
+        var operationResult = new OperationResult();
+        await repository.ApplyChangesAsync(session,
+            new List<IEntityUpdateInfo<RtEntity>> { EntityUpdateInfo<RtEntity>.CreateInsert(country) },
+        [
+            AssociationUpdateInfo.CreateInsert(
+                new RtEntityId(TestCkIds.RtCkCountryTypeId, country.RtId),
+                new RtEntityId(TestCkIds.RtCkContinentTypeId, parentContinentId),
+                SystemCkIds.RtCkParentChildRoleId)
+        ], operationResult);
+        await session.CommitTransactionAsync();
+        Assert.False(operationResult.HasErrors);
+    }
+
+    private static async Task<IResultSet<RtEntityGraphItem>> QueryContinentsWithChildCountAsync(
+        ITenantRepository repository, ICkCacheService ckCacheService, string tenantId,
+        RtSecurityContext? securityContext, FieldFilterOperator countOperator, int comparisonValue)
+    {
+        var continentGraph = ckCacheService.GetRtCkType(tenantId, TestCkIds.RtCkContinentTypeId);
+        var childrenAssociation = continentGraph.Associations.In.All
+            .First(a => a.NavigationPropertyName == "Children");
+
+        var pair = new NavigationPair(
+            [
+                new PathTerm("Children", PathType.Navigation),
+                new PathTerm(TestCkIds.RtCkCountryTypeId.GetTypeName(), PathType.TargetCkTypeId)
+            ],
+            [],
+            childrenAssociation.CkRoleId.ToRtCkId(),
+            GraphDirections.Inbound,
+            TestCkIds.RtCkCountryTypeId)
+        {
+            AssociationCountFilter = new AssociationCountFilter(countOperator, comparisonValue)
+        };
+
+        using var session = securityContext == null
+            ? await repository.GetSessionAsync()
+            : await repository.GetSessionAsync(securityContext);
+        session.StartTransaction();
+        var result = await repository.GetRtEntitiesGraphByTypeAsync(session, TestCkIds.RtCkContinentTypeId,
+            RtEntityQueryOptions.Create(), [pair]);
+        await session.CommitTransactionAsync();
+        return result;
     }
 }
