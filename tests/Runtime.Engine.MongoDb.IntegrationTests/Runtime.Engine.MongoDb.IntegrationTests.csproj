@@ -25,7 +25,7 @@
              with 4.14.0); then this line can be removed. -->
         <PackageReference Include="SSH.NET" Version="2026.0.0" />
         <PackageReference Include="FluentAssertions" Version="8.10.0" />
-        <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
+        <PackageReference Include="xunit.runner.visualstudio" Version="4.0.0">
             <PrivateAssets>all</PrivateAssets>
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
