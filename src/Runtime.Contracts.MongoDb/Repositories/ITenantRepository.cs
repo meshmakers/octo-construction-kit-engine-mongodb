@@ -327,6 +327,24 @@ public interface ITenantRepository : IRuntimeRepository
     Task<IResultSet<RtDeepGraphQueryResult>> GetRtDeepGraphAsync(IOctoSession session, IEnumerable<OctoObjectId> originRtIds, RtCkId<CkTypeId> originCkTypeId,
         RtEntityQueryOptions queryOptions, int? skip = null, int? take = null);
 
+    /// <summary>
+    ///     Gets the rt entity graph connected through a set of directed follow rules (AB#5003). Each
+    ///     rule walks one association role in one direction, so hub types are dead-ends and the closure
+    ///     stays within the intended sub-graph. Null or an empty rule set falls back to the ParentChild
+    ///     traversal of the parameterless overload.
+    /// </summary>
+    /// <remarks>Associations of any role are included when origin and target are within the graph.</remarks>
+    /// <param name="session">Session object</param>
+    /// <param name="originRtIds">Origin runtime entity ids</param>
+    /// <param name="originCkTypeId">Origin construction kit type id</param>
+    /// <param name="queryOptions">Query operation object; the archived-entities global filter is honored</param>
+    /// <param name="followSpecs">Directed follow rules the traversal applies</param>
+    /// <param name="skip">Amount of items to skip</param>
+    /// <param name="take">Amount of items to take</param>
+    /// <returns>Result set with one row per collected entity carrying its outbound edges</returns>
+    Task<IResultSet<RtDeepGraphQueryResult>> GetRtDeepGraphAsync(IOctoSession session, IEnumerable<OctoObjectId> originRtIds, RtCkId<CkTypeId> originCkTypeId,
+        RtEntityQueryOptions queryOptions, IReadOnlyCollection<RtDeepGraphFollowSpec>? followSpecs, int? skip = null, int? take = null);
+
     #endregion Data query
     
     #region Subscriptions / Watch

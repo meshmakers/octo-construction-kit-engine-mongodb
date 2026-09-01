@@ -761,6 +761,27 @@ internal class TenantRepository(
         return await hierarchicalDeepRtGraphQuery.ExecuteQuery(session, skip, take);
     }
 
+    public async Task<IResultSet<RtDeepGraphQueryResult>> GetRtDeepGraphAsync(IOctoSession session,
+        IEnumerable<OctoObjectId> originRtIds,
+        RtCkId<CkTypeId> originCkTypeId,
+        RtEntityQueryOptions queryOptions,
+        IReadOnlyCollection<RtDeepGraphFollowSpec>? followSpecs,
+        int? skip = null, int? take = null)
+    {
+        if (followSpecs == null || followSpecs.Count == 0)
+        {
+            // Fall back to the hard-wired ParentChild traversal — byte-identical to the
+            // parameterless overload.
+            return await GetRtDeepGraphAsync(session, originRtIds, originCkTypeId, queryOptions, skip, take);
+        }
+
+        var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
+        var directedQuery = new MultipleOriginDirectedRoleDeepRtGraphQuery(mongoDbRepositoryDataSource,
+            queryOptions.GlobalFilter?.IncludeArchived ?? false, originRtIds, originTypeGraph, followSpecs);
+
+        return await directedQuery.ExecuteQuery(session, skip, take);
+    }
+
     protected override async Task<IResultSet<TEntity>> GetRtEntitiesByTypeAsync<TEntity>(IOctoSession session,
         RtCkId<CkTypeId> ckTypeId,
         RtEntityQueryOptions queryOptions, int? skip = null,

@@ -83,6 +83,13 @@ public class OperationFailedException : PersistenceException
             "collection roots are supported for association navigation and count lookups.");
     }
 
+    public static Exception DeepGraphFixpointNotReached(int maxRounds)
+    {
+        return new OperationFailedException(
+            $"Directed deep-graph traversal did not reach a fixpoint within {maxRounds} rounds over the " +
+            "association-role set; the follow rules feed each other without converging.");
+    }
+
     public static Exception PreImageCaptureNotEnabled(CkId<CkTypeId> rootCkTypeId)
     {
         return new OperationFailedException(
