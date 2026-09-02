@@ -21,16 +21,25 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 ///     exchange, where a permission is collected together with the policies and roles pointing INTO
 ///     it, but a collected role does not drag in its other permissions.
 /// </summary>
-[Collection(SampleRtModelDataCollection.Name)]
+/// <remarks>
+///     Joins <see cref="ImportTestCkModelCollection" />, not the sample-data collection: both seed
+///     helpers below call <c>ClearCollectionAsync()</c>, which wipes the whole system tenant. In the
+///     shared <see cref="SampleRtModelDataFixture" /> that would destroy the pre-seeded geography
+///     data every other class in that collection asserts on (the fixture seeds it once, in
+///     <c>InitializeServicesAsync</c>, and <c>ClearCollectionAsync</c> only re-imports the CK model).
+///     These tests seed everything they need themselves, so the bare test-CK-model fixture — the one
+///     the other wiping classes already use — is the right home.
+/// </remarks>
+[Collection(ImportTestCkModelCollection.Name)]
 public class DirectedRoleDeepGraphTests
 {
     private static readonly RtCkId<CkAssociationRoleId> ReferencesRoleId = new("Test/References");
     private static readonly RtCkId<CkAssociationRoleId> ParentChildRoleId =
         SystemCkIds.RtCkParentChildRoleId;
 
-    private readonly SampleRtModelDataFixture _fixture;
+    private readonly ImportTestCkModelFixture _fixture;
 
-    public DirectedRoleDeepGraphTests(SampleRtModelDataFixture fixture, ITestOutputHelper output)
+    public DirectedRoleDeepGraphTests(ImportTestCkModelFixture fixture, ITestOutputHelper output)
     {
         _fixture = fixture;
         _fixture.OutputHelper = output;
