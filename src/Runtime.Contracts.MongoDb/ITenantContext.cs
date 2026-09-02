@@ -290,12 +290,19 @@ public interface ITenantContext
     Task<bool> IsChildTenantExistingAsync(IOctoAdminSession adminSession, string tenantId);
 
     /// <summary>
-    /// Gets all child tenants of the current tenant.
+    /// Gets the direct child tenants of the current tenant.
     /// </summary>
+    /// <remarks>
+    /// Filters by <c>ParentTenantId</c> (own tenant id, or unset for records written before the
+    /// field existed and for parent-local records, which never carry it) — on the system tenant,
+    /// whose database doubles as the platform-wide routing registry, tenants re-parented under
+    /// another tenant are therefore NOT returned (AB#5025). For the full registry use
+    /// <c>ISystemContext.GetAllTenantsAsync</c>.
+    /// </remarks>
     /// <param name="adminSession">Admin session to get the tenant context</param>
     /// <param name="skip">Number of tenants to skip</param>
     /// <param name="take">Number of tenants to take</param>
-    /// <returns>List of child tenants</returns>
+    /// <returns>List of direct child tenants</returns>
     Task<IResultSet<OctoTenant>> GetChildTenantsAsync(IOctoAdminSession adminSession, int? skip = null,
         int? take = null);
 

@@ -5,6 +5,8 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
+using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -255,6 +257,22 @@ public class SystemContext : TenantContext, ISystemContext
         }
 
         return false;
+    }
+
+    /// <inheritdoc />
+    public async Task<IResultSet<OctoTenant>> GetAllTenantsAsync(IOctoAdminSession adminSession, int? skip = null,
+        int? take = null)
+    {
+        var tenantRepository = GetTenantRepositoryAsAdmin();
+
+        // Deliberately unfiltered: the system database doubles as the platform-wide routing registry,
+        // so this returns every tenant of the installation regardless of its logical parent. This is
+        // the enumeration for installation-wide concerns (token cleanup, CORS, health checks,
+        // observability); GetChildTenantsAsync returns direct children only (AB#5025).
+        var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession,
+            RtEntityQueryOptions.Create(), skip, take);
+        return new ResultSet<OctoTenant>(result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName)),
+            result.TotalCount, null, null);
     }
 
     /// <inheritdoc />

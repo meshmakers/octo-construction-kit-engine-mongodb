@@ -43,6 +43,25 @@ USE_LOCAL_MONGODB=true dotnet test -c DebugL
 }
 ```
 
+## Tenant Registry vs. Tenant Hierarchy (AB#5025)
+
+The system tenant's database doubles as the **platform-wide routing registry**: every tenant of
+the installation has an `RtTenant` row there (with `ParentTenantId` naming its logical parent),
+and per-request tenant resolution (`SystemContext.TryFindTenantContextAsync`) is a single-level
+lookup against that registry. A child of a **non-system** tenant additionally has an `RtTenant`
+row in the parent tenant's own database (written without `ParentTenantId`).
+
+Two enumeration APIs with distinct semantics:
+
+| API | Semantics | Use for |
+|---|---|---|
+| `ITenantContext.GetChildTenantsAsync` | **Direct children only** — filters `ParentTenantId == own id OR unset` | Logical hierarchy: child-tenant listings (`GetTenants`), client-mirror backfill |
+| `ISystemContext.GetAllTenantsAsync` | **Full registry**, unfiltered | Installation-wide concerns: token cleanup, CORS, health checks, observability, rollup orchestration, tenant discovery |
+
+Re-parenting an existing tenant = `Detach` (old parent context; requires tenant capabilities
+disabled) + `Attach` (new parent context). Attach writes both registry rows; routing keeps
+working because the system registry always holds every tenant.
+
 ## Connection ApplicationName is clamped (AB#4762)
 
 Both repository clients label their connection

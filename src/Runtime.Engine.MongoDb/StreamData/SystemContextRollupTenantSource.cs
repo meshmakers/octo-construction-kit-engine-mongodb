@@ -38,7 +38,7 @@ public sealed class SystemContextRollupTenantSource : IRollupTenantSource
         try
         {
             using var adminSession = await _systemContext.GetAdminSessionAsync();
-            var resultSet = await _systemContext.GetChildTenantsAsync(adminSession);
+            var resultSet = await _systemContext.GetAllTenantsAsync(adminSession);
             var ids = new List<string>(resultSet.Items.Count());
             foreach (var tenant in resultSet.Items)
             {

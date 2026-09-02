@@ -1316,8 +1316,18 @@ public class TenantContext : ITenantContext
     {
         var tenantRepository = GetTenantRepositoryAsAdmin();
 
+        // Direct children only (AB#5025). The system tenant's database doubles as the platform-wide
+        // routing registry and therefore holds a row for EVERY tenant, with ParentTenantId naming the
+        // logical parent — without this filter a tenant re-parented under a non-system tenant kept
+        // showing up as a child of the system tenant. Rows written before the field existed and the
+        // parent-local rows (which never carry ParentTenantId) match via null. Callers that need the
+        // full registry use ISystemContext.GetAllTenantsAsync instead.
+        var queryOptions = RtEntityQueryOptions.Create(LogicalOperators.Or)
+            .FieldEquals(nameof(RtTenant.ParentTenantId), TenantId)
+            .FieldEquals(nameof(RtTenant.ParentTenantId), null);
+
         var result =
-            await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, RtEntityQueryOptions.Create(), skip,
+            await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions, skip,
                 take);
         return new ResultSet<OctoTenant>(result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName)),
             result.TotalCount, null, null);

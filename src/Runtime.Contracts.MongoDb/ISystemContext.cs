@@ -1,5 +1,6 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 
 namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 
@@ -31,6 +32,22 @@ public interface ISystemContext : ITenantContext
     /// </summary>
     /// <returns></returns>
     Task DeleteSystemTenantAsync();
+
+    /// <summary>
+    /// Gets every tenant registered on this installation, regardless of its logical parent tenant.
+    /// </summary>
+    /// <remarks>
+    /// The system database doubles as the platform-wide routing registry, so this enumerates the
+    /// full registry. Use this for installation-wide concerns (token cleanup, CORS, health checks,
+    /// observability). For the logical hierarchy — direct children of a tenant — use
+    /// <see cref="ITenantContext.GetChildTenantsAsync"/>, which filters by parent (AB#5025).
+    /// </remarks>
+    /// <param name="adminSession">Admin session to read the registry</param>
+    /// <param name="skip">Number of tenants to skip</param>
+    /// <param name="take">Number of tenants to take</param>
+    /// <returns>List of all registered tenants</returns>
+    Task<IResultSet<OctoTenant>> GetAllTenantsAsync(IOctoAdminSession adminSession, int? skip = null,
+        int? take = null);
 
     /// <summary>
     /// Gets based on the tenant id the tenant context.
