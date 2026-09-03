@@ -53,10 +53,26 @@ public class DatabaseFixture : ConfigurationFixture
         await base.InitializeServicesAsync();
     }
 
-    protected override Task DisposeServicesAsync()
+    protected override async Task DisposeServicesAsync()
     {
         // The shared container (SharedMongoDbContainer) outlives every individual fixture and is
-        // torn down by Testcontainers' Ryuk reaper when the test process exits, not here.
-        return Task.CompletedTask;
+        // torn down by Testcontainers' Ryuk reaper when the test process exits, not here. Local
+        // MongoDB mode has no such reaper, so best-effort drop the GUID-suffixed database this
+        // fixture created — otherwise repeated local runs accumulate orphaned databases.
+        if (_useLocalDatabase)
+        {
+            try
+            {
+                var systemContext = GetSystemContext();
+                if (await systemContext.IsSystemTenantExistingAsync())
+                {
+                    await systemContext.DeleteSystemTenantAsync();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Best-effort local database cleanup failed: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
     }
 }
