@@ -3,14 +3,11 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Configuration;
 
 using Microsoft.Extensions.DependencyInjection;
 
-using Testcontainers.MongoDb;
-
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
 public class DatabaseFixture : ConfigurationFixture
 {
     protected readonly SystemTestOptions _options;
-    private MongoDbContainer? _mongoDbContainer;
     private bool _useLocalDatabase;
 
     public DatabaseFixture()
@@ -36,57 +33,10 @@ public class DatabaseFixture : ConfigurationFixture
         }
         else
         {
-            // Start MongoDB test container with authentication.
-            // Testcontainers' rs.initiate() handshake races with mongod startup and
-            // occasionally hits "container is not running" / Docker 409 Conflict on CI
-            // agents under load. Retry the whole build+start cycle with a fresh container
-            // before giving up. Each attempt is capped to keep total time bounded.
-            const int maxAttempts = 3;
-            var perAttemptTimeout = TimeSpan.FromMinutes(2);
-
-            for (var attempt = 1; attempt <= maxAttempts; attempt++)
-            {
-                _mongoDbContainer = new MongoDbBuilder(_options.MongoDbImage)
-                    .WithReplicaSet()
-                    .WithName($"mongodb-test-{Guid.NewGuid():N}")
-                    .WithUsername(_options.AdminUser)
-                    .WithPassword(_options.AdminUserPassword)
-                    .Build();
-
-                using var startCts = new CancellationTokenSource(perAttemptTimeout);
-                try
-                {
-                    await _mongoDbContainer.StartAsync(startCts.Token);
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine(
-                        $"Testcontainer MongoDB start failed on attempt {attempt}/{maxAttempts}: {ex.GetType().Name}: {ex.Message}");
-
-                    try
-                    {
-                        await _mongoDbContainer.DisposeAsync();
-                    }
-                    catch (Exception disposeEx)
-                    {
-                        Console.WriteLine($"  Disposal of failed container also threw: {disposeEx.Message}");
-                    }
-
-                    _mongoDbContainer = null;
-
-                    if (attempt == maxAttempts)
-                    {
-                        throw;
-                    }
-
-                    await Task.Delay(TimeSpan.FromSeconds(2 * attempt));
-                }
-            }
-
-            var mappedPort = _mongoDbContainer!.GetMappedPublicPort();
-            databaseHost = $"localhost:{mappedPort}";
-            Console.WriteLine($"Using Testcontainer MongoDB at {databaseHost}");
+            // Every fixture now has its own SystemDatabaseName (GUID-suffixed), so fixtures no
+            // longer need a private server to avoid colliding on the same database. Share one
+            // MongoDB Testcontainer for the whole test process instead of starting one per fixture.
+            databaseHost = await SharedMongoDbContainer.GetHostAsync(_options);
         }
 
         // Configure services with the connection
@@ -103,13 +53,10 @@ public class DatabaseFixture : ConfigurationFixture
         await base.InitializeServicesAsync();
     }
 
-    protected override async Task DisposeServicesAsync()
+    protected override Task DisposeServicesAsync()
     {
-        await Task.Yield();
-        if (_mongoDbContainer != null)
-        {
-            await _mongoDbContainer.StopAsync();
-            await _mongoDbContainer.DisposeAsync();
-        }
+        // The shared container (SharedMongoDbContainer) outlives every individual fixture and is
+        // torn down by Testcontainers' Ryuk reaper when the test process exits, not here.
+        return Task.CompletedTask;
     }
 }
