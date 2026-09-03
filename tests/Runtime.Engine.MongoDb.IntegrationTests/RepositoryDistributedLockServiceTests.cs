@@ -203,13 +203,15 @@ public class RepositoryDistributedLockServiceTests
     [Fact(Timeout = 60_000)]
     public async Task Heartbeat_DetectsStolenLockAndSignalsLockLostToken()
     {
+        // xUnit1069: a test with a Timeout must reference TestContext.Current.CancellationToken directly.
+        var ct = TestContext.Current.CancellationToken;
         var lockId = NewLockId("test_heartbeat_loss");
         var collection = GetSysLockCollection();
 
         var lockService = CreateLockService(lockId);
         try
         {
-            await lockService.AcquireLockAsync(Ct);
+            await lockService.AcquireLockAsync(ct);
 
             // Steal the lock immediately. The next heartbeat (≤ HeartbeatInterval = 15s away)
             // must observe MatchedCount == 0 and cancel LockLostToken.
@@ -217,13 +219,13 @@ public class RepositoryDistributedLockServiceTests
             await collection.UpdateOneAsync(
                 Builders<SysLock>.Filter.Eq(s => s.Id, lockId),
                 Builders<SysLock>.Update.Set(s => s.OwnerToken, thiefToken),
-                cancellationToken: Ct);
+                cancellationToken: ct);
 
             var tcs = new TaskCompletionSource<bool>();
             await using var reg = lockService.LockLostToken.Register(() => tcs.TrySetResult(true));
 
             // Allow at least one heartbeat interval to elapse, plus generous margin.
-            var winner = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(25), Ct));
+            var winner = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(25), ct));
             Assert.Same(tcs.Task, winner);
             Assert.True(lockService.LockLostToken.IsCancellationRequested);
 
@@ -232,14 +234,14 @@ public class RepositoryDistributedLockServiceTests
             await lockService.DisposeAsync();
             lockService = null!;
 
-            var doc = await collection.Find(s => s.Id == lockId).FirstOrDefaultAsync(Ct);
+            var doc = await collection.Find(s => s.Id == lockId).FirstOrDefaultAsync(ct);
             Assert.NotNull(doc);
             Assert.Equal(thiefToken, doc.OwnerToken);
         }
         finally
         {
             if (lockService is not null) await lockService.DisposeAsync();
-            await collection.DeleteOneAsync(Builders<SysLock>.Filter.Eq(s => s.Id, lockId), Ct);
+            await collection.DeleteOneAsync(Builders<SysLock>.Filter.Eq(s => s.Id, lockId), ct);
         }
     }
 

@@ -258,7 +258,7 @@ public class SystemTenantVirginBootstrapTests(VirginSystemFixture fixture)
         var config = Configuration;
         var urlBuilder = new MongoUrlBuilder
         {
-            Server = new MongoServerAddress(config.DatabaseHost),
+            Server = MongoServerAddress.Parse(config.DatabaseHost),
             Username = config.AdminUser,
             Password = config.AdminUserPassword,
             AuthenticationSource = config.AuthenticationDatabaseName,
