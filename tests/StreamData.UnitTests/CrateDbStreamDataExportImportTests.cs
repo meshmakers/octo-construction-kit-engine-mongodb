@@ -51,6 +51,15 @@ public class CrateDbStreamDataExportImportTests
             new ArchiveSnapshot(Archive, SomeType, CkArchiveStatus.Disabled, "voltage-window",
                 new[] { new CkArchiveColumnSpec("Voltage", true, false) }) { IsTimeRange = true });
 
+    /// <summary>
+    /// The export probes <c>information_schema.tables</c> before its first page (AB#5141). FakeItEasy
+    /// answers an unstubbed <c>GetCountAsync</c> with 0 ("no table"), so every test that expects a
+    /// scan must declare the table present explicitly.
+    /// </summary>
+    private void StubTableExists(bool exists) =>
+        A.CallTo(() => _db.GetCountAsync("tenant-x", A<string>.That.Contains("information_schema.tables")))
+            .Returns(exists ? 1L : 0L);
+
     private static async IAsyncEnumerable<IReadOnlyDictionary<string, object?>> Empty()
     {
         await Task.CompletedTask;
@@ -68,6 +77,7 @@ public class CrateDbStreamDataExportImportTests
     public async Task Export_WholeArchive_RawShape_UsesTimestampOrderAndNoWindowPredicate()
     {
         StubRaw();
+        StubTableExists(true);
         string? capturedSql = null;
         A.CallTo(() => _db.StreamRawRowsAsync("tenant-x", A<string>._, A<CancellationToken>._))
             .ReturnsLazily((string _, string sql, CancellationToken _) =>
@@ -94,6 +104,7 @@ public class CrateDbStreamDataExportImportTests
     public async Task Export_Windowed_WithTimeWindow_UsesWindowStartOrderAndPredicate()
     {
         StubWindowed();
+        StubTableExists(true);
         string? capturedSql = null;
         A.CallTo(() => _db.StreamRawRowsAsync("tenant-x", A<string>._, A<CancellationToken>._))
             .ReturnsLazily((string _, string sql, CancellationToken _) =>
@@ -112,6 +123,74 @@ public class CrateDbStreamDataExportImportTests
         Assert.Contains("ORDER BY \"window_start\", \"rtid\", \"cktypeid\"", capturedSql);
         Assert.Contains("\"window_start\" >= '2026-06-01 00:00:00.000'", capturedSql);
         Assert.Contains("\"window_start\" < '2026-07-01 00:00:00.000'", capturedSql);
+    }
+
+    [Fact]
+    public async Task Export_NoBackingTable_YieldsNothingAndNeverScans()
+    {
+        // AB#5141: an archive without a provisioned table (never activated) must yield no rows
+        // instead of failing the first page query with CrateDB's RelationUnknown (42P01).
+        StubRaw();
+        StubTableExists(false);
+
+        var rows = new List<IReadOnlyDictionary<string, object?>>();
+        await foreach (var r in NewSut().ExportRowsAsync(Archive, window: null, CancellationToken.None))
+        {
+            rows.Add(r);
+        }
+
+        Assert.Empty(rows);
+        A.CallTo(() => _db.StreamRawRowsAsync(A<string>._, A<string>._, A<CancellationToken>._))
+            .MustNotHaveHappened();
+        // The probe targets exactly this archive's table via the catalog, not the data table itself.
+        A.CallTo(() => _db.GetCountAsync("tenant-x",
+                A<string>.That.Matches(sql =>
+                    sql.Contains("information_schema.tables") && sql.Contains($"archive_{Archive}"))))
+            .MustHaveHappenedOnceExactly();
+    }
+
+    [Fact]
+    public async Task Export_NoBackingTable_DisabledWindowedWithWindow_YieldsNothing()
+    {
+        // The blueprint-seeded shape: status Disabled (Archive.Status = 2 straight from the seed),
+        // windowed storage, never activated. A windowed export must not even build a page query.
+        StubWindowed();
+        StubTableExists(false);
+
+        var window = new TimeWindow(
+            new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc));
+
+        var rows = new List<IReadOnlyDictionary<string, object?>>();
+        await foreach (var r in NewSut().ExportRowsAsync(Archive, window, CancellationToken.None))
+        {
+            rows.Add(r);
+        }
+
+        Assert.Empty(rows);
+        A.CallTo(() => _db.StreamRawRowsAsync(A<string>._, A<string>._, A<CancellationToken>._))
+            .MustNotHaveHappened();
+    }
+
+    [Fact]
+    public async Task Export_TableExists_ProbesBeforeTheFirstPage()
+    {
+        StubRaw();
+        StubTableExists(true);
+        A.CallTo(() => _db.StreamRawRowsAsync("tenant-x", A<string>._, A<CancellationToken>._))
+            .Returns(Rows(new Dictionary<string, object?> { [Constants.RtId] = HexRtId }));
+
+        var rows = new List<IReadOnlyDictionary<string, object?>>();
+        await foreach (var r in NewSut().ExportRowsAsync(Archive, window: null, CancellationToken.None))
+        {
+            rows.Add(r);
+        }
+
+        Assert.Single(rows);
+        A.CallTo(() => _db.GetCountAsync("tenant-x", A<string>.That.Contains("information_schema.tables")))
+            .MustHaveHappenedOnceExactly()
+            .Then(A.CallTo(() => _db.StreamRawRowsAsync("tenant-x", A<string>._, A<CancellationToken>._))
+                .MustHaveHappenedOnceExactly());
     }
 
     [Fact]
