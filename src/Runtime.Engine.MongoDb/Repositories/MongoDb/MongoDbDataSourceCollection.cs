@@ -421,12 +421,65 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             var id = _mongoDataSourceMapper.GetId(document);
             var filterDefinition = Builders<TDocument>.Filter.BuildIdFilter(id);
             var updateDefinition = _mongoDataSourceMapper.ApplyUpdate(document);
-            var result = await _documentCollection.UpdateOneAsync(((IOctoSessionInternal)session).SessionHandle,
-                filterDefinition,
-                updateDefinition);
-            ThrowIfNotAcknowledged(result.IsAcknowledged);
-            ThrowIfMatchedCountZero<TDocument>(result.MatchedCount, id);
+
+            if (RequiresNullAttributesRepair(document))
+            {
+                // AB#5148 defense in depth: a document persisted before the serializer fix may
+                // carry an explicit `attributes: null`, under which MongoDB refuses to create a
+                // subpath (write error code 28). One ordered bulk write first normalizes the
+                // stored null to an empty document and then applies the subpath $set update, so
+                // the first write heals the entity instead of erroring — with no extra round
+                // trip and inside the ambient transaction.
+                var bulkResult = await _documentCollection.BulkWriteAsync(
+                    ((IOctoSessionInternal)session).SessionHandle,
+                    new WriteModel<TDocument>[]
+                    {
+                        CreateNullAttributesRepairModel(id),
+                        new UpdateOneModel<TDocument>(filterDefinition, updateDefinition)
+                    },
+                    new BulkWriteOptions { IsOrdered = true });
+                ThrowIfNotAcknowledged(bulkResult.IsAcknowledged);
+                // The repair filter is the id filter narrowed by `attributes: null`, so it can
+                // only match when the main update matches too — an aggregate MatchedCount of 0
+                // still means "document not found".
+                ThrowIfMatchedCountZero<TDocument>(bulkResult.MatchedCount, id);
+            }
+            else
+            {
+                var result = await _documentCollection.UpdateOneAsync(((IOctoSessionInternal)session).SessionHandle,
+                    filterDefinition,
+                    updateDefinition);
+                ThrowIfNotAcknowledged(result.IsAcknowledged);
+                ThrowIfMatchedCountZero<TDocument>(result.MatchedCount, id);
+            }
         }
+    }
+
+    /// <summary>
+    ///     AB#5148: only <see cref="RtEntityMongoDataSourceMapper{TEntity}" /> produces
+    ///     `attributes.&lt;name&gt;` subpath $sets, and only when the partial document carries
+    ///     attribute values — everything else cannot hit the attributes-null write conflict.
+    /// </summary>
+    private static bool RequiresNullAttributesRepair(TDocument document)
+    {
+        return document is RtEntity { Attributes.Count: > 0 };
+    }
+
+    /// <summary>
+    ///     Builds the repair statement that normalizes a stored `attributes: null` to an empty
+    ///     document for the given id. Raw BSON definitions on purpose: the typed field renderer
+    ///     would resolve the `attributes` member through
+    ///     <see cref="Serialization.RtAttributeDictionarySerializer" />, which never produces a
+    ///     BSON null/empty-document pair for a filter value.
+    /// </summary>
+    private static UpdateOneModel<TDocument> CreateNullAttributesRepairModel(TKey id)
+    {
+        var repairFilter = Builders<TDocument>.Filter.And(
+            Builders<TDocument>.Filter.BuildIdFilter(id),
+            new BsonDocument(Constants.AttributesName, BsonNull.Value));
+        var repairUpdate = new BsonDocumentUpdateDefinition<TDocument>(
+            new BsonDocument("$set", new BsonDocument(Constants.AttributesName, new BsonDocument())));
+        return new UpdateOneModel<TDocument>(repairFilter, repairUpdate);
     }
 
     public async Task<bool> UpdateOneIfGuardMatchesAsync(IOctoSession session, TDocument document,
@@ -440,6 +493,19 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         // monotonically increasing timestamps in practice (each writer captures
         // DateTime.UtcNow before its DB roundtrip), so ties are extremely rare regardless.
         var id = _mongoDataSourceMapper.GetId(document);
+
+        if (RequiresNullAttributesRepair(document))
+        {
+            // AB#5148 defense in depth (see UpdateOneAsync): normalize a stored
+            // `attributes: null` before the guarded update. A separate statement rather than an
+            // ordered bulk write, because the guarded update's own MatchedCount is this method's
+            // return value — folding both into one bulk write would report a heal-only write
+            // (guard rejected, repair matched) as an applied update.
+            var repairModel = CreateNullAttributesRepairModel(id);
+            await _documentCollection.UpdateOneAsync(((IOctoSessionInternal)session).SessionHandle,
+                repairModel.Filter, repairModel.Update);
+        }
+
         var idFilter = Builders<TDocument>.Filter.BuildIdFilter(id);
         var bsonNewValue = BsonValue.Create(guard.NewValue);
         var guardFilter = Builders<TDocument>.Filter.Or(

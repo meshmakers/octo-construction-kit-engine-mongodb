@@ -90,8 +90,13 @@ internal class RtAttributeDictionarySerializer()
         }
         else
         {
+            // AB#5148: an attribute-less entity must persist `attributes: {}`, never an explicit
+            // null. MongoDB cannot create a field beneath a null value (write error code 28), so
+            // a null here poisoned the entity for every later partial update that $sets an
+            // `attributes.<name>` subpath. Writing an empty document keeps those updates working.
             var bsonWriter = context.Writer;
-            bsonWriter.WriteNull();
+            bsonWriter.WriteStartDocument();
+            bsonWriter.WriteEndDocument();
         }
     }
 
