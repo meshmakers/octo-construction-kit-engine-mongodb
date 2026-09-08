@@ -5,7 +5,12 @@ namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 /// </summary>
 public class OctoTenant
 {
-    public OctoTenant(string tenantId, string databaseName, string? parentTenantId = null)
+    public OctoTenant(string tenantId, string databaseName)
+        : this(tenantId, databaseName, null)
+    {
+    }
+
+    public OctoTenant(string tenantId, string databaseName, string? parentTenantId)
     {
         TenantId = tenantId;
         DatabaseName = databaseName;

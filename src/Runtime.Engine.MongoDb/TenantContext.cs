@@ -1341,7 +1341,8 @@ public class TenantContext : ITenantContext
         var result =
             await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, RtEntityQueryOptions.Create());
         var directChildren = result.Items
-            .Where(d => d.ParentTenantId == null || d.ParentTenantId == TenantId)
+            .Where(d => d.ParentTenantId == null ||
+                        string.Equals(d.ParentTenantId, TenantId, StringComparison.OrdinalIgnoreCase))
             .Select(d => new OctoTenant(d.TenantId, d.DatabaseName, TenantId))
             .ToList();
 
