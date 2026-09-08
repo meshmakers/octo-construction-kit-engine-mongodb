@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Dynamic;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.Runtime.Contracts.Geospatial.Geometry;
@@ -68,6 +69,9 @@ internal class RtAttributeDictionarySerializer()
 
                         bsonWriter.WriteEndArray();
                         break;
+                    case var _ when IsArrayAttributeValue(keyValuePair.Value):
+                        SerializeArrayValue(context, (IEnumerable)keyValuePair.Value);
+                        break;
                     default:
                         if (keyValuePair.Value is Point p)
                         {
@@ -81,7 +85,7 @@ internal class RtAttributeDictionarySerializer()
                             var serializer = BsonSerializer.LookupSerializer(actualType);
                             serializer.Serialize(context, args, keyValuePair.Value);
                         }
-                     
+
                         break;
                 }
             }
@@ -98,6 +102,64 @@ internal class RtAttributeDictionarySerializer()
             bsonWriter.WriteStartDocument();
             bsonWriter.WriteEndDocument();
         }
+    }
+
+    /// <summary>
+    ///     An array attribute whose value is neither <c>IEnumerable&lt;string&gt;</c> nor
+    ///     <c>IEnumerable&lt;RtRecord&gt;</c> — every array attribute that has been read before being
+    ///     written looks like this, because a read materializes a BSON array as
+    ///     <c>List&lt;object&gt;</c>, and an <c>IntArray</c> is a <c>List&lt;long&gt;</c> in every
+    ///     configuration.
+    ///     <para>
+    ///         Deliberately excluded: <see cref="string" /> and <c>byte[]</c> (both
+    ///         <c>IEnumerable</c>, both must keep their scalar BSON representation) and dictionaries.
+    ///     </para>
+    /// </summary>
+    private static bool IsArrayAttributeValue(object value)
+    {
+        return value is IEnumerable
+               && value is not string
+               && value is not byte[]
+               && value is not IDictionary;
+    }
+
+    /// <summary>
+    ///     Writes an array attribute as a BSON array, element by element through this serializer's own
+    ///     pinned value serializer.
+    ///     <para>
+    ///         AB#5160: the previous code fell through to <c>default:</c>, looked the value's
+    ///         collection serializer up in the global registry and handed it the <b>caller's</b>
+    ///         <see cref="BsonSerializationArgs" /> — whose <c>NominalType</c> is the attribute
+    ///         dictionary, not the value. Every driver collection serializer reads "actual type ≠
+    ///         nominal type" as a polymorphic write and emits <c>{ "_t": …, "_v": [ … ] }</c> instead
+    ///         of the bare array; for a generic list <see cref="RtEntityDiscriminatorConvention" />
+    ///         supplies no discriminator, so not even the <c>_t</c> survived. The resulting
+    ///         <c>{ "_v": [ … ] }</c> reads back as a plain <see cref="ExpandoObject" /> (no
+    ///         <c>_t</c>, no <c>ckRecordId</c>) and poisons the attribute for the rest of the
+    ///         entity's life: <c>GetAttributeStringValues</c>, <c>GetRtRecordAttributeValues</c> and
+    ///         <c>EntityRuleEngine.SetDefaultValuesOnInsert</c> all throw on it. Whether a
+    ///         <c>List&lt;object&gt;</c> escaped that fate came down to whether
+    ///         <see cref="OctoObjectListSerializer" /> had won the process-global registration race
+    ///         for <c>List&lt;object&gt;</c> — which is why it read as an ordering flake.
+    ///     </para>
+    ///     <para>
+    ///         Writing the array here, with the pinned value serializer, removes both the registry
+    ///         and the nominal-type dependency: the element shapes are exactly those the read path
+    ///         produces.
+    ///     </para>
+    /// </summary>
+    private void SerializeArrayValue(BsonSerializationContext context, IEnumerable value)
+    {
+        var bsonWriter = context.Writer;
+        var itemArgs = new BsonSerializationArgs { NominalType = typeof(object) };
+
+        bsonWriter.WriteStartArray();
+        foreach (var item in value)
+        {
+            ValueSerializer.Serialize(context, itemArgs, item);
+        }
+
+        bsonWriter.WriteEndArray();
     }
 
     public override Dictionary<string, object?> Deserialize(BsonDeserializationContext context,
@@ -126,6 +188,18 @@ internal class RtAttributeDictionarySerializer()
             if (pair.Value is ExpandoObject expando)
             {
                 var expandoDic = expando.ToDictionary();
+
+                // AB#5160 defense in depth: documents written before the serialization fix carry the
+                // driver's polymorphic wrapper (`{ "_v": [ … ] }`, discriminator-less for a generic
+                // list) where an array attribute belongs. Unwrap it on read so the typed accessors
+                // see a list again instead of this ExpandoObject; the next write persists it as a
+                // proper BSON array and the document is healed. `_v` is never a CK attribute name —
+                // an attribute id cannot start with an underscore — so this cannot shadow real data.
+                if (expandoDic.Count == 1 && expandoDic.TryGetValue("_v", out var wrapped))
+                {
+                    ret[pair.Key.ToPascalCase()] = wrapped;
+                    continue;
+                }
 
                 if (expandoDic.TryGetValue("type", out var v))
                 {
