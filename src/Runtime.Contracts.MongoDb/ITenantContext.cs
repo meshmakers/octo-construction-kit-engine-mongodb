@@ -307,6 +307,18 @@ public interface ITenantContext
         int? take = null);
 
     /// <summary>
+    ///     Gets ONLY the direct child tenants of the current tenant (AB#5151). Unlike
+    ///     <see cref="GetChildTenantsAsync" /> — which returns the tenant's whole registry and,
+    ///     on the system tenant, therefore every hosted tenant including deeper descendants —
+    ///     this filters to records whose parent is the current tenant (a record without a
+    ///     parent id predates the field and counts as a direct child). Use it for tree walks;
+    ///     fleet-wide consumers stay on <see cref="GetChildTenantsAsync" />.
+    /// </summary>
+    /// <param name="adminSession">Admin session to get the tenant context</param>
+    /// <returns>List of direct child tenants, each stamped with the current tenant as parent</returns>
+    Task<IResultSet<OctoTenant>> GetDirectChildTenantsAsync(IOctoAdminSession adminSession);
+
+    /// <summary>
     ///    Gets a child tenant description object with the given name
     /// </summary>
     /// <param name="adminSession">Admin session to get the tenant context</param>
