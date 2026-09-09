@@ -11,8 +11,24 @@ namespace Meshmakers.Octo.Runtime.Engine.UnitTests;
 /// during a backfill ends the job Failed with the real error instead of a misleading "source holds
 /// no data" no-op. These tests exercise the classifier that gates the catch filter.
 /// </summary>
+/// <remarks>
+/// AB#5157: the coverage probe <c>GetArchiveCoverageAsync</c> shares this classifier under the
+/// identical <c>when (IsRelationUnknown(ex))</c> filter — "no backing table" reads as no coverage
+/// (null), every other failure propagates so the coverage cache never memoises a transient error.
+/// </remarks>
 public class CrateDbArchiveMinTimestampErrorHandlingTests
 {
+    [Fact]
+    public void IsRelationUnknown_CoverageProbeSharesClassifier_MissingTableTrue_TransientFalse()
+    {
+        // Same two verdicts the coverage probe relies on: a missing relation is "empty", a
+        // transient read failure is not.
+        Assert.True(CrateDbStreamDataRepository.IsRelationUnknown(
+            new Exception("RelationUnknown[Relation 'octo_t1.archive_cov' unknown]")));
+        Assert.False(CrateDbStreamDataRepository.IsRelationUnknown(
+            new IOException("Exception while reading from stream")));
+    }
+
     [Theory]
     [InlineData("RelationUnknown[Relation 'octo_t1.archive_x' unknown]")]
     [InlineData("Relation 'octo_t1.archive_x' unknown")]

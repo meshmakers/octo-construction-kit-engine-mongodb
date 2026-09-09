@@ -196,7 +196,8 @@ public class CrateDbStreamDataQueryColumnValidationTests
             });
 
         A.CallTo(() => _rollupStore.GetAsync(rollupRt)).Returns(
-            new RollupArchiveSnapshot(rollupRt, SomeType, CkArchiveStatus.Activated, null, sourceRt,
+            new RollupArchiveSnapshot(rollupRt, SomeType, CkArchiveStatus.Activated, null,
+                new[] { new RollupSourceReference(sourceRt) },
                 TimeSpan.FromHours(1), TimeSpan.Zero, null,
                 [new CkRollupAggregationSpec("Voltage", CkRollupFunction.TimeWeightedAvg, null)],
                 null));
@@ -244,7 +245,8 @@ public class CrateDbStreamDataQueryColumnValidationTests
                 RollupAggregations = specs
             });
         A.CallTo(() => _rollupStore.GetAsync(rollupRt)).Returns(
-            new RollupArchiveSnapshot(rollupRt, SomeType, CkArchiveStatus.Activated, null, sourceRt,
+            new RollupArchiveSnapshot(rollupRt, SomeType, CkArchiveStatus.Activated, null,
+                new[] { new RollupSourceReference(sourceRt) },
                 TimeSpan.FromHours(1), TimeSpan.Zero, null, specs, null));
         A.CallTo(() => _store.GetAsync(sourceRt)).Returns(
             new ArchiveSnapshot(sourceRt, SomeType, CkArchiveStatus.Activated, "source",

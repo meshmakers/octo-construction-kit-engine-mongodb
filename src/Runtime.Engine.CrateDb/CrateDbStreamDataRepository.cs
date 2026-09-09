@@ -1666,6 +1666,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// lagging dependent re-aggregate a forward, not-yet-closed bucket. Null when no dependent exists
     /// or none has aggregated yet (nothing has been consumed, so no write can be retroactive).
     /// </summary>
+    /// <remarks>
+    /// Multi-source rollups (AB#5157): a dependent lists this archive among its
+    /// <see cref="RollupArchiveSnapshot.Sources"/> with a validity span, and only the part of its
+    /// watermark that falls inside that span was consumed <i>from this source</i> — see
+    /// <see cref="ClipConsumedWatermark"/>. The MAX over dependents is kept.
+    /// </remarks>
     private async Task<DateTime?> GetConsumedWatermarkAsync(OctoObjectId sourceArchiveRtId)
     {
         if (_rollupArchiveStore is null)
@@ -1676,16 +1682,38 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         DateTime? max = null;
         await foreach (var rollup in _rollupArchiveStore.EnumerateAsync())
         {
-            if (rollup.SourceArchiveRtId != sourceArchiveRtId)
-            {
-                continue;
-            }
-            if (rollup.LastAggregatedBucketEnd is { } watermark && (max is null || watermark > max))
+            if (ClipConsumedWatermark(rollup, sourceArchiveRtId) is { } watermark && (max is null || watermark > max))
             {
                 max = watermark;
             }
         }
         return max;
+    }
+
+    /// <summary>
+    /// One dependent's contribution to the consumed watermark of <paramref name="sourceArchiveRtId"/>
+    /// (AB#5157): the dependent's <see cref="RollupArchiveSnapshot.LastAggregatedBucketEnd"/> clipped
+    /// to the validity span under which it lists the source — clamped to <c>ValidTo</c> on the upper
+    /// end (buckets past the span were aggregated from another source, so an append there is a
+    /// forward write for this source) and floored at <c>ValidFrom</c> on the lower end (a watermark
+    /// at or before the span's start means nothing of this source has been consumed yet). Null when
+    /// the dependent does not list the source, has not aggregated yet, or has not reached the span.
+    /// </summary>
+    internal static DateTime? ClipConsumedWatermark(RollupArchiveSnapshot rollup, OctoObjectId sourceArchiveRtId)
+    {
+        var source = rollup.Sources.FirstOrDefault(s => s.SourceArchiveRtId == sourceArchiveRtId);
+        if (source is null || rollup.LastAggregatedBucketEnd is not { } watermark)
+        {
+            return null;
+        }
+
+        var clamped = source.ValidTo is { } validTo && validTo < watermark ? validTo : watermark;
+        if (source.ValidFrom is { } validFrom && clamped <= validFrom)
+        {
+            return null;
+        }
+
+        return clamped;
     }
 
     /// <inheritdoc />
@@ -1730,10 +1758,56 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         return null;
     }
 
+    /// <inheritdoc />
+    public async Task<ArchiveCoverage?> GetArchiveCoverageAsync(
+        OctoObjectId archiveRtId, CancellationToken cancellationToken = default)
+    {
+        // AB#5157: same shape as the min-timestamp probe, one statement for both ends. The snapshot
+        // only picks the time-axis columns: window_start / window_end for windowed (rollup /
+        // time-range) tables, timestamp for both ends of a raw table. Created archives (no snapshot /
+        // no backing table) and empty tables (either aggregate NULL) resolve to null — never a
+        // sentinel range.
+        var snapshot = await _archiveStore.GetAsync(archiveRtId);
+        if (snapshot is null)
+        {
+            return null;
+        }
+
+        var startColumn = snapshot.UsesWindowedStorage ? Constants.WindowStart : Constants.Timestamp;
+        var endColumn = snapshot.UsesWindowedStorage ? Constants.WindowEnd : Constants.Timestamp;
+        var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString());
+        var sql = $"SELECT MIN(\"{startColumn}\") AS \"min_ts\", MAX(\"{endColumn}\") AS \"max_ts\" FROM {qualifiedTable}";
+
+        try
+        {
+            await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, sql, cancellationToken))
+            {
+                row.TryGetValue("min_ts", out var minValue);
+                row.TryGetValue("max_ts", out var maxValue);
+                var availableFrom = AsUtcDateTimeFlexible(minValue);
+                var availableTo = AsUtcDateTimeFlexible(maxValue);
+                return availableFrom is { } from && availableTo is { } to
+                    ? new ArchiveCoverage(from, to)
+                    : null;
+            }
+        }
+        catch (Exception ex) when (IsRelationUnknown(ex))
+        {
+            // Identical classifier and contract as GetArchiveMinTimestampAsync: ONLY "no backing
+            // table yet" maps to "no coverage" → null; every other read failure propagates so the
+            // caller (and the coverage cache, which never memoises a failure) sees the real error.
+            _logger.LogDebug(ex,
+                "Archive {ArchiveRtId}: coverage probe found no backing table (treated as empty).", archiveRtId);
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// True when the exception is CrateDB's "relation/table unknown" error — the only failure that
-    /// <see cref="GetArchiveMinTimestampAsync"/> treats as a genuine empty source (no backing table
-    /// provisioned yet). Matched on message text (mirroring <see cref="IsColumnAlreadyExists"/>)
+    /// <see cref="GetArchiveMinTimestampAsync"/> and the coverage probe
+    /// <see cref="GetArchiveCoverageAsync"/> (AB#5157) treat as a genuine empty source (no backing
+    /// table provisioned yet). Matched on message text (mirroring <see cref="IsColumnAlreadyExists"/>)
     /// because the driver surfaces it as a generic exception, and the inner exception chain is
     /// walked so a wrapped driver error is still classified. AB#4284.
     /// </summary>

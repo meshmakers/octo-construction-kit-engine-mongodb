@@ -30,6 +30,15 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// that single entity, so a recompute of one metering point leaves every other entity's rows (and
 /// generations) in the range untouched. Planner-produced ranges pass <c>null</c> (whole range).
 /// </para>
+/// <para>
+/// Multi-source rollups (AB#5157): the recompute orchestrator clips a dirty range to the validity
+/// span of the source that produced it and calls <see cref="ExecuteAsync"/> once per source
+/// sub-range with that source's <c>ArchiveSnapshot</c>. Per-source sub-range calls are safe — the
+/// generation-pointer flip and the post-flip sweep are both scoped to <c>[rangeStart, rangeEnd)</c>,
+/// so one source's sub-range never touches rows another source produced — but they MUST be
+/// sequential: the staging table is per archive, not per range, and two overlapping executions on
+/// the same rollup would race on it.
+/// </para>
 /// </remarks>
 public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
 {
