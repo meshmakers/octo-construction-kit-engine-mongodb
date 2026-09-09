@@ -49,8 +49,21 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
     private readonly int _numberOfShards;
     private readonly int _numberOfReplicas;
     private readonly ILogger _logger;
+    private readonly IRollupArchiveRuntimeStore? _rollupArchiveStore;
 
     /// <summary>Constructs the executor for one tenant.</summary>
+    /// <param name="tenantId">The tenant whose CrateDB schema holds the archives.</param>
+    /// <param name="databaseClient">Data-plane CrateDB client (aggregation, copy, sweep).</param>
+    /// <param name="managementClient">DDL client (staging table create / drop, genmap).</param>
+    /// <param name="archiveStore">Archive snapshots (the rollup's columns + aggregations).</param>
+    /// <param name="numberOfShards">Shard count for the staging table.</param>
+    /// <param name="numberOfReplicas">Replica count for the staging table.</param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="rollupArchiveStore">
+    /// Rollup snapshots — needed to resolve a rollup <em>source's</em> logical specs for the
+    /// per-source aggregation binding (AB#5157 §3 rule 2). Optional: without it a rollup source can
+    /// only serve specs that name one of its physical columns verbatim.
+    /// </param>
     public CrateDbArchiveRecomputeExecutor(
         string tenantId,
         IStreamDataDatabaseClient databaseClient,
@@ -58,7 +71,8 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         IArchiveRuntimeStore archiveStore,
         int numberOfShards,
         int numberOfReplicas,
-        ILogger logger)
+        ILogger logger,
+        IRollupArchiveRuntimeStore? rollupArchiveStore = null)
     {
         _tenantId = tenantId;
         _databaseClient = databaseClient;
@@ -67,6 +81,7 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         _numberOfShards = numberOfShards;
         _numberOfReplicas = numberOfReplicas;
         _logger = logger;
+        _rollupArchiveStore = rollupArchiveStore;
     }
 
     /// <inheritdoc />
@@ -101,6 +116,29 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         var liveTable = TenantSchema.QualifiedArchiveTable(_tenantId, rollup.RtId.ToString());
         var stagingTable = RollupRecomputeSqlBuilder.StagingTable(_tenantId, rollup.RtId.ToString());
 
+        // Per-source resolution (AB#5157 §3) — the same binding the forward aggregation uses for
+        // this (rollup, source) pair, resolved once per execution and reused for every bucket. A
+        // rollup source needs its rollup snapshot for the child-aggregation rule.
+        RollupArchiveSnapshot? sourceRollup = null;
+        if (source.RollupAggregations is not null)
+        {
+            if (_rollupArchiveStore is null)
+            {
+                // Same breadcrumb the forward aggregation path leaves: without the rollup store only
+                // rule 1 applies, so a logical spec fails below with "no rollup snapshot".
+                _logger.LogDebug(
+                    "Source archive {SourceRtId} is a rollup but no rollup store is wired — only verbatim declared columns resolve.",
+                    source.RtId);
+            }
+            else
+            {
+                sourceRollup = await _rollupArchiveStore.GetAsync(source.RtId);
+            }
+        }
+
+        var resolvedAggregations = RollupAggregationColumns.ResolveForSource(
+            aggregations, rollup.RtId, source, sourceRollup);
+
         // Fresh staging: drop any leftover from a crashed run, recreate with the live windowed shape.
         // includeGeneration:true so the shared RollupAggregationSqlBuilder (which now always writes a
         // generation column) targets a matching schema; staging's generation is always 0 and is
@@ -125,7 +163,7 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
                 sourceTable,
                 stagingTable,
                 rollup.TargetCkTypeId.SemanticVersionedFullName,
-                aggregations,
+                resolvedAggregations,
                 bucketStart,
                 bucketEnd,
                 source.UsesWindowedStorage,

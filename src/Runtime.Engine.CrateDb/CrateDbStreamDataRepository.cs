@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.Formulas;
@@ -22,6 +23,15 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 {
     /// <summary>Rows read + written per page during an active-archive computed-column backfill (§8).</summary>
     private const int BackfillPageSize = 1000;
+
+    /// <summary>
+    /// CrateDB's "schema unknown" wording: the noun, the (optionally quoted) schema name, then
+    /// "unknown". Anchored on the phrase so unrelated failures mentioning a schema-like identifier
+    /// do not read as a missing tenant schema. AB#5157 E3.
+    /// </summary>
+    private static readonly Regex SchemaUnknownPhrase = new(
+        @"\bschema\s+'?[^'\s]+'?\s+unknown\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private readonly ILogger<CrateDbStreamDataRepository> _logger;
     private CrateDbArchiveRecomputeExecutor? _recomputeExecutor;
@@ -1506,6 +1516,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var sourceTable = TenantSchema.QualifiedArchiveTable(_tenantId, sourceArchive.RtId.ToString());
         var targetTable = TenantSchema.QualifiedArchiveTable(_tenantId, rollup.RtId.ToString());
 
+        // Per-source resolution (AB#5157 §3): the orchestrator picks the source for this bucket;
+        // bind the rollup's logical specs to THAT source's physical columns (a rollup source needs
+        // its own rollup snapshot for the child-aggregation rule).
+        var sourceRollup = await GetSourceRollupSnapshotAsync(sourceArchive);
+        var resolved = RollupAggregationColumns.ResolveForSource(
+            rollup.Aggregations, rollup.RtId, sourceArchive, sourceRollup);
+
         var sql = RollupAggregationSqlBuilder.Build(
             sourceTable,
             targetTable,
@@ -1513,7 +1530,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             // for type version 1). Raw + time-range archives write the same form via
             // RtCkId<CkTypeId>.ToString(); rollups have to match or the query never finds rows.
             rollup.TargetCkTypeId.SemanticVersionedFullName,
-            rollup.Aggregations,
+            resolved,
             bucketStart,
             bucketEnd,
             sourceArchive.UsesWindowedStorage,
@@ -1535,6 +1552,29 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         await EvaluateRollupComputedColumnsAsync(rollup.RtId, targetTable, bucketStart, bucketEnd, cancellationToken);
 
         return affected;
+    }
+
+    /// <summary>
+    /// The rollup snapshot of a rollup source (AB#5157 §3 rule 2 needs its logical specs), or
+    /// <c>null</c> for a base (raw / time-range) source and when no rollup store is wired — in
+    /// both cases only the verbatim declared-column rule can bind a spec to that source.
+    /// </summary>
+    private async Task<RollupArchiveSnapshot?> GetSourceRollupSnapshotAsync(ArchiveSnapshot sourceArchive)
+    {
+        if (sourceArchive.RollupAggregations is null)
+        {
+            return null;
+        }
+
+        if (_rollupArchiveStore is null)
+        {
+            _logger.LogDebug(
+                "Source archive {SourceRtId} is a rollup but no rollup store is wired — only verbatim declared columns resolve.",
+                sourceArchive.RtId);
+            return null;
+        }
+
+        return await _rollupArchiveStore.GetAsync(sourceArchive.RtId).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -1579,7 +1619,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // recompute executor needs the exact same plumbing as bucket aggregation.
         _recomputeExecutor ??= new CrateDbArchiveRecomputeExecutor(
             _tenantId, _databaseClient, _managementClient, _archiveStore,
-            _configuration.NumberOfShards, _configuration.NumberOfReplicas, _logger);
+            _configuration.NumberOfShards, _configuration.NumberOfReplicas, _logger,
+            _rollupArchiveStore);
 
         return _recomputeExecutor.ExecuteAsync(source, rollup, rangeStart, rangeEnd, rtIdScope, cancellationToken);
     }
@@ -1744,15 +1785,16 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 break;
             }
         }
-        catch (Exception ex) when (IsRelationUnknown(ex))
+        catch (Exception ex) when (IsMissingTableError(ex))
         {
-            // AB#4284: ONLY "no backing table yet" (e.g. Created status: MIN over a missing table)
-            // maps to "no data" → null. Any OTHER read failure (transient CrateDB read, connector
-            // reset, timeout) must propagate so BackfillRollupFromSource ends the job Failed with the
-            // real error instead of reporting a misleading "source holds no data" no-op. Debug so the
-            // genuinely-empty path stays observable but quiet.
+            // AB#4284: ONLY "no backing table yet" (e.g. Created status: MIN over a missing table,
+            // or — AB#5157 E3 — a tenant whose CrateDB schema does not exist yet) maps to "no data"
+            // → null. Any OTHER read failure (transient CrateDB read, connector reset, timeout) must
+            // propagate so BackfillRollupFromSource ends the job Failed with the real error instead
+            // of reporting a misleading "source holds no data" no-op. Debug so the genuinely-empty
+            // path stays observable but quiet.
             _logger.LogDebug(ex,
-                "Archive {ArchiveRtId}: min-timestamp probe found no backing table (treated as empty).", archiveRtId);
+                "Archive {ArchiveRtId}: min-timestamp probe found no backing table or schema (treated as empty).", archiveRtId);
         }
 
         return null;
@@ -1791,13 +1833,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                     : null;
             }
         }
-        catch (Exception ex) when (IsRelationUnknown(ex))
+        catch (Exception ex) when (IsMissingTableError(ex))
         {
             // Identical classifier and contract as GetArchiveMinTimestampAsync: ONLY "no backing
-            // table yet" maps to "no coverage" → null; every other read failure propagates so the
-            // caller (and the coverage cache, which never memoises a failure) sees the real error.
+            // table yet" (missing relation, or the tenant's schema not provisioned yet — AB#5157 E3)
+            // maps to "no coverage" → null; every other read failure propagates so the caller (and
+            // the coverage cache, which never memoises a failure) sees the real error.
             _logger.LogDebug(ex,
-                "Archive {ArchiveRtId}: coverage probe found no backing table (treated as empty).", archiveRtId);
+                "Archive {ArchiveRtId}: coverage probe found no backing table or schema (treated as empty).", archiveRtId);
         }
 
         return null;
@@ -1838,6 +1881,45 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         return false;
     }
+
+    /// <summary>
+    /// True when the exception is CrateDB's "schema unknown" error (<c>XX000: Schema 'x' unknown</c>
+    /// / <c>SchemaUnknown[...]</c>) — raised for a tenant whose CrateDB schema has not been created
+    /// yet (schemas materialise with the first archive table). For the coverage / min-timestamp
+    /// probes it means exactly what a missing relation means: no backing table, no data. AB#5157 E3.
+    /// Same message-text matching and inner-exception walk as <see cref="IsRelationUnknown"/>.
+    /// </summary>
+    internal static bool IsSchemaUnknown(Exception ex)
+    {
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            var message = current.Message;
+
+            if (message.Contains("SchemaUnknown", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // CrateDB phrases it "Schema 'name' unknown" / "Schema name unknown" — match that exact
+            // phrase rather than the two tokens anywhere in the message, so a failure that merely
+            // names a schema-ish identifier (ColumnUnknown[Column 'schema_version' unknown]) still
+            // propagates.
+            if (SchemaUnknownPhrase.IsMatch(message))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The catch filter of <see cref="GetArchiveMinTimestampAsync"/> and
+    /// <see cref="GetArchiveCoverageAsync"/>: a missing relation (<see cref="IsRelationUnknown"/>)
+    /// or a missing tenant schema (<see cref="IsSchemaUnknown"/>) both read as "no backing table"
+    /// → <c>null</c>; every other failure propagates. AB#4284 / AB#5157 E3.
+    /// </summary>
+    internal static bool IsMissingTableError(Exception ex) => IsRelationUnknown(ex) || IsSchemaUnknown(ex);
 
     /// <summary>
     /// Converts a CrateDB timestamp scalar to a UTC <see cref="DateTime"/>. Tolerates the wire-type
