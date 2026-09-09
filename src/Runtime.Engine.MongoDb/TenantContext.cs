@@ -1329,8 +1329,35 @@ public class TenantContext : ITenantContext
         var result =
             await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions, skip,
                 take);
-        return new ResultSet<OctoTenant>(result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName)),
+        return new ResultSet<OctoTenant>(
+            result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName, d.ParentTenantId)),
             result.TotalCount, null, null);
+    }
+
+    public async Task<IResultSet<OctoTenant>> GetDirectChildTenantsAsync(IOctoAdminSession adminSession)
+    {
+        // The registry in this tenant's database is not guaranteed to hold ONLY the
+        // direct children: the system tenant's database doubles as the platform-wide
+        // registry, which also carries every deeper descendant (each stamped with its
+        // real parent id). GetChildTenantsAsync deliberately keeps returning the whole
+        // registry — several fleet-wide consumers (rollup orchestration, session sweep,
+        // default-configuration init, identity's allowed-tenants resolve) depend on
+        // seeing every hosted tenant through the system context. THIS method is the
+        // strict variant for tree walks (AB#5151): only direct children, where a record
+        // without a parent id predates the field and lives in its parent's database, so
+        // it IS a direct child. Filtered in memory — the registry is small and the
+        // null-or-equals disjunction has to include the legacy records.
+        var tenantRepository = GetTenantRepositoryAsAdmin();
+
+        var result =
+            await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, RtEntityQueryOptions.Create());
+        var directChildren = result.Items
+            .Where(d => d.ParentTenantId == null ||
+                        string.Equals(d.ParentTenantId, TenantId, StringComparison.OrdinalIgnoreCase))
+            .Select(d => new OctoTenant(d.TenantId, d.DatabaseName, TenantId))
+            .ToList();
+
+        return new ResultSet<OctoTenant>(directChildren, directChildren.Count, null, null);
     }
 
     public async Task<OctoTenant> GetChildTenantAsync(IOctoAdminSession adminSession, string tenantId)

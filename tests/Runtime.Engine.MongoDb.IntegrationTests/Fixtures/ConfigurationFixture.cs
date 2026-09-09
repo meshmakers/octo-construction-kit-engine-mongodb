@@ -8,7 +8,10 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 public abstract class ConfigurationFixture : ServiceCollectionFixture
 {
     private readonly SystemTestConfiguration _configuration;
-    public string SystemDatabaseName => "PersistenceSystemTests".ToLower();
+
+    // Unique per fixture instance so unrelated fixtures can share one MongoDB server
+    // (SharedMongoDbContainer) without colliding on the same database.
+    public string SystemDatabaseName { get; } = $"persistencesystemtests{Guid.NewGuid():N}";
 
     protected ConfigurationFixture()
     {

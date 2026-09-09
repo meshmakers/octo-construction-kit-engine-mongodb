@@ -21,11 +21,12 @@ internal class UserMongoRepositoryClient(
 
         var systemConfiguration = _systemConfiguration.Value;
 
+        // Parse, not the string ctor: DatabaseHost may be "host:port", which MongoDB.Driver >= 3.11.1 rejects in the ctor (CSHARP-6171).
         if (systemConfiguration.DatabaseHost.Contains(","))
             urlBuilder.Servers =
-                systemConfiguration.DatabaseHost.Split(",").Select(x => new MongoServerAddress(x));
+                systemConfiguration.DatabaseHost.Split(",").Select(MongoServerAddress.Parse);
         else
-            urlBuilder.Server = new MongoServerAddress(systemConfiguration.DatabaseHost);
+            urlBuilder.Server = MongoServerAddress.Parse(systemConfiguration.DatabaseHost);
 
         if (!string.IsNullOrWhiteSpace(systemConfiguration.DatabaseUser)
             && !string.IsNullOrWhiteSpace(systemConfiguration.DatabaseUserPassword))

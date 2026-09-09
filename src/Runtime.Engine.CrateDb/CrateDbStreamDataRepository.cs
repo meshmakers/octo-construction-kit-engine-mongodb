@@ -201,11 +201,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             return; // already on the windowed shape (generation handled above for rollups)
         }
 
-        var tableExists = await _databaseClient.GetCountAsync(_tenantId,
-            $"SELECT count(*) FROM information_schema.tables " +
-            $"WHERE table_schema = '{schemaName.Replace("'", "''")}' " +
-            $"AND table_name = '{tableName.Replace("'", "''")}'");
-        if (tableExists == 0)
+        if (!await ArchiveTableExistsAsync(archiveRtId))
         {
             return; // fresh activation, nothing to migrate
         }
@@ -216,6 +212,26 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             "(any persisted bucket rows are lost in this drop).",
             quotedTable);
         await _managementClient.ExecuteDdlAsync(_tenantId, ArchiveDdlGenerator.GenerateDropTable(quotedTable));
+    }
+
+    /// <summary>
+    /// True when the archive's backing CrateDB table exists, probed via <c>information_schema.tables</c>
+    /// (the authoritative catalog, cheap, and it never fails when the tenant schema itself does not
+    /// exist yet). The archive status is deliberately NOT used as a proxy: a blueprint seeds archives
+    /// <c>Disabled</c> without ever provisioning a table, a failed re-enable leaves a <c>Failed</c>
+    /// archive with its table, and a Mongo-only tenant restore leaves an <c>Activated</c> archive
+    /// without one (AB#5141).
+    /// </summary>
+    private async Task<bool> ArchiveTableExistsAsync(string archiveRtId)
+    {
+        var schemaName = TenantSchema.SchemaName(_tenantId);
+        var tableName = TenantSchema.ArchiveTableName(archiveRtId);
+
+        var count = await _databaseClient.GetCountAsync(_tenantId,
+            $"SELECT count(*) FROM information_schema.tables " +
+            $"WHERE table_schema = '{schemaName.Replace("'", "''")}' " +
+            $"AND table_name = '{tableName.Replace("'", "''")}'");
+        return count > 0;
     }
 
     /// <inheritdoc />
@@ -1176,10 +1192,22 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     {
         // Export does not require the archive to be Activated — a Disabled archive's table is
         // preserved and exporting it is explicitly allowed (concept §10). We only need the snapshot
-        // to know the storage shape (raw vs windowed). A missing snapshot is a hard error; a Created
-        // archive (no table yet) yields zero rows.
+        // to know the storage shape (raw vs windowed). A missing snapshot is a hard error; an
+        // archive without a backing table (never activated, whatever its status) yields zero rows.
         var snapshot = await _archiveStore.GetAsync(archiveRtId)
             ?? throw new ArchiveNotFoundException(archiveRtId);
+
+        // Honour the "no backing table ⇒ no rows" contract explicitly instead of letting the first
+        // page query fail with CrateDB's RelationUnknown (42P01). The status is no proxy for the
+        // table (see ArchiveTableExistsAsync); a blueprint-seeded Disabled archive is the common
+        // case that never had one (AB#5141).
+        if (!await ArchiveTableExistsAsync(archiveRtId.ToString()))
+        {
+            _logger.LogInformation(
+                "Archive {ArchiveRtId} (status {Status}) has no backing table in tenant {TenantId}; export yields no rows.",
+                archiveRtId, snapshot.Status, _tenantId);
+            yield break;
+        }
 
         var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString());
         var windowed = snapshot.UsesWindowedStorage;

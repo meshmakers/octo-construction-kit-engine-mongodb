@@ -623,7 +623,7 @@ services) prepends an instance prefix: `{prefix}_{tenant}`. Rules:
   budget; the hash stays over the cleaned tenant id (its job is per-tenant uniqueness).
 - Genmap / recompute-staging side tables derive from the schema-qualified name and follow
   automatically.
-- Tests mutating the process-wide prefix forced `[assembly: CollectionBehavior(DisableTestParallelization = true)]`
+- Tests mutating the process-wide prefix forced `[assembly: Parallelization(Mode = ParallelMode.None)]`
   on `StreamData.UnitTests` (pure-logic assembly, serialization costs ~nothing); the naming
   matrix itself tests the pure `SchemaName(tenantId, prefix)` core.
 

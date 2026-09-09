@@ -70,7 +70,7 @@ public class TenantNamespaceGuardTests(TenantNamespaceFixture fixture)
         var config = Configuration;
         var urlBuilder = new MongoUrlBuilder
         {
-            Server = new MongoServerAddress(config.DatabaseHost),
+            Server = MongoServerAddress.Parse(config.DatabaseHost),
             Username = config.AdminUser,
             Password = config.AdminUserPassword,
             AuthenticationSource = config.AuthenticationDatabaseName,
@@ -230,6 +230,54 @@ public class TenantNamespaceGuardTests(TenantNamespaceFixture fixture)
         {
             await DropTenantQuietlyAsync(SystemContext, thiefId);
             await DropTenantQuietlyAsync(SystemContext, ownerId);
+        }
+    }
+
+    [Fact]
+    public async Task GetDirectChildTenants_ListsOnlyDirectChildren_AndStampsTheParent()
+    {
+        // AB#5151: the system tenant's database doubles as the platform-wide registry,
+        // which also carries every DEEPER descendant (each stamped with its real parent
+        // id). The child listing must filter to direct children — otherwise a
+        // grandchild shows up as a child of the system tenant, which is exactly how
+        // the workload roll-out CDs mis-modelled the tenant tree.
+        var childId = NewName("child");
+        var grandchildId = NewName("grand");
+
+        await CreateTenantAsync(SystemContext, childId, childId);
+        var child = await SystemContext.GetChildTenantContextAsync(childId);
+
+        try
+        {
+            await CreateTenantAsync(child, grandchildId, grandchildId);
+
+            using (var session = await SystemContext.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                var systemChildren = await SystemContext.GetDirectChildTenantsAsync(session);
+                await session.CommitTransactionAsync();
+
+                var items = systemChildren.Items.ToArray();
+                Assert.Contains(items, t => t.TenantId == childId);
+                Assert.DoesNotContain(items, t => t.TenantId == grandchildId);
+                Assert.All(items, t => Assert.Equal(Configuration.SystemTenantId, t.ParentTenantId, ignoreCase: true));
+            }
+
+            using (var session = await child.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                var childChildren = await child.GetDirectChildTenantsAsync(session);
+                await session.CommitTransactionAsync();
+
+                var items = childChildren.Items.ToArray();
+                Assert.Contains(items, t => t.TenantId == grandchildId);
+                Assert.All(items, t => Assert.Equal(childId, t.ParentTenantId));
+            }
+        }
+        finally
+        {
+            await DropTenantQuietlyAsync(child, grandchildId);
+            await DropTenantQuietlyAsync(SystemContext, childId);
         }
     }
 
