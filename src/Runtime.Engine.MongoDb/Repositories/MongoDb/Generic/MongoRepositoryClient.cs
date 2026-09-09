@@ -40,6 +40,14 @@ public abstract class MongoRepositoryClient : IRepositoryClient
 
     private static volatile bool _isRegistered;
     private static volatile bool _isSerializerRegistered;
+
+    /// <summary>
+    ///     The exception that made the first (and only possible) <see cref="ConfigureMongoDriver" />
+    ///     run fail. Guarded by <see cref="ObjectIdLock" />; see the comment there for why the
+    ///     registration must never be retried.
+    /// </summary>
+    private static Exception? _configurationFailure;
+
     private static readonly Lock ObjectIdLock = new();
 
     /// <summary>The MongoDB driver rejects an ApplicationName longer than this once UTF-8 encoded.</summary>
@@ -184,47 +192,78 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 return;
             }
 
-            // Remove convention first to avoid duplications
-            // this call of Remove method makes no errors if occurs before any Register method call
-            ConventionRegistry.Remove(OctoConventionCamelCase);
-            ConventionRegistry.Remove(OctoRtEntityConvention);
-            ConventionRegistry.Remove(OctoRtRecordConvention);
+            // The registration below is NOT restartable: it writes into the MongoDB driver's
+            // process-global class-map registry, so a run that throws half-way leaves part of the
+            // maps registered. Re-entering would then die on the FIRST duplicate it meets
+            // (`SysLock`) and report that as the failure — burying the real cause under a cascade of
+            // identical, misleading "An item with the same key has already been added" errors on
+            // every later repository client (409 of 439 integration tests, all pointing at SysLock,
+            // none at the actual defect). Latch the original exception instead and re-throw it,
+            // unchanged, for every subsequent caller: still loud, still fails fast, but always
+            // naming the true first failure.
+            if (_configurationFailure is not null)
+            {
+                throw new InvalidOperationException(
+                    "MongoDB driver configuration failed earlier in this process and cannot be retried " +
+                    "(the BSON class-map registry is process-global and was left partially populated). " +
+                    "See the inner exception for the original failure.",
+                    _configurationFailure);
+            }
 
-            // Register convention. The IgnoreExtraElementsConvention applies to ALL types and
-            // makes the deserializer silently skip BSON elements that have no matching property —
-            // mandatory for forward-compat across schema evolution (e.g. when a property is
-            // removed from a CK metadata class but legacy documents in the database still carry it).
-            ConventionRegistry.Register(OctoConventionCamelCase,
-                new ConventionPack
-                {
-                    new CamelCaseElementNameConvention(),
-                    new IgnoreExtraElementsConvention(true)
-                }, _ => true);
-
-            // Ensure that class maps are registered after generic conventions!
-            // Otherwise, for example, CamelCaseElementName is not executed during mapping.
-            // The position must be before class mapping registrations using conventions
-            // here
-            RegisterClassMaps();
-
-            // This convention is needed to ensure that properties of a derived class of RtEntity
-            // are not serialized and the correct polymorphic type is used.
-            ConventionRegistry.Register(OctoRtEntityConvention,
-                new ConventionPack
-                {
-                    new RtEntityMapConvention(serviceProvider.GetRequiredService<ICkClassMappingService>())
-                }, t => typeof(RtEntity).IsAssignableFrom(t));
-
-            // This convention is needed to ensure that properties of a derived class of RtRecord
-            // are not serialized and the correct polymorphic type is used.
-            ConventionRegistry.Register(OctoRtRecordConvention,
-                new ConventionPack
-                {
-                    new RtRecordMapConvention(serviceProvider.GetRequiredService<ICkClassMappingService>())
-                }, t => typeof(RtRecord).IsAssignableFrom(t));
+            try
+            {
+                RegisterConventionsAndClassMaps(serviceProvider);
+            }
+            catch (Exception ex)
+            {
+                _configurationFailure = ex;
+                throw;
+            }
 
             _isRegistered = true;
         }
+    }
+
+    private static void RegisterConventionsAndClassMaps(IServiceProvider serviceProvider)
+    {
+        // Remove convention first to avoid duplications
+        // this call of Remove method makes no errors if occurs before any Register method call
+        ConventionRegistry.Remove(OctoConventionCamelCase);
+        ConventionRegistry.Remove(OctoRtEntityConvention);
+        ConventionRegistry.Remove(OctoRtRecordConvention);
+
+        // Register convention. The IgnoreExtraElementsConvention applies to ALL types and
+        // makes the deserializer silently skip BSON elements that have no matching property —
+        // mandatory for forward-compat across schema evolution (e.g. when a property is
+        // removed from a CK metadata class but legacy documents in the database still carry it).
+        ConventionRegistry.Register(OctoConventionCamelCase,
+            new ConventionPack
+            {
+                new CamelCaseElementNameConvention(),
+                new IgnoreExtraElementsConvention(true)
+            }, _ => true);
+
+        // Ensure that class maps are registered after generic conventions!
+        // Otherwise, for example, CamelCaseElementName is not executed during mapping.
+        // The position must be before class mapping registrations using conventions
+        // here
+        RegisterClassMaps();
+
+        // This convention is needed to ensure that properties of a derived class of RtEntity
+        // are not serialized and the correct polymorphic type is used.
+        ConventionRegistry.Register(OctoRtEntityConvention,
+            new ConventionPack
+            {
+                new RtEntityMapConvention(serviceProvider.GetRequiredService<ICkClassMappingService>())
+            }, t => typeof(RtEntity).IsAssignableFrom(t));
+
+        // This convention is needed to ensure that properties of a derived class of RtRecord
+        // are not serialized and the correct polymorphic type is used.
+        ConventionRegistry.Register(OctoRtRecordConvention,
+            new ConventionPack
+            {
+                new RtRecordMapConvention(serviceProvider.GetRequiredService<ICkClassMappingService>())
+            }, t => typeof(RtRecord).IsAssignableFrom(t));
     }
 
     /// <summary>

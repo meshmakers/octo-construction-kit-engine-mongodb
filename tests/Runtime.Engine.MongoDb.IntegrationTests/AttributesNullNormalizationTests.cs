@@ -214,7 +214,9 @@ public class AttributesNullNormalizationTests(ImportTestCkModelFixture fixture)
 
         var urlBuilder = new MongoUrlBuilder
         {
-            Server = new MongoServerAddress(config.DatabaseHost),
+            // Parse, not the string ctor: DatabaseHost is "host:port", which MongoDB.Driver >= 3.11.1
+            // rejects in the ctor (CSHARP-6171) — same fix as in the production repository clients.
+            Server = MongoServerAddress.Parse(config.DatabaseHost),
             Username = config.AdminUser,
             Password = config.AdminUserPassword,
             AuthenticationSource = config.AuthenticationDatabaseName,
