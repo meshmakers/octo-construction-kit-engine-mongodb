@@ -412,6 +412,45 @@ internal class CrateQueryBuilder
     }
 
     /// <summary>
+    /// Downsampling for a calendar-aligned rollup rung (AB#5157 review): each output bin is the
+    /// rung's own stored calendar window, keyed by its <c>window_start</c>, instead of a fixed-width
+    /// <c>DATE_BIN</c>. A fixed interval derived from the rung's advisory bucket size drifts off the
+    /// variable-length calendar windows (a quarter is 90–92 days, a month 28–31) so the §7
+    /// fully-contained predicate drops almost every window and the chart reads empty. Binning on the
+    /// stored boundary is lossless and needs no containment predicate — a window is exactly one bin.
+    /// <paramref name="binAxis"/> is the full list of window-start instants in range (empty bins
+    /// included), computed by the caller with the same <c>BucketBoundary</c> logic and reference zone
+    /// that produced the stored boundaries, so the SQL's populated bins and the synthesized empty
+    /// bins land on identical instants.
+    /// </summary>
+    public CrateQueryBuilder WithDownsamplingByWindowStart(
+        DateTime from, DateTime to, IReadOnlyList<DateTime> binAxis)
+    {
+        ArgumentNullException.ThrowIfNull(binAxis);
+        From = from;
+        To = to;
+        QueryMode = QueryModeDto.Downsampling;
+        Limit = binAxis.Count;
+        DownsamplingByWindowStart = true;
+        DownsamplingBinAxis = binAxis;
+        return this;
+    }
+
+    /// <summary>
+    /// True when the downsampling bins are the source's stored calendar windows (keyed by
+    /// <c>window_start</c>) rather than a fixed-width <c>DATE_BIN</c> axis. Set by
+    /// <see cref="WithDownsamplingByWindowStart"/>.
+    /// </summary>
+    internal bool DownsamplingByWindowStart { get; private set; }
+
+    /// <summary>
+    /// The calendar bin axis (window-start instants, empty bins included) when
+    /// <see cref="DownsamplingByWindowStart"/> is set; otherwise null. The caller materializes empty
+    /// bins from this list instead of <see cref="DownsamplingOrigin"/> + interval arithmetic.
+    /// </summary>
+    internal IReadOnlyList<DateTime>? DownsamplingBinAxis { get; private set; }
+
+    /// <summary>
     /// Width of one downsampling bin in seconds, derived from the requested range and bucket count
     /// by <see cref="WithDownsampling"/>. Zero until downsampling is configured.
     /// </summary>

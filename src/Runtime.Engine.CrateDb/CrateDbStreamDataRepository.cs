@@ -7,6 +7,7 @@ using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
+using Meshmakers.Octo.Runtime.Engine.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
@@ -986,7 +987,27 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // route: their Period is advisory and their windows may be irregular, so a declared
         // grain is no basis for the bin axis there.
         int effectiveLimit;
-        if (snapshot.RollupAggregations is not null
+        // A calendar-aligned rollup rung (CalendarDay / Iso8601Week / CalendarMonth /
+        // CalendarQuarter / CalendarYear) bins on its own stored calendar windows: each variable-
+        // length window is one bin, keyed by window_start. A fixed-width DATE_BIN axis derived from
+        // the rung's advisory bucket size drifts off those windows (a quarter is 90–92 days, a month
+        // 28–31) so the §7 fully-contained predicate drops them and the chart reads empty (AB#5157
+        // review). The axis is built with the SAME BucketBoundary logic and reference zone that
+        // produced the stored boundaries, so populated and synthesized bins land on identical
+        // instants. Only rollups carry an alignment; raw / time-range archives keep the grain route.
+        var rollupForBinning = snapshot.RollupAggregations is not null && _rollupArchiveStore is not null
+            ? await _rollupArchiveStore.GetAsync(snapshot.RtId).ConfigureAwait(false)
+            : null;
+        if (rollupForBinning is not null && rollupForBinning.BucketAlignment != BucketAlignment.FixedSize)
+        {
+            var binAxis = BuildCalendarBinAxis(
+                options.From.Value, options.To.Value,
+                rollupForBinning.BucketAlignment, rollupForBinning.BucketSize,
+                rollupForBinning.ReferenceTimeZone);
+            effectiveLimit = binAxis.Count;
+            q.WithDownsamplingByWindowStart(options.From.Value, options.To.Value, binAxis);
+        }
+        else if (snapshot.RollupAggregations is not null
             && snapshot.Period is { } grain
             && DownsamplingBinQuantizer.QuantizeToGrain(options.Limit.Value,
                 options.To.Value - options.From.Value, grain) is { } quantized)
@@ -1104,7 +1125,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var rows = new List<StreamDataRow>();
         for (var binIndex = 0; binIndex < effectiveLimit; binIndex++)
         {
-            var binTimestamp = q.DownsamplingOrigin.AddSeconds((double)q.DownsamplingIntervalSeconds * binIndex);
+            var binTimestamp = q.DownsamplingByWindowStart
+                ? q.DownsamplingBinAxis![binIndex]
+                : q.DownsamplingOrigin.AddSeconds((double)q.DownsamplingIntervalSeconds * binIndex);
             if (rowsByBin.TryGetValue(binTimestamp, out var binRows))
             {
                 foreach (var dp in binRows)
@@ -1121,6 +1144,38 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
 
         return new StreamDataQueryResult { Rows = rows, TotalCount = rows.Count };
+    }
+
+    /// <summary>
+    /// Bin axis for downsampling a calendar-aligned rollup rung (AB#5157 review): the stored
+    /// calendar window-start instants that overlap <c>[from, to)</c>, empty bins included. Built with
+    /// the same <see cref="BucketBoundary"/> logic and reference zone the orchestrator used to
+    /// produce the window boundaries, so the axis instants equal the stored <c>window_start</c>
+    /// values exactly and populated / synthesized bins align. The first entry is the boundary that
+    /// contains <paramref name="from"/> (its window overlaps the range); the last is the greatest
+    /// boundary strictly before <paramref name="to"/>.
+    /// </summary>
+    private static IReadOnlyList<DateTime> BuildCalendarBinAxis(
+        DateTime from, DateTime to, BucketAlignment alignment, TimeSpan bucketSize, string? referenceTimeZone)
+    {
+        var zone = BucketBoundary.ResolveZone(referenceTimeZone);
+        var axis = new List<DateTime>();
+        if (to <= from)
+        {
+            return axis;
+        }
+
+        var cursor = BucketBoundary.AlignDown(from, alignment, bucketSize, zone);
+        // NextBucketEnd strictly advances for every non-FixedSize alignment, so the guard only
+        // defends against a future zero-length alignment rather than a real loop bound.
+        const int maxBins = 1_000_000;
+        for (var i = 0; cursor < to && i < maxBins; i++)
+        {
+            axis.Add(cursor);
+            cursor = BucketBoundary.NextBucketEnd(cursor, alignment, bucketSize, zone);
+        }
+
+        return axis;
     }
 
     /// <summary>

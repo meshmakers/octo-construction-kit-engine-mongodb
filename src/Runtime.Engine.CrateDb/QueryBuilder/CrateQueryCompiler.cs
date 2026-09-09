@@ -99,12 +99,6 @@ internal class CrateQueryCompiler
     {
         var query = new StringBuilder();
 
-        var intervalLiteral = $"'{queryBuilder.DownsamplingIntervalSeconds} seconds'::INTERVAL";
-        // Constants.DateTimeFormat appends a literal `Z`, so the value must be UTC or the digits
-        // would be stamped `Z` while carrying a local-time offset. DownsamplingOrigin is already
-        // normalised + truncated to the format's millisecond precision.
-        var fromLiteral = $"'{queryBuilder.DownsamplingOrigin.ToString(Constants.DateTimeFormat)}'::TIMESTAMP";
-
         // Windowed-storage downsampling: source is a rollup or time-range archive whose time
         // axis is `(window_start, window_end)`. Concept-time-range §7: a source window
         // contributes to a bin only when it is fully contained; straddling windows are dropped
@@ -117,7 +111,28 @@ internal class CrateQueryCompiler
         // fully-contained predicate then always fails and the bin reads empty — the all-null
         // bug (AB#4246). window_start keeps the §7 containment semantic intact.
         var binColumn = isWindowed ? Constants.WindowStart : timeColumn;
-        var binExpression = $"DATE_BIN({intervalLiteral}, d.\"{binColumn}\", {fromLiteral})";
+
+        // A calendar-aligned rollup rung (AB#5157 review) bins on the stored window_start itself:
+        // each variable-length calendar window is exactly one bin. A fixed-width DATE_BIN axis
+        // would drift off those windows (a quarter is 90–92 days) and the §7 containment predicate
+        // below would then drop them, leaving the chart empty. See
+        // CrateQueryBuilder.WithDownsamplingByWindowStart.
+        var byWindowStart = queryBuilder.DownsamplingByWindowStart;
+        string binExpression;
+        string? intervalLiteral = null;
+        if (byWindowStart)
+        {
+            binExpression = $"d.\"{binColumn}\"";
+        }
+        else
+        {
+            intervalLiteral = $"'{queryBuilder.DownsamplingIntervalSeconds} seconds'::INTERVAL";
+            // Constants.DateTimeFormat appends a literal `Z`, so the value must be UTC or the digits
+            // would be stamped `Z` while carrying a local-time offset. DownsamplingOrigin is already
+            // normalised + truncated to the format's millisecond precision.
+            var fromLiteral = $"'{queryBuilder.DownsamplingOrigin.ToString(Constants.DateTimeFormat)}'::TIMESTAMP";
+            binExpression = $"DATE_BIN({intervalLiteral}, d.\"{binColumn}\", {fromLiteral})";
+        }
 
         query.Append($"SELECT {binExpression} AS \"T\"");
 
@@ -155,7 +170,9 @@ internal class CrateQueryCompiler
         // Fully-contained predicate (concept-time-range §7). The former half
         // `window_start >= bin start` is implied here: DATE_BIN keys on window_start, and a bin
         // start is by definition <= the value it was derived from. Only the upper half remains.
-        if (isWindowed)
+        // Skipped when binning on window_start itself (calendar rungs): each window IS its bin, so
+        // it is trivially contained and there is no fixed interval to add.
+        if (isWindowed && !byWindowStart)
         {
             query.Append($" AND d.\"{Constants.WindowEnd}\" <= {binExpression} + {intervalLiteral}");
         }
