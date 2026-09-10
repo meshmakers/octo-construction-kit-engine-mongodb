@@ -178,12 +178,18 @@ public class RollupChainAggregationResolverTests
         OctoObjectId rtId,
         OctoObjectId sourceRtId,
         params CkRollupAggregationSpec[] aggregations)
+        => MakeRollup(rtId, new[] { new RollupSourceReference(sourceRtId) }, aggregations);
+
+    private static RollupArchiveSnapshot MakeRollup(
+        OctoObjectId rtId,
+        IReadOnlyList<RollupSourceReference> sources,
+        params CkRollupAggregationSpec[] aggregations)
         => new(
             RtId: rtId,
             TargetCkTypeId: CkType,
             Status: CkArchiveStatus.Activated,
             RtWellKnownName: null,
-            SourceArchiveRtId: sourceRtId,
+            Sources: sources,
             BucketSize: TimeSpan.FromDays(1),
             WatermarkLag: TimeSpan.FromMinutes(5),
             LastAggregatedBucketEnd: null,
@@ -271,6 +277,111 @@ public class RollupChainAggregationResolverTests
 
         var result = await RollupChainAggregationResolver.ResolveAsync(
             hourly, "dimming.level", AggregationFunctionDto.TimeWeightedAvg,
+            getArchive, getRollup, TestContext.Current.CancellationToken);
+
+        Assert.Null(result);
+    }
+
+    // ---- Multi-source rollups (AB#5157) ----
+
+    private static readonly OctoObjectId LegacyRawRtId = new("aa00000000000000000001e0");
+    private static readonly OctoObjectId OtherDailyRtId = new("aa00000000000000000001f0");
+    private static readonly DateTime Cutover = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public async Task TwoRawParents_ResolveSumAndDeduplicateOrigins()
+    {
+        // Hourly aggregates the legacy raw archive until the cutover and the native raw archive
+        // from then on. Both branches yield the same physical column on Hourly, so the origin list
+        // carries it once — no double SUM — and the query resolves as for a single-source rollup.
+        var hourly = MakeRollup(HourlyRtId,
+            new[]
+            {
+                new RollupSourceReference(LegacyRawRtId, ValidTo: Cutover),
+                new RollupSourceReference(RawRtId, ValidFrom: Cutover),
+            },
+            new CkRollupAggregationSpec("amount.value", CkRollupFunction.Sum, "amountvalue_sum"));
+
+        var (getArchive, getRollup) = Stores(MakeRawArchive(RawRtId), hourly);
+        var legacyRaw = MakeRawArchive(LegacyRawRtId);
+        Task<ArchiveSnapshot?> GetArchiveWithLegacy(OctoObjectId id)
+            => id == LegacyRawRtId ? Task.FromResult<ArchiveSnapshot?>(legacyRaw) : getArchive(id);
+
+        var origins = await RollupChainAggregationResolver.BuildOriginsAsync(
+            hourly, GetArchiveWithLegacy, getRollup, TestContext.Current.CancellationToken);
+        var origin = Assert.Single(origins);
+        Assert.Equal("amountvalue_sum", origin.PhysicalColumnName);
+
+        var result = await RollupChainAggregationResolver.ResolveAsync(
+            hourly, "amount.value", AggregationFunctionDto.Sum,
+            GetArchiveWithLegacy, getRollup, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+        Assert.Equal("SUM(\"amountvalue_sum\")", result!.SqlExpression);
+    }
+
+    [Fact]
+    public async Task EmptySources_ReturnsNull()
+    {
+        var orphan = MakeRollup(HourlyRtId, Array.Empty<RollupSourceReference>(),
+            new CkRollupAggregationSpec("amount.value", CkRollupFunction.Sum, "amountvalue_sum"));
+
+        var (getArchive, getRollup) = Stores(MakeRawArchive(RawRtId), orphan);
+
+        var result = await RollupChainAggregationResolver.ResolveAsync(
+            orphan, "amount.value", AggregationFunctionDto.Sum,
+            getArchive, getRollup, TestContext.Current.CancellationToken);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task Diamond_TwoDailyBranchesOverOneHourly_TerminatesAndResolves()
+    {
+        // Monthly → {Daily, OtherDaily} → Hourly → raw. The shared ancestor is walked once per
+        // branch; the union is de-duplicated on the physical column and the walk terminates.
+        var hourly = MakeRollup(HourlyRtId, RawRtId,
+            new CkRollupAggregationSpec("amount.value", CkRollupFunction.Sum, "amountvalue_sum"));
+        var daily = MakeRollup(DailyRtId, HourlyRtId,
+            new CkRollupAggregationSpec("amountvalue_sum", CkRollupFunction.Sum, "amountvalue_sum"));
+        var otherDaily = MakeRollup(OtherDailyRtId, HourlyRtId,
+            new CkRollupAggregationSpec("amountvalue_sum", CkRollupFunction.Sum, "amountvalue_sum"));
+        var monthly = MakeRollup(MonthlyRtId,
+            new[]
+            {
+                new RollupSourceReference(OtherDailyRtId, ValidTo: Cutover),
+                new RollupSourceReference(DailyRtId, ValidFrom: Cutover),
+            },
+            new CkRollupAggregationSpec("amountvalue_sum", CkRollupFunction.Sum, "amountvalue_sum"));
+
+        var (getArchive, getRollup) = Stores(MakeRawArchive(RawRtId), hourly, daily, otherDaily, monthly);
+
+        var origins = await RollupChainAggregationResolver.BuildOriginsAsync(
+            monthly, getArchive, getRollup, TestContext.Current.CancellationToken);
+        Assert.Single(origins);
+
+        var result = await RollupChainAggregationResolver.ResolveAsync(
+            monthly, "amount.value", AggregationFunctionDto.Sum,
+            getArchive, getRollup, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+        Assert.Equal("SUM(\"amountvalue_sum\")", result!.SqlExpression);
+    }
+
+    [Fact]
+    public async Task Cycle_StoreInconsistency_TerminatesWithNull()
+    {
+        // Daily lists Hourly and Hourly lists Daily (a corrupted store): the visited guard stops
+        // the recursion instead of overflowing the stack; nothing resolves.
+        var hourly = MakeRollup(HourlyRtId, DailyRtId,
+            new CkRollupAggregationSpec("amountvalue_sum", CkRollupFunction.Sum, "amountvalue_sum"));
+        var daily = MakeRollup(DailyRtId, HourlyRtId,
+            new CkRollupAggregationSpec("amountvalue_sum", CkRollupFunction.Sum, "amountvalue_sum"));
+
+        var (getArchive, getRollup) = Stores(MakeRawArchive(RawRtId), hourly, daily);
+
+        var result = await RollupChainAggregationResolver.ResolveAsync(
+            daily, "amount.value", AggregationFunctionDto.Sum,
             getArchive, getRollup, TestContext.Current.CancellationToken);
 
         Assert.Null(result);

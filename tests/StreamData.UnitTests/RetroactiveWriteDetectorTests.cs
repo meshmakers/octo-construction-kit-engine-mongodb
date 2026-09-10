@@ -1,4 +1,5 @@
 using System;
+using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
 using Xunit;
@@ -155,5 +156,60 @@ public class RetroactiveWriteDetectorTests
 
         Assert.False(result);
         Assert.False(capped);
+    }
+
+    // ---------- Multi-source rollups: span-clipped consumed watermark (AB#5157) ----------
+
+    [Fact]
+    public void ValidToClampedWatermark_PostValidToAppend_NoDirtyWindow()
+    {
+        // A dependent rollup lists the legacy source only until the 12:00 cutover and has aggregated
+        // up to 15:00 — from the native source. Its consumed watermark FOR THE LEGACY SOURCE is
+        // clamped to ValidTo (12:00), so a 13:00 append to the legacy archive is a forward write, not
+        // a retroactive correction. Without the clamp it would be flagged against 15:00 and trigger
+        // a recompute of buckets the legacy source never fed.
+        var legacyRt = OctoObjectId.GenerateNewId();
+        var nativeRt = OctoObjectId.GenerateNewId();
+        var dependent = new RollupArchiveSnapshot(
+            OctoObjectId.GenerateNewId(), new RtCkId<CkTypeId>("Demo/EnergyMeasurement"),
+            CkArchiveStatus.Activated, null,
+            new[]
+            {
+                new RollupSourceReference(legacyRt, ValidTo: Utc(12)),
+                new RollupSourceReference(nativeRt, ValidFrom: Utc(12)),
+            },
+            TimeSpan.FromHours(1), TimeSpan.Zero, LastAggregatedBucketEnd: Utc(15),
+            Array.Empty<CkRollupAggregationSpec>(), null);
+
+        var consumed = CrateDbStreamDataRepository.ClipConsumedWatermark(dependent, legacyRt);
+        Assert.Equal(Utc(12), consumed);
+
+        var result = RetroactiveWriteDetector.TryBuildDirtyWindow(
+            consumedWatermark: consumed,
+            new[] { Utc(13) },
+            RecomputeChangeSource.Pipeline, DetectedAt, maxRetroactiveReach: null, out _, out var capped);
+
+        Assert.False(result);
+        Assert.False(capped);
+
+        // The native source, listed from 12:00 onwards, is consumed up to the full watermark.
+        Assert.Equal(Utc(15), CrateDbStreamDataRepository.ClipConsumedWatermark(dependent, nativeRt));
+    }
+
+    [Fact]
+    public void WatermarkBeforeValidFrom_SourceNotConsumedYet_NoWatermark()
+    {
+        // Floor at ValidFrom: a dependent that has not reached the span in which it lists the source
+        // has consumed nothing from it, so no write to that source can be retroactive for it.
+        var nativeRt = OctoObjectId.GenerateNewId();
+        var dependent = new RollupArchiveSnapshot(
+            OctoObjectId.GenerateNewId(), new RtCkId<CkTypeId>("Demo/EnergyMeasurement"),
+            CkArchiveStatus.Activated, null,
+            new[] { new RollupSourceReference(nativeRt, ValidFrom: Utc(12)) },
+            TimeSpan.FromHours(1), TimeSpan.Zero, LastAggregatedBucketEnd: Utc(10),
+            Array.Empty<CkRollupAggregationSpec>(), null);
+
+        Assert.Null(CrateDbStreamDataRepository.ClipConsumedWatermark(dependent, nativeRt));
+        Assert.Null(CrateDbStreamDataRepository.ClipConsumedWatermark(dependent, OctoObjectId.GenerateNewId()));
     }
 }

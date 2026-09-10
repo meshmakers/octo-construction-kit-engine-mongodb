@@ -1106,6 +1106,10 @@ public class TenantContext : ITenantContext
             // do the same from the tenant lifecycle events.
             await InvalidateTenantRepositoryClientsAsync(tenantId, normalizedDatabaseName).ConfigureAwait(false);
 
+            // AB#5157: the tenant's stream data went with its archives — drop its memoised coverage
+            // (whole tenant) so a tenant re-created under the same id does not inherit stale answers.
+            InvalidateArchiveCoverage(tenantId);
+
             await _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId, handle.CorrelationId);
         }
     }
@@ -1950,9 +1954,125 @@ public class TenantContext : ITenantContext
             // AB#4300: wire the recompute stores so disable/delete purges any queued recompute work
             // (pending ranges + the active job) instead of leaving an un-processable Pending ghost.
             GetArchiveRecomputeStateStore(),
-            GetRecomputeJobStore());
+            GetRecomputeJobStore(),
+            // AB#5157: archive delete / clear drop the memoised coverage of the affected archive.
+            coverageInvalidator: GetArchiveCoverageCache());
         _archiveLifecycleServiceResolved = true;
         return _archiveLifecycleService;
+    }
+
+    // ---------- Archive coverage (AB#5157) ----------
+
+    /// <summary>
+    /// Process-wide fallback memo for hosts that resolve a tenant context without having registered
+    /// the <see cref="ArchiveCoverageCache"/> singleton (neither <c>AddCrateDbStreamDataRepository</c>
+    /// nor <c>AddStreamDataDatabase</c> ran). One instance per process so every tenant context still
+    /// shares one cache; the miss is logged once.
+    /// </summary>
+    private static ArchiveCoverageCache? _fallbackCoverageCache;
+    private static int _fallbackCoverageCacheWarned;
+    private ArchiveCoverageCache? _coverageCache;
+
+    /// <summary>
+    /// The process-wide coverage memo: the DI singleton when registered, else the static fallback.
+    /// Also handed out as <see cref="IArchiveCoverageInvalidator"/> to the lifecycle service and
+    /// the recompute orchestrator so their invalidations hit the same memo the providers read.
+    /// </summary>
+    private ArchiveCoverageCache GetArchiveCoverageCache()
+    {
+        if (_coverageCache is not null)
+        {
+            return _coverageCache;
+        }
+
+        var cache = _serviceProvider.GetService<ArchiveCoverageCache>();
+        if (cache is null)
+        {
+            cache = LazyInitializer.EnsureInitialized(
+                ref _fallbackCoverageCache,
+                () => new ArchiveCoverageCache(ArchiveCoverageCache.DefaultCacheTtl));
+            if (Interlocked.Exchange(ref _fallbackCoverageCacheWarned, 1) == 0)
+            {
+                _logger.LogWarning(
+                    "No ArchiveCoverageCache is registered in the service provider; using a process-wide " +
+                    "default instance with a {CacheTtl} TTL. Register the stream data services " +
+                    "(AddCrateDbStreamDataRepository / AddStreamDataDatabase) to make the TTL configurable",
+                    ArchiveCoverageCache.DefaultCacheTtl);
+            }
+        }
+
+        _coverageCache = cache;
+        return cache;
+    }
+
+    /// <summary>
+    /// Drops every memoised coverage answer of <paramref name="tenantId"/> (AB#5157) after its
+    /// stream data is gone. Null-tolerant: nothing to invalidate when no cache was ever wired.
+    /// </summary>
+    private void InvalidateArchiveCoverage(string tenantId)
+    {
+        try
+        {
+            var invalidator = _serviceProvider.GetService<IArchiveCoverageInvalidator>()
+                              ?? (IArchiveCoverageInvalidator?)_fallbackCoverageCache;
+            invalidator?.Invalidate(tenantId);
+        }
+        catch (Exception ex)
+        {
+            // Best-effort: the tenant is already gone; a stale memo expires with its TTL anyway.
+            _logger.LogDebug(ex, "Failed to invalidate the archive coverage cache of tenant {TenantId}", tenantId);
+        }
+    }
+
+    private IArchiveCoverageProvider? _coverageProvider;
+    private bool _coverageProviderResolved;
+
+    /// <inheritdoc />
+    public IArchiveCoverageProvider? GetArchiveCoverageProvider()
+    {
+        if (_coverageProviderResolved)
+        {
+            return _coverageProvider;
+        }
+
+        var streamData = GetStreamDataRepository();
+        if (streamData is null)
+        {
+            _coverageProviderResolved = true;
+            return null;
+        }
+
+        _coverageProvider = new CachedArchiveCoverageProvider(TenantId, streamData, GetArchiveCoverageCache());
+        _coverageProviderResolved = true;
+        return _coverageProvider;
+    }
+
+    private IArchiveFamilyCoverageService? _familyCoverageService;
+    private bool _familyCoverageServiceResolved;
+
+    /// <inheritdoc />
+    public IArchiveFamilyCoverageService? GetArchiveFamilyCoverageService()
+    {
+        if (_familyCoverageServiceResolved)
+        {
+            return _familyCoverageService;
+        }
+
+        var provider = GetArchiveCoverageProvider();
+        var rollupStore = GetRollupArchiveRuntimeStore();
+        if (provider is null || rollupStore is null)
+        {
+            _familyCoverageServiceResolved = true;
+            return null;
+        }
+
+        _familyCoverageService = new ArchiveFamilyCoverageService(
+            GetArchiveRuntimeStore(),
+            rollupStore,
+            new RollupDependencyGraph(rollupStore),
+            provider);
+        _familyCoverageServiceResolved = true;
+        return _familyCoverageService;
     }
 
     private IRollupArchiveRuntimeStore? _rollupStore;
@@ -2135,7 +2255,9 @@ public class TenantContext : ITenantContext
             audit,
             _loggerFactory.CreateLogger<RecomputeOrchestrator>(),
             () => DateTime.UtcNow,
-            maxBucketsPerChunk);
+            maxBucketsPerChunk,
+            // AB#5157: a committed recompute changes what the rollup holds — drop its memoised coverage.
+            coverageInvalidator: GetArchiveCoverageCache());
         return _recomputeOrchestrator;
     }
 

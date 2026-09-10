@@ -98,7 +98,7 @@ public class RollupComputedColumnEvalTests
     public async Task AggregateBucket_EvaluatesRollupComputedColumns_AndUpdatesRow()
     {
         var rollup = new RollupArchiveSnapshot(
-            RollupRt, Type, CkArchiveStatus.Activated, null, SourceRt,
+            RollupRt, Type, CkArchiveStatus.Activated, null, new[] { new RollupSourceReference(SourceRt) },
             TimeSpan.FromHours(1), TimeSpan.Zero, null,
             new[] { new CkRollupAggregationSpec("active", CkRollupFunction.Sum, null) },
             null);
@@ -149,7 +149,7 @@ public class RollupComputedColumnEvalTests
     public async Task AggregateBucket_NoComputedColumns_DoesNotReadBackOrUpdate()
     {
         var rollup = new RollupArchiveSnapshot(
-            RollupRt, Type, CkArchiveStatus.Activated, null, SourceRt,
+            RollupRt, Type, CkArchiveStatus.Activated, null, new[] { new RollupSourceReference(SourceRt) },
             TimeSpan.FromHours(1), TimeSpan.Zero, null,
             new[] { new CkRollupAggregationSpec("active", CkRollupFunction.Sum, null) },
             null);

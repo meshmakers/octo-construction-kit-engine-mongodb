@@ -1,3 +1,4 @@
+using System;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb.UnitTests;
@@ -86,8 +87,8 @@ public class DownsamplingBinQuantizerTests
         // 285 populated slots → 303 s bins → §7 dropped all but 5 buckets. Grain route: merge 1,
         // 300 s bins, 288 buckets — gaps in the data are irrelevant.
         var result = DownsamplingBinQuantizer.QuantizeToGrain(
-            288, TimeSpan.FromHours(24), TimeSpan.FromMinutes(5));
-        Assert.Equal((288, 300), result);
+            288, Anchor, Anchor.AddHours(24), TimeSpan.FromMinutes(5));
+        Assert.Equal((288, 300, Anchor), result);
     }
 
     [Fact]
@@ -95,8 +96,8 @@ public class DownsamplingBinQuantizerTests
     {
         // The AB#4714 case, grain-based: 670 requested over 720 hourly windows → merge 1 → hourly.
         var result = DownsamplingBinQuantizer.QuantizeToGrain(
-            670, TimeSpan.FromDays(30), TimeSpan.FromHours(1));
-        Assert.Equal((720, 3600), result);
+            670, Anchor, Anchor.AddDays(30), TimeSpan.FromHours(1));
+        Assert.Equal((720, 3600, Anchor), result);
     }
 
     [Fact]
@@ -106,9 +107,9 @@ public class DownsamplingBinQuantizerTests
         // distinct-bin route re-derived round(range/103) = 25 165 s — NOT a grain multiple, so the
         // §7 predicate dropped straddling windows even without any data gap.
         var result = DownsamplingBinQuantizer.QuantizeToGrain(
-            100, TimeSpan.FromDays(30), TimeSpan.FromHours(1));
+            100, Anchor, Anchor.AddDays(30), TimeSpan.FromHours(1));
         Assert.NotNull(result);
-        var (limit, interval) = result.Value;
+        var (limit, interval, _) = result.Value;
         Assert.Equal(0, interval % 3600);
         Assert.Equal(25200, interval);
         Assert.Equal(103, limit);
@@ -119,8 +120,8 @@ public class DownsamplingBinQuantizerTests
     {
         // 670 requested over 30 daily windows → merge 1 → one bin per day.
         var result = DownsamplingBinQuantizer.QuantizeToGrain(
-            670, TimeSpan.FromDays(30), TimeSpan.FromDays(1));
-        Assert.Equal((30, 86400), result);
+            670, Anchor, Anchor.AddDays(30), TimeSpan.FromDays(1));
+        Assert.Equal((30, 86400, Anchor), result);
     }
 
     [Fact]
@@ -128,8 +129,8 @@ public class DownsamplingBinQuantizerTests
     {
         // 25 h over 5-min grain, 288 requested: merge 1, 300 s bins, ceil(90000/300) = 300 buckets.
         var result = DownsamplingBinQuantizer.QuantizeToGrain(
-            288, TimeSpan.FromHours(25), TimeSpan.FromMinutes(5));
-        Assert.Equal((300, 300), result);
+            288, Anchor, Anchor.AddHours(25), TimeSpan.FromMinutes(5));
+        Assert.Equal((300, 300, Anchor), result);
     }
 
     [Theory]
@@ -139,20 +140,76 @@ public class DownsamplingBinQuantizerTests
     public void Grain_OutOfContractInputs_ReturnNull(int requested, int rangeHours, int grainSeconds)
     {
         Assert.Null(DownsamplingBinQuantizer.QuantizeToGrain(
-            requested, TimeSpan.FromHours(rangeHours), TimeSpan.FromSeconds(grainSeconds)));
+            requested, Anchor, Anchor.AddHours(rangeHours), TimeSpan.FromSeconds(grainSeconds)));
     }
 
     [Fact]
     public void Grain_SubSecondGrain_ReturnsNull_CallerFallsBack()
     {
         Assert.Null(DownsamplingBinQuantizer.QuantizeToGrain(
-            288, TimeSpan.FromHours(24), TimeSpan.FromMilliseconds(500)));
+            288, Anchor, Anchor.AddHours(24), TimeSpan.FromMilliseconds(500)));
     }
 
     [Fact]
     public void Grain_FractionalSecondGrain_ReturnsNull_CallerFallsBack()
     {
         Assert.Null(DownsamplingBinQuantizer.QuantizeToGrain(
-            288, TimeSpan.FromHours(24), TimeSpan.FromMilliseconds(1500)));
+            288, Anchor, Anchor.AddHours(24), TimeSpan.FromMilliseconds(1500)));
+    }
+
+    /// <summary>
+    /// A grain-aligned query start — midnight is a whole multiple of every grain used here, so the
+    /// axis origin these cases expect back is the instant they passed in.
+    /// </summary>
+    private static readonly DateTime Anchor = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    // The axis origin (AB#5157 review). The bin axis must start on a source window boundary or the
+    // boundary bins straddle two windows and §7 drops them; callers used to pre-align the window
+    // themselves, which they cannot do correctly because neither the grain nor the chosen bin width
+    // is part of the query contract.
+
+    [Fact]
+    public void Grain_AlignedFrom_LeavesTheAxisExactlyWhereItIs()
+    {
+        // The property that makes this change safe: every window that works today keeps its axis.
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(
+            24, Anchor, Anchor.AddHours(24), TimeSpan.FromHours(1));
+
+        Assert.Equal((24, 3600, Anchor), result);
+    }
+
+    [Fact]
+    public void Grain_SubGrainFrom_SnapsTheOriginDownToTheGrain()
+    {
+        // A relative "last N hours" filter ending at wall-clock time. Every bin used to straddle two
+        // hourly windows, so §7 dropped them and the chart read blank.
+        var from = Anchor.AddHours(6).AddMinutes(42).AddSeconds(54);
+
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(
+            24, from, from.AddHours(24), TimeSpan.FromHours(1));
+
+        Assert.NotNull(result);
+        var (limit, interval, origin) = result.Value;
+        Assert.Equal(Anchor.AddHours(6), origin);
+        Assert.Equal(3600, interval);
+        // The axis now starts 42:54 before the request and must still reach its end.
+        Assert.True(origin.AddSeconds((double)interval * limit) >= from.AddHours(24));
+    }
+
+    [Fact]
+    public void Grain_MergedBins_OriginStaysOnTheGrainNotOnTheBinWidth()
+    {
+        // Snapping to the merged width instead would move the axis of a query that works today;
+        // the grain is all §7 needs, since a bin edge on the grain covers whole source windows.
+        var from = Anchor.AddMinutes(90);
+
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(
+            2, from, from.AddHours(24), TimeSpan.FromHours(1));
+
+        Assert.NotNull(result);
+        var (_, interval, origin) = result.Value;
+        Assert.Equal(Anchor.AddHours(1), origin);
+        Assert.Equal(0, interval % 3600);
+        Assert.Equal(0, (origin - Anchor).Ticks % TimeSpan.FromHours(1).Ticks);
     }
 }
