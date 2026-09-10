@@ -12,8 +12,8 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// <remarks>
 /// <para>
 /// Layout: one row per recomputed half-open range <c>[range_start, range_end)</c> (epoch ms),
-/// optionally scoped to a single <c>rtid_scope</c> (empty string = all rtIds — the only shape the
-/// executor currently produces, since per-rtId recompute is not yet supported). The
+/// optionally scoped to a single <c>rtid_scope</c> (empty string = all rtIds; a per-rtId recompute
+/// writes the entity's rtId, and the executor restricts aggregation, pointer and sweep to it). The
 /// <c>generation</c> column is the active generation for that range: readers select
 /// <c>WHERE generation = active(window)</c> via a CASE built from these rows
 /// (<see cref="CrateQueryCompiler"/>), and the rollup table's generation column lets the previous
