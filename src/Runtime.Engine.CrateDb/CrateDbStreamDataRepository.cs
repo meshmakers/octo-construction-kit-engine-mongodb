@@ -1010,10 +1010,17 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         else if (snapshot.RollupAggregations is not null
             && snapshot.Period is { } grain
             && DownsamplingBinQuantizer.QuantizeToGrain(options.Limit.Value,
-                options.To.Value - options.From.Value, grain) is { } quantized)
+                options.From.Value, options.To.Value, grain) is { } quantized)
         {
+            // The quantizer's Origin is the requested start snapped down to the grain, and it is
+            // passed as the query's lower bound as well: the source filter matches OVERLAPPING
+            // windows, so a bin that starts before the requested instant must read from its own
+            // start or it sums only the tail of its source windows. Callers therefore no longer
+            // have to pre-align the window themselves — they could not do it correctly anyway,
+            // since neither the grain nor the chosen bin width is part of the query contract
+            // (AB#5157 review).
             effectiveLimit = quantized.EffectiveLimit;
-            q.WithDownsampling(effectiveLimit, options.From.Value, options.To.Value,
+            q.WithDownsampling(effectiveLimit, quantized.Origin, options.To.Value,
                 quantized.IntervalSeconds);
         }
         else
