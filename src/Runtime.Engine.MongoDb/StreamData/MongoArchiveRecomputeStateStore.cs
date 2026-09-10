@@ -73,14 +73,29 @@ public sealed class MongoArchiveRecomputeStateStore : IArchiveRecomputeStateStor
             entity.PendingRecomputeRanges = new AttributeRecordValueList<RtCkArchiveRecomputeRangeRecord>());
 
     /// <inheritdoc />
-    public Task ReplacePendingRecomputeRangesAsync(
-        OctoObjectId archiveRtId, IReadOnlyList<ArchiveRecomputeRange> ranges) =>
-        MutateAsync(archiveRtId, entity =>
+    public Task UpdatePendingRecomputeRangesAsync(
+        OctoObjectId archiveRtId,
+        IReadOnlyList<ArchiveRecomputeRange> remove,
+        IReadOnlyList<ArchiveRecomputeRange> add)
+    {
+        if (remove.Count == 0 && add.Count == 0)
         {
+            return Task.CompletedTask;
+        }
+
+        return MutateAsync(archiveRtId, entity =>
+        {
+            var existing = entity.PendingRecomputeRanges ?? Enumerable.Empty<RtCkArchiveRecomputeRangeRecord>();
             var list = new AttributeRecordValueList<RtCkArchiveRecomputeRangeRecord>();
-            list.AddRange(ranges.Select(ToRecord));
+            // Removal is by value: the stored record is mapped back to the contract shape and
+            // compared with what the caller read earlier. FromRecord ∘ ToRecord is the identity on
+            // every field the record carries (pinned by MongoArchiveRecomputeStateStoreMappingTests),
+            // so a range read from this list is removed by handing it back unchanged.
+            list.AddRange(existing.Where(record => !remove.Contains(FromRecord(record))));
+            list.AddRange(add.Select(ToRecord));
             entity.PendingRecomputeRanges = list;
         });
+    }
 
     /// <inheritdoc />
     public Task MarkRecomputeStartedAsync(OctoObjectId archiveRtId, DateTime startedAt) =>
@@ -145,7 +160,8 @@ public sealed class MongoArchiveRecomputeStateStore : IArchiveRecomputeStateStor
         (RecomputeChangeSource)(int)record.Source,
         record.DetectedAt);
 
-    private static RtCkArchiveRecomputeRangeRecord ToRecord(ArchiveRecomputeRange range) => new()
+    /// <summary>Contract → stored record. Internal for the mapping tests.</summary>
+    internal static RtCkArchiveRecomputeRangeRecord ToRecord(ArchiveRecomputeRange range) => new()
     {
         DependentArchiveRtId = range.DependentArchiveRtId.ToString(),
         RangeStart = range.RangeStart,
@@ -160,7 +176,8 @@ public sealed class MongoArchiveRecomputeStateStore : IArchiveRecomputeStateStor
         LastError = range.LastError,
     };
 
-    private static ArchiveRecomputeRange FromRecord(RtCkArchiveRecomputeRangeRecord record) => new(
+    /// <summary>Stored record → contract. Internal for the mapping tests.</summary>
+    internal static ArchiveRecomputeRange FromRecord(RtCkArchiveRecomputeRangeRecord record) => new(
         string.IsNullOrEmpty(record.DependentArchiveRtId) ? default : new OctoObjectId(record.DependentArchiveRtId),
         record.RangeStart,
         record.RangeEnd,

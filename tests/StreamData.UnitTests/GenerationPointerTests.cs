@@ -85,7 +85,7 @@ public class GenerationPointerTests
     }
 
     [Fact]
-    public void BuildDeleteContainedPointers_RemovesEnclosedEntriesButNotTheFlippedOne()
+    public void BuildDeleteContainedPointers_UnscopedFlip_RemovesEnclosedEntriesOfEveryScopeButNotTheFlippedOne()
     {
         var genMap = GenerationMapSqlBuilder.GenMapTable("acmecorp", "rollup1");
         var from = new DateTime(2026, 5, 11, 0, 0, 0, DateTimeKind.Utc);
@@ -95,10 +95,31 @@ public class GenerationPointerTests
 
         var sql = GenerationMapSqlBuilder.BuildDeleteContainedPointers(genMap, from, to, string.Empty);
 
+        // An unscoped flip sweeps the rows of every entity in the range, so a contained scoped entry
+        // is as dead as an unscoped one — no scope predicate. Only the flipped (unscoped) entry stays.
         Assert.Equal(
             $"DELETE FROM {genMap} WHERE \"range_start\" >= {fromMs} AND \"range_end\" <= {toMs} " +
-            "AND \"rtid_scope\" = '' " +
-            $"AND NOT (\"range_start\" = {fromMs} AND \"range_end\" = {toMs});",
+            $"AND NOT (\"range_start\" = {fromMs} AND \"range_end\" = {toMs} AND \"rtid_scope\" = '');",
+            sql);
+    }
+
+    [Fact]
+    public void BuildDeleteContainedPointers_ScopedFlip_TouchesOnlyEntriesOfThatScope()
+    {
+        var genMap = GenerationMapSqlBuilder.GenMapTable("acmecorp", "rollup1");
+        var from = new DateTime(2026, 5, 11, 0, 0, 0, DateTimeKind.Utc);
+        var to = new DateTime(2026, 5, 11, 12, 0, 0, DateTimeKind.Utc);
+        var fromMs = new DateTimeOffset(from).ToUnixTimeMilliseconds();
+        var toMs = new DateTimeOffset(to).ToUnixTimeMilliseconds();
+
+        var sql = GenerationMapSqlBuilder.BuildDeleteContainedPointers(genMap, from, to, "mp-1");
+
+        // A scoped flip swept one entity's rows only: an unscoped entry contained in the range still
+        // governs every other entity and must survive.
+        Assert.Equal(
+            $"DELETE FROM {genMap} WHERE \"range_start\" >= {fromMs} AND \"range_end\" <= {toMs} " +
+            "AND \"rtid_scope\" = 'mp-1' " +
+            $"AND NOT (\"range_start\" = {fromMs} AND \"range_end\" = {toMs} AND \"rtid_scope\" = 'mp-1');",
             sql);
     }
 
