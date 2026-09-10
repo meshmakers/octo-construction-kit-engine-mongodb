@@ -85,6 +85,37 @@ public class GenerationPointerTests
     }
 
     [Fact]
+    public void BuildDeleteContainedPointers_RemovesEnclosedEntriesButNotTheFlippedOne()
+    {
+        var genMap = GenerationMapSqlBuilder.GenMapTable("acmecorp", "rollup1");
+        var from = new DateTime(2026, 5, 11, 0, 0, 0, DateTimeKind.Utc);
+        var to = new DateTime(2026, 5, 11, 12, 0, 0, DateTimeKind.Utc);
+        var fromMs = new DateTimeOffset(from).ToUnixTimeMilliseconds();
+        var toMs = new DateTimeOffset(to).ToUnixTimeMilliseconds();
+
+        var sql = GenerationMapSqlBuilder.BuildDeleteContainedPointers(genMap, from, to, string.Empty);
+
+        Assert.Equal(
+            $"DELETE FROM {genMap} WHERE \"range_start\" >= {fromMs} AND \"range_end\" <= {toMs} " +
+            "AND \"rtid_scope\" = '' " +
+            $"AND NOT (\"range_start\" = {fromMs} AND \"range_end\" = {toMs});",
+            sql);
+    }
+
+    [Fact]
+    public void BuildDeleteContainedPointers_EscapesTheScope()
+    {
+        var genMap = GenerationMapSqlBuilder.GenMapTable("acmecorp", "rollup1");
+        var sql = GenerationMapSqlBuilder.BuildDeleteContainedPointers(
+            genMap,
+            new DateTime(2026, 5, 11, 0, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 5, 11, 12, 0, 0, DateTimeKind.Utc),
+            "o'brien");
+
+        Assert.Contains("\"rtid_scope\" = 'o''brien'", sql);
+    }
+
+    [Fact]
     public void BuildDeleteGenerationsFrom_TreatsUnspecifiedKindAsUtc()
     {
         var genMap = GenerationMapSqlBuilder.GenMapTable("acmecorp", "rollup1");

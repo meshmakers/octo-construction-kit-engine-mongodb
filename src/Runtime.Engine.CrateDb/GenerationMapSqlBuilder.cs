@@ -93,6 +93,30 @@ internal static class GenerationMapSqlBuilder
     public static string BuildDeleteGenerationsFrom(string genMapTable, DateTime fromBucketEnd) =>
         $"DELETE FROM {genMapTable} WHERE \"range_end\" > {ToEpochMs(fromBucketEnd)};";
 
+    /// <summary>
+    /// Builds the delete of every pointer entry (same scope) whose range lies entirely inside
+    /// <c>[from, to)</c> other than that range itself (AB#5189). Called right after the flip: the
+    /// entry just written covers those ranges at a strictly higher generation, and the post-flip
+    /// sweep has already removed the rows they pointed at, so they are dead weight — an entry
+    /// pointing at a generation that no longer exists in the table.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately <b>contained</b>, not overlapping: an entry reaching beyond the flipped range
+    /// still governs the part outside it, and dropping it would silently send that part back to
+    /// generation 0. The read filter is unaffected either way — it orders by generation descending
+    /// and the flipped entry is the highest — so this is table hygiene, not a correctness fix.
+    /// </remarks>
+    public static string BuildDeleteContainedPointers(
+        string genMapTable, DateTime from, DateTime to, string rtIdScope)
+    {
+        var fromMs = ToEpochMs(from);
+        var toMs = ToEpochMs(to);
+        return
+            $"DELETE FROM {genMapTable} WHERE \"range_start\" >= {fromMs} AND \"range_end\" <= {toMs} " +
+            $"AND \"rtid_scope\" = '{rtIdScope.Replace("'", "''")}' " +
+            $"AND NOT (\"range_start\" = {fromMs} AND \"range_end\" = {toMs});";
+    }
+
     private static string ToEpochMs(DateTime value)
     {
         var utc = value.Kind == DateTimeKind.Unspecified
