@@ -91,7 +91,8 @@ public sealed class MongoArchiveRecomputeStateStore : IArchiveRecomputeStateStor
             // compared with what the caller read earlier. FromRecord ∘ ToRecord is the identity on
             // every field the record carries (pinned by MongoArchiveRecomputeStateStoreMappingTests),
             // so a range read from this list is removed by handing it back unchanged.
-            list.AddRange(existing.Where(record => !remove.Contains(FromRecord(record))));
+            var toRemove = remove.ToHashSet();
+            list.AddRange(existing.Where(record => !toRemove.Contains(FromRecord(record))));
             list.AddRange(add.Select(ToRecord));
             entity.PendingRecomputeRanges = list;
         });
