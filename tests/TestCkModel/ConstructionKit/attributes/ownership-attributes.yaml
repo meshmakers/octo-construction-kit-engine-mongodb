@@ -1,0 +1,23 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+# AB#5187 attribute-ownership round-trip coverage. One definition per non-default ownership
+# value, so CkAttributeOwnershipPersistenceTests can prove the declared value survives the
+# CkAttributeDto -> Mongo CkAttribute -> CkAttributeDto cycle into the runtime CK cache instead
+# of collapsing onto the deprecated isRuntimeState boolean (which cannot tell TenantOwned from
+# RuntimeState — the export gap AB#5187 exists to close).
+attributes:
+  - id: TariffRate
+    description: Tenant-owned master data - preserved on re-apply AND exported (AB#5187).
+    valueType: Double
+    ownership: TenantOwned
+  - id: ApiKey
+    description: Credential - preserved on re-apply and excluded from ExportRt (AB#5187).
+    valueType: String
+    ownership: Secret
+  - id: SyncCursor
+    description: Runtime state declared through the ownership marker, not the alias (AB#5187).
+    valueType: String
+    ownership: RuntimeState
+  - id: OwnershipData
+    description: Record attribute carrying the AB#5187 record-assignment coverage.
+    valueType: Record
+    valueCkRecordId: ${this}/OwnershipRecord

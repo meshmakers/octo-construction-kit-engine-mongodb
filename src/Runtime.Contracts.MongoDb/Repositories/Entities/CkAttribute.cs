@@ -51,12 +51,25 @@ public class CkAttribute
     public string? Description { get; set; }
 
     /// <summary>
-    ///     Marks the attribute as runtime state owned by services/operators/users at runtime
-    ///     (e.g. deployment status, archive lifecycle status, sync counters). When true, an Upsert
-    ///     import preserves the existing value instead of overwriting it with the imported value
-    ///     (see ImportRtModelCommand.PreserveRuntimeStateAttributesAsync, AB#4582 / AB#4589).
+    ///     DEPRECATED mirror of <see cref="Ownership" /> meaning "preserved on Upsert"
+    ///     (<c>AttributeOwnership.IsPreservedOnUpsert</c>): true for TenantOwned, RuntimeState and
+    ///     Secret. Persisted unconditionally so an engine that does not know <see cref="Ownership" />
+    ///     yet still reads a tenant-owned or secret attribute as runtime state and degrades to
+    ///     preserve-on-upsert instead of "seed wins", which would reset credentials
+    ///     (see ImportRtModelCommand.PreserveRuntimeStateAttributesAsync, AB#4582 / AB#4589 / AB#5187).
     /// </summary>
     public bool IsRuntimeState { get; set; }
+
+    /// <summary>
+    ///     Declared ownership of the attribute DEFINITION (AB#5187): who owns the value and whether
+    ///     it is part of the entity's portable definition. <c>null</c> means "not declared" — the
+    ///     state of every document written before AB#5187 and of every model that still uses the
+    ///     deprecated <c>isRuntimeState</c> alias. The read path resolves <c>null</c> through
+    ///     <c>AttributeOwnership.Resolve(ownership, isRuntimeState)</c>, so a legacy document keeps
+    ///     exactly today's behaviour (true → RuntimeState, false → SeedOwned) and never falls back
+    ///     to SeedOwned for an attribute that was flagged.
+    /// </summary>
+    public AttributeOwnershipDto? Ownership { get; set; }
 
     /// <summary>
     ///     Optional meta data of the attribute

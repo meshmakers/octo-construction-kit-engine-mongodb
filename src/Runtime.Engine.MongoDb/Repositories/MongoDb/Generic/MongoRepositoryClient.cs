@@ -561,6 +561,11 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.ValueCkEnumId).SetIgnoreIfDefault(true);
             cm.MapMember(c => c.ValueCkRecordId).SetIgnoreIfDefault(true);
             cm.MapMember(c => c.MetaData).SetIgnoreIfDefault(true);
+            // AB#5187: an undeclared ownership stays ABSENT from the document (same convention as
+            // every other optional member here). Absent reads back as null, which the read path
+            // resolves through the persisted isRuntimeState mirror — that is what keeps documents
+            // written by a pre-AB#5187 engine behaving exactly as before.
+            cm.MapMember(c => c.Ownership).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkAssociationRole>(cm =>
@@ -597,6 +602,9 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.AttributeName).SetIsRequired(true);
             cm.MapMember(c => c.AutoIncrementReference).SetIgnoreIfDefault(true);
             cm.MapMember(c => c.AutoCompleteValues).SetIgnoreIfDefault(true);
+            // AB#5187: the per-assignment ownership override. Absent means "inherit from the
+            // attribute definition", which is what every pre-AB#5187 document says.
+            cm.MapMember(c => c.Ownership).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkTypeInheritance>(cm =>

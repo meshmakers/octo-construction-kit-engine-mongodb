@@ -241,7 +241,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     CkAttributeId = a.AttributeId,
                     AutoCompleteValues = a.AutoCompleteValues?.ToList(),
                     AutoIncrementReference = a.AutoIncrementReference,
-                    IsOptional = a.IsOptional
+                    IsOptional = a.IsOptional,
+                    // AB#5187: per-assignment ownership override; null = inherit from the definition.
+                    Ownership = a.Ownership
                 }).ToList(),
                 DerivedFromCkRecordId = ckRecordInheritances.FirstOrDefault(x => x.InheritorCkRecordId == r.CkRecordId)
                     ?.BaseCkRecordId
@@ -254,6 +256,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 ValueCkRecordId = a.ValueCkRecordId,
                 DefaultValues = a.DefaultValues?.ToList(),
                 Description = a.Description,
+                // AB#5187: the declared ownership wins; IsRuntimeState stays the fallback for
+                // documents written before it existed (Ownership == null there).
+                Ownership = a.Ownership,
                 IsRuntimeState = a.IsRuntimeState,
                 MetaData = a.MetaData?.Select(m =>
                     new CkAttributeMetaDataDto { Key = m.Key, Value = m.Value, Description = m.Description }).ToList()
@@ -275,7 +280,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     CkAttributeId = a.AttributeId,
                     AutoCompleteValues = a.AutoCompleteValues?.ToList(),
                     AutoIncrementReference = a.AutoIncrementReference,
-                    IsOptional = a.IsOptional
+                    IsOptional = a.IsOptional,
+                    // AB#5187: per-assignment ownership override; null = inherit from the definition.
+                    Ownership = a.Ownership
                 }).ToList(),
                 Associations = ckTypeAssociations.Where(x => x.OriginCkTypeId == t.CkTypeId).Select(a =>
                     new CkTypeAssociationDto
@@ -301,7 +308,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     CkAttributeId = a.AttributeId,
                     AutoCompleteValues = a.AutoCompleteValues?.ToList(),
                     AutoIncrementReference = a.AutoIncrementReference,
-                    IsOptional = a.IsOptional
+                    IsOptional = a.IsOptional,
+                    // AB#5187: per-assignment ownership override; null = inherit from the definition.
+                    Ownership = a.Ownership
                 }).ToList()
             }).ToList()
         };
@@ -847,6 +856,10 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     AutoCompleteValues = attribute.AutoCompleteValues,
                     AutoIncrementReference = attribute.AutoIncrementReference,
                     IsOptional = attribute.IsOptional,
+                    // AB#5187: the per-assignment override has NO boolean fallback — dropping it
+                    // here would silently disable the override for every type, record and
+                    // association-role attribute (they all pass through this one method).
+                    Ownership = attribute.Ownership,
                 };
 
                 ckTypeAttributes.Add(ckTypeAttribute);
@@ -1003,6 +1016,10 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     DefaultValues = ckAttributeDto.DefaultValues?.Select(dv =>
                         AttributeValueConverter.ConvertAttributeValue(ckAttributeDto.ValueType, dv)!).ToList(),
                     Description = ckAttributeDto.Description,
+                    // AB#5187: persist BOTH — Ownership is the truth, IsRuntimeState is the
+                    // computed mirror (CkAttributeDto.IsRuntimeState == Ownership.IsPreservedOnUpsert())
+                    // that an engine which does not know Ownership yet still reads correctly.
+                    Ownership = ckAttributeDto.Ownership,
                     IsRuntimeState = ckAttributeDto.IsRuntimeState,
                     MetaData = ckAttributeDto.MetaData?.Select(m =>
                         new CkAttributeMetaData { Key = m.Key, Value = m.Value, Description = m.Description }).ToList()

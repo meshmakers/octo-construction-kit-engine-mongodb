@@ -1,0 +1,46 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+# AB#5187: attribute ownership replaces the isRuntimeState boolean. OwnershipEntity assigns the
+# three marked definitions without an override (they must arrive with their declared value),
+# OwnershipOverrideEntity overrides the SAME definitions per assignment in both directions.
+# Asserted by CkAttributeOwnershipPersistenceTests.
+types:
+  - typeId: OwnershipEntity
+    derivedFromCkTypeId: ${System}/Entity
+    isFinal: false
+    isAbstract: false
+    attributes:
+      - id: ${this}/Name
+        name: Name
+        isOptional: true
+      - id: ${this}/TariffRate
+        name: TariffRate
+        isOptional: true
+      - id: ${this}/ApiKey
+        name: ApiKey
+        isOptional: true
+      - id: ${this}/SyncCursor
+        name: SyncCursor
+        isOptional: true
+      - id: ${this}/OwnershipData
+        name: OwnershipData
+        isOptional: true
+    associations:
+      - id: ${this}/OwnershipLink
+        targetCkTypeId: ${this}/OwnershipEntity
+  - typeId: OwnershipOverrideEntity
+    derivedFromCkTypeId: ${System}/Entity
+    isFinal: false
+    isAbstract: false
+    attributes:
+      # Narrowing override: the shared ApiKey definition is Secret, but on THIS type the value
+      # ships with the product, so a blueprint update must be able to correct it.
+      - id: ${this}/ApiKey
+        name: ApiKey
+        isOptional: true
+        ownership: SeedOwned
+      # Widening override: the Name definition carries no marker at all (SeedOwned); on this type
+      # the tenant owns the value.
+      - id: ${this}/Name
+        name: Name
+        isOptional: true
+        ownership: TenantOwned
