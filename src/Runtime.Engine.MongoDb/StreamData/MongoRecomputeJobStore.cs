@@ -112,6 +112,9 @@ public sealed class MongoRecomputeJobStore : IRecomputeJobStore
         entity.DurationMs = job.DurationMs;
         entity.ErrorReason = job.ErrorReason ?? string.Empty;
         entity.StagingTableName = job.StagingTableName ?? string.Empty;
+        // AB#5189 heartbeat — persisted so a drain in ANOTHER process (after a restart) can tell a
+        // job that is still progressing from one whose process died.
+        entity.LastProgressAt = job.LastProgressAt;
     }
 
     private static RecomputeJobSnapshot ToSnapshot(RtRecomputeJob entity) => new(
@@ -129,5 +132,7 @@ public sealed class MongoRecomputeJobStore : IRecomputeJobStore
         entity.FinishedAt,
         (int?)entity.DurationMs,
         string.IsNullOrEmpty(entity.ErrorReason) ? null : entity.ErrorReason,
-        string.IsNullOrEmpty(entity.StagingTableName) ? null : entity.StagingTableName);
+        string.IsNullOrEmpty(entity.StagingTableName) ? null : entity.StagingTableName,
+        // Jobs written before System.StreamData 1.9.0 carry no heartbeat and read back as null.
+        entity.LastProgressAt);
 }
