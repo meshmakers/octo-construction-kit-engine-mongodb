@@ -181,7 +181,9 @@ internal static class RollupAggregationColumns
     /// <exception cref="InvalidOperationException">
     /// Neither rule matches. The activation validator (<c>RollupValidator</c>, rule 14) refuses
     /// exactly this case, so reaching it means the rollup or one of its sources was edited after
-    /// activation; the message names the spec, the source and the rollup. The SQL builder never
+    /// activation — or the rollup predates the AB#5157 tightening of rule 2, which used to accept a
+    /// source that stored its result under the parent's column name without aggregating the same
+    /// attribute. The message names the spec, the source and the rollup. The SQL builder never
     /// receives an unresolved spec, so no NULL-producing column is ever emitted silently.
     /// </exception>
     public static RollupSourceAggregation ResolveForSource(
@@ -212,7 +214,10 @@ internal static class RollupAggregationColumns
                 $"Rollup {rollupRtId}: aggregation (SourcePath '{spec.SourcePath}', {spec.Function}) cannot be resolved " +
                 $"on source {sourceKind} {source.RtId}{rule2Hint}: the source neither declares '{spec.SourcePath}' " +
                 $"as a column nor stores the same {spec.Function} aggregation of '{RollupSourceColumnResolver.NormalisePath(spec.SourcePath)}'. " +
-                "Activation validation refuses this configuration — the rollup or its source was changed after activation.");
+                "Activation validation refuses this configuration, so either the rollup or its source was " +
+                "changed after activation, or it was activated before the per-source resolution rule was " +
+                "tightened (AB#5157: a source now has to aggregate the same attribute, not merely store its " +
+                "result under the same column name).");
         }
 
         return resolution.Kind == RollupSourceColumnResolutionKind.DeclaredColumn
