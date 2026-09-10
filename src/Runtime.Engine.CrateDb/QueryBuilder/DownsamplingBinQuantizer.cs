@@ -1,4 +1,6 @@
 using System;
+using Meshmakers.Octo.Runtime.Contracts.StreamData;
+using Meshmakers.Octo.Runtime.Engine.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 
@@ -32,10 +34,11 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 /// </item>
 /// </list>
 /// <para>
-/// The windowed path assumes the query origin (<c>From</c>) sits on a source-grain boundary, which
-/// holds for every MeshBoard time selection (calendar periods and midnight-aligned custom ranges).
-/// A caller that downsamples a windowed archive from an arbitrary sub-grain instant would still see
-/// the boundary bins straddle; that is out of scope here and unchanged from prior behaviour.
+/// The windowed path needs the bin axis to start on a source-grain boundary, or the boundary bins
+/// straddle two source windows and the §7 predicate drops them. <see cref="QuantizeToGrain"/>
+/// therefore snaps the origin down to the grain itself instead of assuming the caller did
+/// (AB#5157 review) — a no-op for every already-aligned window, so the axis of a calendar-period or
+/// midnight-aligned selection is unchanged.
 /// </para>
 /// </remarks>
 internal static class DownsamplingBinQuantizer
@@ -98,23 +101,34 @@ internal static class DownsamplingBinQuantizer
     /// <para>
     /// Computing from the declared grain (<c>ArchiveSnapshot.Period</c> — a rollup's bucket size, a
     /// time-range archive's period) avoids both: no probe, no data dependence, and the width is a
-    /// grain multiple by construction. The origin-on-grain-boundary assumption is unchanged from
-    /// <see cref="Quantize"/>.
+    /// grain multiple by construction.
+    /// </para>
+    /// <para>
+    /// The returned <c>Origin</c> is <paramref name="from"/> snapped down to the grain with the same
+    /// <see cref="BucketBoundary"/> logic that wrote the stored boundaries, so every bin edge lands
+    /// on a source window start and each bin covers whole source windows. It is the query's lower
+    /// bound as well as the <c>DATE_BIN</c> origin: the source filter matches windows that OVERLAP
+    /// the range, so a first bin starting before the requested instant would otherwise read only the
+    /// part of its source windows that reaches into the range. Snapping is a no-op whenever
+    /// <paramref name="from"/> already sits on the grain, which is every calendar-period and
+    /// midnight-aligned selection — the axis of those queries does not move (AB#5157 review).
     /// </para>
     /// </remarks>
     /// <param name="requestedLimit">The caller-requested bucket count (pixel-driven). Must be &gt; 0.</param>
-    /// <param name="range">The query time range (<c>to - from</c>). Must be positive.</param>
+    /// <param name="from">Start of the requested range.</param>
+    /// <param name="to">End of the requested range. Must be after <paramref name="from"/>.</param>
     /// <param name="grain">
     /// The archive's window length. Must be a positive whole number of seconds — the SQL interval
     /// literal and the caller-side bin axis both work in whole seconds.
     /// </param>
     /// <returns>
-    /// The bucket count and bin width to run the query with, or null when the inputs are out of
-    /// contract (caller should fall back to the probe-based <see cref="Quantize"/> route).
+    /// The bucket count, bin width and axis origin to run the query with, or null when the inputs
+    /// are out of contract (caller should fall back to the probe-based <see cref="Quantize"/> route).
     /// </returns>
-    public static (int EffectiveLimit, int IntervalSeconds)? QuantizeToGrain(
-        int requestedLimit, TimeSpan range, TimeSpan grain)
+    public static (int EffectiveLimit, int IntervalSeconds, DateTime Origin)? QuantizeToGrain(
+        int requestedLimit, DateTime from, DateTime to, TimeSpan grain)
     {
+        var range = to - from;
         if (requestedLimit <= 0 || range <= TimeSpan.Zero || grain <= TimeSpan.Zero)
         {
             return null;
@@ -138,7 +152,11 @@ internal static class DownsamplingBinQuantizer
             return null;
         }
 
-        var effectiveLimit = (int)Math.Ceiling(range.TotalSeconds / intervalSeconds);
-        return (Math.Max(1, effectiveLimit), (int)intervalSeconds);
+        // Snap to the GRAIN, not to the (possibly merged) bin width: every bin edge then still lands
+        // on a source window start, while an already-grain-aligned window keeps the exact axis it
+        // has today. Aligning to the wider bin would move the axis of queries that work fine.
+        var origin = BucketBoundary.AlignDown(from, BucketAlignment.FixedSize, grain);
+        var effectiveLimit = (int)Math.Ceiling((to - origin).TotalSeconds / intervalSeconds);
+        return (Math.Max(1, effectiveLimit), (int)intervalSeconds, origin);
     }
 }

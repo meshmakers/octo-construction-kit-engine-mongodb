@@ -1,0 +1,61 @@
+$schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+# AB#5157 new-form fragment: a rollup that declares its sources through RollupArchive.Sources
+# only, with no deprecated SourceArchiveRtId scalar at all. Two time-disjoint spans model the
+# migration story the feature exists for: coarse legacy history (the EnergyCommunity legacy daily
+# TimeRangeArchive ec...a11) up to the cutover, then the natively ingested quarter-hour raw
+# archive (ec...a01) from the cutover onwards. Both source ids are also referenced by an old-form
+# rollup of the EnergyCommunity seed, which is what makes the mixed-form source counting testable.
+dependencies:
+  - System.StreamData-[1.8,2.0)
+entities:
+  - rtId: ec0000000000000000005157
+    ckTypeId: System.StreamData/RollupArchive
+    rtWellKnownName: energy-measurements-monthly-multisource
+    associations: []
+    attributes:
+      - id: System.StreamData/Archive.TargetCkTypeId
+        value: Basic.Energy/EnergyMeasurement
+      - id: System.StreamData/Archive.Status
+        value: 0
+      - id: System.StreamData/Archive.Columns
+        value:
+          - ckRecordId: System.StreamData/CkArchiveColumn
+            attributes:
+              - id: System.StreamData/CkArchiveColumn.Path
+                value: amountvalue_sum
+              - id: System.StreamData/CkArchiveColumn.Required
+                value: false
+              - id: System.StreamData/CkArchiveColumn.Indexed
+                value: true
+      - id: System.StreamData/RollupArchive.Sources
+        value:
+          - ckRecordId: System.StreamData/CkRollupSourceReference
+            attributes:
+              - id: System.StreamData/CkRollupSourceReference.SourceArchiveRtId
+                value: ec0000000000000000000a11
+              - id: System.StreamData/CkRollupSourceReference.ValidTo
+                value: 2025-01-01T00:00:00Z
+          - ckRecordId: System.StreamData/CkRollupSourceReference
+            attributes:
+              - id: System.StreamData/CkRollupSourceReference.SourceArchiveRtId
+                value: ec0000000000000000000a01
+              - id: System.StreamData/CkRollupSourceReference.ValidFrom
+                value: 2025-01-01T00:00:00Z
+      - id: System.StreamData/RollupArchive.BucketSizeMs
+        value: 2419200000
+      - id: System.StreamData/RollupArchive.WatermarkLagMs
+        value: 900000
+      - id: System.StreamData/RollupArchive.BucketAlignment
+        value: 3
+      - id: System.StreamData/RollupArchive.ReferenceTimeZone
+        value: Europe/Vienna
+      - id: System.StreamData/RollupArchive.Aggregations
+        value:
+          - ckRecordId: System.StreamData/CkRollupAggregation
+            attributes:
+              - id: System.StreamData/CkRollupAggregation.SourcePath
+                value: Amount.Value
+              - id: System.StreamData/CkRollupAggregation.Function
+                value: 3
+              - id: System.StreamData/CkRollupAggregation.TargetColumnName
+                value: amountvalue_sum

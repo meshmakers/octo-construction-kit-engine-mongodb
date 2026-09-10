@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
+using Meshmakers.Octo.Runtime.Engine.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
@@ -22,6 +24,15 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 {
     /// <summary>Rows read + written per page during an active-archive computed-column backfill (§8).</summary>
     private const int BackfillPageSize = 1000;
+
+    /// <summary>
+    /// CrateDB's "schema unknown" wording: the noun, the (optionally quoted) schema name, then
+    /// "unknown". Anchored on the phrase so unrelated failures mentioning a schema-like identifier
+    /// do not read as a missing tenant schema. AB#5157 E3.
+    /// </summary>
+    private static readonly Regex SchemaUnknownPhrase = new(
+        @"\bschema\s+'?[^'\s]+'?\s+unknown\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private readonly ILogger<CrateDbStreamDataRepository> _logger;
     private CrateDbArchiveRecomputeExecutor? _recomputeExecutor;
@@ -976,13 +987,40 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // route: their Period is advisory and their windows may be irregular, so a declared
         // grain is no basis for the bin axis there.
         int effectiveLimit;
-        if (snapshot.RollupAggregations is not null
+        // A calendar-aligned rollup rung (CalendarDay / Iso8601Week / CalendarMonth /
+        // CalendarQuarter / CalendarYear) bins on its own stored calendar windows: each variable-
+        // length window is one bin, keyed by window_start. A fixed-width DATE_BIN axis derived from
+        // the rung's advisory bucket size drifts off those windows (a quarter is 90–92 days, a month
+        // 28–31) so the §7 fully-contained predicate drops them and the chart reads empty (AB#5157
+        // review). The axis is built with the SAME BucketBoundary logic and reference zone that
+        // produced the stored boundaries, so populated and synthesized bins land on identical
+        // instants. Only rollups carry an alignment; raw / time-range archives keep the grain route.
+        var rollupForBinning = snapshot.RollupAggregations is not null && _rollupArchiveStore is not null
+            ? await _rollupArchiveStore.GetAsync(snapshot.RtId).ConfigureAwait(false)
+            : null;
+        if (rollupForBinning is not null && rollupForBinning.BucketAlignment != BucketAlignment.FixedSize)
+        {
+            var binAxis = BuildCalendarBinAxis(
+                options.From.Value, options.To.Value,
+                rollupForBinning.BucketAlignment, rollupForBinning.BucketSize,
+                rollupForBinning.ReferenceTimeZone);
+            effectiveLimit = binAxis.Count;
+            q.WithDownsamplingByWindowStart(options.From.Value, options.To.Value, binAxis);
+        }
+        else if (snapshot.RollupAggregations is not null
             && snapshot.Period is { } grain
             && DownsamplingBinQuantizer.QuantizeToGrain(options.Limit.Value,
-                options.To.Value - options.From.Value, grain) is { } quantized)
+                options.From.Value, options.To.Value, grain) is { } quantized)
         {
+            // The quantizer's Origin is the requested start snapped down to the grain, and it is
+            // passed as the query's lower bound as well: the source filter matches OVERLAPPING
+            // windows, so a bin that starts before the requested instant must read from its own
+            // start or it sums only the tail of its source windows. Callers therefore no longer
+            // have to pre-align the window themselves — they could not do it correctly anyway,
+            // since neither the grain nor the chosen bin width is part of the query contract
+            // (AB#5157 review).
             effectiveLimit = quantized.EffectiveLimit;
-            q.WithDownsampling(effectiveLimit, options.From.Value, options.To.Value,
+            q.WithDownsampling(effectiveLimit, quantized.Origin, options.To.Value,
                 quantized.IntervalSeconds);
         }
         else
@@ -1094,7 +1132,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var rows = new List<StreamDataRow>();
         for (var binIndex = 0; binIndex < effectiveLimit; binIndex++)
         {
-            var binTimestamp = q.DownsamplingOrigin.AddSeconds((double)q.DownsamplingIntervalSeconds * binIndex);
+            var binTimestamp = q.DownsamplingByWindowStart
+                ? q.DownsamplingBinAxis![binIndex]
+                : q.DownsamplingOrigin.AddSeconds((double)q.DownsamplingIntervalSeconds * binIndex);
             if (rowsByBin.TryGetValue(binTimestamp, out var binRows))
             {
                 foreach (var dp in binRows)
@@ -1111,6 +1151,38 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
 
         return new StreamDataQueryResult { Rows = rows, TotalCount = rows.Count };
+    }
+
+    /// <summary>
+    /// Bin axis for downsampling a calendar-aligned rollup rung (AB#5157 review): the stored
+    /// calendar window-start instants that overlap <c>[from, to)</c>, empty bins included. Built with
+    /// the same <see cref="BucketBoundary"/> logic and reference zone the orchestrator used to
+    /// produce the window boundaries, so the axis instants equal the stored <c>window_start</c>
+    /// values exactly and populated / synthesized bins align. The first entry is the boundary that
+    /// contains <paramref name="from"/> (its window overlaps the range); the last is the greatest
+    /// boundary strictly before <paramref name="to"/>.
+    /// </summary>
+    private static IReadOnlyList<DateTime> BuildCalendarBinAxis(
+        DateTime from, DateTime to, BucketAlignment alignment, TimeSpan bucketSize, string? referenceTimeZone)
+    {
+        var zone = BucketBoundary.ResolveZone(referenceTimeZone);
+        var axis = new List<DateTime>();
+        if (to <= from)
+        {
+            return axis;
+        }
+
+        var cursor = BucketBoundary.AlignDown(from, alignment, bucketSize, zone);
+        // NextBucketEnd strictly advances for every non-FixedSize alignment, so the guard only
+        // defends against a future zero-length alignment rather than a real loop bound.
+        const int maxBins = 1_000_000;
+        for (var i = 0; cursor < to && i < maxBins; i++)
+        {
+            axis.Add(cursor);
+            cursor = BucketBoundary.NextBucketEnd(cursor, alignment, bucketSize, zone);
+        }
+
+        return axis;
     }
 
     /// <summary>
@@ -1506,6 +1578,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var sourceTable = TenantSchema.QualifiedArchiveTable(_tenantId, sourceArchive.RtId.ToString());
         var targetTable = TenantSchema.QualifiedArchiveTable(_tenantId, rollup.RtId.ToString());
 
+        // Per-source resolution (AB#5157 §3): the orchestrator picks the source for this bucket;
+        // bind the rollup's logical specs to THAT source's physical columns (a rollup source needs
+        // its own rollup snapshot for the child-aggregation rule).
+        var sourceRollup = await GetSourceRollupSnapshotAsync(sourceArchive);
+        var resolved = RollupAggregationColumns.ResolveForSource(
+            rollup.Aggregations, rollup.RtId, sourceArchive, sourceRollup);
+
         var sql = RollupAggregationSqlBuilder.Build(
             sourceTable,
             targetTable,
@@ -1513,7 +1592,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             // for type version 1). Raw + time-range archives write the same form via
             // RtCkId<CkTypeId>.ToString(); rollups have to match or the query never finds rows.
             rollup.TargetCkTypeId.SemanticVersionedFullName,
-            rollup.Aggregations,
+            resolved,
             bucketStart,
             bucketEnd,
             sourceArchive.UsesWindowedStorage,
@@ -1535,6 +1614,29 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         await EvaluateRollupComputedColumnsAsync(rollup.RtId, targetTable, bucketStart, bucketEnd, cancellationToken);
 
         return affected;
+    }
+
+    /// <summary>
+    /// The rollup snapshot of a rollup source (AB#5157 §3 rule 2 needs its logical specs), or
+    /// <c>null</c> for a base (raw / time-range) source and when no rollup store is wired — in
+    /// both cases only the verbatim declared-column rule can bind a spec to that source.
+    /// </summary>
+    private async Task<RollupArchiveSnapshot?> GetSourceRollupSnapshotAsync(ArchiveSnapshot sourceArchive)
+    {
+        if (sourceArchive.RollupAggregations is null)
+        {
+            return null;
+        }
+
+        if (_rollupArchiveStore is null)
+        {
+            _logger.LogDebug(
+                "Source archive {SourceRtId} is a rollup but no rollup store is wired — only verbatim declared columns resolve.",
+                sourceArchive.RtId);
+            return null;
+        }
+
+        return await _rollupArchiveStore.GetAsync(sourceArchive.RtId).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -1579,7 +1681,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // recompute executor needs the exact same plumbing as bucket aggregation.
         _recomputeExecutor ??= new CrateDbArchiveRecomputeExecutor(
             _tenantId, _databaseClient, _managementClient, _archiveStore,
-            _configuration.NumberOfShards, _configuration.NumberOfReplicas, _logger);
+            _configuration.NumberOfShards, _configuration.NumberOfReplicas, _logger,
+            _rollupArchiveStore);
 
         return _recomputeExecutor.ExecuteAsync(source, rollup, rangeStart, rangeEnd, rtIdScope, cancellationToken);
     }
@@ -1666,6 +1769,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// lagging dependent re-aggregate a forward, not-yet-closed bucket. Null when no dependent exists
     /// or none has aggregated yet (nothing has been consumed, so no write can be retroactive).
     /// </summary>
+    /// <remarks>
+    /// Multi-source rollups (AB#5157): a dependent lists this archive among its
+    /// <see cref="RollupArchiveSnapshot.Sources"/> with a validity span, and only the part of its
+    /// watermark that falls inside that span was consumed <i>from this source</i> — see
+    /// <see cref="ClipConsumedWatermark"/>. The MAX over dependents is kept.
+    /// </remarks>
     private async Task<DateTime?> GetConsumedWatermarkAsync(OctoObjectId sourceArchiveRtId)
     {
         if (_rollupArchiveStore is null)
@@ -1676,16 +1785,38 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         DateTime? max = null;
         await foreach (var rollup in _rollupArchiveStore.EnumerateAsync())
         {
-            if (rollup.SourceArchiveRtId != sourceArchiveRtId)
-            {
-                continue;
-            }
-            if (rollup.LastAggregatedBucketEnd is { } watermark && (max is null || watermark > max))
+            if (ClipConsumedWatermark(rollup, sourceArchiveRtId) is { } watermark && (max is null || watermark > max))
             {
                 max = watermark;
             }
         }
         return max;
+    }
+
+    /// <summary>
+    /// One dependent's contribution to the consumed watermark of <paramref name="sourceArchiveRtId"/>
+    /// (AB#5157): the dependent's <see cref="RollupArchiveSnapshot.LastAggregatedBucketEnd"/> clipped
+    /// to the validity span under which it lists the source — clamped to <c>ValidTo</c> on the upper
+    /// end (buckets past the span were aggregated from another source, so an append there is a
+    /// forward write for this source) and floored at <c>ValidFrom</c> on the lower end (a watermark
+    /// at or before the span's start means nothing of this source has been consumed yet). Null when
+    /// the dependent does not list the source, has not aggregated yet, or has not reached the span.
+    /// </summary>
+    internal static DateTime? ClipConsumedWatermark(RollupArchiveSnapshot rollup, OctoObjectId sourceArchiveRtId)
+    {
+        var source = rollup.Sources.FirstOrDefault(s => s.SourceArchiveRtId == sourceArchiveRtId);
+        if (source is null || rollup.LastAggregatedBucketEnd is not { } watermark)
+        {
+            return null;
+        }
+
+        var clamped = source.ValidTo is { } validTo && validTo < watermark ? validTo : watermark;
+        if (source.ValidFrom is { } validFrom && clamped <= validFrom)
+        {
+            return null;
+        }
+
+        return clamped;
     }
 
     /// <inheritdoc />
@@ -1716,15 +1847,62 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 break;
             }
         }
-        catch (Exception ex) when (IsRelationUnknown(ex))
+        catch (Exception ex) when (IsMissingTableError(ex))
         {
-            // AB#4284: ONLY "no backing table yet" (e.g. Created status: MIN over a missing table)
-            // maps to "no data" → null. Any OTHER read failure (transient CrateDB read, connector
-            // reset, timeout) must propagate so BackfillRollupFromSource ends the job Failed with the
-            // real error instead of reporting a misleading "source holds no data" no-op. Debug so the
-            // genuinely-empty path stays observable but quiet.
+            // AB#4284: ONLY "no backing table yet" (e.g. Created status: MIN over a missing table,
+            // or — AB#5157 E3 — a tenant whose CrateDB schema does not exist yet) maps to "no data"
+            // → null. Any OTHER read failure (transient CrateDB read, connector reset, timeout) must
+            // propagate so BackfillRollupFromSource ends the job Failed with the real error instead
+            // of reporting a misleading "source holds no data" no-op. Debug so the genuinely-empty
+            // path stays observable but quiet.
             _logger.LogDebug(ex,
-                "Archive {ArchiveRtId}: min-timestamp probe found no backing table (treated as empty).", archiveRtId);
+                "Archive {ArchiveRtId}: min-timestamp probe found no backing table or schema (treated as empty).", archiveRtId);
+        }
+
+        return null;
+    }
+
+    /// <inheritdoc />
+    public async Task<ArchiveCoverage?> GetArchiveCoverageAsync(
+        OctoObjectId archiveRtId, CancellationToken cancellationToken = default)
+    {
+        // AB#5157: same shape as the min-timestamp probe, one statement for both ends. The snapshot
+        // only picks the time-axis columns: window_start / window_end for windowed (rollup /
+        // time-range) tables, timestamp for both ends of a raw table. Created archives (no snapshot /
+        // no backing table) and empty tables (either aggregate NULL) resolve to null — never a
+        // sentinel range.
+        var snapshot = await _archiveStore.GetAsync(archiveRtId);
+        if (snapshot is null)
+        {
+            return null;
+        }
+
+        var startColumn = snapshot.UsesWindowedStorage ? Constants.WindowStart : Constants.Timestamp;
+        var endColumn = snapshot.UsesWindowedStorage ? Constants.WindowEnd : Constants.Timestamp;
+        var qualifiedTable = TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString());
+        var sql = $"SELECT MIN(\"{startColumn}\") AS \"min_ts\", MAX(\"{endColumn}\") AS \"max_ts\" FROM {qualifiedTable}";
+
+        try
+        {
+            await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, sql, cancellationToken))
+            {
+                row.TryGetValue("min_ts", out var minValue);
+                row.TryGetValue("max_ts", out var maxValue);
+                var availableFrom = AsUtcDateTimeFlexible(minValue);
+                var availableTo = AsUtcDateTimeFlexible(maxValue);
+                return availableFrom is { } from && availableTo is { } to
+                    ? new ArchiveCoverage(from, to)
+                    : null;
+            }
+        }
+        catch (Exception ex) when (IsMissingTableError(ex))
+        {
+            // Identical classifier and contract as GetArchiveMinTimestampAsync: ONLY "no backing
+            // table yet" (missing relation, or the tenant's schema not provisioned yet — AB#5157 E3)
+            // maps to "no coverage" → null; every other read failure propagates so the caller (and
+            // the coverage cache, which never memoises a failure) sees the real error.
+            _logger.LogDebug(ex,
+                "Archive {ArchiveRtId}: coverage probe found no backing table or schema (treated as empty).", archiveRtId);
         }
 
         return null;
@@ -1732,8 +1910,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
     /// <summary>
     /// True when the exception is CrateDB's "relation/table unknown" error — the only failure that
-    /// <see cref="GetArchiveMinTimestampAsync"/> treats as a genuine empty source (no backing table
-    /// provisioned yet). Matched on message text (mirroring <see cref="IsColumnAlreadyExists"/>)
+    /// <see cref="GetArchiveMinTimestampAsync"/> and the coverage probe
+    /// <see cref="GetArchiveCoverageAsync"/> (AB#5157) treat as a genuine empty source (no backing
+    /// table provisioned yet). Matched on message text (mirroring <see cref="IsColumnAlreadyExists"/>)
     /// because the driver surfaces it as a generic exception, and the inner exception chain is
     /// walked so a wrapped driver error is still classified. AB#4284.
     /// </summary>
@@ -1764,6 +1943,45 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         return false;
     }
+
+    /// <summary>
+    /// True when the exception is CrateDB's "schema unknown" error (<c>XX000: Schema 'x' unknown</c>
+    /// / <c>SchemaUnknown[...]</c>) — raised for a tenant whose CrateDB schema has not been created
+    /// yet (schemas materialise with the first archive table). For the coverage / min-timestamp
+    /// probes it means exactly what a missing relation means: no backing table, no data. AB#5157 E3.
+    /// Same message-text matching and inner-exception walk as <see cref="IsRelationUnknown"/>.
+    /// </summary>
+    internal static bool IsSchemaUnknown(Exception ex)
+    {
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            var message = current.Message;
+
+            if (message.Contains("SchemaUnknown", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // CrateDB phrases it "Schema 'name' unknown" / "Schema name unknown" — match that exact
+            // phrase rather than the two tokens anywhere in the message, so a failure that merely
+            // names a schema-ish identifier (ColumnUnknown[Column 'schema_version' unknown]) still
+            // propagates.
+            if (SchemaUnknownPhrase.IsMatch(message))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The catch filter of <see cref="GetArchiveMinTimestampAsync"/> and
+    /// <see cref="GetArchiveCoverageAsync"/>: a missing relation (<see cref="IsRelationUnknown"/>)
+    /// or a missing tenant schema (<see cref="IsSchemaUnknown"/>) both read as "no backing table"
+    /// → <c>null</c>; every other failure propagates. AB#4284 / AB#5157 E3.
+    /// </summary>
+    internal static bool IsMissingTableError(Exception ex) => IsRelationUnknown(ex) || IsSchemaUnknown(ex);
 
     /// <summary>
     /// Converts a CrateDB timestamp scalar to a UTC <see cref="DateTime"/>. Tolerates the wire-type

@@ -113,6 +113,21 @@ public interface ITenantContext
     IArchiveLifecycleService? GetArchiveLifecycleService();
 
     /// <summary>
+    /// Returns the tenant-scoped archive coverage provider (AB#5157) — measured
+    /// <c>availableFrom</c>/<c>availableTo</c> per archive, memoised in the process-wide coverage
+    /// cache — or null if stream data is not enabled (no <see cref="IStreamDataRepository"/>).
+    /// </summary>
+    IArchiveCoverageProvider? GetArchiveCoverageProvider();
+
+    /// <summary>
+    /// Returns the archive family coverage service (AB#5157) — the coverage of a base archive and
+    /// every rollup rung derived from it — or null if stream data is not enabled (no
+    /// <see cref="IStreamDataRepository"/>). Composes the tenant's stores, dependency graph and
+    /// <see cref="IArchiveCoverageProvider"/> so callers don't have to.
+    /// </summary>
+    IArchiveFamilyCoverageService? GetArchiveFamilyCoverageService();
+
+    /// <summary>
     /// Returns the rollup-archive runtime store for this tenant, or null if no rollup store is
     /// wired up (deployments without rollup support). Reads and writes <c>CkRollupArchive</c>
     /// entities through MongoDB. Used by the rollup lifecycle service and orchestrator

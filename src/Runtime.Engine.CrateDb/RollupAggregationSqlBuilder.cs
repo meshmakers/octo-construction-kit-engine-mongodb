@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
+using Meshmakers.Octo.Runtime.Engine.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 
@@ -24,10 +25,20 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// When the aggregations include <see cref="CkRollupFunction.TimeWeightedAvg"/> over a raw
 /// (event-based) source, the statement is restructured around a nested LOCF sub-select: a
 /// carry-in row per <c>rtId</c> (latest observation before the bucket, bounded by
-/// <paramref name="carryLookback"/>) is unioned with the in-bucket events, each observation is
+/// <c>carryLookback</c>) is unioned with the in-bucket events, each observation is
 /// weighted by the interval to the next observation via <c>LEAD</c>, and the bucket materialises
 /// an integral / covered-duration column pair. Plain aggregations in the same statement exclude
 /// the carry row. See <c>concept-time-weighted-aggregation.md</c> (AB#4336) §5.
+/// </para>
+/// <para>
+/// Per-source resolution (AB#5157 §3): the statement is built from a
+/// <see cref="RollupSourceAggregation"/> list — every target column bound to the physical column
+/// it reads <em>on this source</em>. A base source binds a spec to its own path (rule 1,
+/// unchanged SQL); a rollup source that stores the same logical aggregation binds the parent's
+/// targets to the child's target columns, read function-preserving (rule 2): the child's <c>_sum</c>
+/// / <c>_count</c> / <c>_integral</c> / <c>_duration</c> / Count / StateDuration columns are summed,
+/// Min / Max nest, First / Last pick the child's value at the earliest / latest child window.
+/// Rule-2 sources are always windowed, so they never take the LOCF path.
 /// </para>
 /// </remarks>
 internal static class RollupAggregationSqlBuilder
@@ -40,8 +51,12 @@ internal static class RollupAggregationSqlBuilder
     public static readonly TimeSpan DefaultCarryLookback = TimeSpan.FromDays(35);
 
     /// <summary>
-    /// Builds the upsert statement for one aggregation bucket. The caller supplies already-quoted,
-    /// schema-qualified table identifiers (use <see cref="TenantSchema.QualifiedArchiveTable"/>).
+    /// Builds the upsert statement for one aggregation bucket over a source that declares every
+    /// spec's <see cref="CkRollupAggregationSpec.SourcePath"/> verbatim (rule 1 for all specs) —
+    /// the pre-AB#5157 shape, which is what every base (raw / time-range) source and every
+    /// physical-name chained spec still gets. Equivalent to binding each spec via
+    /// <see cref="RollupAggregationColumns.BindDeclared"/> and calling the per-source overload.
+    /// Production callers resolve per source; this overload exists for those bindings and for tests.
     /// </summary>
     /// <param name="sourceTable">Schema-qualified, double-quoted source archive table.</param>
     /// <param name="targetTable">Schema-qualified, double-quoted rollup archive table.</param>
@@ -52,6 +67,47 @@ internal static class RollupAggregationSqlBuilder
     /// <param name="aggregations">User-defined aggregation specs. Must contain at least one entry.</param>
     /// <param name="bucketStart">Inclusive start of the source row range.</param>
     /// <param name="bucketEnd">Exclusive end of the source row range; also written as the target row's timestamp.</param>
+    /// <param name="sourceUsesWindowedStorage">See the per-source overload.</param>
+    /// <param name="rtIdScope">See the per-source overload.</param>
+    /// <param name="carryLookback">See the per-source overload.</param>
+    public static string Build(
+        string sourceTable,
+        string targetTable,
+        string rollupCkTypeId,
+        IReadOnlyList<CkRollupAggregationSpec> aggregations,
+        DateTime bucketStart,
+        DateTime bucketEnd,
+        bool sourceUsesWindowedStorage,
+        string? rtIdScope = null,
+        TimeSpan? carryLookback = null)
+    {
+        if (aggregations is null || aggregations.Count == 0) throw new ArgumentException("At least one aggregation is required.", nameof(aggregations));
+
+        var resolved = new List<RollupSourceAggregation>(aggregations.Count);
+        foreach (var spec in aggregations)
+        {
+            resolved.Add(RollupAggregationColumns.BindDeclared(spec));
+        }
+
+        return Build(sourceTable, targetTable, rollupCkTypeId, resolved, bucketStart, bucketEnd,
+            sourceUsesWindowedStorage, rtIdScope, carryLookback);
+    }
+
+    /// <summary>
+    /// Builds the upsert statement for one aggregation bucket from the per-source binding of the
+    /// rollup's specs (AB#5157 §3; see <see cref="RollupAggregationColumns.ResolveForSource(System.Collections.Generic.IReadOnlyList{CkRollupAggregationSpec}, Meshmakers.Octo.ConstructionKit.Contracts.OctoObjectId, ArchiveSnapshot, RollupArchiveSnapshot?)"/>).
+    /// The caller supplies already-quoted, schema-qualified table identifiers (use
+    /// <see cref="TenantSchema.QualifiedArchiveTable"/>).
+    /// </summary>
+    /// <param name="sourceTable">Schema-qualified, double-quoted source archive table.</param>
+    /// <param name="targetTable">Schema-qualified, double-quoted rollup archive table.</param>
+    /// <param name="rollupCkTypeId">
+    /// Constant value written into the rollup's <c>ckTypeId</c> column. Stored so consumers can tell
+    /// rollup rows apart from raw rows when both share a CrateDB cluster.
+    /// </param>
+    /// <param name="resolved">The rollup's specs bound to this source's columns. Must contain at least one entry.</param>
+    /// <param name="bucketStart">Inclusive start of the source row range.</param>
+    /// <param name="bucketEnd">Exclusive end of the source row range; also written as the target row's timestamp.</param>
     /// <param name="sourceUsesWindowedStorage">
     /// True when the source archive uses the windowed <c>(window_start, window_end)</c> storage
     /// layout (either a <c>TimeRangeArchive</c> or a <c>RollupArchive</c>). In that case the time
@@ -59,7 +115,8 @@ internal static class RollupAggregationSqlBuilder
     /// and <c>was_updated</c> from the source is propagated via <c>MAX(was_updated)</c> so retro-
     /// corrections cascade. False ⇒ raw archive with the single <c>timestamp</c> column and the
     /// half-open <c>timestamp &gt;= B_start AND timestamp &lt; B_end</c> predicate. Phase 8 / concept-time-
-    /// range §7.
+    /// range §7. Must be true when any binding is a rule-2 (child aggregation) binding — a rollup
+    /// source is always windowed.
     /// </param>
     /// <param name="rtIdScope">
     /// Optional single-entity scope (AB#4184): restricts the aggregation to one source entity.
@@ -73,7 +130,7 @@ internal static class RollupAggregationSqlBuilder
         string sourceTable,
         string targetTable,
         string rollupCkTypeId,
-        IReadOnlyList<CkRollupAggregationSpec> aggregations,
+        IReadOnlyList<RollupSourceAggregation> resolved,
         DateTime bucketStart,
         DateTime bucketEnd,
         bool sourceUsesWindowedStorage,
@@ -83,31 +140,36 @@ internal static class RollupAggregationSqlBuilder
         if (string.IsNullOrWhiteSpace(sourceTable)) throw new ArgumentException("sourceTable must not be empty.", nameof(sourceTable));
         if (string.IsNullOrWhiteSpace(targetTable)) throw new ArgumentException("targetTable must not be empty.", nameof(targetTable));
         if (string.IsNullOrWhiteSpace(rollupCkTypeId)) throw new ArgumentException("rollupCkTypeId must not be empty.", nameof(rollupCkTypeId));
-        if (aggregations is null || aggregations.Count == 0) throw new ArgumentException("At least one aggregation is required.", nameof(aggregations));
+        if (resolved is null || resolved.Count == 0) throw new ArgumentException("At least one aggregation is required.", nameof(resolved));
         if (bucketEnd <= bucketStart) throw new ArgumentException("bucketEnd must be greater than bucketStart.", nameof(bucketEnd));
 
-        // Resolve every spec to its (sourceColumn, target[]) pair once. The spec rides along so
-        // marker branches (TWA, StateDuration) can reach its ComparisonValue.
-        var resolved = new List<(CkRollupAggregationSpec Spec, string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)>(aggregations.Count);
+        // Target columns must be distinct across specs (same rule as the DDL generator) and a
+        // rule-2 binding only makes sense over a windowed (rollup) source.
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var spec in aggregations)
+        foreach (var agg in resolved)
         {
-            var (sourceColumn, targets) = RollupAggregationColumns.Resolve(spec);
-            foreach (var t in targets)
+            foreach (var c in agg.Columns)
             {
-                if (!seen.Add(t.ColumnName))
+                if (!seen.Add(c.ColumnName))
                 {
                     throw new ArgumentException(
-                        $"Duplicate target column '{t.ColumnName}' produced by aggregations — pick distinct TargetColumnName values.",
-                        nameof(aggregations));
+                        $"Duplicate target column '{c.ColumnName}' produced by aggregations — pick distinct TargetColumnName values.",
+                        nameof(resolved));
                 }
             }
-            resolved.Add((spec, sourceColumn, targets));
+
+            if (agg.Kind == RollupSourceColumnResolutionKind.ChildAggregation && !sourceUsesWindowedStorage)
+            {
+                throw new ArgumentException(
+                    $"Aggregation (SourcePath '{agg.Spec.SourcePath}', {agg.Spec.Function}) is bound to a child aggregation " +
+                    "of a rollup source, but the source is flagged as raw storage — a rollup source always uses windowed storage.",
+                    nameof(sourceUsesWindowedStorage));
+            }
         }
 
         // Both time-weighted functions need the LOCF carry over a raw source. AB#4336.
-        var hasTimeWeighted = aggregations.Any(a =>
-            a.Function is CkRollupFunction.TimeWeightedAvg or CkRollupFunction.StateDuration);
+        var hasTimeWeighted = resolved.Any(a =>
+            a.Spec.Function is CkRollupFunction.TimeWeightedAvg or CkRollupFunction.StateDuration);
         if (hasTimeWeighted && !sourceUsesWindowedStorage)
         {
             return BuildWithLocfCarry(
@@ -123,13 +185,15 @@ internal static class RollupAggregationSqlBuilder
     /// <summary>
     /// The pre-AB#4336 single-scan statement: plain SQL aggregates over the bucket's source rows.
     /// Also used when TimeWeightedAvg aggregates a windowed source (each row's weight is its own
-    /// window length — no LOCF needed, the windows are the coverage).
+    /// window length — no LOCF needed, the windows are the coverage), and for every rule-2
+    /// (child aggregation) binding, whose function tokens are plain <c>SUM</c> / <c>MIN</c> /
+    /// <c>MAX</c> or the First / Last markers.
     /// </summary>
     private static string BuildStandard(
         string sourceTable,
         string targetTable,
         string rollupCkTypeId,
-        IReadOnlyList<(CkRollupAggregationSpec Spec, string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)> resolved,
+        IReadOnlyList<RollupSourceAggregation> resolved,
         DateTime bucketStart,
         DateTime bucketEnd,
         bool sourceUsesWindowedStorage,
@@ -167,14 +231,15 @@ internal static class RollupAggregationSqlBuilder
         // array argument, so the value at the earliest / latest observation is picked via a
         // ROW_NUMBER window computed in a wrapping sub-select (AppendArgSourceSubquery below); the
         // outer aggregate reads the value of the row ranked 1 (MAX over the single non-null CASE).
-        var hasArg = resolved.Any(r => r.Targets.Any(t =>
-            t.Function is RollupAggregationColumns.FirstMarker or RollupAggregationColumns.LastMarker));
-        foreach (var (spec, sourceColumn, targets) in resolved)
+        var hasArg = HasArgBinding(resolved);
+        foreach (var agg in resolved)
         {
-            foreach (var t in targets)
+            var spec = agg.Spec;
+            foreach (var c in agg.Columns)
             {
+                var sourceColumn = c.SourceColumn;
                 sb.Append(", ");
-                switch (t.Function)
+                switch (c.Function)
                 {
                     case RollupAggregationColumns.TimeWeightedIntegral:
                         sb.Append("SUM(CASE WHEN \"").Append(sourceColumn).Append("\" IS NOT NULL THEN \"")
@@ -201,10 +266,10 @@ internal static class RollupAggregationSqlBuilder
                           .Append(sourceColumn).Append("\" END)");
                         break;
                     default:
-                        sb.Append(t.Function).Append("(\"").Append(sourceColumn).Append("\")");
+                        sb.Append(c.Function).Append("(\"").Append(sourceColumn).Append("\")");
                         break;
                 }
-                sb.Append(" AS \"").Append(t.ColumnName).Append('"');
+                sb.Append(" AS \"").Append(c.ColumnName).Append('"');
             }
         }
         sb.Append(", 0 AS \"").Append(Constants.Generation).Append('"');
@@ -232,18 +297,47 @@ internal static class RollupAggregationSqlBuilder
     /// <summary>Rank column: latest in-bucket observation per rtId (ROW_NUMBER, descending time).</summary>
     private const string RnLastColumn = "_rn_last";
 
+    /// <summary>True when any bound target column is a First / Last marker (needs the rank sub-select).</summary>
+    private static bool HasArgBinding(IReadOnlyList<RollupSourceAggregation> resolved) =>
+        resolved.Any(r => r.Columns.Any(c =>
+            c.Function is RollupAggregationColumns.FirstMarker or RollupAggregationColumns.LastMarker));
+
+    /// <summary>
+    /// Distinct physical source columns referenced by any binding, in order of first appearance —
+    /// the sub-selects must project every column the outer aggregates read by name.
+    /// </summary>
+    private static List<string> DistinctSourceColumns(IReadOnlyList<RollupSourceAggregation> resolved)
+    {
+        var sourceColumns = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var agg in resolved)
+        {
+            foreach (var c in agg.Columns)
+            {
+                if (seen.Add(c.SourceColumn))
+                {
+                    sourceColumns.Add(c.SourceColumn);
+                }
+            }
+        }
+
+        return sourceColumns;
+    }
+
     /// <summary>
     /// Emits the <c>FROM (SELECT …, ROW_NUMBER() …) src</c> sub-select that annotates every source
     /// row with its ascending / descending time rank per <c>rtId</c>, so the outer GROUP BY can pick
     /// the First / Last value (AB#4188). The projection carries every column the outer aggregates
     /// reference (rtId, well-known-name, the windowed <c>was_updated</c> + window bounds, and each
     /// distinct source column). Ordering key: the raw <c>timestamp</c> for a raw source, the child
-    /// <c>window_end</c> for a windowed / cascade source.
+    /// <c>window_end</c> for a windowed / cascade source (for non-overlapping child windows this is
+    /// the same order as <c>window_start</c>, so a rule-2 First / Last picks the earliest / latest
+    /// child window).
     /// </summary>
     private static void AppendArgSourceSubquery(
         StringBuilder sb,
         string sourceTable,
-        IReadOnlyList<(CkRollupAggregationSpec Spec, string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)> resolved,
+        IReadOnlyList<RollupSourceAggregation> resolved,
         string bucketStartLiteral,
         string bucketEndLiteral,
         bool sourceUsesWindowedStorage,
@@ -252,15 +346,7 @@ internal static class RollupAggregationSqlBuilder
         var orderColumn = sourceUsesWindowedStorage ? Constants.WindowEnd : Constants.Timestamp;
 
         // Distinct source columns referenced by any spec — the outer aggregates read them by name.
-        var sourceColumns = new List<string>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (_, sourceColumn, _) in resolved)
-        {
-            if (seen.Add(sourceColumn))
-            {
-                sourceColumns.Add(sourceColumn);
-            }
-        }
+        var sourceColumns = DistinctSourceColumns(resolved);
 
         sb.AppendLine("FROM (");
         sb.Append("    SELECT \"").Append(Constants.RtId).Append("\", \"").Append(Constants.RtWellKnownName).Append('"');
@@ -329,7 +415,7 @@ internal static class RollupAggregationSqlBuilder
         string sourceTable,
         string targetTable,
         string rollupCkTypeId,
-        IReadOnlyList<(CkRollupAggregationSpec Spec, string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)> resolved,
+        IReadOnlyList<RollupSourceAggregation> resolved,
         DateTime bucketStart,
         DateTime bucketEnd,
         string? rtIdScope,
@@ -341,22 +427,13 @@ internal static class RollupAggregationSqlBuilder
         var carryFromLiteral = (bucketStart.ToUniversalTime() - carryLookback).ToString("O", CultureInfo.InvariantCulture);
 
         // Distinct source columns referenced by any spec — the event rows must carry all of them.
-        var sourceColumns = new List<string>();
-        var seenColumns = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (_, sourceColumn, _) in resolved)
-        {
-            if (seenColumns.Add(sourceColumn))
-            {
-                sourceColumns.Add(sourceColumn);
-            }
-        }
+        var sourceColumns = DistinctSourceColumns(resolved);
         var sourceColumnList = string.Join(", ", sourceColumns.Select(c => $"\"{c}\""));
 
         // First / Last co-occurring with a time-weighted aggregation (AB#4188): the weighted
         // sub-select gains two rank columns so the outer GROUP BY can pick the earliest / latest
         // in-bucket value. Carry rows sort last (they are not real in-bucket observations).
-        var hasArg = resolved.Any(r => r.Targets.Any(t =>
-            t.Function is RollupAggregationColumns.FirstMarker or RollupAggregationColumns.LastMarker));
+        var hasArg = HasArgBinding(resolved);
 
         var scopePredicate = string.IsNullOrEmpty(rtIdScope)
             ? string.Empty
@@ -369,12 +446,14 @@ internal static class RollupAggregationSqlBuilder
           .Append('"').Append(Constants.RtId).Append("\", ")
           .Append('\'').Append(EscapeLiteral(rollupCkTypeId)).Append("' AS \"").Append(Constants.CkTypeId).Append("\", ")
           .Append("MAX(\"").Append(Constants.RtWellKnownName).Append("\") AS \"").Append(Constants.RtWellKnownName).Append('"');
-        foreach (var (spec, sourceColumn, targets) in resolved)
+        foreach (var agg in resolved)
         {
-            foreach (var t in targets)
+            var spec = agg.Spec;
+            foreach (var c in agg.Columns)
             {
+                var sourceColumn = c.SourceColumn;
                 sb.Append(", ");
-                switch (t.Function)
+                switch (c.Function)
                 {
                     case RollupAggregationColumns.TimeWeightedIntegral:
                         // Σ value × Δt(ms). NULL observations contribute nothing — the signal is
@@ -408,11 +487,11 @@ internal static class RollupAggregationSqlBuilder
                         // Plain aggregations must not see the carry-in virtual row — it lies
                         // outside the bucket. CASE-guard on is_carry keeps their semantics
                         // identical to the standard statement.
-                        sb.Append(t.Function).Append("(CASE WHEN NOT \"is_carry\" THEN \"")
+                        sb.Append(c.Function).Append("(CASE WHEN NOT \"is_carry\" THEN \"")
                           .Append(sourceColumn).Append("\" END)");
                         break;
                 }
-                sb.Append(" AS \"").Append(t.ColumnName).Append('"');
+                sb.Append(" AS \"").Append(c.ColumnName).Append('"');
             }
         }
         sb.Append(", 0 AS \"").Append(Constants.Generation).Append('"');
@@ -487,7 +566,7 @@ internal static class RollupAggregationSqlBuilder
     private static void AppendInsertColumnList(
         StringBuilder sb,
         string targetTable,
-        IReadOnlyList<(CkRollupAggregationSpec Spec, string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)> resolved,
+        IReadOnlyList<RollupSourceAggregation> resolved,
         bool includeWasUpdated)
     {
         sb.Append("INSERT INTO ").Append(targetTable).Append(" (")
@@ -500,11 +579,11 @@ internal static class RollupAggregationSqlBuilder
         {
             sb.Append(", \"").Append(Constants.WasUpdated).Append('"');
         }
-        foreach (var (_, _, targets) in resolved)
+        foreach (var agg in resolved)
         {
-            foreach (var t in targets)
+            foreach (var c in agg.Columns)
             {
-                sb.Append(", \"").Append(t.ColumnName).Append('"');
+                sb.Append(", \"").Append(c.ColumnName).Append('"');
             }
         }
         // Phase 6: forward aggregation always writes generation 0 (the steady-state generation);
@@ -515,7 +594,7 @@ internal static class RollupAggregationSqlBuilder
 
     private static void AppendConflictClause(
         StringBuilder sb,
-        IReadOnlyList<(CkRollupAggregationSpec Spec, string SourceColumn, IReadOnlyList<RollupTargetColumn> Targets)> resolved)
+        IReadOnlyList<RollupSourceAggregation> resolved)
     {
         // ---- ON CONFLICT (window_start, window_end, rtId, ckTypeId) DO UPDATE SET ... ----
         // Same conflict key as TimeRangeArchive — same was_updated semantics: the orchestrator
@@ -526,11 +605,11 @@ internal static class RollupAggregationSqlBuilder
         // row, while recomputed higher-generation rows for the same window are left untouched.
         sb.Append("ON CONFLICT (\"").Append(Constants.WindowStart).Append("\", \"").Append(Constants.WindowEnd).Append("\", \"").Append(Constants.RtId).Append("\", \"").Append(Constants.CkTypeId).Append("\", \"").Append(Constants.Generation).AppendLine("\") DO UPDATE SET");
         sb.Append("    \"").Append(Constants.RtWellKnownName).Append("\" = EXCLUDED.\"").Append(Constants.RtWellKnownName).Append('"');
-        foreach (var (_, _, targets) in resolved)
+        foreach (var agg in resolved)
         {
-            foreach (var t in targets)
+            foreach (var c in agg.Columns)
             {
-                sb.Append(",\n    \"").Append(t.ColumnName).Append("\" = EXCLUDED.\"").Append(t.ColumnName).Append('"');
+                sb.Append(",\n    \"").Append(c.ColumnName).Append("\" = EXCLUDED.\"").Append(c.ColumnName).Append('"');
             }
         }
         sb.Append(",\n    \"").Append(Constants.WasUpdated).Append("\" = TRUE");

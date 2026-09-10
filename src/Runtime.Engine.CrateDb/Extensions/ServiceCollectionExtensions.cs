@@ -1,6 +1,7 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -34,6 +35,10 @@ public static class ServiceCollectionExtensions
         // returns null and `IArchiveLifecycleService` is unavailable — both invariants production
         // callers depend on. Keeps this extension symmetric with `AddCrateDbStreamDataRepository`.
         services.AddSingleton<IStreamDataRepositoryFactory, CrateDbStreamDataRepositoryFactory>();
+
+        // AB#5157: process-wide archive coverage memo (also exposed as IArchiveCoverageInvalidator),
+        // registered here too so both entry points wire the same coverage cache.
+        services.AddArchiveCoverageCache();
 
         return services;
     }

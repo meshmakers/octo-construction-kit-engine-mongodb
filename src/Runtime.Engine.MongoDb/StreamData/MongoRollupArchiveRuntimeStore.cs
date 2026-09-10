@@ -1,5 +1,6 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Models.StreamData.Generated.System.StreamData.v1;
+using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
@@ -52,7 +53,7 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
     public async Task<OctoObjectId> InsertAsync(
         string? rtWellKnownName,
         RtCkId<CkTypeId> targetCkTypeId,
-        OctoObjectId sourceArchiveRtId,
+        IReadOnlyList<RollupSourceReference> sources,
         TimeSpan bucketSize,
         TimeSpan watermarkLag,
         IReadOnlyList<CkRollupAggregationSpec> aggregations,
@@ -60,6 +61,33 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
         BucketAlignment bucketAlignment = BucketAlignment.FixedSize,
         string? referenceTimeZone = null,
         TimeSpan? carryLookback = null)
+    {
+        var entity = BuildInsertEntity(
+            rtWellKnownName, targetCkTypeId, sources, bucketSize, watermarkLag, aggregations, columns,
+            bucketAlignment, referenceTimeZone, carryLookback);
+
+        var session = await _tenantRepository.GetSessionAsync();
+        await _tenantRepository.InsertOneRtEntityAsync(session, entity);
+        return entity.RtId;
+    }
+
+    /// <summary>
+    /// Builds the <c>CkRollupArchive</c> entity <see cref="InsertAsync"/> persists. Split out so the
+    /// entity shape — above all that the multi-source declaration lands in <c>Sources</c> and the
+    /// deprecated <c>SourceArchiveRtId</c> scalar stays unset (AB#5157, System.StreamData 1.8.0) — is
+    /// testable without a MongoDB session.
+    /// </summary>
+    internal static RtRollupArchive BuildInsertEntity(
+        string? rtWellKnownName,
+        RtCkId<CkTypeId> targetCkTypeId,
+        IReadOnlyList<RollupSourceReference> sources,
+        TimeSpan bucketSize,
+        TimeSpan watermarkLag,
+        IReadOnlyList<CkRollupAggregationSpec> aggregations,
+        IReadOnlyList<CkArchiveColumnSpec> columns,
+        BucketAlignment bucketAlignment,
+        string? referenceTimeZone,
+        TimeSpan? carryLookback)
     {
         var columnList = new AttributeRecordValueList<RtCkArchiveColumnRecord>();
         columnList.AddRange(columns.Select(c => new RtCkArchiveColumnRecord
@@ -78,12 +106,23 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             ComparisonValue = a.ComparisonValue,
         }));
 
-        var entity = new RtRollupArchive
+        // AB#5157: the source declaration is written to Sources ONLY. The deprecated SourceArchiveRtId
+        // scalar is never written by the platform — a set scalar is a legacy / ImportRt artefact that
+        // NormaliseSources folds into one unbounded reference on the read side.
+        var sourceList = new AttributeRecordValueList<RtCkRollupSourceReferenceRecord>();
+        sourceList.AddRange(sources.Select(s => new RtCkRollupSourceReferenceRecord
+        {
+            SourceArchiveRtId = s.SourceArchiveRtId.ToString(),
+            ValidFrom = s.ValidFrom,
+            ValidTo = s.ValidTo,
+        }));
+
+        return new RtRollupArchive
         {
             RtWellKnownName = rtWellKnownName,
             TargetCkTypeId = targetCkTypeId.ToString(),
             Status = RtCkArchiveStatusEnum.Created,
-            SourceArchiveRtId = sourceArchiveRtId.ToString(),
+            Sources = sourceList,
             // AB#4281: BucketSizeMs / WatermarkLagMs are Int64 (System.StreamData 1.6.3). Cast to long
             // — a calendar-month (2,419,200,000 ms) or calendar-year (31,536,000,000 ms) bucket width
             // exceeds Int32.MaxValue, so an (int) cast would silently truncate before the widening.
@@ -104,10 +143,6 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             Columns = columnList,
             Aggregations = aggregationList,
         };
-
-        var session = await _tenantRepository.GetSessionAsync();
-        await _tenantRepository.InsertOneRtEntityAsync(session, entity);
-        return entity.RtId;
     }
 
     /// <inheritdoc />
@@ -256,17 +291,96 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
         var queryOptions = RtEntityQueryOptions.Create();
         var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtRollupArchive>(session, queryOptions);
 
-        var sourceId = sourceArchiveRtId.ToString();
         var count = 0;
         foreach (var entity in result.Items)
         {
             if (entity.RtState == RtState.Archived) continue;
-            if (string.Equals(entity.SourceArchiveRtId, sourceId, StringComparison.Ordinal))
+            // "Lists this archive among its sources" regardless of the validity span, and
+            // regardless of which storage form (Sources list / deprecated scalar) declares it —
+            // the snapshot mapping is the single normalisation point (AB#5157).
+            if (MapToSnapshot(entity).HasSource(sourceArchiveRtId))
             {
                 count++;
             }
         }
         return count;
+    }
+
+    /// <summary>
+    /// The single normalisation point for a rollup's source declaration (AB#5157, System.StreamData
+    /// 1.8.0) — the ONLY reader of the entity's <c>Sources</c> and deprecated <c>SourceArchiveRtId</c>
+    /// attributes in the workspace. Every engine consumer works on the normalised
+    /// <see cref="RollupArchiveSnapshot.Sources"/> list alone.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Rule: a non-empty <c>Sources</c> list wins. Otherwise a set scalar becomes exactly one
+    /// unbounded <see cref="RollupSourceReference"/>. When both are set there is no conflict if
+    /// <c>Sources</c> is exactly one unbounded reference to the same archive; otherwise the list is
+    /// KEPT as the authoritative declaration and the scalar is reported as
+    /// <c>Conflicting</c> so activation can reject the entity instead of silently picking one form.
+    /// Neither set ⇒ empty list.
+    /// </para>
+    /// <para>
+    /// Reads go through the OrDefault accessors, never the generated getters: ImportRt-seeded
+    /// entities can lack attributes entirely, and a mandatory-attribute getter throws on absence.
+    /// Malformed ids are skipped rather than thrown, so enumeration never fails on one bad entity.
+    /// </para>
+    /// </remarks>
+    internal static (IReadOnlyList<RollupSourceReference> Sources, OctoObjectId? Conflicting) NormaliseSources(
+        RtRollupArchive entity)
+    {
+        OctoObjectId? scalar = TryParseId(entity.GetAttributeStringValueOrDefault("SourceArchiveRtId"));
+
+        var sources = new List<RollupSourceReference>();
+        IEnumerable<RtCkRollupSourceReferenceRecord>? records = null;
+        try
+        {
+            records = entity.GetRtRecordAttributeValuesOrDefault<RtCkRollupSourceReferenceRecord>("Sources");
+        }
+        catch (InvalidAttributeValueException)
+        {
+            // An attribute of an unexpected shape (hand-edited seed) reads as "no list declared".
+        }
+
+        foreach (var record in records ?? Enumerable.Empty<RtCkRollupSourceReferenceRecord>())
+        {
+            var id = TryParseId(record.GetAttributeStringValueOrDefault("SourceArchiveRtId"));
+            if (id is not { } sourceId)
+            {
+                continue;
+            }
+
+            sources.Add(new RollupSourceReference(
+                sourceId,
+                record.GetAttributeValueOrDefault<DateTime>("ValidFrom"),
+                record.GetAttributeValueOrDefault<DateTime>("ValidTo")));
+        }
+
+        if (sources.Count == 0)
+        {
+            return scalar is { } legacy
+                ? (new[] { new RollupSourceReference(legacy) }, null)
+                : (Array.Empty<RollupSourceReference>(), null);
+        }
+
+        if (scalar is not { } scalarId)
+        {
+            return (sources, null);
+        }
+
+        var consistent = sources is [{ IsUnbounded: true } single] && single.SourceArchiveRtId == scalarId;
+        return (sources, consistent ? null : scalarId);
+    }
+
+    private static OctoObjectId? TryParseId(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        return OctoObjectId.TryParse(raw, out var id) ? id : null;
     }
 
     private static RollupArchiveSnapshot MapToSnapshot(RtRollupArchive entity)
@@ -276,9 +390,7 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             ? new RtCkId<CkTypeId>(string.Empty)
             : new RtCkId<CkTypeId>(entity.TargetCkTypeId);
 
-        var sourceArchiveRtId = string.IsNullOrEmpty(entity.SourceArchiveRtId)
-            ? default
-            : new OctoObjectId(entity.SourceArchiveRtId);
+        var (sources, conflictingSourceArchiveRtId) = NormaliseSources(entity);
 
         var aggregations = (entity.Aggregations ?? Enumerable.Empty<RtCkRollupAggregationRecord>())
             .Where(a => a.SourcePath is not null)
@@ -301,13 +413,16 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             targetCkTypeId,
             status,
             entity.RtWellKnownName,
-            sourceArchiveRtId,
+            sources,
             TimeSpan.FromMilliseconds(entity.BucketSizeMs),
             TimeSpan.FromMilliseconds(entity.WatermarkLagMs),
             entity.LastAggregatedBucketEnd,
             aggregations,
             entity.FrozenUntil)
         {
+            // AB#5157: set only when both storage forms disagree — Sources stays authoritative so
+            // enumeration never throws; activation rejects the flagged entity.
+            ConflictingSourceArchiveRtId = conflictingSourceArchiveRtId,
             BucketAlignment = bucketAlignment,
             // AB#4772: flags entities lacking the dehydrated aggregate-column cache (ImportRt
             // seeds) so the orchestrator tick / lifecycle can heal via

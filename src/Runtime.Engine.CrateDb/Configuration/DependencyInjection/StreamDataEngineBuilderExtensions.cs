@@ -4,6 +4,7 @@ using Meshmakers.Octo.Runtime.Engine.Configuration.DependencyInjection;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 
@@ -51,6 +52,10 @@ public static class StreamDataEngineBuilderExtensions
         builder.Services.AddSingleton<ICrateDbConnectionAccess, CrateDbConnectionAccess>();
 
         builder.Services.AddSingleton<IStreamDataRepositoryFactory, CrateDbStreamDataRepositoryFactory>();
+
+        // AB#5157: process-wide archive coverage memo (also exposed as IArchiveCoverageInvalidator).
+        // Hosts bind ArchiveCoverageOptions from StreamData:Coverage; unbound ⇒ the 60 s default.
+        builder.Services.AddArchiveCoverageCache();
 
         return builder;
     }

@@ -105,34 +105,82 @@ public static class RollupChainAggregationResolver
     /// we recurse: source origins tell us what each parent physical column represents, then we
     /// propagate that meaning through each spec on the current rollup, validating chain rules.
     /// </summary>
-    private static async Task<IReadOnlyList<LogicalOriginColumn>> BuildOriginsAsync(
+    /// <remarks>
+    /// Multi-source rollups (AB#5157): every declared source is walked and the origin lists are
+    /// unioned, de-duplicated on <see cref="LogicalOriginColumn.PhysicalColumnName"/> with the first
+    /// seen (declaration order) winning — two time-disjoint sources materialise the same physical
+    /// columns on this rollup, so the union must not double a column. A rollup already on the
+    /// current descent path contributes nothing (cycle guard); a diamond (two branches reaching the
+    /// same ancestor) is walked once per branch and de-duplicated. Internal for the unit tests.
+    /// </remarks>
+    internal static Task<IReadOnlyList<LogicalOriginColumn>> BuildOriginsAsync(
         RollupArchiveSnapshot rollup,
         Func<OctoObjectId, Task<ArchiveSnapshot?>> getArchive,
         Func<OctoObjectId, Task<RollupArchiveSnapshot?>> getRollup,
         CancellationToken cancellationToken)
+        => BuildOriginsAsync(rollup, getArchive, getRollup, new HashSet<OctoObjectId>(), cancellationToken);
+
+    private static async Task<IReadOnlyList<LogicalOriginColumn>> BuildOriginsAsync(
+        RollupArchiveSnapshot rollup,
+        Func<OctoObjectId, Task<ArchiveSnapshot?>> getArchive,
+        Func<OctoObjectId, Task<RollupArchiveSnapshot?>> getRollup,
+        HashSet<OctoObjectId> visiting,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var sourceSnapshot = await getArchive(rollup.SourceArchiveRtId).ConfigureAwait(false);
-        if (sourceSnapshot is null)
+        if (!visiting.Add(rollup.RtId))
         {
-            return Array.Empty<LogicalOriginColumn>();
+            return Array.Empty<LogicalOriginColumn>(); // cycle — store inconsistency, fail soft
         }
 
-        if (sourceSnapshot.RollupAggregations is null)
+        try
         {
-            // Direct rollup over raw / time-range — sourcePath is the logical CK attribute path.
-            return BuildDirectOrigins(rollup);
-        }
+            var seenColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var result = new List<LogicalOriginColumn>();
+            foreach (var source in rollup.Sources)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var sourceSnapshot = await getArchive(source.SourceArchiveRtId).ConfigureAwait(false);
+                if (sourceSnapshot is null)
+                {
+                    continue; // this branch is broken (missing parent) — the others may still resolve
+                }
 
-        // Cascade rollup — recurse for source's origins, then propagate.
-        var sourceRollup = await getRollup(rollup.SourceArchiveRtId).ConfigureAwait(false);
-        if (sourceRollup is null)
+                IReadOnlyList<LogicalOriginColumn> origins;
+                if (sourceSnapshot.RollupAggregations is null)
+                {
+                    // Direct rollup over raw / time-range — sourcePath is the logical CK attribute path.
+                    origins = BuildDirectOrigins(rollup);
+                }
+                else
+                {
+                    // Cascade rollup — recurse for source's origins, then propagate.
+                    var sourceRollup = await getRollup(source.SourceArchiveRtId).ConfigureAwait(false);
+                    if (sourceRollup is null)
+                    {
+                        continue;
+                    }
+
+                    var sourceOrigins = await BuildOriginsAsync(sourceRollup, getArchive, getRollup, visiting, cancellationToken)
+                        .ConfigureAwait(false);
+                    origins = BuildCascadeOrigins(rollup, sourceOrigins);
+                }
+
+                foreach (var origin in origins)
+                {
+                    if (seenColumns.Add(origin.PhysicalColumnName))
+                    {
+                        result.Add(origin);
+                    }
+                }
+            }
+
+            return result;
+        }
+        finally
         {
-            return Array.Empty<LogicalOriginColumn>();
+            visiting.Remove(rollup.RtId);
         }
-
-        var sourceOrigins = await BuildOriginsAsync(sourceRollup, getArchive, getRollup, cancellationToken).ConfigureAwait(false);
-        return BuildCascadeOrigins(rollup, sourceOrigins);
     }
 
     private static List<LogicalOriginColumn> BuildDirectOrigins(RollupArchiveSnapshot rollup)
