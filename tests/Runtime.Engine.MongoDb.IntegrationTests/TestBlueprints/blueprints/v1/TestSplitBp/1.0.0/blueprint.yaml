@@ -1,0 +1,10 @@
+$schema: https://schemas.meshmakers.cloud/blueprint-meta.schema.json
+blueprintId: TestSplitBp-1.0.0
+description: Same seed as TestBp-1.0.0, split across three files in two folders (AB#4758)
+ckModelDependencies:
+  - System-[2.0,3.0)
+  - Test-[1.0,2.0)
+seedDataPaths:
+  - seed-data/customers/alpha.yaml
+  - seed-data/customers/beta.yaml
+  - seed-data/geo/continents.yaml

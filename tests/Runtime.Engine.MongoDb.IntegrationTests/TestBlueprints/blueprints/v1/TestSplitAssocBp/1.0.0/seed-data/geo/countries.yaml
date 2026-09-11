@@ -1,0 +1,17 @@
+$schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+dependencies:
+  - System-2.0.0
+  - Test-1.0.0
+entities:
+  - rtId: 507f1f77bcf86cd7994390a1
+    ckTypeId: Test/Country
+    rtWellKnownName: Austria
+    attributes:
+      - id: Test/Name
+        value: Austria
+      - id: Test/ISOCode
+        value: AT
+    associations:
+      - roleId: System/ParentChild
+        targetRtId: 507f1f77bcf86cd7994390a0
+        targetCkTypeId: Test/Continent
