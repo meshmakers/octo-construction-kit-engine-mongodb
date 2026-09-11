@@ -220,6 +220,14 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
                 string.IsNullOrEmpty(scope) ? null : scope),
             cancellationToken);
 
+        // 3b. Drop the pointer entries the flip just made redundant (AB#5189). The pointer is keyed
+        // on the exact range, so a recompute over a different range adds an entry rather than
+        // replacing the old one; after the sweep above, an entry contained in this range points at
+        // rows that no longer exist. Left alone they accumulate for the life of the rollup.
+        await _databaseClient.ExecuteNonQueryAsync(_tenantId,
+            GenerationMapSqlBuilder.BuildDeleteContainedPointers(genMapTable, rangeStart, rangeEnd, scope),
+            cancellationToken);
+
         // 4. Drop staging.
         await _managementClient.ExecuteDdlAsync(_tenantId, RollupRecomputeSqlBuilder.BuildDropIfExists(stagingTable));
 

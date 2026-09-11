@@ -73,6 +73,32 @@ public sealed class MongoArchiveRecomputeStateStore : IArchiveRecomputeStateStor
             entity.PendingRecomputeRanges = new AttributeRecordValueList<RtCkArchiveRecomputeRangeRecord>());
 
     /// <inheritdoc />
+    public Task UpdatePendingRecomputeRangesAsync(
+        OctoObjectId archiveRtId,
+        IReadOnlyList<ArchiveRecomputeRange> remove,
+        IReadOnlyList<ArchiveRecomputeRange> add)
+    {
+        if (remove.Count == 0 && add.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        return MutateAsync(archiveRtId, entity =>
+        {
+            var existing = entity.PendingRecomputeRanges ?? Enumerable.Empty<RtCkArchiveRecomputeRangeRecord>();
+            var list = new AttributeRecordValueList<RtCkArchiveRecomputeRangeRecord>();
+            // Removal is by value: the stored record is mapped back to the contract shape and
+            // compared with what the caller read earlier. FromRecord ∘ ToRecord is the identity on
+            // every field the record carries (pinned by MongoArchiveRecomputeStateStoreMappingTests),
+            // so a range read from this list is removed by handing it back unchanged.
+            var toRemove = remove.ToHashSet();
+            list.AddRange(existing.Where(record => !toRemove.Contains(FromRecord(record))));
+            list.AddRange(add.Select(ToRecord));
+            entity.PendingRecomputeRanges = list;
+        });
+    }
+
+    /// <inheritdoc />
     public Task MarkRecomputeStartedAsync(OctoObjectId archiveRtId, DateTime startedAt) =>
         MutateAsync(archiveRtId, entity =>
         {
@@ -135,19 +161,32 @@ public sealed class MongoArchiveRecomputeStateStore : IArchiveRecomputeStateStor
         (RecomputeChangeSource)(int)record.Source,
         record.DetectedAt);
 
-    private static RtCkArchiveRecomputeRangeRecord ToRecord(ArchiveRecomputeRange range) => new()
+    /// <summary>Contract → stored record. Internal for the mapping tests.</summary>
+    internal static RtCkArchiveRecomputeRangeRecord ToRecord(ArchiveRecomputeRange range) => new()
     {
         DependentArchiveRtId = range.DependentArchiveRtId.ToString(),
         RangeStart = range.RangeStart,
         RangeEnd = range.RangeEnd,
         RtIdScope = range.RtIdScope?.ToString() ?? string.Empty,
         EnqueuedAt = range.EnqueuedAt,
+        // AB#5189 attempt tracking. Persisted so the backoff survives a service restart — the whole
+        // point is to stop a broken rollup burning a recompute run per tick indefinitely, and an
+        // in-memory counter would reset on every deployment.
+        Attempts = range.Attempts,
+        NextAttemptAt = range.NextAttemptAt,
+        LastError = range.LastError,
     };
 
-    private static ArchiveRecomputeRange FromRecord(RtCkArchiveRecomputeRangeRecord record) => new(
+    /// <summary>Stored record → contract. Internal for the mapping tests.</summary>
+    internal static ArchiveRecomputeRange FromRecord(RtCkArchiveRecomputeRangeRecord record) => new(
         string.IsNullOrEmpty(record.DependentArchiveRtId) ? default : new OctoObjectId(record.DependentArchiveRtId),
         record.RangeStart,
         record.RangeEnd,
         string.IsNullOrEmpty(record.RtIdScope) ? null : new OctoObjectId(record.RtIdScope),
-        record.EnqueuedAt);
+        record.EnqueuedAt,
+        // Ranges written before System.StreamData 1.9.0 have no attempt fields; they read back as
+        // (0, null, null) and are therefore treated as due on the next tick, at attempt zero.
+        record.Attempts,
+        record.NextAttemptAt,
+        string.IsNullOrEmpty(record.LastError) ? null : record.LastError);
 }

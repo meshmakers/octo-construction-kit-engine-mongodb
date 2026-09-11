@@ -12,8 +12,8 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// <remarks>
 /// <para>
 /// Layout: one row per recomputed half-open range <c>[range_start, range_end)</c> (epoch ms),
-/// optionally scoped to a single <c>rtid_scope</c> (empty string = all rtIds — the only shape the
-/// executor currently produces, since per-rtId recompute is not yet supported). The
+/// optionally scoped to a single <c>rtid_scope</c> (empty string = all rtIds; a per-rtId recompute
+/// writes the entity's rtId, and the executor restricts aggregation, pointer and sweep to it). The
 /// <c>generation</c> column is the active generation for that range: readers select
 /// <c>WHERE generation = active(window)</c> via a CASE built from these rows
 /// (<see cref="CrateQueryCompiler"/>), and the rollup table's generation column lets the previous
@@ -92,6 +92,39 @@ internal static class GenerationMapSqlBuilder
     /// </summary>
     public static string BuildDeleteGenerationsFrom(string genMapTable, DateTime fromBucketEnd) =>
         $"DELETE FROM {genMapTable} WHERE \"range_end\" > {ToEpochMs(fromBucketEnd)};";
+
+    /// <summary>
+    /// Builds the delete of every pointer entry whose range lies entirely inside <c>[from, to)</c>
+    /// other than the entry just flipped (AB#5189). Called right after the flip: the entry just
+    /// written covers those ranges at a strictly higher generation, and the post-flip sweep has
+    /// already removed the rows they pointed at, so they are dead weight — an entry pointing at a
+    /// generation that no longer exists in the table.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Deliberately <b>contained</b>, not overlapping: an entry reaching beyond the flipped range
+    /// still governs the part outside it, and dropping it would silently send that part back to
+    /// generation 0. The read filter is unaffected either way — it orders by generation descending
+    /// and the flipped entry is the highest — so this is table hygiene, not a correctness fix.
+    /// </para>
+    /// <para>
+    /// Scope follows the sweep: an unscoped flip (<paramref name="rtIdScope"/> empty) sweeps the
+    /// rows of every entity in the range, so a contained entry of <em>any</em> scope is dead and is
+    /// dropped; a scoped flip sweeps one entity's rows only, so only contained entries of that same
+    /// scope are.
+    /// </para>
+    /// </remarks>
+    public static string BuildDeleteContainedPointers(
+        string genMapTable, DateTime from, DateTime to, string rtIdScope)
+    {
+        var fromMs = ToEpochMs(from);
+        var toMs = ToEpochMs(to);
+        var scope = (rtIdScope ?? AllRtIdsScope).Replace("'", "''");
+        var scopeClause = scope.Length == 0 ? string.Empty : $" AND \"rtid_scope\" = '{scope}'";
+        return
+            $"DELETE FROM {genMapTable} WHERE \"range_start\" >= {fromMs} AND \"range_end\" <= {toMs}{scopeClause} " +
+            $"AND NOT (\"range_start\" = {fromMs} AND \"range_end\" = {toMs} AND \"rtid_scope\" = '{scope}');";
+    }
 
     private static string ToEpochMs(DateTime value)
     {

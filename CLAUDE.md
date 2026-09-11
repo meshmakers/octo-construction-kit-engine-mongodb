@@ -773,8 +773,9 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
   trade-off as the pre-Phase-7 single-timestamp migration). No-op once the column is present.
 - **Caveats:** rollup tables provisioned *before* Phase 6 lack the generation column/PK — handled by
   the upgrade self-heal above (dropped + recreated); `LoadGenerationRangesAsync` also tolerates a
-  missing genmap table on the read side. Per-rtId scoped recompute is still `NotSupported` in the
-  executor (genmap `rtid_scope` is always `''`). `rewindRollupWatermark` over a recomputed range is
+  missing genmap table on the read side. Per-rtId scoped recompute is supported: the executor restricts
+  aggregation, pointer entry (`rtid_scope` = the entity's rtId) and sweep to that entity, and since
+  AB#5189 the drain merges and runs obligations per scope. `rewindRollupWatermark` over a recomputed range is
   not reconciled with the genmap yet.
 
 ### Open-Bucket Refresh + Recompute Cap (AB#4306)
