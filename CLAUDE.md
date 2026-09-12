@@ -985,6 +985,36 @@ required to repopulate the flag — which is why the fix is paired with a `Syste
 patch bump (`ImportCkModelAsync` short-circuits on an already-installed version). Field name in
 Mongo is camelCase `isRuntimeState` (global `CamelCaseElementNameConvention`).
 
+### Attribute Ownership Round-Trip (AB#5187)
+
+`ownership` (`AttributeOwnershipDto`: `SeedOwned | TenantOwned | RuntimeState | Secret`) replaces
+the `isRuntimeState` boolean, which conflated "preserve on Upsert" with "exclude from `ExportRt`".
+It exists at TWO levels and both must survive the Mongo round-trip described above:
+
+1. **Definition** — `CkAttributeDto.Ownership` (nullable). Persisted on
+   `Repositories/Entities/CkAttribute.cs` next to the boolean; `ProcessCkAttributes` writes BOTH
+   (`IsRuntimeState` is now the computed mirror `Ownership.IsPreservedOnUpsert()`), and the
+   read-back in `TryLookupCkModelAsync` copies both.
+2. **Assignment** — `CkTypeAttributeDto.Ownership` (nullable, `null` = inherit from the
+   definition). Persisted on `Repositories/Entities/CkTypeAttribute.cs`, written by the single
+   `ProcessCkTypeAttributes` and read back at **three** distinct sites in `TryLookupCkModelAsync`
+   — records, types and association roles each build their own `CkTypeAttributeDto`. Miss one and
+   only that element silently loses its override.
+
+Both members are mapped `SetIgnoreIfDefault(true)` in `MongoRepositoryClient.RegisterClassMaps`, so
+an undeclared ownership stays absent from the document — the exact shape a pre-AB#5187 engine
+wrote. **Legacy documents:** absent → `Ownership == null` → `AttributeOwnership.Resolve(null,
+isRuntimeState)` maps the persisted boolean (`true` → `RuntimeState`, `false` → `SeedOwned`), so
+behaviour is unchanged and a flagged attribute never degrades to "seed wins" (which would let a
+re-apply overwrite credentials). Same operational caveat as AB#4589: a tenant keeps its
+ownership-less docs until the model is **re-imported**, and a re-import needs a version bump
+because `ImportCkModelAsync` short-circuits on an already-installed version.
+
+Pinned by `CkAttributeOwnershipPersistenceTests` (import → cache, definition + override at all
+three assignment sites, using `Test/OwnershipEntity`, `Test/OwnershipOverrideEntity`,
+`Test/OwnershipRecord` and the `Test/OwnershipLink` role) and `CkAttributeOwnershipLegacyDocumentTests`
+(BSON level, no DB: verbatim round-trip plus a document with the `ownership` element stripped).
+
 ### Extensible Enum Preservation on Import (WI #3324)
 
 `DatabaseCkModelRepository.PreserveExtensibleEnumValues` runs inside `ExecuteImport`

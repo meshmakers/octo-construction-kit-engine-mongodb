@@ -1,0 +1,11 @@
+$schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+dependencies:
+  - System-2.0.0
+  - Test-1.0.0
+entities:
+  - rtId: 507f1f77bcf86cd7994390a0
+    ckTypeId: Test/Continent
+    rtWellKnownName: EuropeAssoc
+    attributes:
+      - id: Test/Name
+        value: Europe

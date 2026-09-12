@@ -1,0 +1,14 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+# AB#5187: RECORD attribute assignments are one of the three places the compiled model is read
+# back from MongoDB (DatabaseCkModelRepository, CkRecordDto branch). The ApiKey assignment below
+# overrides the Secret definition, so a dropped override shows up here as Secret.
+records:
+  - recordId: OwnershipRecord
+    attributes:
+      - id: ${this}/ApiKey
+        name: ApiKey
+        isOptional: true
+        ownership: SeedOwned
+      - id: ${this}/TariffRate
+        name: TariffRate
+        isOptional: true

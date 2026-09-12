@@ -1,0 +1,11 @@
+$schema: https://schemas.meshmakers.cloud/blueprint-meta.schema.json
+blueprintId: TestSplitAssocBp-1.0.0
+description: Split seed whose first file associates to an entity declared in the last file (AB#4758)
+ckModelDependencies:
+  - System-[2.0,3.0)
+  - Test-[1.0,2.0)
+seedDataPaths:
+  # Deliberately listed BEFORE the file that declares the association target: the merged import
+  # writes all entities before any association, so the forward reference has to resolve.
+  - seed-data/geo/countries.yaml
+  - seed-data/geo/continents.yaml

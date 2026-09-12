@@ -1,0 +1,18 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+# AB#5187: ASSOCIATION-ROLE attribute assignments are the third read-back site of the compiled
+# model (DatabaseCkModelRepository, CkAssociationRoleDto branch).
+associationRoles:
+  - id: OwnershipLink
+    description: "Links ownership test entities; carries attributes so the association-role assignment site is covered (AB#5187)."
+    inboundName: OwnershipLinkedBy
+    inboundMultiplicity: N
+    outboundName: OwnershipLinks
+    outboundMultiplicity: N
+    attributes:
+      - id: ${this}/ApiKey
+        name: ApiKey
+        isOptional: true
+        ownership: SeedOwned
+      - id: ${this}/SyncCursor
+        name: SyncCursor
+        isOptional: true

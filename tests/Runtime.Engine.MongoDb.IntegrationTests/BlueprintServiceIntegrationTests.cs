@@ -2,6 +2,7 @@ using FluentAssertions;
 
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.BlueprintCatalogs;
+using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.Blueprints;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
@@ -32,8 +33,11 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
     private static readonly BlueprintId TestBpV2 = new("TestBp", "2.0.0");
     private static readonly BlueprintId TestMigBpV1 = new("TestMigBp", "1.0.0");
     private static readonly BlueprintId TestMigBpV2 = new("TestMigBp", "2.0.0");
+    private static readonly BlueprintId TestSplitBpV1 = new("TestSplitBp", "1.0.0");
+    private static readonly BlueprintId TestSplitAssocBpV1 = new("TestSplitAssocBp", "1.0.0");
     private static readonly RtCkId<CkTypeId> CustomerCkType = new("Test/Customer");
     private static readonly RtCkId<CkTypeId> ContinentCkType = new("Test/Continent");
+    private static readonly RtCkId<CkTypeId> CountryCkType = new("Test/Country");
 
     /// <summary>
     /// Diagnostic to pin down WHY the Mongo provider returns null for a fresh
@@ -940,6 +944,108 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
         {
             await _fixture.DropTenantAsync(tenantId);
         }
+    }
+
+    /// <summary>
+    /// AB#4758: TestSplitBp-1.0.0 declares exactly the seed of TestBp-1.0.0, only spread over three
+    /// files in two folders. Installing either must leave the tenant in the same state.
+    /// </summary>
+    [Fact]
+    public async Task ApplyBlueprint_SplitSeedData_ProducesSameResultAsSingleFileForm()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var singleFileTenant = await _fixture.CreateTestTenantAsync("seed-single");
+        var splitTenant = await _fixture.CreateTestTenantAsync("seed-split");
+
+        try
+        {
+            var singleFileResult = await blueprintService
+                .ApplyBlueprintAsync(singleFileTenant, TestBpV1, force: false, ct);
+            var splitResult = await blueprintService
+                .ApplyBlueprintAsync(splitTenant, TestSplitBpV1, force: false, ct);
+
+            splitResult.IsSuccess.Should().BeTrue(
+                string.Join("; ", splitResult.OperationResult.Messages.Select(m => $"[{m.MessageLevel}] {m.MessageText}")));
+            splitResult.AppliedSeedDataFiles.Should().HaveCount(3, "the seed is split over three files");
+            splitResult.EntitiesCreated.Should().Be(singleFileResult.EntitiesCreated);
+
+            foreach (var ckType in new[] { CustomerCkType, ContinentCkType })
+            {
+                var expected = await QueryComparableAsync(singleFileTenant, ckType);
+                var actual = await QueryComparableAsync(splitTenant, ckType);
+
+                actual.Should().BeEquivalentTo(expected,
+                    $"the split seed must import the same {ckType} entities as the single-file seed");
+            }
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(singleFileTenant);
+            await _fixture.DropTenantAsync(splitTenant);
+        }
+    }
+
+    /// <summary>
+    /// AB#4758: the first seed file of TestSplitAssocBp-1.0.0 associates to an entity that is only
+    /// declared in the last one. All files are merged into one model before the import, which writes
+    /// every entity before any association — so the forward reference survives instead of being
+    /// dropped as a dangling edge.
+    /// </summary>
+    [Fact]
+    public async Task ApplyBlueprint_SplitSeedData_ResolvesAssociationDeclaredInALaterFile()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var tenantId = await _fixture.CreateTestTenantAsync("seed-split-assoc");
+
+        try
+        {
+            var result = await blueprintService
+                .ApplyBlueprintAsync(tenantId, TestSplitAssocBpV1, force: false, ct);
+
+            result.IsSuccess.Should().BeTrue(
+                string.Join("; ", result.OperationResult.Messages.Select(m => $"[{m.MessageLevel}] {m.MessageText}")));
+
+            var countries = await QueryAllAsync(tenantId, CountryCkType);
+            countries.Should().HaveCount(1);
+
+            var repository = await _fixture.GetRuntimeRepositoryProvider().GetRepositoryAsync(tenantId, ct);
+            using var session = await repository!.GetSessionAsync();
+            var associations = await repository.GetRtAssociationsAsync(
+                session,
+                [countries[0].ToRtEntityId()],
+                RtAssociationExtendedQueryOptions.Create(GraphDirections.Outbound, 0, 10));
+
+            associations.Values.SelectMany(v => v.Items).Should().ContainSingle(
+                "the cross-file ParentChild edge must not be dropped as a dangling association");
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    /// <summary>
+    /// Projects entities to the parts that must match across two tenants: identity plus every
+    /// attribute the seed sets. The blueprint provenance attributes are stripped — they name the
+    /// blueprint, which differs by construction.
+    /// </summary>
+    private async Task<List<(string RtId, string? WellKnownName, List<KeyValuePair<string, object?>> Attributes)>>
+        QueryComparableAsync(string tenantId, RtCkId<CkTypeId> ckTypeId)
+    {
+        var entities = await QueryAllAsync(tenantId, ckTypeId);
+
+        return entities
+            .Select(e => (
+                RtId: e.RtId.ToString(),
+                WellKnownName: e.RtWellKnownName,
+                Attributes: e.Attributes
+                    .Where(a => !a.Key.StartsWith("RtBlueprint", StringComparison.Ordinal))
+                    .OrderBy(a => a.Key, StringComparer.Ordinal)
+                    .ToList()))
+            .OrderBy(e => e.RtId, StringComparer.Ordinal)
+            .ToList();
     }
 
     private Task<List<RtEntity>> QueryAllCustomersAsync(string tenantId)
