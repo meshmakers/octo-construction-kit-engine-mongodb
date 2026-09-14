@@ -16,12 +16,26 @@ public interface IStreamDataDatabaseClient
     /// are silently dropped on the data plane (they would have been rejected at activation time
     /// during DDL generation).
     /// </summary>
-    Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint);
+    /// <param name="conflictVersionColumn">
+    /// Opt-in conflict resolution (System.StreamData 1.10.0): the archive's
+    /// <c>ConflictVersionColumn</c>, naming one of <paramref name="userColumnNames" />. When null
+    /// the conflict update is unconditional (last write wins, the historical behaviour). When set,
+    /// a conflicting row is only replaced if the incoming version is <c>&gt;=</c> the stored one,
+    /// so a re-delivered or out-of-order data point can no longer overwrite newer stored values.
+    /// </param>
+    Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint, string? conflictVersionColumn = null);
 
     /// <summary>
-    /// Bulk variant of <see cref="InsertDataAsync(string, string, IReadOnlyList{string}, DataPointDto)"/>.
+    /// Bulk variant of <see cref="InsertDataAsync(string, string, IReadOnlyList{string}, DataPointDto, string)"/>.
     /// </summary>
-    Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints);
+    /// <param name="conflictVersionColumn">
+    /// Opt-in conflict resolution (System.StreamData 1.10.0): the archive's
+    /// <c>ConflictVersionColumn</c>, naming one of <paramref name="userColumnNames" />. When null
+    /// the conflict update is unconditional (last write wins, the historical behaviour). When set,
+    /// a conflicting row is only replaced if the incoming version is <c>&gt;=</c> the stored one,
+    /// so a re-delivered or out-of-order data point can no longer overwrite newer stored values.
+    /// </param>
+    Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints, string? conflictVersionColumn = null);
 
     /// <summary>
     /// Inserts time-range data points into a windowed archive table. Schema is the
@@ -36,7 +50,14 @@ public interface IStreamDataDatabaseClient
     /// (AB#4773: archive data import into rollup tables collapses onto the always-live generation 0).
     /// Time-range archive tables have no generation column and pass false.
     /// </param>
-    Task InsertTimeRangeDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false);
+    /// <param name="conflictVersionColumn">
+    /// Opt-in conflict resolution (System.StreamData 1.10.0): the archive's
+    /// <c>ConflictVersionColumn</c>, naming one of <paramref name="userColumnNames" />. When null
+    /// the conflict update is unconditional (last write wins, the historical behaviour). When set,
+    /// a conflicting row is only replaced if the incoming version is <c>&gt;=</c> the stored one,
+    /// so a re-delivered or out-of-order data point can no longer overwrite newer stored values.
+    /// </param>
+    Task InsertTimeRangeDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false, string? conflictVersionColumn = null);
 
     /// <summary>
     /// Get data from the stream data database.

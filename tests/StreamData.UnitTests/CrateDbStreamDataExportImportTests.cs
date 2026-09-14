@@ -235,7 +235,10 @@ public class CrateDbStreamDataExportImportTests
         var batchSizes = new List<int>();
         A.CallTo(() => _db.InsertDataAsync(
                 A<string>._, A<string>._, A<IReadOnlyList<string>>._, A<IEnumerable<DataPointDto>>._))
-            .Invokes((string _, string _, IReadOnlyList<string> _, IEnumerable<DataPointDto> d) =>
+            // The trailing argument is the archive's opt-in ConflictVersionColumn
+            // (System.StreamData 1.10.0), null on the import path: an archive-data import restores
+            // an operator's snapshot and must write what it is given, not re-decide who wins.
+            .Invokes((string _, string _, IReadOnlyList<string> _, IEnumerable<DataPointDto> d, string? _) =>
                 batchSizes.Add(d.Count()));
 
         await NewSut().ImportRowsAsync(

@@ -168,7 +168,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         });
     }
 
-    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints)
+    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints, string? conflictVersionColumn = null)
     {
         var d = datapoints.ToArray();
         if (d.Length == 0) return;
@@ -181,7 +181,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // stays per-row/per-column (unlike unnest), but the whole sub-batch is pipelined in one
         // round trip. The previous command-per-row loop capped bulk restores at well under
         // 1k rows/s, which turned multi-million-row archive restores into multi-hour jobs.
-        var sql = BuildSingleRowInsertSql(qualifiedTable, userColumnNames);
+        var sql = BuildSingleRowInsertSql(qualifiedTable, userColumnNames, conflictVersionColumn);
 
         // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
         // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
@@ -205,20 +205,21 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         }
     }
 
-    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint)
+    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint, string? conflictVersionColumn = null)
     {
         await _resilience.ExecuteAsync(async _ =>
         {
             await using var lease = await LeaseConnectionAsync(tenantId);
             var connection = lease.Connection;
-            var sql = BuildSingleRowInsertSql(qualifiedTable, userColumnNames);
+            var sql = BuildSingleRowInsertSql(qualifiedTable, userColumnNames, conflictVersionColumn);
             await ExecuteSingleInsertAsync(connection, sql, datapoint, userColumnNames);
         });
     }
 
     public async Task InsertTimeRangeDataAsync(
         string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
-        IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false)
+        IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false,
+        string? conflictVersionColumn = null)
     {
         var d = datapoints.ToArray();
         if (d.Length == 0) return;
@@ -226,7 +227,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // Same batching rationale as InsertDataAsync (AB#4773) — typed columns need their own
         // native param types per row, the bulk-unnest path can't carry that information, and the
         // NpgsqlBatch pipelines the sub-batch in one round trip.
-        var sql = BuildTimeRangeInsertSql(qualifiedTable, userColumnNames, generationTracked);
+        var sql = BuildTimeRangeInsertSql(qualifiedTable, userColumnNames, generationTracked, conflictVersionColumn);
 
         // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
         // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
@@ -273,8 +274,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         }
     }
 
-    private static string BuildTimeRangeInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames,
-        bool generationTracked = false)
+    internal static string BuildTimeRangeInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames,
+        bool generationTracked = false, string? conflictVersionColumn = null)
     {
         // Column order matches the DDL emitted by GenerateCreateWindowedTable: window_start,
         // window_end, rtid, ckTypeId, rtWellKnownName, then user columns. The CONFLICT clause's
@@ -306,16 +307,71 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         }
 
         var conflictGenerationSuffix = generationTracked ? $", \"{Constants.Generation}\"" : string.Empty;
-        var conflictUpdates = userColumnNames.Count == 0
-            ? string.Empty
-            : ", " + string.Join(", ", userColumnNames.Select(c => $"\"{c}\" = EXCLUDED.\"{c}\""));
+        var guard = BuildConflictGuard(conflictVersionColumn, userColumnNames);
+        var conflictUpdates = BuildConflictUpdates(userColumnNames, guard);
 
         return $"INSERT INTO {qualifiedTable} ({columnList}) VALUES ({paramList}) "
              + $"ON CONFLICT (\"{Constants.WindowStart}\", \"{Constants.WindowEnd}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\"{conflictGenerationSuffix}) "
-             + $"DO UPDATE SET \"{Constants.RtChangedDateTime}\" = CURRENT_TIMESTAMP, "
-             + $"\"{Constants.WasUpdated}\" = TRUE"
+             + $"DO UPDATE SET \"{Constants.RtChangedDateTime}\" = {Guarded("CURRENT_TIMESTAMP", Constants.RtChangedDateTime, guard)}, "
+             + $"\"{Constants.WasUpdated}\" = {Guarded("TRUE", Constants.WasUpdated, guard)}"
              + conflictUpdates;
     }
+
+    /// <summary>
+    /// Builds the boolean predicate that decides whether a conflicting insert may replace the
+    /// stored row, or <c>null</c> when the archive did not opt in (<c>ConflictVersionColumn</c>
+    /// unset) and the historical unconditional last-write-wins update applies.
+    /// </summary>
+    /// <remarks>
+    /// Null handling is deliberate and asymmetric. A stored <c>NULL</c> version is always
+    /// replaceable — rows written before the archive opted in carry no version, and refusing to
+    /// ever update them would freeze the archive's whole history. An incoming <c>NULL</c> version
+    /// never displaces a stored row that has one: a data point that cannot prove it is newer must
+    /// not win. With both sides null the predicate is true, which is exactly the pre-opt-in
+    /// behaviour. <c>&gt;=</c> rather than <c>&gt;</c> so re-delivering the identical document is
+    /// idempotent rather than a no-op that leaves the row looking untouched.
+    /// </remarks>
+    internal static string? BuildConflictGuard(string? conflictVersionColumn,
+        IReadOnlyList<string> userColumnNames)
+    {
+        if (string.IsNullOrWhiteSpace(conflictVersionColumn))
+        {
+            return null;
+        }
+
+        // The guard reads EXCLUDED."v", so the version column has to be part of the INSERT column
+        // list. A name that is not a user column of this archive would produce SQL that fails at
+        // execution time on every single write; refuse to build it instead.
+        if (!userColumnNames.Contains(conflictVersionColumn, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Archive conflict version column '{conflictVersionColumn}' is not one of the archive's " +
+                $"columns ({string.Join(", ", userColumnNames)}). Declare it in the archive's Columns " +
+                "or clear ConflictVersionColumn.");
+        }
+
+        var v = conflictVersionColumn;
+        return $"(\"{v}\" IS NULL OR (EXCLUDED.\"{v}\" IS NOT NULL AND EXCLUDED.\"{v}\" >= \"{v}\"))";
+    }
+
+    /// <summary>
+    /// Renders one <c>ON CONFLICT DO UPDATE</c> assignment: the incoming value unguarded, or a
+    /// <c>CASE</c> that falls back to the stored column when the guard rejects the write.
+    /// </summary>
+    private static string Guarded(string incomingExpression, string storedColumn, string? guard)
+        => guard is null
+            ? incomingExpression
+            : $"CASE WHEN {guard} THEN {incomingExpression} ELSE \"{storedColumn}\" END";
+
+    /// <summary>
+    /// Renders the user-column part of the <c>DO UPDATE SET</c> list (leading comma included), or
+    /// an empty string when the archive has no user columns.
+    /// </summary>
+    private static string BuildConflictUpdates(IReadOnlyList<string> userColumnNames, string? guard)
+        => userColumnNames.Count == 0
+            ? string.Empty
+            : ", " + string.Join(", ",
+                userColumnNames.Select(c => $"\"{c}\" = {Guarded($"EXCLUDED.\"{c}\"", c, guard)}"));
 
     /// <summary>
     /// Executes a single per-archive INSERT using the raw Npgsql command API. We bind parameters
@@ -346,7 +402,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         }
     }
 
-    private static string BuildSingleRowInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames)
+    internal static string BuildSingleRowInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames,
+        string? conflictVersionColumn = null)
     {
         // Column-explicit INSERT against a per-archive table. Columns = standard time-series set
         // (rtId, ckTypeId, timestamp, rtWellKnownName) plus the user-defined columns. Unknown
@@ -360,13 +417,12 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
         var columnList = string.Join(", ", allColumns.Select(c => $"\"{c}\""));
         var paramList = string.Join(", ", allColumns.Select(c => $"@{c}"));
-        var conflictUpdates = userColumnNames.Count == 0
-            ? string.Empty
-            : ", " + string.Join(", ", userColumnNames.Select(c => $"\"{c}\" = EXCLUDED.\"{c}\""));
+        var guard = BuildConflictGuard(conflictVersionColumn, userColumnNames);
+        var conflictUpdates = BuildConflictUpdates(userColumnNames, guard);
 
         return $"INSERT INTO {qualifiedTable} ({columnList}) VALUES ({paramList}) "
              + $"ON CONFLICT (\"{Constants.Timestamp}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\") "
-             + $"DO UPDATE SET \"{Constants.RtChangedDateTime}\" = CURRENT_TIMESTAMP, "
+             + $"DO UPDATE SET \"{Constants.RtChangedDateTime}\" = {Guarded("CURRENT_TIMESTAMP", Constants.RtChangedDateTime, guard)}, "
              + $"\"{Constants.RtCreationDateTime}\" = \"{Constants.RtCreationDateTime}\""
              + conflictUpdates;
     }

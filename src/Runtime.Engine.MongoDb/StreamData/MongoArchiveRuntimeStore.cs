@@ -117,6 +117,11 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
             Period = period,
             // Bounded retro reach (AB#4196): per-archive automatic-recompute cap; null = unbounded.
             MaxRetroactiveReachMs = entity.MaxRetroactiveReachMs,
+            // Opt-in conflict resolution: names the column that orders competing writes to the same
+            // row key; null keeps the historical last-write-wins upsert. System.StreamData 1.10.0.
+            ConflictVersionColumn = string.IsNullOrWhiteSpace(entity.ConflictVersionColumn)
+                ? null
+                : entity.ConflictVersionColumn,
         };
     }
 
