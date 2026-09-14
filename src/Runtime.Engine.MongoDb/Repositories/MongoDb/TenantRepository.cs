@@ -1309,6 +1309,29 @@ internal class TenantRepository(
     }
 
     /// <inheritdoc />
+    public override async Task<int> UpdateAssociationRoleIdsForMigrationAsync(
+        IOctoSession session, RtCkId<CkAssociationRoleId> oldRoleId, RtCkId<CkAssociationRoleId> newRoleId)
+    {
+        // Associations live in ONE dedicated collection (MongoDbRepositoryDataSource
+        // .RtMongoDbDataSourceAssociations); the "_associations" / "$associations" names seen in
+        // the query pipelines are $lookup aliases, not a second copy of the data. A single
+        // UpdateMany on associationRoleId is therefore a complete rewrite — there is no embedded
+        // duplicate to keep in sync.
+        var oldValue = oldRoleId.SemanticVersionedFullName;
+        var newValue = newRoleId.SemanticVersionedFullName;
+        var associations = mongoDbRepositoryDataSource.RtMongoDbDataSourceAssociations;
+
+        // Count before updating so the returned count reflects actually targeted rows, matching
+        // UpdateAssociationCkTypeIdsForMigrationAsync above.
+        var roleFilter = Builders<RtAssociation>.Filter.Eq("associationRoleId", oldValue);
+        var roleCount = await associations.GetTotalCountAsync(session, roleFilter).ConfigureAwait(false);
+        var roleUpdate = Builders<RtAssociation>.Update.Set("associationRoleId", newValue);
+        await associations.UpdateManyAsync(session, roleFilter, roleUpdate).ConfigureAwait(false);
+
+        return (int)roleCount;
+    }
+
+    /// <inheritdoc />
     public override async Task<bool> DropCollectionIfEmptyForMigrationAsync(RtCkId<CkTypeId> rtCkTypeId)
     {
         var collection = GetRtCollectionForMigration<RtEntity>(rtCkTypeId);
