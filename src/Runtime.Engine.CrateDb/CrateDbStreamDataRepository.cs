@@ -136,6 +136,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 "Provisioning windowed archive table {Table} with {ColumnCount} user columns for tenant {TenantId} (shape: {Shape})",
                 qualifiedTable, resolvedColumns.Count, _tenantId, shape);
             await _managementClient.ExecuteDdlAsync(_tenantId, sql);
+            await ReconcileDeclaredColumnsAsync(qualifiedTable, snapshot.RtId.ToString(), resolvedColumns);
 
             if (isRollup)
             {
@@ -153,7 +154,69 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 "Provisioning raw archive table {Table} with {ColumnCount} user columns for tenant {TenantId}",
                 qualifiedTable, resolvedColumns.Count, _tenantId);
             await _managementClient.ExecuteDdlAsync(_tenantId, sql);
+            await ReconcileDeclaredColumnsAsync(qualifiedTable, snapshot.RtId.ToString(), resolvedColumns);
         }
+    }
+
+    /// <summary>
+    /// Adds columns the archive declares but the physical table does not have yet, so a declared-only
+    /// column change can be adopted by an already-activated archive instead of requiring its table to
+    /// be dropped. The rules live in <see cref="ArchiveColumnReconciliation" />.
+    /// </summary>
+    private async Task ReconcileDeclaredColumnsAsync(
+        string qualifiedTable, string archiveRtId, IReadOnlyList<ArchiveColumnDdl> resolvedColumns)
+    {
+        var existing = await ReadPhysicalColumnNamesAsync(archiveRtId);
+        if (existing.Count == 0)
+        {
+            // Either the table was just created (then it already has every declared column and the
+            // plan below would be empty anyway) or the catalogue could not be read. Adding columns
+            // on the strength of an empty answer would ALTER on every activation.
+            return;
+        }
+
+        foreach (var addition in ArchiveColumnReconciliation.Plan(resolvedColumns, existing))
+        {
+            if (addition.DeclaredRequired)
+            {
+                _logger.LogWarning(
+                    "Archive {Table}: adding declared column {Column} as NULLABLE although the archive " +
+                    "declares it required — CrateDB cannot add a NOT NULL column to a table that may " +
+                    "already hold rows, and every existing row carries NULL for it.",
+                    qualifiedTable, addition.Name);
+            }
+
+            _logger.LogInformation(
+                "Archive {Table}: adding declared column {Column}, which the table does not have yet.",
+                qualifiedTable, addition.Name);
+            await _managementClient.ExecuteDdlAsync(_tenantId,
+                ArchiveDdlGenerator.GenerateAddColumn(qualifiedTable, addition.Column));
+        }
+    }
+
+    /// <summary>
+    /// Reads the physical column names of an archive table from <c>information_schema</c>. An empty
+    /// result means "table not found or not readable" and is treated as "do not reconcile".
+    /// </summary>
+    private async Task<IReadOnlySet<string>> ReadPhysicalColumnNamesAsync(string archiveRtId)
+    {
+        var schemaName = TenantSchema.SchemaName(_tenantId);
+        var tableName = "archive_" + archiveRtId;
+        var query =
+            "SELECT column_name FROM information_schema.columns " +
+            $"WHERE table_schema = '{schemaName.Replace("'", "''")}' " +
+            $"AND table_name = '{tableName.Replace("'", "''")}'";
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, query))
+        {
+            if (row.TryGetValue("column_name", out var value) && value is string name)
+            {
+                names.Add(name);
+            }
+        }
+
+        return names;
     }
 
     /// <summary>
