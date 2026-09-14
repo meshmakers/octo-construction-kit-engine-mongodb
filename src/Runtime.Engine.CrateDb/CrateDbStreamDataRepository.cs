@@ -2640,8 +2640,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             {
                 case FieldFilterOperator.Between:
                     result.Add(new Dtos.StreamDataFieldFilterDto(resolved.CrateDbName, op,
-                        filter.ComparisonValue?.ToString() ?? "",
-                        filter.SecondaryValue?.ToString(), null));
+                        StreamDataFieldFilterValueParser.FormatScalar(filter.ComparisonValue),
+                        filter.SecondaryValue == null
+                            ? null
+                            : StreamDataFieldFilterValueParser.FormatScalar(filter.SecondaryValue),
+                        null));
                     break;
 
                 case FieldFilterOperator.In:
@@ -2661,8 +2664,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                     break;
 
                 default:
+                    // Invariant rendering — an ambient-culture ToString() on a DateTime or a
+                    // double produces text CrateDB either rejects or misreads. See
+                    // StreamDataFieldFilterValueParser.FormatScalar.
                     result.Add(new Dtos.StreamDataFieldFilterDto(resolved.CrateDbName, op,
-                        filter.ComparisonValue!.ToString()!, null, null));
+                        StreamDataFieldFilterValueParser.FormatScalar(filter.ComparisonValue),
+                        null, null));
                     break;
             }
         }

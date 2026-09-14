@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 
 /// <summary>
@@ -27,7 +29,7 @@ public static class StreamDataFieldFilterValueParser
             case IEnumerable<string> strings:
                 return strings.ToList();
             case IEnumerable<object> objects:
-                return objects.Select(o => o.ToString() ?? string.Empty).ToList();
+                return objects.Select(FormatScalar).ToList();
             case string text when text.StartsWith('[') && text.EndsWith(']'):
                 var parsed = text.Trim('[', ']')
                     .Split(',')
@@ -40,7 +42,33 @@ public static class StreamDataFieldFilterValueParser
             case string text:
                 return [text];
             default:
-                return [comparisonValue?.ToString() ?? string.Empty];
+                return [FormatScalar(comparisonValue)];
         }
     }
+
+    /// <summary>
+    /// Renders a filter comparison value as the text CrateDB has to parse back, using the
+    /// invariant culture.
+    /// </summary>
+    /// <remarks>
+    /// A plain <c>ToString()</c> formats with the AMBIENT culture, which CrateDB cannot read:
+    /// a <see cref="DateTime" /> rendered on an en-US host becomes
+    /// <c>09/30/2025 22:00:00</c> and the statement fails with
+    /// <c>Cannot cast '…' of type `text` to type `timestamp with time zone`</c>; a
+    /// <see cref="double" /> on a de-AT host becomes <c>0,08</c> and silently changes meaning.
+    /// This is reachable from ordinary pipeline input: a JSON string in ISO-8601 form is boxed
+    /// as a <see cref="DateTime" /> on the way in (JsonScalar.ToClr parses date strings for
+    /// Newtonsoft parity), so a pipeline that passes an ISO timestamp as a field-filter
+    /// comparison value never reaches the database as one unless it is rendered here.
+    /// Dates use the round-trip format so the offset survives.
+    /// </remarks>
+    public static string FormatScalar(object? value) => value switch
+    {
+        null => string.Empty,
+        string s => s,
+        DateTime dt => dt.ToString("O", CultureInfo.InvariantCulture),
+        DateTimeOffset dto => dto.ToString("O", CultureInfo.InvariantCulture),
+        IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
+        _ => value.ToString() ?? string.Empty
+    };
 }
