@@ -6,7 +6,7 @@ namespace Meshmakers.Octo.Runtime.Engine.UnitTests;
 // archive a newly declared column never reaches CrateDB: everything written to it is dropped as an
 // unknown column, or — once SQL references it — every write to the archive fails. Before this, the
 // only way to adopt such a change was to drop the table, which for a populated archive means losing
-// its history. That is what made the opt-in ConflictVersionColumn unusable on exactly the archives
+// its history. That is what made the opt-in ConflictPrecedence unusable on exactly the archives
 // that have the ordering defect.
 //
 // The ALTER itself was verified against CrateDB 5.10.10 on a populated table (it succeeds, and
