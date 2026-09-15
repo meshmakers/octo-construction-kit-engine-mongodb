@@ -117,12 +117,31 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
             Period = period,
             // Bounded retro reach (AB#4196): per-archive automatic-recompute cap; null = unbounded.
             MaxRetroactiveReachMs = entity.MaxRetroactiveReachMs,
-            // Opt-in conflict resolution: names the column that orders competing writes to the same
-            // row key; null keeps the historical last-write-wins upsert. System.StreamData 1.10.0.
-            ConflictVersionColumn = string.IsNullOrWhiteSpace(entity.ConflictVersionColumn)
-                ? null
-                : entity.ConflictVersionColumn,
+            // Opt-in conflict resolution: the ordered keys that decide which of two competing writes
+            // to one row survives; an empty list keeps the historical last-write-wins upsert.
+            // System.StreamData 1.10.0.
+            ConflictPrecedence = MapConflictPrecedence(entity.ConflictPrecedence),
         };
+    }
+
+    /// <summary>
+    /// Projects the runtime conflict-precedence records onto <see cref="ArchiveConflictKey" />,
+    /// preserving declaration order — the keys are compared lexicographically, so their order IS the
+    /// semantics. A record without a column name is dropped rather than silently treated as a
+    /// wildcard.
+    /// </summary>
+    private static IReadOnlyList<ArchiveConflictKey> MapConflictPrecedence(
+        IEnumerable<RtCkArchiveConflictKeyRecord>? keys)
+    {
+        if (keys is null)
+        {
+            return Array.Empty<ArchiveConflictKey>();
+        }
+
+        return keys
+            .Where(k => !string.IsNullOrWhiteSpace(k.Column))
+            .Select(k => new ArchiveConflictKey(k.Column!, (ConflictKeyOrder)(int)k.Order))
+            .ToList();
     }
 
     /// <summary>

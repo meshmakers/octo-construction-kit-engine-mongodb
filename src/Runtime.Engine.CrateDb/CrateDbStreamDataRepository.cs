@@ -340,7 +340,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var computedPlan = BuildComputedPlan(snapshot);
         var dto = MapToDataPointDto(datapoint, computedPlan);
         await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dto,
-            ResolveConflictVersionColumn(snapshot));
+            ResolveConflictPrecedence(snapshot));
         sw.Stop();
 
         CrateDbDiagnostics.InsertDurationMs.Record(sw.Elapsed.TotalMilliseconds,
@@ -392,7 +392,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var computedPlan = BuildComputedPlan(snapshot);
         var dtos = filtered.Select(p => MapToDataPointDto(p, computedPlan));
         await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
-            ResolveConflictVersionColumn(snapshot));
+            ResolveConflictPrecedence(snapshot));
         sw.Stop();
 
         var bucket = CrateDbDiagnostics.BatchSizeBucket(filtered.Count);
@@ -409,25 +409,28 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     /// <summary>
-    /// Resolves the archive's opt-in <c>ConflictVersionColumn</c> to the physical CrateDB column
-    /// name the insert SQL references, or <c>null</c> when the archive did not opt in.
+    /// Maps the archive's opt-in <c>ConflictPrecedence</c> onto the physical CrateDB column names the
+    /// insert SQL references.
     /// </summary>
     /// <remarks>
-    /// The attribute is authored as a CK attribute path — the same spelling the author already used
-    /// in <c>Columns[].Path</c> — while the physical column is the lower-cased, dot-stripped form
+    /// The keys are authored as CK attribute paths — the same spelling the author already used in
+    /// <c>Columns[].Path</c> — while the physical column is the lower-cased, dot-stripped form
     /// (<see cref="ColumnNameMapper" />). Mapping here keeps that asymmetry out of the archive
-    /// definition: an author writes <c>SourceDocumentDate</c>, not <c>sourcedocumentdate</c>.
+    /// definition: an author writes <c>SourceDocumentDate</c>, not <c>sourcedocumentdate</c>. Order is
+    /// preserved, because the keys are compared lexicographically and their order IS the semantics.
     /// <para>
-    /// Deliberately NOT applied to <see cref="ImportRowsAsync" />. The guard orders competing
-    /// <em>deliveries</em> of the same window; an archive-data import is an operator restoring a
-    /// known snapshot, where "write what I give you" is the intent — silently dropping restored
-    /// rows because they look older than what is already there would be a data-loss trap.
+    /// Deliberately NOT applied to <see cref="ImportRowsAsync" />. The precedence orders competing
+    /// <em>deliveries</em> of the same row; an archive-data import is an operator restoring a known
+    /// snapshot, where "write what I give you" is the intent — silently dropping restored rows for
+    /// looking worse than what is already there would be a data-loss trap.
     /// </para>
     /// </remarks>
-    private static string? ResolveConflictVersionColumn(ArchiveSnapshot snapshot)
-        => string.IsNullOrWhiteSpace(snapshot.ConflictVersionColumn)
-            ? null
-            : ColumnNameMapper.PathToColumnName(snapshot.ConflictVersionColumn);
+    private static IReadOnlyList<ArchiveConflictKey>? ResolveConflictPrecedence(ArchiveSnapshot snapshot)
+        => snapshot.ConflictPrecedence.Count == 0
+            ? null   // not configured is an absence, not an empty list — the client reads it as "no guard"
+            : snapshot.ConflictPrecedence
+                .Select(k => new ArchiveConflictKey(ColumnNameMapper.PathToColumnName(k.Column), k.Order))
+                .ToList();
 
     /// <summary>
     /// Computes the qualified per-archive table name and the camelCase user-column list from the
@@ -521,7 +524,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var computedPlan = BuildComputedPlan(snapshot);
         var dtos = filtered.Select(p => MapToTimeRangeDataPointDto(p, computedPlan));
         await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
-            conflictVersionColumn: ResolveConflictVersionColumn(snapshot));
+            conflictPrecedence: ResolveConflictPrecedence(snapshot));
         sw.Stop();
 
         var bucket = CrateDbDiagnostics.BatchSizeBucket(filtered.Count);

@@ -10,6 +10,7 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
 using Polly;
+using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 
@@ -168,7 +169,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         });
     }
 
-    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints, string? conflictVersionColumn = null)
+    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
     {
         var d = datapoints.ToArray();
         if (d.Length == 0) return;
@@ -181,7 +182,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // stays per-row/per-column (unlike unnest), but the whole sub-batch is pipelined in one
         // round trip. The previous command-per-row loop capped bulk restores at well under
         // 1k rows/s, which turned multi-million-row archive restores into multi-hour jobs.
-        var sql = BuildSingleRowInsertSql(qualifiedTable, userColumnNames, conflictVersionColumn);
+        var sql = BuildSingleRowInsertSql(qualifiedTable, userColumnNames, conflictPrecedence);
 
         // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
         // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
@@ -205,13 +206,13 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         }
     }
 
-    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint, string? conflictVersionColumn = null)
+    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
     {
         await _resilience.ExecuteAsync(async _ =>
         {
             await using var lease = await LeaseConnectionAsync(tenantId);
             var connection = lease.Connection;
-            var sql = BuildSingleRowInsertSql(qualifiedTable, userColumnNames, conflictVersionColumn);
+            var sql = BuildSingleRowInsertSql(qualifiedTable, userColumnNames, conflictPrecedence);
             await ExecuteSingleInsertAsync(connection, sql, datapoint, userColumnNames);
         });
     }
@@ -219,7 +220,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     public async Task InsertTimeRangeDataAsync(
         string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
         IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false,
-        string? conflictVersionColumn = null)
+        IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
     {
         var d = datapoints.ToArray();
         if (d.Length == 0) return;
@@ -227,7 +228,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // Same batching rationale as InsertDataAsync (AB#4773) — typed columns need their own
         // native param types per row, the bulk-unnest path can't carry that information, and the
         // NpgsqlBatch pipelines the sub-batch in one round trip.
-        var sql = BuildTimeRangeInsertSql(qualifiedTable, userColumnNames, generationTracked, conflictVersionColumn);
+        var sql = BuildTimeRangeInsertSql(qualifiedTable, userColumnNames, generationTracked, conflictPrecedence);
 
         // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
         // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
@@ -275,7 +276,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     }
 
     internal static string BuildTimeRangeInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames,
-        bool generationTracked = false, string? conflictVersionColumn = null)
+        bool generationTracked = false,
+        IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
     {
         // Column order matches the DDL emitted by GenerateCreateWindowedTable: window_start,
         // window_end, rtid, ckTypeId, rtWellKnownName, then user columns. The CONFLICT clause's
@@ -307,7 +309,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         }
 
         var conflictGenerationSuffix = generationTracked ? $", \"{Constants.Generation}\"" : string.Empty;
-        var guard = BuildConflictGuard(conflictVersionColumn, userColumnNames);
+        var guard = BuildConflictGuard(conflictPrecedence ?? [], userColumnNames);
         var conflictUpdates = BuildConflictUpdates(userColumnNames, guard);
 
         return $"INSERT INTO {qualifiedTable} ({columnList}) VALUES ({paramList}) "
@@ -318,41 +320,85 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     }
 
     /// <summary>
-    /// Builds the boolean predicate that decides whether a conflicting insert may replace the
-    /// stored row, or <c>null</c> when the archive did not opt in (<c>ConflictVersionColumn</c>
-    /// unset) and the historical unconditional last-write-wins update applies.
+    /// Builds the boolean predicate that decides whether a conflicting insert may replace the stored
+    /// row, or <c>null</c> when the archive did not opt in (no <c>ConflictPrecedence</c>) and the
+    /// historical unconditional last-write-wins update applies.
     /// </summary>
     /// <remarks>
-    /// Null handling is deliberate and asymmetric. A stored <c>NULL</c> version is always
-    /// replaceable — rows written before the archive opted in carry no version, and refusing to
-    /// ever update them would freeze the archive's whole history. An incoming <c>NULL</c> version
-    /// never displaces a stored row that has one: a data point that cannot prove it is newer must
-    /// not win. With both sides null the predicate is true, which is exactly the pre-opt-in
-    /// behaviour. <c>&gt;=</c> rather than <c>&gt;</c> so re-delivering the identical document is
-    /// idempotent rather than a no-op that leaves the row looking untouched.
+    /// <para>
+    /// The keys are compared <b>lexicographically</b> in declaration order: the first key decides,
+    /// and a later one only breaks a tie in every key before it. That matters more than it looks.
+    /// Lexicographic ordering is a total order over the DATA, so the surviving value is its maximum —
+    /// the same value whichever write lands first. Read as a conjunction instead ("better rank AND
+    /// newer"), the result would still depend on arrival order: an older but better-ranked value
+    /// would lose to a newer worse-ranked one that happened to arrive first, which is exactly the
+    /// defect the opt-in exists to remove.
+    /// </para>
+    /// <para>
+    /// Null handling is deliberate and asymmetric, per key. A stored <c>NULL</c> counts as worse than
+    /// anything — rows written before the archive opted in carry no keys, and refusing to ever update
+    /// them would freeze the archive's whole history. An incoming <c>NULL</c> counts as worse than a
+    /// stored value: a data point that cannot prove it is better must not win. Both null is a tie, so
+    /// an archive whose keys are entirely absent behaves exactly as it did before opting in.
+    /// </para>
+    /// <para>
+    /// The last key admits equality so that re-delivering the identical document is idempotent rather
+    /// than a no-op that leaves the row looking untouched.
+    /// </para>
     /// </remarks>
-    internal static string? BuildConflictGuard(string? conflictVersionColumn,
-        IReadOnlyList<string> userColumnNames)
+    internal static string? BuildConflictGuard(
+        IReadOnlyList<ArchiveConflictKey> precedence, IReadOnlyList<string> userColumnNames)
     {
-        if (string.IsNullOrWhiteSpace(conflictVersionColumn))
+        if (precedence.Count == 0)
         {
             return null;
         }
 
-        // The guard reads EXCLUDED."v", so the version column has to be part of the INSERT column
-        // list. A name that is not a user column of this archive would produce SQL that fails at
-        // execution time on every single write; refuse to build it instead.
-        if (!userColumnNames.Contains(conflictVersionColumn, StringComparer.Ordinal))
+        // The guard reads EXCLUDED."k", so every key has to be part of the INSERT column list. A name
+        // that is not a user column of this archive would produce SQL that fails at execution time on
+        // every single write; refuse to build it instead.
+        foreach (var key in precedence)
         {
-            throw new InvalidOperationException(
-                $"Archive conflict version column '{conflictVersionColumn}' is not one of the archive's " +
-                $"columns ({string.Join(", ", userColumnNames)}). Declare it in the archive's Columns " +
-                "or clear ConflictVersionColumn.");
+            if (!userColumnNames.Contains(key.Column, StringComparer.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Archive conflict precedence key '{key.Column}' is not one of the archive's " +
+                    $"columns ({string.Join(", ", userColumnNames)}). Declare it in the archive's " +
+                    "Columns or remove it from ConflictPrecedence.");
+            }
         }
 
-        var v = conflictVersionColumn;
-        return $"(\"{v}\" IS NULL OR (EXCLUDED.\"{v}\" IS NOT NULL AND EXCLUDED.\"{v}\" >= \"{v}\"))";
+        return BuildPrecedenceLevel(precedence, 0);
     }
+
+    /// <summary>
+    /// Renders the lexicographic comparison from key <paramref name="index" /> onwards.
+    /// </summary>
+    private static string BuildPrecedenceLevel(IReadOnlyList<ArchiveConflictKey> keys, int index)
+    {
+        var key = keys[index];
+        var better = BuildKeyBetter(key);
+        var equal = BuildKeyEqual(key.Column);
+
+        // Last key: equality is accepted, which is what makes an identical re-delivery idempotent.
+        return index == keys.Count - 1
+            ? $"({better} OR {equal})"
+            : $"({better} OR ({equal} AND {BuildPrecedenceLevel(keys, index + 1)}))";
+    }
+
+    /// <summary>Incoming value is strictly better than the stored one for this key.</summary>
+    private static string BuildKeyBetter(ArchiveConflictKey key)
+    {
+        var c = key.Column;
+        var op = key.Order == ConflictKeyOrder.HigherWins ? ">" : "<";
+        return $"((\"{c}\" IS NULL AND EXCLUDED.\"{c}\" IS NOT NULL) "
+             + $"OR (\"{c}\" IS NOT NULL AND EXCLUDED.\"{c}\" IS NOT NULL AND EXCLUDED.\"{c}\" {op} \"{c}\"))";
+    }
+
+    /// <summary>Incoming and stored value are indistinguishable for this key, nulls included.</summary>
+    private static string BuildKeyEqual(string c)
+        => $"((\"{c}\" IS NULL AND EXCLUDED.\"{c}\" IS NULL) "
+         + $"OR (\"{c}\" IS NOT NULL AND EXCLUDED.\"{c}\" IS NOT NULL AND EXCLUDED.\"{c}\" = \"{c}\"))";
 
     /// <summary>
     /// Renders one <c>ON CONFLICT DO UPDATE</c> assignment: the incoming value unguarded, or a
@@ -403,7 +449,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     }
 
     internal static string BuildSingleRowInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames,
-        string? conflictVersionColumn = null)
+        IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
     {
         // Column-explicit INSERT against a per-archive table. Columns = standard time-series set
         // (rtId, ckTypeId, timestamp, rtWellKnownName) plus the user-defined columns. Unknown
@@ -417,7 +463,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
         var columnList = string.Join(", ", allColumns.Select(c => $"\"{c}\""));
         var paramList = string.Join(", ", allColumns.Select(c => $"@{c}"));
-        var guard = BuildConflictGuard(conflictVersionColumn, userColumnNames);
+        var guard = BuildConflictGuard(conflictPrecedence ?? [], userColumnNames);
         var conflictUpdates = BuildConflictUpdates(userColumnNames, guard);
 
         return $"INSERT INTO {qualifiedTable} ({columnList}) VALUES ({paramList}) "
