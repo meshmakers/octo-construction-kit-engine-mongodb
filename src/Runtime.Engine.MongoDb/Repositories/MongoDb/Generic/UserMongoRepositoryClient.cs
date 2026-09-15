@@ -1,4 +1,5 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
@@ -28,11 +29,33 @@ internal class UserMongoRepositoryClient(
         else
             urlBuilder.Server = MongoServerAddress.Parse(systemConfiguration.DatabaseHost);
 
-        if (!string.IsNullOrWhiteSpace(systemConfiguration.DatabaseUser)
-            && !string.IsNullOrWhiteSpace(systemConfiguration.DatabaseUserPassword))
+        var user = string.IsNullOrWhiteSpace(systemConfiguration.DatabaseUser)
+            ? null
+            : string.Format(systemConfiguration.DatabaseUser, databaseName);
+        var password = systemConfiguration.DatabaseUserPassword;
+
+        // 🔴 AB#4924 — a runtime credential for THIS database wins over the configured one. An
+        // adapter-pool member is deliberately given neither the installation's datasource password nor
+        // its admin password (WorkloadReconciler.AppendClusterSecrets); the credential for the tenant
+        // it is currently lent arrives on the lease and is published through this seam for the
+        // duration of that lease. Resolved per connection build, not cached in a field: a client is
+        // built once per database and lives in a cache the lease drops on release, so reading the
+        // source here is what makes the credential's lifetime the lease's rather than the process's.
+        //
+        // Optional on purpose — GetService, not GetRequiredService. No host registers a source unless
+        // it is a pool member, and one that does not is byte-for-byte unchanged by this block.
+        var credentialSource = _serviceProvider.GetService<ITenantDatabaseCredentialSource>();
+        if (credentialSource is not null
+            && credentialSource.TryGetCredential(databaseName, out var leasedUser, out var leasedPassword))
         {
-            urlBuilder.Username = string.Format(systemConfiguration.DatabaseUser, databaseName);
-            urlBuilder.Password = systemConfiguration.DatabaseUserPassword;
+            user = leasedUser;
+            password = leasedPassword;
+        }
+
+        if (!string.IsNullOrWhiteSpace(user) && !string.IsNullOrWhiteSpace(password))
+        {
+            urlBuilder.Username = user;
+            urlBuilder.Password = password;
             urlBuilder.DatabaseName = databaseName;
             urlBuilder.AuthenticationSource = systemConfiguration.AuthenticationDatabaseName;
         }
