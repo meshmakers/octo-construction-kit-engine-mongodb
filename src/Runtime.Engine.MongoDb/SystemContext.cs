@@ -192,6 +192,21 @@ public class SystemContext : TenantContext, ISystemContext
 
     public async Task<ITenantContext?> TryFindTenantContextAsync(string tenantId)
     {
+        // 🔴 AB#4924 — before anything that needs installation-wide authority. The probe below opens
+        // the ADMIN connection (listDatabases) and reads the system CK model, and the registry lookup
+        // after it reads the system database; a process that must do both holds the installation's
+        // admin and datasource credentials. An adapter-pool member holds neither: it is told where the
+        // leased tenant lives, by the party that resolved it before granting the lease.
+        //
+        // Optional on purpose — GetService, not GetRequiredService. No host registers a source unless
+        // it is a pool member, and one that does not takes the unchanged path below.
+        var locationSource = _serviceProvider.GetService<ITenantLocationSource>();
+        if (locationSource is not null
+            && locationSource.TryGetDatabaseName(tenantId, out var leasedDatabaseName))
+        {
+            return CreateDetachedTenantContext(tenantId, leasedDatabaseName);
+        }
+
         if (!await IsSystemTenantExistingAsync())
         {
             throw TenantException.SystemTenantDatabaseNotExisting();

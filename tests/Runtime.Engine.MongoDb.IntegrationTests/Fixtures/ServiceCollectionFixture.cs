@@ -1,6 +1,7 @@
 using MartinCostello.Logging.XUnit;
 
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -21,6 +22,13 @@ public abstract class ServiceCollectionFixture : ITestOutputHelperAccessor, IAsy
         Services.AddRuntimeEngine()
             .AddMongoDbRuntimeRepository();
         Services.AddCkModelTestV1();
+
+        // AB#4924 — the tenant-location seam, registered always and answering never until a test arms
+        // it (see TestTenantLocationSource). Registering it here rather than per test is what lets a
+        // test exercise the detached resolve through the real container; it changes nothing for every
+        // other test because an unarmed source declines and the registry route runs unchanged.
+        Services.AddSingleton<TestTenantLocationSource>();
+        Services.AddSingleton<ITenantLocationSource>(sp => sp.GetRequiredService<TestTenantLocationSource>());
         Services.AddLogging(loggingBuilder =>
         {
             loggingBuilder.ClearProviders();

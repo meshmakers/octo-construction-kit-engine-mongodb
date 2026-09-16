@@ -62,6 +62,50 @@ Re-parenting an existing tenant = `Detach` (old parent context; requires tenant 
 disabled) + `Attach` (new parent context). Attach writes both registry rows; routing keeps
 working because the system registry always holds every tenant.
 
+## Resolving a tenant without the registry — the two runtime seams (AB#4924)
+
+A process normally answers "where does tenant X live and how do I open it" from the installation:
+`SystemContext.TryFindTenantContextAsync` runs `IsSystemTenantExistingAsync` (**`listDatabases` on the
+admin connection** plus a system CK-model read), then reads the tenant's registry row, and
+`UserMongoRepositoryClient` builds the connection from `OctoSystemConfiguration.DatabaseUser` (a
+**format string** over the database name) and the installation-wide `DatabaseUserPassword`.
+
+🔴 **Both halves are installation-wide authority, and an adapter-pool member must have neither.** Such
+a member executes work for tenants other than the one that owns it and is handed exactly one of them
+at a time by a lease; a process holding the admin password — or a datasource password whose user name
+is derivable for every database — makes that lease decorative.
+
+Two optional seams, both `GetService` and both inert in any host that registers no implementation:
+
+| Interface | Keyed by | Answers | Consulted in |
+|---|---|---|---|
+| `ITenantLocationSource` | tenant id | which database holds that tenant | `SystemContext.TryFindTenantContextAsync`, **before** the probe and the registry read |
+| `ITenantDatabaseCredentialSource` | database name | which credential opens that database | `UserMongoRepositoryClient`, per connection build |
+
+Keyed differently on purpose: a process may open several databases, but asks for one tenant at a time.
+Either seam alone is not enough — with only the credential the member still needs admin to *find* the
+tenant, and with only the location it cannot open what it found.
+
+🔴 **A context built from the location source is DETACHED: it manages nothing.**
+`TenantContext.CreateDetachedTenantContext` performs none of the four side effects the registry route
+performs — the system CK-model update, the stream-data model, the service-managed model imports and
+the ownership stamp. Every one of those is a **write** into the tenant's database on behalf of the
+installation that owns it, and a borrowed process running one pipeline is not that installation; an
+ownership marker written by it would name the wrong owner. The tenant's own services have already done
+all four.
+
+The database name and the credential are **trusted, not verified** — verifying them against the
+registry is precisely what is being avoided — so both must come from a party authorised to know them.
+For a pool member that is the communication controller, which resolved both before granting the lease.
+
+Tests: `tests/Runtime.Engine.MongoDb.IntegrationTests/DetachedTenantContextTests.cs`. 🔴 The
+arrangement is the proof: the tenant's **database still exists** while its **registry row has been
+deleted**, which is the one state in which the two routes disagree — the registry route answers "does
+not exist", the detached route resolves and the repository opens a session. Arming the source for a
+tenant the registry also knows would pass either way and would keep passing after a regression.
+`TestTenantLocationSource` is registered in the shared fixture and answers nothing until a test arms
+it, so every other test still exercises the registry route.
+
 ## Connection ApplicationName is clamped (AB#4762)
 
 Both repository clients label their connection

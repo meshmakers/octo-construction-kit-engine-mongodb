@@ -1422,6 +1422,47 @@ public class TenantContext : ITenantContext
         return context;
     }
 
+    /// <summary>
+    ///     Builds a tenant context for a tenant whose database is already known, WITHOUT consulting the
+    ///     installation's registry (AB#4924).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         🔴 <b>What it skips is the point, not a shortcut.</b> The registry route runs
+    ///         <c>IsSystemTenantExistingAsync</c> first — <c>listDatabases</c> over the <b>admin</b>
+    ///         connection plus a system CK-model read — and then looks the tenant's row up in the
+    ///         system database. A caller that can do that holds the installation's admin and datasource
+    ///         credentials. An adapter-pool member must not, so it is told where the tenant lives
+    ///         instead of being allowed to find out.
+    ///     </para>
+    ///     <para>
+    ///         🔴 <b>And it deliberately performs none of the four side effects
+    ///         <see cref="TryGetChildTenantContextAsync(IOctoAdminSession,string)" /> performs</b> —
+    ///         the system CK-model update, the stream-data model, the service-managed model imports and
+    ///         the ownership stamp. Every one of them is a WRITE into the tenant's database made on
+    ///         behalf of the installation that owns the tenant. A borrowed process running one of that
+    ///         tenant's pipelines is not that installation, and an ownership marker written by it would
+    ///         name the wrong owner. The tenant's own services have already done all four; a member
+    ///         that repeated them would at best duplicate work and at worst overwrite a model while
+    ///         somebody else's deploy was in flight.
+    ///     </para>
+    ///     <para>
+    ///         The caller supplies the database name and is trusted for it; the credential that opens
+    ///         it comes from <c>ITenantDatabaseCredentialSource</c>. Neither is verified against the
+    ///         registry here — that verification IS the thing being avoided — so the two values have to
+    ///         come from a party that is authorised to know them. For a pool member that party is the
+    ///         communication controller, which resolved both before it granted the lease.
+    ///     </para>
+    /// </remarks>
+    protected ITenantContext CreateDetachedTenantContext(string tenantId, string databaseName)
+    {
+        ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
+        ArgumentValidation.ValidateString(nameof(databaseName), databaseName);
+
+        return new TenantContext(_loggerFactory, _systemConfiguration, _serviceProvider, tenantId,
+            NormalizeDatabaseName(databaseName));
+    }
+
     public async Task<ITenantContext> GetChildTenantContextAsync(IOctoAdminSession adminSession, string tenantId)
     {
         var tenantContext = await TryGetChildTenantContextAsync(adminSession, tenantId);
