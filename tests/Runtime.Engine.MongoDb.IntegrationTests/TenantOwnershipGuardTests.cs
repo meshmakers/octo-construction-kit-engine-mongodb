@@ -208,7 +208,12 @@ public class TenantOwnershipGuardTests(TenantNamespaceFixture fixture)
         {
             // Simulate the existing fleet: attached (registry row present) but unstamped.
             await OwnershipStore.RemoveAsync(tenantId, TestContext.Current.CancellationToken);
-            TenantContext.ResetServiceManagedCkModelImportGuardForTests();
+            // Clear only THIS tenant's resolve guards (service-managed import + lazy ownership stamp).
+            // The test-only ResetServiceManagedCkModelImportGuardForTests() wipes the process-global
+            // dictionaries for every tenant, and with parallel collections (AB#5116) that raced
+            // ServiceManagedCkModelDescriptorTests.EnsureServiceManagedCkModelsImported_SecondAttempt_IsGuardedNoOp,
+            // whose armed guard it silently cleared mid-test (re-import instead of the asserted no-op).
+            SystemContext.InvalidateTenantResolveImportGuards(tenantId);
 
             var context = await SystemContext.TryGetChildTenantContextAsync(tenantId);
             Assert.NotNull(context);
