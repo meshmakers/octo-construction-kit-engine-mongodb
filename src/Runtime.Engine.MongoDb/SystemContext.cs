@@ -271,7 +271,11 @@ public class SystemContext : TenantContext, ISystemContext
         // observability); GetChildTenantsAsync returns direct children only (AB#5025).
         var result = await tenantRepository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession,
             RtEntityQueryOptions.Create(), skip, take);
-        return new ResultSet<OctoTenant>(result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName)),
+        // Carry the logical parent (AB#5311): the registry rows are stamped with it, and a consumer
+        // walking the hierarchy from this enumeration (identity's scoped tenant discovery) otherwise
+        // sees every tenant as a direct child of the system tenant.
+        return new ResultSet<OctoTenant>(
+            result.Items.Select(d => new OctoTenant(d.TenantId, d.DatabaseName, d.ParentTenantId)),
             result.TotalCount, null, null);
     }
 
