@@ -167,11 +167,11 @@ For each `CkArchiveColumn`:
 
 ### Upsert semantics
 
-Primary key `(timestamp, rtid, cktypeid)` — on a windowed archive `(window_start, window_end, rtid, cktypeid)`, plus `generation` on a generation-tracked rollup — may collide with existing rows. The conflict clause is generated once per archive and reused for every row of a batch:
+Primary key `(timestamp, rtid, cktypeid)` — on a windowed archive `(window_start, window_end, rtid, cktypeid)`, plus `generation` on a generation-tracked rollup — may collide with existing rows. A batch is written as multi-row statements of up to 1,000 rows each (fewer for an archive so wide that 1,000 rows would exceed the protocol's 65,535 bind parameters); the conflict clause appears once per statement and applies to every row in it:
 
 ```sql
 INSERT INTO {schema}.{table} ("rtid", "cktypeid", "timestamp", "rtwellknownname", <user columns>)
-VALUES (...)
+VALUES ($1, $2, ...), ($n+1, $n+2, ...), ...
 ON CONFLICT ("timestamp", "rtid", "cktypeid") DO UPDATE SET
   "rtchangeddatetime"  = CURRENT_TIMESTAMP,
   "rtcreationdatetime" = "rtcreationdatetime",   -- never modified
@@ -188,6 +188,7 @@ Implications:
 - **An incoming NULL clears the stored value.** The upsert does not `COALESCE`, so partial multi-source merges (source A writes `voltage`, source B later writes `current` for the same key) do **not** work as a merge: B's insert nulls `voltage` unless it carries it. A source must write the full row it owns.
 - **Required-validation runs app-side** (§7) before the SQL is built; the DB `NOT NULL` constraint is the backstop.
 - **Idempotent re-inserts** are safe: an identical payload only bumps `rtchangeddatetime` (and `was_updated`).
+- **One statement per sub-batch, not one per row.** Every value stays its own typed bind parameter, but CrateDB analyses the statement once instead of once per row. That matters as soon as *Conflict precedence* is on: its guard makes each statement several KB, and as single-row commands CrateDB spent ~0.7 ms per row analysing it — 10,000 rows took 7.4 s, against 0.8 s as multi-row statements (CrateDB 5.10). Two rows with the same key in one statement resolve exactly as two separate writes would: the guard picks the winner, and without a guard the later row wins (verified on CrateDB 5.10).
 
 ### Conflict precedence — opt-in ordering (System.StreamData 1.11.0)
 

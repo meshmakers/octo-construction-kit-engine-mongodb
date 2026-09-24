@@ -46,7 +46,7 @@ public class ConflictPrecedenceSqlTests
     [Fact]
     public void WithoutPrecedenceTheRawUpdateStaysUnconditional()
     {
-        var sql = CrateDatabaseClient.BuildSingleRowInsertSql("\"t\".\"archive_a\"", Columns);
+        var sql = CrateDatabaseClient.BuildRawInsertSql("\"t\".\"archive_a\"", Columns);
 
         Assert.Contains("\"amountvalue\" = EXCLUDED.\"amountvalue\"", sql);
         Assert.DoesNotContain("CASE WHEN", sql);
@@ -140,7 +140,7 @@ public class ConflictPrecedenceSqlTests
     {
         // Raw archives carry the same unconditional upsert and therefore the same defect; the opt-in
         // lives on the Archive base type so both storage shapes can use it.
-        var sql = CrateDatabaseClient.BuildSingleRowInsertSql(
+        var sql = CrateDatabaseClient.BuildRawInsertSql(
             "\"t\".\"archive_a\"", Columns, conflictPrecedence: QualityThenDate);
 
         Assert.Contains("\"amountvalue\" = CASE WHEN", sql);
