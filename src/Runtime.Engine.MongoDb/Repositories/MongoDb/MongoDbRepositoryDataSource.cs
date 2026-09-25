@@ -396,13 +396,20 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var ckTypeInfoList = await AggregateCkTypeInfo(aggregate).ToListAsync(effectiveToken);
         var collectionRootTypes = ckTypeInfoList.ToList();
 
-        // When scoped to a specific model, only process collection roots belonging to that model or holding
-        // a type of that model. This significantly reduces index update time on large tenants.
+        // Pre-fetch all base types for all collection roots to avoid long transactions
+        var baseTypesMap =
+            await CollectBaseTypesForCollectionRoots(session, collectionRootTypes, includeModelsInStateImporting);
+
+        // When scoped to a specific model, only process collection roots that belong to that model, derive from
+        // a type of that model or hold a type of that model. This significantly reduces index update time on
+        // large tenants.
         if (scopeToModelId != null)
         {
             var modelName = scopeToModelId.Name;
             collectionRootTypes = collectionRootTypes
                 .Where(t => t.CkModelId.Name == modelName ||
+                            (baseTypesMap.TryGetValue(t.CkTypeId, out var baseTypes) &&
+                             baseTypes.Any(b => b.CkModelId.Name == modelName)) ||
                             t.InheritedTypes.Any(i => i.CkModelId.Name == modelName))
                 .ToList();
 
@@ -410,10 +417,6 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 "Scoped index update: processing {Count} collection roots for model '{ModelId}'",
                 collectionRootTypes.Count, scopeToModelId);
         }
-
-        // Pre-fetch all base types for all collection roots to avoid long transactions
-        var baseTypesMap =
-            await CollectBaseTypesForCollectionRoots(session, collectionRootTypes, includeModelsInStateImporting);
 
         // Pre-fetch attribute metadata for resolving index attribute paths
         var (allCkAttributes, allCkRecords) = await FetchAttributeMetadataAsync();

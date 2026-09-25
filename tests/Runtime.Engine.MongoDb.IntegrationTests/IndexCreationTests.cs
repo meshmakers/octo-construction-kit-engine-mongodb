@@ -7,6 +7,9 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -541,6 +544,113 @@ public class IndexCreationTests
             await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
             await cleanupSession.CommitTransactionAsync();
         }
+    }
+
+    [Fact]
+    public async Task SystemIndexes_OnAbstractCollectionRootWithoutDeclaredIndexes_ShouldBeCreated()
+    {
+        // Arrange - Create child tenant
+        var systemContext = _fixture.GetSystemContext();
+        var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
+
+        using (var adminSession = await systemContext.GetAdminSessionAsync())
+        {
+            adminSession.StartTransaction();
+            await systemContext.CreateChildTenantAsync(adminSession, tenantId, tenantId);
+            await adminSession.CommitTransactionAsync();
+        }
+
+        try
+        {
+            var tenantContext = await systemContext.GetChildTenantContextAsync(tenantId);
+
+            // Act
+            await tenantContext.ImportCkModelAsync(
+                CreateAbstractRootModel(GetModelVersion(Constants.AbstractRootModelName), includeConcreteChild: false));
+
+            // Assert
+            var indexNames = await GetAbstractRootIndexNamesAsync(tenantId);
+            Assert.Contains("SystemEntity_0", indexNames);
+            Assert.Contains("SystemEntity_1", indexNames);
+            Assert.Contains("SystemEntity_2", indexNames);
+            Assert.Contains(indexNames, n => n.EndsWith("_9000"));
+            Assert.Contains(indexNames, n => n.EndsWith("_9001"));
+        }
+        finally
+        {
+            // Cleanup - Delete child tenant
+            using var cleanupSession = await systemContext.GetAdminSessionAsync();
+            cleanupSession.StartTransaction();
+            await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
+            await cleanupSession.CommitTransactionAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ScopedIndexUpdate_ForSystemModel_ShouldReachCollectionRootsOfOtherModels()
+    {
+        // Arrange - Create child tenant
+        var systemContext = _fixture.GetSystemContext();
+        var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
+
+        using (var adminSession = await systemContext.GetAdminSessionAsync())
+        {
+            adminSession.StartTransaction();
+            await systemContext.CreateChildTenantAsync(adminSession, tenantId, tenantId);
+            await adminSession.CommitTransactionAsync();
+        }
+
+        try
+        {
+            var tenantContext = await systemContext.GetChildTenantContextAsync(tenantId);
+            await tenantContext.ImportCkModelAsync(
+                CreateAbstractRootModel(GetModelVersion(Constants.AbstractRootModelName), includeConcreteChild: false));
+
+            // Arrange - The root's collection misses an index declared by System/Entity, as after a System model upgrade
+            var collectionName = await GetAbstractRootCollectionNameAsync(tenantId);
+            await GetTenantMongoDatabase(tenantId).GetCollection<BsonDocument>(collectionName).Indexes
+                .DropOneAsync("SystemEntity_0", TestContext.Current.CancellationToken);
+
+            // Act
+            var databaseName = tenantId.ToLowerInvariant();
+            var dataSource = new MongoDbRepositoryDataSource(NullLogger<MongoDbRepositoryDataSource>.Instance,
+                _fixture.GetService<IAdminRepositoryAccess>().GetRepositoryClient(databaseName), databaseName,
+                tenantId);
+            using (var session = await dataSource.CreateSessionAsync())
+            {
+                session.StartTransaction();
+                await dataSource.UpdateIndexAsync(session, false, SystemCkIds.CkModelId,
+                    TestContext.Current.CancellationToken);
+                await session.CommitTransactionAsync();
+            }
+
+            // Assert
+            Assert.Contains("SystemEntity_0", await GetAbstractRootIndexNamesAsync(tenantId));
+        }
+        finally
+        {
+            // Cleanup - Delete child tenant
+            using var cleanupSession = await systemContext.GetAdminSessionAsync();
+            cleanupSession.StartTransaction();
+            await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
+            await cleanupSession.CommitTransactionAsync();
+        }
+    }
+
+    private async Task<string> GetAbstractRootCollectionNameAsync(string tenantId)
+    {
+        var collectionNames = await (await GetTenantMongoDatabase(tenantId)
+            .ListCollectionNamesAsync(cancellationToken: TestContext.Current.CancellationToken))
+            .ToListAsync(TestContext.Current.CancellationToken);
+        return collectionNames.Single(n => n.EndsWith(Constants.AbstractRootTypeName));
+    }
+
+    private async Task<List<string>> GetAbstractRootIndexNamesAsync(string tenantId)
+    {
+        var collectionName = await GetAbstractRootCollectionNameAsync(tenantId);
+        var indexes = await (await GetTenantMongoDatabase(tenantId).GetCollection<BsonDocument>(collectionName).Indexes
+            .ListAsync(TestContext.Current.CancellationToken)).ToListAsync(TestContext.Current.CancellationToken);
+        return indexes.Select(i => i["name"].AsString).ToList();
     }
 
     private IMongoDatabase GetTenantMongoDatabase(string tenantId)
