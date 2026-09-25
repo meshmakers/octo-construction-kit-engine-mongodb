@@ -303,7 +303,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     : t.ModelState == ModelState.Available)))
             .ToList();
 
-        // Build set of valid collection suffixes for non-abstract collection roots
+        // Build set of valid collection suffixes for collection roots
         var validCollectionSuffixes = new HashSet<string>(
             ckTypes.Select(t => t.CkTypeId.ToRtCkId().GetCkTypeCollectionName()));
 
@@ -324,7 +324,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         if (!skipCleanup)
         {
-            // Cleanup: Remove empty collections that were created for abstract types
+            // Cleanup: Remove empty collections that do not belong to a collection root
             await CleanupEmptyAbstractTypeCollectionsInternalAsync(validCollectionSuffixes);
         }
     }
@@ -336,7 +336,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         // Get all RtEntity collections
         var allCollections = await _repository.ListCollectionNamesAsync(rtEntityPrefix);
 
-        // Find collections that don't correspond to valid (non-abstract) collection roots
+        // Find collections that don't correspond to collection roots
         foreach (var collectionName in allCollections)
         {
             var suffix = collectionName.Substring(rtEntityPrefix.Length);
@@ -388,7 +388,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var effectiveToken = linkedCts.Token;
 
         var aggregate = _ckTypes.Aggregate(session);
-        aggregate = aggregate.Match(x => x.IsCollectionRoot == true && !x.IsAbstract &&
+        aggregate = aggregate.Match(x => x.IsCollectionRoot == true &&
             (includeModelsInStateImporting
                 ? (x.ModelState == ModelState.Available || x.ModelState == ModelState.Importing)
                 : x.ModelState == ModelState.Available));
@@ -396,23 +396,27 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var ckTypeInfoList = await AggregateCkTypeInfo(aggregate).ToListAsync(effectiveToken);
         var collectionRootTypes = ckTypeInfoList.ToList();
 
-        // When scoped to a specific model, only process collection roots belonging to that model.
-        // This significantly reduces index update time on large tenants.
+        // Pre-fetch all base types for all collection roots to avoid long transactions
+        var baseTypesMap =
+            await CollectBaseTypesForCollectionRoots(session, collectionRootTypes, includeModelsInStateImporting);
+
+        // When scoped to a specific model, only process collection roots that belong to that model, derive from
+        // a type of that model or hold a type of that model. This significantly reduces index update time on
+        // large tenants.
         if (scopeToModelId != null)
         {
             var modelName = scopeToModelId.Name;
             collectionRootTypes = collectionRootTypes
-                .Where(t => t.CkModelId.Name == modelName)
+                .Where(t => t.CkModelId.Name == modelName ||
+                            (baseTypesMap.TryGetValue(t.CkTypeId, out var baseTypes) &&
+                             baseTypes.Any(b => b.CkModelId.Name == modelName)) ||
+                            t.InheritedTypes.Any(i => i.CkModelId.Name == modelName))
                 .ToList();
 
             _logger.LogInformation(
                 "Scoped index update: processing {Count} collection roots for model '{ModelId}'",
                 collectionRootTypes.Count, scopeToModelId);
         }
-
-        // Pre-fetch all base types for all collection roots to avoid long transactions
-        var baseTypesMap =
-            await CollectBaseTypesForCollectionRoots(session, collectionRootTypes, includeModelsInStateImporting);
 
         // Pre-fetch attribute metadata for resolving index attribute paths
         var (allCkAttributes, allCkRecords) = await FetchAttributeMetadataAsync();
@@ -558,8 +562,9 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
             // Then analyze the inherited types (descendants), to merge text indexes
             var inheritTypes = collectionRootType.Inheritances.ToDictionary(k => k.CkTypeId, v => v);
-            foreach (var ckInheritedTypeInfo in collectionRootType.InheritedTypes.OrderByDescending(x =>
-                         x.BaseTypeDepthIndex))
+            foreach (var ckInheritedTypeInfo in collectionRootType.InheritedTypes
+                         .DistinctBy(x => x.InheritorCkTypeId)
+                         .OrderByDescending(x => x.BaseTypeDepthIndex))
             {
                 if (!inheritTypes.TryGetValue(ckInheritedTypeInfo.InheritorCkTypeId, out var inheritCkTypeInfo))
                 {
@@ -1331,9 +1336,9 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         _logger.LogDebug("Found {Count} RtEntity collections to analyze", allCollections.Count);
 
-        // Step 2: Build set of valid collection suffixes (non-abstract collection roots)
+        // Step 2: Build set of valid collection suffixes (collection roots)
         var validTypes = await _ckTypes.FindManyAsync(session,
-            t => t.IsCollectionRoot && !t.IsAbstract && t.ModelState == ModelState.Available);
+            t => t.IsCollectionRoot && t.ModelState == ModelState.Available);
 
         var validCollectionSuffixes = new HashSet<string>(
             validTypes.Select(t => t.CkTypeId.ToRtCkId().GetCkTypeCollectionName()));
