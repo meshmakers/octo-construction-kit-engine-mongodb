@@ -2560,7 +2560,8 @@ public class TenantContext : ITenantContext
             _bulkRtMutation,
             _serviceProvider.GetService<IDataSecurityFilterFactory>(),
             _serviceProvider.GetService<IDataPermissionResolver>(),
-            _serviceProvider.GetService<IAuditEventSink>());
+            _serviceProvider.GetService<IAuditEventSink>(),
+            _loggerFactory.CreateLogger<TenantRepository>());
         return tenantRepository;
     }
 
@@ -2573,7 +2574,8 @@ public class TenantContext : ITenantContext
             _bulkRtMutation,
             _serviceProvider.GetService<IDataSecurityFilterFactory>(),
             _serviceProvider.GetService<IDataPermissionResolver>(),
-            _serviceProvider.GetService<IAuditEventSink>());
+            _serviceProvider.GetService<IAuditEventSink>(),
+            _loggerFactory.CreateLogger<TenantRepository>());
         return tenantRepository;
     }
 

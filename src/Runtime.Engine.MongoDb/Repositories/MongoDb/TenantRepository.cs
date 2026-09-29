@@ -18,6 +18,8 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 
+using Microsoft.Extensions.Logging;
+
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -34,9 +36,10 @@ internal class TenantRepository(
     IBulkRtMutation bulkRtMutation,
     IDataSecurityFilterFactory? dataSecurityFilterFactory = null,
     IDataPermissionResolver? dataPermissionResolver = null,
-    IAuditEventSink? auditEventSink = null)
+    IAuditEventSink? auditEventSink = null,
+    ILogger? logger = null)
     : RuntimeRepositoryBase(tenantId, ckCacheService, mongoDbRepositoryDataSource, bulkRtMutation,
-        dataPermissionResolver, auditEventSink), ITenantRepository,
+        dataPermissionResolver, auditEventSink, logger), ITenantRepository,
         ISecureSessionFactory
 {
     /// <summary>
