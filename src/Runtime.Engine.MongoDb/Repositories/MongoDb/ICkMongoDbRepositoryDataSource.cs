@@ -38,10 +38,10 @@ public interface ICkMongoDbRepositoryDataSource
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Cleans up empty collections that were created for abstract CK types.
+    /// Cleans up empty collections that do not belong to a collection root.
     /// Only deletes collections that:
     /// 1. Start with "RtEntity_" prefix
-    /// 2. Correspond to an abstract CK type
+    /// 2. Do not correspond to a collection root
     /// 3. Contain no documents
     /// </summary>
     /// <param name="session">The session to use for database operations</param>

@@ -1,10 +1,18 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using MongoDB.Bson;
+using MongoDB.Driver;
 
 using Xunit;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
@@ -30,6 +38,10 @@ public class IndexCreationTests
         public const string SimpleFieldName = "SimpleField";
         public const string DuplicateValue = "DuplicateValue";
         public const string UniqueValue = "UniqueValue";
+        public const string AbstractRootModelName = "AbstractRootModel";
+        public const string AbstractRootTypeName = "AbstractRoot";
+        public const string ConcreteChildTypeName = "ConcreteChild";
+        public const string ConcreteChildModelName = "ConcreteChildModel";
     }
 
     private static CkId<CkTypeId> GetSimpleTypeId(string modelName) => new($"{modelName}/{Constants.SimpleTypeName}");
@@ -408,6 +420,368 @@ public class IndexCreationTests
             await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
             await cleanupSession.CommitTransactionAsync();
         }
+    }
+
+    [Fact]
+    public async Task UniqueNotDeletedIndex_OnTypeUnderAbstractCollectionRoot_ShouldBeEnforced()
+    {
+        // Arrange - Create child tenant
+        var systemContext = _fixture.GetSystemContext();
+        var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
+
+        using (var adminSession = await systemContext.GetAdminSessionAsync())
+        {
+            adminSession.StartTransaction();
+            await systemContext.CreateChildTenantAsync(adminSession, tenantId, tenantId);
+            await adminSession.CommitTransactionAsync();
+        }
+
+        try
+        {
+            var tenantContext = await systemContext.GetChildTenantContextAsync(tenantId);
+            var modelVersion = GetModelVersion(Constants.AbstractRootModelName);
+
+            // Act
+            await tenantContext.ImportCkModelAsync(CreateAbstractRootModel(modelVersion, includeConcreteChild: true));
+
+            // Assert
+            await AssertConcreteChildUniqueIndexEnforcedAsync(tenantContext.GetTenantRepository(),
+                new CkId<CkTypeId>($"{modelVersion}/{Constants.ConcreteChildTypeName}"));
+        }
+        finally
+        {
+            // Cleanup - Delete child tenant
+            using var cleanupSession = await systemContext.GetAdminSessionAsync();
+            cleanupSession.StartTransaction();
+            await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
+            await cleanupSession.CommitTransactionAsync();
+        }
+    }
+
+    [Fact]
+    public async Task UniqueNotDeletedIndex_OnTypeFromAnotherModelUnderAbstractCollectionRoot_ShouldBeEnforced()
+    {
+        // Arrange - Create child tenant
+        var systemContext = _fixture.GetSystemContext();
+        var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
+
+        using (var adminSession = await systemContext.GetAdminSessionAsync())
+        {
+            adminSession.StartTransaction();
+            await systemContext.CreateChildTenantAsync(adminSession, tenantId, tenantId);
+            await adminSession.CommitTransactionAsync();
+        }
+
+        try
+        {
+            var tenantContext = await systemContext.GetChildTenantContextAsync(tenantId);
+            var rootModelVersion = GetModelVersion(Constants.AbstractRootModelName);
+            var childModelVersion = GetModelVersion(Constants.ConcreteChildModelName);
+
+            // Arrange - The root's model is imported first, as a blueprint imports Basic before Basic.Energy
+            await tenantContext.ImportCkModelAsync(CreateAbstractRootModel(rootModelVersion, includeConcreteChild: false));
+
+            // Act
+            await tenantContext.ImportCkModelAsync(CreateConcreteChildModel(childModelVersion, rootModelVersion));
+
+            // Assert
+            await AssertConcreteChildUniqueIndexEnforcedAsync(tenantContext.GetTenantRepository(),
+                new CkId<CkTypeId>($"{childModelVersion}/{Constants.ConcreteChildTypeName}"));
+        }
+        finally
+        {
+            // Cleanup - Delete child tenant
+            using var cleanupSession = await systemContext.GetAdminSessionAsync();
+            cleanupSession.StartTransaction();
+            await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
+            await cleanupSession.CommitTransactionAsync();
+        }
+    }
+
+    [Fact]
+    public async Task UpdateIndexes_WithDuplicatedInheritanceOfDerivedType_ShouldSucceed()
+    {
+        // Arrange - Create child tenant
+        var systemContext = _fixture.GetSystemContext();
+        var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
+
+        using (var adminSession = await systemContext.GetAdminSessionAsync())
+        {
+            adminSession.StartTransaction();
+            await systemContext.CreateChildTenantAsync(adminSession, tenantId, tenantId);
+            await adminSession.CommitTransactionAsync();
+        }
+
+        try
+        {
+            var tenantContext = await systemContext.GetChildTenantContextAsync(tenantId);
+            var modelVersion = GetModelVersion(Constants.AbstractRootModelName);
+            var childTypeId = new CkId<CkTypeId>($"{modelVersion}/{Constants.ConcreteChildTypeName}");
+            await tenantContext.ImportCkModelAsync(CreateAbstractRootModel(modelVersion, includeConcreteChild: true));
+
+            // Arrange - A second, identical inheritance record, as left behind by a tenant restore
+            var inheritances = GetTenantMongoDatabase(tenantId).GetCollection<BsonDocument>("CkTypeInheritance");
+            var inheritance = await inheritances
+                .Find(Builders<BsonDocument>.Filter.Eq("inheritorCkTypeId", childTypeId.ToString()))
+                .SingleAsync(TestContext.Current.CancellationToken);
+            inheritance["_id"] = ObjectId.GenerateNewId();
+            await inheritances.InsertOneAsync(inheritance, cancellationToken: TestContext.Current.CancellationToken);
+
+            // Act
+            using (var adminSession = await systemContext.GetAdminSessionAsync())
+            {
+                await tenantContext.UpdateIndexesAsync(adminSession);
+            }
+
+            // Assert
+            await AssertConcreteChildUniqueIndexEnforcedAsync(tenantContext.GetTenantRepository(), childTypeId);
+        }
+        finally
+        {
+            // Cleanup - Delete child tenant
+            using var cleanupSession = await systemContext.GetAdminSessionAsync();
+            cleanupSession.StartTransaction();
+            await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
+            await cleanupSession.CommitTransactionAsync();
+        }
+    }
+
+    [Fact]
+    public async Task SystemIndexes_OnAbstractCollectionRootWithoutDeclaredIndexes_ShouldBeCreated()
+    {
+        // Arrange - Create child tenant
+        var systemContext = _fixture.GetSystemContext();
+        var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
+
+        using (var adminSession = await systemContext.GetAdminSessionAsync())
+        {
+            adminSession.StartTransaction();
+            await systemContext.CreateChildTenantAsync(adminSession, tenantId, tenantId);
+            await adminSession.CommitTransactionAsync();
+        }
+
+        try
+        {
+            var tenantContext = await systemContext.GetChildTenantContextAsync(tenantId);
+
+            // Act
+            await tenantContext.ImportCkModelAsync(
+                CreateAbstractRootModel(GetModelVersion(Constants.AbstractRootModelName), includeConcreteChild: false));
+
+            // Assert
+            var indexNames = await GetAbstractRootIndexNamesAsync(tenantId);
+            Assert.Contains("SystemEntity_0", indexNames);
+            Assert.Contains("SystemEntity_1", indexNames);
+            Assert.Contains("SystemEntity_2", indexNames);
+            Assert.Contains(indexNames, n => n.EndsWith("_9000"));
+            Assert.Contains(indexNames, n => n.EndsWith("_9001"));
+        }
+        finally
+        {
+            // Cleanup - Delete child tenant
+            using var cleanupSession = await systemContext.GetAdminSessionAsync();
+            cleanupSession.StartTransaction();
+            await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
+            await cleanupSession.CommitTransactionAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ScopedIndexUpdate_ForSystemModel_ShouldReachCollectionRootsOfOtherModels()
+    {
+        // Arrange - Create child tenant
+        var systemContext = _fixture.GetSystemContext();
+        var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
+
+        using (var adminSession = await systemContext.GetAdminSessionAsync())
+        {
+            adminSession.StartTransaction();
+            await systemContext.CreateChildTenantAsync(adminSession, tenantId, tenantId);
+            await adminSession.CommitTransactionAsync();
+        }
+
+        try
+        {
+            var tenantContext = await systemContext.GetChildTenantContextAsync(tenantId);
+            await tenantContext.ImportCkModelAsync(
+                CreateAbstractRootModel(GetModelVersion(Constants.AbstractRootModelName), includeConcreteChild: false));
+
+            // Arrange - The root's collection misses an index declared by System/Entity, as after a System model upgrade
+            var collectionName = await GetAbstractRootCollectionNameAsync(tenantId);
+            await GetTenantMongoDatabase(tenantId).GetCollection<BsonDocument>(collectionName).Indexes
+                .DropOneAsync("SystemEntity_0", TestContext.Current.CancellationToken);
+
+            // Act
+            var databaseName = tenantId.ToLowerInvariant();
+            var dataSource = new MongoDbRepositoryDataSource(NullLogger<MongoDbRepositoryDataSource>.Instance,
+                _fixture.GetService<IAdminRepositoryAccess>().GetRepositoryClient(databaseName), databaseName,
+                tenantId);
+            using (var session = await dataSource.CreateSessionAsync())
+            {
+                session.StartTransaction();
+                await dataSource.UpdateIndexAsync(session, false, SystemCkIds.CkModelId,
+                    TestContext.Current.CancellationToken);
+                await session.CommitTransactionAsync();
+            }
+
+            // Assert
+            Assert.Contains("SystemEntity_0", await GetAbstractRootIndexNamesAsync(tenantId));
+        }
+        finally
+        {
+            // Cleanup - Delete child tenant
+            using var cleanupSession = await systemContext.GetAdminSessionAsync();
+            cleanupSession.StartTransaction();
+            await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
+            await cleanupSession.CommitTransactionAsync();
+        }
+    }
+
+    private async Task<string> GetAbstractRootCollectionNameAsync(string tenantId)
+    {
+        var collectionNames = await (await GetTenantMongoDatabase(tenantId)
+            .ListCollectionNamesAsync(cancellationToken: TestContext.Current.CancellationToken))
+            .ToListAsync(TestContext.Current.CancellationToken);
+        return collectionNames.Single(n => n.EndsWith(Constants.AbstractRootTypeName));
+    }
+
+    private async Task<List<string>> GetAbstractRootIndexNamesAsync(string tenantId)
+    {
+        var collectionName = await GetAbstractRootCollectionNameAsync(tenantId);
+        var indexes = await (await GetTenantMongoDatabase(tenantId).GetCollection<BsonDocument>(collectionName).Indexes
+            .ListAsync(TestContext.Current.CancellationToken)).ToListAsync(TestContext.Current.CancellationToken);
+        return indexes.Select(i => i["name"].AsString).ToList();
+    }
+
+    private IMongoDatabase GetTenantMongoDatabase(string tenantId)
+    {
+        var config = _fixture.GetService<IOptions<OctoSystemConfiguration>>().Value;
+
+        var urlBuilder = new MongoUrlBuilder
+        {
+            Server = MongoServerAddress.Parse(config.DatabaseHost),
+            Username = config.AdminUser,
+            Password = config.AdminUserPassword,
+            AuthenticationSource = config.AuthenticationDatabaseName,
+            DatabaseName = config.AuthenticationDatabaseName,
+            DirectConnection = config.UseDirectConnection
+        };
+
+        return new MongoClient(urlBuilder.ToMongoUrl()).GetDatabase(tenantId.ToLowerInvariant());
+    }
+
+    /// <summary>
+    /// Asserts that the UniqueNotDeleted index of the concrete child is applied in the abstract root's collection:
+    /// a unique value is accepted and a duplicate is rejected
+    /// </summary>
+    private static async Task AssertConcreteChildUniqueIndexEnforcedAsync(ITenantRepository tenantRepository,
+        CkId<CkTypeId> childTypeId)
+    {
+        var session = tenantRepository.GetSession();
+        var result = await tenantRepository.GetCkTypeAsync(session, new List<CkId<CkTypeId>> { childTypeId },
+            RtEntityQueryOptions.Create());
+
+        var ckType = result.Items.SingleOrDefault();
+        Assert.NotNull(ckType);
+        Assert.NotNull(ckType.IndexStates);
+        var appliedIndex = ckType.IndexStates.FirstOrDefault(s => s.State == IndexState.Applied);
+        Assert.NotNull(appliedIndex);
+        Assert.EndsWith(Constants.AbstractRootTypeName, appliedIndex.CollectionName);
+
+        var rtChildTypeId = childTypeId.ToRtCkId();
+
+        using (var insertSession = await tenantRepository.GetSessionAsync())
+        {
+            insertSession.StartTransaction();
+            var first = await tenantRepository.CreateTransientRtEntityByRtCkIdAsync(rtChildTypeId);
+            first.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
+            await tenantRepository.InsertOneRtEntityAsync(insertSession, first);
+            var second = await tenantRepository.CreateTransientRtEntityByRtCkIdAsync(rtChildTypeId);
+            second.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.UniqueValue);
+            await tenantRepository.InsertOneRtEntityAsync(insertSession, second);
+            await insertSession.CommitTransactionAsync();
+        }
+
+        using var duplicateSession = await tenantRepository.GetSessionAsync();
+        duplicateSession.StartTransaction();
+        var duplicate = await tenantRepository.CreateTransientRtEntityByRtCkIdAsync(rtChildTypeId);
+        duplicate.SetAttributeValue(Constants.SimpleFieldName, AttributeValueTypesDto.String, Constants.DuplicateValue);
+        var exception = await Assert.ThrowsAnyAsync<Exception>(() =>
+            tenantRepository.InsertOneRtEntityAsync(duplicateSession, duplicate));
+        Assert.Contains("duplicate", exception.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Creates a CK model whose collection root is abstract, optionally with a concrete child declaring a UniqueNotDeleted index
+    /// </summary>
+    private static CkCompiledModelRoot CreateAbstractRootModel(string modelVersion, bool includeConcreteChild)
+    {
+        var rootType = new CkCompiledTypeDto
+        {
+            TypeId = new CkTypeId(Constants.AbstractRootTypeName),
+            DerivedFromCkTypeId = SystemCkIds.CkEntityTypeId,
+            IsAbstract = true,
+            IsCollectionRoot = true
+        };
+
+        return new CkCompiledModelRoot
+        {
+            ModelId = new CkModelId(modelVersion),
+            Dependencies = [SystemCkIds.CkModelId],
+            Attributes =
+            [
+                new CkAttributeDto
+                {
+                    AttributeId = new CkAttributeId(Constants.SimpleFieldName),
+                    ValueType = AttributeValueTypesDto.String
+                },
+            ],
+            Types = includeConcreteChild
+                ? [rootType, CreateConcreteChildType(modelVersion, modelVersion)]
+                : [rootType]
+        };
+    }
+
+    /// <summary>
+    /// Creates a CK model holding only the concrete child, derived from the abstract root of another model
+    /// </summary>
+    private static CkCompiledModelRoot CreateConcreteChildModel(string modelVersion, string rootModelVersion)
+    {
+        return new CkCompiledModelRoot
+        {
+            ModelId = new CkModelId(modelVersion),
+            Dependencies = [SystemCkIds.CkModelId, new CkModelId(rootModelVersion)],
+            Attributes =
+            [
+                new CkAttributeDto
+                {
+                    AttributeId = new CkAttributeId(Constants.SimpleFieldName),
+                    ValueType = AttributeValueTypesDto.String
+                },
+            ],
+            Types = [CreateConcreteChildType(modelVersion, rootModelVersion)]
+        };
+    }
+
+    private static CkCompiledTypeDto CreateConcreteChildType(string modelVersion, string rootModelVersion)
+    {
+        return new CkCompiledTypeDto
+        {
+            TypeId = new CkTypeId(Constants.ConcreteChildTypeName),
+            DerivedFromCkTypeId = new CkId<CkTypeId>($"{rootModelVersion}/{Constants.AbstractRootTypeName}"),
+            Attributes =
+            [
+                new() { CkAttributeId = new CkId<CkAttributeId>($"{modelVersion}/{Constants.SimpleFieldName}"), AttributeName = Constants.SimpleFieldName },
+            ],
+            Indexes =
+            [
+                new()
+                {
+                    IndexType = IndexTypeDto.UniqueNotDeleted,
+                    Fields = [new() { AttributePaths = [Constants.SimpleFieldName] }]
+                },
+            ]
+        };
     }
 
     /// <summary>
