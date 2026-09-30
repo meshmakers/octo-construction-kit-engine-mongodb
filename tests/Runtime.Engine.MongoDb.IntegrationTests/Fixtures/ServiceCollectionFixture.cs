@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 using MartinCostello.Logging.XUnit;
 
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -43,14 +45,27 @@ public abstract class ServiceCollectionFixture : ITestOutputHelperAccessor, IAsy
         }
     }
 
+    /// <summary>
+    ///     Tears the fixture down step by step, each step bounded and reported (AB#5436). Neither the
+    ///     fixture's own cleanup nor the service provider — whose singletons close MongoDB connections
+    ///     and, for a throwaway tenant, may still be talking to a database that is on its way out — may
+    ///     hold the run open or turn a finished run into a cleanup failure. Whatever the tests decided
+    ///     has already been reported by the time we get here.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
-        await DisposeServicesAsync();
+        var name = GetType().Name;
+
+        await RunProgress.RunBoundedAsync($"{name} teardown", DisposeServicesAsync);
 
         if (Provider is not null)
         {
-            await Provider.DisposeAsync();
+            var provider = Provider;
+            await RunProgress.RunBoundedAsync($"{name} service provider dispose",
+                async () => await provider.DisposeAsync());
         }
+
+        RunProgress.FixtureTornDown();
     }
 
     public async ValueTask InitializeAsync()
@@ -60,8 +75,25 @@ public abstract class ServiceCollectionFixture : ITestOutputHelperAccessor, IAsy
             return;
         }
 
-        await InitializeServicesAsync();
+        // Reported because this is where the suite's wall clock actually goes: every collection
+        // fixture creates its own system tenant and imports the CK models, which xUnit attributes to
+        // no test at all, so it is invisible both in the console output and in the .trx durations.
+        var name = GetType().Name;
+        var watch = Stopwatch.StartNew();
+        RunProgress.Report($"{name}: initialising");
+        try
+        {
+            await InitializeServicesAsync();
+        }
+        catch (Exception ex)
+        {
+            RunProgress.Report(
+                $"{name}: initialisation FAILED after {RunProgress.Seconds(watch.Elapsed)}s — {ex.GetType().Name}: {ex.Message}");
+            throw;
+        }
 
+        RunProgress.Report($"{name}: ready in {RunProgress.Seconds(watch.Elapsed)}s");
+        RunProgress.FixtureReady();
     }
 
     protected virtual Task InitializeServicesAsync()

@@ -43,6 +43,64 @@ USE_LOCAL_MONGODB=true dotnet test -c DebugL
 }
 ```
 
+### The integration suite is silent for most of its run — that is not a hang (AB#5436)
+
+At the default `dotnet test` console verbosity **a passing test prints nothing**: only `[FAIL]` and
+`[SKIP]` lines reach the log. This suite reports its last failing test very early — the stream-data
+collections abort on their first assertion and are done inside the first two minutes — and then keeps
+working for the rest of its wall clock, so the log falls silent for the remainder. Measured on the
+`ae3336e` commit, all six runs, same shape:
+
+| Build | Result | Silence before `Results File:` | Integration wall clock | Share |
+|---|---|---|---|---|
+| 48277 | red | **1177 s** | 1319 s | 89 % |
+| 48271 attempt 1 / 2 / 3 | red | 341 s / 440 s / 649 s | 406 / 512 / 779 s | 84-86 % |
+| 48116 | **green** | 520 s | 604 s | 86 % |
+| 48223 | **green** | 409 s | 461 s | 89 % |
+
+**The silence is the tests running.** The green builds are silent at exactly the same place, so it
+cannot be a failed cleanup stalling. ADO's own per-test figures for the integration run confirm where
+the wall clock goes: 1042-1927 s of aggregate test time across the 482 results, **slowest single test
+69-99 s** (not 7 s — that figure comes from reading only the failed results). The sum exceeds the wall
+clock because `parallelizeTestCollections: true` runs the collections concurrently. Reproduced locally:
+a fully green DebugL run printed four lines in its first 11 s, then nothing for 166 s of its 176 s,
+and the .trx `<Times finish>` equals the last test's `endTime` to the second — zero post-run gap.
+
+Two consequences worth keeping:
+
+- **Never conclude "the build hangs" from a quiet log here.** Read `[xUnit.net ...] octo-progress`
+  lines (below) or the .trx times first. Misreading this once cost real time — the run was reported as
+  stuck for twenty minutes while the actual cause, the `System.StreamData` resolve failure, had been in
+  the log within seconds.
+- **The cost driver is fixture setup, and it is invisible in every per-test duration.** Each of the
+  ~17 collection fixtures creates its own system tenant and imports the CK models; xUnit attributes
+  that to no test at all. If this suite needs to get faster, that is the place, not the tests.
+
+### Progress and bounded teardown (AB#5436)
+
+`Fixtures/RunProgress.cs` is the suite's progress channel. It writes **xUnit diagnostic messages**
+(`diagnosticMessages: true` in `xunit.runner.json`), which the runner prints as
+`[xUnit.net HH:MM:SS.ff] ... octo-progress <elapsed> <what>` — the same channel the `[FAIL]` lines use.
+`Console.WriteLine` from a fixture does **not** work for this: it is captured as test output and only
+ever reaches the .trx, which is why "Using shared Testcontainer MongoDB at ..." was never visible in a
+CI log. Every fixture reports `initialising` / `ready in Xs`, and `RunHeartbeatFixture` (an assembly
+fixture) adds a line every 30 s, so the log can no longer go quiet for longer than that — a heartbeat
+that keeps ticking means "working", one that stops means "hung", and the last `octo-progress` line says
+where. The diagnostic sink hangs off the `AsyncLocal` test context, so the heartbeat thread would see
+only xUnit's idle context: `RunProgress.CaptureDiagnosticSink()` captures it once from the assembly
+fixture.
+
+`RunProgress.RunBoundedAsync` is the only way teardown runs: each step gets a time budget (60 s for
+fixture teardown and provider dispose, 30 s for a throwaway tenant), is reported before and after, and
+**never throws**. A cleanup that overruns is abandoned with a `STILL RUNNING ... abandoned` line and the
+run continues — cleaning up after a failure, against a tenant in an unknown state, is exactly the place
+a finished run could otherwise be held open. Tests that create a throwaway tenant drop it through
+`Fixtures/ThrowawayTenant.cs` in a `finally`, so a failing test no longer leaves `streamdrop*` tenants
+and their databases behind in the shared container.
+
+Swallowing a teardown failure loses it as a test result, deliberately: the reported line is the only
+trace, and the run's red/green verdict is already decided by the tests themselves.
+
 ## Tenant Registry vs. Tenant Hierarchy (AB#5025)
 
 The system tenant's database doubles as the **platform-wide routing registry**: every tenant of
