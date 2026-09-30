@@ -692,7 +692,7 @@ Every archive write is an upsert on the row key, and the `DO UPDATE SET` was unc
 the same messages in a different order produced a different archive — a correctness defect wherever
 one window can be written more than once (corrections, re-sends, a backfill next to a live feed).
 
-`Archive.ConflictPrecedence` (System.StreamData 1.11.0, on the abstract `Archive` base so raw and
+`Archive.ConflictPrecedence` (System.StreamData 1.13.0, on the abstract `Archive` base so raw and
 windowed alike) is the opt-in that makes the update conditional: an **ordered list of keys**, each
 naming one of the archive's own user columns plus `HigherWins` (timestamps, sequence numbers) or
 `LowerWins` (rank codes numbered best-first). **An empty list is the default and behaves exactly as

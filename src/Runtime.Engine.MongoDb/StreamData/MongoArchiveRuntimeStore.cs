@@ -119,7 +119,7 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
             MaxRetroactiveReachMs = entity.MaxRetroactiveReachMs,
             // Opt-in conflict resolution: the ordered keys that decide which of two competing writes
             // to one row survives; an empty list keeps the historical last-write-wins upsert.
-            // System.StreamData 1.11.0.
+            // System.StreamData 1.13.0.
             ConflictPrecedence = MapConflictPrecedence(entity.ConflictPrecedence),
         };
     }

@@ -3,7 +3,7 @@ using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 
 namespace Meshmakers.Octo.Runtime.Engine.UnitTests;
 
-// Opt-in conflict resolution (System.StreamData 1.11.0 — Archive.ConflictPrecedence).
+// Opt-in conflict resolution (System.StreamData 1.13.0 — Archive.ConflictPrecedence).
 //
 // Every archive write is an upsert on the row key, and until this feature the DO UPDATE was
 // unconditional: whichever delivery arrived LAST won, regardless of the data. A re-delivered or
@@ -38,7 +38,7 @@ public class ConflictPrecedenceSqlTests
     {
         var sql = CrateDatabaseClient.BuildTimeRangeInsertSql("\"t\".\"archive_a\"", Columns);
 
-        // The pre-1.11.0 shape, byte for byte: no archive changes behaviour until it opts in.
+        // The pre-1.13.0 shape, byte for byte: no archive changes behaviour until it opts in.
         Assert.Contains("\"amountvalue\" = EXCLUDED.\"amountvalue\"", sql);
         Assert.DoesNotContain("CASE WHEN", sql);
     }

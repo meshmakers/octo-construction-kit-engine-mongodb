@@ -18,7 +18,7 @@ public interface IStreamDataDatabaseClient
     /// during DDL generation).
     /// </summary>
     /// <param name="conflictPrecedence">
-    /// Opt-in conflict resolution (System.StreamData 1.11.0): the archive's
+    /// Opt-in conflict resolution (System.StreamData 1.13.0): the archive's
     /// <c>ConflictPrecedence</c>, each key naming one of <paramref name="userColumnNames" /> plus the
     /// direction of it that counts as better. Empty or null leaves the conflict update unconditional
     /// (last write wins, the historical behaviour). Otherwise competing writes are compared
@@ -31,7 +31,7 @@ public interface IStreamDataDatabaseClient
     /// Bulk variant of <see cref="InsertDataAsync(string, string, IReadOnlyList{string}, DataPointDto, IReadOnlyList{ArchiveConflictKey})"/>.
     /// </summary>
     /// <param name="conflictPrecedence">
-    /// Opt-in conflict resolution (System.StreamData 1.11.0): the archive's
+    /// Opt-in conflict resolution (System.StreamData 1.13.0): the archive's
     /// <c>ConflictPrecedence</c>, each key naming one of <paramref name="userColumnNames" /> plus the
     /// direction of it that counts as better. Empty or null leaves the conflict update unconditional
     /// (last write wins, the historical behaviour). Otherwise competing writes are compared
@@ -54,7 +54,7 @@ public interface IStreamDataDatabaseClient
     /// Time-range archive tables have no generation column and pass false.
     /// </param>
     /// <param name="conflictPrecedence">
-    /// Opt-in conflict resolution (System.StreamData 1.11.0): the archive's
+    /// Opt-in conflict resolution (System.StreamData 1.13.0): the archive's
     /// <c>ConflictPrecedence</c>, each key naming one of <paramref name="userColumnNames" /> plus the
     /// direction of it that counts as better. Empty or null leaves the conflict update unconditional
     /// (last write wins, the historical behaviour). Otherwise competing writes are compared

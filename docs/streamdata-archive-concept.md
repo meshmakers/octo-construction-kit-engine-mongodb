@@ -190,7 +190,7 @@ Implications:
 - **Idempotent re-inserts** are safe: an identical payload only bumps `rtchangeddatetime` (and `was_updated`).
 - **One statement per sub-batch, not one per row.** Every value stays its own typed bind parameter, but CrateDB analyses the statement once instead of once per row. That matters as soon as *Conflict precedence* is on: its guard makes each statement several KB, and as single-row commands CrateDB spent ~0.7 ms per row analysing it — 10,000 rows took 7.4 s, against 0.8 s as multi-row statements (CrateDB 5.10). Two rows with the same key in one statement resolve exactly as two separate writes would: the guard picks the winner, and without a guard the later row wins (verified on CrateDB 5.10).
 
-### Conflict precedence — opt-in ordering (System.StreamData 1.11.0)
+### Conflict precedence — opt-in ordering (System.StreamData 1.13.0)
 
 Unconditional last-write-wins means the stored value reflects **arrival order**, not the data. Wherever the same key can be written more than once — a corrected meter reading, a re-sent document, a backfill next to a live feed — that is a correctness defect and not just a race: replaying the same set of messages in a different order produces a different archive.
 

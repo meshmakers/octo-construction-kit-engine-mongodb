@@ -236,7 +236,7 @@ public class CrateDbStreamDataExportImportTests
         A.CallTo(() => _db.InsertDataAsync(
                 A<string>._, A<string>._, A<IReadOnlyList<string>>._, A<IEnumerable<DataPointDto>>._))
             // The trailing argument is the archive's opt-in ConflictPrecedence (System.StreamData
-            // 1.11.0), null on the import path: an archive-data import restores an operator's
+            // 1.13.0), null on the import path: an archive-data import restores an operator's
             // snapshot and must write what it is given, not re-decide which write wins.
             .Invokes((string _, string _, IReadOnlyList<string> _, IEnumerable<DataPointDto> d,
                     IReadOnlyList<ArchiveConflictKey>? _) =>
