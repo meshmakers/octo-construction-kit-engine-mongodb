@@ -204,7 +204,7 @@ ConflictPrecedence:
 
 An **empty list is the default and preserves the behaviour above exactly**, so this is a real opt-in — nothing changes for an archive that does not declare it.
 
-**Lexicographic, never conjunctive.** The first key decides; a later one only breaks a tie in every key before it. That is what makes the keys a total order over the data, so the surviving value is its maximum — the same value whichever write lands first. Read as a conjunction ("better rank AND newer"), the result would still depend on arrival order: an older but better-ranked value would lose to a newer worse-ranked one that happened to arrive first, which is exactly the defect being removed.
+**Lexicographic, never conjunctive.** The first key decides; a later one only breaks a tie in every key before it. That is what makes the keys a total order over the data, so the surviving value is its maximum — the same value whichever write lands first. Read as a conjunction ("better rank AND newer"), the result would still depend on arrival order: an older but better-ranked value would lose to a newer worse-ranked one that happened to arrive first, which is exactly the defect being removed. The guarantee covers writes the keys tell apart: two writes equal in every key are not ordered, and because the guard replaces a row only for a strictly better one, the row stored first stays.
 
 The clause becomes a guard wrapped around every assignment, including the standard ones:
 

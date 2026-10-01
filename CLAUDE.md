@@ -700,7 +700,8 @@ before.**
 
 - **Lexicographic, never conjunctive.** `BuildConflictGuard` / `BuildPrecedenceLevel` in
   `CrateDatabaseClient` render `better(k1) OR (equal(k1) AND (…))`. That is a total order over the
-  data, so the surviving value is its maximum — the same whichever write lands first. ANDing the
+  data, so the surviving value is its maximum — the same whichever write lands first (for writes
+  the keys tell apart; writes equal in every key keep the row stored first). ANDing the
   keys ("better rank AND newer") would leave the result arrival-order dependent, which is the whole
   defect. Do not "simplify" it into a conjunction.
 - **The guard wraps every assignment**, `rtchangeddatetime` and `was_updated` included
