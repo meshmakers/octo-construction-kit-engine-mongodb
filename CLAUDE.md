@@ -685,6 +685,62 @@ services) prepends an instance prefix: `{prefix}_{tenant}`. Rules:
   on `StreamData.UnitTests` (pure-logic assembly, serialization costs ~nothing); the naming
   matrix itself tests the pure `SchemaName(tenantId, prefix)` core.
 
+### Conflict Precedence — the upsert stops being last-write-wins (AB#5247)
+
+Every archive write is an upsert on the row key, and the `DO UPDATE SET` was unconditional: the
+**last** delivery won regardless of the data, so the stored value reflected arrival order. Replaying
+the same messages in a different order produced a different archive — a correctness defect wherever
+one window can be written more than once (corrections, re-sends, a backfill next to a live feed).
+
+`Archive.ConflictPrecedence` (System.StreamData 1.13.0, on the abstract `Archive` base so raw and
+windowed alike) is the opt-in that makes the update conditional: an **ordered list of keys**, each
+naming one of the archive's own user columns plus `HigherWins` (timestamps, sequence numbers) or
+`LowerWins` (rank codes numbered best-first). **An empty list is the default and behaves exactly as
+before.**
+
+- **Lexicographic, never conjunctive.** `BuildConflictGuard` / `BuildPrecedenceLevel` in
+  `CrateDatabaseClient` render `better(k1) OR (equal(k1) AND (…))`. That is a total order over the
+  data, so the surviving value is its maximum — the same whichever write lands first (for writes
+  the keys tell apart; on a tie in every key the last level admits equality, so the later write
+  replaces the stored row — idempotent re-delivery, and keyless rows behave as before opting in). ANDing the
+  keys ("better rank AND newer") would leave the result arrival-order dependent, which is the whole
+  defect. Do not "simplify" it into a conjunction.
+- **The guard wraps every assignment**, `rtchangeddatetime` and `was_updated` included
+  (`Guarded(...)` → `CASE WHEN <guard> THEN <incoming> ELSE "col" END`), so a losing write leaves no
+  trace at all.
+- **Null rules:** stored NULL is always replaceable (otherwise the first write freezes the history);
+  an incoming NULL never displaces a stored value (a write that cannot prove it is better must not
+  win); both NULL is a tie and falls through to the next key. The **last** key admits equality, which
+  is what makes an identical re-delivery idempotent.
+- **Keys must be user columns of the archive.** The guard reads `EXCLUDED."k"`, so an unknown name
+  would produce SQL that fails on every single write; the builder refuses and names the valid columns.
+- **Ingest paths only.** `ImportRowsAsync` deliberately does not apply it — an operator restoring a
+  snapshot must get back what they gave.
+
+Full write-up incl. the rendered SQL: `docs/streamdata-archive-concept.md` → *Conflict precedence*.
+
+### Declared-vs-physical Column Reconciliation
+
+Archive tables are provisioned with `CREATE TABLE IF NOT EXISTS`, so on an **already-activated**
+archive a newly declared column never reached CrateDB: everything written to it was dropped as
+unknown, and once anything referenced it in SQL — which an opt-in `ConflictPrecedence` key does —
+**every** write to the archive failed. The only remedy was dropping the table, i.e. losing the
+archive's history, which made the opt-in unusable on exactly the archives that have the ordering
+defect.
+
+`CrateDbStreamDataRepository.ReconcileDeclaredColumnsAsync` now runs after the `CREATE TABLE IF NOT
+EXISTS` and issues `ALTER TABLE … ADD COLUMN` for declared-but-missing columns. The plan is computed
+by the pure `ArchiveColumnReconciliation.Plan`, which is deliberately narrow:
+
+- **Add-only.** Nothing is ever dropped or retyped — that would destroy data.
+- **Ingested columns only.** Computed columns have their own versioned backfill path.
+- **A `Required` column is added nullable**, because existing rows cannot retroactively have a value.
+
+`ArchiveLifecycleService.ActivateAsync` used to return early for an already-`Activated` archive;
+it now reaches provisioning (idempotent by contract, one catalogue query when there is nothing to
+do), which is what makes the reconciliation reachable at all. Verified against CrateDB 5.10.10 on a
+populated table: the ALTER succeeds, existing rows carry NULL, and 316,268 rows stayed untouched.
+
 ### Storage Layout
 
 Per-tenant CrateDB schemas hold one table per `CkArchive` (and per `CkRollupArchive`). The Mongo

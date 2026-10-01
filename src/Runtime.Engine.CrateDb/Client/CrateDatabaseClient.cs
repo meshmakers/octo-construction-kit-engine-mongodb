@@ -10,6 +10,8 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
 using Polly;
+using System.Text;
+using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 
@@ -20,14 +22,20 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     IStreamDataHealthCheckClient
 {
     /// <summary>
-    /// AB#4278: maximum single-row inserts executed under one resilience (Polly) envelope. A bulk
-    /// insert of millions of rows (the <c>import_archive_data</c> path) is split into sub-batches of
-    /// this size, each opening its own connection and running inside its own per-attempt timeout, so
-    /// no single attempt spans more inserts than can complete within the timeout — and a transient
-    /// retry replays only the failed sub-batch instead of the whole input. Sized well below the number
-    /// of single-row round-trips that fit in the 30s per-attempt budget.
+    /// AB#4278: maximum rows written under one resilience (Polly) envelope. A bulk insert of millions
+    /// of rows (the <c>import_archive_data</c> path) is split into sub-batches of this size, each
+    /// opening its own connection and running inside its own per-attempt timeout, so no single attempt
+    /// spans more rows than can complete within the timeout — and a transient retry replays only the
+    /// failed sub-batch instead of the whole input. A sub-batch is one multi-row statement; see
+    /// <see cref="RowsPerStatement"/> for the parameter cap that can make it smaller.
     /// </summary>
     private const int MaxRowsPerInsertBatch = 1000;
+
+    /// <summary>
+    /// Upper bound of bind parameters in one statement: the PostgreSQL wire protocol carries the
+    /// parameter count as an unsigned 16-bit integer.
+    /// </summary>
+    private const int MaxParametersPerStatement = 65535;
 
     private readonly ILogger<CrateDatabaseClient> _logger;
     private readonly ICrateDbConnectionAccess _connectionAccess;
@@ -168,7 +176,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         });
     }
 
-    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints)
+    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
     {
         var d = datapoints.ToArray();
         if (d.Length == 0) return;
@@ -177,104 +185,148 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // CK-derived primitive type), so the legacy `unnest(@arr,...)` bulk path no longer fits:
         // it required `NpgsqlDbType.Array|Json` for the dynamic `data` blob, but typed columns
         // need their own native param types and silently drop values when forced through JSON.
-        // AB#4773: the rows go out as an NpgsqlBatch of single-row commands — parameter typing
-        // stays per-row/per-column (unlike unnest), but the whole sub-batch is pipelined in one
-        // round trip. The previous command-per-row loop capped bulk restores at well under
-        // 1k rows/s, which turned multi-million-row archive restores into multi-hour jobs.
-        var sql = BuildSingleRowInsertSql(qualifiedTable, userColumnNames);
+        // AB#4773 kept one bind parameter per value; the rows now go out as ONE multi-row
+        // `VALUES (…), (…)` statement per sub-batch rather than an NpgsqlBatch of single-row
+        // commands. Typing is unchanged, but CrateDB analyses the statement once instead of once
+        // per row — which became the dominant cost when the ConflictPrecedence guard grew every
+        // statement to several KB: 10,000 rows took 7.4 s as single-row commands and 0.8 s as
+        // multi-row statements (local CrateDB 5.10, octogrid EDA replay, 2026-09-24).
+        var rowsPerStatement = RowsPerStatement(4 + userColumnNames.Count);
+        var fullSql = BuildRawInsertSql(qualifiedTable, userColumnNames, conflictPrecedence, rowsPerStatement);
 
         // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
         // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
-        for (var offset = 0; offset < d.Length; offset += MaxRowsPerInsertBatch)
+        for (var offset = 0; offset < d.Length; offset += rowsPerStatement)
         {
             var start = offset;
-            var end = Math.Min(offset + MaxRowsPerInsertBatch, d.Length);
+            var end = Math.Min(offset + rowsPerStatement, d.Length);
+            var sql = end - start == rowsPerStatement
+                ? fullSql
+                : BuildRawInsertSql(qualifiedTable, userColumnNames, conflictPrecedence, end - start);
             await _resilience.ExecuteAsync(async _ =>
             {
                 await using var lease = await LeaseConnectionAsync(tenantId);
-                await using var batch = new NpgsqlBatch(lease.Connection);
+                await using var cmd = new NpgsqlCommand(sql, lease.Connection);
                 for (var i = start; i < end; i++)
                 {
-                    var cmd = new NpgsqlBatchCommand(sql);
                     AddInsertParameters(cmd.Parameters, d[i], userColumnNames);
-                    batch.BatchCommands.Add(cmd);
                 }
 
-                await batch.ExecuteNonQueryAsync();
+                await cmd.ExecuteNonQueryAsync();
             });
         }
     }
 
-    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint)
+    /// <summary>
+    /// Rows per multi-row statement for a row of <paramref name="parametersPerRow"/> bind parameters:
+    /// <see cref="MaxRowsPerInsertBatch"/>, lowered for a wide archive so the statement stays within
+    /// <see cref="MaxParametersPerStatement"/>. More rows per statement would gain nothing measurable —
+    /// the per-statement analysis is already spread over a thousand rows.
+    /// </summary>
+    internal static int RowsPerStatement(int parametersPerRow)
+        => Math.Max(1, Math.Min(MaxRowsPerInsertBatch, MaxParametersPerStatement / Math.Max(1, parametersPerRow)));
+
+    /// <summary>
+    /// Renders the <c>VALUES</c> list for <paramref name="rowCount"/> rows of
+    /// <paramref name="parametersPerRow"/> positional parameters each (<c>($1, $2), ($3, $4)</c>),
+    /// appending <paramref name="rowSuffix"/> — a constant such as the rollup generation — inside
+    /// every row. The parameters are bound in the same order by the <c>Add*Parameters</c> helpers.
+    /// </summary>
+    internal static string BuildValuesList(int parametersPerRow, int rowCount, string rowSuffix = "")
+    {
+        var sb = new StringBuilder(rowCount * parametersPerRow * 7);
+        var parameter = 1;
+        for (var row = 0; row < rowCount; row++)
+        {
+            sb.Append(row == 0 ? "(" : ", (");
+            for (var column = 0; column < parametersPerRow; column++)
+            {
+                if (column > 0)
+                {
+                    sb.Append(", ");
+                }
+
+                sb.Append('$').Append(parameter++);
+            }
+
+            sb.Append(rowSuffix).Append(')');
+        }
+
+        return sb.ToString();
+    }
+
+    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
     {
         await _resilience.ExecuteAsync(async _ =>
         {
             await using var lease = await LeaseConnectionAsync(tenantId);
             var connection = lease.Connection;
-            var sql = BuildSingleRowInsertSql(qualifiedTable, userColumnNames);
+            var sql = BuildRawInsertSql(qualifiedTable, userColumnNames, conflictPrecedence);
             await ExecuteSingleInsertAsync(connection, sql, datapoint, userColumnNames);
         });
     }
 
     public async Task InsertTimeRangeDataAsync(
         string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
-        IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false)
+        IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false,
+        IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
     {
         var d = datapoints.ToArray();
         if (d.Length == 0) return;
 
-        // Same batching rationale as InsertDataAsync (AB#4773) — typed columns need their own
-        // native param types per row, the bulk-unnest path can't carry that information, and the
-        // NpgsqlBatch pipelines the sub-batch in one round trip.
-        var sql = BuildTimeRangeInsertSql(qualifiedTable, userColumnNames, generationTracked);
+        // Same shape as InsertDataAsync (AB#4773): one bind parameter per value, one multi-row
+        // statement per sub-batch.
+        var rowsPerStatement = RowsPerStatement(5 + userColumnNames.Count);
+        var fullSql = BuildTimeRangeInsertSql(qualifiedTable, userColumnNames, generationTracked, conflictPrecedence,
+            rowsPerStatement);
 
         // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
         // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
-        for (var offset = 0; offset < d.Length; offset += MaxRowsPerInsertBatch)
+        for (var offset = 0; offset < d.Length; offset += rowsPerStatement)
         {
             var start = offset;
-            var end = Math.Min(offset + MaxRowsPerInsertBatch, d.Length);
+            var end = Math.Min(offset + rowsPerStatement, d.Length);
+            var sql = end - start == rowsPerStatement
+                ? fullSql
+                : BuildTimeRangeInsertSql(qualifiedTable, userColumnNames, generationTracked, conflictPrecedence,
+                    end - start);
             await _resilience.ExecuteAsync(async _ =>
             {
                 await using var lease = await LeaseConnectionAsync(tenantId);
-                await using var batch = new NpgsqlBatch(lease.Connection);
+                await using var cmd = new NpgsqlCommand(sql, lease.Connection);
                 for (var i = start; i < end; i++)
                 {
-                    var cmd = new NpgsqlBatchCommand(sql);
                     AddTimeRangeInsertParameters(cmd.Parameters, d[i], userColumnNames);
-                    batch.BatchCommands.Add(cmd);
                 }
 
-                await batch.ExecuteNonQueryAsync();
+                await cmd.ExecuteNonQueryAsync();
             });
         }
     }
 
-    private static async Task ExecuteSingleTimeRangeInsertAsync(
-        NpgsqlConnection connection, string sql, TimeRangeDataPointDto dto, IReadOnlyList<string> userColumnNames)
-    {
-        await using var cmd = new NpgsqlCommand(sql, connection);
-        AddTimeRangeInsertParameters(cmd.Parameters, dto, userColumnNames);
-        await cmd.ExecuteNonQueryAsync();
-    }
-
+    /// <summary>
+    /// Binds one time-range row as positional parameters, in the column order of
+    /// <see cref="BuildTimeRangeInsertSql"/>.
+    /// </summary>
     private static void AddTimeRangeInsertParameters(
         NpgsqlParameterCollection parameters, TimeRangeDataPointDto dto, IReadOnlyList<string> userColumnNames)
     {
-        parameters.Add(new NpgsqlParameter($"@{Constants.WindowStart}", dto.From));
-        parameters.Add(new NpgsqlParameter($"@{Constants.WindowEnd}", dto.To));
-        parameters.Add(new NpgsqlParameter($"@{Constants.RtId}", (object?)dto.RtId?.ToString() ?? DBNull.Value));
-        parameters.Add(new NpgsqlParameter($"@{Constants.CkTypeId}", (object?)dto.CkTypeId?.ToString() ?? DBNull.Value));
-        parameters.Add(new NpgsqlParameter($"@{Constants.RtWellKnownName}", (object?)dto.RtWellKnownName ?? DBNull.Value));
+        parameters.Add(new NpgsqlParameter { Value = dto.From });
+        parameters.Add(new NpgsqlParameter { Value = dto.To });
+        parameters.Add(new NpgsqlParameter { Value = (object?)dto.RtId?.ToString() ?? DBNull.Value });
+        parameters.Add(new NpgsqlParameter { Value = (object?)dto.CkTypeId?.ToString() ?? DBNull.Value });
+        parameters.Add(new NpgsqlParameter { Value = (object?)dto.RtWellKnownName ?? DBNull.Value });
         foreach (var col in userColumnNames)
         {
             var value = dto.Attributes != null && dto.Attributes.TryGetValue(col, out var v) ? v : null;
-            parameters.Add(new NpgsqlParameter($"@{col}", value ?? (object)DBNull.Value));
+            parameters.Add(new NpgsqlParameter { Value = value ?? DBNull.Value });
         }
     }
 
-    private static string BuildTimeRangeInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames,
-        bool generationTracked = false)
+    internal static string BuildTimeRangeInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames,
+        bool generationTracked = false,
+        IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null,
+        int rowCount = 1)
     {
         // Column order matches the DDL emitted by GenerateCreateWindowedTable: window_start,
         // window_end, rtid, ckTypeId, rtWellKnownName, then user columns. The CONFLICT clause's
@@ -298,24 +350,123 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         allColumns.AddRange(userColumnNames);
 
         var columnList = string.Join(", ", allColumns.Select(c => $"\"{c}\""));
-        var paramList = string.Join(", ", allColumns.Select(c => $"@{c}"));
         if (generationTracked)
         {
             columnList += $", \"{Constants.Generation}\"";
-            paramList += ", 0";
         }
 
+        var values = BuildValuesList(allColumns.Count, rowCount, generationTracked ? ", 0" : string.Empty);
         var conflictGenerationSuffix = generationTracked ? $", \"{Constants.Generation}\"" : string.Empty;
-        var conflictUpdates = userColumnNames.Count == 0
-            ? string.Empty
-            : ", " + string.Join(", ", userColumnNames.Select(c => $"\"{c}\" = EXCLUDED.\"{c}\""));
+        var guard = BuildConflictGuard(conflictPrecedence ?? [], userColumnNames);
+        var conflictUpdates = BuildConflictUpdates(userColumnNames, guard);
 
-        return $"INSERT INTO {qualifiedTable} ({columnList}) VALUES ({paramList}) "
+        return $"INSERT INTO {qualifiedTable} ({columnList}) VALUES {values} "
              + $"ON CONFLICT (\"{Constants.WindowStart}\", \"{Constants.WindowEnd}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\"{conflictGenerationSuffix}) "
-             + $"DO UPDATE SET \"{Constants.RtChangedDateTime}\" = CURRENT_TIMESTAMP, "
-             + $"\"{Constants.WasUpdated}\" = TRUE"
+             + $"DO UPDATE SET \"{Constants.RtChangedDateTime}\" = {Guarded("CURRENT_TIMESTAMP", Constants.RtChangedDateTime, guard)}, "
+             + $"\"{Constants.WasUpdated}\" = {Guarded("TRUE", Constants.WasUpdated, guard)}"
              + conflictUpdates;
     }
+
+    /// <summary>
+    /// Builds the boolean predicate that decides whether a conflicting insert may replace the stored
+    /// row, or <c>null</c> when the archive did not opt in (no <c>ConflictPrecedence</c>) and the
+    /// historical unconditional last-write-wins update applies.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The keys are compared <b>lexicographically</b> in declaration order: the first key decides,
+    /// and a later one only breaks a tie in every key before it. That matters more than it looks.
+    /// Lexicographic ordering is a total order over the DATA, so the surviving value is its maximum —
+    /// the same value whichever write lands first (for writes the keys tell apart; two writes equal
+    /// in every key are not ordered and the later one replaces the stored row, see the last paragraph). Read as a conjunction instead ("better rank AND
+    /// newer"), the result would still depend on arrival order: an older but better-ranked value
+    /// would lose to a newer worse-ranked one that happened to arrive first, which is exactly the
+    /// defect the opt-in exists to remove.
+    /// </para>
+    /// <para>
+    /// Null handling is deliberate and asymmetric, per key. A stored <c>NULL</c> counts as worse than
+    /// anything — rows written before the archive opted in carry no keys, and refusing to ever update
+    /// them would freeze the archive's whole history. An incoming <c>NULL</c> counts as worse than a
+    /// stored value: a data point that cannot prove it is better must not win. Both null is a tie, so
+    /// an archive whose keys are entirely absent behaves exactly as it did before opting in.
+    /// </para>
+    /// <para>
+    /// The last key admits equality so that re-delivering the identical document is idempotent rather
+    /// than a no-op that leaves the row looking untouched.
+    /// </para>
+    /// </remarks>
+    internal static string? BuildConflictGuard(
+        IReadOnlyList<ArchiveConflictKey> precedence, IReadOnlyList<string> userColumnNames)
+    {
+        if (precedence.Count == 0)
+        {
+            return null;
+        }
+
+        // The guard reads EXCLUDED."k", so every key has to be part of the INSERT column list. A name
+        // that is not a user column of this archive would produce SQL that fails at execution time on
+        // every single write; refuse to build it instead.
+        foreach (var key in precedence)
+        {
+            if (!userColumnNames.Contains(key.Column, StringComparer.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Archive conflict precedence key '{key.Column}' is not one of the archive's " +
+                    $"columns ({string.Join(", ", userColumnNames)}). Declare it in the archive's " +
+                    "Columns or remove it from ConflictPrecedence.");
+            }
+        }
+
+        return BuildPrecedenceLevel(precedence, 0);
+    }
+
+    /// <summary>
+    /// Renders the lexicographic comparison from key <paramref name="index" /> onwards.
+    /// </summary>
+    private static string BuildPrecedenceLevel(IReadOnlyList<ArchiveConflictKey> keys, int index)
+    {
+        var key = keys[index];
+        var better = BuildKeyBetter(key);
+        var equal = BuildKeyEqual(key.Column);
+
+        // Last key: equality is accepted, which is what makes an identical re-delivery idempotent.
+        return index == keys.Count - 1
+            ? $"({better} OR {equal})"
+            : $"({better} OR ({equal} AND {BuildPrecedenceLevel(keys, index + 1)}))";
+    }
+
+    /// <summary>Incoming value is strictly better than the stored one for this key.</summary>
+    private static string BuildKeyBetter(ArchiveConflictKey key)
+    {
+        var c = key.Column;
+        var op = key.Order == ConflictKeyOrder.HigherWins ? ">" : "<";
+        return $"((\"{c}\" IS NULL AND EXCLUDED.\"{c}\" IS NOT NULL) "
+             + $"OR (\"{c}\" IS NOT NULL AND EXCLUDED.\"{c}\" IS NOT NULL AND EXCLUDED.\"{c}\" {op} \"{c}\"))";
+    }
+
+    /// <summary>Incoming and stored value are indistinguishable for this key, nulls included.</summary>
+    private static string BuildKeyEqual(string c)
+        => $"((\"{c}\" IS NULL AND EXCLUDED.\"{c}\" IS NULL) "
+         + $"OR (\"{c}\" IS NOT NULL AND EXCLUDED.\"{c}\" IS NOT NULL AND EXCLUDED.\"{c}\" = \"{c}\"))";
+
+    /// <summary>
+    /// Renders one <c>ON CONFLICT DO UPDATE</c> assignment: the incoming value unguarded, or a
+    /// <c>CASE</c> that falls back to the stored column when the guard rejects the write.
+    /// </summary>
+    private static string Guarded(string incomingExpression, string storedColumn, string? guard)
+        => guard is null
+            ? incomingExpression
+            : $"CASE WHEN {guard} THEN {incomingExpression} ELSE \"{storedColumn}\" END";
+
+    /// <summary>
+    /// Renders the user-column part of the <c>DO UPDATE SET</c> list (leading comma included), or
+    /// an empty string when the archive has no user columns.
+    /// </summary>
+    private static string BuildConflictUpdates(IReadOnlyList<string> userColumnNames, string? guard)
+        => userColumnNames.Count == 0
+            ? string.Empty
+            : ", " + string.Join(", ",
+                userColumnNames.Select(c => $"\"{c}\" = {Guarded($"EXCLUDED.\"{c}\"", c, guard)}"));
 
     /// <summary>
     /// Executes a single per-archive INSERT using the raw Npgsql command API. We bind parameters
@@ -332,21 +483,26 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         await cmd.ExecuteNonQueryAsync();
     }
 
+    /// <summary>
+    /// Binds one raw row as positional parameters, in the column order of
+    /// <see cref="BuildRawInsertSql"/>.
+    /// </summary>
     private static void AddInsertParameters(
         NpgsqlParameterCollection parameters, DataPointDto dto, IReadOnlyList<string> userColumnNames)
     {
-        parameters.Add(new NpgsqlParameter($"@{Constants.RtId}", (object?)dto.RtId?.ToString() ?? DBNull.Value));
-        parameters.Add(new NpgsqlParameter($"@{Constants.CkTypeId}", (object?)dto.CkTypeId?.ToString() ?? DBNull.Value));
-        parameters.Add(new NpgsqlParameter($"@{Constants.Timestamp}", dto.Timestamp));
-        parameters.Add(new NpgsqlParameter($"@{Constants.RtWellKnownName}", (object?)dto.RtWellKnownName ?? DBNull.Value));
+        parameters.Add(new NpgsqlParameter { Value = (object?)dto.RtId?.ToString() ?? DBNull.Value });
+        parameters.Add(new NpgsqlParameter { Value = (object?)dto.CkTypeId?.ToString() ?? DBNull.Value });
+        parameters.Add(new NpgsqlParameter { Value = dto.Timestamp });
+        parameters.Add(new NpgsqlParameter { Value = (object?)dto.RtWellKnownName ?? DBNull.Value });
         foreach (var col in userColumnNames)
         {
             var value = dto.Attributes != null && dto.Attributes.TryGetValue(col, out var v) ? v : null;
-            parameters.Add(new NpgsqlParameter($"@{col}", value ?? (object)DBNull.Value));
+            parameters.Add(new NpgsqlParameter { Value = value ?? DBNull.Value });
         }
     }
 
-    private static string BuildSingleRowInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames)
+    internal static string BuildRawInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames,
+        IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null, int rowCount = 1)
     {
         // Column-explicit INSERT against a per-archive table. Columns = standard time-series set
         // (rtId, ckTypeId, timestamp, rtWellKnownName) plus the user-defined columns. Unknown
@@ -359,14 +515,13 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         allColumns.AddRange(userColumnNames);
 
         var columnList = string.Join(", ", allColumns.Select(c => $"\"{c}\""));
-        var paramList = string.Join(", ", allColumns.Select(c => $"@{c}"));
-        var conflictUpdates = userColumnNames.Count == 0
-            ? string.Empty
-            : ", " + string.Join(", ", userColumnNames.Select(c => $"\"{c}\" = EXCLUDED.\"{c}\""));
+        var values = BuildValuesList(allColumns.Count, rowCount);
+        var guard = BuildConflictGuard(conflictPrecedence ?? [], userColumnNames);
+        var conflictUpdates = BuildConflictUpdates(userColumnNames, guard);
 
-        return $"INSERT INTO {qualifiedTable} ({columnList}) VALUES ({paramList}) "
+        return $"INSERT INTO {qualifiedTable} ({columnList}) VALUES {values} "
              + $"ON CONFLICT (\"{Constants.Timestamp}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\") "
-             + $"DO UPDATE SET \"{Constants.RtChangedDateTime}\" = CURRENT_TIMESTAMP, "
+             + $"DO UPDATE SET \"{Constants.RtChangedDateTime}\" = {Guarded("CURRENT_TIMESTAMP", Constants.RtChangedDateTime, guard)}, "
              + $"\"{Constants.RtCreationDateTime}\" = \"{Constants.RtCreationDateTime}\""
              + conflictUpdates;
     }

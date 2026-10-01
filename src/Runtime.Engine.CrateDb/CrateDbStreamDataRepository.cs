@@ -104,6 +104,15 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // validator skips non-computed columns, so it is a no-op for archives without formulas.
         ComputedColumnValidator.Validate(snapshot.RtId, snapshot.Columns, _formulaEngine);
 
+        // A conflict-precedence key has to name one of the archive's columns; the guard reads it on
+        // both sides of the upsert. Building the guard here turns a mistyped key into a failed
+        // activation instead of an archive that activates and then rejects every single write.
+        if (ResolveConflictPrecedence(snapshot) is { } precedence)
+        {
+            var (_, userColumnNames) = ResolveTableAndColumns(snapshot, snapshot.RtId);
+            Client.CrateDatabaseClient.BuildConflictGuard(precedence, userColumnNames);
+        }
+
         var resolvedColumns = snapshot.RollupAggregations is { } aggs
             ? RollupColumnTypeResolver.Resolve(snapshot.Columns, aggs)
             : ArchivePathTypeResolver.Resolve(
@@ -136,6 +145,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 "Provisioning windowed archive table {Table} with {ColumnCount} user columns for tenant {TenantId} (shape: {Shape})",
                 qualifiedTable, resolvedColumns.Count, _tenantId, shape);
             await _managementClient.ExecuteDdlAsync(_tenantId, sql);
+            await ReconcileDeclaredColumnsAsync(qualifiedTable, snapshot.RtId.ToString(), resolvedColumns, isRollup);
 
             if (isRollup)
             {
@@ -153,7 +163,75 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 "Provisioning raw archive table {Table} with {ColumnCount} user columns for tenant {TenantId}",
                 qualifiedTable, resolvedColumns.Count, _tenantId);
             await _managementClient.ExecuteDdlAsync(_tenantId, sql);
+            await ReconcileDeclaredColumnsAsync(qualifiedTable, snapshot.RtId.ToString(), resolvedColumns, isRollup: false);
         }
+    }
+
+    /// <summary>
+    /// Adds columns the archive declares but the physical table does not have yet, so a declared-only
+    /// column change can be adopted by an already-activated archive instead of requiring its table to
+    /// be dropped. The rules live in <see cref="ArchiveColumnReconciliation" />.
+    /// </summary>
+    private async Task ReconcileDeclaredColumnsAsync(
+        string qualifiedTable, string archiveRtId, IReadOnlyList<ArchiveColumnDdl> resolvedColumns, bool isRollup)
+    {
+        if (isRollup)
+        {
+            // Aggregate columns are derived, not written; see ArchiveColumnReconciliation.Plan.
+            return;
+        }
+
+        var existing = await ReadPhysicalColumnNamesAsync(archiveRtId);
+        if (existing.Count == 0)
+        {
+            // Either the table was just created (then it already has every declared column and the
+            // plan below would be empty anyway) or the catalogue could not be read. Adding columns
+            // on the strength of an empty answer would ALTER on every activation.
+            return;
+        }
+
+        foreach (var addition in ArchiveColumnReconciliation.Plan(resolvedColumns, existing, isRollup))
+        {
+            if (addition.DeclaredRequired)
+            {
+                _logger.LogWarning(
+                    "Archive {Table}: adding declared column {Column} as NULLABLE although the archive " +
+                    "declares it required — CrateDB cannot add a NOT NULL column to a table that may " +
+                    "already hold rows, and every existing row carries NULL for it.",
+                    qualifiedTable, addition.Name);
+            }
+
+            _logger.LogInformation(
+                "Archive {Table}: adding declared column {Column}, which the table does not have yet.",
+                qualifiedTable, addition.Name);
+            await _managementClient.ExecuteDdlAsync(_tenantId,
+                ArchiveDdlGenerator.GenerateAddColumn(qualifiedTable, addition.Column));
+        }
+    }
+
+    /// <summary>
+    /// Reads the physical column names of an archive table from <c>information_schema</c>. An empty
+    /// result means "table not found or not readable" and is treated as "do not reconcile".
+    /// </summary>
+    private async Task<IReadOnlySet<string>> ReadPhysicalColumnNamesAsync(string archiveRtId)
+    {
+        var schemaName = TenantSchema.SchemaName(_tenantId);
+        var tableName = "archive_" + archiveRtId;
+        var query =
+            "SELECT column_name FROM information_schema.columns " +
+            $"WHERE table_schema = '{schemaName.Replace("'", "''")}' " +
+            $"AND table_name = '{tableName.Replace("'", "''")}'";
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, query))
+        {
+            if (row.TryGetValue("column_name", out var value) && value is string name)
+            {
+                names.Add(name);
+            }
+        }
+
+        return names;
     }
 
     /// <summary>
@@ -276,7 +354,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var sw = Stopwatch.StartNew();
         var computedPlan = BuildComputedPlan(snapshot);
         var dto = MapToDataPointDto(datapoint, computedPlan);
-        await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dto);
+        await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dto,
+            ResolveConflictPrecedence(snapshot));
         sw.Stop();
 
         CrateDbDiagnostics.InsertDurationMs.Record(sw.Elapsed.TotalMilliseconds,
@@ -327,7 +406,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var sw = Stopwatch.StartNew();
         var computedPlan = BuildComputedPlan(snapshot);
         var dtos = filtered.Select(p => MapToDataPointDto(p, computedPlan));
-        await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos);
+        await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
+            ResolveConflictPrecedence(snapshot));
         sw.Stop();
 
         var bucket = CrateDbDiagnostics.BatchSizeBucket(filtered.Count);
@@ -342,6 +422,30 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         await DetectAndRecordRetroactiveWriteAsync(
             snapshot, filtered.Select(p => p.Timestamp), RecomputeChangeSource.Pipeline);
     }
+
+    /// <summary>
+    /// Maps the archive's opt-in <c>ConflictPrecedence</c> onto the physical CrateDB column names the
+    /// insert SQL references.
+    /// </summary>
+    /// <remarks>
+    /// The keys are authored as CK attribute paths — the same spelling the author already used in
+    /// <c>Columns[].Path</c> — while the physical column is the lower-cased, dot-stripped form
+    /// (<see cref="ColumnNameMapper" />). Mapping here keeps that asymmetry out of the archive
+    /// definition: an author writes <c>SourceDocumentDate</c>, not <c>sourcedocumentdate</c>. Order is
+    /// preserved, because the keys are compared lexicographically and their order IS the semantics.
+    /// <para>
+    /// Deliberately NOT applied to <see cref="ImportRowsAsync" />. The precedence orders competing
+    /// <em>deliveries</em> of the same row; an archive-data import is an operator restoring a known
+    /// snapshot, where "write what I give you" is the intent — silently dropping restored rows for
+    /// looking worse than what is already there would be a data-loss trap.
+    /// </para>
+    /// </remarks>
+    private static IReadOnlyList<ArchiveConflictKey>? ResolveConflictPrecedence(ArchiveSnapshot snapshot)
+        => snapshot.ConflictPrecedence.Count == 0
+            ? null   // not configured is an absence, not an empty list — the client reads it as "no guard"
+            : snapshot.ConflictPrecedence
+                .Select(k => new ArchiveConflictKey(ColumnNameMapper.PathToColumnName(k.Column), k.Order))
+                .ToList();
 
     /// <summary>
     /// Computes the qualified per-archive table name and the camelCase user-column list from the
@@ -434,7 +538,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var sw = Stopwatch.StartNew();
         var computedPlan = BuildComputedPlan(snapshot);
         var dtos = filtered.Select(p => MapToTimeRangeDataPointDto(p, computedPlan));
-        await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos);
+        await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
+            conflictPrecedence: ResolveConflictPrecedence(snapshot));
         sw.Stop();
 
         var bucket = CrateDbDiagnostics.BatchSizeBucket(filtered.Count);
@@ -2640,8 +2745,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             {
                 case FieldFilterOperator.Between:
                     result.Add(new Dtos.StreamDataFieldFilterDto(resolved.CrateDbName, op,
-                        filter.ComparisonValue?.ToString() ?? "",
-                        filter.SecondaryValue?.ToString(), null));
+                        StreamDataFieldFilterValueParser.FormatScalar(filter.ComparisonValue),
+                        filter.SecondaryValue == null
+                            ? null
+                            : StreamDataFieldFilterValueParser.FormatScalar(filter.SecondaryValue),
+                        null));
                     break;
 
                 case FieldFilterOperator.In:
@@ -2661,8 +2769,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                     break;
 
                 default:
+                    // Invariant rendering — an ambient-culture ToString() on a DateTime or a
+                    // double produces text CrateDB either rejects or misreads. See
+                    // StreamDataFieldFilterValueParser.FormatScalar.
                     result.Add(new Dtos.StreamDataFieldFilterDto(resolved.CrateDbName, op,
-                        filter.ComparisonValue!.ToString()!, null, null));
+                        StreamDataFieldFilterValueParser.FormatScalar(filter.ComparisonValue),
+                        null, null));
                     break;
             }
         }
