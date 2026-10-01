@@ -378,7 +378,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     /// and a later one only breaks a tie in every key before it. That matters more than it looks.
     /// Lexicographic ordering is a total order over the DATA, so the surviving value is its maximum —
     /// the same value whichever write lands first (for writes the keys tell apart; two writes equal
-    /// in every key keep the row stored first). Read as a conjunction instead ("better rank AND
+    /// in every key are not ordered and the later one replaces the stored row, see the last paragraph). Read as a conjunction instead ("better rank AND
     /// newer"), the result would still depend on arrival order: an older but better-ranked value
     /// would lose to a newer worse-ranked one that happened to arrive first, which is exactly the
     /// defect the opt-in exists to remove.

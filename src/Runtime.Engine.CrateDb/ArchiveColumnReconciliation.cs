@@ -46,15 +46,26 @@ internal static class ArchiveColumnReconciliation
     /// Only <em>ingested</em> columns are considered: those identified by a CK attribute path and
     /// carrying no explicit column name. A computed column (explicit name) has its own lifecycle — a
     /// versioned physical column plus a backfill — and creating it empty here would bypass that and
-    /// leave a column of NULLs that reads like data. A rollup's aggregate columns are excluded for
-    /// the same reason: they are derived rather than written, and an empty one is indistinguishable
-    /// from a bucket that legitimately aggregated to nothing.
+    /// leave a column of NULLs that reads like data.
+    /// </para>
+    /// <para>
+    /// A rollup archive is not reconciled at all (<paramref name="isRollup" />). Its aggregate columns
+    /// are derived rather than written, and an empty one is indistinguishable from a bucket that
+    /// legitimately aggregated to nothing; a newly declared aggregation needs a backfill, not an
+    /// empty column. They cannot be told apart from ingested columns here — the rollup resolver
+    /// emits them with a path and no explicit column name — so the archive kind decides.
     /// </para>
     /// </remarks>
     public static IReadOnlyList<Addition> Plan(
         IReadOnlyList<ArchiveColumnDdl> resolvedColumns,
-        IReadOnlySet<string> existingPhysicalColumns)
+        IReadOnlySet<string> existingPhysicalColumns,
+        bool isRollup)
     {
+        if (isRollup)
+        {
+            return [];
+        }
+
         var additions = new List<Addition>();
 
         foreach (var column in resolvedColumns)

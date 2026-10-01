@@ -27,7 +27,8 @@ public class ArchiveColumnReconciliationTests
     public void AColumnThePhysicalTableAlreadyHasIsNotTouched()
     {
         var plan = ArchiveColumnReconciliation.Plan(
-            [Ingested("Amount.Value")], Existing("amountvalue"));
+            [Ingested("Amount.Value")], Existing("amountvalue"),
+            isRollup: false);
 
         Assert.Empty(plan);
     }
@@ -36,7 +37,8 @@ public class ArchiveColumnReconciliationTests
     public void ADeclaredColumnTheTableLacksIsAdded()
     {
         var plan = ArchiveColumnReconciliation.Plan(
-            [Ingested("Amount.Value"), Ingested("SourceDocumentDate")], Existing("amountvalue"));
+            [Ingested("Amount.Value"), Ingested("SourceDocumentDate")], Existing("amountvalue"),
+            isRollup: false);
 
         var addition = Assert.Single(plan);
         Assert.Equal("sourcedocumentdate", addition.Name);
@@ -48,7 +50,8 @@ public class ArchiveColumnReconciliationTests
         // Only additions are planned. Dropping would destroy data on a definition edit, which must
         // stay an operator decision rather than a side effect of re-activating an archive.
         var plan = ArchiveColumnReconciliation.Plan(
-            [Ingested("Amount.Value")], Existing("amountvalue", "retiredcolumn"));
+            [Ingested("Amount.Value")], Existing("amountvalue", "retiredcolumn"),
+            isRollup: false);
 
         Assert.Empty(plan);
     }
@@ -61,7 +64,8 @@ public class ArchiveColumnReconciliationTests
         // exactly the definition-versus-table disagreement this exists to close, so it is added
         // nullable and the caller says so.
         var plan = ArchiveColumnReconciliation.Plan(
-            [Ingested("ObisCode", required: true)], Existing("amountvalue"));
+            [Ingested("ObisCode", required: true)], Existing("amountvalue"),
+            isRollup: false);
 
         var addition = Assert.Single(plan);
         Assert.True(addition.DeclaredRequired);
@@ -75,7 +79,8 @@ public class ArchiveColumnReconciliationTests
         // (AB#4189 Phase 7). Creating it empty here would bypass the backfill and leave a column of
         // NULLs that reads like data.
         var plan = ArchiveColumnReconciliation.Plan(
-            [Computed("derived")], Existing("amountvalue"));
+            [Computed("derived")], Existing("amountvalue"),
+            isRollup: false);
 
         Assert.Empty(plan);
     }
@@ -83,10 +88,13 @@ public class ArchiveColumnReconciliationTests
     [Fact]
     public void ARollupAggregateColumnIsNotReconciled()
     {
-        // Same reason: an aggregate column is derived rather than written, and an empty one is
-        // indistinguishable from a bucket that legitimately aggregated to nothing.
+        // An aggregate column is derived rather than written, and an empty one is indistinguishable
+        // from a bucket that legitimately aggregated to nothing. The rollup resolver emits it with
+        // a path and no explicit column name - exactly the shape of an ingested column - so only
+        // the archive kind can keep it out.
         var plan = ArchiveColumnReconciliation.Plan(
-            [Computed("amountvalue_sum")], Existing("dataquality_max"));
+            [Ingested("amountvalue_sum"), Ingested("amountvalue_count")], Existing("amountvalue_sum"),
+            isRollup: true);
 
         Assert.Empty(plan);
     }
@@ -96,7 +104,8 @@ public class ArchiveColumnReconciliationTests
     {
         var plan = ArchiveColumnReconciliation.Plan(
             [Ingested("Amount.Value"), Ingested("Amount.Unit"), Ingested("SourceDocumentDate")],
-            Existing("amountvalue"));
+            Existing("amountvalue"),
+            isRollup: false);
 
         Assert.Equal(["amountunit", "sourcedocumentdate"], plan.Select(a => a.Name).ToArray());
     }
@@ -107,7 +116,8 @@ public class ArchiveColumnReconciliationTests
         // Physical names are the dot-stripped, lower-cased form (ColumnNameMapper). Comparing the
         // path would report every nested column as missing and ALTER on every single activation.
         var plan = ArchiveColumnReconciliation.Plan(
-            [Ingested("Amount.Value")], Existing("Amount.Value"));
+            [Ingested("Amount.Value")], Existing("Amount.Value"),
+            isRollup: false);
 
         Assert.Single(plan);
         Assert.Equal("amountvalue", plan[0].Name);

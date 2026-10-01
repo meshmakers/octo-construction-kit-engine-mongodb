@@ -104,6 +104,15 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // validator skips non-computed columns, so it is a no-op for archives without formulas.
         ComputedColumnValidator.Validate(snapshot.RtId, snapshot.Columns, _formulaEngine);
 
+        // A conflict-precedence key has to name one of the archive's columns; the guard reads it on
+        // both sides of the upsert. Building the guard here turns a mistyped key into a failed
+        // activation instead of an archive that activates and then rejects every single write.
+        if (ResolveConflictPrecedence(snapshot) is { } precedence)
+        {
+            var (_, userColumnNames) = ResolveTableAndColumns(snapshot, snapshot.RtId);
+            Client.CrateDatabaseClient.BuildConflictGuard(precedence, userColumnNames);
+        }
+
         var resolvedColumns = snapshot.RollupAggregations is { } aggs
             ? RollupColumnTypeResolver.Resolve(snapshot.Columns, aggs)
             : ArchivePathTypeResolver.Resolve(
@@ -136,7 +145,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 "Provisioning windowed archive table {Table} with {ColumnCount} user columns for tenant {TenantId} (shape: {Shape})",
                 qualifiedTable, resolvedColumns.Count, _tenantId, shape);
             await _managementClient.ExecuteDdlAsync(_tenantId, sql);
-            await ReconcileDeclaredColumnsAsync(qualifiedTable, snapshot.RtId.ToString(), resolvedColumns);
+            await ReconcileDeclaredColumnsAsync(qualifiedTable, snapshot.RtId.ToString(), resolvedColumns, isRollup);
 
             if (isRollup)
             {
@@ -154,7 +163,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 "Provisioning raw archive table {Table} with {ColumnCount} user columns for tenant {TenantId}",
                 qualifiedTable, resolvedColumns.Count, _tenantId);
             await _managementClient.ExecuteDdlAsync(_tenantId, sql);
-            await ReconcileDeclaredColumnsAsync(qualifiedTable, snapshot.RtId.ToString(), resolvedColumns);
+            await ReconcileDeclaredColumnsAsync(qualifiedTable, snapshot.RtId.ToString(), resolvedColumns, isRollup: false);
         }
     }
 
@@ -164,8 +173,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// be dropped. The rules live in <see cref="ArchiveColumnReconciliation" />.
     /// </summary>
     private async Task ReconcileDeclaredColumnsAsync(
-        string qualifiedTable, string archiveRtId, IReadOnlyList<ArchiveColumnDdl> resolvedColumns)
+        string qualifiedTable, string archiveRtId, IReadOnlyList<ArchiveColumnDdl> resolvedColumns, bool isRollup)
     {
+        if (isRollup)
+        {
+            // Aggregate columns are derived, not written; see ArchiveColumnReconciliation.Plan.
+            return;
+        }
+
         var existing = await ReadPhysicalColumnNamesAsync(archiveRtId);
         if (existing.Count == 0)
         {
@@ -175,7 +190,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             return;
         }
 
-        foreach (var addition in ArchiveColumnReconciliation.Plan(resolvedColumns, existing))
+        foreach (var addition in ArchiveColumnReconciliation.Plan(resolvedColumns, existing, isRollup))
         {
             if (addition.DeclaredRequired)
             {
