@@ -1713,12 +1713,21 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             return sql;
         }
 
+        // A discarded attempt's generation-0 rows are removed before the bucket is aggregated again:
+        // the upsert only overwrites the rows the repeated attempt produces. The delete is a search
+        // operation, so the rows have to be on the read path first.
+        async Task DiscardForwardBucketAsync(CancellationToken ct)
+        {
+            await _databaseClient.RefreshArchiveTableAsync(_tenantId, targetTable);
+            await _databaseClient.ExecuteNonQueryAsync(_tenantId,
+                RollupRecomputeSqlBuilder.BuildDeleteForwardBucket(targetTable, bucketStart), ct);
+        }
+
         // A rollup source is read in its active generation only, and the read is repeated if the
-        // source commits a recompute of the bucket meanwhile. The target is an upsert on the
-        // generation-0 row, so a repeated attempt overwrites the discarded one in place.
+        // source commits a recompute of the bucket meanwhile.
         _bucketAggregator ??= new RollupSourceBucketAggregator(_tenantId, _databaseClient, _managementClient, _logger);
         var affected = await _bucketAggregator.AggregateAsync(
-            sourceArchive, bucketStart, bucketEnd, BuildSql, discardAttemptAsync: null, cancellationToken);
+            sourceArchive, bucketStart, bucketEnd, rtIdScope: null, BuildSql, DiscardForwardBucketAsync, cancellationToken);
 
         CrateDbDiagnostics.RollupBucketUpserts.Add(affected,
             new("tenant", _tenantId),
@@ -1783,9 +1792,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 "Cleared recompute generations for rollup {RollupRtId} at/after {From:O} (watermark rewind).",
                 rollupRtId, fromBucketEnd);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (IsMissingTableError(ex))
         {
             // No genmap side-table (non-rollup or pre-Phase-6) ⇒ nothing to clear. Idempotent no-op.
+            // Any other failure propagates: a half-cleared pointer state must not pass as success.
             _logger.LogDebug(ex,
                 "ClearRecomputeGenerationsAsync is a no-op for {RollupRtId} (no recompute state).", rollupRtId);
         }

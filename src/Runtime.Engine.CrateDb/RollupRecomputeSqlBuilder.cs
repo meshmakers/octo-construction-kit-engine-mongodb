@@ -64,6 +64,15 @@ internal static class RollupRecomputeSqlBuilder
         $"DELETE FROM {stagingTable} WHERE \"{Constants.WindowStart}\" = {ToEpochMs(bucketStart)};";
 
     /// <summary>
+    /// Builds the delete of one bucket's forward-aggregated (generation 0) rows in a rollup's live
+    /// table — used when a forward aggregation of the bucket is discarded because its source
+    /// committed a recompute while it was being read. Recomputed generations are left alone.
+    /// </summary>
+    public static string BuildDeleteForwardBucket(string liveTable, DateTime bucketStart) =>
+        $"DELETE FROM {liveTable} WHERE \"{Constants.WindowStart}\" = {ToEpochMs(bucketStart)} " +
+        $"AND \"{Constants.Generation}\" = 0;";
+
+    /// <summary>
     /// Builds the post-flip sweep: removes the now-superseded rows in <c>[from, to)</c> whose
     /// generation differs from the active one. Runs <b>after</b> the pointer flip, so no consistent
     /// generation is ever removed from under a reader. Optionally scoped to a single

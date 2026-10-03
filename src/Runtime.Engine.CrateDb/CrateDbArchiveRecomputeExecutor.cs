@@ -206,7 +206,7 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
             // worth of buckets in a single statement. Do NOT add another retry loop here (it would
             // multiply against the Polly retries and amplify load on a struggling cluster).
             rows += await _bucketAggregator.AggregateAsync(
-                source, bucketStart, bucketEnd, BuildAggregateSql, DiscardStagedBucketAsync, cancellationToken);
+                source, bucketStart, bucketEnd, scope, BuildAggregateSql, DiscardStagedBucketAsync, cancellationToken);
             windows++;
         }
 

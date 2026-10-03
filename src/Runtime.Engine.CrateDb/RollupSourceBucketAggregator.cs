@@ -65,10 +65,17 @@ internal sealed class RollupSourceBucketAggregator
     /// Builds the aggregation statement for the given source pointer entries — <c>null</c> for a raw
     /// or time-range source, the source's entries (possibly none) for a rollup source.
     /// </param>
+    /// <param name="rtIdScope">
+    /// The single entity the statement is restricted to, or null / empty for all entities. A scoped
+    /// statement only reads that entity's source rows, so only the pointer entries that can apply to
+    /// it — unscoped ones and its own — are rendered and compared; a recompute of another entity
+    /// must not make this bucket repeat.
+    /// </param>
     /// <param name="discardAttemptAsync">
-    /// Removes what a discarded attempt wrote, before the bucket is aggregated again. Optional: an
-    /// upsert target overwrites its own rows, so this only matters where a row of the discarded
-    /// attempt may have no counterpart in the repeated one.
+    /// Removes what a discarded attempt wrote. Called after every attempt whose result is not kept —
+    /// before the bucket is aggregated again and before giving up — because an upsert only
+    /// overwrites the rows the repeated attempt produces: a row for an entity the discarded attempt
+    /// saw and the repeated one does not would otherwise stay.
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The rows written by the attempt that was kept.</returns>
@@ -76,6 +83,7 @@ internal sealed class RollupSourceBucketAggregator
         ArchiveSnapshot source,
         DateTime bucketStart,
         DateTime bucketEnd,
+        string? rtIdScope,
         Func<IReadOnlyList<GenerationRange>?, string> buildSql,
         Func<CancellationToken, Task>? discardAttemptAsync,
         CancellationToken cancellationToken)
@@ -92,13 +100,18 @@ internal sealed class RollupSourceBucketAggregator
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var before = await LoadOverlappingAsync(genMapTable, bucketStart, bucketEnd, cancellationToken);
+            var before = await LoadOverlappingAsync(genMapTable, bucketStart, bucketEnd, rtIdScope, cancellationToken);
             var rows = await _databaseClient.ExecuteNonQueryAsync(_tenantId, buildSql(before), cancellationToken);
-            var after = await LoadOverlappingAsync(genMapTable, bucketStart, bucketEnd, cancellationToken);
+            var after = await LoadOverlappingAsync(genMapTable, bucketStart, bucketEnd, rtIdScope, cancellationToken);
 
             if (SamePointers(before, after))
             {
                 return rows;
+            }
+
+            if (discardAttemptAsync is not null)
+            {
+                await discardAttemptAsync(cancellationToken);
             }
 
             if (attempt >= MaxAttempts)
@@ -112,11 +125,6 @@ internal sealed class RollupSourceBucketAggregator
             _logger.LogInformation(
                 "Source rollup {SourceRtId} committed a recompute of bucket [{BucketStart:O}, {BucketEnd:O}) while it was being aggregated; aggregating it again (attempt {Attempt}/{MaxAttempts}).",
                 source.RtId, bucketStart, bucketEnd, attempt + 1, MaxAttempts);
-
-            if (discardAttemptAsync is not null)
-            {
-                await discardAttemptAsync(cancellationToken);
-            }
         }
     }
 
@@ -137,7 +145,8 @@ internal sealed class RollupSourceBucketAggregator
     }
 
     private async Task<IReadOnlyList<GenerationRange>> LoadOverlappingAsync(
-        string genMapTable, DateTime bucketStart, DateTime bucketEnd, CancellationToken cancellationToken)
+        string genMapTable, DateTime bucketStart, DateTime bucketEnd, string? rtIdScope,
+        CancellationToken cancellationToken)
     {
         var ranges = new List<GenerationRange>();
         await foreach (var row in _databaseClient.StreamRawRowsAsync(
@@ -147,6 +156,13 @@ internal sealed class RollupSourceBucketAggregator
             var end = Convert.ToInt64(row["range_end"], CultureInfo.InvariantCulture);
             var scope = row.TryGetValue("rtid_scope", out var s) && s is not null ? s.ToString() ?? string.Empty : string.Empty;
             var generation = Convert.ToInt64(row[Constants.Generation], CultureInfo.InvariantCulture);
+            if (!string.IsNullOrEmpty(rtIdScope) && scope.Length > 0 && !string.Equals(scope, rtIdScope, StringComparison.Ordinal))
+            {
+                // Another entity's pointer: it cannot select or hide a row of a statement scoped to
+                // this entity.
+                continue;
+            }
+
             ranges.Add(new GenerationRange(start, end, scope, generation));
         }
 

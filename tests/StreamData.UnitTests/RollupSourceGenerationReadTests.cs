@@ -150,7 +150,7 @@ public class RollupSourceGenerationReadTests
         };
 
         var rows = await harness.Aggregator.AggregateAsync(
-            baseSource, BucketStart, BucketEnd, harness.BuildSql, harness.Discard, CancellationToken.None);
+            baseSource, BucketStart, BucketEnd, null, harness.BuildSql, harness.Discard, CancellationToken.None);
 
         Assert.Equal(Harness.RowsPerStatement, rows);
         Assert.Equal(new IReadOnlyList<GenerationRange>?[] { null }, harness.BuiltWith);
@@ -165,7 +165,7 @@ public class RollupSourceGenerationReadTests
         var harness = new Harness(new[] { pointer }, new[] { pointer });
 
         var rows = await harness.Aggregator.AggregateAsync(
-            RollupSource(), BucketStart, BucketEnd, harness.BuildSql, harness.Discard, CancellationToken.None);
+            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.Discard, CancellationToken.None);
 
         Assert.Equal(Harness.RowsPerStatement, rows);
         Assert.Single(harness.BuiltWith);
@@ -182,7 +182,7 @@ public class RollupSourceGenerationReadTests
         var harness = new Harness(new[] { old }, new[] { flipped }, new[] { flipped }, new[] { flipped });
 
         await harness.Aggregator.AggregateAsync(
-            RollupSource(), BucketStart, BucketEnd, harness.BuildSql, harness.Discard, CancellationToken.None);
+            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.Discard, CancellationToken.None);
 
         Assert.Equal(2, harness.BuiltWith.Count);
         Assert.Equal(new[] { old }, harness.BuiltWith[0]);
@@ -198,7 +198,7 @@ public class RollupSourceGenerationReadTests
         var harness = new Harness(Array.Empty<GenerationRange>(), new[] { first }, new[] { first }, new[] { first });
 
         await harness.Aggregator.AggregateAsync(
-            RollupSource(), BucketStart, BucketEnd, harness.BuildSql, harness.Discard, CancellationToken.None);
+            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.Discard, CancellationToken.None);
 
         Assert.Equal(2, harness.BuiltWith.Count);
         Assert.Empty(harness.BuiltWith[0]!);
@@ -214,7 +214,7 @@ public class RollupSourceGenerationReadTests
         var harness = new Harness(new[] { mine, elsewhereOld }, new[] { mine, elsewhereNew });
 
         await harness.Aggregator.AggregateAsync(
-            RollupSource(), BucketStart, BucketEnd, harness.BuildSql, harness.Discard, CancellationToken.None);
+            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.Discard, CancellationToken.None);
 
         Assert.Single(harness.BuiltWith);
         Assert.Equal(new[] { mine }, harness.BuiltWith[0]);
@@ -229,9 +229,29 @@ public class RollupSourceGenerationReadTests
         var harness = new Harness(reads);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => harness.Aggregator.AggregateAsync(
-            RollupSource(), BucketStart, BucketEnd, harness.BuildSql, harness.Discard, CancellationToken.None));
+            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.Discard, CancellationToken.None));
 
         Assert.Equal(RollupSourceBucketAggregator.MaxAttempts, harness.BuiltWith.Count);
+        // The last attempt's rows are discarded too — nothing unverified is left behind.
+        Assert.Equal(RollupSourceBucketAggregator.MaxAttempts, harness.Discards);
+    }
+
+    [Fact]
+    public async Task Aggregate_ScopedStatement_IgnoresPointersOfOtherEntities()
+    {
+        var global = new GenerationRange(StartMs, EndMs, string.Empty, 4);
+        var mine = new GenerationRange(StartMs, EndMs, "entity-a", 6);
+        var otherOld = new GenerationRange(StartMs, EndMs, "entity-b", 5);
+        var otherNew = new GenerationRange(StartMs, EndMs, "entity-b", 7);
+        // Another entity is recomputed while this entity's bucket is aggregated.
+        var harness = new Harness(new[] { global, mine, otherOld }, new[] { global, mine, otherNew });
+
+        await harness.Aggregator.AggregateAsync(
+            RollupSource(), BucketStart, BucketEnd, "entity-a", harness.BuildSql, harness.Discard, CancellationToken.None);
+
+        Assert.Single(harness.BuiltWith);
+        Assert.Equal(new[] { global, mine }, harness.BuiltWith[0]);
+        Assert.Equal(0, harness.Discards);
     }
 
     [Fact]
@@ -241,8 +261,8 @@ public class RollupSourceGenerationReadTests
         var harness = new Harness(new[] { pointer }, new[] { pointer }, new[] { pointer }, new[] { pointer });
         var source = RollupSource();
 
-        await harness.Aggregator.AggregateAsync(source, BucketStart, BucketEnd, harness.BuildSql, null, CancellationToken.None);
-        await harness.Aggregator.AggregateAsync(source, BucketStart, BucketEnd, harness.BuildSql, null, CancellationToken.None);
+        await harness.Aggregator.AggregateAsync(source, BucketStart, BucketEnd, null, harness.BuildSql, null, CancellationToken.None);
+        await harness.Aggregator.AggregateAsync(source, BucketStart, BucketEnd, null, harness.BuildSql, null, CancellationToken.None);
 
         A.CallTo(() => harness.Management.ExecuteDdlAsync(Tenant, A<string>.That.Contains("__genmap")))
             .MustHaveHappenedOnceExactly();
@@ -275,6 +295,16 @@ public class RollupSourceGenerationReadTests
 
         // Strictly greater: the truncated copy ends exactly at the boundary and survives.
         Assert.Equal($"DELETE FROM {genMap} WHERE \"range_end\" > {StartMs};", sql);
+    }
+
+    [Fact]
+    public void BuildDeleteForwardBucket_RemovesOnlyGenerationZeroOfThatBucket()
+    {
+        var live = "\"acmecorp\".\"archive_rollup1\"";
+
+        var sql = RollupRecomputeSqlBuilder.BuildDeleteForwardBucket(live, BucketStart);
+
+        Assert.Equal($"DELETE FROM {live} WHERE \"window_start\" = {StartMs} AND \"generation\" = 0;", sql);
     }
 
     [Fact]

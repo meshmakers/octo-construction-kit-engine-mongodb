@@ -94,9 +94,17 @@ therefore before the sweep of the generation it selected (see 2.3 for why the or
 The pointer is read **per bucket, immediately around the statement** — not once per chunk or per
 tick. A wider interval would reopen the gap for as long as the chunk runs.
 
-When a recompute repeats a bucket, the discarded attempt's rows are removed from the staging table
-first, so a series present in the discarded attempt but not in the repeated one cannot reach the
-live table. The forward aggregation upserts the generation-0 row in place and needs no cleanup.
+A discarded attempt's rows are removed before the bucket is aggregated again, and before giving
+up: the statement is an upsert, which only overwrites the rows the repeated attempt produces, so a
+row for a series the discarded attempt saw and the repeated one does not would otherwise stay. The
+recompute removes the bucket from its staging table; the forward aggregation removes the bucket's
+generation-0 rows from the live table (recomputed generations are left alone). A bucket that was
+given up on is therefore empty until the next run aggregates it, never filled with an unverified
+result.
+
+A statement restricted to a single series (a scoped recompute) only reads that series' source
+rows. It renders and compares the pointer entries that can apply to it — unscoped ones and its
+own — so a recompute of another series does not make it repeat.
 
 ### 2.3 The commit sequence makes its own writes visible
 
@@ -121,7 +129,8 @@ aggregation (generation 0): pointer entries reaching past `B` are removed, and r
 rewound and stay on their generation. Before the entry is removed, its part before the boundary is
 written as an entry of its own — same generation, same scope, ending at `B`. Without it, every
 reader would look for those rows at generation 0 and find nothing. If an entry with exactly that
-range already exists, the higher generation is kept.
+range already exists, the higher generation is kept. A rollup without a pointer table has nothing
+to clear; any other failure of the cleanup fails the rewind instead of passing as done.
 
 ## 3. What this guarantees
 
