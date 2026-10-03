@@ -36,6 +36,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
     private readonly ILogger<CrateDbStreamDataRepository> _logger;
     private CrateDbArchiveRecomputeExecutor? _recomputeExecutor;
+    private RollupSourceBucketAggregator? _bucketAggregator;
     private readonly ICkCacheService _ckCacheService;
     private readonly IStreamDataDatabaseClient _databaseClient;
     private readonly IStreamDataDatabaseManagementClient _managementClient;
@@ -1690,24 +1691,34 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var resolved = RollupAggregationColumns.ResolveForSource(
             rollup.Aggregations, rollup.RtId, sourceArchive, sourceRollup);
 
-        var sql = RollupAggregationSqlBuilder.Build(
-            sourceTable,
-            targetTable,
-            // The query side filters by SemanticVersionedFullName (which drops the "-1" suffix
-            // for type version 1). Raw + time-range archives write the same form via
-            // RtCkId<CkTypeId>.ToString(); rollups have to match or the query never finds rows.
-            rollup.TargetCkTypeId.SemanticVersionedFullName,
-            resolved,
-            bucketStart,
-            bucketEnd,
-            sourceArchive.UsesWindowedStorage,
-            carryLookback: rollup.CarryLookback);
+        string BuildSql(IReadOnlyList<GenerationRange>? sourceGenerationRanges)
+        {
+            var sql = RollupAggregationSqlBuilder.Build(
+                sourceTable,
+                targetTable,
+                // The query side filters by SemanticVersionedFullName (which drops the "-1" suffix
+                // for type version 1). Raw + time-range archives write the same form via
+                // RtCkId<CkTypeId>.ToString(); rollups have to match or the query never finds rows.
+                rollup.TargetCkTypeId.SemanticVersionedFullName,
+                resolved,
+                bucketStart,
+                bucketEnd,
+                sourceArchive.UsesWindowedStorage,
+                carryLookback: rollup.CarryLookback,
+                sourceGenerationRanges: sourceGenerationRanges);
 
-        _logger.LogDebug(
-            "Rollup aggregation SQL for {RollupRtId} bucket [{BucketStart:O}, {BucketEnd:O}): {Sql}",
-            rollup.RtId, bucketStart, bucketEnd, sql);
+            _logger.LogDebug(
+                "Rollup aggregation SQL for {RollupRtId} bucket [{BucketStart:O}, {BucketEnd:O}): {Sql}",
+                rollup.RtId, bucketStart, bucketEnd, sql);
+            return sql;
+        }
 
-        var affected = await _databaseClient.ExecuteNonQueryAsync(_tenantId, sql, cancellationToken);
+        // A rollup source is read in its active generation only, and the read is repeated if the
+        // source commits a recompute of the bucket meanwhile. The target is an upsert on the
+        // generation-0 row, so a repeated attempt overwrites the discarded one in place.
+        _bucketAggregator ??= new RollupSourceBucketAggregator(_tenantId, _databaseClient, _managementClient, _logger);
+        var affected = await _bucketAggregator.AggregateAsync(
+            sourceArchive, bucketStart, bucketEnd, BuildSql, discardAttemptAsync: null, cancellationToken);
 
         CrateDbDiagnostics.RollupBucketUpserts.Add(affected,
             new("tenant", _tenantId),
@@ -1753,9 +1764,16 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         try
         {
             // 1. Drop the active-generation pointers reaching into the rewound range so those windows
-            //    fall back to generation 0 (the forward re-aggregation target).
+            //    fall back to generation 0 (the forward re-aggregation target). A pointer straddling
+            //    the boundary keeps its part before it: those rows are not rewound and stay on their
+            //    recomputed generation. Both statements are search operations on the pointer table,
+            //    and its readers are too — hence the refreshes around them.
+            await _databaseClient.RefreshArchiveTableAsync(_tenantId, genMapTable);
+            await _databaseClient.ExecuteNonQueryAsync(_tenantId,
+                GenerationMapSqlBuilder.BuildTruncateStraddlingPointers(genMapTable, fromBucketEnd), cancellationToken);
             await _databaseClient.ExecuteNonQueryAsync(_tenantId,
                 GenerationMapSqlBuilder.BuildDeleteGenerationsFrom(genMapTable, fromBucketEnd), cancellationToken);
+            await _databaseClient.RefreshArchiveTableAsync(_tenantId, genMapTable);
             // 2. Remove the now-orphaned higher-generation rows in that range (generation 0 rows stay).
             await _databaseClient.ExecuteNonQueryAsync(_tenantId,
                 RollupRecomputeSqlBuilder.BuildDeleteRecomputedRowsFrom(liveTable, fromBucketEnd), cancellationToken);

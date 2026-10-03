@@ -57,6 +57,13 @@ internal static class RollupRecomputeSqlBuilder
     }
 
     /// <summary>
+    /// Builds the delete of one bucket's staged rows (all entities) — used when a bucket has to be
+    /// aggregated again because its source committed a recompute while it was being read.
+    /// </summary>
+    public static string BuildDeleteStagedBucket(string stagingTable, DateTime bucketStart) =>
+        $"DELETE FROM {stagingTable} WHERE \"{Constants.WindowStart}\" = {ToEpochMs(bucketStart)};";
+
+    /// <summary>
     /// Builds the post-flip sweep: removes the now-superseded rows in <c>[from, to)</c> whose
     /// generation differs from the active one. Runs <b>after</b> the pointer flip, so no consistent
     /// generation is ever removed from under a reader. Optionally scoped to a single
