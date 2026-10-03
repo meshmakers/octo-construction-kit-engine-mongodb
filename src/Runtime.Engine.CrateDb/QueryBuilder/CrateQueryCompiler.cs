@@ -407,28 +407,8 @@ internal class CrateQueryCompiler
     /// baseline <c>generation = 0</c> — never a CASE with no WHEN, which CrateDB would reject — so the
     /// not-yet-committed rows stay hidden. AB#4184, Phase 6.
     /// </summary>
-    private static string CompileGenerationFilter(CrateQueryBuilder queryBuilder)
-    {
-        if (queryBuilder.GenerationRanges.Count == 0)
-        {
-            return $"\"{Constants.Generation}\" = 0";
-        }
-
-        var sb = new StringBuilder();
-        sb.Append('"').Append(Constants.Generation).Append("\" = CASE");
-        foreach (var range in queryBuilder.GenerationRanges.OrderByDescending(r => r.Generation))
-        {
-            sb.Append(" WHEN (\"").Append(Constants.WindowStart).Append("\" >= ").Append(range.StartMs)
-              .Append(" AND \"").Append(Constants.WindowStart).Append("\" < ").Append(range.EndMs).Append(')');
-            if (!string.IsNullOrEmpty(range.Scope))
-            {
-                sb.Append(" AND \"").Append(Constants.RtId).Append("\" = '").Append(range.Scope.Replace("'", "''")).Append('\'');
-            }
-            sb.Append(" THEN ").Append(range.Generation);
-        }
-        sb.Append(" ELSE 0 END");
-        return sb.ToString();
-    }
+    private static string CompileGenerationFilter(CrateQueryBuilder queryBuilder) =>
+        GenerationFilterSql.Render(queryBuilder.GenerationRanges);
 
     /// <summary>
     /// Renders one field-filter predicate (without leading AND / table alias). Internal so the

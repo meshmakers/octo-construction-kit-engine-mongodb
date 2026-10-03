@@ -869,11 +869,26 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
   (3) `GenerationMapSqlBuilder.BuildUpsertPointer` flips the pointer to `N+1` — the **atomic commit**;
   (4) `BuildSweepSupersededGenerations` deletes the now-superseded generations in the range; (5) drop
   staging. A crash before the flip leaves readers on the previous generation; a crash after the flip
-  but before the sweep just leaves dead rows the next sweep/activation reclaims.
+  but before the sweep just leaves dead rows the next sweep/activation reclaims. **Every step the
+  next statement or reader depends on is followed by a refresh — the genmap table included:** before
+  `MAX(generation)+1` is read, after the flip (readers must select `N+1` before `N` is swept), after
+  the sweep (the dependents recompute right after this rollup), after the contained-pointer delete.
+  Search reads see the last refresh, not the last write; do not remove one of these as "redundant".
+- **A rollup as the source of the next level** — `RollupAggregationSqlBuilder` reads a rollup source
+  through the same predicate as the read path (`GenerationFilterSql`, entries overlapping the bucket
+  only, `generation = 0` when none), in the recompute executor and in the forward
+  `AggregateBucketAsync` alike. `RollupSourceBucketAggregator` reads the source's pointer before and
+  after each bucket statement and repeats the bucket when it moved: without a snapshot across
+  statements the predicate alone can ask for a generation that was swept in between, and the level
+  above would come out short. A scan by time alone would count both generations of a window during
+  a source recompute (the level above up to 2x its source). Switch on "source is a rollup", never on
+  "windowed" — time-range archives have no generation column. Full reasoning, guarantees and cost:
+  `docs/streamdata-rollup-source-generation-read.md`.
 - **Read path** — the four windowed query methods call `LoadGenerationRangesAsync` (reads the genmap)
   and pass the ranges to `CrateQueryBuilder.WithGenerationRanges`; `CrateQueryCompiler` emits
   `"generation" = CASE WHEN <range> THEN <gen> … ELSE 0 END` (ranges ordered newest-generation-first
-  so an overlapping re-recompute wins). Empty genmap ⇒ no predicate ⇒ all (generation-0) rows.
+  so an overlapping re-recompute wins). Empty genmap ⇒ the baseline `generation = 0`, never no
+  predicate — rows a recompute has copied in but not yet committed must stay hidden.
 - **Integration test:** `RollupRecomputeGenerationPointerTests` (in `octo-asset-repo-services`,
   reusing its CrateDB+Mongo `StreamDataFixture`) drives the real executor end-to-end against a CrateDB
   Testcontainer and asserts the generation flip, the no-mixed-read filter (an injected uncommitted
@@ -889,8 +904,10 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
   the upgrade self-heal above (dropped + recreated); `LoadGenerationRangesAsync` also tolerates a
   missing genmap table on the read side. Per-rtId scoped recompute is supported: the executor restricts
   aggregation, pointer entry (`rtid_scope` = the entity's rtId) and sweep to that entity, and since
-  AB#5189 the drain merges and runs obligations per scope. `rewindRollupWatermark` over a recomputed range is
-  not reconciled with the genmap yet.
+  AB#5189 the drain merges and runs obligations per scope. A `rewindRollupWatermark` through a
+  recomputed range (`ClearRecomputeGenerationsAsync`) keeps the part of a straddling pointer before
+  the boundary as an entry of its own (`BuildTruncateStraddlingPointers`) — those rows are not
+  rewound, stay on their generation, and would be invisible to every reader without a pointer.
 
 ### Open-Bucket Refresh + Recompute Cap (AB#4306)
 
