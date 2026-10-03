@@ -887,7 +887,8 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
 - **Read path** — the four windowed query methods call `LoadGenerationRangesAsync` (reads the genmap)
   and pass the ranges to `CrateQueryBuilder.WithGenerationRanges`; `CrateQueryCompiler` emits
   `"generation" = CASE WHEN <range> THEN <gen> … ELSE 0 END` (ranges ordered newest-generation-first
-  so an overlapping re-recompute wins). Empty genmap ⇒ no predicate ⇒ all (generation-0) rows.
+  so an overlapping re-recompute wins). Empty genmap ⇒ the baseline `generation = 0`, never no
+  predicate — rows a recompute has copied in but not yet committed must stay hidden.
 - **Integration test:** `RollupRecomputeGenerationPointerTests` (in `octo-asset-repo-services`,
   reusing its CrateDB+Mongo `StreamDataFixture`) drives the real executor end-to-end against a CrateDB
   Testcontainer and asserts the generation flip, the no-mixed-read filter (an injected uncommitted
