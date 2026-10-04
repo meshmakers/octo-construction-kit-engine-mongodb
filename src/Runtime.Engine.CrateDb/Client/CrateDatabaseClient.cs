@@ -149,8 +149,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     {
         // Unbuffered enumeration: Dapper hands back rows one at a time off the open data reader so a
         // multi-GB archive export never materialises the whole table. The connection stays open for
-        // the life of the enumeration (held by `await using`), which is why this is a per-page query
-        // in the caller's keyset loop rather than one giant cursor — a page is small and bounded.
+        // the life of the enumeration (held by `await using`), which is why the export sends one
+        // statement per time slice rather than one giant cursor — a slice is bounded.
         await using var lease = await LeaseConnectionAsync(tenantId, cancellationToken);
         var connection = lease.Connection;
         var rows = connection.QueryUnbufferedAsync(query);

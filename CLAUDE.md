@@ -1064,6 +1064,64 @@ Semantics preserved:
   active-generation predicate when `GenerationTracked` — previously the downsampling path missed
   it entirely, so a read during a recompute double-counted the swapped windows.
 
+### Archive Export — Time Slices, Not Keyset Pages
+
+`CrateDbStreamDataRepository.ExportRowsAsync` is the scan behind a tenant dump with archive data
+and behind `export-archive-data`. It reads an archive as **consecutive time slices, one statement
+per slice**:
+
+```sql
+SELECT MIN("window_start") AS "export_min", MAX("window_start") AS "export_max", COUNT(*) AS "export_count" FROM <table>;
+-- then, per slice proposed by ExportSlicePlanner:
+SELECT COUNT(*) FROM <table> WHERE "window_start" >= '<from>' AND "window_start" < '<to>';
+SELECT * FROM <table> WHERE "window_start" >= '<from>' AND "window_start" < '<to>'
+ORDER BY "window_start", "rtid", "cktypeid";
+```
+
+(`timestamp`, `rtid` for a raw archive.) The slices ascend without gap or overlap and each is
+ordered by the natural key, so the rows come out in exactly the order a single ordered scan would
+give — the contract of `IStreamDataRepository.ExportRowsAsync` is unchanged.
+
+**Why not keyset pages.** Until then the scan paged over the whole table: `ORDER BY key LIMIT 5000`
+behind `key > cursor`. Such a page is a top-n search over **every row behind the cursor**, so its
+cost follows the size of the table, not the size of the page. Measured through the driver:
+
+| Table | Old: per page of 5,000 rows | Old: rows a second | New: rows a second |
+|---|---|---|---|
+| 739,000 rows (local) | 0.02 s | 209,000 | 469,000 |
+| 115 million rows (local, single node), first million rows | 1.0 s | 4,989 | 199,000 |
+| 115 million rows (three nodes, production) | 3.6 s | 1,381 | not run |
+
+The whole 115 million row table, written as compressed NDJSON the way the dump job does it, took
+9 min 45 s with the new scan (197,000 rows a second; 469 slices read, 477 counted). On three
+tables the old and the new scan were compared row by row through the driver against a real
+CrateDB — a time-range archive, a rollup with its generation column and a raw archive with
+irregular timestamps, whole and with a window: same rows, same order.
+
+The production figure is a tenant dump that had read 7.2 of 115.3 million rows after 3 h 15 min
+and would have run for about another day. The same dump of tenants with 400,000 to 900,000 rows
+took 22 to 49 seconds, which is why the defect stayed unseen.
+
+Rules to keep when touching the scan:
+
+- **Never page a large archive with `LIMIT` behind a cursor.** Bound the statement on both sides of
+  the time axis instead. `BackfillComputedColumn` still pages that way (`BackfillPageSize`, keyset
+  over the key columns) and has the same cost on a large archive.
+- **A slice is counted before it is read.** `ExportSlicePlanner` proposes, the scan counts, the
+  planner accepts or refuses and proposes narrower. Sizing the next slice from the last one alone
+  is not enough: an archive that is sparse for a year and dense afterwards (a back-fill) would get
+  months of the dense part in one statement. A range count is answered from the index; it costs
+  one cheap statement per 250,000 rows.
+- **No row buffering per statement.** `StreamRawRowsAsync` hands rows off the open reader, so the
+  slice size (`ExportSliceTargetRows`, at most twice that) bounds the length of a statement, not
+  memory. Do not replace it with a buffered read.
+- **The bounds are read once.** Rows written behind the last instant while the export runs are not
+  part of it. The export never was a snapshot of a table that is being written; export a disabled
+  archive, or accept that.
+
+Leaving the enumeration early disposes the open reader, and the driver then cancels the statement
+(`XX000: Job killed`); cancel through the token instead of breaking out of the loop.
+
 ### CkType.ownerAttributePath Round-Trip + OwnedOnly Owner Attribute (AB#4978)
 
 `CkTypeDto.OwnerAttributePath` (the CK-model-declared owner attribute for owned-only data

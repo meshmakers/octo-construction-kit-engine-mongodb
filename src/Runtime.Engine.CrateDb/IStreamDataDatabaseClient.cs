@@ -71,8 +71,8 @@ public interface IStreamDataDatabaseClient
     /// <summary>
     /// Streams the raw rows of an arbitrary read query without buffering the whole result set in
     /// memory. Each row is yielded as a case-preserving dictionary of physical CrateDB column name →
-    /// value, exactly as the driver returns it. Used by the archive-data export path (AB#4230) which
-    /// drives keyset pagination at the caller and needs the physical columns verbatim (no DTO
+    /// value, exactly as the driver returns it. Used by the archive-data export path (AB#4230), which
+    /// reads an archive as consecutive time slices and needs the physical columns verbatim (no DTO
     /// projection). The connection is held open for the duration of the enumeration.
     /// </summary>
     IAsyncEnumerable<IReadOnlyDictionary<string, object?>> StreamRawRowsAsync(
