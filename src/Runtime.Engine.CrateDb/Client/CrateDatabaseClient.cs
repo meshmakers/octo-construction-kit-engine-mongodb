@@ -166,14 +166,18 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         }
     }
 
-    public async Task<long> GetCountAsync(string tenantId, string countQuery)
+    public Task<long> GetCountAsync(string tenantId, string countQuery)
+        => GetCountAsync(tenantId, countQuery, CancellationToken.None);
+
+    public async Task<long> GetCountAsync(string tenantId, string countQuery, CancellationToken cancellationToken)
     {
-        return await _resilience.ExecuteAsync(async _ =>
+        return await _resilience.ExecuteAsync(async token =>
         {
-            await using var lease = await LeaseConnectionAsync(tenantId);
+            await using var lease = await LeaseConnectionAsync(tenantId, token);
             var connection = lease.Connection;
-            return await connection.ExecuteScalarAsync<long>(countQuery);
-        });
+            return await connection.ExecuteScalarAsync<long>(
+                new CommandDefinition(countQuery, cancellationToken: token));
+        }, cancellationToken);
     }
 
     public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)

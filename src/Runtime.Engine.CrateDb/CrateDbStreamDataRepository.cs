@@ -1401,10 +1401,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // Time-axis column: window_start for windowed archives, timestamp for raw.
         var timeColumn = windowed ? Constants.WindowStart : Constants.Timestamp;
 
-        // The scan reads the archive as consecutive time slices, one statement per slice, each in
-        // the order of the natural key: (timestamp, rtid) for raw, (window_start, rtid, cktypeid)
-        // for windowed. Slices ascend and do not overlap, so the rows arrive in the same order a
-        // single ordered scan would deliver. A statement that is bounded on both sides only looks
+        // The scan reads the archive as consecutive time slices, one statement per slice, each
+        // ordered by (time, rtid, cktypeid) and then by the rest of the table's primary key
+        // (window_end, and generation on a rollup), so the order is total. Slices ascend and do
+        // not overlap, so the rows arrive in the same order a single ordered scan would deliver.
+        // A statement that is bounded on both sides only looks
         // at the rows of its slice; a keyset page over the whole table (ORDER BY ... LIMIT behind
         // a cursor) is a top-n search over everything behind the cursor instead, and on a large
         // archive that search, not the rows, is what a page costs.
@@ -1417,6 +1418,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             yield break; // empty table, or nothing inside the window
         }
 
+        // Rollup tables key their rows with `generation` as well (AB#4184 Phase 6).
+        var generationTracked = snapshot.RollupAggregations is not null;
         var planner = new ExportSlicePlanner(
             bounds.Value.FromInclusiveMs, bounds.Value.ToExclusiveMs, bounds.Value.RowCount, ExportSliceTargetRows);
 
@@ -1424,20 +1427,25 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         {
             ct.ThrowIfCancellationRequested();
 
+            // The planner works with an exclusive end, one millisecond behind the last row. That
+            // instant need not exist as a DateTime (a row at the largest timestamp), so the last
+            // slice is bounded by the last row itself, inclusive.
+            var isLast = sliceTo == bounds.Value.ToExclusiveMs;
             var fromUtc = DateTimeOffset.FromUnixTimeMilliseconds(sliceFrom).UtcDateTime;
-            var toUtc = DateTimeOffset.FromUnixTimeMilliseconds(sliceTo).UtcDateTime;
+            var toUtc = DateTimeOffset.FromUnixTimeMilliseconds(isLast ? sliceTo - 1 : sliceTo).UtcDateTime;
 
             // Count before reading: the planner refuses a slice that holds far more rows than a
             // statement should return and proposes a narrower one from the same start. A count
             // over a time range is answered from the index.
             var sliceRows = await _databaseClient.GetCountAsync(_tenantId,
-                BuildExportSliceCountSql(qualifiedTable, timeColumn, fromUtc, toUtc));
+                BuildExportSliceCountSql(qualifiedTable, timeColumn, fromUtc, toUtc, isLast), ct);
             if (!planner.Accept(sliceRows) || sliceRows == 0)
             {
                 continue; // too large: proposed again narrower; empty: nothing to read
             }
 
-            var sql = BuildExportSliceSql(qualifiedTable, windowed, timeColumn, fromUtc, toUtc);
+            var sql = BuildExportSliceSql(
+                qualifiedTable, windowed, generationTracked, timeColumn, fromUtc, toUtc, isLast);
             await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, sql, ct))
             {
                 yield return row;
@@ -1497,35 +1505,56 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         return sb.ToString();
     }
 
-    /// <summary>Builds the statement that counts the rows of one slice <c>[fromUtc, toUtc)</c>.</summary>
+    /// <summary>
+    /// Builds the statement that counts the rows of one slice: <c>[fromUtc, toUtc)</c>, or
+    /// <c>[fromUtc, toUtc]</c> for the last slice (<paramref name="toInclusive"/>).
+    /// </summary>
     internal static string BuildExportSliceCountSql(
-        string qualifiedTable, string timeColumn, DateTime fromUtc, DateTime toUtc)
+        string qualifiedTable, string timeColumn, DateTime fromUtc, DateTime toUtc, bool toInclusive)
     {
         var sb = new System.Text.StringBuilder();
-        sb.Append("SELECT COUNT(*) FROM ").Append(qualifiedTable)
-            .Append(" WHERE \"").Append(timeColumn).Append("\" >= '").Append(FormatTs(fromUtc))
-            .Append("' AND \"").Append(timeColumn).Append("\" < '").Append(FormatTs(toUtc)).Append("';");
+        sb.Append("SELECT COUNT(*) FROM ").Append(qualifiedTable);
+        AppendExportSlicePredicate(sb, timeColumn, fromUtc, toUtc, toInclusive);
+        sb.Append(';');
         return sb.ToString();
     }
 
+    private static void AppendExportSlicePredicate(
+        System.Text.StringBuilder sb, string timeColumn, DateTime fromUtc, DateTime toUtc, bool toInclusive)
+    {
+        sb.Append(" WHERE \"").Append(timeColumn).Append("\" >= '").Append(FormatTs(fromUtc))
+            .Append("' AND \"").Append(timeColumn).Append(toInclusive ? "\" <= '" : "\" < '")
+            .Append(FormatTs(toUtc)).Append('\'');
+    }
+
     /// <summary>
-    /// Builds the statement that reads one slice <c>[fromUtc, toUtc)</c> of the export scan:
-    /// <c>SELECT *</c> in the order of the natural key, without a limit. Timestamps are embedded as
-    /// quoted literals in CrateDB's canonical format (the export path is internal and the only
-    /// string inputs are server-controlled identifiers, not user data).
+    /// Builds the statement that reads one slice of the export scan — <c>[fromUtc, toUtc)</c>, or
+    /// <c>[fromUtc, toUtc]</c> for the last slice — as <c>SELECT *</c> without a limit. The order
+    /// is (time, rtid, cktypeid) followed by the rest of the table's primary key: <c>window_end</c>
+    /// on a windowed table, and <c>generation</c> on a rollup. Without those two, rows that share
+    /// the leading columns (two windows starting at the same instant, or two generations of a
+    /// rollup window that a recompute has not swept yet) would come out in an arbitrary order.
+    /// Timestamps are embedded as quoted literals in CrateDB's canonical format (the export path
+    /// is internal and the only string inputs are server-controlled identifiers, not user data).
     /// </summary>
     internal static string BuildExportSliceSql(
-        string qualifiedTable, bool windowed, string timeColumn, DateTime fromUtc, DateTime toUtc)
+        string qualifiedTable, bool windowed, bool generationTracked, string timeColumn,
+        DateTime fromUtc, DateTime toUtc, bool toInclusive)
     {
         var sb = new System.Text.StringBuilder();
-        sb.Append("SELECT * FROM ").Append(qualifiedTable)
-            .Append(" WHERE \"").Append(timeColumn).Append("\" >= '").Append(FormatTs(fromUtc))
-            .Append("' AND \"").Append(timeColumn).Append("\" < '").Append(FormatTs(toUtc)).Append('\'')
-            .Append(" ORDER BY \"").Append(timeColumn).Append("\", \"").Append(Constants.RtId).Append('"');
+        sb.Append("SELECT * FROM ").Append(qualifiedTable);
+        AppendExportSlicePredicate(sb, timeColumn, fromUtc, toUtc, toInclusive);
+        sb.Append(" ORDER BY \"").Append(timeColumn).Append("\", \"").Append(Constants.RtId)
+            .Append("\", \"").Append(Constants.CkTypeId).Append('"');
 
         if (windowed)
         {
-            sb.Append(", \"").Append(Constants.CkTypeId).Append('"');
+            sb.Append(", \"").Append(Constants.WindowEnd).Append('"');
+        }
+
+        if (generationTracked)
+        {
+            sb.Append(", \"").Append(Constants.Generation).Append('"');
         }
 
         sb.Append(';');

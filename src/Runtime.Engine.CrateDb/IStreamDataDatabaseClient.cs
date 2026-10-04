@@ -84,6 +84,13 @@ public interface IStreamDataDatabaseClient
     Task<long> GetCountAsync(string tenantId, string countQuery);
 
     /// <summary>
+    /// Executes a COUNT query and returns the total number of matching rows; the token cancels
+    /// the wait for a connection and the statement. For callers that send many counts in a loop
+    /// that must stay cancellable (the archive export counts every slice before reading it).
+    /// </summary>
+    Task<long> GetCountAsync(string tenantId, string countQuery, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Executes a non-query SQL statement (INSERT / UPDATE / DELETE / upsert) and returns the
     /// number of affected rows. Used by the rollup orchestrator for the bucket-aggregation upsert
     /// (rollup-archives concept §5).

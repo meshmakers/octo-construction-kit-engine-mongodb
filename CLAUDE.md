@@ -1075,12 +1075,20 @@ SELECT MIN("window_start") AS "export_min", MAX("window_start") AS "export_max",
 -- then, per slice proposed by ExportSlicePlanner:
 SELECT COUNT(*) FROM <table> WHERE "window_start" >= '<from>' AND "window_start" < '<to>';
 SELECT * FROM <table> WHERE "window_start" >= '<from>' AND "window_start" < '<to>'
-ORDER BY "window_start", "rtid", "cktypeid";
+ORDER BY "window_start", "rtid", "cktypeid", "window_end"[, "generation"];
 ```
 
-(`timestamp`, `rtid` for a raw archive.) The slices ascend without gap or overlap and each is
-ordered by the natural key, so the rows come out in exactly the order a single ordered scan would
-give — the contract of `IStreamDataRepository.ExportRowsAsync` is unchanged.
+(`timestamp`, `rtid`, `cktypeid` for a raw archive; `generation` on a rollup.) The slices ascend
+without gap or overlap and each is ordered by (time, rtid, cktypeid) and then by the rest of the
+table's primary key, so the order is total and the rows come out in exactly the order a single
+ordered scan would give — the contract of `IStreamDataRepository.ExportRowsAsync` is unchanged.
+The last slice is bounded by the last row itself (`<=`): the exclusive end one millisecond behind
+it need not exist as a `DateTime`.
+
+The keyset cursor it replaces compared (time, rtid, cktypeid) only. Rows that share those three —
+two windows starting at the same instant, or two generations of a rollup window between the
+pointer flip of a recompute and its sweep — were skipped when a page boundary fell between them.
+A slice is cut by time alone, so it cannot split such rows.
 
 **Why not keyset pages.** Until then the scan paged over the whole table: `ORDER BY key LIMIT 5000`
 behind `key > cursor`. Such a page is a top-n search over **every row behind the cursor**, so its
@@ -1107,6 +1115,8 @@ Rules to keep when touching the scan:
 - **Never page a large archive with `LIMIT` behind a cursor.** Bound the statement on both sides of
   the time axis instead. `BackfillComputedColumn` still pages that way (`BackfillPageSize`, keyset
   over the key columns) and has the same cost on a large archive.
+- **The order names the whole primary key.** Leave a key column out and rows that tie on the
+  rest come out in an arbitrary order.
 - **A slice is counted before it is read.** `ExportSlicePlanner` proposes, the scan counts, the
   planner accepts or refuses and proposes narrower. Sizing the next slice from the last one alone
   is not enough: an archive that is sparse for a year and dense afterwards (a back-fill) would get

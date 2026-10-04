@@ -84,8 +84,8 @@ public class CrateDbStreamDataExportImportTests
         var statements = new List<string>();
         // Every slice is counted before it is read; the stub answers with the whole count, spread
         // evenly, so a large archive is cut into several slices and a small one into one.
-        A.CallTo(() => _db.GetCountAsync("tenant-x", A<string>.That.StartsWith("SELECT COUNT(*) FROM ")))
-            .ReturnsLazily((string _, string sql) =>
+        A.CallTo(() => _db.GetCountAsync("tenant-x", A<string>.That.StartsWith("SELECT COUNT(*) FROM "), A<CancellationToken>._))
+            .ReturnsLazily((string _, string sql, CancellationToken _) =>
             {
                 if (min is null || max is null)
                 {
@@ -114,9 +114,14 @@ public class CrateDbStreamDataExportImportTests
     }
 
     private static readonly System.Text.RegularExpressions.Regex SliceBounds = new(
-        "\" >= '(?<from>[^']+)' AND \"[a-z_]+\" < '(?<to>[^']+)'",
+        "\" >= '(?<from>[^']+)' AND \"[a-z_]+\" (?<op><=?) '(?<to>[^']+)'",
         System.Text.RegularExpressions.RegexOptions.Compiled);
 
+    /// <summary>
+    /// The slice a statement covers, as a half-open interval. The last slice of a scan is written
+    /// with an inclusive end (<c>&lt;=</c> the last row); it is returned one millisecond further, so
+    /// that every slice reads as <c>[From, To)</c>.
+    /// </summary>
     private static (DateTime From, DateTime To) BoundsOf(string sliceSql)
     {
         var m = SliceBounds.Match(sliceSql);
@@ -124,7 +129,14 @@ public class CrateDbStreamDataExportImportTests
         DateTime Parse(string v) => DateTime.ParseExact(v, "yyyy-MM-dd HH:mm:ss.fff",
             System.Globalization.CultureInfo.InvariantCulture,
             System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal);
-        return (Parse(m.Groups["from"].Value), Parse(m.Groups["to"].Value));
+        var to = Parse(m.Groups["to"].Value);
+        if (m.Groups["op"].Value == "<=")
+        {
+            // One millisecond further, unless the row sits at the largest instant there is.
+            to = to.Ticks > DateTime.MaxValue.Ticks - TimeSpan.TicksPerMillisecond ? DateTime.MaxValue : to.AddMilliseconds(1);
+        }
+
+        return (Parse(m.Groups["from"].Value), to);
     }
 
     private static async Task<List<IReadOnlyDictionary<string, object?>>> Drain(
@@ -159,9 +171,11 @@ public class CrateDbStreamDataExportImportTests
         Assert.DoesNotContain("WHERE", bounds); // whole archive
 
         var slice = statements[1];
-        Assert.Contains("ORDER BY \"timestamp\", \"rtid\"", slice);
+        // The whole primary key of a raw table, so the order is total.
+        Assert.EndsWith("ORDER BY \"timestamp\", \"rtid\", \"cktypeid\";", slice);
         Assert.DoesNotContain("window_start", slice);
-        Assert.DoesNotContain("cktypeid", slice);
+        // The only slice is the last one: bounded by the last row itself, inclusive.
+        Assert.Contains("\"timestamp\" <= '2026-06-02 12:00:00.000'", slice);
         // A page limit is what made the scan slow on a large archive: every page searched the
         // whole rest of the table for its top rows. A slice is bounded by time instead.
         Assert.DoesNotContain("LIMIT", slice);
@@ -190,8 +204,67 @@ public class CrateDbStreamDataExportImportTests
         Assert.Contains("\"window_start\" >= '2026-06-01 00:00:00.000'", statements[0]);
         Assert.Contains("\"window_start\" < '2026-07-01 00:00:00.000'", statements[0]);
 
-        Assert.Contains("ORDER BY \"window_start\", \"rtid\", \"cktypeid\"", statements[1]);
+        // A time-range table: window_end completes the primary key; it has no generation column.
+        Assert.EndsWith("ORDER BY \"window_start\", \"rtid\", \"cktypeid\", \"window_end\";", statements[1]);
         Assert.Equal((first, last.AddMilliseconds(1)), BoundsOf(statements[1]));
+    }
+
+    [Fact]
+    public async Task Export_Rollup_OrdersByGenerationLast()
+    {
+        // A rollup keeps two generations of a window between the pointer flip of a recompute and
+        // its sweep. Both are exported; generation in the order keeps their sequence defined.
+        A.CallTo(() => _store.GetAsync(Archive)).Returns(
+            new ArchiveSnapshot(Archive, SomeType, CkArchiveStatus.Activated, "voltage-hourly",
+                new[] { new CkArchiveColumnSpec("Voltage", true, false) })
+            {
+                RollupAggregations = Array.Empty<CkRollupAggregationSpec>(),
+            });
+        StubTableExists(true);
+        var at = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+        var statements = StubScan(at, at.AddDays(1), count: 10);
+
+        await Drain(NewSut().ExportRowsAsync(Archive, window: null, CancellationToken.None));
+
+        Assert.EndsWith(
+            "ORDER BY \"window_start\", \"rtid\", \"cktypeid\", \"window_end\", \"generation\";", statements[1]);
+    }
+
+    [Fact]
+    public async Task Export_LastRowAtTheLargestTimestamp_DoesNotOverflow()
+    {
+        // The exclusive end of the scan lies one millisecond behind the last row. For a row at
+        // the largest instant a DateTime can hold that end does not exist, so the last slice is
+        // bounded by the row itself.
+        StubRaw();
+        StubTableExists(true);
+        var first = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+        var largest = new DateTime(DateTime.MaxValue.Ticks - DateTime.MaxValue.Ticks % TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);
+        var statements = StubScan(first, largest, count: 2);
+
+        await Drain(NewSut().ExportRowsAsync(Archive, window: null, CancellationToken.None));
+
+        Assert.Equal(2, statements.Count);
+        Assert.Contains("\"timestamp\" >= '2026-06-01 00:00:00.000'", statements[1]);
+        Assert.Contains("\"timestamp\" <= '9999-12-31 23:59:59.999'", statements[1]);
+    }
+
+    [Fact]
+    public async Task Export_PassesItsTokenToTheSliceCounts()
+    {
+        StubRaw();
+        StubTableExists(true);
+        var at = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+        StubScan(at, at.AddDays(4), count: 1_000_000);
+        using var source = new CancellationTokenSource();
+
+        await Drain(NewSut().ExportRowsAsync(Archive, window: null, source.Token));
+
+        A.CallTo(() => _db.GetCountAsync("tenant-x", A<string>.That.StartsWith("SELECT COUNT(*) FROM "), source.Token))
+            .MustHaveHappened();
+        A.CallTo(() => _db.GetCountAsync("tenant-x", A<string>.That.StartsWith("SELECT COUNT(*) FROM "),
+                A<CancellationToken>.That.Not.IsEqualTo(source.Token)))
+            .MustNotHaveHappened();
     }
 
     [Fact]
@@ -205,7 +278,7 @@ public class CrateDbStreamDataExportImportTests
 
         Assert.Empty(rows);
         Assert.Single(statements); // the bounds read only
-        A.CallTo(() => _db.GetCountAsync("tenant-x", A<string>.That.StartsWith("SELECT COUNT(*) FROM ")))
+        A.CallTo(() => _db.GetCountAsync("tenant-x", A<string>.That.StartsWith("SELECT COUNT(*) FROM "), A<CancellationToken>._))
             .MustNotHaveHappened();
     }
 
@@ -218,8 +291,8 @@ public class CrateDbStreamDataExportImportTests
         var last = new DateTime(2026, 1, 5, 0, 0, 0, DateTimeKind.Utc);
         var statements = StubScan(first, last, count: 1_000_000);
         // Rows only on the first day; the three days behind it are empty.
-        A.CallTo(() => _db.GetCountAsync("tenant-x", A<string>.That.StartsWith("SELECT COUNT(*) FROM ")))
-            .ReturnsLazily((string _, string sql) => BoundsOf(sql).From < first.AddDays(1) ? 200_000L : 0L);
+        A.CallTo(() => _db.GetCountAsync("tenant-x", A<string>.That.StartsWith("SELECT COUNT(*) FROM "), A<CancellationToken>._))
+            .ReturnsLazily((string _, string sql, CancellationToken _) => BoundsOf(sql).From < first.AddDays(1) ? 200_000L : 0L);
 
         await Drain(NewSut().ExportRowsAsync(Archive, window: null, CancellationToken.None));
 
