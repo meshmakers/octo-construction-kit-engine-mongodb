@@ -1353,11 +1353,19 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     /// <summary>
-    /// Page size for the keyset export scan. ~5000 rows balances round-trip count against the
-    /// memory held per page (one page is fully materialised by <see cref="StreamRawRowsAsync"/>'s
-    /// per-row copy before the next page is fetched). Concept §4.1.
+    /// Rows one statement of the export scan aims at. The export reads an archive as consecutive
+    /// time slices (<see cref="ExportSlicePlanner"/>), and no slice is read that holds more than
+    /// twice this figure. Rows are streamed off the open reader, so the figure bounds the length of
+    /// a statement, not the memory of the caller.
     /// </summary>
-    private const int ExportPageSize = 5000;
+    private const int ExportSliceTargetRows = 250_000;
+
+    /// <summary>Rows per insert batch of <see cref="ImportRowsAsync"/>.</summary>
+    private const int ImportBatchSize = 5000;
+
+    private const string ExportBoundsMin = "export_min";
+    private const string ExportBoundsMax = "export_max";
+    private const string ExportBoundsCount = "export_count";
 
     private static readonly System.Text.RegularExpressions.Regex RtIdHexRegex =
         new("^[0-9a-fA-F]{24}$", System.Text.RegularExpressions.RegexOptions.Compiled);
@@ -1393,116 +1401,168 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // Time-axis column: window_start for windowed archives, timestamp for raw.
         var timeColumn = windowed ? Constants.WindowStart : Constants.Timestamp;
 
-        // Keyset cursor. Raw key: (timestamp, rtid). Windowed key: (window_start, rtid, cktypeid)
-        // — window_start alone is not unique (multiple entities per window), so rtid + cktypeid
-        // complete the natural key the windowed PK uses.
-        DateTime? cursorTime = null;
-        string? cursorRtId = null;
-        string? cursorCkTypeId = null;
+        // The scan reads the archive as consecutive time slices, one statement per slice, each
+        // ordered by (time, rtid, cktypeid) and then by the rest of the table's primary key
+        // (window_end, and generation on a rollup), so the order is total. Slices ascend and do
+        // not overlap, so the rows arrive in the same order a single ordered scan would deliver.
+        // A statement that is bounded on both sides only looks
+        // at the rows of its slice; a keyset page over the whole table (ORDER BY ... LIMIT behind
+        // a cursor) is a top-n search over everything behind the cursor instead, and on a large
+        // archive that search, not the rows, is what a page costs.
+        //
+        // The bounds are read once, up front. A row written behind them while the export runs is
+        // not part of it, which is the same guarantee as before: the export never was a snapshot.
+        var bounds = await ReadExportBoundsAsync(qualifiedTable, timeColumn, window, ct);
+        if (bounds is null)
+        {
+            yield break; // empty table, or nothing inside the window
+        }
 
-        while (true)
+        // Rollup tables key their rows with `generation` as well (AB#4184 Phase 6).
+        var generationTracked = snapshot.RollupAggregations is not null;
+        var planner = new ExportSlicePlanner(
+            bounds.Value.FromInclusiveMs, bounds.Value.ToExclusiveMs, bounds.Value.RowCount, ExportSliceTargetRows);
+
+        while (planner.TryNext(out var sliceFrom, out var sliceTo))
         {
             ct.ThrowIfCancellationRequested();
 
-            var sql = BuildExportPageSql(
-                qualifiedTable, windowed, timeColumn, window,
-                cursorTime, cursorRtId, cursorCkTypeId, ExportPageSize);
+            // The planner works with an exclusive end, one millisecond behind the last row. That
+            // instant need not exist as a DateTime (a row at the largest timestamp), so the last
+            // slice is bounded by the last row itself, inclusive.
+            var isLast = sliceTo == bounds.Value.ToExclusiveMs;
+            var fromUtc = DateTimeOffset.FromUnixTimeMilliseconds(sliceFrom).UtcDateTime;
+            var toUtc = DateTimeOffset.FromUnixTimeMilliseconds(isLast ? sliceTo - 1 : sliceTo).UtcDateTime;
 
-            var pageCount = 0;
-            IReadOnlyDictionary<string, object?>? lastRow = null;
+            // Count before reading: the planner refuses a slice that holds far more rows than a
+            // statement should return and proposes a narrower one from the same start. A count
+            // over a time range is answered from the index.
+            var sliceRows = await _databaseClient.GetCountAsync(_tenantId,
+                BuildExportSliceCountSql(qualifiedTable, timeColumn, fromUtc, toUtc, isLast), ct);
+            if (!planner.Accept(sliceRows) || sliceRows == 0)
+            {
+                continue; // too large: proposed again narrower; empty: nothing to read
+            }
 
+            var sql = BuildExportSliceSql(
+                qualifiedTable, windowed, generationTracked, timeColumn, fromUtc, toUtc, isLast);
             await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, sql, ct))
             {
-                pageCount++;
-                lastRow = row;
                 yield return row;
-            }
-
-            if (pageCount < ExportPageSize || lastRow is null)
-            {
-                yield break; // last (partial) page reached
-            }
-
-            // Advance the cursor to the last row of this page.
-            cursorTime = AsUtcDateTime(lastRow.TryGetValue(timeColumn, out var t) ? t : null);
-            cursorRtId = lastRow.TryGetValue(Constants.RtId, out var r) ? r as string : null;
-            cursorCkTypeId = windowed
-                ? (lastRow.TryGetValue(Constants.CkTypeId, out var c) ? c as string : null)
-                : null;
-
-            if (cursorTime is null || cursorRtId is null || (windowed && cursorCkTypeId is null))
-            {
-                // Defensive: a row without a usable cursor key would otherwise loop forever.
-                _logger.LogWarning(
-                    "Export of archive {ArchiveRtId} stopped early: last page row had no usable keyset cursor.",
-                    archiveRtId);
-                yield break;
             }
         }
     }
 
     /// <summary>
-    /// Builds one keyset-pagination page query for the export scan. Emits <c>SELECT *</c> ordered by
-    /// the natural key with a tuple cursor predicate and the optional <c>[FromUtc, ToUtc)</c> window
-    /// predicate. Timestamps are embedded as quoted literals in CrateDB's canonical format (the
-    /// export path is internal and the only string inputs are server-controlled identifiers, not
-    /// user data).
+    /// Reads the first and the last instant on the time axis and the number of rows, restricted to
+    /// the optional <c>[FromUtc, ToUtc)</c> window. Returns <c>null</c> when there is no row.
     /// </summary>
-    private static string BuildExportPageSql(
-        string qualifiedTable, bool windowed, string timeColumn, TimeWindow? window,
-        DateTime? cursorTime, string? cursorRtId, string? cursorCkTypeId, int pageSize)
+    private async Task<(long FromInclusiveMs, long ToExclusiveMs, long RowCount)?> ReadExportBoundsAsync(
+        string qualifiedTable, string timeColumn, TimeWindow? window, CancellationToken ct)
+    {
+        var sql = BuildExportBoundsSql(qualifiedTable, timeColumn, window);
+
+        await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, sql, ct))
+        {
+            var min = AsUtcDateTime(row.TryGetValue(ExportBoundsMin, out var lo) ? lo : null);
+            var max = AsUtcDateTime(row.TryGetValue(ExportBoundsMax, out var hi) ? hi : null);
+            var count = row.TryGetValue(ExportBoundsCount, out var n) && n is not null
+                ? Convert.ToInt64(n, CultureInfo.InvariantCulture)
+                : 0L;
+
+            if (min is null || max is null || count <= 0)
+            {
+                return null;
+            }
+
+            // CrateDB stores timestamps in milliseconds; the end is exclusive, one step behind the last row.
+            return (new DateTimeOffset(min.Value).ToUnixTimeMilliseconds(),
+                new DateTimeOffset(max.Value).ToUnixTimeMilliseconds() + 1,
+                count);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Builds the statement that reads the extent of the export: first and last instant on the time
+    /// axis and the row count, inside the optional window.
+    /// </summary>
+    internal static string BuildExportBoundsSql(string qualifiedTable, string timeColumn, TimeWindow? window)
     {
         var sb = new System.Text.StringBuilder();
-        sb.Append("SELECT * FROM ").Append(qualifiedTable);
-
-        var predicates = new List<string>();
+        sb.Append("SELECT MIN(\"").Append(timeColumn).Append("\") AS \"").Append(ExportBoundsMin)
+            .Append("\", MAX(\"").Append(timeColumn).Append("\") AS \"").Append(ExportBoundsMax)
+            .Append("\", COUNT(*) AS \"").Append(ExportBoundsCount).Append("\" FROM ").Append(qualifiedTable);
 
         if (window is not null)
         {
-            predicates.Add($"\"{timeColumn}\" >= '{FormatTs(window.FromUtc)}'");
-            predicates.Add($"\"{timeColumn}\" < '{FormatTs(window.ToUtc)}'");
+            sb.Append(" WHERE \"").Append(timeColumn).Append("\" >= '").Append(FormatTs(window.FromUtc))
+                .Append("' AND \"").Append(timeColumn).Append("\" < '").Append(FormatTs(window.ToUtc)).Append('\'');
         }
 
-        if (cursorTime is not null)
-        {
-            // Tuple-greater-than on the natural key. CrateDB supports row-value comparison, but we
-            // spell it out to stay portable across the (time, rtid[, cktypeid]) key shapes.
-            var ts = FormatTs(cursorTime.Value);
-            if (windowed)
-            {
-                predicates.Add(
-                    $"(\"{timeColumn}\" > '{ts}' " +
-                    $"OR (\"{timeColumn}\" = '{ts}' AND \"{Constants.RtId}\" > '{EscapeLiteral(cursorRtId!)}') " +
-                    $"OR (\"{timeColumn}\" = '{ts}' AND \"{Constants.RtId}\" = '{EscapeLiteral(cursorRtId!)}' " +
-                    $"AND \"{Constants.CkTypeId}\" > '{EscapeLiteral(cursorCkTypeId!)}'))");
-            }
-            else
-            {
-                predicates.Add(
-                    $"(\"{timeColumn}\" > '{ts}' " +
-                    $"OR (\"{timeColumn}\" = '{ts}' AND \"{Constants.RtId}\" > '{EscapeLiteral(cursorRtId!)}'))");
-            }
-        }
+        sb.Append(';');
+        return sb.ToString();
+    }
 
-        if (predicates.Count > 0)
-        {
-            sb.Append(" WHERE ").Append(string.Join(" AND ", predicates));
-        }
+    /// <summary>
+    /// Builds the statement that counts the rows of one slice: <c>[fromUtc, toUtc)</c>, or
+    /// <c>[fromUtc, toUtc]</c> for the last slice (<paramref name="toInclusive"/>).
+    /// </summary>
+    internal static string BuildExportSliceCountSql(
+        string qualifiedTable, string timeColumn, DateTime fromUtc, DateTime toUtc, bool toInclusive)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("SELECT COUNT(*) FROM ").Append(qualifiedTable);
+        AppendExportSlicePredicate(sb, timeColumn, fromUtc, toUtc, toInclusive);
+        sb.Append(';');
+        return sb.ToString();
+    }
 
-        sb.Append(" ORDER BY \"").Append(timeColumn).Append("\", \"").Append(Constants.RtId).Append('"');
+    private static void AppendExportSlicePredicate(
+        System.Text.StringBuilder sb, string timeColumn, DateTime fromUtc, DateTime toUtc, bool toInclusive)
+    {
+        sb.Append(" WHERE \"").Append(timeColumn).Append("\" >= '").Append(FormatTs(fromUtc))
+            .Append("' AND \"").Append(timeColumn).Append(toInclusive ? "\" <= '" : "\" < '")
+            .Append(FormatTs(toUtc)).Append('\'');
+    }
+
+    /// <summary>
+    /// Builds the statement that reads one slice of the export scan — <c>[fromUtc, toUtc)</c>, or
+    /// <c>[fromUtc, toUtc]</c> for the last slice — as <c>SELECT *</c> without a limit. The order
+    /// is (time, rtid, cktypeid) followed by the rest of the table's primary key: <c>window_end</c>
+    /// on a windowed table, and <c>generation</c> on a rollup. Without those two, rows that share
+    /// the leading columns (two windows starting at the same instant, or two generations of a
+    /// rollup window that a recompute has not swept yet) would come out in an arbitrary order.
+    /// Timestamps are embedded as quoted literals in CrateDB's canonical format (the export path
+    /// is internal and the only string inputs are server-controlled identifiers, not user data).
+    /// </summary>
+    internal static string BuildExportSliceSql(
+        string qualifiedTable, bool windowed, bool generationTracked, string timeColumn,
+        DateTime fromUtc, DateTime toUtc, bool toInclusive)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("SELECT * FROM ").Append(qualifiedTable);
+        AppendExportSlicePredicate(sb, timeColumn, fromUtc, toUtc, toInclusive);
+        sb.Append(" ORDER BY \"").Append(timeColumn).Append("\", \"").Append(Constants.RtId)
+            .Append("\", \"").Append(Constants.CkTypeId).Append('"');
+
         if (windowed)
         {
-            sb.Append(", \"").Append(Constants.CkTypeId).Append('"');
+            sb.Append(", \"").Append(Constants.WindowEnd).Append('"');
         }
 
-        sb.Append(" LIMIT ").Append(pageSize.ToString(CultureInfo.InvariantCulture)).Append(';');
+        if (generationTracked)
+        {
+            sb.Append(", \"").Append(Constants.Generation).Append('"');
+        }
+
+        sb.Append(';');
         return sb.ToString();
     }
 
     private static string FormatTs(DateTime dt)
         => dt.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture);
-
-    private static string EscapeLiteral(string s) => s.Replace("'", "''");
 
     private static DateTime? AsUtcDateTime(object? value) => value switch
     {
@@ -1537,8 +1597,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         activity?.SetTag("streamdata.tenant", _tenantId);
         activity?.SetTag("streamdata.archive.rtid", archiveRtId.ToString());
 
-        var rawBatch = new List<DataPointDto>(ExportPageSize);
-        var windowedBatch = new List<Dtos.TimeRangeDataPointDto>(ExportPageSize);
+        var rawBatch = new List<DataPointDto>(ImportBatchSize);
+        var windowedBatch = new List<Dtos.TimeRangeDataPointDto>(ImportBatchSize);
         var rowIndex = 0;
 
         await foreach (var row in rows.WithCancellation(ct))
@@ -1546,7 +1606,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             if (windowed)
             {
                 windowedBatch.Add(MapImportedWindowedRow(row, userColumnNames, rowIndex));
-                if (windowedBatch.Count >= ExportPageSize)
+                if (windowedBatch.Count >= ImportBatchSize)
                 {
                     await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, windowedBatch, generationTracked);
                     windowedBatch.Clear();
@@ -1555,7 +1615,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             else
             {
                 rawBatch.Add(MapImportedRawRow(row, userColumnNames, rowIndex));
-                if (rawBatch.Count >= ExportPageSize)
+                if (rawBatch.Count >= ImportBatchSize)
                 {
                     await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, rawBatch);
                     rawBatch.Clear();

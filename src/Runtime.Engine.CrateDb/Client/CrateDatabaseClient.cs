@@ -149,8 +149,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     {
         // Unbuffered enumeration: Dapper hands back rows one at a time off the open data reader so a
         // multi-GB archive export never materialises the whole table. The connection stays open for
-        // the life of the enumeration (held by `await using`), which is why this is a per-page query
-        // in the caller's keyset loop rather than one giant cursor — a page is small and bounded.
+        // the life of the enumeration (held by `await using`), which is why the export sends one
+        // statement per time slice rather than one giant cursor — a slice is bounded.
         await using var lease = await LeaseConnectionAsync(tenantId, cancellationToken);
         var connection = lease.Connection;
         var rows = connection.QueryUnbufferedAsync(query);
@@ -166,14 +166,18 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         }
     }
 
-    public async Task<long> GetCountAsync(string tenantId, string countQuery)
+    public Task<long> GetCountAsync(string tenantId, string countQuery)
+        => GetCountAsync(tenantId, countQuery, CancellationToken.None);
+
+    public async Task<long> GetCountAsync(string tenantId, string countQuery, CancellationToken cancellationToken)
     {
-        return await _resilience.ExecuteAsync(async _ =>
+        return await _resilience.ExecuteAsync(async token =>
         {
-            await using var lease = await LeaseConnectionAsync(tenantId);
+            await using var lease = await LeaseConnectionAsync(tenantId, token);
             var connection = lease.Connection;
-            return await connection.ExecuteScalarAsync<long>(countQuery);
-        });
+            return await connection.ExecuteScalarAsync<long>(
+                new CommandDefinition(countQuery, cancellationToken: token));
+        }, cancellationToken);
     }
 
     public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
