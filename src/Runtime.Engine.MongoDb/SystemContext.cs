@@ -1,5 +1,6 @@
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
@@ -18,6 +19,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 public class SystemContext : TenantContext, ISystemContext
 {
     private readonly IServiceProvider _serviceProvider;
+    private readonly ILogger<SystemContext> _logger;
 
     /// <summary>
     ///     Initializes a new instance of the <see cref="SystemContext" /> class.
@@ -33,6 +35,7 @@ public class SystemContext : TenantContext, ISystemContext
             NormalizeDatabaseName(systemConfiguration.Value.SystemDatabaseName))
     {
         _serviceProvider = serviceProvider;
+        _logger = loggerFactory.CreateLogger<SystemContext>();
     }
 
     #region System database handling
@@ -122,7 +125,7 @@ public class SystemContext : TenantContext, ISystemContext
     {
         if (!await IsSystemTenantExistingAsync())
         {
-            throw TenantException.SystemTenantDatabaseNotExisting();
+            throw await CreateSystemTenantNotExistingExceptionAsync();
         }
 
         await DeleteSystemTenantAsync();
@@ -135,7 +138,7 @@ public class SystemContext : TenantContext, ISystemContext
     {
         if (!await IsSystemTenantExistingAsync())
         {
-            throw TenantException.SystemTenantDatabaseNotExisting();
+            throw await CreateSystemTenantNotExistingExceptionAsync();
         }
 
         var normalizedDatabaseName = NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName);
@@ -194,7 +197,7 @@ public class SystemContext : TenantContext, ISystemContext
     {
         if (!await IsSystemTenantExistingAsync())
         {
-            throw TenantException.SystemTenantDatabaseNotExisting();
+            throw await CreateSystemTenantNotExistingExceptionAsync();
         }
 
         ITenantContext tenantContext = this;
@@ -257,6 +260,70 @@ public class SystemContext : TenantContext, ISystemContext
         }
 
         return false;
+    }
+
+    /// <summary>
+    ///     Builds the exception for "the system tenant does not exist", naming the real cause when the
+    ///     database is there but carries a different System CK model version than this process was
+    ///     compiled against (AB#5492).
+    /// </summary>
+    /// <remarks>
+    ///     Only ever runs on the failure path of <see cref="IsSystemTenantExistingAsync" />, so the one
+    ///     extra query costs nothing on healthy requests. The diagnostic itself is best-effort: a
+    ///     failure while enumerating the installed models falls back to the generic message rather
+    ///     than masking the original problem with a secondary exception.
+    /// </remarks>
+    private async Task<Exception> CreateSystemTenantNotExistingExceptionAsync()
+    {
+        var normalizedDatabaseName = NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName);
+
+        try
+        {
+            if (!await IsDatabaseExistingAsync(normalizedDatabaseName)
+                || await IsDatabaseMaterializedOnlyByInfrastructureAsync(normalizedDatabaseName))
+            {
+                return TenantException.SystemTenantDatabaseNotExisting();
+            }
+
+            var installedSystemModels = await GetInstalledSystemModelsDirectAsync(normalizedDatabaseName);
+            if (installedSystemModels.Count > 0)
+            {
+                _logger.LogError(
+                    "System CK model '{CompiledModelId}' compiled into this process is not installed in system " +
+                    "database '{DatabaseName}'; installed: {InstalledSystemModels}. The process was built against " +
+                    "an older platform release and must be rebuilt/re-released",
+                    SystemCkIds.CkModelId, normalizedDatabaseName, string.Join(", ", installedSystemModels));
+                return TenantException.SystemModelVersionMismatch(SystemCkIds.CkModelId, installedSystemModels);
+            }
+        }
+        catch (Exception e)
+        {
+            _logger.LogDebug(e, "Could not determine the installed System CK models of database '{DatabaseName}'",
+                normalizedDatabaseName);
+        }
+
+        return TenantException.SystemTenantDatabaseNotExisting();
+    }
+
+    /// <summary>
+    ///     Lists the System CK models installed in the system database as "Name-Version" (one direct
+    ///     query on the CkModel collection, admin connection, same shape as the schema-version read in
+    ///     <see cref="TenantContext" />). A model that is not Available carries its state in brackets.
+    /// </summary>
+    private async Task<IReadOnlyCollection<string>> GetInstalledSystemModelsDirectAsync(string normalizedDatabaseName)
+    {
+        var dataSource = CreateRepositoryDataSourceAsAdmin(normalizedDatabaseName, TenantId);
+        var systemModelName = SystemCkIds.CkModelId.Name;
+
+        using var session = await dataSource.CreateSessionAsync();
+        var ckModels = await dataSource.CkModels.FindManyAsync(session, model => model.ModelId == systemModelName);
+
+        return ckModels
+            .OrderBy(model => model.Id.Version)
+            .Select(model => model.ModelState == ModelState.Available
+                ? model.Id.ToString()
+                : $"{model.Id} [{model.ModelState}]")
+            .ToArray();
     }
 
     /// <inheritdoc />
