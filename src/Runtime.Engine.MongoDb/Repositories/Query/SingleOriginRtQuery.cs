@@ -812,6 +812,12 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
     internal override IReadOnlyList<IPipelineStageDefinition> GetEnrichmentStageDefinitions()
         => _enrichmentStageDefinitions;
 
+    protected override void OnResultsMaterialized(IEnumerable<TEntity> resultList)
+    {
+        // AB#5533: legacy strings in Secret slots are handed out as RtSecretValue.LegacyPlaintext.
+        new SecretAttributeReadNormalizer(_ckCacheService, _tenantId).Normalize(resultList);
+    }
+
     protected override (AggregationResult?, IEnumerable<FieldAggregationResult>?) CalculateAggregations(
         IEnumerable<TEntity> resultList)
     {

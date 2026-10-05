@@ -165,7 +165,9 @@ public class CkRecordMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkRecor
             update.Set(p => p.CkModelId, document.CkModelId),
             update.Set(p => p.ModelState, document.ModelState),
             update.Set(p => p.IsAbstract, document.IsAbstract),
-            update.Set(p => p.IsFinal, document.IsFinal)
+            update.Set(p => p.IsFinal, document.IsFinal),
+            // AB#5533: keep the record key in sync on update.
+            update.Set(p => p.RecordKey, document.RecordKey)
         ];
 
         return update.Combine(list);

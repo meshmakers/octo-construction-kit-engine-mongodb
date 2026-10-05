@@ -293,7 +293,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
                 {
                     foreach (var reversedResult in reversedResults)
                     {
-                        var reversedAggregations = CalculateAggregations(reversedResult.Targets);
+                        var reversedAggregations = FinalizeResults(reversedResult.Targets);
                         reversedResult.AggregationResult = reversedAggregations.Item1;
                         reversedResult.FieldAggregationResults = reversedAggregations.Item2;
                     }
@@ -583,7 +583,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
 
         foreach (var multipleResult in result)
         {
-            var targetEntities = CalculateAggregations(multipleResult.Targets);
+            var targetEntities = FinalizeResults(multipleResult.Targets);
             multipleResult.AggregationResult = targetEntities.Item1;
             multipleResult.FieldAggregationResults = targetEntities.Item2;
         }
@@ -712,6 +712,12 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         return await fluent.ToListAsync();
     }
 
+
+    protected override void OnResultsMaterialized(IEnumerable<TTargetEntity> resultList)
+    {
+        // AB#5533: legacy strings in Secret slots are handed out as RtSecretValue.LegacyPlaintext.
+        new SecretAttributeReadNormalizer(_ckCacheService, _tenantId).Normalize(resultList);
+    }
 
     protected override (AggregationResult?, IEnumerable<FieldAggregationResult>?) CalculateAggregations(
         IEnumerable<TTargetEntity> resultList)

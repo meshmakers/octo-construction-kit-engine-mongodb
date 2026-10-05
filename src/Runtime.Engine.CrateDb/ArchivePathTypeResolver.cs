@@ -121,6 +121,12 @@ internal static class ArchivePathTypeResolver
                 return ResolveSegment(ckCache, tenantId, nextAttribute, segments, segmentIndex + 1, fullPath);
             }
 
+            case AttributeValueTypesDto.Secret:
+                // AB#5533 (concept §4.4): Secret attributes never become archive columns - the time
+                // series store would hold the value outside the protector's reach.
+                throw new UnresolvableArchivePathException(fullPath,
+                    $"attribute '{segments[segmentIndex]}' is a Secret attribute; Secret attributes cannot be archived.");
+
             default:
             {
                 if (!isLast)
@@ -167,6 +173,12 @@ internal static class ArchivePathTypeResolver
             // their own paths if the user wants them. CrateDB strict objects with deeply-nested
             // dynamic schemas tend to surprise people on activation.
             if (attr.ValueType is AttributeValueTypesDto.Record or AttributeValueTypesDto.RecordArray)
+            {
+                continue;
+            }
+
+            // AB#5533: a Secret sub-attribute is left out of the archived record object.
+            if (attr.ValueType == AttributeValueTypesDto.Secret)
             {
                 continue;
             }

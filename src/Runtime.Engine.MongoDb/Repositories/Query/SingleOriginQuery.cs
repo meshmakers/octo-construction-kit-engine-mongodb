@@ -127,7 +127,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
 
         meter.SetCheckpoint("enrichment for ids executed");
 
-        var aggregations = CalculateAggregations(result);
+        var aggregations = FinalizeResults(result);
         return new ResultSet<TEntity>(result, totalCount, aggregations.Item1, aggregations.Item2);
     }
 
@@ -227,7 +227,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
                 meter.SetCheckpoint("enrichment executed");
             }
 
-            var aggregations = CalculateAggregations(pageEntities);
+            var aggregations = FinalizeResults(pageEntities);
             return new ResultSet<TEntity>(pageEntities, count,
                 aggregations.Item1, aggregations.Item2);
         }
@@ -268,7 +268,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
             var pipelineDefinition = PipelineDefinition<TEntity, QueryResult<TEntity>>.Create(pipelineStageDefinitions);
             var resultAggregate = _mongoDbDataSourceCollection.Aggregate(octoSession, pipelineDefinition);
             var result = await resultAggregate.SingleOrDefaultAsync();
-            var aggregations = CalculateAggregations(result.Result);
+            var aggregations = FinalizeResults(result.Result);
             return new ResultSet<TEntity>(result.Result, result.TotalCount.FirstOrDefault()?.Count ?? 0,
                 aggregations.Item1, aggregations.Item2);
         }
@@ -284,7 +284,7 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
 
             var aggregate = _mongoDbDataSourceCollection.Aggregate(octoSession, pipelineDefinition);
             var resultNoTotalCount = await aggregate.ToListAsync();
-            var aggregations = CalculateAggregations(resultNoTotalCount);
+            var aggregations = FinalizeResults(resultNoTotalCount);
             return new ResultSet<TEntity>(resultNoTotalCount, resultNoTotalCount.Count, aggregations.Item1,
                 aggregations.Item2);
         }

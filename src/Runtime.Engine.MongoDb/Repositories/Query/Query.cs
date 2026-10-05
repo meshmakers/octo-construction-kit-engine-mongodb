@@ -100,6 +100,25 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
     /// </summary>
     protected bool HasSortDefinitions => _sortDefinitions.Any();
 
+    /// <summary>
+    ///     Hook for every materialised result page before aggregations are computed (AB#5533: the
+    ///     RT queries normalise legacy strings in Secret slots to <c>RtSecretValue.LegacyPlaintext</c>).
+    /// </summary>
+    protected virtual void OnResultsMaterialized(IEnumerable<TEntity> resultList)
+    {
+    }
+
+    /// <summary>
+    ///     Runs <see cref="OnResultsMaterialized" /> and then <see cref="CalculateAggregations" /> - the
+    ///     single funnel every query result passes before it is returned.
+    /// </summary>
+    protected (AggregationResult?, IEnumerable<FieldAggregationResult>?) FinalizeResults(
+        IEnumerable<TEntity> resultList)
+    {
+        OnResultsMaterialized(resultList);
+        return CalculateAggregations(resultList);
+    }
+
     protected virtual (AggregationResult?, IEnumerable<FieldAggregationResult>?) CalculateAggregations(
         IEnumerable<TEntity> resultList)
     {
@@ -136,6 +155,9 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
         {
             if (_fieldFilterResolver.IsAttributePathValid(attributePath))
             {
+                // AB#5533: never LIKE-match a Secret attribute (ciphertext or legacy plaintext).
+                _fieldFilterResolver.EnsureNotSecretAttribute(attributePath, "attribute search");
+
                 var resolveAttributePath = _fieldFilterResolver.ResolveAttributePath(attributePath);
                 // For attribute search, the operator is determined after resolving the value:
                 // - String values use LIKE, non-string values use EQUALS
@@ -193,6 +215,9 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
                 throw InvalidAttributeException.SortDefinitionContainsInvalidAttribute(item.AttributePath, _fieldFilterResolver.GetEntityName());
             }
 
+            // AB#5533: sorting by a Secret attribute would order by ciphertext / leak plaintext order.
+            _fieldFilterResolver.EnsureNotSecretAttribute(item.AttributePath, "sort");
+
             var resolvedAttributeName = _fieldFilterResolver.ResolveAttributePath(item.AttributePath);
 
             switch (item.SortOrder)
@@ -216,6 +241,13 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
             return;
         }
 
+        // AB#5533: no group-by or aggregate over a Secret attribute.
+        foreach (var path in fieldAggregationInput.GroupByAttributePathList)
+        {
+            _fieldFilterResolver.EnsureNotSecretAttribute(path, "group-by");
+        }
+
+        EnsureNoSecretAggregationPath(fieldAggregationInput);
         FieldAggregation = fieldAggregationInput;
     }
 
@@ -226,6 +258,19 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
             return;
         }
 
+        EnsureNoSecretAggregationPath(aggregationInput);
         ResultAggregation = aggregationInput;
+    }
+
+    private void EnsureNoSecretAggregationPath(AggregationInput aggregationInput)
+    {
+        foreach (var path in aggregationInput.CountAttributePathList
+                     .Concat(aggregationInput.MaxValueAttributePathList)
+                     .Concat(aggregationInput.MinValueAttributePathList)
+                     .Concat(aggregationInput.AvgAttributePathList)
+                     .Concat(aggregationInput.SumAttributePathList))
+        {
+            _fieldFilterResolver.EnsureNotSecretAttribute(path, "aggregation");
+        }
     }
 }

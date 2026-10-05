@@ -233,6 +233,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             {
                 RecordId = r.CkRecordId.ElementId,
                 Description = r.Description,
+                // AB#5533: the record key must survive the round-trip into the runtime CK cache.
+                RecordKey = r.RecordKey,
                 IsAbstract = r.IsAbstract,
                 IsFinal = r.IsFinal,
                 Attributes = r.Attributes.Select(a => new CkTypeAttributeDto
@@ -807,6 +809,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     ModelState = ModelState.Importing,
                     CkRecordId = new CkId<CkRecordId>(compiledModel.ModelId, ckRecordDto.RecordId),
                     Description = ckRecordDto.Description,
+                    // AB#5533: persist the declared record key (the inherited one is resolved by the graph).
+                    RecordKey = string.IsNullOrWhiteSpace(ckRecordDto.RecordKey) ? null : ckRecordDto.RecordKey,
                     IsFinal = ckRecordDto.IsFinal,
                     IsAbstract = ckRecordDto.IsAbstract,
                     Attributes = ckTypeAttributes

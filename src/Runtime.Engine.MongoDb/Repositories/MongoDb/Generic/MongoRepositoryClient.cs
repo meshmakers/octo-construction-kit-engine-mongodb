@@ -367,6 +367,9 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             AssertOctoDiscriminatorConvention(typeof(RtRecord));
 
             TryRegisterSerializer(new OctoObjectIdSerializer());
+            // AB#5533: Secret attribute values - protected envelopes only, { _t: "OctoSecret", e: ... }.
+            TryRegisterSerializer(new RtSecretValueSerializer());
+            TryRegisterDiscriminator(typeof(RtSecretValue), RtSecretValueSerializer.Discriminator);
             TryRegisterDiscriminator(typeof(DateTimeOffset), "datetimeoffset");
             TryRegisterSerializer(new DateTimeOffsetSerializer());
             TryRegisterSerializer(new Serialization.TimeSpanSerializer());
@@ -516,6 +519,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.IsFinal).SetIsRequired(true);
             cm.MapMember(c => c.IsAbstract).SetIgnoreIfDefault(true);
             cm.MapMember(c => c.Attributes).SetIgnoreIfDefault(true);
+            // AB#5533: absent for records without a key (documents written before stay valid).
+            cm.MapMember(c => c.RecordKey).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkEnum>(cm =>

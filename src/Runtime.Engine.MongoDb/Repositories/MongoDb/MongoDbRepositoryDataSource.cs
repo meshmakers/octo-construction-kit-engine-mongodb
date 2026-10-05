@@ -744,7 +744,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
             foreach (var fields in localIndex.Fields)
             {
-                fields.AttributeNames = fields.AttributeNames.Select(name =>
+                // AB#5533: never index a Secret attribute (incl. text indexes). The CK compiler
+                // already rejects it (message 70-77); a model compiled by an older compiler is
+                // guarded here - the field is skipped with a warning instead of indexing ciphertext.
+                fields.AttributeNames = MongoDbAttributePathResolver.WithoutSecretAttributePaths(
+                    fields.AttributeNames, metadataProvider,
+                    name => _logger.LogWarning(
+                        "Skipping Secret attribute '{AttributePath}' in a {IndexType} index on type '{CkTypeId}': " +
+                        "Secret attributes are never indexed",
+                        name, localIndex.IndexType, indexDefiningType.CkTypeId)).Select(name =>
                 {
                     if (Constants.IsSystemAttribute(name))
                     {
@@ -779,6 +787,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             }
 
             fields.AttributeNames = fieldAttributePaths.ToList();
+        }
+
+        // AB#5533: an index whose only fields were Secret attributes is not created at all.
+        localIndex.Fields = localIndex.Fields.Where(f => f.AttributeNames.Any()).ToList();
+        if (localIndex.Fields.Count == 0)
+        {
+            _logger.LogWarning("Index on type '{CkTypeId}' has no indexable field left and is not created",
+                indexDefiningType.CkTypeId);
+            return;
         }
 
         // Prepend ckTypeId as first field and append rtState as last field to Ascending indexes.

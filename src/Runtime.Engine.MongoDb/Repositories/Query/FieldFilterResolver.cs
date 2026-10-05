@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Secrets;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.Formulas;
@@ -45,6 +46,27 @@ internal class FieldFilterResolver<TEntity>
         return memberMap.ElementName;
     }
     
+    /// <summary>
+    ///     True when the path ends on a <c>Secret</c> attribute (AB#5533). Such an attribute only
+    ///     supports <c>IS_NULL</c> / <c>IS_NOT_NULL</c>; everything else is refused.
+    /// </summary>
+    internal virtual bool IsSecretAttributePath(string attributePath)
+    {
+        return false;
+    }
+
+    /// <summary>
+    ///     Throws <see cref="SecretAttributeNotQueryableException" /> when the path ends on a
+    ///     <c>Secret</c> attribute (AB#5533) - for sort, attribute search and aggregations.
+    /// </summary>
+    internal void EnsureNotSecretAttribute(string attributePath, string operation)
+    {
+        if (IsSecretAttributePath(attributePath))
+        {
+            throw new SecretAttributeNotQueryableException(attributePath, operation, GetEntityName());
+        }
+    }
+
     internal virtual object? ResolveSearchAttributeValue(string attributePath, object? searchTerm, FieldFilterOperator filterOperator, out bool isEnum)
     {
         if (searchTerm == null)
@@ -183,6 +205,15 @@ internal class FieldFilterResolver<TEntity>
 
         if (IsAttributePathValid(fieldFilter.AttributePath))
         {
+            // AB#5533 (concept §4.4): a Secret attribute is either set or not - a secret counts as set
+            // when the field exists and is not null (protected sub-document or legacy string). Any
+            // other operator would compare ciphertext or probe the plaintext, so it is refused.
+            if (IsSecretAttributePath(fieldFilter.AttributePath))
+            {
+                AddSecretAttributeFilter(fieldFilters, fieldFilter);
+                return;
+            }
+
             var resolvedAttributePath = ResolveAttributePath(fieldFilter.AttributePath);
             var resolvedValue = ResolveSearchAttributeValue(fieldFilter.AttributePath, fieldFilter.ComparisonValue,
                 fieldFilter.Operator, out var isEnum);
@@ -216,6 +247,25 @@ internal class FieldFilterResolver<TEntity>
         }
     }
     
+    private void AddSecretAttributeFilter(List<FilterDefinition<TEntity>> fieldFilters, FieldFilter fieldFilter)
+    {
+        if (fieldFilter.Operator is not (FieldFilterOperator.IsNull or FieldFilterOperator.IsNotNull))
+        {
+            throw new SecretAttributeNotQueryableException(fieldFilter.AttributePath,
+                $"filter operator '{fieldFilter.Operator}'", GetEntityName());
+        }
+
+        var resolvedAttributePath = ResolveAttributePath(fieldFilter.AttributePath);
+        if (string.IsNullOrWhiteSpace(resolvedAttributePath))
+        {
+            throw OperationFailedException.AttributePathResolutionFailed(fieldFilter.AttributePath);
+        }
+
+        // The comparison value is ignored on purpose: it is never converted (that would build a
+        // pending secret) and never rendered into the query.
+        fieldFilters.Add(CreateScalarFilter(resolvedAttributePath, fieldFilter.Operator, null));
+    }
+
     internal static FilterDefinition<TEntity> CreateScalarFilter(string attributePath, FieldFilterOperator comparisonOperator,
         object? value, object? secondaryValue = null)
     {

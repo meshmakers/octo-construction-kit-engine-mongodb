@@ -39,6 +39,12 @@ internal abstract class RtFieldFilterResolver<TEntity>(
         return MongoDbAttributePathResolver.ResolveToMongoDbFieldPath(attributePath, provider);
     }
 
+    internal override bool IsSecretAttributePath(string attributePath)
+    {
+        var provider = new CkCacheAttributeMetadataProvider(_ckCacheService, _tenantId, ckTypeWithAttributesGraph);
+        return MongoDbAttributePathResolver.IsSecretAttributePath(attributePath, provider);
+    }
+
     internal override object? ResolveSearchAttributeValue(string attributePath, object? searchTerm, FieldFilterOperator filterOperator, out bool isEnum)
     {
         // Search for the correct attribute in the CkTypeAttributesGraph

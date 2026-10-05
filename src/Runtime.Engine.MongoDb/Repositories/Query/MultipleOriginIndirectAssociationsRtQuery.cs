@@ -35,6 +35,8 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
     where TTargetEntity : RtEntity, new()
 {
     private readonly GraphDirections _graphDirection;
+    private readonly ICkCacheService _ckCacheService;
+    private readonly string _tenantId;
     private readonly IMongoDbRepositoryDataSource _mongoDbRepositoryDataSource;
     private readonly bool _includeArchivedEntities;
     private readonly CkTypeGraph _originCkTypeGraph;
@@ -50,6 +52,8 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
         GraphDirections graphDirection, CkTypeGraph targetCkTypeGraph)
         : base(new RtEntityFieldFilterResolver<TTargetEntity>(ckCacheService, tenantId, targetCkTypeGraph), language)
     {
+        _ckCacheService = ckCacheService;
+        _tenantId = tenantId;
         _mongoDbRepositoryDataSource = mongoDbRepositoryDataSource;
         _includeArchivedEntities = includeArchivedEntities;
         _rtIds = rtIds;
@@ -234,11 +238,17 @@ internal class MultipleOriginIndirectAssociationsRtQuery<TTargetEntity> : Query<
 
         foreach (var multipleResult in result)
         {
-            var aggregations = CalculateAggregations(multipleResult.Targets);
+            var aggregations = FinalizeResults(multipleResult.Targets);
             multipleResult.AggregationResult = aggregations.Item1;
             multipleResult.FieldAggregationResults = aggregations.Item2;
         }
 
         return new MultipleOriginResultSet<TTargetEntity>(result);
+    }
+
+    protected override void OnResultsMaterialized(IEnumerable<TTargetEntity> resultList)
+    {
+        // AB#5533: legacy strings in Secret slots are handed out as RtSecretValue.LegacyPlaintext.
+        new SecretAttributeReadNormalizer(_ckCacheService, _tenantId).Normalize(resultList);
     }
 }
