@@ -7,7 +7,6 @@ using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Secrets;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
@@ -40,7 +39,10 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 ///         <item>a legacy string in a Secret slot reads back as <see cref="RtSecretValue.LegacyPlaintext" />;</item>
 ///         <item>only <c>IS_NULL</c> / <c>IS_NOT_NULL</c> filter a Secret attribute; every other operator,
 ///         sort, attribute search and aggregation is refused;</item>
-///         <item>migration paths accept protected values and plain strings (emergency Decrypt sweep);</item>
+///         <item>migration paths accept protected values and plain strings (emergency Decrypt sweep);
+///         a legacy value is written back as its original string;</item>
+///         <item>the conditional (compare-and-swap) rewrite of the secret sweep;</item>
+///         <item>UpdateMany writes every target with its own carried-over secrets;</item>
 ///         <item>archive paths refuse Secret attributes.</item>
 ///     </list>
 ///     Keys are generated per test run (<see cref="RandomNumberGenerator" />); the "plaintexts" are
@@ -110,7 +112,9 @@ public class SecretAttributeStorageTests(ImportTestCkModelFixture fixture)
         var exception = await Assert.ThrowsAnyAsync<Exception>(() =>
             InsertAsync(repository, NewHolder(rtId, "pending", RtSecretValue.Pending(plaintext))));
 
-        Assert.Contains(Chain(exception), e => e is SecretValueNotStorableException);
+        // The engine write step (AB#5532) stops a pending value first - on this host without a key ring
+        // it cannot encrypt it; the serializer is the second line of defence behind it.
+        Assert.Contains(Chain(exception), IsPendingRefusal);
         Assert.All(Chain(exception), e => Assert.DoesNotContain(plaintext, e.Message, StringComparison.Ordinal));
         Assert.Null(await FindRawEntityDocumentAsync(rtId));
     }
@@ -154,7 +158,7 @@ public class SecretAttributeStorageTests(ImportTestCkModelFixture fixture)
         });
 
         var exception = await Assert.ThrowsAnyAsync<Exception>(() => ApplyUpdateAsync(repository, rtId, update));
-        Assert.Contains(Chain(exception), e => e is SecretValueNotStorableException);
+        Assert.Contains(Chain(exception), IsPendingRefusal);
         Assert.Equal(before, (await FindRawEntityDocumentAsync(rtId))!["attributes"]["apiKey"]);
     }
 
@@ -404,6 +408,163 @@ public class SecretAttributeStorageTests(ImportTestCkModelFixture fixture)
         Assert.DoesNotContain("\"Value\"", rendered, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Replace_OfAnUnmigratedEntity_WritesTheLegacyValueBackUnchanged()
+    {
+        // The fixture host has no key ring: the carried-over legacy value is kept as stored (AB#5532)
+        // and the serializer writes it back as the original string instead of refusing the save.
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var rtId = OctoObjectId.GenerateNewId();
+        await InsertAsync(repository, NewHolder(rtId, "legacy-save"));
+        var legacy = NewPlaintext();
+        await SetRawAttributesAsync(rtId, new BsonDocument("attributes.apiKey", legacy));
+
+        using (var session = await repository.GetSessionAsync())
+        {
+            session.StartTransaction();
+            var operationResult = new OperationResult();
+            await repository.ApplyChangesAsync(session,
+                [
+                    EntityUpdateInfo<RtEntity>.CreateReplace(new RtEntityId(SecretHolderTypeId, rtId),
+                        new RtEntity(SecretHolderTypeId, rtId,
+                            new Dictionary<string, object?> { ["Name"] = "legacy-save-renamed" }))
+                ],
+                operationResult);
+            Assert.False(operationResult.HasErrors);
+            await session.CommitTransactionAsync();
+        }
+
+        var attributes = (await FindRawEntityDocumentAsync(rtId))!["attributes"].AsBsonDocument;
+        Assert.Equal("legacy-save-renamed", attributes["name"].AsString);
+        Assert.Equal(new BsonString(legacy), attributes["apiKey"]);
+    }
+
+    [Fact]
+    public async Task MigrationRewrite_LegacyPlaintext_IsStoredAsTheOriginalString()
+    {
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var rtId = OctoObjectId.GenerateNewId();
+        await InsertAsync(repository, NewHolder(rtId, "legacy-rewrite"));
+        const string legacyV1 = "enc:v1:oKGio6SlpqeoqaqrOxh7H702oGiyoSGkNg1vJ7bb2F42vG3NFkjx4iY=";
+
+        await RewriteAsync(repository, rtId, RtSecretValue.LegacyPlaintext(legacyV1));
+
+        Assert.Equal(new BsonString(legacyV1), (await FindRawEntityDocumentAsync(rtId))!["attributes"]["apiKey"]);
+    }
+
+    [Fact]
+    public async Task UpdateMany_UpdatesEveryTarget_AndCarriesEachEntitysOwnRecordSecretOver()
+    {
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var plainA = NewPlaintext();
+        var plainB = NewPlaintext();
+        var rtIdA = OctoObjectId.GenerateNewId();
+        var rtIdB = OctoObjectId.GenerateNewId();
+        await InsertAsync(repository, NewHolder(rtIdA, "many", arraySecret: _protector.Protect(plainA)));
+        await InsertAsync(repository, NewHolder(rtIdB, "many", arraySecret: _protector.Protect(plainB)));
+
+        // One update object for all targets: rename, and resend the record array without the secret
+        // (null = carry the stored value of the element with the same key over).
+        var update = new RtEntity(SecretHolderTypeId, OctoObjectId.GenerateNewId(), new Dictionary<string, object?>
+        {
+            ["Name"] = "many-updated",
+            ["Credentials"] = new List<RtRecord> { NewCredential("smtp", null) }
+        });
+        using (var session = await repository.GetSessionAsync())
+        {
+            session.StartTransaction();
+            await repository.UpdateManyRtEntityAsync(session,
+                FieldFilterCriteria.Create().Field("Name", FieldFilterOperator.Equals, "many"), update);
+            await session.CommitTransactionAsync();
+        }
+
+        var loadedA = await LoadSingleAsync(repository, rtIdA);
+        var loadedB = await LoadSingleAsync(repository, rtIdB);
+        Assert.Equal("many-updated", loadedA.Attributes["Name"]);
+        Assert.Equal("many-updated", loadedB.Attributes["Name"]);
+        Assert.Equal(plainA, _protector.Unprotect(
+            Assert.Single(loadedA.GetRtRecordAttributeValues<RtRecord>("Credentials")!).GetAttributeSecretValueOrDefault("Value")!));
+        Assert.Equal(plainB, _protector.Unprotect(
+            Assert.Single(loadedB.GetRtRecordAttributeValues<RtRecord>("Credentials")!).GetAttributeSecretValueOrDefault("Value")!));
+        // The caller's object is not changed by the update.
+        Assert.Null(Assert.Single((List<RtRecord>)update.Attributes["Credentials"]!).Attributes["Value"]);
+    }
+
+    [Fact]
+    public async Task ConditionalRewrite_WritesOnlyWhileTheStoredValueIsTheExpectedOne()
+    {
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var rtId = OctoObjectId.GenerateNewId();
+        var original = _protector.Protect(NewPlaintext());
+        await InsertAsync(repository, NewHolder(rtId, "cas", original));
+
+        // Unchanged: the rewrite happens.
+        var first = _protector.Protect(NewPlaintext());
+        Assert.True(await ConditionalRewriteAsync(repository, rtId, "ApiKey", original, first));
+        Assert.Equal(first.Envelope, (await FindRawEntityDocumentAsync(rtId))!["attributes"]["apiKey"]["e"].AsString);
+
+        // Stale expectation (someone else wrote 'first' meanwhile): nothing is written.
+        var versionBefore = (await FindRawEntityDocumentAsync(rtId))!["rtVersion"];
+        Assert.False(await ConditionalRewriteAsync(repository, rtId, "ApiKey", original,
+            _protector.Protect(NewPlaintext())));
+        var raw = (await FindRawEntityDocumentAsync(rtId))!;
+        Assert.Equal(first.Envelope, raw["attributes"]["apiKey"]["e"].AsString);
+        Assert.Equal(versionBefore, raw["rtVersion"]);
+
+        // An entity that does not exist is not an error either.
+        Assert.False(await ConditionalRewriteAsync(repository, OctoObjectId.GenerateNewId(), "ApiKey", null, first));
+    }
+
+    [Fact]
+    public async Task ConditionalRewrite_LegacyStringAndUnsetSlots_CompareByStoredForm()
+    {
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var rtId = OctoObjectId.GenerateNewId();
+        await InsertAsync(repository, NewHolder(rtId, "cas-legacy"));
+
+        // Not set yet: null is the expected value.
+        var protectedValue = _protector.Protect(NewPlaintext());
+        Assert.False(await ConditionalRewriteAsync(repository, rtId, "ApiKey", "something", protectedValue));
+        Assert.True(await ConditionalRewriteAsync(repository, rtId, "ApiKey", null, RtSecretValue.Protected(protectedValue.Envelope!)));
+
+        // A legacy string read as LegacyPlaintext (or as a string) matches the stored string.
+        var legacy = NewPlaintext();
+        await SetRawAttributesAsync(rtId, new BsonDocument("attributes.apiKey", legacy));
+        Assert.False(await ConditionalRewriteAsync(repository, rtId, "ApiKey", RtSecretValue.LegacyPlaintext("other"),
+            protectedValue));
+        Assert.True(await ConditionalRewriteAsync(repository, rtId, "ApiKey", RtSecretValue.LegacyPlaintext(legacy),
+            protectedValue));
+        AssertStoredSecretShape((await FindRawEntityDocumentAsync(rtId))!["attributes"]["apiKey"]);
+    }
+
+    [Fact]
+    public async Task ConditionalRewrite_RecordArray_ComparesTheWholeStoredValue()
+    {
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var rtId = OctoObjectId.GenerateNewId();
+        await InsertAsync(repository, NewHolder(rtId, "cas-records", arraySecret: _protector.Protect(NewPlaintext())));
+        var read = (await LoadSingleAsync(repository, rtId)).Attributes["Credentials"];
+
+        // Another writer changes a non-secret member of the stored array after the read.
+        await SetRawAttributesAsync(rtId, new BsonDocument("attributes.credentials.0.attributes.key", "changed"));
+        var replacement = new List<RtRecord> { NewCredential("smtp", _protector.Protect(NewPlaintext())) };
+        Assert.False(await ConditionalRewriteAsync(repository, rtId, "Credentials", read, replacement));
+        Assert.Equal("changed",
+            (await FindRawEntityDocumentAsync(rtId))!["attributes"]["credentials"][0]["attributes"]["key"].AsString);
+
+        // Read again: the value as stored now matches and the rewrite goes through.
+        var reread = (await LoadSingleAsync(repository, rtId)).Attributes["Credentials"];
+        Assert.True(await ConditionalRewriteAsync(repository, rtId, "Credentials", reread, replacement));
+        Assert.Equal("smtp",
+            (await FindRawEntityDocumentAsync(rtId))!["attributes"]["credentials"][0]["attributes"]["key"].AsString);
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────
 
     private static ISecretAttributeProtector CreateProtector()
@@ -455,6 +616,13 @@ public class SecretAttributeStorageTests(ImportTestCkModelFixture fixture)
         Assert.StartsWith(SecretEnvelope.PrefixV2 + "t1:", envelope, StringComparison.Ordinal);
         Assert.True(SecretEnvelope.IsEnvelope(envelope));
     }
+
+    /// <summary>
+    ///     A pending value is refused either by the engine write step (no key ring to encrypt it with) or
+    ///     by the serializer (a write path that skipped the write step).
+    /// </summary>
+    private static bool IsPendingRefusal(Exception exception) =>
+        exception is SecretValueNotStorableException or SecretEncryptionNotConfiguredException;
 
     private static IEnumerable<Exception> Chain(Exception exception)
     {
@@ -508,6 +676,25 @@ public class SecretAttributeStorageTests(ImportTestCkModelFixture fixture)
         {
             await repository.RewriteAttributeValueForMigrationAsync(session, SecretHolderTypeId, rtId, "ApiKey", value);
             await session.CommitTransactionAsync();
+        }
+        catch
+        {
+            await session.AbortTransactionAsync();
+            throw;
+        }
+    }
+
+    private static async Task<bool> ConditionalRewriteAsync(ITenantRepository repository, OctoObjectId rtId,
+        string attribute, object? expected, object? value)
+    {
+        using var session = await repository.GetSessionAsync();
+        session.StartTransaction();
+        try
+        {
+            var written = await repository.RewriteAttributeValueIfUnchangedForMigrationAsync(session,
+                SecretHolderTypeId, rtId, attribute, expected, value);
+            await session.CommitTransactionAsync();
+            return written;
         }
         catch
         {

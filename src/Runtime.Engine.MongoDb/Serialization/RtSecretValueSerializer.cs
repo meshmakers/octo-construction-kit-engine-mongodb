@@ -1,4 +1,3 @@
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Secrets;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.Secrets;
 
@@ -14,13 +13,15 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         <b>Write:</b> only <see cref="RtSecretValueState.Protected" /> values are stored, as the
+///         <b>Write:</b> <see cref="RtSecretValueState.Protected" /> values are stored as the
 ///         self-describing sub-document <c>{ _t: "OctoSecret", e: "enc:v2:&lt;kid&gt;:..." }</c>.
-///         <see cref="RtSecretValueState.Pending" /> (a plaintext the engine write step has not
-///         encrypted) and <see cref="RtSecretValueState.LegacyPlaintext" /> are refused with
+///         <see cref="RtSecretValueState.LegacyPlaintext" /> (a string read from a Secret slot) is
+///         written back unchanged as that string, so saving an entity the encrypt sweep has not
+///         reached yet keeps its stored form. <see cref="RtSecretValueState.Pending" /> (a plaintext
+///         the engine write step has not encrypted) is refused with
 ///         <see cref="SecretValueNotStorableException" />, so a write path that forgets the protector
-///         fails loudly instead of persisting plaintext. The emergency <c>Decrypt</c> sweep writes a
-///         plain string, not an <see cref="RtSecretValue" />.
+///         fails loudly instead of persisting new plaintext. The emergency <c>Decrypt</c> sweep writes
+///         a plain string.
 ///     </para>
 ///     <para>
 ///         <b>Read:</b> the sub-document becomes <see cref="RtSecretValue.Protected" /> in every slot -
@@ -63,6 +64,16 @@ internal sealed class RtSecretValueSerializer : SerializerBase<RtSecretValue>, I
         if (value == null)
         {
             writer.WriteNull();
+            return;
+        }
+
+        if (value.IsLegacyPlaintext)
+        {
+            // A legacy value read from storage goes back exactly as it was read (the string slot,
+            // plaintext or enc:v1): carry-over and upsert preservation re-write stored values of
+            // entities the encrypt sweep has not reached yet, and refusing them would make such an
+            // entity unsavable. Nothing new is stored in clear text - new input is Pending.
+            writer.WriteString(value.RawValue);
             return;
         }
 

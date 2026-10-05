@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 
 using Meshmakers.Octo.ConstructionKit.Contracts;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Secrets;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.Secrets;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
@@ -17,7 +16,7 @@ namespace Meshmakers.Octo.Runtime.Engine.UnitTests;
 
 /// <summary>
 ///     AB#5533: BSON storage of Secret attribute values. Only protected envelopes are written, as
-///     <c>{ _t: "OctoSecret", e: "enc:v2:..." }</c>; pending and legacy values are refused, and the
+///     <c>{ _t: "OctoSecret", e: "enc:v2:..." }</c>; pending values are refused, legacy values are written back as their original string, and the
 ///     sub-document reads back as <see cref="RtSecretValue.Protected" /> in any slot without CK
 ///     knowledge. The envelopes are structurally valid random bytes - no key, no plaintext.
 /// </summary>
@@ -60,15 +59,69 @@ public class RtSecretValueSerializerTests
     }
 
     [Fact]
-    public void Serialize_LegacyPlaintext_IsRefused()
+    public void Serialize_LegacyPlaintext_IsWrittenBackAsTheOriginalString()
+    {
+        // Saving an entity the encrypt sweep has not reached yet must keep its stored (legacy) form.
+        const string legacy = "legacy-plaintext-value";
+        const string legacyV1 = "enc:v1:oKGio6SlpqeoqaqrOxh7H702oGiyoSGkNg1vJ7bb2F42vG3NFkjx4iY=";
+
+        var attributes = SerializeAttributes(new Dictionary<string, object?>
+        {
+            ["ApiKey"] = RtSecretValue.LegacyPlaintext(legacy),
+            ["Password"] = RtSecretValue.LegacyPlaintext(legacyV1),
+            ["Credentials"] = new List<RtRecord>
+            {
+                new(CredentialRecordId, new Dictionary<string, object?>
+                {
+                    ["Key"] = "smtp",
+                    ["Value"] = RtSecretValue.LegacyPlaintext(legacy)
+                })
+            }
+        });
+
+        Assert.Equal(new BsonString(legacy), attributes["apiKey"]);
+        Assert.Equal(new BsonString(legacyV1), attributes["password"]);
+        // Record element names depend on the registered class-map conventions; the legacy string must
+        // sit in the element as a plain string, and no secret sub-document may have been written.
+        Assert.Contains(new BsonString(legacy), AllValues(attributes["credentials"]));
+        Assert.Empty(FindStoredSecrets(attributes));
+    }
+
+    private static IEnumerable<BsonValue> AllValues(BsonValue value)
+    {
+        yield return value;
+        var children = value switch
+        {
+            BsonDocument document => document.Values,
+            BsonArray array => array,
+            _ => Enumerable.Empty<BsonValue>()
+        };
+        foreach (var child in children.SelectMany(AllValues))
+        {
+            yield return child;
+        }
+    }
+
+    [Fact]
+    public void LegacyPlaintext_RoundTripsThroughTheSecretSerializer()
     {
         const string legacy = "legacy-plaintext-value";
+        var serializer = new RtSecretValueSerializer();
+        var document = new BsonDocument();
+        using (var writer = new BsonDocumentWriter(document))
+        {
+            writer.WriteStartDocument();
+            writer.WriteName("v");
+            serializer.Serialize(BsonSerializationContext.CreateRoot(writer), RtSecretValue.LegacyPlaintext(legacy));
+            writer.WriteEndDocument();
+        }
 
-        var exception = Assert.Throws<SecretValueNotStorableException>(() =>
-            SerializeAttributes(new Dictionary<string, object?> { ["ApiKey"] = RtSecretValue.LegacyPlaintext(legacy) }));
+        using var reader = new BsonDocumentReader(document);
+        reader.ReadStartDocument();
+        reader.ReadName("v");
+        var read = serializer.Deserialize(BsonDeserializationContext.CreateRoot(reader));
 
-        Assert.Equal(RtSecretValueState.LegacyPlaintext, exception.State);
-        Assert.DoesNotContain(legacy, exception.Message, StringComparison.Ordinal);
+        Assert.Equal(RtSecretValue.LegacyPlaintext(legacy), read);
     }
 
     [Fact]

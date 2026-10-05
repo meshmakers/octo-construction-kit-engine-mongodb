@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
-using Meshmakers.Octo.Runtime.Contracts.MongoDb.Secrets;
+using Meshmakers.Octo.Runtime.Contracts.Secrets;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.Formulas;

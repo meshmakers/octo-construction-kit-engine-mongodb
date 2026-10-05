@@ -125,10 +125,65 @@ internal class Mutation<TEntity> : Engine<TEntity> where TEntity : RtEntity, new
         var rtCollection = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TEntity>(_ckTypeGraph);
         var entities = await rtCollection.FindManyAsync(session, filterDefinitions);
 
+        // One copy of the update per target: BulkRtMutation sets the target's rtId on the entity and the
+        // secret write step carries stored secrets over into it (AB#5533). With one shared object every
+        // update request ended up addressing the last target, and a secret carried over from entity A
+        // could be written to entity B.
         var entityUpdateInfoList = entities.Select(entityToUpdate =>
-            EntityUpdateInfo<TEntity>.CreateUpdate(entityToUpdate.ToRtEntityId(), rtEntity)).ToList();
+            EntityUpdateInfo<TEntity>.CreateUpdate(entityToUpdate.ToRtEntityId(), CopyEntity(rtEntity))).ToList();
 
         await _bulkRtMutation.ApplyChangesAsync(session, _mongoDbRepositoryDataSource, _ckCacheService, entityUpdateInfoList,
             new Collection<AssociationUpdateInfo>(), BulkRtMutationOptions.Default);
+    }
+
+    /// <summary>
+    ///     Copies an entity for one update target: the system fields and the attribute values, with records
+    ///     and arrays copied deeply (the write steps change them in place). Scalars and
+    ///     <see cref="RtSecretValue" />s are immutable and shared.
+    /// </summary>
+    internal static TEntity CopyEntity(TEntity source)
+    {
+        var copy = new TEntity
+        {
+            RtId = source.RtId,
+            CkTypeId = source.CkTypeId,
+            RtCreationDateTime = source.RtCreationDateTime,
+            RtChangedDateTime = source.RtChangedDateTime,
+            RtArchivedDateTime = source.RtArchivedDateTime,
+            RtWellKnownName = source.RtWellKnownName,
+            RtCreatedBy = source.RtCreatedBy,
+            RtDisplayName = source.RtDisplayName,
+            RtDisplayDescription = source.RtDisplayDescription,
+            RtVersion = source.RtVersion,
+            RtState = source.RtState
+        };
+        foreach (var (name, value) in source.Attributes)
+        {
+            copy.SetAttributeRawValue(name, CopyValue(value));
+        }
+
+        return copy;
+    }
+
+    private static object? CopyValue(object? value)
+    {
+        switch (value)
+        {
+            case null:
+                return null;
+            case RtRecord record:
+                return new RtRecord(record.CkRecordId,
+                    record.Attributes.ToDictionary(p => p.Key, p => CopyValue(p.Value), StringComparer.Ordinal));
+            case string or byte[] or System.Collections.IDictionary:
+                return value;
+            case IEnumerable<RtRecord> records:
+                return records.Select(r => (RtRecord)CopyValue(r)!).ToList();
+            case IEnumerable<string> strings:
+                return strings.ToList();
+            case System.Collections.IEnumerable elements:
+                return elements.Cast<object?>().Select(CopyValue).ToList();
+            default:
+                return value;
+        }
     }
 }

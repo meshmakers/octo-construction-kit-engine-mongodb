@@ -13,7 +13,9 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+using Meshmakers.Octo.Runtime.Contracts.Secrets;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Query;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.Repositories;
 using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
@@ -21,6 +23,7 @@ using Meshmakers.Octo.Runtime.Engine.Repositories.Query;
 using Microsoft.Extensions.Logging;
 
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 
 using DeleteOptions = Meshmakers.Octo.Runtime.Contracts.Repositories.DeleteOptions;
@@ -1335,17 +1338,7 @@ internal class TenantRepository(
         string attributeId,
         object? newValue)
     {
-        // Resolve the collection the same way DeleteOneRtEntityForMigrationAsync does so that
-        // derived-type entities living in a parent collection are correctly addressed.
-        IMongoDbDataSourceCollection<OctoObjectId, RtEntity> collection;
-        if (_derivedTypeCollectionMap.TryGetValue(rtCkTypeId.FullName, out var parentCollectionName))
-        {
-            collection = GetRtCollectionByName<RtEntity>(parentCollectionName);
-        }
-        else
-        {
-            collection = GetRtCollectionForMigration<RtEntity>(rtCkTypeId);
-        }
+        var collection = GetAttributeRewriteCollection(rtCkTypeId);
 
         // Attribute storage uses the same convention as MongoDataSourceMapper.ApplyUpdate:
         // `attributes.<key.ToCamelCase()>`. The CK migration step's attribute id is the
@@ -1360,6 +1353,92 @@ internal class TenantRepository(
             Builders<RtEntity>.Update.Inc("rtVersion", 1));
 
         await collection.UpdateOneAsync(session, rtId, updateDef).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    ///     AB#5533: compare-and-swap in two steps. The stored attribute is read raw, deserialized with the
+    ///     attribute serializer and compared with <paramref name="expectedValue" /> by
+    ///     <see cref="StoredAttributeValueComparer" /> (so the CLR shape of a read does not matter); the
+    ///     update then filters on the exact raw BSON just read, so a write that lands between the read
+    ///     and the update makes the update match nothing instead of being overwritten.
+    /// </remarks>
+    public override async Task<bool> RewriteAttributeValueIfUnchangedForMigrationAsync(
+        IOctoSession session,
+        RtCkId<CkTypeId> rtCkTypeId,
+        OctoObjectId rtId,
+        string attributeId,
+        object? expectedValue,
+        object? newValue)
+    {
+        var mongoCollection = GetAttributeRewriteCollection(rtCkTypeId).GetMongoCollection();
+        var sessionHandle = ((IOctoSessionInternal)session).SessionHandle;
+        var fieldName = attributeId.ToCamelCase();
+        var fieldPath = "attributes." + fieldName;
+        var id = rtId.ToObjectId();
+
+        var rawCollection = mongoCollection.Database.GetCollection<BsonDocument>(
+            mongoCollection.CollectionNamespace.CollectionName);
+        var stored = await rawCollection.Find(sessionHandle, new BsonDocument("_id", id))
+            .Project(Builders<BsonDocument>.Projection.Include(fieldPath))
+            .FirstOrDefaultAsync().ConfigureAwait(false);
+        if (stored == null)
+        {
+            return false;
+        }
+
+        var storedRaw = stored.TryGetValue("attributes", out var attributes) && attributes is BsonDocument attributeDocument &&
+                        attributeDocument.TryGetValue(fieldName, out var rawValue)
+            ? rawValue
+            : BsonNull.Value;
+        if (!StoredAttributeValueComparer.AreEqual(DeserializeAttributeValue(fieldName, storedRaw), expectedValue))
+        {
+            return false;
+        }
+
+        // {field: null} matches a null and a missing field alike; any other value matches exactly.
+        var filter = new BsonDocumentFilterDefinition<RtEntity>(new BsonDocument
+        {
+            { "_id", id },
+            { fieldPath, storedRaw }
+        });
+        var updateDef = Builders<RtEntity>.Update.Combine(
+            Builders<RtEntity>.Update.Set(fieldPath, newValue),
+            Builders<RtEntity>.Update.Set("rtChangedDateTime", DateTime.UtcNow),
+            Builders<RtEntity>.Update.Inc("rtVersion", 1));
+
+        var result = await mongoCollection.UpdateOneAsync(sessionHandle, filter, updateDef).ConfigureAwait(false);
+        return result.MatchedCount == 1;
+    }
+
+    /// <summary>
+    ///     Deserializes one stored attribute value the way an entity read does (the attribute dictionary
+    ///     serializer: discriminated records and secrets, ObjectIds, points, decimals).
+    /// </summary>
+    private static object? DeserializeAttributeValue(string fieldName, BsonValue storedRaw)
+    {
+        if (storedRaw.IsBsonNull)
+        {
+            return null;
+        }
+
+        var document = new BsonDocument(fieldName, storedRaw);
+        using var reader = new MongoDB.Bson.IO.BsonDocumentReader(document);
+        var values = new RtAttributeDictionarySerializer().Deserialize(BsonDeserializationContext.CreateRoot(reader));
+        return values.Values.SingleOrDefault();
+    }
+
+    /// <summary>
+    ///     Resolves the collection of a CK-cache-free attribute rewrite the same way
+    ///     DeleteOneRtEntityForMigrationAsync does, so that derived-type entities living in a parent
+    ///     collection are correctly addressed.
+    /// </summary>
+    private IMongoDbDataSourceCollection<OctoObjectId, RtEntity> GetAttributeRewriteCollection(
+        RtCkId<CkTypeId> rtCkTypeId)
+    {
+        return _derivedTypeCollectionMap.TryGetValue(rtCkTypeId.FullName, out var parentCollectionName)
+            ? GetRtCollectionByName<RtEntity>(parentCollectionName)
+            : GetRtCollectionForMigration<RtEntity>(rtCkTypeId);
     }
 
     /// <summary>
