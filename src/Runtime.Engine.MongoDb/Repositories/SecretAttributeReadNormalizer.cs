@@ -3,6 +3,7 @@ using System.Collections;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories;
@@ -41,23 +42,39 @@ internal sealed class SecretAttributeReadNormalizer(ICkCacheService ckCacheServi
     /// </summary>
     public void Normalize(RtEntity entity)
     {
-        if (entity.CkTypeId == null)
+        if (entity.CkTypeId != null)
         {
-            return;
+            var key = entity.CkTypeId.FullName;
+            if (!_typeShapes.TryGetValue(key, out var shape))
+            {
+                shape = ckCacheService.TryGetRtCkType(tenantId, entity.CkTypeId, out var graph)
+                    ? BuildShape(graph, new HashSet<string>(StringComparer.Ordinal))
+                    : null;
+                _typeShapes[key] = shape;
+            }
+
+            if (shape != null)
+            {
+                Apply(entity, shape);
+            }
         }
 
-        var key = entity.CkTypeId.FullName;
-        if (!_typeShapes.TryGetValue(key, out var shape))
+        // Navigation targets of a graph query (RtEntityGraphItem.Associations[].Targets) are full
+        // entities of other CK types and are handed out the same way as the root entity.
+        if (entity is RtEntityGraphItem { Associations: { Count: > 0 } navigationEnds })
         {
-            shape = ckCacheService.TryGetRtCkType(tenantId, entity.CkTypeId, out var graph)
-                ? BuildShape(graph, new HashSet<string>(StringComparer.Ordinal))
-                : null;
-            _typeShapes[key] = shape;
-        }
+            foreach (var navigationEnd in navigationEnds)
+            {
+                if (navigationEnd.Targets == null)
+                {
+                    continue;
+                }
 
-        if (shape != null)
-        {
-            Apply(entity, shape);
+                foreach (var target in navigationEnd.Targets)
+                {
+                    Normalize(target);
+                }
+            }
         }
     }
 

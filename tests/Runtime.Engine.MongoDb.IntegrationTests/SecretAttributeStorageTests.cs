@@ -2,11 +2,13 @@ using System.Security.Cryptography;
 using System.Text;
 
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Secrets;
+using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.Secrets;
@@ -21,6 +23,8 @@ using Microsoft.Extensions.Options;
 
 using MongoDB.Bson;
 using MongoDB.Driver;
+
+using TestCkModel.Generated.Test.v1;
 
 using Xunit;
 
@@ -318,6 +322,66 @@ public class SecretAttributeStorageTests(ImportTestCkModelFixture fixture)
         var exception = await Assert.ThrowsAnyAsync<Exception>(() =>
             RewriteAsync(repository, rtId, RtSecretValue.Pending(NewPlaintext())));
         Assert.Contains(Chain(exception), e => e is SecretValueNotStorableException);
+    }
+
+    [Fact]
+    public async Task Read_LegacyStringInANavigationTarget_IsLegacyPlaintext()
+    {
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+
+        // A SecretHolder reached through a navigation (Customer -References-> System/Entity) carries a
+        // legacy string in its Secret slot: the graph item's navigation target must be normalised
+        // like a root entity and never hand the plaintext out as a string.
+        var targetId = OctoObjectId.GenerateNewId();
+        await InsertAsync(repository, NewHolder(targetId, "navigation-target"));
+        var legacy = NewPlaintext();
+        await SetRawAttributesAsync(targetId, new BsonDocument("attributes.apiKey", legacy));
+
+        var originId = OctoObjectId.GenerateNewId();
+        await InsertAsync(repository, new RtEntity(TestCkIds.RtCkCustomerTypeId, originId,
+            new Dictionary<string, object?>
+            {
+                ["Name"] = new RtRecord(new RtCkId<CkRecordId>("Test/ContactName"),
+                    new Dictionary<string, object?> { ["LastName"] = "navigation-origin" })
+            }));
+
+        using var session = await repository.GetSessionAsync();
+        session.StartTransaction();
+        var operationResult = new OperationResult();
+        await repository.ApplyChangesAsync(session, new List<IEntityUpdateInfo<RtEntity>>(),
+            [
+                AssociationUpdateInfo.CreateInsert(new RtEntityId(TestCkIds.RtCkCustomerTypeId, originId),
+                    new RtEntityId(SecretHolderTypeId, targetId), new RtCkId<CkAssociationRoleId>("Test/References"))
+            ],
+            operationResult);
+        Assert.False(operationResult.HasErrors);
+
+        var tenantId = fixture.GetSystemContext().TenantId;
+        var referencesAssociation = fixture.GetService<ICkCacheService>()
+            .GetRtCkType(tenantId, TestCkIds.RtCkCustomerTypeId).Associations.Out.All
+            .First(a => a.NavigationPropertyName == "References");
+        var pair = new NavigationPair(
+            [
+                new PathTerm("References", PathType.Navigation),
+                new PathTerm("Entity", PathType.TargetCkTypeId)
+            ],
+            [],
+            referencesAssociation.CkRoleId.ToRtCkId(),
+            GraphDirections.Outbound,
+            new RtCkId<CkTypeId>("System/Entity"));
+
+        var result = await repository.GetRtEntitiesGraphByTypeAsync(session, TestCkIds.RtCkCustomerTypeId,
+            RtEntityQueryOptions.Create().FieldFilter("RtId", FieldFilterOperator.Equals, originId.ToString()),
+            [pair]);
+        await session.CommitTransactionAsync();
+
+        var origin = Assert.Single(result.Items);
+        var target = Assert.Single(Assert.Single(origin.Associations).Targets);
+        Assert.Equal(targetId, target.RtId);
+        var apiKey = Assert.IsType<RtSecretValue>(target.Attributes["ApiKey"]);
+        Assert.True(apiKey.IsLegacyPlaintext);
+        Assert.Equal(legacy, _protector.Unprotect(apiKey));
     }
 
     [Fact]

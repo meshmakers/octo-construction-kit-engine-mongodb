@@ -713,10 +713,15 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
     }
 
 
+    private SecretAttributeReadNormalizer? _secretAttributeReadNormalizer;
+
     protected override void OnResultsMaterialized(IEnumerable<TTargetEntity> resultList)
     {
         // AB#5533: legacy strings in Secret slots are handed out as RtSecretValue.LegacyPlaintext.
-        new SecretAttributeReadNormalizer(_ckCacheService, _tenantId).Normalize(resultList);
+        // One normaliser per query: a multiple-origin result calls this once per origin, and the
+        // per-type Secret shape is then computed once instead of once per origin.
+        _secretAttributeReadNormalizer ??= new SecretAttributeReadNormalizer(_ckCacheService, _tenantId);
+        _secretAttributeReadNormalizer.Normalize(resultList);
     }
 
     protected override (AggregationResult?, IEnumerable<FieldAggregationResult>?) CalculateAggregations(
