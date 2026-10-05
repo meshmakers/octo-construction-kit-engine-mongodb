@@ -347,7 +347,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
 
         using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.insert");
-        activity?.SetTag("streamdata.tenant", _tenantId);
+        activity?.SetTag("octo.tenant.id", _tenantId);
         activity?.SetTag("streamdata.archive.rtid", archiveRtId.ToString());
 
         var (qualifiedTable, userColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
@@ -360,11 +360,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         sw.Stop();
 
         CrateDbDiagnostics.InsertDurationMs.Record(sw.Elapsed.TotalMilliseconds,
-            new("tenant", _tenantId),
+            new("octo.tenant.id", _tenantId),
             new("archive", archiveRtId.ToString()),
             new("batch_size_bucket", CrateDbDiagnostics.BatchSizeBucket(1)));
         CrateDbDiagnostics.InsertedPoints.Add(1,
-            new("tenant", _tenantId),
+            new("octo.tenant.id", _tenantId),
             new("archive", archiveRtId.ToString()));
 
         await DetectAndRecordRetroactiveWriteAsync(
@@ -398,7 +398,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
 
         using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.insert");
-        activity?.SetTag("streamdata.tenant", _tenantId);
+        activity?.SetTag("octo.tenant.id", _tenantId);
         activity?.SetTag("streamdata.archive.rtid", archiveRtId.ToString());
         activity?.SetTag("streamdata.batch_size", filtered.Count);
 
@@ -413,11 +413,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var bucket = CrateDbDiagnostics.BatchSizeBucket(filtered.Count);
         CrateDbDiagnostics.InsertDurationMs.Record(sw.Elapsed.TotalMilliseconds,
-            new("tenant", _tenantId),
+            new("octo.tenant.id", _tenantId),
             new("archive", archiveRtId.ToString()),
             new("batch_size_bucket", bucket));
         CrateDbDiagnostics.InsertedPoints.Add(filtered.Count,
-            new("tenant", _tenantId),
+            new("octo.tenant.id", _tenantId),
             new("archive", archiveRtId.ToString()));
 
         await DetectAndRecordRetroactiveWriteAsync(
@@ -530,7 +530,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
 
         using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.insertTimeRange");
-        activity?.SetTag("streamdata.tenant", _tenantId);
+        activity?.SetTag("octo.tenant.id", _tenantId);
         activity?.SetTag("streamdata.archive.rtid", archiveRtId.ToString());
         activity?.SetTag("streamdata.batch_size", filtered.Count);
 
@@ -545,11 +545,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var bucket = CrateDbDiagnostics.BatchSizeBucket(filtered.Count);
         CrateDbDiagnostics.InsertDurationMs.Record(sw.Elapsed.TotalMilliseconds,
-            new("tenant", _tenantId),
+            new("octo.tenant.id", _tenantId),
             new("archive", archiveRtId.ToString()),
             new("batch_size_bucket", bucket));
         CrateDbDiagnostics.InsertedPoints.Add(filtered.Count,
-            new("tenant", _tenantId),
+            new("octo.tenant.id", _tenantId),
             new("archive", archiveRtId.ToString()));
 
         // Time-range rows are keyed by their window start; a late window correction is retroactive.
@@ -1594,7 +1594,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var generationTracked = snapshot.RollupAggregations is not null;
 
         using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.importRows");
-        activity?.SetTag("streamdata.tenant", _tenantId);
+        activity?.SetTag("octo.tenant.id", _tenantId);
         activity?.SetTag("streamdata.archive.rtid", archiveRtId.ToString());
 
         var rawBatch = new List<DataPointDto>(ImportBatchSize);
@@ -1790,7 +1790,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             sourceArchive, bucketStart, bucketEnd, rtIdScope: null, BuildSql, DiscardForwardBucketAsync, cancellationToken);
 
         CrateDbDiagnostics.RollupBucketUpserts.Add(affected,
-            new("tenant", _tenantId),
+            new("octo.tenant.id", _tenantId),
             new("rollup", rollup.RtId.ToString()));
 
         // Rollup-internal computed columns (concept §11, approach a): after the aggregate columns
