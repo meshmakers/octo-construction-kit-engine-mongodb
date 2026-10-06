@@ -32,7 +32,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 /// <summary>
 ///     AB#5533: storage of the SECRET attribute value type in MongoDB (concept §3.3, §3.4, §4.4).
 ///     <list type="bullet">
-///         <item>a protected value is stored as <c>{ _t: "OctoSecret", e: "enc:v2:..." }</c> - at the top
+///         <item>a protected value is stored as <c>{ _t: "OctoSecret", e: "enc:v2:...", t: ISODate }</c> - at the top
 ///         level and inside record / record-array elements - and the plaintext bytes never reach the
 ///         raw document;</item>
 ///         <item>pending values are refused by the serializer on every write path;</item>
@@ -520,6 +520,83 @@ public class SecretAttributeStorageTests(ImportTestCkModelFixture fixture)
     }
 
     [Fact]
+    public async Task SetAt_IsStoredAsBsonDate_AndReadBack()
+    {
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var rtId = OctoObjectId.GenerateNewId();
+        var apiKey = _protector.Protect(NewPlaintext());
+        var record = _protector.Protect(NewPlaintext());
+        Assert.NotNull(apiKey.SetAt);
+        await InsertAsync(repository, NewHolder(rtId, "set-at", apiKey, recordSecret: record));
+
+        var raw = (await FindRawEntityDocumentAsync(rtId))!["attributes"];
+        Assert.Equal(TruncateToMilliseconds(apiKey.SetAt!.Value), raw["apiKey"]["t"].ToUniversalTime());
+        Assert.Equal(TruncateToMilliseconds(record.SetAt!.Value),
+            raw["primaryCredential"]["attributes"]["value"]["t"].ToUniversalTime());
+
+        var loaded = await LoadSingleAsync(repository, rtId);
+        var loadedApiKey = loaded.GetAttributeSecretValueOrDefault("ApiKey")!;
+        Assert.Equal(apiKey.Envelope, loadedApiKey.Envelope);
+        Assert.Equal(TruncateToMilliseconds(apiKey.SetAt!.Value), loadedApiKey.SetAt);
+        Assert.Equal(DateTimeKind.Utc, loadedApiKey.SetAt!.Value.Kind);
+        var primary = loaded.GetRtRecordAttributeValueOrDefault<RtRecord>("PrimaryCredential")!;
+        Assert.Equal(TruncateToMilliseconds(record.SetAt!.Value), primary.GetAttributeSecretValueOrDefault("Value")!.SetAt);
+    }
+
+    [Fact]
+    public async Task SetAt_OfAValueStoredWithoutTimestamp_IsNull()
+    {
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var rtId = OctoObjectId.GenerateNewId();
+        var envelope = _protector.Protect(NewPlaintext()).Envelope!;
+        await InsertAsync(repository, NewHolder(rtId, "no-set-at"));
+        // Stored before the timestamp existed (or converted from legacy storage): { _t, e } only.
+        await SetRawAttributesAsync(rtId, new BsonDocument
+        {
+            { "attributes.apiKey", new BsonDocument { { "_t", "OctoSecret" }, { "e", envelope } } }
+        });
+
+        var loaded = (await LoadSingleAsync(repository, rtId)).GetAttributeSecretValueOrDefault("ApiKey")!;
+
+        Assert.True(loaded.IsProtected);
+        Assert.Equal(envelope, loaded.Envelope);
+        Assert.Null(loaded.SetAt);
+
+        // Written back without a timestamp, t stays absent.
+        await RewriteAsync(repository, rtId, loaded);
+        Assert.False((await FindRawEntityDocumentAsync(rtId))!["attributes"]["apiKey"].AsBsonDocument.Contains("t"));
+    }
+
+    [Fact]
+    public async Task ConditionalRewrite_KeepsSetAt_AndComparesTheEnvelopeOnly()
+    {
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var rtId = OctoObjectId.GenerateNewId();
+        var original = _protector.Protect(NewPlaintext());
+        await InsertAsync(repository, NewHolder(rtId, "cas-set-at", original));
+
+        // The sweep keeps SetAt (Reprotect); the expected value read in memory has full tick precision
+        // while the stored t has millisecond precision - the comparison is by envelope, so it matches.
+        var stored = (await LoadSingleAsync(repository, rtId)).GetAttributeSecretValueOrDefault("ApiKey")!;
+        var reprotected = _protector.Reprotect(stored);
+        Assert.Equal(stored.SetAt, reprotected.SetAt);
+        Assert.True(await ConditionalRewriteAsync(repository, rtId, "ApiKey", original, reprotected));
+        var raw = (await FindRawEntityDocumentAsync(rtId))!["attributes"]["apiKey"];
+        Assert.Equal(reprotected.Envelope, raw["e"].AsString);
+        Assert.Equal(stored.SetAt, raw["t"].ToUniversalTime());
+
+        // An expectation with the same envelope but another (or no) timestamp still matches.
+        Assert.True(await ConditionalRewriteAsync(repository, rtId, "ApiKey",
+            RtSecretValue.Protected(reprotected.Envelope!, null), reprotected));
+    }
+
+    private static DateTime TruncateToMilliseconds(DateTime value) =>
+        new(value.Ticks - value.Ticks % TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);
+
+    [Fact]
     public async Task ConditionalRewrite_LegacyStringAndUnsetSlots_CompareByStoredForm()
     {
         await fixture.ClearCollectionAsync();
@@ -610,7 +687,9 @@ public class SecretAttributeStorageTests(ImportTestCkModelFixture fixture)
     private static void AssertStoredSecretShape(BsonValue value)
     {
         var document = Assert.IsType<BsonDocument>(value);
-        Assert.Equal(2, document.ElementCount);
+        // { _t, e, t }: every value protected from new input carries its set-at timestamp (round 2).
+        Assert.Equal(3, document.ElementCount);
+        Assert.Equal(BsonType.DateTime, document["t"].BsonType);
         Assert.Equal("OctoSecret", document["_t"].AsString);
         var envelope = document["e"].AsString;
         Assert.StartsWith(SecretEnvelope.PrefixV2 + "t1:", envelope, StringComparison.Ordinal);

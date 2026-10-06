@@ -14,7 +14,9 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 /// <remarks>
 ///     <para>
 ///         <b>Write:</b> <see cref="RtSecretValueState.Protected" /> values are stored as the
-///         self-describing sub-document <c>{ _t: "OctoSecret", e: "enc:v2:&lt;kid&gt;:..." }</c>.
+///         self-describing sub-document <c>{ _t: "OctoSecret", e: "enc:v2:&lt;kid&gt;:...", t: ISODate(...) }</c>;
+///         <c>t</c> is <see cref="RtSecretValue.SetAt" /> (UTC, millisecond precision) and is omitted when
+///         it is null (values converted from legacy storage or stored before the timestamp existed).
 ///         <see cref="RtSecretValueState.LegacyPlaintext" /> (a string read from a Secret slot) is
 ///         written back unchanged as that string, so saving an entity the encrypt sweep has not
 ///         reached yet keeps its stored form. <see cref="RtSecretValueState.Pending" /> (a plaintext
@@ -25,6 +27,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Serialization;
 ///     </para>
 ///     <para>
 ///         <b>Read:</b> the sub-document becomes <see cref="RtSecretValue.Protected" /> in every slot -
+///         with <c>t</c> as its <see cref="RtSecretValue.SetAt" /> (missing <c>t</c> = null) -
 ///         the <c>_t</c> discriminator makes it recognisable without CK knowledge, so a non-Secret
 ///         slot, a change-stream document or a dynamic read never trips over it. A BSON string read
 ///         through this serializer (nominal type <see cref="RtSecretValue" />) is
@@ -56,6 +59,11 @@ internal sealed class RtSecretValueSerializer : SerializerBase<RtSecretValue>, I
     /// </summary>
     public const string EnvelopeElementName = "e";
 
+    /// <summary>
+    ///     Element name of the "set at" timestamp (<see cref="RtSecretValue.SetAt" />, BSON UTC date).
+    /// </summary>
+    public const string SetAtElementName = "t";
+
     public bool IsDiscriminatorCompatibleWithObjectSerializer => true;
 
     public override void Serialize(BsonSerializationContext context, BsonSerializationArgs args, RtSecretValue? value)
@@ -85,6 +93,12 @@ internal sealed class RtSecretValueSerializer : SerializerBase<RtSecretValue>, I
         writer.WriteStartDocument();
         writer.WriteString(DiscriminatorElementName, Discriminator);
         writer.WriteString(EnvelopeElementName, value.Envelope);
+        if (value.SetAt is { } setAt)
+        {
+            // AB#5533 round 2: omitted for legacy-converted values (SetAt null).
+            writer.WriteDateTime(SetAtElementName, BsonUtils.ToMillisecondsSinceEpoch(setAt.ToUniversalTime()));
+        }
+
         writer.WriteEndDocument();
     }
 
@@ -110,6 +124,7 @@ internal sealed class RtSecretValueSerializer : SerializerBase<RtSecretValue>, I
     private static RtSecretValue? ReadDocument(IBsonReader reader)
     {
         string? envelope = null;
+        DateTime? setAt = null;
 
         reader.ReadStartDocument();
         while (reader.ReadBsonType() != BsonType.EndOfDocument)
@@ -119,9 +134,14 @@ internal sealed class RtSecretValueSerializer : SerializerBase<RtSecretValue>, I
             {
                 envelope = reader.ReadString();
             }
+            else if (name == SetAtElementName && reader.CurrentBsonType == BsonType.DateTime)
+            {
+                setAt = BsonUtils.ToDateTimeFromMillisecondsSinceEpoch(reader.ReadDateTime());
+            }
             else
             {
-                // _t (already resolved by the discriminator convention) and anything unknown.
+                // _t (already resolved by the discriminator convention), a t of another BSON type
+                // (treated as unknown: "set at" is metadata only) and anything unknown.
                 reader.SkipValue();
             }
         }
@@ -134,7 +154,7 @@ internal sealed class RtSecretValueSerializer : SerializerBase<RtSecretValue>, I
             return null;
         }
 
-        return RtSecretValue.Protected(envelope);
+        return RtSecretValue.Protected(envelope, setAt);
     }
 
     /// <summary>

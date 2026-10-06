@@ -16,7 +16,7 @@ namespace Meshmakers.Octo.Runtime.Engine.UnitTests;
 
 /// <summary>
 ///     AB#5533: BSON storage of Secret attribute values. Only protected envelopes are written, as
-///     <c>{ _t: "OctoSecret", e: "enc:v2:..." }</c>; pending values are refused, legacy values are written back as their original string, and the
+///     <c>{ _t: "OctoSecret", e: "enc:v2:...", t: ISODate }</c> (<c>t</c> = set-at, omitted when null); pending values are refused, legacy values are written back as their original string, and the
 ///     sub-document reads back as <see cref="RtSecretValue.Protected" /> in any slot without CK
 ///     knowledge. The envelopes are structurally valid random bytes - no key, no plaintext.
 /// </summary>
@@ -44,6 +44,83 @@ public class RtSecretValueSerializerTests
         Assert.Equal("OctoSecret", stored["_t"].AsString);
         Assert.Equal(envelope, stored["e"].AsString);
         Assert.True(RtSecretValueSerializer.IsStoredSecret(stored));
+    }
+
+    [Fact]
+    public void Serialize_ProtectedWithSetAt_WritesTheTimestampAsBsonDate()
+    {
+        var envelope = NewEnvelope();
+        var setAt = new DateTime(2026, 10, 6, 12, 34, 56, 789, DateTimeKind.Utc);
+
+        var attributes = SerializeAttributes(new Dictionary<string, object?>
+        {
+            ["ApiKey"] = RtSecretValue.Protected(envelope, setAt)
+        });
+
+        var stored = attributes["apiKey"].AsBsonDocument;
+        Assert.Equal(3, stored.ElementCount);
+        Assert.Equal("OctoSecret", stored["_t"].AsString);
+        Assert.Equal(envelope, stored["e"].AsString);
+        Assert.Equal(BsonType.DateTime, stored["t"].BsonType);
+        Assert.Equal(setAt, stored["t"].ToUniversalTime());
+    }
+
+    [Fact]
+    public void RoundTrip_ProtectedWithSetAt_KeepsTheTimestamp()
+    {
+        var envelope = NewEnvelope();
+        // BSON dates have millisecond precision: sub-millisecond ticks are dropped.
+        var setAt = new DateTime(2026, 10, 6, 12, 34, 56, 789, DateTimeKind.Utc).AddTicks(1234);
+
+        var attributes = SerializeAttributes(new Dictionary<string, object?>
+        {
+            ["ApiKey"] = RtSecretValue.Protected(envelope, setAt),
+            ["PrimaryCredential"] = new RtRecord(CredentialRecordId, new Dictionary<string, object?>
+            {
+                ["Key"] = "main", ["Value"] = RtSecretValue.Protected(NewEnvelope(), setAt)
+            })
+        });
+
+        Assert.All(FindStoredSecrets(attributes), d => Assert.True(d.Contains("t")));
+
+        var read = DeserializeAttributes(new BsonDocument("apiKey", attributes["apiKey"]));
+        var apiKey = Assert.IsType<RtSecretValue>(read["ApiKey"]);
+        Assert.True(apiKey.IsProtected);
+        Assert.Equal(envelope, apiKey.Envelope);
+        Assert.Equal(new DateTime(2026, 10, 6, 12, 34, 56, 789, DateTimeKind.Utc), apiKey.SetAt);
+        Assert.Equal(DateTimeKind.Utc, apiKey.SetAt!.Value.Kind);
+    }
+
+    [Fact]
+    public void Serialize_ProtectedWithoutSetAt_OmitsTheTimestamp()
+    {
+        var attributes = SerializeAttributes(new Dictionary<string, object?>
+        {
+            ["ApiKey"] = RtSecretValue.Protected(NewEnvelope(), null)
+        });
+
+        Assert.False(attributes["apiKey"].AsBsonDocument.Contains("t"));
+    }
+
+    [Fact]
+    public void Deserialize_LegacySubDocumentWithoutTimestamp_HasNoSetAt()
+    {
+        // Values stored before the timestamp existed ({ _t, e } only) read with SetAt = null; a t of
+        // another BSON type is ignored (metadata only, never fails the read).
+        var stored = new BsonDocument
+        {
+            { "apiKey", new BsonDocument { { "_t", "OctoSecret" }, { "e", NewEnvelope() } } },
+            { "password", new BsonDocument { { "_t", "OctoSecret" }, { "e", NewEnvelope() }, { "t", "yesterday" } } }
+        };
+
+        var read = DeserializeAttributes(stored);
+
+        var apiKey = Assert.IsType<RtSecretValue>(read["ApiKey"]);
+        Assert.True(apiKey.IsProtected);
+        Assert.Null(apiKey.SetAt);
+        var password = Assert.IsType<RtSecretValue>(read["Password"]);
+        Assert.True(password.IsProtected);
+        Assert.Null(password.SetAt);
     }
 
     [Fact]
