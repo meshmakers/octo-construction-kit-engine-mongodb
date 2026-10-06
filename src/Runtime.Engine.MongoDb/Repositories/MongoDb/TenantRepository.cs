@@ -1203,7 +1203,7 @@ internal class TenantRepository(
     /// Tracks which collection derived type entities were found in, so delete operations
     /// can target the correct collection.
     /// </summary>
-    private readonly Dictionary<string, string> _derivedTypeCollectionMap = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _derivedTypeCollectionMap = new();
 
     /// <inheritdoc />
     public override async Task DeleteOneRtEntityForMigrationAsync(
@@ -1338,7 +1338,7 @@ internal class TenantRepository(
         string attributeId,
         object? newValue)
     {
-        var collection = GetAttributeRewriteCollection(rtCkTypeId);
+        var collection = await LocateAttributeRewriteCollectionAsync(session, rtCkTypeId, rtId).ConfigureAwait(false);
 
         // Attribute storage uses the same convention as MongoDataSourceMapper.ApplyUpdate:
         // `attributes.<key.ToCamelCase()>`. The CK migration step's attribute id is the
@@ -1371,7 +1371,8 @@ internal class TenantRepository(
         object? expectedValue,
         object? newValue)
     {
-        var mongoCollection = GetAttributeRewriteCollection(rtCkTypeId).GetMongoCollection();
+        var mongoCollection = (await LocateAttributeRewriteCollectionAsync(session, rtCkTypeId, rtId)
+            .ConfigureAwait(false)).GetMongoCollection();
         var sessionHandle = ((IOctoSessionInternal)session).SessionHandle;
         var fieldName = attributeId.ToCamelCase();
         var fieldPath = "attributes." + fieldName;
@@ -1429,16 +1430,64 @@ internal class TenantRepository(
     }
 
     /// <summary>
-    ///     Resolves the collection of a CK-cache-free attribute rewrite the same way
-    ///     DeleteOneRtEntityForMigrationAsync does, so that derived-type entities living in a parent
-    ///     collection are correctly addressed.
+    ///     Finds the collection that stores the entity of a CK-cache-free attribute rewrite (AB#5533). An
+    ///     entity of a derived type lives in its collection root's collection (every
+    ///     <c>System.Communication/*Configuration</c> in <c>RtEntity_SystemConfiguration</c>), not in the
+    ///     collection named after its own type - which usually does not even exist. Looking only there made
+    ///     every rewrite of the secret sweep match nothing (reported as "modified concurrently").
+    ///     Order: the collection a migration read found the type in; the collection root known to the CK
+    ///     cache; the type's own collection; finally a search of all RtEntity collections by id. A candidate
+    ///     is used only when it holds the id.
     /// </summary>
-    private IMongoDbDataSourceCollection<OctoObjectId, RtEntity> GetAttributeRewriteCollection(
+    private async Task<IMongoDbDataSourceCollection<OctoObjectId, RtEntity>> LocateAttributeRewriteCollectionAsync(
+        IOctoSession session, RtCkId<CkTypeId> rtCkTypeId, OctoObjectId rtId)
+    {
+        var idFilter = Builders<RtEntity>.Filter.Eq("_id", rtId);
+        var checkedCollections = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var candidate in await GetAttributeRewriteCandidatesAsync(rtCkTypeId).ConfigureAwait(false))
+        {
+            if (!checkedCollections.Add(candidate.GetMongoCollection().CollectionNamespace.CollectionName))
+            {
+                continue;
+            }
+
+            if (await candidate.GetTotalCountAsync(session, idFilter, 1).ConfigureAwait(false) > 0)
+            {
+                return candidate;
+            }
+        }
+
+        var collectionName = await mongoDbRepositoryDataSource.FindRtCollectionNameByRtIdAsync(session, rtId)
+            .ConfigureAwait(false);
+        if (collectionName == null)
+        {
+            // The entity does not exist (any more): the rewrite matches nothing.
+            return GetRtCollectionForMigration<RtEntity>(rtCkTypeId);
+        }
+
+        _derivedTypeCollectionMap[rtCkTypeId.FullName] = collectionName;
+        return GetRtCollectionByName<RtEntity>(collectionName);
+    }
+
+    private async Task<List<IMongoDbDataSourceCollection<OctoObjectId, RtEntity>>> GetAttributeRewriteCandidatesAsync(
         RtCkId<CkTypeId> rtCkTypeId)
     {
-        return _derivedTypeCollectionMap.TryGetValue(rtCkTypeId.FullName, out var parentCollectionName)
-            ? GetRtCollectionByName<RtEntity>(parentCollectionName)
-            : GetRtCollectionForMigration<RtEntity>(rtCkTypeId);
+        var candidates = new List<IMongoDbDataSourceCollection<OctoObjectId, RtEntity>>();
+        if (_derivedTypeCollectionMap.TryGetValue(rtCkTypeId.FullName, out var parentCollectionName))
+        {
+            candidates.Add(GetRtCollectionByName<RtEntity>(parentCollectionName));
+        }
+
+        var ckCacheService = await GetCkCacheServiceAsync().ConfigureAwait(false);
+        if (ckCacheService.TryGetRtCkType(TenantId, rtCkTypeId, out var graph)
+            && graph.DefiningCollectionRootCkTypeId is { } collectionRoot)
+        {
+            candidates.Add(mongoDbRepositoryDataSource.GetRtDatabaseCollectionByTypeId<RtEntity>(
+                collectionRoot.ToRtCkId()));
+        }
+
+        candidates.Add(GetRtCollectionForMigration<RtEntity>(rtCkTypeId));
+        return candidates;
     }
 
     /// <summary>

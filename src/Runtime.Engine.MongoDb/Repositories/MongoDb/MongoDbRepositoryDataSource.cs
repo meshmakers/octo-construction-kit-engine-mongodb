@@ -198,6 +198,25 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         return (string.Empty, Array.Empty<TEntity>());
     }
 
+    /// <inheritdoc />
+    public async Task<string?> FindRtCollectionNameByRtIdAsync(IOctoSession session, OctoObjectId rtId)
+    {
+        const string rtEntityPrefix = "RtEntity_";
+        var allCollections = await _repository.ListCollectionNamesAsync(rtEntityPrefix);
+        var filter = Builders<RtEntity>.Filter.Eq("_id", rtId);
+        foreach (var collectionName in allCollections)
+        {
+            var collection = _repository.GetCollection(CreateRtEntityMapper<RtEntity>(),
+                collectionName.Substring(rtEntityPrefix.Length));
+            if (await collection.GetTotalCountAsync(session, filter, 1).ConfigureAwait(false) > 0)
+            {
+                return collectionName;
+            }
+        }
+
+        return null;
+    }
+
     public override async Task<IReadOnlyList<RtAssociationsMultiplicityResult>> GetRtAssociationsMultiplicityAsync(
         IOctoSession session, IEnumerable<RtEntityRoleIdDirectionPair> entityRoleIdDirectionPairs)
     {
