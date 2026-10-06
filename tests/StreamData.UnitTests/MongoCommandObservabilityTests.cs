@@ -659,6 +659,45 @@ public sealed class MongoCommandObservabilityTests : IDisposable
         Assert.DoesNotContain("elided", entry.CommandBsonPreview);
     }
 
+    // ---- AB#5533: secret envelopes never reach the buffer or the logs ----
+
+    [Fact]
+    public void SlowCommandWithSecret_BufferPreviewAndWarnLog_AreRedacted()
+    {
+        const string fakeEnvelope = "enc:v2:testkid:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        var buffer = new SlowQueriesBuffer(capacity: 100);
+        var sut = new MongoCommandObservability(_logger, _config, buffer);
+        _config.Current.SlowQueryThresholdMs = 50;
+        _config.Current.SlowQueryFullCommandLogMs = 100;
+
+        var command = new BsonDocument
+        {
+            { "update", "rt_entities" },
+            {
+                "updates", new BsonArray
+                {
+                    new BsonDocument
+                    {
+                        { "q", new BsonDocument("_id", 1) },
+                        { "u", new BsonDocument("$set", new BsonDocument("attributes.password",
+                            new BsonDocument { { "_t", "OctoSecret" }, { "e", fakeEnvelope } })) }
+                    }
+                }
+            }
+        };
+        var (started, succeeded) = BuildPair("update", command, "tenant_a", durationMs: 250);
+
+        sut.OnStarted(started);
+        sut.OnSucceeded(succeeded);
+
+        var entry = Assert.Single(buffer.GetSnapshot());
+        Assert.DoesNotContain(fakeEnvelope, entry.CommandBsonPreview);
+        Assert.Contains("\"e\" : \"***\"", entry.CommandBsonPreview);
+        var warn = Assert.Single(_logger.Entries, e => e.Level == LogLevel.Warning);
+        Assert.DoesNotContain(fakeEnvelope, warn.Message);
+        Assert.Contains("OctoSecret", warn.Message);
+    }
+
     private static RawBsonDocument BuildRawAggregateCommand()
     {
         var command = new BsonDocument

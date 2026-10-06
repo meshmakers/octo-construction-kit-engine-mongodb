@@ -106,7 +106,13 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                     cb.Subscribe<CommandStartedEvent>(e =>
                     {
                         observability.OnStarted(e);
-                        _logger.LogDebug("{ObjCommandName} - {Json}", e.CommandName, e.Command.ToJson());
+                        // Guarded: the JSON rendering is expensive and must not run per command
+                        // when Debug is off. Secret envelopes are redacted (AB#5533).
+                        if (_logger.IsEnabled(LogLevel.Debug))
+                        {
+                            _logger.LogDebug("{ObjCommandName} - {Json}", e.CommandName,
+                                MongoCommandSecretRedactor.ToRedactedJsonOrPlaceholder(e.Command));
+                        }
                     });
                     cb.Subscribe<CommandSucceededEvent>(observability.OnSucceeded);
                     cb.Subscribe<CommandFailedEvent>(observability.OnFailed);
