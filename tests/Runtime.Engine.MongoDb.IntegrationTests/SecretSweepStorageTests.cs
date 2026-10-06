@@ -147,6 +147,39 @@ public class SecretSweepStorageTests(SecretSweepFixture fixture)
         Assert.Equal(BsonNull.Value, (await FindRawEntityDocumentAsync(rtId))!["attributes"]["apiKey"]);
     }
 
+    [Fact]
+    public async Task ConditionalRewrite_TypeUnknownToTheCkCache_FindsTheEntityById_AndMissingIdMatchesNothing()
+    {
+        // The last-resort search of all RtEntity collections by id (a type the CK cache does not resolve, e.g. a
+        // type id of an older model version): the compare-and-swap still lands on the stored document, and an id
+        // that no collection holds answers false instead of throwing.
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var rtId = OctoObjectId.GenerateNewId();
+        await InsertAsync(repository, NewHolder(DerivedTypeId, rtId));
+        var legacy = NewPlaintext();
+        await SetRawAttributesAsync(rtId, new BsonDocument("attributes.apiKey", legacy));
+        var protector = fixture.GetService<ISecretAttributeProtector>();
+        var newValue = protector.Protect(NewPlaintext());
+        var unknownTypeId = new RtCkId<CkTypeId>("Test/SecretHolderNotInCkCache");
+
+        using (var session = await repository.GetSessionAsync())
+        {
+            session.StartTransaction();
+            // A stale expected value must not be overwritten, wherever the entity was found.
+            Assert.False(await repository.RewriteAttributeValueIfUnchangedForMigrationAsync(session, unknownTypeId,
+                rtId, "ApiKey", RtSecretValue.LegacyPlaintext(NewPlaintext()), newValue));
+            Assert.True(await repository.RewriteAttributeValueIfUnchangedForMigrationAsync(session, unknownTypeId,
+                rtId, "ApiKey", RtSecretValue.LegacyPlaintext(legacy), newValue));
+            Assert.False(await repository.RewriteAttributeValueIfUnchangedForMigrationAsync(session, unknownTypeId,
+                OctoObjectId.GenerateNewId(), "ApiKey", RtSecretValue.LegacyPlaintext(legacy), newValue));
+            await session.CommitTransactionAsync();
+        }
+
+        Assert.Equal(newValue.Envelope,
+            (await FindRawEntityDocumentAsync(rtId))!["attributes"]["apiKey"]["e"].AsString);
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────
 
     private static IEnumerable<SecretSlotReport> TestSlots(SecretSweepResult result) =>
