@@ -1,6 +1,7 @@
 
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.Geospatial.Geometry;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
@@ -10,9 +11,42 @@ using MongoDB.Driver.GeoJsonObjectModel;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
-public class RtEntityMongoDataSourceMapper<TEntity> : IMongoDataSourceMapper<OctoObjectId, TEntity> where TEntity : RtEntity, new()
+public class RtEntityMongoDataSourceMapper<TEntity> : IMongoDataSourceMapper<OctoObjectId, TEntity>,
+    IMongoDocumentReadNormalizer<TEntity> where TEntity : RtEntity, new()
 {
+    private readonly ICkCacheService? _ckCacheService;
+    private readonly string? _tenantId;
+
+    /// <summary>
+    ///     Mapper without read normalisation (collection management, index maintenance).
+    /// </summary>
+    public RtEntityMongoDataSourceMapper()
+    {
+    }
+
+    /// <summary>
+    ///     Mapper whose collection reads normalise legacy strings in <c>Secret</c> slots to
+    ///     <see cref="RtSecretValue.LegacyPlaintext" /> with the CK knowledge of the tenant (AB#5533).
+    /// </summary>
+    internal RtEntityMongoDataSourceMapper(ICkCacheService? ckCacheService, string tenantId)
+    {
+        _ckCacheService = ckCacheService;
+        _tenantId = tenantId;
+    }
+
     public string CollectionNamePrefix => "RtEntity";
+
+    void IMongoDocumentReadNormalizer<TEntity>.NormalizeAfterRead(IEnumerable<TEntity> documents)
+    {
+        if (_ckCacheService == null || _tenantId == null)
+        {
+            return;
+        }
+
+        // One normaliser per read operation: it caches the per-type Secret shape and is not shared
+        // between concurrent reads.
+        new SecretAttributeReadNormalizer(_ckCacheService, _tenantId).Normalize(documents);
+    }
 
     public OctoObjectId GetId(TEntity document)
     {

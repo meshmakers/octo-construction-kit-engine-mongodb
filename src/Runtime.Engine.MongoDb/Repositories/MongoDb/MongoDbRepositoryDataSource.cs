@@ -2,6 +2,7 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
@@ -29,20 +30,30 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     private readonly IRepositoryClient _repositoryClient;
     private readonly ILogger<MongoDbRepositoryDataSource> _logger;
     private readonly IndexStateService _indexStateService;
+    private readonly ICkCacheService? _ckCacheService;
 
     public MongoDbRepositoryDataSource(ILogger<MongoDbRepositoryDataSource> logger,
         IUserRepositoryAccess repositoryAccess, string databaseName,
-        string tenantId)
-        : this(logger, repositoryAccess.GetRepositoryClient(databaseName), databaseName, tenantId)
+        string tenantId, ICkCacheService? ckCacheService = null)
+        : this(logger, repositoryAccess.GetRepositoryClient(databaseName), databaseName, tenantId, ckCacheService)
     {
     }
 
+    /// <param name="logger">Logger</param>
+    /// <param name="repositoryClient">Repository client of the tenant database</param>
+    /// <param name="databaseName">Tenant database name</param>
+    /// <param name="tenantId">Tenant id</param>
+    /// <param name="ckCacheService">
+    ///     CK cache used to normalise legacy strings in Secret slots on every runtime-entity collection
+    ///     read (AB#5533). Null disables the normalisation (tooling without a CK cache).
+    /// </param>
     internal MongoDbRepositoryDataSource(ILogger<MongoDbRepositoryDataSource> logger,
         IRepositoryClient repositoryClient, string databaseName,
-        string tenantId)
+        string tenantId, ICkCacheService? ckCacheService = null)
         : base(tenantId, new MongoLinkedBinaryDataSource(repositoryClient, databaseName))
     {
         _logger = logger;
+        _ckCacheService = ckCacheService;
         ArgumentValidation.ValidateString(databaseName, nameof(databaseName));
 
         _repositoryClient = repositoryClient;
@@ -111,8 +122,18 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
 
         var suffix = ckTypeGraph.DefiningCollectionRootCkTypeId.ToRtCkId().GetCkTypeCollectionName();
-        var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
+        var mapper = CreateRtEntityMapper<TEntity>();
         return _repository.GetCollection(mapper, suffix);
+    }
+
+    /// <summary>
+    ///     Mapper for runtime-entity collections whose reads normalise legacy strings in Secret slots
+    ///     (AB#5533) - every read path of the returned collection (by id, by ids, find, migration reads,
+    ///     change streams) hands out <see cref="RtSecretValue.LegacyPlaintext" />, never a string.
+    /// </summary>
+    private RtEntityMongoDataSourceMapper<TEntity> CreateRtEntityMapper<TEntity>() where TEntity : RtEntity, new()
+    {
+        return new RtEntityMongoDataSourceMapper<TEntity>(_ckCacheService, TenantId);
     }
 
     /// <inheritdoc />
@@ -120,7 +141,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         RtCkId<CkTypeId> rtCkTypeId) where TEntity : RtEntity, new()
     {
         var suffix = rtCkTypeId.GetCkTypeCollectionName();
-        var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
+        var mapper = CreateRtEntityMapper<TEntity>();
         return _repository.GetCollection(mapper, suffix);
     }
 
@@ -128,7 +149,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     public IMongoDbDataSourceCollection<OctoObjectId, TEntity> GetRtDatabaseCollectionByCollectionSuffix<TEntity>(
         string suffix) where TEntity : RtEntity, new()
     {
-        var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
+        var mapper = CreateRtEntityMapper<TEntity>();
         return _repository.GetCollection(mapper, suffix);
     }
 
@@ -154,7 +175,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         foreach (var collectionName in allCollections)
         {
             var suffix = collectionName.Substring(rtEntityPrefix.Length);
-            var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
+            var mapper = CreateRtEntityMapper<TEntity>();
             var collection = _repository.GetCollection(mapper, suffix);
 
             var filter = Builders<TEntity>.Filter.Eq("ckTypeId", ckTypeIdValue);

@@ -2582,13 +2582,13 @@ public class TenantContext : ITenantContext
     private IMongoDbRepositoryDataSource CreateRepositoryDataSource(string databaseName)
     {
         return new MongoDbRepositoryDataSource(_loggerFactory.CreateLogger<MongoDbRepositoryDataSource>(),
-            _serviceProvider.GetRequiredService<IUserRepositoryAccess>(), databaseName, TenantId);
+            _serviceProvider.GetRequiredService<IUserRepositoryAccess>(), databaseName, TenantId, _cacheService);
     }
 
     protected IMongoDbRepositoryDataSource CreateRepositoryDataSourceAsAdmin(string databaseName, string tenantId)
     {
         return new MongoDbRepositoryDataSource(_loggerFactory.CreateLogger<MongoDbRepositoryDataSource>(),
-            _adminRepositoryClient, databaseName, tenantId);
+            _adminRepositoryClient, databaseName, tenantId, _cacheService);
     }
 
     /// <summary>
