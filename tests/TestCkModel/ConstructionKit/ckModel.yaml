@@ -1,6 +1,7 @@
 "$schema": "https://schemas.meshmakers.cloud/construction-kit-meta.schema.json"
 modelId: "Test-1.0.0"
 dependencies:
-  - System-[2.0,3.0)
+  # AB#5533: the model declares Secret attributes, which require System >= 2.5 (decision 12).
+  - System-[2.5,3.0)
 
 

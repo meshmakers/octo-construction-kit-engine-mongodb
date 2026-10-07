@@ -58,6 +58,16 @@ public interface IMongoDbRepositoryDataSource : ICkMongoDbRepositoryDataSource, 
     Task<(string CollectionName, IReadOnlyList<TEntity> Entities)> FindEntitiesInAllCollectionsByCkTypeIdAsync<TEntity>(
         IOctoSession session, string ckTypeIdValue) where TEntity : RtEntity, new();
 
+    /// <summary>
+    /// Searches all RtEntity collections for the document with the given runtime id (AB#5533). Used by the
+    /// CK-cache-free attribute rewrites when the entity is not in the collection derived from its type id
+    /// (a derived type stored in its collection root's collection that the CK cache does not resolve).
+    /// </summary>
+    /// <param name="session">The session object</param>
+    /// <param name="rtId">The runtime id of the entity</param>
+    /// <returns>The collection name (with the "RtEntity_" prefix), or <c>null</c> when no collection holds the id</returns>
+    Task<string?> FindRtCollectionNameByRtIdAsync(IOctoSession session, OctoObjectId rtId);
+
     Task<IOctoSession> GetSessionAsync();
 
     /// <summary>

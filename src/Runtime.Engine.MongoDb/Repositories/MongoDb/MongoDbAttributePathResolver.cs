@@ -234,6 +234,83 @@ internal static class MongoDbAttributePathResolver
     }
 
     /// <summary>
+    /// Resolves the value type of the attribute a CK attribute path ends on (e.g. the type of
+    /// <c>From</c> for "TimeRange.From"), walking into records like
+    /// <see cref="ResolveToMongoDbFieldPath"/>. Array indexes do not change the terminal type.
+    /// </summary>
+    /// <param name="attributePath">The CK attribute path</param>
+    /// <param name="provider">The metadata provider for attribute lookups</param>
+    /// <param name="valueType">The value type of the terminal attribute</param>
+    /// <returns>True if the path resolves to an attribute</returns>
+    public static bool TryResolveTerminalValueType(string attributePath, IAttributeMetadataProvider provider,
+        out AttributeValueTypesDto valueType)
+    {
+        valueType = default;
+        var found = false;
+        var currentProvider = provider;
+
+        foreach (var pathTerm in RtPathEvaluator.TokenizePath(attributePath))
+        {
+            switch (pathTerm.Type)
+            {
+                case PathType.Attribute:
+                    if (currentProvider == null ||
+                        !currentProvider.TryGetAttribute(pathTerm.Value.ToPascalCase(), out valueType))
+                    {
+                        valueType = default;
+                        return false;
+                    }
+
+                    found = true;
+                    currentProvider = valueType is AttributeValueTypesDto.Record or AttributeValueTypesDto.RecordArray
+                        ? currentProvider.NavigateToRecord(pathTerm.Value.ToPascalCase())
+                        : null;
+                    break;
+
+                case PathType.ArrayIndex:
+                    break;
+
+                default:
+                    valueType = default;
+                    return false;
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// True when the CK attribute path ends on a <c>Secret</c> attribute (AB#5533) - at the top
+    /// level or as a record sub-attribute.
+    /// </summary>
+    public static bool IsSecretAttributePath(string attributePath, IAttributeMetadataProvider provider)
+    {
+        return TryResolveTerminalValueType(attributePath, provider, out var valueType)
+               && valueType == AttributeValueTypesDto.Secret;
+    }
+
+    /// <summary>
+    /// The index guard (AB#5533): returns the attribute paths of an index definition without those
+    /// that end on a <c>Secret</c> attribute - a Secret attribute is never indexed, not even in a
+    /// text index. System attributes pass unchanged. <paramref name="onSkipped"/> is called for
+    /// every removed path.
+    /// </summary>
+    public static IEnumerable<string> WithoutSecretAttributePaths(IEnumerable<string> attributePaths,
+        IAttributeMetadataProvider provider, Action<string> onSkipped)
+    {
+        foreach (var path in attributePaths)
+        {
+            if (!Constants.IsSystemAttribute(path) && IsSecretAttributePath(path, provider))
+            {
+                onSkipped(path);
+                continue;
+            }
+
+            yield return path;
+        }
+    }
+
+    /// <summary>
     /// Validates whether a CK attribute path is valid against the given metadata provider.
     /// </summary>
     /// <param name="attributePath">The CK attribute path to validate</param>

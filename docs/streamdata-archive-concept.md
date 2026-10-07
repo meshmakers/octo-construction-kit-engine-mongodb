@@ -167,31 +167,77 @@ For each `CkArchiveColumn`:
 
 ### Upsert semantics
 
-Primary key `(timestamp, rtId, ckTypeId)` may collide with existing rows. Behaviour on conflict differs per column class:
+Primary key `(timestamp, rtid, cktypeid)` — on a windowed archive `(window_start, window_end, rtid, cktypeid)`, plus `generation` on a generation-tracked rollup — may collide with existing rows. A batch is written as multi-row statements of up to 1,000 rows each (fewer for an archive so wide that 1,000 rows would exceed the protocol's 65,535 bind parameters); the conflict clause appears once per statement and applies to every row in it:
 
 ```sql
-INSERT INTO {schema}.{table} (rtId, timestamp, ckTypeId, ...)
-VALUES (...)
-ON CONFLICT (timestamp, rtId, ckTypeId) DO UPDATE SET
-  -- required columns: full overwrite (incoming value is always present per §3 / D7)
-  required_col_1   = EXCLUDED.required_col_1,
+INSERT INTO {schema}.{table} ("rtid", "cktypeid", "timestamp", "rtwellknownname", <user columns>)
+VALUES ($1, $2, ...), ($n+1, $n+2, ...), ...
+ON CONFLICT ("timestamp", "rtid", "cktypeid") DO UPDATE SET
+  "rtchangeddatetime"  = CURRENT_TIMESTAMP,
+  "rtcreationdatetime" = "rtcreationdatetime",   -- never modified
+  "user_col_1"         = EXCLUDED."user_col_1",  -- every user column, required or not
   ...
-  -- optional columns: preserve existing if incoming is NULL (multi-source merge)
-  optional_col_1   = COALESCE(EXCLUDED.optional_col_1, optional_col_1),
-  ...
-  -- standard columns
-  rtWellKnownName    = COALESCE(EXCLUDED.rtWellKnownName, rtWellKnownName),
-  rtChangedDateTime  = CURRENT_TIMESTAMP,
-  rtCreationDateTime = rtCreationDateTime;     -- never modified
 ```
+
+The windowed variant differs only in the conflict target and in carrying `"was_updated" = TRUE` instead of the `rtcreationdatetime` no-op (§5: an "ever updated" signal, set on any conflict, not value-change detection).
 
 Implications:
 
-- **Multi-source friendly**: source A may write `voltage`, source B later writes `current` for the same timestamp without overwriting each other (assuming both required fields are present in both inserts).
-- **No explicit NULL on optional**: setting an optional column back to NULL via re-insert is not supported in this iteration. If the use-case appears, add an explicit `clearOptionalColumns: [path[]]` parameter on the insert API later.
+- **Last write wins, per row, by default.** Every user column is overwritten unconditionally, so a re-delivery replaces the stored values whatever they were. See *Conflict precedence* below for the opt-in that makes this conditional.
+- **`rtwellknownname` is not updated on conflict** — it is written on insert and then left alone. Renaming the source entity does not propagate into existing archive rows.
+- **An incoming NULL clears the stored value.** The upsert does not `COALESCE`, so partial multi-source merges (source A writes `voltage`, source B later writes `current` for the same key) do **not** work as a merge: B's insert nulls `voltage` unless it carries it. A source must write the full row it owns.
 - **Required-validation runs app-side** (§7) before the SQL is built; the DB `NOT NULL` constraint is the backstop.
-- **Idempotent re-inserts** are safe: identical payload only bumps `rtChangedDateTime`.
-- **Bulk inserts**: the same `ON CONFLICT` clause is generated once per archive for all rows in the batch.
+- **Idempotent re-inserts** are safe: an identical payload only bumps `rtchangeddatetime` (and `was_updated`).
+- **One statement per sub-batch, not one per row.** Every value stays its own typed bind parameter, but CrateDB analyses the statement once instead of once per row. That matters as soon as *Conflict precedence* is on: its guard makes each statement several KB, and as single-row commands CrateDB spent ~0.7 ms per row analysing it — 10,000 rows took 7.4 s, against 0.8 s as multi-row statements (CrateDB 5.10). Two rows with the same key in one statement resolve exactly as two separate writes would: the guard picks the winner, and without a guard the later row wins (verified on CrateDB 5.10).
+
+### Conflict precedence — opt-in ordering (System.StreamData 1.13.0)
+
+Unconditional last-write-wins means the stored value reflects **arrival order**, not the data. Wherever the same key can be written more than once — a corrected meter reading, a re-sent document, a backfill next to a live feed — that is a correctness defect and not just a race: replaying the same set of messages in a different order produces a different archive.
+
+`Archive.ConflictPrecedence` (on the abstract `Archive` base, so raw and time-range archives alike) makes the update conditional. It is an **ordered list of keys**, each naming one of the archive's own user columns plus which direction of it wins:
+
+```yaml
+ConflictPrecedence:
+  - { Column: DataQuality,        Order: LowerWins }    # rank codes numbered best-first
+  - { Column: SourceDocumentDate, Order: HigherWins }   # timestamps, sequence numbers
+```
+
+An **empty list is the default and preserves the behaviour above exactly**, so this is a real opt-in — nothing changes for an archive that does not declare it.
+
+**Lexicographic, never conjunctive.** The first key decides; a later one only breaks a tie in every key before it. That is what makes the keys a total order over the data, so the surviving value is its maximum — the same value whichever write lands first. Read as a conjunction ("better rank AND newer"), the result would still depend on arrival order: an older but better-ranked value would lose to a newer worse-ranked one that happened to arrive first, which is exactly the defect being removed. The guarantee covers writes the keys tell apart. Two writes equal in every key are not ordered by them: the last key admits equality, so the later write replaces the stored row and such writes stay arrival-order dependent. That is deliberate — an identical re-delivery stays an idempotent upsert, and an archive whose rows carry no keys behaves as it did before opting in. Declare enough keys to tell apart every pair of writes that can carry different values.
+
+The clause becomes a guard wrapped around every assignment, including the standard ones:
+
+```sql
+ON CONFLICT (...) DO UPDATE SET
+  "rtchangeddatetime" = CASE WHEN <guard> THEN CURRENT_TIMESTAMP ELSE "rtchangeddatetime" END,
+  "was_updated"       = CASE WHEN <guard> THEN TRUE ELSE "was_updated" END,
+  "user_col_1"        = CASE WHEN <guard> THEN EXCLUDED."user_col_1" ELSE "user_col_1" END,
+  ...
+```
+
+so a losing write leaves **no trace at all** — not even a changed timestamp. `<guard>` for keys `k1 … kn` is
+
+```
+(better(k1) OR (equal(k1) AND (better(k2) OR (equal(k2) AND … (better(kn) OR equal(kn))))))
+```
+
+Null semantics, which are load-bearing:
+
+| Stored | Incoming | Result |
+|---|---|---|
+| `NULL` | value | incoming wins — a row that carries no ranking must stay replaceable, or the first write freezes the archive's history |
+| value | `NULL` | stored wins — a write that cannot prove it is better must not displace one that can |
+| `NULL` | `NULL` | tie, falls through to the next key |
+
+The **last** key admits equality, which is what makes re-delivering an identical document idempotent rather than a no-op that leaves the row looking untouched.
+
+Two constraints:
+
+- Every key must be one of the archive's own user columns. The guard reads `EXCLUDED."k"`, so a name that is not in the INSERT column list would produce SQL that fails on every single write; `BuildConflictGuard` refuses to build it and names the valid columns instead.
+- **Ingest paths only.** `ImportRowsAsync` deliberately does not apply the guard: an operator restoring a snapshot must get back what they gave, not a merge against whatever is in the table.
+
+Adopting this on an **already-activated** archive needs the declared/physical column reconciliation described under *Tenant schema lifecycle* — a new precedence key is usually a newly declared column, and until AB#5247 `CREATE TABLE IF NOT EXISTS` meant such a column never reached CrateDB, which turns the guard into SQL that fails on every write.
 
 ### Time semantics
 

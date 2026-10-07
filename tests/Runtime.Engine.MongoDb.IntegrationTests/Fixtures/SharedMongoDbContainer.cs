@@ -50,15 +50,20 @@ internal static class SharedMongoDbContainer
                 using var startCts = new CancellationTokenSource(perAttemptTimeout);
                 try
                 {
+                    var watch = System.Diagnostics.Stopwatch.StartNew();
                     await container.StartAsync(startCts.Token);
                     _host = $"localhost:{container.GetMappedPublicPort()}";
-                    Console.WriteLine($"Using shared Testcontainer MongoDB at {_host}");
+                    // Reported, not Console.WriteLine'd: console output from a fixture is captured as
+                    // test output and only ever reaches the .trx, which is why this line was invisible
+                    // in every CI log so far (AB#5436).
+                    RunProgress.Report(
+                        $"shared Testcontainer MongoDB ready at {_host} after {RunProgress.Seconds(watch.Elapsed)}s");
                     break;
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine(
-                        $"Shared testcontainer MongoDB start failed on attempt {attempt}/{maxAttempts}: {ex.GetType().Name}: {ex.Message}");
+                    RunProgress.Report(
+                        $"shared Testcontainer MongoDB start failed on attempt {attempt}/{maxAttempts}: {ex.GetType().Name}: {ex.Message}");
 
                     try
                     {
@@ -66,7 +71,7 @@ internal static class SharedMongoDbContainer
                     }
                     catch (Exception disposeEx)
                     {
-                        Console.WriteLine($"  Disposal of failed container also threw: {disposeEx.Message}");
+                        RunProgress.Report($"disposal of the failed container also threw: {disposeEx.Message}");
                     }
 
                     if (attempt == maxAttempts)

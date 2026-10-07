@@ -2,6 +2,7 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
@@ -29,20 +30,30 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     private readonly IRepositoryClient _repositoryClient;
     private readonly ILogger<MongoDbRepositoryDataSource> _logger;
     private readonly IndexStateService _indexStateService;
+    private readonly ICkCacheService? _ckCacheService;
 
     public MongoDbRepositoryDataSource(ILogger<MongoDbRepositoryDataSource> logger,
         IUserRepositoryAccess repositoryAccess, string databaseName,
-        string tenantId)
-        : this(logger, repositoryAccess.GetRepositoryClient(databaseName), databaseName, tenantId)
+        string tenantId, ICkCacheService? ckCacheService = null)
+        : this(logger, repositoryAccess.GetRepositoryClient(databaseName), databaseName, tenantId, ckCacheService)
     {
     }
 
+    /// <param name="logger">Logger</param>
+    /// <param name="repositoryClient">Repository client of the tenant database</param>
+    /// <param name="databaseName">Tenant database name</param>
+    /// <param name="tenantId">Tenant id</param>
+    /// <param name="ckCacheService">
+    ///     CK cache used to normalise legacy strings in Secret slots on every runtime-entity collection
+    ///     read (AB#5533). Null disables the normalisation (tooling without a CK cache).
+    /// </param>
     internal MongoDbRepositoryDataSource(ILogger<MongoDbRepositoryDataSource> logger,
         IRepositoryClient repositoryClient, string databaseName,
-        string tenantId)
+        string tenantId, ICkCacheService? ckCacheService = null)
         : base(tenantId, new MongoLinkedBinaryDataSource(repositoryClient, databaseName))
     {
         _logger = logger;
+        _ckCacheService = ckCacheService;
         ArgumentValidation.ValidateString(databaseName, nameof(databaseName));
 
         _repositoryClient = repositoryClient;
@@ -111,8 +122,18 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
 
         var suffix = ckTypeGraph.DefiningCollectionRootCkTypeId.ToRtCkId().GetCkTypeCollectionName();
-        var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
+        var mapper = CreateRtEntityMapper<TEntity>();
         return _repository.GetCollection(mapper, suffix);
+    }
+
+    /// <summary>
+    ///     Mapper for runtime-entity collections whose reads normalise legacy strings in Secret slots
+    ///     (AB#5533) - every read path of the returned collection (by id, by ids, find, migration reads,
+    ///     change streams) hands out <see cref="RtSecretValue.LegacyPlaintext" />, never a string.
+    /// </summary>
+    private RtEntityMongoDataSourceMapper<TEntity> CreateRtEntityMapper<TEntity>() where TEntity : RtEntity, new()
+    {
+        return new RtEntityMongoDataSourceMapper<TEntity>(_ckCacheService, TenantId);
     }
 
     /// <inheritdoc />
@@ -120,7 +141,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         RtCkId<CkTypeId> rtCkTypeId) where TEntity : RtEntity, new()
     {
         var suffix = rtCkTypeId.GetCkTypeCollectionName();
-        var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
+        var mapper = CreateRtEntityMapper<TEntity>();
         return _repository.GetCollection(mapper, suffix);
     }
 
@@ -128,7 +149,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     public IMongoDbDataSourceCollection<OctoObjectId, TEntity> GetRtDatabaseCollectionByCollectionSuffix<TEntity>(
         string suffix) where TEntity : RtEntity, new()
     {
-        var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
+        var mapper = CreateRtEntityMapper<TEntity>();
         return _repository.GetCollection(mapper, suffix);
     }
 
@@ -154,7 +175,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         foreach (var collectionName in allCollections)
         {
             var suffix = collectionName.Substring(rtEntityPrefix.Length);
-            var mapper = new RtEntityMongoDataSourceMapper<TEntity>();
+            var mapper = CreateRtEntityMapper<TEntity>();
             var collection = _repository.GetCollection(mapper, suffix);
 
             var filter = Builders<TEntity>.Filter.Eq("ckTypeId", ckTypeIdValue);
@@ -175,6 +196,25 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             ckTypeIdValue);
 
         return (string.Empty, Array.Empty<TEntity>());
+    }
+
+    /// <inheritdoc />
+    public async Task<string?> FindRtCollectionNameByRtIdAsync(IOctoSession session, OctoObjectId rtId)
+    {
+        const string rtEntityPrefix = "RtEntity_";
+        var allCollections = await _repository.ListCollectionNamesAsync(rtEntityPrefix);
+        var filter = Builders<RtEntity>.Filter.Eq("_id", rtId);
+        foreach (var collectionName in allCollections)
+        {
+            var collection = _repository.GetCollection(CreateRtEntityMapper<RtEntity>(),
+                collectionName.Substring(rtEntityPrefix.Length));
+            if (await collection.GetTotalCountAsync(session, filter, 1).ConfigureAwait(false) > 0)
+            {
+                return collectionName;
+            }
+        }
+
+        return null;
     }
 
     public override async Task<IReadOnlyList<RtAssociationsMultiplicityResult>> GetRtAssociationsMultiplicityAsync(
@@ -744,7 +784,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
             foreach (var fields in localIndex.Fields)
             {
-                fields.AttributeNames = fields.AttributeNames.Select(name =>
+                // AB#5533: never index a Secret attribute (incl. text indexes). The CK compiler
+                // already rejects it (message 70-77); a model compiled by an older compiler is
+                // guarded here - the field is skipped with a warning instead of indexing ciphertext.
+                fields.AttributeNames = MongoDbAttributePathResolver.WithoutSecretAttributePaths(
+                    fields.AttributeNames, metadataProvider,
+                    name => _logger.LogWarning(
+                        "Skipping Secret attribute '{AttributePath}' in a {IndexType} index on type '{CkTypeId}': " +
+                        "Secret attributes are never indexed",
+                        name, localIndex.IndexType, indexDefiningType.CkTypeId)).Select(name =>
                 {
                     if (Constants.IsSystemAttribute(name))
                     {
@@ -779,6 +827,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             }
 
             fields.AttributeNames = fieldAttributePaths.ToList();
+        }
+
+        // AB#5533: an index whose only fields were Secret attributes is not created at all.
+        localIndex.Fields = localIndex.Fields.Where(f => f.AttributeNames.Any()).ToList();
+        if (localIndex.Fields.Count == 0)
+        {
+            _logger.LogWarning("Index on type '{CkTypeId}' has no indexable field left and is not created",
+                indexDefiningType.CkTypeId);
+            return;
         }
 
         // Prepend ckTypeId as first field and append rtState as last field to Ascending indexes.
@@ -845,8 +902,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         // We check if the index already exists in the repository,
         // by comparing type, the fields' weight and the attribute paths
         // The fields are compared case-insensitive, so we use the attribute names directly.
-        var repositoryIndex = repositoryIndices.SingleOrDefault(i =>
-            i.CompareToInSequence(ckTypeIndex));
+        // Several indexes can share one definition: two types in the same collection that declare the same
+        // index differ only in their name and their type filter, e.g. after a type moved to another model.
+        // The one carrying the expected name is ours; a differently named one is taken over only when it is
+        // the single candidate, otherwise it belongs to another type or is obsolete and dropped at the end.
+        var matchingIndices = repositoryIndices.Where(i => i.CompareToInSequence(ckTypeIndex)).ToList();
+        var repositoryIndex = matchingIndices.FirstOrDefault(i => i.Name == indexName)
+                              ?? (matchingIndices.Count == 1 ? matchingIndices[0] : null);
 
         // If found, check if the name matches what we expect
         if (repositoryIndex != null)

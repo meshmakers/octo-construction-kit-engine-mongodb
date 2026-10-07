@@ -25,7 +25,7 @@ internal static class CrateDbDiagnostics
     private static readonly Meter Meter = new(MeterName, "1.0.0");
 
     /// <summary>
-    /// Histogram of insert duration in milliseconds (single + bulk). Tags: <c>tenant</c>,
+    /// Histogram of insert duration in milliseconds (single + bulk). Tags: <c>octo.tenant.id</c>,
     /// <c>archive</c>, <c>batch_size_bucket</c> (1, 2-10, 11-100, 101-1000, 1000+).
     /// </summary>
     public static readonly Histogram<double> InsertDurationMs =
@@ -35,7 +35,7 @@ internal static class CrateDbDiagnostics
             description: "Wall-clock time to insert a stream data point or batch into CrateDB.");
 
     /// <summary>
-    /// Counter of inserted points. Tags: <c>tenant</c>, <c>archive</c>.
+    /// Counter of inserted points. Tags: <c>octo.tenant.id</c>, <c>archive</c>.
     /// </summary>
     public static readonly Counter<long> InsertedPoints =
         Meter.CreateCounter<long>(
@@ -44,7 +44,7 @@ internal static class CrateDbDiagnostics
             description: "Cumulative count of stream data points written to CrateDB.");
 
     /// <summary>
-    /// Counter of required-attribute violations rejected at insert time. Tags: <c>tenant</c>,
+    /// Counter of required-attribute violations rejected at insert time. Tags: <c>octo.tenant.id</c>,
     /// <c>archive</c>, <c>path</c> (the offending CkArchiveColumn.Path).
     /// </summary>
     public static readonly Counter<long> RequiredViolations =
@@ -54,7 +54,7 @@ internal static class CrateDbDiagnostics
             description: "Inserts rejected because a required CkArchiveColumn path was missing on the incoming point.");
 
     /// <summary>
-    /// Counter of rows written by a rollup bucket aggregation upsert. Tags: <c>tenant</c>,
+    /// Counter of rows written by a rollup bucket aggregation upsert. Tags: <c>octo.tenant.id</c>,
     /// <c>rollup</c>. Sum of <c>RollupBucketUpserts</c> divided by the count of audit events
     /// gives the average rollup rows-per-bucket.
     /// </summary>
@@ -65,7 +65,7 @@ internal static class CrateDbDiagnostics
             description: "Cumulative count of rollup rows upserted by AggregateBucketAsync.");
 
     /// <summary>
-    /// Histogram of query duration in milliseconds. Tags: <c>tenant</c>, <c>archive</c>,
+    /// Histogram of query duration in milliseconds. Tags: <c>octo.tenant.id</c>, <c>archive</c>,
     /// <c>query_type</c> (simple/aggregation/grouped/downsampling).
     /// </summary>
     public static readonly Histogram<double> QueryDurationMs =

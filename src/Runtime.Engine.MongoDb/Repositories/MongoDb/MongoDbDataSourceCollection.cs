@@ -26,6 +26,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     private readonly IMongoCollection<TDocument> _documentCollection;
     private readonly ILogger<MongoDbDataSourceCollection<TKey, TDocument>> _logger;
     private readonly IMongoDataSourceMapper<TKey, TDocument> _mongoDataSourceMapper;
+    private readonly IMongoDocumentReadNormalizer<TDocument>? _readNormalizer;
 
     internal MongoDbDataSourceCollection(ILogger<MongoDbDataSourceCollection<TKey, TDocument>> logger,
         IMongoCollection<TDocument> documentCollection,
@@ -34,6 +35,30 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         _logger = logger;
         _mongoDataSourceMapper = mongoDataSourceMapper;
         _documentCollection = documentCollection;
+        _readNormalizer = mongoDataSourceMapper as IMongoDocumentReadNormalizer<TDocument>;
+    }
+
+    /// <summary>
+    ///     AB#5533: hands a document read from the collection to the mapper's read normaliser (legacy
+    ///     strings in Secret slots become <c>RtSecretValue.LegacyPlaintext</c>).
+    /// </summary>
+    private TDocument? NormalizeRead(TDocument? document)
+    {
+        if (document != null && _readNormalizer != null)
+        {
+            _readNormalizer.NormalizeAfterRead([document]);
+        }
+
+        return document;
+    }
+
+    /// <summary>
+    ///     AB#5533: normalises every document of one read operation.
+    /// </summary>
+    private TList NormalizeRead<TList>(TList documents) where TList : IEnumerable<TDocument>
+    {
+        _readNormalizer?.NormalizeAfterRead(documents);
+        return documents;
     }
 
     public IMongoDataSourceMapper<TKey, TDocument> MongoDataSourceMapper => _mongoDataSourceMapper;
@@ -50,7 +75,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         var document = await _documentCollection.FindOneAndUpdateAsync(((IOctoSessionInternal)session).SessionHandle,
             filter,
             updateDefinition, options);
-        return document;
+        return NormalizeRead(document);
     }
 
     public IAggregateFluent<TDocument> Aggregate(IOctoSession session)
@@ -321,7 +346,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         {
             var cursor = await _documentCollection.FindAsync(((IOctoSessionInternal)session).SessionHandle,
                 filterDefinition, new FindOptions<TDocument> { Sort = sort, Skip = skip, Limit = take });
-            return await cursor.ToListAsync();
+            return NormalizeRead(await cursor.ToListAsync());
         }
         catch (Exception e)
         {
@@ -339,7 +364,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             var cursor = await _documentCollection.FindAsync(((IOctoSessionInternal)session).SessionHandle,
                 expression,
                 new FindOptions<TDocument> { Skip = skip, Limit = limit });
-            return await cursor.ToListAsync();
+            return NormalizeRead(await cursor.ToListAsync());
         }
         catch (MongoException e)
         {
@@ -380,8 +405,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     {
         try
         {
-            return await (await _documentCollection.FindAsync(((IOctoSessionInternal)session).SessionHandle,
-                expression)).SingleOrDefaultAsync();
+            return NormalizeRead(await (await _documentCollection.FindAsync(
+                ((IOctoSessionInternal)session).SessionHandle, expression)).SingleOrDefaultAsync());
         }
         catch (MongoException e)
         {
@@ -646,7 +671,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 return null;
             }
 
-            return document;
+            return NormalizeRead(document);
         }
         catch (MongoException e)
         {
@@ -671,7 +696,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
             var documents = await result.ToListAsync();
 
-            return documents;
+            return NormalizeRead(documents);
         }
         catch (MongoException e)
         {
@@ -694,7 +719,7 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 return default;
             }
 
-            return (TDerived)document;
+            return (TDerived)NormalizeRead(document)!;
         }
         catch (MongoException e)
         {
@@ -707,8 +732,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         try
         {
             var options = new FindOptions<TDocument> { Limit = take, Skip = skip };
-            return await (await _documentCollection.FindAsync(((IOctoSessionInternal)session).SessionHandle,
-                _ => true, options)).ToListAsync();
+            return NormalizeRead(await (await _documentCollection.FindAsync(
+                ((IOctoSessionInternal)session).SessionHandle, _ => true, options)).ToListAsync());
         }
         catch (MongoException e)
         {
@@ -892,7 +917,8 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         Func<FilterDefinition<ChangeStreamDocument<TDocument>>?>? documentBeforeFilterFunc = null,
         CancellationToken cancellationToken = default)
     {
-        var updateStream = new UpdateStream<TDocument>();
+        // AB#5533: change-stream documents (full document and pre-image) are normalised like reads.
+        var updateStream = new UpdateStream<TDocument>(_readNormalizer);
 
         PipelineDefinition<ChangeStreamDocument<TDocument>, ChangeStreamDocument<TDocument>> pipeline =
             new EmptyPipelineDefinition<ChangeStreamDocument<TDocument>>();

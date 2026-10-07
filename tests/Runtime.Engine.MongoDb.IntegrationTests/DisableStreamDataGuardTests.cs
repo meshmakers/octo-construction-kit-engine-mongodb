@@ -126,10 +126,9 @@ public class DisableStreamDataGuardTests(StreamDataFlagFixture fixture)
         }
         finally
         {
-            using var session = await systemContext.GetAdminSessionAsync();
-            session.StartTransaction();
-            await systemContext.DropChildTenantAsync(session, childTenantId);
-            await session.CommitTransactionAsync();
+            // Bounded and reported (AB#5436): the cleanup of a throwaway tenant runs after the
+            // assertions, against a tenant in an unknown state, and must never be able to hold the run.
+            await ThrowawayTenant.DropAsync(systemContext, childTenantId);
         }
     }
 

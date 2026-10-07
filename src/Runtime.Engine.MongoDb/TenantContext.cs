@@ -2601,7 +2601,8 @@ public class TenantContext : ITenantContext
             _bulkRtMutation,
             _serviceProvider.GetService<IDataSecurityFilterFactory>(),
             _serviceProvider.GetService<IDataPermissionResolver>(),
-            _serviceProvider.GetService<IAuditEventSink>());
+            _serviceProvider.GetService<IAuditEventSink>(),
+            _loggerFactory.CreateLogger<TenantRepository>());
         return tenantRepository;
     }
 
@@ -2614,20 +2615,21 @@ public class TenantContext : ITenantContext
             _bulkRtMutation,
             _serviceProvider.GetService<IDataSecurityFilterFactory>(),
             _serviceProvider.GetService<IDataPermissionResolver>(),
-            _serviceProvider.GetService<IAuditEventSink>());
+            _serviceProvider.GetService<IAuditEventSink>(),
+            _loggerFactory.CreateLogger<TenantRepository>());
         return tenantRepository;
     }
 
     private IMongoDbRepositoryDataSource CreateRepositoryDataSource(string databaseName)
     {
         return new MongoDbRepositoryDataSource(_loggerFactory.CreateLogger<MongoDbRepositoryDataSource>(),
-            _serviceProvider.GetRequiredService<IUserRepositoryAccess>(), databaseName, TenantId);
+            _serviceProvider.GetRequiredService<IUserRepositoryAccess>(), databaseName, TenantId, _cacheService);
     }
 
     protected IMongoDbRepositoryDataSource CreateRepositoryDataSourceAsAdmin(string databaseName, string tenantId)
     {
         return new MongoDbRepositoryDataSource(_loggerFactory.CreateLogger<MongoDbRepositoryDataSource>(),
-            _adminRepositoryClient, databaseName, tenantId);
+            _adminRepositoryClient, databaseName, tenantId, _cacheService);
     }
 
     /// <summary>

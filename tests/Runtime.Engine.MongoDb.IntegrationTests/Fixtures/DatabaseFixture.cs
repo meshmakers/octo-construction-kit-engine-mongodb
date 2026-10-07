@@ -29,7 +29,7 @@ public class DatabaseFixture : ConfigurationFixture
         {
             // Use local MongoDB instance
             databaseHost = _options.LocalDatabaseHost;
-            Console.WriteLine($"Using local MongoDB at {databaseHost}");
+            RunProgress.Report($"{GetType().Name}: using local MongoDB at {databaseHost}");
         }
         else
         {
@@ -59,20 +59,33 @@ public class DatabaseFixture : ConfigurationFixture
         // torn down by Testcontainers' Ryuk reaper when the test process exits, not here. Local
         // MongoDB mode has no such reaper, so best-effort drop the GUID-suffixed database this
         // fixture created — otherwise repeated local runs accumulate orphaned databases.
-        if (_useLocalDatabase)
+        //
+        // Both branches report what they did (AB#5436): a teardown that silently does nothing is
+        // indistinguishable from a teardown that is stuck, and that reading cost real time once.
+        if (!_useLocalDatabase)
         {
-            try
+            RunProgress.Report(
+                $"{GetType().Name}: nothing to drop — the shared Testcontainer takes database " +
+                $"'{SystemDatabaseName}' with it when Ryuk reaps it at process exit");
+            return;
+        }
+
+        RunProgress.Report($"{GetType().Name}: dropping local system database '{SystemDatabaseName}'");
+        try
+        {
+            var systemContext = GetSystemContext();
+            if (await systemContext.IsSystemTenantExistingAsync())
             {
-                var systemContext = GetSystemContext();
-                if (await systemContext.IsSystemTenantExistingAsync())
-                {
-                    await systemContext.DeleteSystemTenantAsync();
-                }
+                await systemContext.DeleteSystemTenantAsync();
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Best-effort local database cleanup failed: {ex.GetType().Name}: {ex.Message}");
-            }
+        }
+        catch (Exception ex)
+        {
+            // Best-effort by design: an orphaned local database is a nuisance, a teardown that
+            // escalates would turn a finished run into a cleanup failure.
+            RunProgress.Report(
+                $"{GetType().Name}: dropping local system database '{SystemDatabaseName}' failed — " +
+                $"{ex.GetType().Name}: {ex.Message}");
         }
     }
 }

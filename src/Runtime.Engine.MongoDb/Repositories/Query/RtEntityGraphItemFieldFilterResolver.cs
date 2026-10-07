@@ -37,6 +37,31 @@ internal class RtEntityGraphItemFieldFilterResolver(
         return resolver.IsAttributePathValid(RtPathEvaluator.GetPath(navigationPair.SubPathTerms.First()));
     }
 
+    internal override bool IsSecretAttributePath(string attributePath)
+    {
+        // AB#5533: a navigation path (parent.Type->ApiKey) must not reach a Secret attribute of the
+        // target type either.
+        var navigationPair = RtPathEvaluator.TokenizeAndGetNavigationPair(_ckCacheService, _tenantId, _ckTypeGraph.CkTypeId, attributePath);
+        if (navigationPair == null)
+        {
+            return base.IsSecretAttributePath(attributePath);
+        }
+
+        while (navigationPair.InnerNavigationPairs.Count > 0)
+        {
+            navigationPair = navigationPair.InnerNavigationPairs[0];
+        }
+
+        if (!navigationPair.SubPathTerms.Any() || !navigationPair.SubPathTerms.First().Any())
+        {
+            return false;
+        }
+
+        var targetCkTypeGraph = _ckCacheService.GetRtCkType(_tenantId, navigationPair.TargetCkTypeId);
+        RtEntityFieldFilterResolver<RtEntity> resolver = new(_ckCacheService, _tenantId, targetCkTypeGraph);
+        return resolver.IsSecretAttributePath(RtPathEvaluator.GetPath(navigationPair.SubPathTerms.First()));
+    }
+
     internal override string? ResolveAttributePath(string attributePath)
     {
         var navigationPair = RtPathEvaluator.TokenizeAndGetNavigationPair(_ckCacheService, _tenantId, _ckTypeGraph.CkTypeId, attributePath);

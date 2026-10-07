@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 using Meshmakers.Octo.Runtime.Engine.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
@@ -40,6 +41,14 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// Min / Max nest, First / Last pick the child's value at the earliest / latest child window.
 /// Rule-2 sources are always windowed, so they never take the LOCF path.
 /// </para>
+/// <para>
+/// A rollup source is read through its active-generation pointer, like every other reader of a
+/// rollup table: the caller passes the source's pointer entries and the source scan gets the
+/// <see cref="GenerationFilterSql"/> predicate. A rollup table can hold two generations of one
+/// window while the source is being recomputed (the next generation is copied in before the
+/// pointer flips, the superseded one is swept after), and a scan by time alone would aggregate
+/// both. See <c>docs/streamdata-rollup-source-generation-read.md</c>.
+/// </para>
 /// </remarks>
 internal static class RollupAggregationSqlBuilder
 {
@@ -70,6 +79,7 @@ internal static class RollupAggregationSqlBuilder
     /// <param name="sourceUsesWindowedStorage">See the per-source overload.</param>
     /// <param name="rtIdScope">See the per-source overload.</param>
     /// <param name="carryLookback">See the per-source overload.</param>
+    /// <param name="sourceGenerationRanges">See the per-source overload.</param>
     public static string Build(
         string sourceTable,
         string targetTable,
@@ -79,7 +89,8 @@ internal static class RollupAggregationSqlBuilder
         DateTime bucketEnd,
         bool sourceUsesWindowedStorage,
         string? rtIdScope = null,
-        TimeSpan? carryLookback = null)
+        TimeSpan? carryLookback = null,
+        IReadOnlyList<GenerationRange>? sourceGenerationRanges = null)
     {
         if (aggregations is null || aggregations.Count == 0) throw new ArgumentException("At least one aggregation is required.", nameof(aggregations));
 
@@ -90,7 +101,7 @@ internal static class RollupAggregationSqlBuilder
         }
 
         return Build(sourceTable, targetTable, rollupCkTypeId, resolved, bucketStart, bucketEnd,
-            sourceUsesWindowedStorage, rtIdScope, carryLookback);
+            sourceUsesWindowedStorage, rtIdScope, carryLookback, sourceGenerationRanges);
     }
 
     /// <summary>
@@ -126,6 +137,12 @@ internal static class RollupAggregationSqlBuilder
     /// <c>CarryLookbackMs</c>. Null ⇒ <see cref="DefaultCarryLookback"/>. Only consulted when the
     /// aggregations include <see cref="CkRollupFunction.TimeWeightedAvg"/> over a raw source.
     /// </param>
+    /// <param name="sourceGenerationRanges">
+    /// The source's active-generation pointer entries when the source is a <b>rollup</b> archive;
+    /// <c>null</c> for a raw or time-range source, whose tables have no generation column. Non-null
+    /// (an empty list included) restricts the source scan to the active generation of each window:
+    /// the entries overlapping the bucket decide, and with none the scan reads generation 0.
+    /// </param>
     public static string Build(
         string sourceTable,
         string targetTable,
@@ -135,13 +152,25 @@ internal static class RollupAggregationSqlBuilder
         DateTime bucketEnd,
         bool sourceUsesWindowedStorage,
         string? rtIdScope = null,
-        TimeSpan? carryLookback = null)
+        TimeSpan? carryLookback = null,
+        IReadOnlyList<GenerationRange>? sourceGenerationRanges = null)
     {
         if (string.IsNullOrWhiteSpace(sourceTable)) throw new ArgumentException("sourceTable must not be empty.", nameof(sourceTable));
         if (string.IsNullOrWhiteSpace(targetTable)) throw new ArgumentException("targetTable must not be empty.", nameof(targetTable));
         if (string.IsNullOrWhiteSpace(rollupCkTypeId)) throw new ArgumentException("rollupCkTypeId must not be empty.", nameof(rollupCkTypeId));
         if (resolved is null || resolved.Count == 0) throw new ArgumentException("At least one aggregation is required.", nameof(resolved));
         if (bucketEnd <= bucketStart) throw new ArgumentException("bucketEnd must be greater than bucketStart.", nameof(bucketEnd));
+        if (sourceGenerationRanges is not null && !sourceUsesWindowedStorage)
+        {
+            throw new ArgumentException(
+                "Generation ranges were supplied for a source flagged as raw storage — only a rollup source, which always uses windowed storage, is generation-tracked.",
+                nameof(sourceGenerationRanges));
+        }
+
+        // Only the pointer entries overlapping the bucket can decide one of its rows.
+        var generationFilter = sourceGenerationRanges is null
+            ? null
+            : GenerationFilterSql.Render(GenerationFilterSql.Overlapping(sourceGenerationRanges, bucketStart, bucketEnd));
 
         // Target columns must be distinct across specs (same rule as the DDL generator) and a
         // rule-2 binding only makes sense over a windowed (rollup) source.
@@ -179,7 +208,7 @@ internal static class RollupAggregationSqlBuilder
 
         return BuildStandard(
             sourceTable, targetTable, rollupCkTypeId, resolved, bucketStart, bucketEnd,
-            sourceUsesWindowedStorage, rtIdScope);
+            sourceUsesWindowedStorage, rtIdScope, generationFilter);
     }
 
     /// <summary>
@@ -197,7 +226,8 @@ internal static class RollupAggregationSqlBuilder
         DateTime bucketStart,
         DateTime bucketEnd,
         bool sourceUsesWindowedStorage,
-        string? rtIdScope)
+        string? rtIdScope,
+        string? generationFilter)
     {
         var sb = new StringBuilder();
         var bucketEndLiteral = bucketEnd.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
@@ -278,12 +308,12 @@ internal static class RollupAggregationSqlBuilder
         {
             AppendArgSourceSubquery(
                 sb, sourceTable, resolved, bucketStartLiteral, bucketEndLiteral,
-                sourceUsesWindowedStorage, rtIdScope);
+                sourceUsesWindowedStorage, rtIdScope, generationFilter);
         }
         else
         {
             sb.Append("FROM ").AppendLine(sourceTable);
-            AppendTimePredicate(sb, bucketStartLiteral, bucketEndLiteral, sourceUsesWindowedStorage, rtIdScope);
+            AppendTimePredicate(sb, bucketStartLiteral, bucketEndLiteral, sourceUsesWindowedStorage, rtIdScope, generationFilter);
         }
         sb.Append("GROUP BY \"").Append(Constants.RtId).AppendLine("\"");
 
@@ -341,7 +371,8 @@ internal static class RollupAggregationSqlBuilder
         string bucketStartLiteral,
         string bucketEndLiteral,
         bool sourceUsesWindowedStorage,
-        string? rtIdScope)
+        string? rtIdScope,
+        string? generationFilter)
     {
         var orderColumn = sourceUsesWindowedStorage ? Constants.WindowEnd : Constants.Timestamp;
 
@@ -364,13 +395,14 @@ internal static class RollupAggregationSqlBuilder
         sb.Append(",\n           ROW_NUMBER() OVER (PARTITION BY \"").Append(Constants.RtId)
           .Append("\" ORDER BY \"").Append(orderColumn).Append("\" DESC) AS \"").Append(RnLastColumn).Append('"');
         sb.AppendLine().Append("    FROM ").AppendLine(sourceTable);
-        AppendTimePredicate(sb, bucketStartLiteral, bucketEndLiteral, sourceUsesWindowedStorage, rtIdScope, indent: "    ");
+        AppendTimePredicate(sb, bucketStartLiteral, bucketEndLiteral, sourceUsesWindowedStorage, rtIdScope, generationFilter, indent: "    ");
         sb.AppendLine(") \"src\"");
     }
 
     /// <summary>
     /// Emits the bucket time predicate (fully-contained window rule for a windowed source, half-open
-    /// timestamp rule for a raw source) plus the optional per-rtId recompute scope.
+    /// timestamp rule for a raw source) plus the optional per-rtId recompute scope and, for a
+    /// rollup source, the active-generation predicate.
     /// </summary>
     private static void AppendTimePredicate(
         StringBuilder sb,
@@ -378,6 +410,7 @@ internal static class RollupAggregationSqlBuilder
         string bucketEndLiteral,
         bool sourceUsesWindowedStorage,
         string? rtIdScope,
+        string? generationFilter,
         string indent = "")
     {
         if (sourceUsesWindowedStorage)
@@ -398,6 +431,12 @@ internal static class RollupAggregationSqlBuilder
         if (!string.IsNullOrEmpty(rtIdScope))
         {
             sb.Append(indent).Append("AND \"").Append(Constants.RtId).Append("\" = '").Append(EscapeLiteral(rtIdScope)).AppendLine("'");
+        }
+        // Rollup source: one generation per window, the one its pointer names. Without it a source
+        // window that exists in two generations (mid-recompute) would be aggregated twice.
+        if (generationFilter is not null)
+        {
+            sb.Append(indent).Append("AND ").AppendLine(generationFilter);
         }
     }
 

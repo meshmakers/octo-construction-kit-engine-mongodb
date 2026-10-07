@@ -114,8 +114,15 @@ internal class RtEntityDiscriminatorConvention : IDiscriminatorConvention
                     discriminator = discriminator.AsBsonArray.Last(); // last item is leaf class discriminator
                 }
                 
+                // AB#5533: a stored secret ({ _t: "OctoSecret", e: ... }) is recognised in every slot,
+                // without CK knowledge - it must never fall through to LookupActualType (unknown
+                // discriminator) or to the dynamic ExpandoObject path.
+                if (discriminator.IsString && discriminator.AsString == RtSecretValueSerializer.Discriminator)
+                {
+                    actualType = typeof(RtSecretValue);
+                }
                 // We ignore the discriminator for List`1 - we handle that on our side.
-                if (discriminator.AsString == "List`1")
+                else if (discriminator.AsString == "List`1")
                 {
                     actualType = typeof(List<object>);
                 }
@@ -148,6 +155,13 @@ internal class RtEntityDiscriminatorConvention : IDiscriminatorConvention
         if (actualType.IsAssignableTo(typeof(RtEntity)))
         {
             return "RtEntity";
+        }
+
+        // AB#5533: RtSecretValueSerializer writes its own discriminator; reported here for callers
+        // that ask the convention directly.
+        if (actualType == typeof(RtSecretValue))
+        {
+            return RtSecretValueSerializer.Discriminator;
         }
 
         // Don't write discriminator for RtRecord types - the type is determined by CkRecordId

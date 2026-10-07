@@ -30,16 +30,23 @@ public class DropTenantStreamDataTests(StreamDataDropFixture fixture)
     {
         const string tenantId = "streamdropchild";
         Fake.ClearRecordedCalls(fixture.StreamDataRepositoryFactory);
-        var (created, disabled) = await CreateChildWithArchivesAsync(tenantId);
+        try
+        {
+            var (created, disabled) = await CreateChildWithArchivesAsync(tenantId);
 
-        await DropChildAsync(tenantId, dropStreamData: true);
+            await DropChildAsync(tenantId, dropStreamData: true);
 
-        A.CallTo(() => fixture.StreamDataRepositoryFactory.DeleteArchiveTablesAsync(
-                A<string>.That.Matches(id => string.Equals(id, tenantId, StringComparison.OrdinalIgnoreCase)),
-                A<IReadOnlyList<OctoObjectId>>.That.Matches(ids => ids.Count == 2 && ids.Contains(created) && ids.Contains(disabled))))
-            // All statuses are dropped - a Created archive's DROP IF EXISTS is harmless.
-            .MustHaveHappenedOnceExactly();
-        (await IsChildExistingAsync(tenantId)).Should().BeFalse();
+            A.CallTo(() => fixture.StreamDataRepositoryFactory.DeleteArchiveTablesAsync(
+                    A<string>.That.Matches(id => string.Equals(id, tenantId, StringComparison.OrdinalIgnoreCase)),
+                    A<IReadOnlyList<OctoObjectId>>.That.Matches(ids => ids.Count == 2 && ids.Contains(created) && ids.Contains(disabled))))
+                // All statuses are dropped - a Created archive's DROP IF EXISTS is harmless.
+                .MustHaveHappenedOnceExactly();
+            (await IsChildExistingAsync(tenantId)).Should().BeFalse();
+        }
+        finally
+        {
+            await CleanUpAsync(tenantId);
+        }
     }
 
     [Fact]
@@ -50,13 +57,20 @@ public class DropTenantStreamDataTests(StreamDataDropFixture fixture)
         // on RestoreRepositoryJob - a Mongo-only restore used to lose all stream data).
         const string tenantId = "streamdropswap";
         Fake.ClearRecordedCalls(fixture.StreamDataRepositoryFactory);
-        await CreateChildWithArchivesAsync(tenantId);
+        try
+        {
+            await CreateChildWithArchivesAsync(tenantId);
 
-        await DropChildAsync(tenantId, dropStreamData: false);
+            await DropChildAsync(tenantId, dropStreamData: false);
 
-        A.CallTo(() => fixture.StreamDataRepositoryFactory.DeleteArchiveTablesAsync(A<string>._, A<IReadOnlyList<OctoObjectId>>._))
-            .MustNotHaveHappened();
-        (await IsChildExistingAsync(tenantId)).Should().BeFalse();
+            A.CallTo(() => fixture.StreamDataRepositoryFactory.DeleteArchiveTablesAsync(A<string>._, A<IReadOnlyList<OctoObjectId>>._))
+                .MustNotHaveHappened();
+            (await IsChildExistingAsync(tenantId)).Should().BeFalse();
+        }
+        finally
+        {
+            await CleanUpAsync(tenantId);
+        }
     }
 
     [Fact]
@@ -68,12 +82,19 @@ public class DropTenantStreamDataTests(StreamDataDropFixture fixture)
                 A<string>.That.Matches(id => string.Equals(id, tenantId, StringComparison.OrdinalIgnoreCase)),
                 A<IReadOnlyList<OctoObjectId>>._))
             .Throws(new InvalidOperationException("CrateDB unreachable"));
-        await CreateChildWithArchivesAsync(tenantId);
+        try
+        {
+            await CreateChildWithArchivesAsync(tenantId);
 
-        // Best-effort: the tenant is already deleted, the failure is logged, the drop completes.
-        await DropChildAsync(tenantId, dropStreamData: true);
+            // Best-effort: the tenant is already deleted, the failure is logged, the drop completes.
+            await DropChildAsync(tenantId, dropStreamData: true);
 
-        (await IsChildExistingAsync(tenantId)).Should().BeFalse();
+            (await IsChildExistingAsync(tenantId)).Should().BeFalse();
+        }
+        finally
+        {
+            await CleanUpAsync(tenantId);
+        }
     }
 
     [Fact]
@@ -83,17 +104,26 @@ public class DropTenantStreamDataTests(StreamDataDropFixture fixture)
 
         // Stream data enabled (model imported) but no archive entity.
         const string enabledWithoutArchives = "streamdropempty";
-        await CreateChildAsync(enabledWithoutArchives);
-        await (await GetChildAsync(enabledWithoutArchives)).EnableStreamDataAsync();
-        await DropChildAsync(enabledWithoutArchives, dropStreamData: true);
 
         // Never opted into stream data (no model) - the archive store cannot even be enumerated.
         const string withoutModel = "streamdropnomodel";
-        await CreateChildAsync(withoutModel);
-        await DropChildAsync(withoutModel, dropStreamData: true);
+        try
+        {
+            await CreateChildAsync(enabledWithoutArchives);
+            await (await GetChildAsync(enabledWithoutArchives)).EnableStreamDataAsync();
+            await DropChildAsync(enabledWithoutArchives, dropStreamData: true);
 
-        A.CallTo(() => fixture.StreamDataRepositoryFactory.DeleteArchiveTablesAsync(A<string>._, A<IReadOnlyList<OctoObjectId>>._))
-            .MustNotHaveHappened();
+            await CreateChildAsync(withoutModel);
+            await DropChildAsync(withoutModel, dropStreamData: true);
+
+            A.CallTo(() => fixture.StreamDataRepositoryFactory.DeleteArchiveTablesAsync(A<string>._, A<IReadOnlyList<OctoObjectId>>._))
+                .MustNotHaveHappened();
+        }
+        finally
+        {
+            await CleanUpAsync(enabledWithoutArchives);
+            await CleanUpAsync(withoutModel);
+        }
     }
 
     [Fact]
@@ -123,8 +153,19 @@ public class DropTenantStreamDataTests(StreamDataDropFixture fixture)
         }
         finally
         {
-            await DropChildAsync(tenantId, dropStreamData: true);
+            await CleanUpAsync(tenantId);
         }
+    }
+
+    /// <summary>
+    ///     Bounded, reported cleanup of the tenant this test created (AB#5436). Every test here runs it
+    ///     in a <c>finally</c>: before, a failing test left its tenant and database behind in the shared
+    ///     container with nothing in the log about it — and a cleanup that cannot be walked away from
+    ///     would be the one thing able to hold a red run open.
+    /// </summary>
+    private Task CleanUpAsync(string tenantId)
+    {
+        return ThrowawayTenant.DropAsync(fixture.GetSystemContext(), tenantId);
     }
 
     /// <summary>Creates a child tenant with stream data enabled and two raw archives (Created and Disabled).</summary>
@@ -210,21 +251,28 @@ public class DropTenantStreamDataDisabledInstanceTests(StreamDataDisabledDropFix
     {
         const string tenantId = "streamdropoff";
         var systemContext = fixture.GetSystemContext();
-        using (var session = await systemContext.GetAdminSessionAsync())
+        try
         {
-            session.StartTransaction();
-            await systemContext.CreateChildTenantAsync(session, tenantId, tenantId);
-            await session.CommitTransactionAsync();
-        }
+            using (var session = await systemContext.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await systemContext.CreateChildTenantAsync(session, tenantId, tenantId);
+                await session.CommitTransactionAsync();
+            }
 
-        using (var session = await systemContext.GetAdminSessionAsync())
+            using (var session = await systemContext.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await systemContext.DropChildTenantAsync(session, tenantId, dropStreamData: true);
+                await session.CommitTransactionAsync();
+            }
+
+            A.CallTo(() => fixture.StreamDataRepositoryFactory.DeleteArchiveTablesAsync(A<string>._, A<IReadOnlyList<OctoObjectId>>._))
+                .MustNotHaveHappened();
+        }
+        finally
         {
-            session.StartTransaction();
-            await systemContext.DropChildTenantAsync(session, tenantId, dropStreamData: true);
-            await session.CommitTransactionAsync();
+            await ThrowawayTenant.DropAsync(systemContext, tenantId);
         }
-
-        A.CallTo(() => fixture.StreamDataRepositoryFactory.DeleteArchiveTablesAsync(A<string>._, A<IReadOnlyList<OctoObjectId>>._))
-            .MustNotHaveHappened();
     }
 }

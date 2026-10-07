@@ -5,7 +5,8 @@ using MongoDB.Driver;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories;
 
 /// <inheritdoc />
-internal class UpdateStream<TDocument> : IUpdateStream<TDocument>
+internal class UpdateStream<TDocument>(
+    MongoDb.IMongoDocumentReadNormalizer<TDocument>? readNormalizer = null) : IUpdateStream<TDocument>
     where TDocument : class, new()
 {
     private readonly CancellationTokenSource _cancellationTokenSource = new();
@@ -37,7 +38,9 @@ internal class UpdateStream<TDocument> : IUpdateStream<TDocument>
             
             await cursor.ForEachAsync(change =>
             {
-                _messageStream.OnNext(new UpdateInfo<TDocument>(change));
+                // ChangeStreamDocument deserialises FullDocument on every access, so the normalisation
+                // runs on the instances UpdateInfo keeps.
+                _messageStream.OnNext(new UpdateInfo<TDocument>(change, readNormalizer));
                 if (!_messageStream.HasObservers)
                 {
                     _cancellationTokenSource.Cancel();

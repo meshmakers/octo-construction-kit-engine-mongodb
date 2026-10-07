@@ -228,7 +228,7 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
             var resultAggregate = _mongoDbRepositoryDataSource
                 .GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph).Aggregate(session, pipelineDefinition);
             QueryResult<RtDeepGraphQueryResult>? result = await resultAggregate.SingleOrDefaultAsync();
-            var aggregations = CalculateAggregations(result.Result);
+            var aggregations = FinalizeResults(result.Result);
             return new ResultSet<RtDeepGraphQueryResult>(result.Result, result.TotalCount.FirstOrDefault()?.Count ?? 0,
                 aggregations.Item1, aggregations.Item2);
         }
@@ -240,7 +240,7 @@ internal class MultipleOriginHierarchicalDeepRtGraphQuery : Query<RtDeepGraphQue
             var aggregate = _mongoDbRepositoryDataSource
                 .GetRtDatabaseCollection<RtEntity>(_originCkTypeGraph).Aggregate(session, pipelineDefinition);
             var resultNoTotalCount = await aggregate.ToListAsync();
-            var aggregations = CalculateAggregations(resultNoTotalCount);
+            var aggregations = FinalizeResults(resultNoTotalCount);
             return new ResultSet<RtDeepGraphQueryResult>(resultNoTotalCount, resultNoTotalCount.Count,
                 aggregations.Item1, aggregations.Item2);
         }

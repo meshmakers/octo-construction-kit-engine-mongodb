@@ -82,13 +82,32 @@ internal static class GenerationMapSqlBuilder
         $"SELECT \"range_start\", \"range_end\", \"rtid_scope\", \"{Constants.Generation}\" FROM {genMapTable};";
 
     /// <summary>
-    /// Builds the delete of all active-generation entries whose range reaches at or past
+    /// Builds the statement that keeps the part before <paramref name="fromBucketEnd"/> of every
+    /// entry straddling it: a copy of the entry ending at the boundary, on the same generation and
+    /// scope. Run before <see cref="BuildDeleteGenerationsFrom"/> on a watermark rewind — the rows
+    /// before the boundary are not rewound and stay on their recomputed generation, so they need a
+    /// pointer; without one every reader would look for them at generation 0 and find nothing. If an
+    /// entry with exactly the truncated range already exists, the higher generation is kept.
+    /// </summary>
+    public static string BuildTruncateStraddlingPointers(string genMapTable, DateTime fromBucketEnd)
+    {
+        var boundary = ToEpochMs(fromBucketEnd);
+        return
+            $"INSERT INTO {genMapTable} (\"range_start\", \"range_end\", \"rtid_scope\", \"{Constants.Generation}\") " +
+            $"SELECT \"range_start\", {boundary}, \"rtid_scope\", \"{Constants.Generation}\" FROM {genMapTable} " +
+            $"WHERE \"range_start\" < {boundary} AND \"range_end\" > {boundary} " +
+            $"ON CONFLICT (\"range_start\", \"range_end\", \"rtid_scope\") DO UPDATE SET " +
+            $"\"{Constants.Generation}\" = GREATEST(\"{Constants.Generation}\", excluded.\"{Constants.Generation}\");";
+    }
+
+    /// <summary>
+    /// Builds the delete of all active-generation entries whose range reaches past
     /// <paramref name="fromBucketEnd"/> — i.e. <c>range_end &gt; fromBucketEnd</c>. Used when a rollup
     /// watermark is rewound over a recomputed range (AB#4184, Phase 6): clearing these entries lets
     /// the forward re-aggregation (generation 0) become the active generation again. Entries entirely
-    /// before the boundary (not rewound) are kept. An entry that straddles the boundary is removed in
-    /// full, so its pre-boundary part also falls back to generation 0 — align rewind boundaries with
-    /// recompute-range boundaries to avoid losing the non-rewound part.
+    /// before the boundary (not rewound) are kept. An entry that straddles the boundary is removed
+    /// too; <see cref="BuildTruncateStraddlingPointers"/> runs first and leaves its part before the
+    /// boundary behind as an entry of its own.
     /// </summary>
     public static string BuildDeleteGenerationsFrom(string genMapTable, DateTime fromBucketEnd) =>
         $"DELETE FROM {genMapTable} WHERE \"range_end\" > {ToEpochMs(fromBucketEnd)};";

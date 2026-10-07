@@ -94,6 +94,9 @@ internal static class CrateTypeMapper
         AttributeValueTypesDto.DateTimeOffset => new CrateColumnType.Primitive("TIMESTAMP WITH TIME ZONE"),
         AttributeValueTypesDto.TimeSpan => new CrateColumnType.Primitive("BIGINT"),
         AttributeValueTypesDto.GeospatialPoint => new CrateColumnType.Primitive("GEO_POINT"),
+        // AB#5533: Secret attributes never become CrateDB columns.
+        AttributeValueTypesDto.Secret => throw new ArgumentException(
+            "Secret attributes cannot be archived and have no CrateDB column mapping.", nameof(type)),
         _ => throw new ArgumentException(
             $"Attribute value type '{type}' has no CrateDB primitive mapping for archive columns.",
             nameof(type)),

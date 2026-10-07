@@ -626,7 +626,8 @@ internal sealed class MongoCommandObservability
     }
 
     /// <summary>
-    /// Truncates the BSON-as-JSON representation so it fits within <paramref name="maxBytes"/>
+    /// Truncates the BSON-as-JSON representation (secret envelopes redacted, see
+    /// <see cref="MongoCommandSecretRedactor"/>) so it fits within <paramref name="maxBytes"/>
     /// bytes when UTF-8 encoded — i.e. the same byte budget the log sink will spend. Naïve
     /// char-based truncation under-counts non-ASCII content (each German umlaut is 2 UTF-8 bytes,
     /// emoji are 4) and can also split a UTF-16 surrogate pair, producing an invalid string.
@@ -646,7 +647,11 @@ internal sealed class MongoCommandObservability
         string json;
         try
         {
-            json = command.ToJson();
+            // AB#5533: stored secret envelopes ({ _t: "OctoSecret", e: "enc:v2:..." }) must never
+            // reach the slow-query buffer (served to tenant admins), the WARN log or the explain
+            // preview. Redaction runs before truncation and only walks the document when the
+            // serialized JSON mentions a secret; a failed redaction drops the preview.
+            json = MongoCommandSecretRedactor.ToRedactedJson(command);
         }
         catch (ObjectDisposedException)
         {

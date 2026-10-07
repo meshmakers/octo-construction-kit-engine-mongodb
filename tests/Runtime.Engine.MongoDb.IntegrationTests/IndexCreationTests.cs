@@ -42,6 +42,8 @@ public class IndexCreationTests
         public const string AbstractRootTypeName = "AbstractRoot";
         public const string ConcreteChildTypeName = "ConcreteChild";
         public const string ConcreteChildModelName = "ConcreteChildModel";
+        public const string FormerOwnerModelName = "FormerOwnerModel";
+        public const string RemainingChildTypeName = "RemainingChild";
     }
 
     private static CkId<CkTypeId> GetSimpleTypeId(string modelName) => new($"{modelName}/{Constants.SimpleTypeName}");
@@ -637,6 +639,54 @@ public class IndexCreationTests
         }
     }
 
+    [Fact]
+    public async Task ImportCkModel_AfterTypeMovedToAnotherModel_ShouldKeepTheNewIndexAndDropTheFormerOne()
+    {
+        // Arrange - Create child tenant
+        var systemContext = _fixture.GetSystemContext();
+        var tenantId = $"IT_{Guid.NewGuid():N}"[..20];
+
+        using (var adminSession = await systemContext.GetAdminSessionAsync())
+        {
+            adminSession.StartTransaction();
+            await systemContext.CreateChildTenantAsync(adminSession, tenantId, tenantId);
+            await adminSession.CommitTransactionAsync();
+        }
+
+        try
+        {
+            var tenantContext = await systemContext.GetChildTenantContextAsync(tenantId);
+            var rootModelVersion = GetModelVersion(Constants.AbstractRootModelName);
+            var newOwnerModelVersion = GetModelVersion(Constants.ConcreteChildModelName);
+
+            // Arrange - The type lives in one model, then a second model brings the same type with the same index
+            // into the same collection, as EnergyCommunity 3.x and Basic.Energy both declare MeteringPoint
+            await tenantContext.ImportCkModelAsync(CreateAbstractRootModel(rootModelVersion, includeConcreteChild: false));
+            await tenantContext.ImportCkModelAsync(CreateConcreteChildModel(
+                GetModelVersion(Constants.FormerOwnerModelName), rootModelVersion));
+            await tenantContext.ImportCkModelAsync(CreateConcreteChildModel(newOwnerModelVersion, rootModelVersion));
+
+            // Act - The former owner drops the type with its next version
+            await tenantContext.ImportCkModelAsync(CreateModelWithoutIndexedChild(
+                GetModelVersion(Constants.FormerOwnerModelName, "2.0.0"), rootModelVersion));
+
+            // Assert
+            var childIndexName = Assert.Single(await GetAbstractRootIndexNamesAsync(tenantId),
+                n => n.EndsWith($"{Constants.ConcreteChildTypeName}_0"));
+            Assert.StartsWith(Constants.ConcreteChildModelName, childIndexName);
+            await AssertConcreteChildUniqueIndexEnforcedAsync(tenantContext.GetTenantRepository(),
+                new CkId<CkTypeId>($"{newOwnerModelVersion}/{Constants.ConcreteChildTypeName}"));
+        }
+        finally
+        {
+            // Cleanup - Delete child tenant
+            using var cleanupSession = await systemContext.GetAdminSessionAsync();
+            cleanupSession.StartTransaction();
+            await systemContext.DropChildTenantAsync(cleanupSession, tenantId);
+            await cleanupSession.CommitTransactionAsync();
+        }
+    }
+
     private async Task<string> GetAbstractRootCollectionNameAsync(string tenantId)
     {
         var collectionNames = await (await GetTenantMongoDatabase(tenantId)
@@ -760,6 +810,26 @@ public class IndexCreationTests
                 },
             ],
             Types = [CreateConcreteChildType(modelVersion, rootModelVersion)]
+        };
+    }
+
+    /// <summary>
+    /// Creates a CK model holding one concrete type without indexes, derived from the abstract root of another model
+    /// </summary>
+    private static CkCompiledModelRoot CreateModelWithoutIndexedChild(string modelVersion, string rootModelVersion)
+    {
+        return new CkCompiledModelRoot
+        {
+            ModelId = new CkModelId(modelVersion),
+            Dependencies = [SystemCkIds.CkModelId, new CkModelId(rootModelVersion)],
+            Types =
+            [
+                new()
+                {
+                    TypeId = new CkTypeId(Constants.RemainingChildTypeName),
+                    DerivedFromCkTypeId = new CkId<CkTypeId>($"{rootModelVersion}/{Constants.AbstractRootTypeName}")
+                },
+            ]
         };
     }
 

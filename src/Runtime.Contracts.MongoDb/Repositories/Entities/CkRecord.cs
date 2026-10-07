@@ -52,4 +52,14 @@ public class CkRecord
     ///     An optional description of the record
     /// </summary>
     public string? Description { get; set; }
+
+    /// <summary>
+    ///     The record's own key sub-attribute (<c>CkRecordDto.RecordKey</c>, AB#5528 concept §4.6):
+    ///     names the sub-attribute that identifies an element of a record array, used to carry Secret
+    ///     sub-values over when the array is replaced. <c>null</c> when the record declares none (an
+    ///     inherited key is resolved by the CK graph, not stored here). Must round-trip through the
+    ///     database, otherwise the runtime CK cache reads <c>null</c> (AB#5533, same failure class as
+    ///     AB#4589).
+    /// </summary>
+    public string? RecordKey { get; set; }
 }

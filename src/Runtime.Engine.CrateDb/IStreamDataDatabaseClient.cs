@@ -1,4 +1,5 @@
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
+using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 
@@ -16,12 +17,28 @@ public interface IStreamDataDatabaseClient
     /// are silently dropped on the data plane (they would have been rejected at activation time
     /// during DDL generation).
     /// </summary>
-    Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint);
+    /// <param name="conflictPrecedence">
+    /// Opt-in conflict resolution (System.StreamData 1.13.0): the archive's
+    /// <c>ConflictPrecedence</c>, each key naming one of <paramref name="userColumnNames" /> plus the
+    /// direction of it that counts as better. Empty or null leaves the conflict update unconditional
+    /// (last write wins, the historical behaviour). Otherwise competing writes are compared
+    /// lexicographically in key order and the better one survives, so the stored value stops
+    /// depending on the order deliveries arrive in.
+    /// </param>
+    Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null);
 
     /// <summary>
-    /// Bulk variant of <see cref="InsertDataAsync(string, string, IReadOnlyList{string}, DataPointDto)"/>.
+    /// Bulk variant of <see cref="InsertDataAsync(string, string, IReadOnlyList{string}, DataPointDto, IReadOnlyList{ArchiveConflictKey})"/>.
     /// </summary>
-    Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints);
+    /// <param name="conflictPrecedence">
+    /// Opt-in conflict resolution (System.StreamData 1.13.0): the archive's
+    /// <c>ConflictPrecedence</c>, each key naming one of <paramref name="userColumnNames" /> plus the
+    /// direction of it that counts as better. Empty or null leaves the conflict update unconditional
+    /// (last write wins, the historical behaviour). Otherwise competing writes are compared
+    /// lexicographically in key order and the better one survives, so the stored value stops
+    /// depending on the order deliveries arrive in.
+    /// </param>
+    Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null);
 
     /// <summary>
     /// Inserts time-range data points into a windowed archive table. Schema is the
@@ -36,7 +53,15 @@ public interface IStreamDataDatabaseClient
     /// (AB#4773: archive data import into rollup tables collapses onto the always-live generation 0).
     /// Time-range archive tables have no generation column and pass false.
     /// </param>
-    Task InsertTimeRangeDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false);
+    /// <param name="conflictPrecedence">
+    /// Opt-in conflict resolution (System.StreamData 1.13.0): the archive's
+    /// <c>ConflictPrecedence</c>, each key naming one of <paramref name="userColumnNames" /> plus the
+    /// direction of it that counts as better. Empty or null leaves the conflict update unconditional
+    /// (last write wins, the historical behaviour). Otherwise competing writes are compared
+    /// lexicographically in key order and the better one survives, so the stored value stops
+    /// depending on the order deliveries arrive in.
+    /// </param>
+    Task InsertTimeRangeDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null);
 
     /// <summary>
     /// Get data from the stream data database.
@@ -46,8 +71,8 @@ public interface IStreamDataDatabaseClient
     /// <summary>
     /// Streams the raw rows of an arbitrary read query without buffering the whole result set in
     /// memory. Each row is yielded as a case-preserving dictionary of physical CrateDB column name →
-    /// value, exactly as the driver returns it. Used by the archive-data export path (AB#4230) which
-    /// drives keyset pagination at the caller and needs the physical columns verbatim (no DTO
+    /// value, exactly as the driver returns it. Used by the archive-data export path (AB#4230), which
+    /// reads an archive as consecutive time slices and needs the physical columns verbatim (no DTO
     /// projection). The connection is held open for the duration of the enumeration.
     /// </summary>
     IAsyncEnumerable<IReadOnlyDictionary<string, object?>> StreamRawRowsAsync(
@@ -57,6 +82,13 @@ public interface IStreamDataDatabaseClient
     /// Executes a COUNT query and returns the total number of matching rows.
     /// </summary>
     Task<long> GetCountAsync(string tenantId, string countQuery);
+
+    /// <summary>
+    /// Executes a COUNT query and returns the total number of matching rows; the token cancels
+    /// the wait for a connection and the statement. For callers that send many counts in a loop
+    /// that must stay cancellable (the archive export counts every slice before reading it).
+    /// </summary>
+    Task<long> GetCountAsync(string tenantId, string countQuery, CancellationToken cancellationToken);
 
     /// <summary>
     /// Executes a non-query SQL statement (INSERT / UPDATE / DELETE / upsert) and returns the
