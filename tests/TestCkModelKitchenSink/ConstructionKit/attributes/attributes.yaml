@@ -1,0 +1,14 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+attributes:
+  - id: Name
+    valueType: String
+  - id: Alias
+    valueType: String
+  - id: Code
+    valueType: String
+  - id: Secret
+    valueType: String
+    ownership: Secret
+  - id: Mode
+    valueType: Enum
+    valueCkEnumId: ${this}/Mode

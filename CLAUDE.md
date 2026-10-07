@@ -1323,15 +1323,18 @@ above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before a
 
 - `CkMetaModelRoundTripTests`: import → `TryLookupCkModelAsync` → compare the read-back with the compiled DTO
   as JSON over **all public properties** (`CkModelJsonComparer`, no hand-written field list). Corpus: installed
-  System, `Test-1.0.0` and the C#-built `CkV2KitchenSinkModel` (the MSBuild-compiled YAML twin follows with P5).
+  System, `Test-1.0.0`, the MSBuild-compiled YAML kitchen sink `KitchenSink-1.0.0` (`tests/TestCkModelKitchenSink`,
+  registered via `AddCkModelKitchenSinkV1()` in `CkModelImportMigrationFixture`) and its C#-built twin
+  `CkV2KitchenSinkModel` (`KitchenSinkCs-1.0.0`, also used for the next-version replacement test).
   A new DTO property that is not persisted fails here by itself. `RoundTripIgnoredPaths` lists what is
   legitimately not stored, each with a justification: `$schema`, `migrations`, `dependencies` /
   `dependencyRanges` (F0.2 owns them) and the **pre-existing** gap `types[*].indexes` (type indexes are
   persisted on the entity and consumed from there, but have never been read back — found by this gate,
   reported, not changed in Phase 0). `defaultValues` / `autoCompleteValues` scalars compare by invariant text
   because the import converts them to the attribute's value type by design.
-- `CkMetaModelCacheRoundTripTests`: the cache rebuilt from Mongo exposes interfaces, implements, methods
-  (field by field), `access` at all three assignment sites and `ckLanguage`.
+- `CkMetaModelCacheRoundTripTests`: the cache rebuilt from Mongo (YAML kitchen sink) exposes interfaces,
+  declared AND inherited implements / methods (`AllImplementedInterfaces`, `AllMethods`, `ImplementingTypes`),
+  methods field by field, `access` at all three assignment sites and `ckLanguage`.
 - `CkMetaModelLegacyDocumentTests`: BSON only — classic element sets, pre-v2 documents read back as
   `null`/default, every method field and the new collections round-trip.
 
@@ -1853,6 +1856,14 @@ Europe (Continent)
         ├── Lienz, Landeck (Districts - active)
         └── Imst, Kitzbühel (Districts - Archived)
 ```
+
+### CK v2 Kitchen Sink (AB#5667 / AB#5668 / AB#5669)
+
+`TestCkModelKitchenSink` (`KitchenSink-1.0.0`, `ckLanguage: 2`) uses every CK v2 Phase 0 construct: interfaces
+`Named-1` (required + optional member) and `Coded-1`; abstract `Thing` implements Named, `Gadget` derives from
+Thing (inherits Named) and implements Coded, unrelated `Widget` implements Named; all four `access` values on type,
+record (`Address`) and association-role (`Link`) assignments; methods `ChangePassword-2` (every field),
+`Reindex-1` (static) and `Ping-1` (minimal) on Thing. Extend it whenever a new meta-model field is added.
 
 ### Migration Test Data
 

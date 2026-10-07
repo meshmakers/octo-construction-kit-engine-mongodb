@@ -1,0 +1,24 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+associationRoles:
+  - id: Link
+    inboundName: LinkedFrom
+    inboundMultiplicity: N
+    outboundName: LinksTo
+    outboundMultiplicity: N
+    attributes:
+      - id: ${this}/Alias
+        name: Alias
+        isOptional: true
+        access: ReadWrite
+      - id: ${this}/Code
+        name: Code
+        isOptional: true
+        access: ReadOnly
+      - id: ${this}/Mode
+        name: Mode
+        isOptional: true
+        access: MethodOnly
+      - id: ${this}/Secret
+        name: Secret
+        isOptional: true
+        access: Hidden

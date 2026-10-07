@@ -1,0 +1,19 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+records:
+  - recordId: Address
+    attributes:
+      - id: ${this}/Name
+        name: Name
+        isOptional: true
+      - id: ${this}/Alias
+        name: Alias
+        isOptional: true
+        access: ReadOnly
+      - id: ${this}/Code
+        name: Code
+        isOptional: true
+        access: MethodOnly
+      - id: ${this}/Secret
+        name: Secret
+        isOptional: true
+        access: Hidden

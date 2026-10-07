@@ -1,0 +1,14 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+interfaces:
+  - interfaceId: Named-1
+    description: things with a name
+    attributes:
+      - id: ${this}/Name
+        name: Name
+      - id: ${this}/Alias
+        name: Alias
+        isOptional: true
+  - interfaceId: Coded-1
+    attributes:
+      - id: ${this}/Code
+        name: Code

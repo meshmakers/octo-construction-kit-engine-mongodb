@@ -1,0 +1,77 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+types:
+  # Abstract base implementing Named; declares the full and the minimal method.
+  - typeId: Thing
+    isAbstract: true
+    derivedFromCkTypeId: ${System}/Entity
+    implements:
+      - ${this}/Named-1
+    attributes:
+      - id: ${this}/Name
+        name: Name
+        access: ReadWrite
+      - id: ${this}/Alias
+        name: Alias
+        isOptional: true
+        access: ReadOnly
+      - id: ${this}/Secret
+        name: Secret
+        isOptional: true
+        access: Hidden
+    methods:
+      - methodId: ChangePassword-2
+        description: changes the password
+        parameters:
+          - name: newPassword
+            valueType: String
+            isOptional: true
+            sensitive: true
+            description: the new one
+          - name: address
+            valueType: Record
+            valueCkRecordId: ${this}/Address
+          - name: mode
+            valueType: Enum
+            valueCkEnumId: ${this}/Mode
+        result:
+          valueType: Enum
+          valueCkEnumId: ${this}/Mode
+        errors:
+          - code: PASSWORD_POLICY_VIOLATION
+            description: too weak
+        authorization:
+          roles: [ UserManagement ]
+          allowSelf: true
+          scopes: [ octo_api, extra ]
+        execution:
+          timeoutSeconds: 30
+          idempotent: true
+      - methodId: Ping-1
+      - methodId: Reindex-1
+        kind: Static
+        authorization:
+          roles: [ UserManagement ]
+  # Inherits Named from Thing and implements Coded itself.
+  - typeId: Gadget
+    derivedFromCkTypeId: ${this}/Thing
+    implements:
+      - ${this}/Coded-1
+    attributes:
+      - id: ${this}/Code
+        name: Code
+        access: MethodOnly
+    associations:
+      - id: ${this}/Link
+        targetCkTypeId: ${this}/Widget
+  # Unrelated type implementing Named.
+  - typeId: Widget
+    derivedFromCkTypeId: ${System}/Entity
+    implements:
+      - ${this}/Named-1
+    attributes:
+      - id: ${this}/Name
+        name: Name
+      - id: ${this}/Mode
+        name: Mode
+        isOptional: true
+        access: ReadOnly

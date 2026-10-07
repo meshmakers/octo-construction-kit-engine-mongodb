@@ -28,8 +28,10 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.RoundTrip;
 ///         Corpus: the installed System model, <c>Test-1.0.0</c> and a kitchen-sink v2 model that uses every
 ///         Phase 0 construct (ckLanguage 2, interfaces with required and optional members, declared and
 ///         inherited implements, all four access values on type / record / association-role assignments, a
-///         method with every field and a minimal one). Until the engine compiler hand-off H1b the kitchen sink
-///         is built in C# (<see cref="CkV2KitchenSinkModel" />); P5 adds the MSBuild-compiled YAML twin.
+///         method with every field, a static and a minimal one), twice: compiled by MSBuild from YAML
+///         (<c>tests/TestCkModelKitchenSink</c>, <c>KitchenSink-1.0.0</c>, through the real compiler and catalog)
+///         and built in C# (<see cref="CkV2KitchenSinkModel" />, <c>KitchenSinkCs-1.0.0</c>, which also sets
+///         combinations the YAML cannot express in one model).
 ///     </para>
 /// </summary>
 [Collection(CkModelImportMigrationCollection.Name)]
@@ -55,6 +57,31 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
                 Assert.NotNull(compiled);
                 await AssertRoundTripAsync(tenantId, compiled);
             }
+        });
+    }
+
+    internal static readonly CkModelId YamlKitchenSinkModelId = new("KitchenSink-1.0.0");
+
+    [Fact]
+    public async Task CkV2YamlKitchenSink_SurvivesTheMongoRoundTrip()
+    {
+        await WithThrowawayTenantAsync("rtv2yaml", async (tenant, tenantId) =>
+        {
+            var operationResult = new OperationResult();
+            await tenant.ImportCkModelAsync(YamlKitchenSinkModelId, operationResult);
+            Assert.False(operationResult.HasErrors, string.Join("; ", operationResult.Messages));
+
+            var compiled = await fixture.GetService<ICatalogService>()
+                .GetAsync(YamlKitchenSinkModelId, new OperationResult());
+            Assert.NotNull(compiled);
+            // Guard against a vacuous pass: the compiled model really carries every v2 construct.
+            Assert.Equal(2, compiled.CkLanguage);
+            Assert.Equal(2, compiled.Interfaces!.Count);
+            Assert.Equal(3, compiled.Types!.Count(t => t.Implements is { Count: > 0 }));
+            Assert.Equal(3, compiled.Types!.Single(t => t.TypeId.Name == "Thing").Methods!.Count);
+            Assert.Equal(3, compiled.Records!.Single().Attributes!.Count(a => a.Access != null));
+
+            await AssertRoundTripAsync(tenantId, compiled);
         });
     }
 
@@ -126,26 +153,26 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
                 .SingleAsync(TestContext.Current.CancellationToken);
             Assert.Equal(2, model["ckLanguage"].AsInt32);
 
-            Assert.Equal(["KitchenSink-1.0.0/Coded-1", "KitchenSink-1.0.0/Named-1"],
+            Assert.Equal(["KitchenSinkCs-1.0.0/Coded-1", "KitchenSinkCs-1.0.0/Named-1"],
                 await IdsAsync(database, "CkInterface", "_id"));
             Assert.Equal(
             [
-                "KitchenSink-1.0.0/Gadget-1 -> KitchenSink-1.0.0/Coded-1",
-                "KitchenSink-1.0.0/Thing-1 -> KitchenSink-1.0.0/Named-1",
-                "KitchenSink-1.0.0/Widget-1 -> KitchenSink-1.0.0/Named-1"
+                "KitchenSinkCs-1.0.0/Gadget-1 -> KitchenSinkCs-1.0.0/Coded-1",
+                "KitchenSinkCs-1.0.0/Thing-1 -> KitchenSinkCs-1.0.0/Named-1",
+                "KitchenSinkCs-1.0.0/Widget-1 -> KitchenSinkCs-1.0.0/Named-1"
             ], await ImplementationsAsync(database));
 
             // The next version drops one implements entry and one interface: nothing of 1.0.0 is left behind.
-            var next = CkV2KitchenSinkModel.Build(systemId, new CkModelId("KitchenSink-1.1.0"));
+            var next = CkV2KitchenSinkModel.Build(systemId, new CkModelId("KitchenSinkCs-1.1.0"));
             next.Interfaces!.RemoveAll(i => i.InterfaceId.Name == "Coded");
             next.Types!.Single(t => t.TypeId.Name == "Gadget").Implements = null;
             await tenant.ImportCkModelAsync(next);
 
-            Assert.Equal(["KitchenSink-1.1.0/Named-1"], await IdsAsync(database, "CkInterface", "_id"));
+            Assert.Equal(["KitchenSinkCs-1.1.0/Named-1"], await IdsAsync(database, "CkInterface", "_id"));
             Assert.Equal(
             [
-                "KitchenSink-1.1.0/Thing-1 -> KitchenSink-1.1.0/Named-1",
-                "KitchenSink-1.1.0/Widget-1 -> KitchenSink-1.1.0/Named-1"
+                "KitchenSinkCs-1.1.0/Thing-1 -> KitchenSinkCs-1.1.0/Named-1",
+                "KitchenSinkCs-1.1.0/Widget-1 -> KitchenSinkCs-1.1.0/Named-1"
             ], await ImplementationsAsync(database));
             Assert.All(await database.GetCollection<BsonDocument>("CkTypeInterfaceImplementation")
                     .Find(FilterDefinition<BsonDocument>.Empty).ToListAsync(TestContext.Current.CancellationToken),

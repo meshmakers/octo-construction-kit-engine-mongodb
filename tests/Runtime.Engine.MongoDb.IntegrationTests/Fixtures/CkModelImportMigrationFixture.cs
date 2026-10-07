@@ -15,6 +15,8 @@ public class CkModelImportMigrationFixture : SystemFixture
     {
         // Register TestCkModel v2 in addition to v1 (already registered in base)
         Services.AddCkModelTestV2();
+        // CK v2 Phase 0 (AB#5667/5668/5669): MSBuild-compiled kitchen sink for the RoundTrip/ gate.
+        Services.AddCkModelKitchenSinkV1();
     }
 
     /// <summary>

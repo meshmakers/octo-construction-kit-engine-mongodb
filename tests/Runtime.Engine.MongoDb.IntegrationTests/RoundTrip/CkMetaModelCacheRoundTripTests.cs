@@ -24,8 +24,11 @@ public class CkMetaModelCacheRoundTripTests(CkModelImportMigrationFixture fixtur
         var helper = new CkMetaModelRoundTripTests(fixture);
         await helper.WithThrowawayTenantAsync("rtv2cache", async (tenant, tenantId) =>
         {
-            var modelId = CkV2KitchenSinkModel.ModelId;
-            await tenant.ImportCkModelAsync(CkV2KitchenSinkModel.Build(await helper.GetInstalledSystemIdAsync(tenant)));
+            // The MSBuild-compiled YAML kitchen sink: imported through the catalog like a real model.
+            var modelId = CkMetaModelRoundTripTests.YamlKitchenSinkModelId;
+            var operationResult = new OperationResult();
+            await tenant.ImportCkModelAsync(modelId, operationResult);
+            Assert.False(operationResult.HasErrors, string.Join("; ", operationResult.Messages));
 
             var cacheService = fixture.GetService<ICkCacheService>();
             if (cacheService.IsTenantLoaded(tenantId))
@@ -49,6 +52,17 @@ public class CkMetaModelCacheRoundTripTests(CkModelImportMigrationFixture fixtur
             Assert.Equal([new CkId<CkInterfaceId>(modelId, new CkInterfaceId("Coded-1"))], gadget.DeclaredImplements);
             var thing = cacheService.GetRtCkType(tenantId, new RtCkId<CkTypeId>("KitchenSink/Thing"));
             Assert.Equal([new CkId<CkInterfaceId>(modelId, new CkInterfaceId("Named-1"))], thing.DeclaredImplements);
+
+            // Inherited views, resolved by the engine graph from the read-back (only DECLARED rows are stored)
+            Assert.Equal(["Coded-1", "Named-1"],
+                gadget.AllImplementedInterfaces.Select(i => i.ElementId.FullName).Order(StringComparer.Ordinal));
+            Assert.Equal(["ChangePassword-2", "Ping-1", "Reindex-1"], gadget.AllMethods.Keys.Order(StringComparer.Ordinal));
+            Assert.Equal("KitchenSink/Thing.ChangePassword-2", gadget.AllMethods["ChangePassword-2"].QualifiedMethodId);
+            Assert.Equal(["Gadget", "Thing", "Widget"],
+                named.ImplementingTypes.Select(t => t.ElementId.Name).Order(StringComparer.Ordinal));
+            var widgetGraph = cacheService.GetRtCkType(tenantId, new RtCkId<CkTypeId>("KitchenSink/Widget"));
+            Assert.Empty(widgetGraph.AllMethods);
+            Assert.Equal(["Named-1"], widgetGraph.AllImplementedInterfaces.Select(i => i.ElementId.FullName));
 
             // Declared methods (AB#5669), field by field
             Assert.Equal(["ChangePassword-2", "Ping-1", "Reindex-1"],

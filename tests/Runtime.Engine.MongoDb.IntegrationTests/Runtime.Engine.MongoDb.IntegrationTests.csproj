@@ -66,6 +66,7 @@
         <ProjectReference Include="..\..\src\Runtime.Engine.CrateDb\Runtime.Engine.CrateDb.csproj" />
         <ProjectReference Include="..\TestCkModel\TestCkModel.csproj" />
         <ProjectReference Include="..\TestCkModelV2\TestCkModelV2.csproj" />
+        <ProjectReference Include="..\TestCkModelKitchenSink\TestCkModelKitchenSink.csproj" />
     </ItemGroup>
 
 </Project>

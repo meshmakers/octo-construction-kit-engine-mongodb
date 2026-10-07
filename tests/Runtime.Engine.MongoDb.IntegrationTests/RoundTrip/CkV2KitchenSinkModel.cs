@@ -18,7 +18,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.RoundTrip;
 /// </summary>
 internal static class CkV2KitchenSinkModel
 {
-    internal static readonly CkModelId ModelId = new("KitchenSink-1.0.0");
+    internal static readonly CkModelId ModelId = new("KitchenSinkCs-1.0.0");
 
     internal static CkCompiledModelRoot Build(CkModelId systemId, CkModelId? modelId = null)
     {
@@ -107,8 +107,8 @@ internal static class CkV2KitchenSinkModel
                 new CkAssociationRoleDto
                 {
                     AssociationRoleId = new CkAssociationRoleId("Link-1"),
-                    InboundName = "linkedFrom",
-                    OutboundName = "linksTo",
+                    InboundName = "LinkedFrom",
+                    OutboundName = "LinksTo",
                     InboundMultiplicity = MultiplicitiesDto.N,
                     OutboundMultiplicity = MultiplicitiesDto.N,
                     Attributes =

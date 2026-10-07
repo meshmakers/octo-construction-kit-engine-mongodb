@@ -1,0 +1,8 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-meta.schema.json"
+# CK v2 Phase 0 kitchen sink (AB#5667 / AB#5668 / AB#5669): every new construct with every field set, so the
+# MongoDB round-trip gate (tests/.../RoundTrip) sees each of them. YAML twin of RoundTrip/CkV2KitchenSinkModel.cs.
+modelId: "KitchenSink-1.0.0"
+ckLanguage: 2
+description: "CK v2 Phase 0 kitchen sink"
+dependencies:
+  - System-[2.5,3.0)
