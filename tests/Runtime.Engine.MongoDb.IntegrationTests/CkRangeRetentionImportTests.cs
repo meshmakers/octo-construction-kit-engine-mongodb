@@ -7,6 +7,10 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+using Meshmakers.Octo.ConstructionKit.Engine.Resolvers.Repository;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -116,6 +120,173 @@ public class CkRangeRetentionImportTests(CkModelImportMigrationFixture fixture)
         }
     }
 
+    /// <summary>
+    ///     D3 / review M6: index maintenance works on the persisted rows, where a range-retaining model stores
+    ///     its base types major-qualified. The collection root RrBase/Thing (base System@N/Entity) must get the
+    ///     System Entity index, and the index declared on the derived RangeDep/Gadget (base RrBase@1/Thing,
+    ///     attribute System@N/Name) must land in Thing's collection.
+    /// </summary>
+    [Fact]
+    public async Task RangeRetainingTypes_IndexMaintenanceFollowsMajorQualifiedBaseTypes()
+    {
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = $"rangeidx{Guid.NewGuid():N}"[..20];
+        try
+        {
+            await CreateChildAsync(tenantId);
+            var tenant = await GetChildAsync(tenantId);
+            var system = await GetInstalledSystemIdAsync(tenant);
+            var database = GetTenantDatabase(tenantId);
+
+            await tenant.ImportCkModelAsync(BuildBase("RrBase-1.0.0", system, withExtra: false));
+            await tenant.ImportCkModelAsync(BuildDependent("RangeDep-1.0.0", "RrBase-1.0.0", system,
+                rangeRetaining: true));
+
+            var collectionName = (await (await database.ListCollectionNamesAsync(
+                        cancellationToken: TestContext.Current.CancellationToken))
+                    .ToListAsync(TestContext.Current.CancellationToken))
+                .Single(n => n.EndsWith("RrBaseThing", StringComparison.Ordinal));
+            var indexes = await (await database.GetCollection<BsonDocument>(collectionName).Indexes
+                    .ListAsync(TestContext.Current.CancellationToken))
+                .ToListAsync(TestContext.Current.CancellationToken);
+            var names = indexes.Select(i => i["name"].AsString).ToList();
+            var keys = indexes.Select(i => i["key"].AsBsonDocument.Names.ToList()).ToList();
+
+            Assert.Contains(names, n => n.StartsWith("SystemEntity", StringComparison.Ordinal));
+            Assert.Contains(keys, k => k.Any(f => f.Contains("label", StringComparison.OrdinalIgnoreCase)));
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(systemContext, tenantId);
+        }
+    }
+
+    /// <summary>
+    ///     F0.2 scenario (E2E D2): an additive System minor imported into a tenant that holds exact-pinned AND
+    ///     range-retaining models. The exact pins on the old System go ResolveFailed, the range-retaining models
+    ///     stay Available, and the import itself must not throw ("Sequence contains more than one matching
+    ///     element" before the D2 fix).
+    /// </summary>
+    [Fact]
+    public async Task AdditiveSystemMinor_MixedExactAndRangeModels_RangeModelsStayAvailable()
+    {
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = $"rangesys{Guid.NewGuid():N}"[..20];
+        try
+        {
+            await CreateChildAsync(tenantId);
+            var tenant = await GetChildAsync(tenantId);
+            var system = await GetInstalledSystemIdAsync(tenant);
+            var database = GetTenantDatabase(tenantId);
+
+            // Exact pins first (like the service models System.Bot / System.Communication), then range models.
+            await tenant.ImportCkModelAsync(ExactOnSystem("ExactBot-3.4.0", system));
+            await tenant.ImportCkModelAsync(ExactOnSystem("ExactComm-3.40.0", system,
+                new CkModelId("ExactBot-3.4.0")));
+            await tenant.ImportCkModelAsync(BuildBase("RrBase-1.0.0", system, withExtra: false));
+            await tenant.ImportCkModelAsync(BuildDependent("RangeDep-1.0.0", "RrBase-1.0.0", system,
+                rangeRetaining: true));
+            Assert.Equal("ExactBot-3.4.0=1, ExactComm-3.40.0=1, RrBase-1.0.0=1, RangeDep-1.0.0=1",
+                await StatesAsync(database, "ExactBot", "ExactComm", "RrBase", "RangeDep"));
+
+            // Import through the CK model repository (ExecuteImport → ValidateDependencies, where D2 threw).
+            // The tenant-level ImportCkModelAsync would afterwards re-import the host's EMBEDDED System 2.5.0
+            // (TenantContext.UpdateSystemCkModelAsync has no downgrade guard) — in production every service
+            // embeds the new System, in this test host only the old one exists.
+            var nextSystem = await NextSystemMinorAsync(system);
+            var dataSource = new MongoDbRepositoryDataSource(NullLogger<MongoDbRepositoryDataSource>.Instance,
+                fixture.GetService<IAdminRepositoryAccess>().GetRepositoryClient(tenantId.ToLowerInvariant()),
+                tenantId.ToLowerInvariant(), tenantId);
+            await fixture.GetService<IDatabaseCkModelRepository>().UpdateModelAsync(nextSystem,
+                new TenantDatabaseSourceIdentifier(null, dataSource, tenantId));
+
+            Assert.Equal(
+                $"{nextSystem.ModelId}=1, ExactBot-3.4.0=2, ExactComm-3.40.0=2, RrBase-1.0.0=1, RangeDep-1.0.0=1",
+                await StatesAsync(database, "System", "ExactBot", "ExactComm", "RrBase", "RangeDep"));
+
+            // The runtime graph of the range-retaining models binds to the new System (cache built from Mongo).
+            var graph = await fixture.GetService<IRepositoryModelResolver>().HardResolveAsync(
+                [new CkModelId("RangeDep-1.0.0")], new OriginFileResolver("-"), new OperationResult(),
+                new TenantDatabaseSourceIdentifier(null, dataSource, tenantId));
+            Assert.Equal($"{nextSystem.ModelId.FullName}/Entity-1",
+                graph.Types[new CkId<CkTypeId>("RrBase-1.0.0/Thing-1")].DerivedFromCkTypeId!.FullName);
+            Assert.Equal("RrBase-1.0.0/Thing-1",
+                graph.Types[new CkId<CkTypeId>("RangeDep-1.0.0/Gadget-1")].DerivedFromCkTypeId!.FullName);
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(systemContext, tenantId);
+        }
+    }
+
+    private static CkCompiledModelRoot ExactOnSystem(string modelId, CkModelId system, params CkModelId[] more)
+    {
+        var id = new CkModelId(modelId);
+        return new CkCompiledModelRoot
+        {
+            ModelId = id,
+            Description = "AB#5665 exact-pinned model on System",
+            Dependencies = [system, .. more],
+            Types =
+            [
+                new CkCompiledTypeDto
+                {
+                    TypeId = new CkTypeId($"{id.Name}Thing-1"),
+                    DerivedFromCkTypeId = new CkId<CkTypeId>(system, new CkTypeId("Entity-1"))
+                }
+            ]
+        };
+    }
+
+    /// <summary>The installed System re-versioned as the next minor with one additive optional attribute.</summary>
+    private async Task<CkCompiledModelRoot> NextSystemMinorAsync(CkModelId system)
+    {
+        var copy = (await fixture.GetService<ICatalogService>().GetAsync(system, new OperationResult()))!;
+        var next = new CkModelId(system.Name, new CkVersion(system.Version.Major, system.Version.Minor + 1, 0));
+        copy.ModelId = next;
+        RewriteOwnReferences(copy, system, next);
+        copy.Attributes!.Add(new CkAttributeDto
+        {
+            AttributeId = new CkAttributeId("RangeRetentionDemo-1"), ValueType = AttributeValueTypesDto.String
+        });
+        return copy;
+    }
+
+    private static void RewriteOwnReferences(CkCompiledModelRoot model, CkModelId from, CkModelId to)
+    {
+        CkId<T>? Map<T>(CkId<T>? id) where T : IComparable<T>, ICkElementId =>
+            id != null && id.ModelId == from ? new CkId<T>(to, id.ElementId) : id;
+
+        foreach (var attribute in model.Attributes ?? [])
+        {
+            attribute.ValueCkEnumId = Map(attribute.ValueCkEnumId);
+            attribute.ValueCkRecordId = Map(attribute.ValueCkRecordId);
+        }
+
+        foreach (var role in model.AssociationRoles ?? [])
+        {
+            role.Attributes?.ForEach(a => a.CkAttributeId = Map(a.CkAttributeId)!);
+        }
+
+        foreach (var record in model.Records ?? [])
+        {
+            record.DerivedFromCkRecordId = Map(record.DerivedFromCkRecordId);
+            record.Attributes?.ForEach(a => a.CkAttributeId = Map(a.CkAttributeId)!);
+        }
+
+        foreach (var type in model.Types ?? [])
+        {
+            type.DerivedFromCkTypeId = Map(type.DerivedFromCkTypeId);
+            type.Attributes?.ForEach(a => a.CkAttributeId = Map(a.CkAttributeId)!);
+            foreach (var association in type.Associations ?? [])
+            {
+                association.CkRoleId = Map(association.CkRoleId)!;
+                association.TargetCkTypeId = Map(association.TargetCkTypeId)!;
+                association.TargetCkAttributeIds = association.TargetCkAttributeIds?.Select(a => Map(a)!).ToList();
+            }
+        }
+    }
+
     /// <summary>A base model: type Thing (derived from System@N/Entity) with an own attribute Code.</summary>
     private static CkCompiledModelRoot BuildBase(string modelId, CkModelId system, bool withExtra)
     {
@@ -145,6 +316,7 @@ public class CkRangeRetentionImportTests(CkModelImportMigrationFixture fixture)
                 new CkCompiledTypeDto
                 {
                     TypeId = new CkTypeId("Thing-1"),
+                    IsCollectionRoot = true,
                     DerivedFromCkTypeId = new CkId<CkTypeId>(systemMajor, new CkTypeId("Entity-1")),
                     Attributes =
                     [
@@ -187,7 +359,26 @@ public class CkRangeRetentionImportTests(CkModelImportMigrationFixture fixture)
                 new CkCompiledTypeDto
                 {
                     TypeId = new CkTypeId("Gadget-1"),
-                    DerivedFromCkTypeId = new CkId<CkTypeId>(baseRef, new CkTypeId("Thing-1"))
+                    DerivedFromCkTypeId = new CkId<CkTypeId>(baseRef, new CkTypeId("Thing-1")),
+                    // D3: an attribute of a dependency (major-qualified when range-retaining) carrying an index.
+                    Attributes =
+                    [
+                        new CkTypeAttributeDto
+                        {
+                            CkAttributeId = new CkId<CkAttributeId>(
+                                rangeRetaining ? system.ToMajorQualified() : system, new CkAttributeId("Name-1")),
+                            AttributeName = "Label",
+                            IsOptional = true
+                        }
+                    ],
+                    Indexes =
+                    [
+                        new CkTypeIndexDto
+                        {
+                            IndexType = IndexTypeDto.Ascending,
+                            Fields = [new CkIndexFieldsDto { AttributePaths = ["Label"] }]
+                        }
+                    ]
                 }
             ]
         };

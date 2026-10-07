@@ -1253,6 +1253,30 @@ by the engine resolvers (on a copy during import, so the version-less form is wh
 `ValidateSystemReferencesAsync` skips major-qualified references (nothing to compare; an uninstalled major
 fails reference resolution instead).
 
+**Index maintenance binds major-qualified rows (D3 / review M6).** Index maintenance runs on the persisted
+rows during an import, before any CK cache exists, and used to look the verbatim `System@2/Entity-1` up as a
+concrete id: "Base type 'System@2/Entity-1' not found", the base type's indexes were not created on the
+collection root, and a range-retaining type derived from a collection root was missing from the `$graphLookup`
+result (its declared indexes not created, unique-index filters wrong). `InstalledModelReferenceBinder` (built from
+the installed `CkModel` rows, `Available` + `Importing` during an import) binds them:
+- `CollectBaseTypesForCollectionRoots` binds every inheritance row's base id before walking the chain;
+- `BindMajorQualifiedInheritancesAsync` recomputes `CkTypeInfo.InheritedTypes` / `Inheritances` in memory (same
+  depth semantics as the `$graphLookup`) — **only when a major-qualified row exists**, so classic tenants keep the
+  database result unchanged;
+- `FetchAttributeMetadataAsync` adds `Name@Major/...` alias keys for attributes and records of the installed
+  versions (index attribute-path resolution through `DatabaseAttributeMetadataProvider`).
+The rows themselves stay verbatim (the read-back must round-trip). Pinned by
+`CkRangeRetentionImportTests.RangeRetainingTypes_IndexMaintenanceFollowsMajorQualifiedBaseTypes` (red before).
+
+**F0.2 scenario as integration test.** `AdditiveSystemMinor_MixedExactAndRangeModels_RangeModelsStayAvailable`
+imports an additive System minor (copy of the installed System, one more optional attribute) through
+`IDatabaseCkModelRepository.UpdateModelAsync` into a throwaway tenant holding exact-pinned models (the
+System.Bot / System.Communication shape) and range-retaining ones: exact pins go `ResolveFailed`, range-retaining
+models stay `Available` and resolve against the new System. Against the engine without the D2 fix it throws
+"Sequence contains more than one matching element" (the E2E failure). It uses the repository, not
+`ITenantContext.ImportCkModelAsync`, because the tenant path afterwards re-imports the host's **embedded** System
+(`UpdateSystemCkModelAsync`, no downgrade guard) — a live System bump needs every service to embed it.
+
 `ValidateDependencies` now logs, for every model it marks `ResolveFailed`, what is unmet
 (`DescribeUnmetDependencies`): `RrBase-[1.0,2.0) (floor 1.1.0): installed RrBase-1.0.0` for range-retaining
 models, `exact pin System-2.2.2: installed System-2.5.0` for classic ones.

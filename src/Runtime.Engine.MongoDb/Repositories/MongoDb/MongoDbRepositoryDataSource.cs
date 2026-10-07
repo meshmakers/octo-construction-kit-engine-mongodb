@@ -457,6 +457,10 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var ckTypeInfoList = await AggregateCkTypeInfo(aggregate).ToListAsync(effectiveToken);
         var collectionRootTypes = ckTypeInfoList.ToList();
 
+        // D3 / review M6: $graphLookup matches base and inheritor ids as strings; a range-retaining model stores
+        // its base major-qualified (System@2/Entity-1). Recompute the descendants in memory with bound ids.
+        await BindMajorQualifiedInheritancesAsync(session, collectionRootTypes, includeModelsInStateImporting);
+
         // Pre-fetch all base types for all collection roots to avoid long transactions
         var baseTypesMap =
             await CollectBaseTypesForCollectionRoots(session, collectionRootTypes, includeModelsInStateImporting);
@@ -510,8 +514,14 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             return result;
         }
 
-        // Bulk fetch ALL inheritances in one query
+        // Bulk fetch ALL inheritances in one query (D3: major-qualified base ids bound to installed versions)
+        var binder = await CreateReferenceBinderAsync(session, includeModelsInStateImporting);
         var allInheritances = await _ckTypeInheritances.FindManyAsync(session, x => true);
+        foreach (var inheritance in allInheritances)
+        {
+            inheritance.BaseCkTypeId = binder.Bind(inheritance.BaseCkTypeId);
+        }
+
         var inheritanceDict = allInheritances.ToLookup(x => x.InheritorCkTypeId, x => x);
 
         // Collect all type IDs that we might need (all collection roots + their potential base types)
@@ -600,11 +610,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         // Fetch all CkAttributes
         var allAttributes = await CkAttributes.FindManyAsync(session, _ => true);
-        var attributeDict = allAttributes.ToDictionary(a => a.CkAttributeId, a => a);
+        // D3: verbatim major-qualified attribute/record references of range-retaining models resolve via aliases.
+        var binder = await CreateReferenceBinderAsync(session, true);
+        var attributeDict = binder.WithMajorQualifiedAliases<CkAttributeId, CkAttribute>(
+            allAttributes.ToDictionary(a => a.CkAttributeId, a => a));
 
         // Fetch all CkRecords
         var allRecords = await CkRecords.FindManyAsync(session, _ => true);
-        var recordDict = allRecords.ToDictionary(r => r.CkRecordId, r => r);
+        var recordDict = binder.WithMajorQualifiedAliases<CkRecordId, CkRecord>(
+            allRecords.ToDictionary(r => r.CkRecordId, r => r));
 
         return (attributeDict, recordDict);
     }
@@ -1381,6 +1395,78 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             _logger.LogDebug("Dropping old index '{IndexName}' for RtAssociations collection",
                 repositoryIndex.Name);
             await collection.DropIndexAsync(repositoryIndex.Name);
+        }
+    }
+
+    private async Task<InstalledModelReferenceBinder> CreateReferenceBinderAsync(IOctoSession session,
+        bool includeModelsInStateImporting)
+    {
+        var models = await CkModels.FindManyAsync(session,
+            m => m.ModelState == ModelState.Available ||
+                 (includeModelsInStateImporting && m.ModelState == ModelState.Importing));
+        return new InstalledModelReferenceBinder(models.Select(m => m.Id));
+    }
+
+    /// <summary>
+    ///     D3 / review M6: recomputes <see cref="CkTypeInfo.InheritedTypes" /> and <see cref="CkTypeInfo.Inheritances" />
+    ///     of the collection roots in memory — like the <c>$graphLookup</c> (depth 0 = direct descendants) but on
+    ///     inheritance rows whose major-qualified base ids are bound to the installed versions. Only runs when such a
+    ///     row exists, so tenants with classic models only keep the database result unchanged.
+    /// </summary>
+    private async Task BindMajorQualifiedInheritancesAsync(IOctoSession session, List<CkTypeInfo> collectionRoots,
+        bool includeModelsInStateImporting)
+    {
+        var allInheritances = await _ckTypeInheritances.FindManyAsync(session, _ => true);
+        if (collectionRoots.Count == 0 || !allInheritances.Any(i => i.BaseCkTypeId.ModelId.IsMajorQualified))
+        {
+            return;
+        }
+
+        var binder = await CreateReferenceBinderAsync(session, includeModelsInStateImporting);
+        foreach (var inheritance in allInheritances)
+        {
+            inheritance.BaseCkTypeId = binder.Bind(inheritance.BaseCkTypeId);
+        }
+
+        var byBase = allInheritances.ToLookup(i => i.BaseCkTypeId);
+        var typesById = (await _ckTypes.FindManyAsync(session, _ => true)).ToDictionary(t => t.CkTypeId, t => t);
+
+        foreach (var root in collectionRoots)
+        {
+            var inherited = new List<CkInheritedTypeInfo>();
+            var visited = new HashSet<CkId<CkTypeId>> { root.CkTypeId };
+            var frontier = new List<CkId<CkTypeId>> { root.CkTypeId };
+            for (var depth = 0; frontier.Count > 0; depth++)
+            {
+                var next = new List<CkId<CkTypeId>>();
+                foreach (var row in frontier.SelectMany(t => byBase[t]))
+                {
+                    if (!visited.Add(row.InheritorCkTypeId))
+                    {
+                        continue;
+                    }
+
+                    inherited.Add(new CkInheritedTypeInfo
+                    {
+                        InheritanceId = row.InheritanceId,
+                        CkModelId = row.CkModelId,
+                        ModelState = row.ModelState,
+                        BaseCkTypeId = row.BaseCkTypeId,
+                        InheritorCkTypeId = row.InheritorCkTypeId,
+                        BaseTypeDepthIndex = depth
+                    });
+                    next.Add(row.InheritorCkTypeId);
+                }
+
+                frontier = next;
+            }
+
+            root.InheritedTypes = inherited;
+            root.Inheritances = inherited
+                .Select(i => typesById.TryGetValue(i.InheritorCkTypeId, out var type) ? type : null)
+                .Where(t => t != null)
+                .Select(t => t!)
+                .ToList();
         }
     }
 
