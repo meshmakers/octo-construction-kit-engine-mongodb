@@ -148,10 +148,15 @@ public class CkModelMongoDataSourceMapper : IMongoDataSourceMapper<CkModelId, Ck
         [
             update.Set(p => p.ModelState, document.ModelState),
             update.Set(p => p.Dependencies, document.Dependencies),
-            // AB#5665: keep the range-retaining dependencies on a full update as well.
-            update.Set(p => p.DependencyRanges, document.DependencyRanges),
+            // AB#5665: keep the range-retaining dependencies on a full update as well. Review L19: unset instead
+            // of writing an explicit null, so classic documents keep their pre-v2 shape.
+            document.DependencyRanges == null
+                ? update.Unset(p => p.DependencyRanges)
+                : update.Set(p => p.DependencyRanges, document.DependencyRanges),
             // CK v2 (AB#5584)
-            update.Set(p => p.CkLanguage, document.CkLanguage)
+            document.CkLanguage == null
+                ? update.Unset(p => p.CkLanguage)
+                : update.Set(p => p.CkLanguage, document.CkLanguage)
         ];
 
         return update.Combine(list);
