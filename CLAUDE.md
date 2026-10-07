@@ -1245,7 +1245,8 @@ its dependencies **major-qualified** (`System@2/Entity-1`). The three-place rule
    `SetIgnoreIfDefault(true)` — classic exact-pinned models keep the pre-v2 document shape;
 2. write: `InsertModelWithImportingState` and the `UpdateModelAsync` transient model (plus the
    `CkModelMongoDataSourceMapper` full update, which `$unset`s `dependencyRanges` / `ckLanguage` when they are
-   null instead of writing explicit nulls — review L19, `CkModelUpdateMapperTests`);
+   null instead of writing explicit nulls — review L19; the `CkTypeMongoDataSourceMapper` does the same for
+   `methods`, review N9; both pinned by `CkModelUpdateMapperTests`);
 3. read-back: `TryLookupCkModelAsync` → `CkCompiledModelRoot.DependencyRanges`.
 
 References need no new field: `System@2/Entity-1` is persisted verbatim in `CkTypeInheritance`,

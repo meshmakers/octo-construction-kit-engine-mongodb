@@ -185,7 +185,10 @@ public class CkTypeMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkTypeId>
             update.Set(p => p.IsAbstract, document.IsAbstract),
             update.Set(p => p.IsFinal, document.IsFinal),
             // CK v2 (AB#5669): defensive — the import bulk-inserts, but UpdateOne/UpdateMany go through here.
-            update.Set(p => p.Methods, document.Methods)
+            // Review N9: unset instead of writing an explicit null, so classic CkType documents keep their shape.
+            document.Methods == null
+                ? update.Unset(p => p.Methods)
+                : update.Set(p => p.Methods, document.Methods)
         ];
 
         return update.Combine(list);

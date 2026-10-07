@@ -46,4 +46,19 @@ public class CkModelUpdateMapperTests
         Assert.Contains(Keys(rendered, "$set"), k => k.Equals("dependencyRanges", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(Keys(rendered, "$set"), k => k.Equals("ckLanguage", StringComparison.OrdinalIgnoreCase));
     }
+
+    // Review N9: same pattern on CkType.methods.
+    [Fact]
+    public void ClassicType_UnsetsMethods_InsteadOfWritingNull()
+    {
+        var update = new CkTypeMongoDataSourceMapper().ApplyUpdate(new CkType
+        {
+            CkTypeId = new CkId<CkTypeId>("Classic-1.0.0/Thing-1"), CkModelId = new CkModelId("Classic-1.0.0")
+        });
+        var rendered = update.Render(new RenderArgs<CkType>(BsonSerializer.LookupSerializer<CkType>(),
+            BsonSerializer.SerializerRegistry)).AsBsonDocument;
+
+        Assert.Contains(Keys(rendered, "$unset"), k => k.Equals("methods", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(Keys(rendered, "$set"), k => k.Equals("methods", StringComparison.OrdinalIgnoreCase));
+    }
 }
