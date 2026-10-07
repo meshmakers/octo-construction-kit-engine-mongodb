@@ -499,6 +499,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.AutoMap();
 
             cm.MapMember(c => c.Description).SetIgnoreIfDefault(true);
+            // AB#5665: absent for classic exact-pinned models, so their documents keep the pre-v2 shape.
+            cm.MapMember(c => c.DependencyRanges).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkType>(cm =>

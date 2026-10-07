@@ -147,7 +147,9 @@ public class CkModelMongoDataSourceMapper : IMongoDataSourceMapper<CkModelId, Ck
         List<UpdateDefinition<CkModel>> list =
         [
             update.Set(p => p.ModelState, document.ModelState),
-            update.Set(p => p.Dependencies, document.Dependencies)
+            update.Set(p => p.Dependencies, document.Dependencies),
+            // AB#5665: keep the range-retaining dependencies on a full update as well.
+            update.Set(p => p.DependencyRanges, document.DependencyRanges)
         ];
 
         return update.Combine(list);

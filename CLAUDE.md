@@ -1235,6 +1235,36 @@ required to repopulate the flag — which is why the fix is paired with a `Syste
 patch bump (`ImportCkModelAsync` short-circuits on an already-installed version). Field name in
 Mongo is camelCase `isRuntimeState` (global `CamelCaseElementNameConvention`).
 
+### CK v2 Range Retention Round-Trip (AB#5665, Phase 0 spike)
+
+A model compiled with `OctoCkRangeRetention=true` (see the engine CLAUDE.md) carries
+`CkCompiledModelRoot.DependencyRanges` (`{range, floor}` per direct dependency) and stores references into
+its dependencies **major-qualified** (`System@2/Entity-1`). The three-place rule applies:
+
+1. entity: `CkModel.DependencyRanges` (`CkModelDependency[] {Range, Floor}` strings), mapped
+   `SetIgnoreIfDefault(true)` — classic exact-pinned models keep the pre-v2 document shape;
+2. write: `InsertModelWithImportingState` and the `UpdateModelAsync` transient model (plus the
+   `CkModelMongoDataSourceMapper` full update);
+3. read-back: `TryLookupCkModelAsync` → `CkCompiledModelRoot.DependencyRanges`.
+
+References need no new field: `System@2/Entity-1` is persisted verbatim in `CkTypeInheritance`,
+`CkTypeAssociation`, the attribute rows etc. (strings), and bound to the installed version only in memory
+by the engine resolvers (on a copy during import, so the version-less form is what gets persisted).
+`ValidateSystemReferencesAsync` skips major-qualified references (nothing to compare; an uninstalled major
+fails reference resolution instead).
+
+`ValidateDependencies` now logs, for every model it marks `ResolveFailed`, what is unmet
+(`DescribeUnmetDependencies`): `RrBase-[1.0,2.0) (floor 1.1.0): installed RrBase-1.0.0` for range-retaining
+models, `exact pin System-2.2.2: installed System-2.5.0` for classic ones.
+
+Pinned by `CkRangeRetentionImportTests` (throwaway tenants): document shape, version-less inheritance row,
+a range-retaining dependent stays `Available` across an additive minor of its dependency while an
+exact-pinned one goes `ResolveFailed`, the rebuilt cache binds to the new version, and a downgrade below the
+floor goes `ResolveFailed` with the range/floor/installed description. The test bumps a test base model, not
+System: `TenantContext.UpdateSystemCkModelAsync` re-imports the service's **embedded** System version
+whenever that exact version is missing (no downgrade guard on this path), so a System bump only sticks when
+every service embeds it.
+
 ### Attribute Ownership Round-Trip (AB#5187)
 
 `ownership` (`AttributeOwnershipDto`: `SeedOwned | TenantOwned | RuntimeState | Secret`) replaces

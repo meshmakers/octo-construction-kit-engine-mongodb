@@ -174,7 +174,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         {
             Id = ckCompiledModel.ModelId,
             Description = ckCompiledModel.Description,
-            Dependencies = ckCompiledModel.Dependencies?.ToArray()
+            Dependencies = ckCompiledModel.Dependencies?.ToArray(),
+            // AB#5665: range retention — persisted next to the exact closure.
+            DependencyRanges = ckCompiledModel.DependencyRanges?.Select(CkModelDependency.FromDto).ToArray()
         });
         await ExecuteImport(ckCompiledModel, transientCkModel,
             sourceIdentifierObject.MongoDbRepositoryDataSource,
@@ -225,6 +227,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             ModelId = ckModel.Id,
             Description = ckModel.Description,
             Dependencies = ckModel.Dependencies?.ToList(),
+            // AB#5665: range retention read-back (the runtime cache is rebuilt from here, AB#4589 lesson).
+            DependencyRanges = ckModel.DependencyRanges?.Select(d => d.ToDto()).ToList(),
             Enums = ckEnums.Select(e => new CkEnumDto
             {
                 EnumId = e.CkEnumId.ElementId,
@@ -964,6 +968,42 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     }
 
     /// <summary>
+    ///     AB#5665: names, per unmet dependency, what the model requires (range + floor, or the exact pin of a
+    ///     classic model) and which version is installed, e.g.
+    ///     <c>System-[2.5,3.0) (floor 2.5.0): installed System-2.4.0</c>.
+    /// </summary>
+    internal static string DescribeUnmetDependencies(CkModel model, IReadOnlyCollection<CkModel> installedModels)
+    {
+        string Installed(string name) =>
+            installedModels.FirstOrDefault(m => m.Id.Name == name)?.Id.FullName ?? "none";
+
+        var unmet = new List<string>();
+        if (model.DependencyRanges != null)
+        {
+            foreach (var dependency in model.DependencyRanges.Select(d => d.ToDto()))
+            {
+                var installed = installedModels.FirstOrDefault(m => m.Id.Name == dependency.Range.Name);
+                if (installed == null || !dependency.IsSatisfiedBy(installed.Id))
+                {
+                    unmet.Add($"{dependency.Range} (floor {dependency.Floor}): installed {Installed(dependency.Range.Name)}");
+                }
+            }
+        }
+        else
+        {
+            foreach (var pin in model.Dependencies ?? [])
+            {
+                if (installedModels.All(m => m.Id != pin))
+                {
+                    unmet.Add($"exact pin {pin}: installed {Installed(pin.Name)}");
+                }
+            }
+        }
+
+        return unmet.Count == 0 ? "a transitive dependency failed" : string.Join("; ", unmet);
+    }
+
+    /// <summary>
     /// Inserts the model with Importing state into the database.
     /// This method should only be called after acquiring the distributed lock.
     /// </summary>
@@ -986,6 +1026,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 Id = compiledModel.ModelId,
                 ModelId = compiledModel.ModelId.Name,
                 Dependencies = compiledModel.Dependencies?.ToArray(),
+                // AB#5665: range retention — without it the read-back would fall back to the exact pins.
+                DependencyRanges = compiledModel.DependencyRanges?.Select(CkModelDependency.FromDto).ToArray(),
                 Description = compiledModel.Description,
                 ModelState = ModelState.Importing
             });
@@ -1388,6 +1430,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             if (type.DerivedFromCkTypeId?.ModelId == null) continue;
 
             var refModelId = type.DerivedFromCkTypeId.ModelId;
+            // AB#5665: a major-qualified reference (System@2/Entity-1) has no version to compare; it is
+            // bound to the installed version of that major by the resolver, which fails if there is none.
+            if (refModelId.IsMajorQualified) continue;
             if (refModelId.Name == "System" || refModelId.Name.StartsWith("System.", StringComparison.Ordinal))
             {
                 referencedSystemVersions.TryAdd(refModelId.Name, refModelId);

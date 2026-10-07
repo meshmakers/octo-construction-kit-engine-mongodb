@@ -36,7 +36,37 @@ public class CkModel
     public CkModelId[]? Dependencies { get; init; }
     
     /// <summary>
+    ///     CK v2 range retention (AB#5665): declared range + floor per direct dependency of a range-retaining
+    ///     model; <c>null</c> for classic exact-pinned models (and absent from their documents).
+    /// </summary>
+    public CkModelDependency[]? DependencyRanges { get; init; }
+
+    /// <summary>
     ///     An optional description of the model
     /// </summary>
     public string? Description { get; set; }
+}
+
+/// <summary>
+///     A range-retaining dependency of a persisted CK model (AB#5665), the persisted form of
+///     <see cref="CkModelDependencyDto" />.
+/// </summary>
+public class CkModelDependency
+{
+    /// <summary>
+    ///     The declared range, e.g. <c>System-[2.4,3.0)</c>.
+    /// </summary>
+    public string Range { get; init; } = null!;
+
+    /// <summary>
+    ///     The floor version, e.g. <c>2.4.0</c>.
+    /// </summary>
+    public string Floor { get; init; } = null!;
+
+    /// <summary>Maps a DTO to the persisted form.</summary>
+    public static CkModelDependency FromDto(CkModelDependencyDto dto) =>
+        new() { Range = dto.Range.FullName, Floor = dto.Floor };
+
+    /// <summary>Maps the persisted form back to the DTO.</summary>
+    public CkModelDependencyDto ToDto() => new() { Range = new CkModelIdVersionRange(Range), Floor = Floor };
 }
