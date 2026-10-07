@@ -1265,6 +1265,64 @@ System: `TenantContext.UpdateSystemCkModelAsync` re-imports the service's **embe
 whenever that exact version is missing (no downgrade guard on this path), so a System bump only sticks when
 every service embeds it.
 
+### CK v2 Meta-Model Persistence — interfaces, access, methods, ckLanguage (AB#5667 / AB#5668 / AB#5669)
+
+CK v2 Phase 0 adds four constructs to the compiled model. All of them follow the three-place rule
+(entity + class map → write in `ExecuteImport` → read-back in `TryLookupCkModelAsync`):
+
+| Construct | Persisted as | Write | Read-back |
+|---|---|---|---|
+| `ckLanguage` (`CkModelPropertiesDto.CkLanguage`) | `CkModel.CkLanguage`, `SetIgnoreIfNull` | `InsertModelWithImportingState`, `UpdateModelAsync` transient model, `CkModelMongoDataSourceMapper` | model root |
+| `access` (`CkTypeAttributeDto.Access`) | `CkTypeAttribute.Access` (Int32 enum, nullable), `SetIgnoreIfDefault` | `ProcessCkTypeAttributes` (single writer for types, records, association roles) | **three sites**: records, types, association roles |
+| `methods` (`CkTypeDto.Methods`) | `CkType.Methods` = the Contracts `CkMethodDto` family **embedded verbatim** (class maps in `MongoRepositoryClient.RegisterCkMethodClassMaps`, every optional member left out when default) | `ProcessCkTypesAndAssociations` (`null` when empty); `CkTypeMongoDataSourceMapper.ApplyUpdate` | types |
+| `implements` (`CkTypeDto.Implements`) | new collection `CkTypeInterfaceImplementation` (clone of `CkTypeInheritance`: one row per declared entry, owned by the model that declares the TYPE, reference persisted verbatim) | `ProcessCkTypesAndAssociations` | types (`null` when the type declares none) |
+| `interfaces` (`CkModelRootBase.Interfaces`) | new collection `CkInterface` (`_id` = `CkId<CkInterfaceId>`, embedded `CkInterfaceAttribute` members) | `ProcessCkInterfaces` (runs before the types) | model root (`null` when the model declares none) |
+
+Both new collections go through the full plumbing: entity, class map, `CkIdSerializer`/`RtCkIdSerializer`
+for `CkInterfaceId` (`OctoInterfaceIdSerializer`), mapper, `ICkMongoDbRepositoryDataSource` property,
+`UpdateCollectionsAsync` create list, `TransientCkModel` lists, bulk import, `UpdateModelStateAsync`,
+`DeletePreviousVersion` (regex on `ckModelId`) and the read-back. Only DECLARED implements/methods are stored;
+inherited ones (`AllImplementedInterfaces`, `AllMethods`, `ImplementingTypes`) are resolved by the engine graph.
+
+**Classic (v1) models keep their exact document shape**: no `ckLanguage`, `access` or `methods` element and no
+row in the two new collections (pinned by `ClassicModel_DocumentsCarryNoCkV2Elements` and the BSON tests).
+A *declared* `access: ReadWrite` is written (`0`) — the member is nullable, so only "undeclared" is absent, and
+the declared value reads back verbatim.
+
+**Import guard (message 91, CkLanguageNotSupported):** `ExecuteImport` refuses a model whose `CkLanguage` is
+above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before anything is written (the engine
+`ElementResolver` raises 91 on resolve too; this guard covers callers that bypass resolution).
+
+**Round-trip gate (concept §4.6, the isRuntimeState lesson)** — `tests/.../RoundTrip/`:
+
+- `CkMetaModelRoundTripTests`: import → `TryLookupCkModelAsync` → compare the read-back with the compiled DTO
+  as JSON over **all public properties** (`CkModelJsonComparer`, no hand-written field list). Corpus: installed
+  System, `Test-1.0.0` and the C#-built `CkV2KitchenSinkModel` (the MSBuild-compiled YAML twin follows with P5).
+  A new DTO property that is not persisted fails here by itself. `RoundTripIgnoredPaths` lists what is
+  legitimately not stored, each with a justification: `$schema`, `migrations`, `dependencies` /
+  `dependencyRanges` (F0.2 owns them) and the **pre-existing** gap `types[*].indexes` (type indexes are
+  persisted on the entity and consumed from there, but have never been read back — found by this gate,
+  reported, not changed in Phase 0). `defaultValues` / `autoCompleteValues` scalars compare by invariant text
+  because the import converts them to the attribute's value type by design.
+- `CkMetaModelCacheRoundTripTests`: the cache rebuilt from Mongo exposes interfaces, implements, methods
+  (field by field), `access` at all three assignment sites and `ckLanguage`.
+- `CkMetaModelLegacyDocumentTests`: BSON only — classic element sets, pre-v2 documents read back as
+  `null`/default, every method field and the new collections round-trip.
+
+### New meta-model field checklist (do this for EVERY new CK DTO property)
+
+1. Entity member (`Repositories/Entities/*`), nullable or defaulted so legacy documents read back unchanged.
+2. Class map in `MongoRepositoryClient.RegisterClassMaps`: `SetIgnoreIfNull` / `SetIgnoreIfDefault` so
+   models that do not use the field keep their document shape; register a BSON serializer for new id types.
+3. Write: the matching `Process*` method in `DatabaseCkModelRepository` (and `InsertModelWithImportingState` /
+   `UpdateModelAsync` for model-level fields); keep the `*MongoDataSourceMapper.ApplyUpdate` in sync.
+4. Read-back: `TryLookupCkModelAsync` — at EVERY site that builds the DTO (assignments: records, types,
+   association roles).
+5. A new collection additionally needs the plumbing list above (data source property, create list,
+   `TransientCkModel`, bulk import, model state, `DeletePreviousVersion`, read-back query).
+6. Run `RoundTrip/CkMetaModelRoundTripTests` — it fails until steps 1–4 are done. Extend the kitchen sink
+   (C# and YAML) so the new field is actually set, and add a BSON legacy assertion.
+
 ### Attribute Ownership Round-Trip (AB#5187)
 
 `ownership` (`AttributeOwnershipDto`: `SeedOwned | TenantOwned | RuntimeState | Secret`) replaces

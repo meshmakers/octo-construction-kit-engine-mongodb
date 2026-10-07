@@ -149,7 +149,9 @@ public class CkModelMongoDataSourceMapper : IMongoDataSourceMapper<CkModelId, Ck
             update.Set(p => p.ModelState, document.ModelState),
             update.Set(p => p.Dependencies, document.Dependencies),
             // AB#5665: keep the range-retaining dependencies on a full update as well.
-            update.Set(p => p.DependencyRanges, document.DependencyRanges)
+            update.Set(p => p.DependencyRanges, document.DependencyRanges),
+            // CK v2 (AB#5584)
+            update.Set(p => p.CkLanguage, document.CkLanguage)
         ];
 
         return update.Combine(list);
@@ -176,7 +178,9 @@ public class CkTypeMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkTypeId>
             update.Set(p => p.EnableChangeStreamPreAndPostImages, document.EnableChangeStreamPreAndPostImages),
             update.Set(p => p.Indexes, document.Indexes),
             update.Set(p => p.IsAbstract, document.IsAbstract),
-            update.Set(p => p.IsFinal, document.IsFinal)
+            update.Set(p => p.IsFinal, document.IsFinal),
+            // CK v2 (AB#5669): defensive — the import bulk-inserts, but UpdateOne/UpdateMany go through here.
+            update.Set(p => p.Methods, document.Methods)
         ];
 
         return update.Combine(list);
@@ -333,6 +337,61 @@ public class CkTypeInheritanceMongoDataSourceMapper : IMongoDataSourceMapper<Oct
             update.Set(p => p.ModelState, document.ModelState),
             update.Set(p => p.BaseCkTypeId, document.BaseCkTypeId),
             update.Set(p => p.InheritorCkTypeId, document.InheritorCkTypeId)
+        ];
+
+        return update.Combine(list);
+    }
+}
+
+/// <summary>
+///     CK v2 (AB#5667): collection <c>CkInterface</c>.
+/// </summary>
+public class CkInterfaceMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkInterfaceId>, CkInterface>
+{
+    public string CollectionNamePrefix => nameof(CkInterface);
+
+    public CkId<CkInterfaceId> GetId(CkInterface document)
+    {
+        return document.CkInterfaceId;
+    }
+
+    public UpdateDefinition<CkInterface> ApplyUpdate(CkInterface document)
+    {
+        var update = Builders<CkInterface>.Update;
+        List<UpdateDefinition<CkInterface>> list =
+        [
+            update.Set(p => p.CkModelId, document.CkModelId),
+            update.Set(p => p.ModelState, document.ModelState),
+            update.Set(p => p.Description, document.Description),
+            update.Set(p => p.Attributes, document.Attributes)
+        ];
+
+        return update.Combine(list);
+    }
+}
+
+/// <summary>
+///     CK v2 (AB#5667): collection <c>CkTypeInterfaceImplementation</c>.
+/// </summary>
+public class CkTypeInterfaceImplementationMongoDataSourceMapper
+    : IMongoDataSourceMapper<OctoObjectId, CkTypeInterfaceImplementation>
+{
+    public string CollectionNamePrefix => nameof(CkTypeInterfaceImplementation);
+
+    public OctoObjectId GetId(CkTypeInterfaceImplementation document)
+    {
+        return document.ImplementationId;
+    }
+
+    public UpdateDefinition<CkTypeInterfaceImplementation> ApplyUpdate(CkTypeInterfaceImplementation document)
+    {
+        var update = Builders<CkTypeInterfaceImplementation>.Update;
+        List<UpdateDefinition<CkTypeInterfaceImplementation>> list =
+        [
+            update.Set(p => p.CkModelId, document.CkModelId),
+            update.Set(p => p.ModelState, document.ModelState),
+            update.Set(p => p.CkTypeId, document.CkTypeId),
+            update.Set(p => p.CkInterfaceId, document.CkInterfaceId)
         ];
 
         return update.Combine(list);

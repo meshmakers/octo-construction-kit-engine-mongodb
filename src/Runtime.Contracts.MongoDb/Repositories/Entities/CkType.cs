@@ -73,6 +73,13 @@ public class CkType
     public ICollection<CkTypeAttribute> Attributes { get; set; }
 
     /// <summary>
+    ///     CK v2 (AB#5669): the methods this type DECLARES (inherited ones are resolved by the engine graph).
+    ///     The Contracts DTO is embedded as-is to keep the hand-mapped surface small; <c>null</c> (absent
+    ///     from the document) for types without methods, so pre-v2 documents keep their shape.
+    /// </summary>
+    public List<CkMethodDto>? Methods { get; set; }
+
+    /// <summary>
     ///     Gets or sets a list of defined indexes
     /// </summary>
     public ICollection<CkTypeIndex>? Indexes { get; set; }

@@ -42,6 +42,12 @@ public class CkModel
     public CkModelDependency[]? DependencyRanges { get; init; }
 
     /// <summary>
+    ///     CK v2 (AB#5584): the CK language version the model declares (<c>ckLanguage</c>). <c>null</c> means 1
+    ///     and stays absent from the document, so classic models keep their pre-v2 shape.
+    /// </summary>
+    public int? CkLanguage { get; init; }
+
+    /// <summary>
     ///     An optional description of the model
     /// </summary>
     public string? Description { get; set; }

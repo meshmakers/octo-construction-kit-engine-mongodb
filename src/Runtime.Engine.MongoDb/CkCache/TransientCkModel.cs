@@ -19,6 +19,8 @@ public class TransientCkModel
         CkEnums = new List<CkEnum>();
         CkAttributes = new List<CkAttribute>();
         CkAssociationRoles = new List<CkAssociationRole>();
+        CkInterfaces = new List<CkInterface>();
+        CkTypeInterfaceImplementations = new List<CkTypeInterfaceImplementation>();
     }
 
     public CkModel CkModel { get; }
@@ -31,4 +33,10 @@ public class TransientCkModel
     public List<CkEnum> CkEnums { get; }
     public List<CkAttribute> CkAttributes { get; }
     public List<CkAssociationRole> CkAssociationRoles { get; }
+
+    /// <summary>CK v2 (AB#5667)</summary>
+    public List<CkInterface> CkInterfaces { get; }
+
+    /// <summary>CK v2 (AB#5667)</summary>
+    public List<CkTypeInterfaceImplementation> CkTypeInterfaceImplementations { get; }
 }

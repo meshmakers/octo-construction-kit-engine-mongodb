@@ -3,6 +3,7 @@ using System.Diagnostics;
 
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -385,12 +386,15 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             TryRegisterSerializer(new CkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());
             TryRegisterSerializer(new CkIdSerializer<CkRecordId, OctoRecordIdSerializer>());
             TryRegisterSerializer(new CkIdSerializer<CkEnumId, OctoEnumIdSerializer>());
+            // CK v2 (AB#5667): interface ids (CkInterface._id, CkTypeInterfaceImplementation.ckInterfaceId).
+            TryRegisterSerializer(new CkIdSerializer<CkInterfaceId, OctoInterfaceIdSerializer>());
             TryRegisterSerializer(new ModelIdSerializer());
 
             // RtId serializers
             TryRegisterSerializer(new RtCkIdSerializer<CkTypeId, OctoTypeIdSerializer>());
             TryRegisterSerializer(new RtCkIdSerializer<CkRecordId, OctoRecordIdSerializer>());
             TryRegisterSerializer(new RtCkIdSerializer<CkAssociationRoleId, OctoAssociationIdSerializer>());
+            TryRegisterSerializer(new RtCkIdSerializer<CkInterfaceId, OctoInterfaceIdSerializer>());
         }
     }
 
@@ -475,6 +479,83 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         }
     }
 
+    /// <summary>
+    ///     CK v2 (AB#5669): class maps of the method DTOs embedded in <see cref="CkType.Methods" />. They are the
+    ///     Contracts DTOs themselves (no entity copy), auto-mapped, with every optional member left out of the
+    ///     document when it carries its default — an absent element reads back as the same default, so the
+    ///     DTO survives the round trip unchanged. Enums use the driver default (Int32), like every other enum in
+    ///     the CK class maps: <see cref="CkMethodKindDto" /> may only be appended to.
+    /// </summary>
+    private static void RegisterCkMethodClassMaps()
+    {
+        BsonClassMap.RegisterClassMap<CkMethodDto>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.AutoMap();
+
+            cm.MapMember(c => c.MethodId).SetIsRequired(true);
+            cm.MapMember(c => c.Kind).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Description).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.Parameters).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.Result).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.Errors).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.Authorization).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.Execution).SetIgnoreIfNull(true);
+        });
+
+        BsonClassMap.RegisterClassMap<CkMethodParameterDto>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.AutoMap();
+
+            cm.MapMember(c => c.Name).SetIsRequired(true);
+            cm.MapMember(c => c.ValueType).SetIsRequired(true);
+            cm.MapMember(c => c.ValueCkRecordId).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.ValueCkEnumId).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.IsOptional).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Sensitive).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Description).SetIgnoreIfNull(true);
+        });
+
+        BsonClassMap.RegisterClassMap<CkMethodResultDto>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.AutoMap();
+
+            cm.MapMember(c => c.ValueType).SetIsRequired(true);
+            cm.MapMember(c => c.ValueCkRecordId).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.ValueCkEnumId).SetIgnoreIfNull(true);
+        });
+
+        BsonClassMap.RegisterClassMap<CkMethodErrorDto>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.AutoMap();
+
+            cm.MapMember(c => c.Code).SetIsRequired(true);
+            cm.MapMember(c => c.Description).SetIgnoreIfNull(true);
+        });
+
+        BsonClassMap.RegisterClassMap<CkMethodAuthorizationDto>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.AutoMap();
+
+            cm.MapMember(c => c.Roles).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.AllowSelf).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Scopes).SetIgnoreIfNull(true);
+        });
+
+        BsonClassMap.RegisterClassMap<CkMethodExecutionDto>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.AutoMap();
+
+            cm.MapMember(c => c.TimeoutSeconds).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.Idempotent).SetIgnoreIfDefault(true);
+        });
+    }
+
     private static void RegisterClassMaps()
     {
         BsonClassMap.RegisterClassMap<SysLock>(cm =>
@@ -501,7 +582,12 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.Description).SetIgnoreIfDefault(true);
             // AB#5665: absent for classic exact-pinned models, so their documents keep the pre-v2 shape.
             cm.MapMember(c => c.DependencyRanges).SetIgnoreIfDefault(true);
+            // CK v2 (AB#5584): absent for classic (ckLanguage 1) models.
+            cm.MapMember(c => c.CkLanguage).SetIgnoreIfNull(true);
         });
+
+        // Before CkType: the method DTOs are embedded in CkType.Methods.
+        RegisterCkMethodClassMaps();
 
         BsonClassMap.RegisterClassMap<CkType>(cm =>
         {
@@ -515,6 +601,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.Attributes).SetIsRequired(true);
             cm.MapMember(c => c.Indexes).SetIgnoreIfDefault(true);
             cm.MapMember(c => c.EnableChangeStreamPreAndPostImages).SetIgnoreIfDefault(true);
+            // CK v2 (AB#5669): absent for types without methods (pre-v2 documents keep their shape).
+            cm.MapMember(c => c.Methods).SetIgnoreIfNull(true);
         });
 
         BsonClassMap.RegisterClassMap<CkRecord>(cm =>
@@ -618,6 +706,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             // AB#5187: the per-assignment ownership override. Absent means "inherit from the
             // attribute definition", which is what every pre-AB#5187 document says.
             cm.MapMember(c => c.Ownership).SetIgnoreIfDefault(true);
+            // CK v2 (AB#5668): absent means ReadWrite, which is what every pre-v2 document says.
+            cm.MapMember(c => c.Access).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkTypeInheritance>(cm =>
@@ -638,6 +728,38 @@ public abstract class MongoRepositoryClient : IRepositoryClient
 
             cm.MapMember(c => c.BaseCkRecordId).SetIsRequired(true);
             cm.MapMember(c => c.InheritorCkRecordId).SetIsRequired(true);
+        });
+
+        // CK v2 (AB#5667): interfaces and the per-type implements rows.
+        BsonClassMap.RegisterClassMap<CkInterface>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.MapIdMember(c => c.CkInterfaceId).SetIsRequired(true).SetIdGenerator(new NullIdChecker());
+            cm.AutoMap();
+
+            cm.MapMember(c => c.CkModelId).SetIsRequired(true);
+            cm.MapMember(c => c.Description).SetIgnoreIfDefault(true);
+            cm.MapMember(c => c.Attributes).SetIsRequired(true);
+        });
+
+        BsonClassMap.RegisterClassMap<CkInterfaceAttribute>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.AutoMap();
+
+            cm.MapMember(c => c.AttributeId).SetIsRequired(true);
+            cm.MapMember(c => c.AttributeName).SetIsRequired(true);
+            cm.MapMember(c => c.IsOptional).SetIgnoreIfDefault(true);
+        });
+
+        BsonClassMap.RegisterClassMap<CkTypeInterfaceImplementation>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.MapIdMember(c => c.ImplementationId).SetIdGenerator(new OctoObjectIdGenerator());
+            cm.AutoMap();
+
+            cm.MapMember(c => c.CkTypeId).SetIsRequired(true);
+            cm.MapMember(c => c.CkInterfaceId).SetIsRequired(true);
         });
 
         BsonClassMap.RegisterClassMap<CkTypeIndex>(cm =>

@@ -176,7 +176,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             Description = ckCompiledModel.Description,
             Dependencies = ckCompiledModel.Dependencies?.ToArray(),
             // AB#5665: range retention — persisted next to the exact closure.
-            DependencyRanges = ckCompiledModel.DependencyRanges?.Select(CkModelDependency.FromDto).ToArray()
+            DependencyRanges = ckCompiledModel.DependencyRanges?.Select(CkModelDependency.FromDto).ToArray(),
+            // CK v2 (AB#5584)
+            CkLanguage = ckCompiledModel.CkLanguage
         });
         await ExecuteImport(ckCompiledModel, transientCkModel,
             sourceIdentifierObject.MongoDbRepositoryDataSource,
@@ -221,6 +223,11 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             .FindManyAsync(session, e => e.CkModelId == ckModelId);
         var ckAssociationRoles = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkAssociationRoles
             .FindManyAsync(session, e => e.CkModelId == ckModelId);
+        // CK v2 (AB#5667): interfaces of this model and the implements rows of its types.
+        var ckInterfaces = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkInterfaces
+            .FindManyAsync(session, e => e.CkModelId == ckModelId);
+        var ckTypeInterfaceImplementations = await sourceIdentifierObject.MongoDbRepositoryDataSource
+            .CkTypeInterfaceImplementations.FindManyAsync(session, e => e.CkModelId == ckModelId);
 
         var ckCompiledModelRoot = new CkCompiledModelRoot
         {
@@ -229,6 +236,22 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             Dependencies = ckModel.Dependencies?.ToList(),
             // AB#5665: range retention read-back (the runtime cache is rebuilt from here, AB#4589 lesson).
             DependencyRanges = ckModel.DependencyRanges?.Select(d => d.ToDto()).ToList(),
+            // CK v2 (AB#5584): null for classic models, exactly like the compiled DTO.
+            CkLanguage = ckModel.CkLanguage,
+            // CK v2 (AB#5667): null when the model declares none, matching the compiled DTO.
+            Interfaces = ckInterfaces.Count == 0
+                ? null
+                : ckInterfaces.Select(i => new CkInterfaceDto
+                {
+                    InterfaceId = i.CkInterfaceId.ElementId,
+                    Description = i.Description,
+                    Attributes = i.Attributes.Select(a => new CkInterfaceAttributeDto
+                    {
+                        CkAttributeId = a.AttributeId,
+                        AttributeName = a.AttributeName,
+                        IsOptional = a.IsOptional
+                    }).ToList()
+                }).ToList(),
             Enums = ckEnums.Select(e => new CkEnumDto
             {
                 EnumId = e.CkEnumId.ElementId,
@@ -257,7 +280,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     AutoIncrementReference = a.AutoIncrementReference,
                     IsOptional = a.IsOptional,
                     // AB#5187: per-assignment ownership override; null = inherit from the definition.
-                    Ownership = a.Ownership
+                    Ownership = a.Ownership,
+                    // CK v2 (AB#5668): per-assignment access; null = ReadWrite.
+                    Access = a.Access
                 }).ToList(),
                 DerivedFromCkRecordId = ckRecordInheritances.FirstOrDefault(x => x.InheritorCkRecordId == r.CkRecordId)
                     ?.BaseCkRecordId
@@ -288,6 +313,10 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 DisplayNameRule = t.DisplayNameRule,
                 DisplayDescriptionRule = t.DisplayDescriptionRule,
                 OwnerAttributePath = t.OwnerAttributePath,
+                // CK v2 (AB#5669): the declared methods, embedded verbatim.
+                Methods = t.Methods,
+                // CK v2 (AB#5667): the declared implements entries; null when none, matching the compiled DTO.
+                Implements = ImplementsOf(t.CkTypeId, ckTypeInterfaceImplementations),
                 Attributes = t.Attributes.Select(a => new CkTypeAttributeDto
                 {
                     AttributeName = a.AttributeName,
@@ -296,7 +325,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     AutoIncrementReference = a.AutoIncrementReference,
                     IsOptional = a.IsOptional,
                     // AB#5187: per-assignment ownership override; null = inherit from the definition.
-                    Ownership = a.Ownership
+                    Ownership = a.Ownership,
+                    // CK v2 (AB#5668): per-assignment access; null = ReadWrite.
+                    Access = a.Access
                 }).ToList(),
                 Associations = ckTypeAssociations.Where(x => x.OriginCkTypeId == t.CkTypeId).Select(a =>
                     new CkTypeAssociationDto
@@ -324,12 +355,25 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     AutoIncrementReference = a.AutoIncrementReference,
                     IsOptional = a.IsOptional,
                     // AB#5187: per-assignment ownership override; null = inherit from the definition.
-                    Ownership = a.Ownership
+                    Ownership = a.Ownership,
+                    // CK v2 (AB#5668): per-assignment access; null = ReadWrite.
+                    Access = a.Access
                 }).ToList()
             }).ToList()
         };
 
         return ckCompiledModelRoot;
+    }
+
+    /// <summary>
+    ///     CK v2 (AB#5667): the declared <c>implements</c> entries of a type from its implementation rows;
+    ///     <c>null</c> when it declares none (the compiled DTO omits the key then).
+    /// </summary>
+    private static List<CkId<CkInterfaceId>>? ImplementsOf(CkId<CkTypeId> ckTypeId,
+        IEnumerable<CkTypeInterfaceImplementation> implementations)
+    {
+        var implements = implementations.Where(x => x.CkTypeId == ckTypeId).Select(x => x.CkInterfaceId).ToList();
+        return implements.Count == 0 ? null : implements;
     }
 
     /// <inheritdoc />
@@ -439,6 +483,17 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     {
         _logger.LogInformation("Executing import of CK model '{CkModelId}' to database", compiledModel.ModelId);
 
+        // CK v2 (AB#5584, message 91 CkLanguageNotSupported): refuse a model written in a CK language this
+        // engine does not understand before anything is written — persisting it would drop the unknown
+        // constructs silently.
+        if (compiledModel.CkLanguage > CkModelPropertiesDto.MaxSupportedCkLanguage)
+        {
+            throw new ModelValidationException(
+                $"CK model '{compiledModel.ModelId}' declares ckLanguage {compiledModel.CkLanguage}, but this engine " +
+                $"supports up to {CkModelPropertiesDto.MaxSupportedCkLanguage} (CkLanguageNotSupported). " +
+                "Update the services to an engine version that supports it.");
+        }
+
         // Acquire distributed lock to prevent parallel imports of the same model.
         // Pass the caller's cancellation token so the polling loop is interruptable.
         await using var importLock = await mongoDbRepositoryDataSource.AcquireModelImportLockAsync(
@@ -529,6 +584,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             ProcessCkEnums(compiledModel, transientCkModel);
             ProcessCkAttributes(compiledModel, transientCkModel);
             ProcessCkAssociationRoles(compiledModel, transientCkModel);
+            // CK v2 (AB#5667): before the types, whose implements rows refer to the interfaces.
+            ProcessCkInterfaces(compiledModel, transientCkModel);
             ProcessCkTypesAndAssociations(compiledModel, transientCkModel);
 
             // ValidateAsync
@@ -616,6 +673,23 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 ValidateAndThrow(
                     await mongoDbRepositoryDataSource.CkRecordInheritances.BulkImportAsync(session,
                         transientCkModel.CkRecordInheritances, BulkOperationOptions.Default));
+                CheckCancellation(cancellationToken);
+            }
+
+            // CK v2 (AB#5667)
+            if (transientCkModel.CkInterfaces.Any())
+            {
+                ValidateAndThrow(
+                    await mongoDbRepositoryDataSource.CkInterfaces.BulkImportAsync(session,
+                        transientCkModel.CkInterfaces.ToArray(), BulkOperationOptions.Default));
+                CheckCancellation(cancellationToken);
+            }
+
+            if (transientCkModel.CkTypeInterfaceImplementations.Any())
+            {
+                ValidateAndThrow(
+                    await mongoDbRepositoryDataSource.CkTypeInterfaceImplementations.BulkImportAsync(session,
+                        transientCkModel.CkTypeInterfaceImplementations, BulkOperationOptions.Default));
                 CheckCancellation(cancellationToken);
             }
 
@@ -726,6 +800,13 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         await mongoDbRepositoryDataSource.CkAssociationRoles.UpdateManyAsync(sessionComplete,
             Builders<CkAssociationRole>.Filter.Eq(x => x.CkModelId, ckModelId),
             Builders<CkAssociationRole>.Update.Set(x => x.ModelState, modelState));
+        // CK v2 (AB#5667)
+        await mongoDbRepositoryDataSource.CkInterfaces.UpdateManyAsync(sessionComplete,
+            Builders<CkInterface>.Filter.Eq(x => x.CkModelId, ckModelId),
+            Builders<CkInterface>.Update.Set(x => x.ModelState, modelState));
+        await mongoDbRepositoryDataSource.CkTypeInterfaceImplementations.UpdateManyAsync(sessionComplete,
+            Builders<CkTypeInterfaceImplementation>.Filter.Eq(x => x.CkModelId, ckModelId),
+            Builders<CkTypeInterfaceImplementation>.Update.Set(x => x.ModelState, modelState));
 
         await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(sessionComplete, ckModelId,
             Builders<CkModel>.Update.Set(x => x.ModelState, modelState));
@@ -1028,6 +1109,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 Dependencies = compiledModel.Dependencies?.ToArray(),
                 // AB#5665: range retention — without it the read-back would fall back to the exact pins.
                 DependencyRanges = compiledModel.DependencyRanges?.Select(CkModelDependency.FromDto).ToArray(),
+                // CK v2 (AB#5584): absent for classic models.
+                CkLanguage = compiledModel.CkLanguage,
                 Description = compiledModel.Description,
                 ModelState = ModelState.Importing
             });
@@ -1152,6 +1235,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     // here would silently disable the override for every type, record and
                     // association-role attribute (they all pass through this one method).
                     Ownership = attribute.Ownership,
+                    // CK v2 (AB#5668): same single writer for type, record and association-role assignments.
+                    Access = attribute.Access,
                 };
 
                 ckTypeAttributes.Add(ckTypeAttribute);
@@ -1219,6 +1304,16 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         await mongoDbRepositoryDataSource.CkRecordInheritances.DeleteManyAsync(session,
             Builders<CkRecordInheritance>.Filter.Regex(nameof(CkRecordInheritance.CkModelId).ToCamelCase(),
                 $"^{ckModel.ModelId}-.*$"));
+        CheckCancellation(cancellationToken);
+
+        // CK v2 (AB#5667)
+        await mongoDbRepositoryDataSource.CkInterfaces.DeleteManyAsync(session,
+            Builders<CkInterface>.Filter.Regex(nameof(CkInterface.CkModelId).ToCamelCase(), $"^{ckModel.ModelId}-.*$"));
+        CheckCancellation(cancellationToken);
+
+        await mongoDbRepositoryDataSource.CkTypeInterfaceImplementations.DeleteManyAsync(session,
+            Builders<CkTypeInterfaceImplementation>.Filter.Regex(
+                nameof(CkTypeInterfaceImplementation.CkModelId).ToCamelCase(), $"^{ckModel.ModelId}-.*$"));
         CheckCancellation(cancellationToken);
     }
 
@@ -1321,6 +1416,34 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         }
     }
 
+    /// <summary>
+    ///     CK v2 (AB#5667): one <see cref="CkInterface" /> document per interface the model declares.
+    /// </summary>
+    private static void ProcessCkInterfaces(CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel)
+    {
+        if (compiledModel.Interfaces == null)
+        {
+            return;
+        }
+
+        foreach (var ckInterfaceDto in compiledModel.Interfaces)
+        {
+            transientCkModel.CkInterfaces.Add(new CkInterface
+            {
+                CkModelId = compiledModel.ModelId,
+                ModelState = ModelState.Importing,
+                CkInterfaceId = new CkId<CkInterfaceId>(compiledModel.ModelId, ckInterfaceDto.InterfaceId),
+                Description = ckInterfaceDto.Description,
+                Attributes = ckInterfaceDto.Attributes.Select(a => new CkInterfaceAttribute
+                {
+                    AttributeId = a.CkAttributeId,
+                    AttributeName = a.AttributeName,
+                    IsOptional = a.IsOptional
+                }).ToList()
+            });
+        }
+    }
+
     private void ProcessCkTypesAndAssociations(CkCompiledModelRoot compiledModel,
         TransientCkModel transientCkModel)
     {
@@ -1365,6 +1488,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 DisplayNameRule = ckTypeDto.DisplayNameRule,
                 DisplayDescriptionRule = ckTypeDto.DisplayDescriptionRule,
                 OwnerAttributePath = ckTypeDto.OwnerAttributePath,
+                // CK v2 (AB#5669): declared methods, embedded verbatim; null keeps the pre-v2 document shape.
+                Methods = ckTypeDto.Methods is { Count: > 0 } ? ckTypeDto.Methods : null,
                 Attributes = ckTypeAttributes,
                 Indexes = textSearchDefinitions
             };
@@ -1379,6 +1504,21 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     InheritorCkTypeId = new CkId<CkTypeId>(compiledModel.ModelId, ckTypeDto.TypeId)
                 };
                 transientCkModel.CkTypeInheritances.Add(ckTypeInheritance);
+            }
+
+            // CK v2 (AB#5667): one row per declared implements entry, persisted verbatim (like the inheritance row).
+            if (ckTypeDto.Implements != null)
+            {
+                foreach (var ckInterfaceId in ckTypeDto.Implements)
+                {
+                    transientCkModel.CkTypeInterfaceImplementations.Add(new CkTypeInterfaceImplementation
+                    {
+                        CkModelId = compiledModel.ModelId,
+                        ModelState = ModelState.Importing,
+                        CkTypeId = new CkId<CkTypeId>(compiledModel.ModelId, ckTypeDto.TypeId),
+                        CkInterfaceId = ckInterfaceId
+                    });
+                }
             }
 
             if (ckTypeDto.Associations != null)

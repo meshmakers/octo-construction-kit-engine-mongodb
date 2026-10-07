@@ -77,6 +77,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         CkRecordInheritances = _repository.GetCollection(new CkRecordInheritanceMongoDataSourceMapper());
 
+        // CK v2 (AB#5667)
+        CkInterfaces = _repository.GetCollection(new CkInterfaceMongoDataSourceMapper());
+        CkTypeInterfaceImplementations =
+            _repository.GetCollection(new CkTypeInterfaceImplementationMongoDataSourceMapper());
+
         RtMongoDbDataSourceAssociations = _repository.GetCollection(new RtAssociationMongoDataSourceMapper());
 
         // Initialize index state service
@@ -314,6 +319,12 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     public IMongoDbDataSourceCollection<OctoObjectId, CkTypeAssociation> CkTypeAssociations { get; }
     public IMongoDbDataSourceCollection<OctoObjectId, CkTypeInheritance> CkTypeInheritances { get; }
     public IMongoDbDataSourceCollection<OctoObjectId, CkRecordInheritance> CkRecordInheritances { get; }
+    public IMongoDbDataSourceCollection<CkId<CkInterfaceId>, CkInterface> CkInterfaces { get; }
+
+    public IMongoDbDataSourceCollection<OctoObjectId, CkTypeInterfaceImplementation> CkTypeInterfaceImplementations
+    {
+        get;
+    }
 
     public async Task UpdateCollectionsAsync(IOctoSession session, bool includeModelsInStateImporting = false,
         bool skipCleanup = false)
@@ -329,6 +340,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             _repository.CreateCollectionIfNotExistsAsync(CkAssociationRoles.MongoDataSourceMapper, false),
             _repository.CreateCollectionIfNotExistsAsync(CkTypeInheritances.MongoDataSourceMapper, false),
             _repository.CreateCollectionIfNotExistsAsync(CkRecordInheritances.MongoDataSourceMapper, false),
+            _repository.CreateCollectionIfNotExistsAsync(CkInterfaces.MongoDataSourceMapper, false),
+            _repository.CreateCollectionIfNotExistsAsync(CkTypeInterfaceImplementations.MongoDataSourceMapper, false),
             _repository.CreateCollectionIfNotExistsAsync(RtMongoDbDataSourceAssociations.MongoDataSourceMapper, true));
 
         _logger.LogDebug("Creating type root collections for tenant '{TenantId}'", TenantId);

@@ -20,6 +20,12 @@ public interface ICkMongoDbRepositoryDataSource
     IMongoDbDataSourceCollection<OctoObjectId, CkTypeInheritance> CkTypeInheritances { get; }
     IMongoDbDataSourceCollection<OctoObjectId, CkRecordInheritance> CkRecordInheritances { get; }
 
+    /// <summary>CK v2 (AB#5667): the interfaces of all installed models.</summary>
+    IMongoDbDataSourceCollection<CkId<CkInterfaceId>, CkInterface> CkInterfaces { get; }
+
+    /// <summary>CK v2 (AB#5667): one row per declared <c>implements</c> entry of a type.</summary>
+    IMongoDbDataSourceCollection<OctoObjectId, CkTypeInterfaceImplementation> CkTypeInterfaceImplementations { get; }
+
     Task UpdateCollectionsAsync(IOctoSession session, bool includeModelsInStateImporting = false, bool skipCleanup = false);
     Task UpdateIndexAsync(IOctoSession session, bool includeModelsInStateImporting,
         CkModelId? scopeToModelId = null, CancellationToken cancellationToken = default);

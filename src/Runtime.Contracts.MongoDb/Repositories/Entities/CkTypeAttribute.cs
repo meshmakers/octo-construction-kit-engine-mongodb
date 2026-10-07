@@ -29,4 +29,12 @@ public class CkTypeAttribute
     ///     all persist through this entity.
     /// </summary>
     public AttributeOwnershipDto? Ownership { get; set; }
+
+    /// <summary>
+    ///     CK v2 (AB#5668): per-assignment API access (<c>ReadWrite | ReadOnly | MethodOnly | Hidden</c>).
+    ///     <c>null</c> means <see cref="CkAttributeAccessDto.ReadWrite" /> and is what every pre-v2 document
+    ///     says (the element stays absent). Like <see cref="Ownership" /> it is read back at three sites —
+    ///     records, types and association roles — and must round-trip at all of them.
+    /// </summary>
+    public CkAttributeAccessDto? Access { get; set; }
 }
