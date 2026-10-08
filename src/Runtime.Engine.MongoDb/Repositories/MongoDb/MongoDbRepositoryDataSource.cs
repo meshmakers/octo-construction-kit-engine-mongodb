@@ -505,9 +505,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
 
         // Bulk fetch ALL types that we might need in one query
         var allTypes = await _ckTypes.FindManyAsync(session,
-            x => allTypeIds.Contains(x.CkTypeId) && includeModelsInStateImporting
+            // Parenthesized (AB#5901): `a && b ? c : d` parses as `(a && b) ? c : d`, which dropped the id
+            // filter and fetched every Available type of the tenant.
+            x => allTypeIds.Contains(x.CkTypeId) && (includeModelsInStateImporting
                 ? (x.ModelState == ModelState.Available || x.ModelState == ModelState.Importing)
-                : x.ModelState == ModelState.Available);
+                : x.ModelState == ModelState.Available));
         var typeDict = allTypes.ToDictionary(x => x.CkTypeId, x => x);
 
         // Build inheritance chains in memory using the fetched data

@@ -292,7 +292,13 @@ public class TenantContext : ITenantContext
         var databaseContext = CreateRepositoryDataSourceAsAdmin(normalizedDatabaseName, tenantId);
         var databaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, databaseContext, tenantId);
         OperationResult operationResult = new();
-        if (await _ckModelRepositoryService.IsExistingAsync(SystemCkIds.CkModelId, databaseSourceIdentifier))
+
+        // CK v2 F1.0-S1 (AB#5900): compare by NAME, not by exact id. The embedded System is imported only when
+        // the tenant has none or an older one; a newer installed version (another service already upgraded the
+        // tenant) is never replaced — the import deletes every row of the model name before it inserts.
+        var (decision, _) = await EmbeddedCkModelImportGuard.EvaluateAsync(databaseContext, SystemCkIds.CkModelId,
+            tenantId, _logger);
+        if (decision != EmbeddedImportDecision.Import)
         {
             return;
         }
@@ -1647,19 +1653,8 @@ public class TenantContext : ITenantContext
     /// </summary>
     internal async Task ImportEmbeddedCkModelWithDowngradeGuardAsync(CkModelId modelId)
     {
-        var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName, TenantId);
-        var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource, TenantId);
-        var anyVersionRange = new CkModelIdVersionRange(modelId.Name, "0.0.0");
-        var installed = await _ckModelRepositoryService.IsExistingAsync(anyVersionRange, tenantDatabaseSourceIdentifier);
-        if (installed.Exists && installed.ModelId is { } installedModelId &&
-            installedModelId.Version.CompareTo(modelId.Version) > 0)
-        {
-            _logger.LogInformation(
-                "Skipping CK model import for tenant '{TenantId}': installed version '{InstalledVersion}' is newer than the embedded target '{TargetVersion}'; downgrade prevented.",
-                TenantId, installedModelId, modelId);
-            return;
-        }
-
+        // The downgrade guard itself lives in ImportCkModelAsync(CkModelId, ...) since CK v2 F1.0-S1 (AB#5900),
+        // shared with every other embedded/startup import.
         var operationResult = new OperationResult();
         await ImportCkModelAsync(modelId, operationResult);
         if (operationResult.HasErrors || operationResult.HasFatalErrors)
@@ -2411,6 +2406,18 @@ public class TenantContext : ITenantContext
         var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName, TenantId);
         var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource, TenantId);
 
+        // CK v2 F1.0-S1 (AB#5900, decision Q5): an explicit import may downgrade — it is the operator's escape
+        // hatch — but it is never silent.
+        var installedBefore =
+            await EmbeddedCkModelImportGuard.FindInstalledAsync(repositoryDataSource, ckCompiledModelRoot.ModelId.Name);
+        if (installedBefore != null && installedBefore.ModelId.Version.CompareTo(ckCompiledModelRoot.ModelId.Version) > 0)
+        {
+            _logger.LogWarning(
+                "Explicit downgrade of CK model '{CkModelName}' in tenant '{TenantId}' from '{InstalledModelId}' to '{ImportedModelId}'",
+                ckCompiledModelRoot.ModelId.Name, TenantId, installedBefore.ModelId, ckCompiledModelRoot.ModelId);
+            CkModelImportDiagnostics.RecordExplicitDowngrade(ckCompiledModelRoot.ModelId.Name);
+        }
+
         // Capture schema versions BEFORE importing (for migration detection)
         var previousSchemaVersions = await GetSchemaVersionsDirectAsync(tenantDatabaseSourceIdentifier);
 
@@ -2486,15 +2493,28 @@ public class TenantContext : ITenantContext
         // This matches the pattern used by UpdateIndexesAsync (schema-level ops run as admin).
         var repositoryDataSource = CreateRepositoryDataSourceAsAdmin(DatabaseName, TenantId);
         var tenantDatabaseSourceIdentifier = new TenantDatabaseSourceIdentifier(null, repositoryDataSource, TenantId);
-        if (await _ckModelRepositoryService.IsExistingAsync(ckModelId, tenantDatabaseSourceIdentifier))
-        {
-            _logger.LogDebug("CK Model '{CkModelId}' already exists in tenant '{TenantId}', skipping import",
-                ckModelId, TenantId);
 
+        // CK v2 F1.0-S1 (AB#5900): this overload is the embedded/startup import of every service, so it never
+        // replaces a newer installed version (by name). A skip sends no notification and runs no migration.
+        var (decision, installed) =
+            await EmbeddedCkModelImportGuard.EvaluateAsync(repositoryDataSource, ckModelId, TenantId, _logger);
+        if (decision is EmbeddedImportDecision.SkipNewerInstalled or EmbeddedImportDecision.SkipNewerMajorInstalled)
+        {
+            return;
+        }
+
+        if (decision == EmbeddedImportDecision.AlreadyInstalled)
+        {
             // Even though the model is already imported, check for pending migrations.
             // A previous migration attempt may have failed, leaving the MigrationHistory
             // at an older version while the CkModel schema is already at the target version.
-            await RetryPendingMigrationsAsync(ckModelId);
+            // Not for a ResolveFailed model: it is not in the CK cache, and it recovers through the
+            // re-validation that runs after every import (AB#5901), not through a re-import.
+            if (installed!.ModelState == ModelState.Available)
+            {
+                await RetryPendingMigrationsAsync(ckModelId);
+            }
+
             return;
         }
 
@@ -2549,7 +2569,10 @@ public class TenantContext : ITenantContext
                 "Skipping CK model '{CkModelId}' import for tenant '{TenantId}' due to missing dependencies: {Message}. " +
                 "This import will be retried when the dependent CK model becomes available.",
                 ckModelId, TenantId, ex.Message);
-            // Don't add to operationResult as error - this is a transient condition that will resolve itself
+            // Don't add to operationResult as error - this is a transient condition that will resolve itself.
+            // No post-update notification either (AB#5900): nothing was imported, and announcing a failed
+            // import made every other service re-run its tenant setup — an import ping-pong.
+            return;
         }
 
         // Only send the notification after a successful import (not in finally).

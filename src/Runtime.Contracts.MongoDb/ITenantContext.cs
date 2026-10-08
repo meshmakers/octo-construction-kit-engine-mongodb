@@ -392,14 +392,26 @@ public interface ITenantContext
     #region Construction Kits
 
     /// <summary>
-    ///     Imports a construction kit model into the tenant.
+    ///     Explicit import of a construction kit model into the tenant (CLI/API <c>ImportCk</c>, bot import
+    ///     command). Not downgrade-guarded: replacing a newer installed version of the same model is allowed —
+    ///     the operator's escape hatch — but logged as WARN <c>explicit downgrade from X to Y</c> and counted in
+    ///     <c>octo.ck.explicit_import.downgraded</c> (CK v2 F1.0-S1, AB#5900). Like every import, it ends with the
+    ///     re-validation of all installed models, which returns <c>ResolveFailed</c> models whose dependencies
+    ///     became satisfiable to <c>Available</c> (AB#5901).
     /// </summary>
     /// <param name="ckCompiledModelRoot"></param>
     /// <returns></returns>
     Task ImportCkModelAsync(CkCompiledModelRoot ckCompiledModelRoot);
 
     /// <summary>
-    ///     Imports a construction kit model into the tenant.
+    ///     Embedded/startup import of a construction kit model from the catalogs (service tenant setup,
+    ///     service-managed and StreamData models, blueprint dependencies). Downgrade-guarded by model NAME
+    ///     (CK v2 F1.0-S1, AB#5900): nothing installed or an older version → import; the same version →
+    ///     short-circuit (retries pending migrations of an <c>Available</c> model); a newer version of the same
+    ///     major → skip, INFO <c>downgrade prevented</c>; a higher major → skip, WARN <c>service is too old for the
+    ///     tenant</c>. Skips are counted in <c>octo.ck.embedded_import.skipped</c> (tags <c>model</c>, <c>reason</c>)
+    ///     and send no tenant-update notification. An import that fails with missing dependencies is logged and
+    ///     swallowed, also without a notification.
     /// </summary>
     /// <param name="ckModelId">The construction kit model id to load</param>
     /// <param name="operationResult">Object that contains validation messages during load of construction kits</param>
@@ -408,7 +420,9 @@ public interface ITenantContext
 
     /// <summary>
     ///     Imports the given CK model version, but skips the import when the tenant already has a
-    ///     strictly-newer version installed (downgrade guard). Use this when a service ensures its own
+    ///     strictly-newer version installed (downgrade guard). Since CK v2 F1.0-S1 (AB#5900) this is the same
+    ///     guard as <see cref="ImportCkModelAsync(CkModelId, OperationResult)" />; it additionally logs errors of
+    ///     the operation result. Use this when a service ensures its own
     ///     embedded (source-generated) model version is present without ever clobbering a newer one a
     ///     sibling deploy may have installed — e.g. a feature-service importing its model on enable.
     ///     Idempotent: a no-op when the exact version is already present.

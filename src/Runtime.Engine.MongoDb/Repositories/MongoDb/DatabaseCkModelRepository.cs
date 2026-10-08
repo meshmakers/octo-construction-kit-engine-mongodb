@@ -121,8 +121,12 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         await using var scope = await SessionScope.CreateAsync(sourceIdentifierObject);
         var session = scope.Session;
 
+        // AB#5901: the post-import re-validation also resolves ResolveFailed models (and their dependencies).
+        var includeResolveFailed = sourceIdentifierObject.IncludeResolveFailedModels;
         var ckModels = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels.FindManyAsync(session,
-            e => e.ModelId == modelIdVersionRange.Name && e.ModelState == ModelState.Available);
+            e => e.ModelId == modelIdVersionRange.Name && (e.ModelState == ModelState.Available ||
+                                                           (includeResolveFailed &&
+                                                            e.ModelState == ModelState.ResolveFailed)));
 
         var satisfiedModels = ckModels
             .Where(m => modelIdVersionRange.IsSatisfiedBy(m.Id))
@@ -188,8 +192,12 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         await using var scope = await SessionScope.CreateAsync(sourceIdentifierObject);
         var session = scope.Session;
 
+        // AB#5901: see IsExistingAsync(CkModelIdVersionRange) — re-validation only.
+        var includeResolveFailed = sourceIdentifierObject.IncludeResolveFailedModels;
         var ckModel = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels
-            .FindSingleOrDefaultAsync(session, e => e.Id == ckModelId && e.ModelState == ModelState.Available);
+            .FindSingleOrDefaultAsync(session, e => e.Id == ckModelId && (e.ModelState == ModelState.Available ||
+                                                                          (includeResolveFailed &&
+                                                                           e.ModelState == ModelState.ResolveFailed)));
         if (ckModel == null)
         {
             return null;
@@ -675,46 +683,125 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             Builders<CkModel>.Update.Set(x => x.ModelState, modelState));
     }
 
+    /// <summary>
+    ///     Re-validates every installed model after an import (end of <c>ExecuteImport</c>, inside the
+    ///     <c>sessionComplete</c> transaction). CK v2 F1.0-S2 (AB#5901): <c>ResolveFailed</c> models are resolved
+    ///     too, so a model whose dependencies became satisfiable again (an upgrade, an explicit downgrade, a
+    ///     missing dependency imported) returns to <c>Available</c> without manual action — before, only
+    ///     <c>Available</c> models were checked and <c>ResolveFailed</c> never recovered (R2-3). <c>Importing</c>
+    ///     models are never touched.
+    /// </summary>
     private async Task ValidateDependencies(IOctoSession session,
         ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
     {
-        var sourceIdentifier = new TenantDatabaseSourceIdentifier(session, mongoDbRepositoryDataSource);
+        // The resolver may load ResolveFailed models for this call only (see TenantDatabaseSourceIdentifier).
+        var sourceIdentifier = new TenantDatabaseSourceIdentifier(session, mongoDbRepositoryDataSource,
+            IncludeResolveFailedModels: true);
         OperationResult operationResult = new();
         var ckModels =
             await mongoDbRepositoryDataSource.CkModels.FindManyAsync(session,
-                m => m.ModelState == ModelState.Available);
+                m => m.ModelState == ModelState.Available || m.ModelState == ModelState.ResolveFailed);
         var originFileResolver = new OriginFileResolver("-");
         var resolveResult = await _repositoryModelResolver.SoftResolveAsync(ckModels.Select(x => x.Id).ToList(),
             originFileResolver, operationResult, sourceIdentifier);
 
-        // Mark models that were skipped due to missing dependencies as ResolveFailed
-        if (resolveResult.SkippedModelIds.Any())
+        var failed = ComputeFailedModels(ckModels.Select(m => (m.Id, (IReadOnlyCollection<CkModelId>)(m.Dependencies ?? []))).ToList(),
+            resolveResult.SkippedModelIds, resolveResult.FailedModelIds);
+
+        foreach (var ckModel in ckModels)
         {
-            foreach (CkModelId skippedModelId in resolveResult.SkippedModelIds)
+            var isFailed = failed.ContainsKey(ckModel.Id);
+            if (ckModel.ModelState == ModelState.Available && isFailed)
             {
                 _logger.LogWarning(
-                    "CK model '{CkModelId}' has missing dependencies and will be marked as ResolveFailed. " +
-                    "It will be re-validated when the missing dependency becomes available",
-                    skippedModelId);
-                await UpdateModelStateAsync(session, mongoDbRepositoryDataSource, skippedModelId, ModelState.ResolveFailed);
+                    "CK model '{CkModelId}' no longer resolves and is marked as ResolveFailed: {Reason}. " +
+                    "It is re-validated after every CK model import and returns to Available once it resolves",
+                    ckModel.Id, failed[ckModel.Id]);
+                await UpdateModelStateAsync(session, mongoDbRepositoryDataSource, ckModel.Id, ModelState.ResolveFailed);
+            }
+            else if (ckModel.ModelState == ModelState.ResolveFailed && !isFailed)
+            {
+                _logger.LogInformation(
+                    "CK model '{CkModelId}' resolves again (dependencies {Dependencies} satisfied) and is Available",
+                    ckModel.Id, string.Join(", ", ckModel.Dependencies ?? []));
+                await UpdateModelStateAsync(session, mongoDbRepositoryDataSource, ckModel.Id, ModelState.Available);
+                CkModelImportDiagnostics.RecordRevalidation(CkModelImportDiagnostics.ResultRecovered);
+            }
+            else if (ckModel.ModelState == ModelState.ResolveFailed)
+            {
+                // Still failing: no log spam on every import, the reason was logged when it failed.
+                _logger.LogDebug("CK model '{CkModelId}' still does not resolve: {Reason}", ckModel.Id,
+                    failed[ckModel.Id]);
+                CkModelImportDiagnostics.RecordRevalidation(CkModelImportDiagnostics.ResultStillFailed);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     AB#5901: the set of models that do not resolve, with a reason. Seeds: models with an exact dependency
+    ///     that is not installed, and the models the resolver skipped (missing dependency) or failed (inheritance).
+    ///     Then the failure is propagated to every model with an exact dependency on a failed model, until nothing
+    ///     changes — with ResolveFailed models visible to the resolver, a dependent of a model that fails only
+    ///     its inheritance would otherwise be judged on a dependency that is not usable.
+    /// </summary>
+    internal static Dictionary<CkModelId, string> ComputeFailedModels(
+        IReadOnlyCollection<(CkModelId Id, IReadOnlyCollection<CkModelId> Dependencies)> models,
+        IEnumerable<CkModelId> skippedModelIds, IEnumerable<CkModelId> inheritanceFailedModelIds)
+    {
+        var installedIds = models.Select(m => m.Id).ToHashSet();
+        var failed = new Dictionary<CkModelId, string>();
+
+        foreach (var model in models)
+        {
+            var missing = model.Dependencies.Where(d => !installedIds.Contains(d)).ToList();
+            if (missing.Count > 0)
+            {
+                failed[model.Id] = "missing dependency " + string.Join(", ", missing.Select(m => m.FullName)) +
+                                   InstalledVersions(missing, installedIds);
             }
         }
 
-        // Mark models that failed inheritance resolution as ResolveFailed
-        // This happens when a dependency model was upgraded to a new major version and
-        // the dependent model still references types from the old version
-        if (resolveResult.FailedModelIds.Any())
+        foreach (var id in skippedModelIds.Where(installedIds.Contains))
         {
-            foreach (CkModelId failedModelId in resolveResult.FailedModelIds)
-            {
-                _logger.LogWarning(
-                    "CK model '{CkModelId}' failed inheritance resolution and will be marked as ResolveFailed. " +
-                    "This typically happens after a dependency model major version upgrade. " +
-                    "The model will be re-validated when a compatible version is imported",
-                    failedModelId);
-                await UpdateModelStateAsync(session, mongoDbRepositoryDataSource, failedModelId, ModelState.ResolveFailed);
-            }
+            failed.TryAdd(id, "a dependency does not resolve");
         }
+
+        foreach (var id in inheritanceFailedModelIds.Where(installedIds.Contains))
+        {
+            failed.TryAdd(id, "inheritance resolution failed (typically a dependency changed its major version)");
+        }
+
+        bool changed;
+        do
+        {
+            changed = false;
+            foreach (var model in models)
+            {
+                if (failed.ContainsKey(model.Id))
+                {
+                    continue;
+                }
+
+                var failedDependency = model.Dependencies.FirstOrDefault(failed.ContainsKey);
+                if (failedDependency != null)
+                {
+                    failed[model.Id] = $"dependency '{failedDependency.FullName}' is ResolveFailed";
+                    changed = true;
+                }
+            }
+        } while (changed);
+
+        return failed;
+    }
+
+    private static string InstalledVersions(IEnumerable<CkModelId> missing, IReadOnlySet<CkModelId> installed)
+    {
+        var details = missing
+            .Select(m => installed.FirstOrDefault(i => i.Name == m.Name))
+            .Where(i => i != null)
+            .Select(i => i!.FullName)
+            .ToList();
+        return details.Count == 0 ? " (not installed)" : $" (installed: {string.Join(", ", details)})";
     }
 
     /// <summary>

@@ -199,6 +199,9 @@ Meter name: **`Meshmakers.Octo.MongoDb`** (registered in
 |------------|------|------|---------|
 | `octo.mongodb.command.duration` | Histogram (ms) | `command_name`, `database`, `status` | Latency distribution per command per tenant DB |
 | `octo.mongodb.command.errors` | Counter | `command_name`, `database`, `error_code` | Failure counts, tagged with the Mongo error code (e.g. `112` for WriteConflict) |
+| `octo.ck.embedded_import.skipped` | Counter | `model`, `reason` | Embedded CK model import skipped, tenant has a newer version (AB#5900, see *Embedded CK Model Import Guard*) |
+| `octo.ck.explicit_import.downgraded` | Counter | `model` | Explicit `ImportCk` replaced a newer installed version (AB#5900) |
+| `octo.ck.model.revalidated` | Counter | `result` (`recovered` / `still_failed`) | Post-import re-validation of `ResolveFailed` models (AB#5901) |
 
 The `tenantId` is deliberately **not** a tag — `database` is used instead as the
 low-cardinality attribution dimension (it equals the tenant database name).
@@ -1277,15 +1280,70 @@ survive a model upgrade:
 `TenantDatabaseSourceIdentifier` carries the `TenantId` (nullable; `null` = system tenant) so
 the audit trail can route notifications to the correct tenant.
 
-### Auto-import Downgrade Guard
+### Embedded CK Model Import Guard (CK v2 F1.0-S1, AB#5900)
 
-`TenantContext.EnsureStreamDataCkModelImportedAsync` checks the currently-installed
-`System.StreamData` version before importing the descriptor's version. If the installed
-version is **strictly greater** than the descriptor's target, the import is skipped — this
-prevents a service that ships an older `IStreamDataCkModelDescriptor` (or the bare 1.0.0
-fallback for services that register no descriptor) from overwriting a higher version that a
-sibling service already installed. Without this guard `DeletePreviousVersion` would strip the
-newer model's CK records and the `CkCache` reload would lose the newer types.
+A CK model import deletes every `CkModel` row of the same **name** before it inserts
+(`InsertModelWithImportingState`), so an exact-id existence check cannot see a newer installed version. Before
+F1.0 every service re-imported its embedded System on tenant resolve whenever the exact id was missing — an
+additive System bump (2.5.0 → 2.6.0) installed by one service was reverted by the next service within a second.
+
+`EmbeddedCkModelImportGuard` (`src/Runtime.Engine.MongoDb/EmbeddedCkModelImportGuard.cs`) is now the single guard
+of every **embedded/startup** import. It looks the model up by name (`FindInstalledAsync`, any state except
+`Importing` — a `ResolveFailed` model counts as installed) and decides (`Decide`, pure):
+
+| Installed | Decision | Log | Counter `octo.ck.embedded_import.skipped` |
+|---|---|---|---|
+| none / older | import (upgrade + migrations as before) | INFO | — |
+| same version | short-circuit; `RetryPendingMigrationsAsync` only for an `Available` model | DEBUG | — |
+| newer, same major | **skip** | INFO `downgrade prevented` | `reason=newer_installed` |
+| higher major | **skip** | WARN `this service is too old for the tenant` | `reason=newer_major_installed` |
+
+Used by `UpdateSystemCkModelAsync` (tenant resolve/create; the AB#4854 infrastructure-shell guard keeps its
+position after it), `ImportCkModelAsync(CkModelId, OperationResult)` (every service's tenant setup, blueprint
+dependencies via `MongoRuntimeRepositoryProvider`) and, through it, `ImportEmbeddedCkModelWithDowngradeGuardAsync`
+(System.StreamData descriptor, service-managed models — the guard that used to live only there). A skip sends
+**no** pre/post tenant-update notification, runs no migration and leaves the CK cache alone.
+
+- **Explicit imports stay unguarded** (platform-owner decision Q5): `ImportCkModelAsync(CkCompiledModelRoot)`
+  (CLI/API `ImportCk`, bot import command) may downgrade, logged WARN `Explicit downgrade of CK model ... from X
+  to Y` and counted in `octo.ck.explicit_import.downgraded` (tag `model`). An explicit downgrade of a model that
+  this process *embeds* in a newer version does not stick: the next tenant resolve (at the latest, the migration
+  step of the import itself) sees "installed older" and upgrades it back.
+- **No notification after a swallowed `ModelValidationException`** in the `CkModelId` overload any more (the System
+  path already returned early): announcing a failed import made every service re-run its tenant setup.
+- **Consequence for a service with an older embedded System:** it runs against the tenant's newer System (runtime
+  code uses version-less ids, the cache is rebuilt from what is installed), but its own exact-pinned service model
+  goes `ResolveFailed` until the service is upgraded — the v1 contract made visible instead of a silent downgrade.
+- Counters live in `CkModelImportDiagnostics` on the meter `Meshmakers.Octo.MongoDb` (no tenant tag; the tenant
+  is in the log line).
+
+### Re-validation of ResolveFailed Models after Every Import (CK v2 F1.0-S2, AB#5901)
+
+`DatabaseCkModelRepository.ValidateDependencies` (end of `ExecuteImport`, inside the `sessionComplete`
+transaction) soft-resolves **`Available` and `ResolveFailed`** models; `Importing` is never touched. Before F1.0 it
+resolved `Available` models only, so a `ResolveFailed` model never recovered although the log promised it (R2-3:
+Basic.Accounting stayed `ResolveFailed` after System went back to the version it pins).
+
+- The resolver sees `ResolveFailed` models only for this call: `TenantDatabaseSourceIdentifier.IncludeResolveFailedModels`
+  widens the state filter of `IsExistingAsync(CkModelIdVersionRange)` and `TryLookupCkModelAsync`. The CK cache
+  (`ModelLoaderService`), imports and every other lookup keep resolving `Available` models only.
+- `ComputeFailedModels` seeds the failed set with models whose exact dependency is not installed (reason names the
+  installed version), the resolver's skipped models and its inheritance failures, and **propagates** the failure to
+  every dependent until nothing changes — with `ResolveFailed` models visible, a dependent of a model that fails
+  only its inheritance would otherwise stay `Available` on an unusable dependency.
+- Transitions: `Available` → failed → `ResolveFailed` (WARN with the reason); `ResolveFailed` → resolves →
+  `Available` (INFO, `octo.ck.model.revalidated{result=recovered}`; `UpdateModelStateAsync` flips the element rows
+  too); still failing → stays, DEBUG only (`result=still_failed`, no log spam on every import).
+- The callers in `TenantContext` unload the tenant's CK cache after every import, so a recovered model's types are in
+  the next cache load (its collections and indexes exist: a model is `Available` after its own import and only later
+  flips to `ResolveFailed`).
+- Also fixed on the way: an operator-precedence slip in `MongoDbRepositoryDataSource` (`a && b ? c : d`) that dropped
+  the id filter of the base-type prefetch and loaded every `Available` type of the tenant.
+
+Pinned by `CkModelImportGuard/CkModelImportGuardTests` (real MongoDB, throwaway tenants: same-major and major skip,
+explicit downgrade + upgrade back, same-version short-circuit, embedded vs explicit service-model overloads,
+notification counts, log levels, counters, and the R2-3 recovery incl. "still failed" on an unrelated import) and
+`CkModelImportGuardDecisionTests` (decision table, failure propagation).
 
 ### Service-Managed CK Model Auto-import (AB#4294)
 
