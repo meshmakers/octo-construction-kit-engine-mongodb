@@ -8,6 +8,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
@@ -378,8 +379,10 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
     ///     D-G1-1 (G1 E2E): a service whose embedded System is OLDER than the tenant's (the state the downgrade guard
     ///     keeps) must still write entities. <c>AutoIncrementModifier</c> looked up the generated versioned
     ///     <c>System-&lt;embedded&gt;/AutoIncrement-1</c> on every insert, which is not in the cache of a tenant with a
-    ///     newer System. One batch with a type WITHOUT auto-increment first and one WITH it second (the first entry
-    ///     used to end the whole batch's auto-increment pass).
+    ///     newer System. Single-type batches on purpose: the mixed-batch numbering is a separate, unchanged bug
+    ///     (scratchpad bug-autoincrement-mixed-batches.md). The newer System adds an AutoIncrement attribute
+    ///     (<c>Prefix</c>) that the older typed <c>RtAutoIncrement</c> does not know; the counter document written
+    ///     back through it must keep that value.
     /// </summary>
     [Fact]
     public async Task OlderEmbeddedSystem_CanWriteEntities_IntoATenantWithANewerSystem()
@@ -387,15 +390,17 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
         await WithTenantAsync("guardwrite", async (tenant, tenantId) =>
         {
             var newer = Bump(EmbeddedSystem, minor: 1);
-            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, newer));
+            await tenant.ImportCkModelAsync(WithAutoIncrementPrefix(await RenameAsync(EmbeddedSystem, newer)));
             await tenant.ImportCkModelAsync(TicketModel(newer));
             Assert.Equal(newer.FullName, await InstalledAsync(tenantId, "System"));
 
             var repository = tenant.GetTenantRepository();
+            var counterId = OctoObjectId.GenerateNewId();
             using (var session = await repository.GetSessionAsync())
             {
                 session.StartTransaction();
                 var counter = await repository.CreateTransientRtEntityAsync<RtAutoIncrement>();
+                counter.RtId = counterId;
                 counter.RtWellKnownName = "TicketNumber";
                 counter.CurrentValue = 41;
                 counter.End = 1000;
@@ -403,44 +408,81 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
                 await session.CommitTransactionAsync();
             }
 
-            var noteId = OctoObjectId.GenerateNewId();
-            var ticketId = OctoObjectId.GenerateNewId();
-            using (var session = await repository.GetSessionAsync())
-            {
-                session.StartTransaction();
-                var operationResult = new OperationResult();
-                await repository.ApplyChangesAsync(session, new List<IEntityUpdateInfo<RtEntity>>
-                {
-                    EntityUpdateInfo<RtEntity>.CreateInsert(new RtEntity(NoteTypeId, noteId,
-                        new Dictionary<string, object?> { { "Title", "no auto-increment" } })),
-                    EntityUpdateInfo<RtEntity>.CreateInsert(new RtEntity(TicketTypeId, ticketId,
-                        new Dictionary<string, object?> { { "Title", "with auto-increment" } }))
-                }, operationResult);
-                Assert.False(operationResult.HasErrors, operationResult.GetMessages());
-                await session.CommitTransactionAsync();
-            }
-
+            // A value of the attribute only the newer System has (written by a newer service).
             var database = GetTenantDatabase(tenantId);
-            var documents = new List<BsonDocument>();
-            foreach (var name in await (await database.ListCollectionNamesAsync(
-                         cancellationToken: TestContext.Current.CancellationToken)).ToListAsync(TestContext.Current.CancellationToken))
-            {
-                if (name.StartsWith("RtEntity_", StringComparison.Ordinal))
-                {
-                    documents.AddRange(await database.GetCollection<BsonDocument>(name)
-                        .Find(new BsonDocument("_id", new BsonDocument("$in", new BsonArray
-                        {
-                            ObjectId.Parse(noteId.ToString()), ObjectId.Parse(ticketId.ToString())
-                        }))).ToListAsync(TestContext.Current.CancellationToken));
-                }
-            }
+            var counterCollection = await FindCollectionOfAsync(database, counterId);
+            await database.GetCollection<BsonDocument>(counterCollection).UpdateOneAsync(
+                new BsonDocument("_id", ObjectId.Parse(counterId.ToString())),
+                new BsonDocument("$set", new BsonDocument("attributes.prefix", "T-")),
+                cancellationToken: TestContext.Current.CancellationToken);
 
-            Assert.Equal(2, documents.Count);
-            var ticket = documents.Single(d => d["_id"].AsObjectId.ToString() == ticketId.ToString());
+            // Without auto-increment (failed before the fix: the versioned lookup ran for every insert) ...
+            var noteId = OctoObjectId.GenerateNewId();
+            await InsertAsync(repository, new RtEntity(NoteTypeId, noteId,
+                new Dictionary<string, object?> { { "Title", "no auto-increment" } }));
+            // ... and with it.
+            var ticketId = OctoObjectId.GenerateNewId();
+            await InsertAsync(repository, new RtEntity(TicketTypeId, ticketId,
+                new Dictionary<string, object?> { { "Title", "with auto-increment" } }));
+
+            var note = await FindDocumentAsync(database, noteId);
+            Assert.False(note["attributes"].AsBsonDocument.Contains("number"));
+            var ticket = await FindDocumentAsync(database, ticketId);
             Assert.Equal(42, ticket["attributes"]["number"].ToInt64());
-            Assert.False(documents.Single(d => d["_id"].AsObjectId.ToString() == noteId.ToString())["attributes"]
-                .AsBsonDocument.Contains("number"));
+
+            var counterDocument = await FindDocumentAsync(database, counterId);
+            Assert.Equal(42, counterDocument["attributes"]["currentValue"].ToInt64());
+            Assert.Equal("T-", counterDocument["attributes"]["prefix"].AsString);
         });
+    }
+
+    private static async Task InsertAsync(ITenantRepository repository, RtEntity entity)
+    {
+        using var session = await repository.GetSessionAsync();
+        session.StartTransaction();
+        var operationResult = new OperationResult();
+        await repository.ApplyChangesAsync(session,
+            new List<IEntityUpdateInfo<RtEntity>> { EntityUpdateInfo<RtEntity>.CreateInsert(entity) }, operationResult);
+        Assert.False(operationResult.HasErrors, operationResult.GetMessages());
+        await session.CommitTransactionAsync();
+    }
+
+    private static async Task<string> FindCollectionOfAsync(IMongoDatabase database, OctoObjectId rtId)
+    {
+        foreach (var name in await (await database.ListCollectionNamesAsync(
+                     cancellationToken: TestContext.Current.CancellationToken)).ToListAsync(TestContext.Current.CancellationToken))
+        {
+            if (name.StartsWith("RtEntity_", StringComparison.Ordinal) &&
+                await database.GetCollection<BsonDocument>(name)
+                    .Find(new BsonDocument("_id", ObjectId.Parse(rtId.ToString())))
+                    .AnyAsync(TestContext.Current.CancellationToken))
+            {
+                return name;
+            }
+        }
+
+        throw new InvalidOperationException($"Entity {rtId} not found");
+    }
+
+    private static async Task<BsonDocument> FindDocumentAsync(IMongoDatabase database, OctoObjectId rtId) =>
+        await database.GetCollection<BsonDocument>(await FindCollectionOfAsync(database, rtId))
+            .Find(new BsonDocument("_id", ObjectId.Parse(rtId.ToString())))
+            .SingleAsync(TestContext.Current.CancellationToken);
+
+    /// <summary>The newer System gets an AutoIncrement attribute the embedded (older) System does not have.</summary>
+    private static CkCompiledModelRoot WithAutoIncrementPrefix(CkCompiledModelRoot system)
+    {
+        system.Attributes!.Add(new CkAttributeDto
+        {
+            AttributeId = new CkAttributeId("AutoIncrement.Prefix-1"), ValueType = AttributeValueTypesDto.String
+        });
+        var autoIncrement = system.Types!.Single(t => t.TypeId.Name == "AutoIncrement");
+        autoIncrement.Attributes!.Add(new CkTypeAttributeDto
+        {
+            CkAttributeId = new CkId<CkAttributeId>(system.ModelId, new CkAttributeId("AutoIncrement.Prefix-1")),
+            AttributeName = "Prefix", IsOptional = true
+        });
+        return system;
     }
 
     private static readonly RtCkId<CkTypeId> NoteTypeId = new("GuardWrite/Note");

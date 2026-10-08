@@ -1348,8 +1348,10 @@ dependencies via `MongoRuntimeRepositoryProvider`) and, through it, `ImportEmbed
   (`….ToRtCkId()` / `GetRtCkType`). D-G1-1: `AutoIncrementModifier` looked up `SystemCkIds.CkAutoIncrementTypeId`
   on every entity insert, so an older service could not write anything into a tenant with a newer System (also its
   migration-history rows); it now looks the type up version-less and only when an auto-increment attribute is
-  written (and no longer stops at the first batch entry without one — a pre-existing `return` instead of
-  `continue`). Sweep result (engine-mongodb `src/`): this was the only versioned generated-id lookup; the other
+  written. Batch semantics are deliberately unchanged: the pass still ends at the first entry/type without
+  auto-increment (a pre-existing `return`, tracked as a separate bug — a plain `continue` would renumber values on
+  replace and overwrite supplied values on ImportRt). A counter written back through an older typed
+  `RtAutoIncrement` keeps attributes only the newer System has. Sweep result (engine-mongodb `src/`): this was the only versioned generated-id lookup; the other
   `GetCkType`/`GetCkRecord`/`GetCkEnum` calls take ids from the CK cache or the database, which are the installed
   versions. Pinned by `OlderEmbeddedSystem_CanWriteEntities_IntoATenantWithANewerSystem`.
 - Counters live in `CkModelImportDiagnostics` on the meter `Meshmakers.Octo.MongoDb` (no tenant tag; the tenant

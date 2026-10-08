@@ -33,9 +33,9 @@ public class AutoIncrementModifier(
                 .Select(x => x.AutoIncrementReference!).ToList();
             if (!typeAttributeGraphs.Any())
             {
-                // Pre-existing bug fixed with D-G1-1: this was a `return`, which skipped the auto-increment
-                // assignment of every LATER type of a mixed batch.
-                continue;
+                // NOTE: `return` ends the pass for the whole batch, also for later types that do use auto-increment.
+                // Known pre-existing behaviour, deliberately unchanged here (see the mixed-batch bug report).
+                return;
             }
 
             // Add unique auto increment references of typeAttributeGraphs to hashset autoIncrementReferences
@@ -74,8 +74,8 @@ public class AutoIncrementModifier(
                 .Where(a => !string.IsNullOrEmpty(a.AutoIncrementReference)).ToList();
             if (!typeIncrements.Any())
             {
-                // Was a `return` (see above): it skipped every later entity of the batch.
-                continue;
+                // Same pre-existing `return` as above (mixed-batch bug report), deliberately unchanged.
+                return;
             }
 
             foreach (var autoIncrementReference in typeIncrements)
