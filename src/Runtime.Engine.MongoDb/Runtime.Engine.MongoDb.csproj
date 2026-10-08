@@ -34,6 +34,7 @@
 
     <ItemGroup>
         <InternalsVisibleTo Include="Meshmakers.Octo.Runtime.Engine.UnitTests" />
+        <InternalsVisibleTo Include="Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests" />
     </ItemGroup>
 
     <ItemGroup>

@@ -3,6 +3,8 @@ types:
   - typeId: Location
     derivedFromCkTypeId: ${System}/Entity
     isAbstract: true
+    # AB#5945: inherited display rule exercised by the bulk-import (blueprint / ImportRt) tests.
+    displayNameRule: "${Name}"
     attributes:
     - id: ${this}/Name
       name: Name

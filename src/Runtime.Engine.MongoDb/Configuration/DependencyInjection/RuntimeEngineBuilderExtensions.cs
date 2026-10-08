@@ -108,6 +108,10 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services
             .AddSingleton<Meshmakers.Octo.Runtime.Contracts.MongoDb.DisplayRules.IDisplayRuleSweepStore,
                 Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.DisplayRules.DisplayRuleSweepStore>();
+        // AB#5945 operator-triggered recompute: enqueues the same sweep tasks for all rule-bearing types.
+        builder.Services
+            .AddSingleton<Meshmakers.Octo.Runtime.Contracts.MongoDb.DisplayRules.IDisplayRuleRecomputeService,
+                Meshmakers.Octo.Runtime.Engine.MongoDb.DisplayRules.DisplayRuleRecomputeService>();
 
         // Stage 2B explain cache — singleton, shared between admin and user MongoDB
         // connections so a tenant query's explain finishes wherever the listener that
