@@ -48,8 +48,9 @@ public class SystemContext : TenantContext, ISystemContext
         var normalizedDatabaseName = NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName);
         var normalizedTenantId = _systemConfiguration.Value.SystemTenantId.NormalizeString();
 
-        // IsSystemTenantExistingAsync above is false whenever the System CK model is missing or not
-        // at the exact expected version - even when the database itself is present and full of data.
+        // IsSystemTenantExistingAsync above is false whenever the System CK model is missing or older than
+        // the embedded version (a newer one counts as existing since CK v2 F1.0-S1, AB#5900) - even when
+        // the database itself is present and full of data.
         // Bootstrapping over it used to run into the database-exists guard inside the try below, whose
         // catch then dropped the entire platform database (AB#4762). Refuse instead: the caller must
         // repair the CK model, not re-create the tenant. Deliberately explicit rather than generic -
@@ -265,7 +266,11 @@ public class SystemContext : TenantContext, ISystemContext
                 return false;
             }
 
-            if (await IsCkModelExistingAsync(SystemCkIds.CkModelId))
+            // By name, embedded version or newer (CK v2 F1.0-S1, G-H2): the downgrade guard keeps a newer System
+            // that another service installed, and an exact check would report this database as having no usable
+            // System model — an older identity then refuses to start ("carries no usable System CK model") and
+            // older services throw SystemTenantDatabaseNotExisting on every request.
+            if (await IsCkModelSatisfiedAsync(SystemCkIds.CkModelId))
             {
                 return true;
             }

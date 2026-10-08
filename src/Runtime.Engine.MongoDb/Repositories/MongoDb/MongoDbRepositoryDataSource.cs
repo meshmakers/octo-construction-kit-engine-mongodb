@@ -347,6 +347,14 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         var validCollectionSuffixes = new HashSet<string>(
             ckTypes.Select(t => t.CkTypeId.ToRtCkId().GetCkTypeCollectionName()));
 
+        // CK v2 F1.0-S2 (AB#5901, G-M2): collection roots of ResolveFailed models are kept too (not created, not
+        // dropped by the cleanup below). Since ResolveFailed models recover by re-validation, dropping their empty
+        // collections would leave a recovered model without collection, indexes and change-stream options.
+        var resolveFailedRoots = await CkTypes.FindManyAsync(session,
+            t => t.IsCollectionRoot && t.ModelState == ModelState.ResolveFailed);
+        validCollectionSuffixes.UnionWith(
+            resolveFailedRoots.Select(t => t.CkTypeId.ToRtCkId().GetCkTypeCollectionName()));
+
         foreach (var ckType in ckTypes)
         {
             _logger.LogDebug("Creating type root collection for '{CkTypeId}'", ckType.CkTypeId);

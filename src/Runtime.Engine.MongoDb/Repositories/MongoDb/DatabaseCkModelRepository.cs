@@ -447,9 +447,30 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             cancellationToken ?? CancellationToken.None, importLock.LockLostToken);
         cancellationToken = linkedImportCts.Token;
 
-        // Re-check after acquiring the lock: another service may have already imported
-        // the model while we were waiting for the lock
+        var guardedIdentifier = sourceIdentifier as TenantDatabaseSourceIdentifier;
+        if (guardedIdentifier is { GuardAgainstDowngrade: true })
         {
+            // CK v2 F1.0-S1 (AB#5900, G-H1): an embedded/startup import repeats the by-name decision under the
+            // lock. The caller decided before waiting for the lock; meanwhile another service may have installed
+            // this or a newer version (parallel stack start, rolling update, fresh tenant set up by two services).
+            // Without this check the exact-id re-check below misses the newer row, and InsertModelWithImportingState
+            // deletes it — the downgrade the guard exists to prevent.
+            var installed = await EmbeddedCkModelImportGuard.FindInstalledAsync(mongoDbRepositoryDataSource,
+                compiledModel.ModelId.Name);
+            var decision = EmbeddedCkModelImportGuard.Decide(compiledModel.ModelId, installed?.ModelId);
+            if (decision != EmbeddedImportDecision.Import)
+            {
+                EmbeddedCkModelImportGuard.Report(decision, compiledModel.ModelId, installed, tenantId, _logger,
+                    underLock: true);
+                guardedIdentifier.ImportOutcome.SkippedUnderLock = true;
+                guardedIdentifier.ImportOutcome.InstalledModelId = installed!.ModelId;
+                return;
+            }
+        }
+        else
+        {
+            // Re-check after acquiring the lock: another service may have already imported
+            // the model while we were waiting for the lock
             using var checkSession = await mongoDbRepositoryDataSource.CreateSessionAsync();
             var existingModel = await mongoDbRepositoryDataSource.CkModels
                 .FindSingleOrDefaultAsync(checkSession,
@@ -466,6 +487,10 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         // Insert model with Importing state (now safe because we have the lock)
         await InsertModelWithImportingState(compiledModel, mongoDbRepositoryDataSource);
 
+        // G-L3: once the element rows are committed, a failure of the post-work must not delete the CkModel row
+        // (that would orphan the committed rows). The row then stays Importing; the next import of the model name
+        // replaces it.
+        var elementsCommitted = false;
         try
         {
             // Pre-validate that all system CkTypeId references in the compiled model
@@ -605,6 +630,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
             _logger.LogDebug("Committing model import transaction");
             await session.CommitTransactionAsync();
+            elementsCommitted = true;
 
             _logger.LogDebug("Pos-work of CK model import");
             using var indexUpdateSession = await mongoDbRepositoryDataSource.CreateSessionAsync();
@@ -619,24 +645,42 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
 
             await indexUpdateSession.CommitTransactionAsync();
 
-            using var sessionComplete = await mongoDbRepositoryDataSource.CreateSessionAsync();
-            sessionComplete.StartTransaction();
+            // State flip + re-validation of all models in one transaction, retried on transient transaction errors
+            // (G-L3: parallel imports by several services re-validate the same models and can write-conflict).
+            var revalidation = await RunInTransactionWithRetryAsync(mongoDbRepositoryDataSource, async sessionComplete =>
+            {
+                _logger.LogDebug("Updating model state");
+                await UpdateModelStateAsync(sessionComplete, mongoDbRepositoryDataSource, compiledModel.ModelId,
+                    ModelState.Available);
 
-            _logger.LogDebug("Updating model state");
-            await UpdateModelStateAsync(sessionComplete, mongoDbRepositoryDataSource, compiledModel.ModelId,
-                ModelState.Available);
+                _logger.LogDebug("Validating dependencies of other CK models");
+                var result = await ValidateDependencies(sessionComplete, mongoDbRepositoryDataSource);
+                CheckCancellation(cancellationToken);
+                return result;
+            }, $"state update and re-validation after the import of '{compiledModel.ModelId}'");
 
-            _logger.LogDebug("Validating dependencies of other CK models");
-            await ValidateDependencies(sessionComplete, mongoDbRepositoryDataSource);
-            CheckCancellation(cancellationToken);
-
-            await sessionComplete.CommitTransactionAsync();
+            ReportRevalidation(revalidation);
+            await RestoreCollectionsOfRecoveredModelsAsync(mongoDbRepositoryDataSource, revalidation.Recovered,
+                cancellationToken);
+            if (guardedIdentifier != null)
+            {
+                guardedIdentifier.ImportOutcome.RecoveredModelIds = revalidation.Recovered;
+            }
 
             _logger.LogInformation("Import of CK model {CkModelId} to database succeeded", compiledModel.ModelId);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Import of CK model {CkModelId}  to database failed", compiledModel.ModelId);
+
+            if (elementsCommitted)
+            {
+                _logger.LogError(
+                    "The elements of CK model '{CkModelId}' were already committed; its CkModel row is kept (state " +
+                    "Importing) and is replaced by the next import of the model",
+                    compiledModel.ModelId);
+                throw;
+            }
 
             using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
             session.StartTransaction();
@@ -684,14 +728,25 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     }
 
     /// <summary>
-    ///     Re-validates every installed model after an import (end of <c>ExecuteImport</c>, inside the
-    ///     <c>sessionComplete</c> transaction). CK v2 F1.0-S2 (AB#5901): <c>ResolveFailed</c> models are resolved
-    ///     too, so a model whose dependencies became satisfiable again (an upgrade, an explicit downgrade, a
-    ///     missing dependency imported) returns to <c>Available</c> without manual action — before, only
-    ///     <c>Available</c> models were checked and <c>ResolveFailed</c> never recovered (R2-3). <c>Importing</c>
-    ///     models are never touched.
+    ///     Outcome of one re-validation pass (CK v2 F1.0-S2, AB#5901). Logged and counted by
+    ///     <see cref="ReportRevalidation" /> only after the transaction committed, so a retried transaction is not
+    ///     reported twice.
     /// </summary>
-    private async Task ValidateDependencies(IOctoSession session,
+    internal sealed record RevalidationResult(
+        IReadOnlyCollection<CkModelId> Recovered,
+        IReadOnlyCollection<(CkModelId ModelId, string Reason)> NewlyFailed,
+        IReadOnlyCollection<(CkModelId ModelId, string Reason)> StillFailed,
+        IReadOnlyDictionary<CkModelId, CkModelId[]> Dependencies);
+
+    /// <summary>
+    ///     Re-validates every installed model after an import (end of <c>ExecuteImport</c>, inside the transaction
+    ///     that flips the imported model to <c>Available</c>) or on its own (<see cref="RevalidateAsync" />).
+    ///     CK v2 F1.0-S2 (AB#5901): <c>ResolveFailed</c> models are resolved too, so a model whose dependencies became
+    ///     satisfiable again (an upgrade, an explicit downgrade, a missing dependency imported) returns to
+    ///     <c>Available</c> without manual action — before, only <c>Available</c> models were checked and
+    ///     <c>ResolveFailed</c> never recovered (R2-3). <c>Importing</c> models are never touched.
+    /// </summary>
+    private async Task<RevalidationResult> ValidateDependencies(IOctoSession session,
         ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
     {
         // The resolver may load ResolveFailed models for this call only (see TenantDatabaseSourceIdentifier).
@@ -705,34 +760,138 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         var resolveResult = await _repositoryModelResolver.SoftResolveAsync(ckModels.Select(x => x.Id).ToList(),
             originFileResolver, operationResult, sourceIdentifier);
 
+        // TODO CK v2 S3 (F1.0-S4 range-retention run, review I2): the missing-dependency seed below and the
+        // engine's RepositoryDependencyResolver both use the exact Dependencies. Range-retaining models must be
+        // judged by their persisted dependency ranges (CkModel.DependencyRanges, F1.3-S1), otherwise they go
+        // ResolveFailed on an additive System bump. ComputeFailedModels takes the dependencies as input so the
+        // ranges can be passed in there.
         var failed = ComputeFailedModels(ckModels.Select(m => (m.Id, (IReadOnlyCollection<CkModelId>)(m.Dependencies ?? []))).ToList(),
             resolveResult.SkippedModelIds, resolveResult.FailedModelIds);
 
+        var recovered = new List<CkModelId>();
+        var newlyFailed = new List<(CkModelId, string)>();
+        var stillFailed = new List<(CkModelId, string)>();
         foreach (var ckModel in ckModels)
         {
             var isFailed = failed.ContainsKey(ckModel.Id);
             if (ckModel.ModelState == ModelState.Available && isFailed)
             {
-                _logger.LogWarning(
-                    "CK model '{CkModelId}' no longer resolves and is marked as ResolveFailed: {Reason}. " +
-                    "It is re-validated after every CK model import and returns to Available once it resolves",
-                    ckModel.Id, failed[ckModel.Id]);
                 await UpdateModelStateAsync(session, mongoDbRepositoryDataSource, ckModel.Id, ModelState.ResolveFailed);
+                newlyFailed.Add((ckModel.Id, failed[ckModel.Id]));
             }
             else if (ckModel.ModelState == ModelState.ResolveFailed && !isFailed)
             {
-                _logger.LogInformation(
-                    "CK model '{CkModelId}' resolves again (dependencies {Dependencies} satisfied) and is Available",
-                    ckModel.Id, string.Join(", ", ckModel.Dependencies ?? []));
                 await UpdateModelStateAsync(session, mongoDbRepositoryDataSource, ckModel.Id, ModelState.Available);
-                CkModelImportDiagnostics.RecordRevalidation(CkModelImportDiagnostics.ResultRecovered);
+                recovered.Add(ckModel.Id);
             }
             else if (ckModel.ModelState == ModelState.ResolveFailed)
             {
-                // Still failing: no log spam on every import, the reason was logged when it failed.
-                _logger.LogDebug("CK model '{CkModelId}' still does not resolve: {Reason}", ckModel.Id,
-                    failed[ckModel.Id]);
-                CkModelImportDiagnostics.RecordRevalidation(CkModelImportDiagnostics.ResultStillFailed);
+                stillFailed.Add((ckModel.Id, failed[ckModel.Id]));
+            }
+        }
+
+        return new RevalidationResult(recovered, newlyFailed, stillFailed,
+            ckModels.ToDictionary(m => m.Id, m => m.Dependencies ?? []));
+    }
+
+    private void ReportRevalidation(RevalidationResult result)
+    {
+        foreach (var (modelId, reason) in result.NewlyFailed)
+        {
+            _logger.LogWarning(
+                "CK model '{CkModelId}' no longer resolves and is marked as ResolveFailed: {Reason}. " +
+                "It is re-validated after every CK model import and returns to Available once it resolves",
+                modelId, reason);
+        }
+
+        foreach (var modelId in result.Recovered)
+        {
+            _logger.LogInformation(
+                "CK model '{CkModelId}' resolves again (dependencies {Dependencies} satisfied) and is Available",
+                modelId, string.Join(", ", result.Dependencies.TryGetValue(modelId, out var d) ? d : []));
+            CkModelImportDiagnostics.RecordRevalidation(CkModelImportDiagnostics.ResultRecovered);
+        }
+
+        foreach (var (modelId, reason) in result.StillFailed)
+        {
+            // Still failing: no log spam on every import, the reason was logged when it failed.
+            _logger.LogDebug("CK model '{CkModelId}' still does not resolve: {Reason}", modelId, reason);
+            CkModelImportDiagnostics.RecordRevalidation(CkModelImportDiagnostics.ResultStillFailed);
+        }
+    }
+
+    /// <summary>
+    ///     G-M2: a recovered model gets its collection roots and indexes back. While it was <c>ResolveFailed</c> its
+    ///     types were not part of collection/index maintenance, and the collections of a model that went
+    ///     <c>ResolveFailed</c> before they were ever created do not exist; MongoDB would auto-create them on the
+    ///     first insert without the model's (unique) indexes and without <c>changeStreamPreAndPostImages</c>.
+    /// </summary>
+    private async Task RestoreCollectionsOfRecoveredModelsAsync(ICkMongoDbRepositoryDataSource dataSource,
+        IReadOnlyCollection<CkModelId> recovered, CancellationToken? cancellationToken)
+    {
+        if (recovered.Count == 0)
+        {
+            return;
+        }
+
+        using (var session = await dataSource.CreateSessionAsync())
+        {
+            session.StartTransaction();
+            await dataSource.UpdateCollectionsAsync(session, includeModelsInStateImporting: false, skipCleanup: true);
+            await session.CommitTransactionAsync();
+        }
+
+        foreach (var modelId in recovered)
+        {
+            using var indexSession = await dataSource.CreateSessionAsync();
+            indexSession.StartTransaction();
+            await dataSource.UpdateIndexAsync(indexSession, false, modelId, cancellationToken ?? CancellationToken.None);
+            await indexSession.CommitTransactionAsync();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyCollection<CkModelId>> RevalidateAsync(object? sourceIdentifier = null,
+        CancellationToken? cancellationToken = null)
+    {
+        var sourceIdentifierObject =
+            ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
+                sourceIdentifier);
+        var dataSource = sourceIdentifierObject.MongoDbRepositoryDataSource;
+
+        var result = await RunInTransactionWithRetryAsync(dataSource,
+            session => ValidateDependencies(session, dataSource), "re-validation of the CK models");
+        ReportRevalidation(result);
+        await RestoreCollectionsOfRecoveredModelsAsync(dataSource, result.Recovered, cancellationToken);
+        return result.Recovered;
+    }
+
+    /// <summary>
+    ///     Runs <paramref name="work" /> in its own transaction and retries it (3 attempts) on the MongoDB labels
+    ///     <c>TransientTransactionError</c> / <c>UnknownTransactionCommitResult</c> — write conflicts between services
+    ///     that import or re-validate in parallel (G-L3).
+    /// </summary>
+    private async Task<T> RunInTransactionWithRetryAsync<T>(ICkMongoDbRepositoryDataSource dataSource,
+        Func<IOctoSession, Task<T>> work, string what)
+    {
+        const int maxAttempts = 3;
+        for (var attempt = 1;; attempt++)
+        {
+            try
+            {
+                using var session = await dataSource.CreateSessionAsync();
+                session.StartTransaction();
+                var result = await work(session);
+                await session.CommitTransactionAsync();
+                return result;
+            }
+            catch (MongoException ex) when (attempt < maxAttempts &&
+                                            (ex.HasErrorLabel("TransientTransactionError") ||
+                                             ex.HasErrorLabel("UnknownTransactionCommitResult")))
+            {
+                _logger.LogWarning("Transient transaction error during {What} (attempt {Attempt}/{MaxAttempts}), retrying: {Message}",
+                    what, attempt, maxAttempts, ex.Message);
+                await Task.Delay(TimeSpan.FromMilliseconds(100 * attempt));
             }
         }
     }

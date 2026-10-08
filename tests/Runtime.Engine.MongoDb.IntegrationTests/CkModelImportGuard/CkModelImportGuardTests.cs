@@ -2,12 +2,17 @@ using System.Text;
 
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.Messages;
 using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
+
+using Microsoft.Extensions.Logging.Abstractions;
 
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -39,6 +44,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.CkModelImportG
 public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
 {
     private static readonly CkModelId TestV1ModelId = new("Test-1.0.0");
+    private static readonly CkModelId TestV2ModelId = new("Test-2.0.0");
     private static CkModelId EmbeddedSystem => SystemCkIds.CkModelId;
 
     [Fact]
@@ -106,7 +112,9 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
 
             await ResolveAsync(tenantId);
             Assert.Equal(EmbeddedSystem.FullName, await InstalledAsync(tenantId, "System"));
-            Assert.NotEmpty(fixture.Logs.Find(LogLevel.Information, "Restoring system CK Model"));
+            Assert.NotEmpty(fixture.Logs.Find(LogLevel.Information, "Restoring system CK Model", tenantId));
+            // The restore of a child tenant notifies the CHILD tenant, not the system tenant (review I1).
+            Assert.Contains(tenantId, fixture.Notifications.UpdatedTenantIds);
         });
     }
 
@@ -146,10 +154,16 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
             await tenant.ImportCkModelAsync(TestV1ModelId, result = new OperationResult());
             await tenant.ImportCkModelWithDowngradeGuardAsync(TestV1ModelId);
             Assert.False(result.HasErrors);
+            // The skip is reported to the caller as a warning (G-M1), so e.g. a blueprint install can name it.
+            Assert.Contains(result.Messages, m => m.MessageLevel == MessageLevel.Warning &&
+                                                  m.MessageText.Contains(newer.FullName, StringComparison.Ordinal));
             Assert.Equal(newer.FullName, await InstalledAsync(tenantId, "Test"));
             Assert.Equal((pre, pos), (fixture.Notifications.PreUpdates, fixture.Notifications.PosUpdates));
             Assert.True(counters.Sum(CkModelImportDiagnostics.EmbeddedImportSkippedCounterName,
-                ("model", "Test"), ("reason", CkModelImportDiagnostics.ReasonNewerInstalled)) >= 2);
+                ("model", "Test"), ("reason", CkModelImportDiagnostics.ReasonNewerInstalled)) >= 1);
+            // G-L2: the same prevented downgrade is logged at INFO once per process, repeats at DEBUG only.
+            Assert.Single(fixture.Logs.Find(LogLevel.Information, "downgrade prevented", tenantId, newer.FullName));
+            Assert.NotEmpty(fixture.Logs.Find(LogLevel.Debug, "downgrade prevented", tenantId, newer.FullName));
 
             // Explicit: downgrade allowed, WARN + counter.
             var compiledV1 = await fixture.GetService<ICatalogService>().GetAsync(TestV1ModelId, new OperationResult());
@@ -209,6 +223,196 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
             Assert.NotEmpty(typeStates);
             Assert.All(typeStates, t => Assert.Equal(1, t["modelState"].AsInt32));
         });
+    }
+
+    /// <summary>
+    ///     G-H1: two services import different embedded versions of the same model at the same time (parallel stack
+    ///     start, rolling update, fresh tenant). Whoever waits for the import lock must repeat the decision under the
+    ///     lock — the newer version always wins, in either order.
+    /// </summary>
+    [Fact]
+    public async Task ConcurrentEmbeddedImports_NewerVersionAlwaysWins()
+    {
+        for (var round = 0; round < 3; round++)
+        {
+            await WithTenantAsync("guardrace", async (tenant, tenantId) =>
+            {
+                var older = tenant.ImportCkModelAsync(TestV1ModelId, new OperationResult());
+                var newer = tenant.ImportCkModelAsync(TestV2ModelId, new OperationResult());
+                await Task.WhenAll(older, newer);
+
+                Assert.Equal(TestV2ModelId.FullName, await InstalledAsync(tenantId, "Test"));
+                Assert.Equal(1, await StateAsync(tenantId, TestV2ModelId));
+            });
+        }
+    }
+
+    /// <summary>
+    ///     G-H1, deterministic: the decision under the lock. Test-2.0.0 is installed after the caller's early check
+    ///     (simulated by calling the repository directly); the guarded import of Test-1.0.0 must skip and report it.
+    /// </summary>
+    [Fact]
+    public async Task GuardedImport_UnderTheLock_SkipsWhenANewerVersionWasInstalledMeanwhile()
+    {
+        await WithTenantAsync("guardlock", async (tenant, tenantId) =>
+        {
+            var result = new OperationResult();
+            await tenant.ImportCkModelAsync(TestV2ModelId, result);
+            Assert.False(result.HasErrors);
+
+            var compiledV1 = await fixture.GetService<ICatalogService>().GetAsync(TestV1ModelId, new OperationResult());
+            var identifier = NewSourceIdentifier(tenantId) with { GuardAgainstDowngrade = true };
+            await fixture.GetService<IDatabaseCkModelRepository>().UpdateModelAsync(compiledV1!, identifier);
+
+            Assert.True(identifier.ImportOutcome.SkippedUnderLock);
+            Assert.Equal(TestV2ModelId, identifier.ImportOutcome.InstalledModelId);
+            Assert.Equal(TestV2ModelId.FullName, await InstalledAsync(tenantId, "Test"));
+            Assert.NotEmpty(fixture.Logs.Find(LogLevel.Warning, "detected under the import lock", tenantId));
+
+            // Unguarded (explicit) calls keep the old behaviour: they replace the model.
+            var explicitIdentifier = NewSourceIdentifier(tenantId);
+            await fixture.GetService<IDatabaseCkModelRepository>().UpdateModelAsync(compiledV1!, explicitIdentifier);
+            Assert.False(explicitIdentifier.ImportOutcome.SkippedUnderLock);
+            Assert.Equal(TestV1ModelId.FullName, await InstalledAsync(tenantId, "Test"));
+        });
+    }
+
+    /// <summary>
+    ///     G-H2: the system database keeps a NEWER System (another service upgraded it, the guard keeps it). A service
+    ///     embedding the older System must still see the system tenant as existing and resolve tenants, and its
+    ///     EnsureSystemCkModelAsync must not touch the newer System.
+    /// </summary>
+    [Fact]
+    public async Task SystemDatabaseWithNewerSystem_StillExists_ForAServiceWithAnOlderEmbeddedSystem()
+    {
+        var systemContext = fixture.GetSystemContext();
+        var newer = Bump(EmbeddedSystem, minor: 1);
+        try
+        {
+            await systemContext.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, newer));
+            Assert.False(await systemContext.IsCkModelExistingAsync(EmbeddedSystem));
+            Assert.True(await systemContext.IsCkModelSatisfiedAsync(EmbeddedSystem));
+
+            Assert.True(await systemContext.IsSystemTenantExistingAsync());
+            await systemContext.EnsureSystemCkModelAsync();
+            Assert.True(await systemContext.IsCkModelExistingAsync(newer));
+            Assert.NotNull(await systemContext.TryFindTenantContextAsync(systemContext.TenantId));
+            Assert.NotEmpty(fixture.Logs.Find(LogLevel.Information, "downgrade prevented", newer.FullName));
+        }
+        finally
+        {
+            // Restore the shared system tenant to the embedded System (explicit import may downgrade).
+            await systemContext.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, EmbeddedSystem));
+        }
+
+        Assert.True(await systemContext.IsCkModelExistingAsync(EmbeddedSystem));
+    }
+
+    /// <summary>
+    ///     G-M1 + G-M2: a stale ResolveFailed model at the service's own version (dependencies satisfiable again, e.g.
+    ///     a tenant left behind before F1.0) is healed by the service's embedded import WITHOUT a re-import, and its
+    ///     collection roots and indexes are restored.
+    /// </summary>
+    [Fact]
+    public async Task StaleResolveFailedModel_IsHealedByTheEmbeddedImport_WithCollectionsAndIndexes()
+    {
+        await WithTenantAsync("staleheal", async (tenant, tenantId) =>
+        {
+            var result = new OperationResult();
+            await tenant.ImportCkModelAsync(TestV1ModelId, result);
+            Assert.False(result.HasErrors);
+            var database = GetTenantDatabase(tenantId);
+            var before = await CollectionIndexesAsync(database);
+            var rootCollection = before.Keys.First(k => k.StartsWith("RtEntity_", StringComparison.Ordinal) &&
+                                                        k.Contains("Test", StringComparison.Ordinal));
+
+            // A stale ResolveFailed model whose dependencies are fine, and a lost (empty) collection root.
+            await SetModelStateAsync(database, TestV1ModelId, 2);
+            await database.DropCollectionAsync(rootCollection, TestContext.Current.CancellationToken);
+
+            using var counters = new CkCounterRecorder();
+            var (pre, pos) = (fixture.Notifications.PreUpdates, fixture.Notifications.PosUpdates);
+            await tenant.ImportCkModelAsync(TestV1ModelId, result = new OperationResult());
+
+            Assert.Equal(1, await StateAsync(tenantId, TestV1ModelId));
+            Assert.True(counters.Sum(CkModelImportDiagnostics.ModelRevalidatedCounterName,
+                ("result", CkModelImportDiagnostics.ResultRecovered)) >= 1);
+            // A recovery is announced as one paired Pre/Post (other services reload their CK caches).
+            Assert.Equal((pre + 1, pos + 1), (fixture.Notifications.PreUpdates, fixture.Notifications.PosUpdates));
+            Assert.Equal(before, await CollectionIndexesAsync(database));
+
+            // Nothing left to heal: the next call changes nothing and sends nothing.
+            await tenant.ImportCkModelAsync(TestV1ModelId, new OperationResult());
+            Assert.Equal((pre + 1, pos + 1), (fixture.Notifications.PreUpdates, fixture.Notifications.PosUpdates));
+        });
+    }
+
+    /// <summary>
+    ///     G-L1: an embedded import whose dependencies are not installed is skipped BEFORE the Pre notification (no
+    ///     unpaired Pre, no Post): here Test-1.0.0 pins the embedded System exactly while the tenant has a newer one.
+    /// </summary>
+    [Fact]
+    public async Task EmbeddedImportWithMissingDependency_SendsNoNotification()
+    {
+        await WithTenantAsync("guarddeps", async (tenant, tenantId) =>
+        {
+            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, Bump(EmbeddedSystem, minor: 1)));
+
+            var (pre, pos) = (fixture.Notifications.PreUpdates, fixture.Notifications.PosUpdates);
+            var result = new OperationResult();
+            await tenant.ImportCkModelAsync(TestV1ModelId, result);
+
+            Assert.False(result.HasErrors);
+            Assert.Equal((pre, pos), (fixture.Notifications.PreUpdates, fixture.Notifications.PosUpdates));
+            Assert.Empty(await GetTenantDatabase(tenantId).GetCollection<BsonDocument>("CkModel")
+                .Find(new BsonDocument("modelId", "Test")).ToListAsync(TestContext.Current.CancellationToken));
+            Assert.NotEmpty(fixture.Logs.Find(LogLevel.Warning, "due to missing dependencies", tenantId,
+                EmbeddedSystem.FullName));
+        });
+    }
+
+    private static async Task SetModelStateAsync(IMongoDatabase database, CkModelId modelId, int state)
+    {
+        await database.GetCollection<BsonDocument>("CkModel").UpdateOneAsync(new BsonDocument("_id", modelId.FullName),
+            new BsonDocument("$set", new BsonDocument("modelState", state)),
+            cancellationToken: TestContext.Current.CancellationToken);
+        foreach (var collection in new[]
+                 {
+                     "CkType", "CkAttribute", "CkRecord", "CkEnum", "CkAssociationRole", "CkTypeAssociation",
+                     "CkTypeInheritance", "CkRecordInheritance"
+                 })
+        {
+            await database.GetCollection<BsonDocument>(collection).UpdateManyAsync(
+                new BsonDocument("ckModelId", modelId.FullName),
+                new BsonDocument("$set", new BsonDocument("modelState", state)),
+                cancellationToken: TestContext.Current.CancellationToken);
+        }
+    }
+
+    /// <summary>RtEntity_* collections with their sorted index names.</summary>
+    private static async Task<Dictionary<string, string>> CollectionIndexesAsync(IMongoDatabase database)
+    {
+        var names = await (await database.ListCollectionNamesAsync(cancellationToken: TestContext.Current.CancellationToken))
+            .ToListAsync(TestContext.Current.CancellationToken);
+        var result = new Dictionary<string, string>();
+        foreach (var name in names.Where(n => n.StartsWith("RtEntity_", StringComparison.Ordinal)).Order(StringComparer.Ordinal))
+        {
+            var indexes = await (await database.GetCollection<BsonDocument>(name).Indexes
+                    .ListAsync(TestContext.Current.CancellationToken))
+                .ToListAsync(TestContext.Current.CancellationToken);
+            result[name] = string.Join(",", indexes.Select(i => i["name"].AsString).Order(StringComparer.Ordinal));
+        }
+
+        return result;
+    }
+
+    private TenantDatabaseSourceIdentifier NewSourceIdentifier(string tenantId)
+    {
+        var databaseName = tenantId.ToLowerInvariant();
+        var client = fixture.GetService<IAdminRepositoryAccess>().GetRepositoryClient(databaseName);
+        var dataSource = new MongoDbRepositoryDataSource(NullLogger<MongoDbRepositoryDataSource>.Instance, client,
+            databaseName, tenantId);
+        return new TenantDatabaseSourceIdentifier(null, dataSource, tenantId);
     }
 
     private static CkModelId Bump(CkModelId id, int minor) =>

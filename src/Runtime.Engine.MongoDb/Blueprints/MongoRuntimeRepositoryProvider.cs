@@ -189,10 +189,15 @@ public class MongoRuntimeRepositoryProvider : IRuntimeRepositoryProvider
                 "CK model {ModelId} is still not installed for tenant {TenantId} after import; " +
                 "dependencies are likely missing or still importing",
                 modelId, tenantId);
+            // CK v2 F1.0 (G-M1): name the installed row when there is one — e.g. a newer ResolveFailed version the
+            // embedded-import guard does not replace — instead of only guessing at missing dependencies.
+            var installedRow = installedModels.Items.FirstOrDefault(m => m.Id.Name == modelId.Name);
             operationResult.AddMessage(new OperationMessage(
                 MessageLevel.Error, null, 25,
                 $"CK model '{modelId}' could not be installed for tenant '{tenantId}'; " +
-                "required CK model dependencies may be missing or still importing"));
+                (installedRow != null
+                    ? $"the tenant has '{installedRow.Id}' in state {installedRow.ModelState}"
+                    : "required CK model dependencies may be missing or still importing")));
         }
     }
 

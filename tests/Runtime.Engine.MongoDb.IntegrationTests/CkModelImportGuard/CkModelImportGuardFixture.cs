@@ -24,6 +24,8 @@ public class CkModelImportGuardFixture : SystemFixture
         // Registered after AddRuntimeEngine's TryAdd default: the last registration wins.
         Services.AddSingleton<ITenantNotifications>(Notifications);
         Services.AddSingleton<ILoggerProvider>(Logs);
+        // Test-2.0.0 (a major above Test-1.0.0) for the concurrent embedded-import test.
+        Services.AddCkModelTestV2();
     }
 
     public RecordingTenantNotifications Notifications { get; } = new();
@@ -43,6 +45,9 @@ public sealed class RecordingTenantNotifications : ITenantNotifications
     private int _preUpdates;
     private int _posUpdates;
 
+    /// <summary>Tenant ids of every pre/post update notification, in order.</summary>
+    public ConcurrentQueue<string> UpdatedTenantIds { get; } = new();
+
     public int PreUpdates => Volatile.Read(ref _preUpdates);
 
     public int PosUpdates => Volatile.Read(ref _posUpdates);
@@ -54,12 +59,14 @@ public sealed class RecordingTenantNotifications : ITenantNotifications
     public Task NotifyPreTenantUpdateAsync(string tenantId, Guid correlationId)
     {
         Interlocked.Increment(ref _preUpdates);
+        UpdatedTenantIds.Enqueue(tenantId);
         return Task.CompletedTask;
     }
 
     public Task NotifyPosTenantUpdateAsync(string tenantId, Guid correlationId)
     {
         Interlocked.Increment(ref _posUpdates);
+        UpdatedTenantIds.Enqueue(tenantId);
         return Task.CompletedTask;
     }
 

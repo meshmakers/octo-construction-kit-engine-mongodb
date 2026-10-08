@@ -431,11 +431,23 @@ public interface ITenantContext
     Task ImportCkModelWithDowngradeGuardAsync(CkModelId ckModelId);
 
     /// <summary>
-    ///     Returns true if a construction kit model with the given id exists.
+    ///     Returns true if a construction kit model with EXACTLY the given id (name and version) is installed and
+    ///     <c>Available</c>. Exact means exact: since the embedded-import downgrade guard (CK v2 F1.0-S1, AB#5900) a
+    ///     tenant may legitimately have a NEWER version than the one a service embeds, and this method then returns
+    ///     false. To ask "is my embedded version or a newer one installed", use <see cref="IsCkModelSatisfiedAsync" />.
     /// </summary>
     /// <param name="ckModelId">The construction kit model id to check</param>
     /// <returns>True, if the construction kit model exists</returns>
     Task<bool> IsCkModelExistingAsync(CkModelId ckModelId);
+
+    /// <summary>
+    ///     Returns true if a construction kit model with the name of <paramref name="minimumModelId" /> is installed
+    ///     and <c>Available</c> at that version or a newer one (any major). This is the check a service needs for its
+    ///     own embedded model after CK v2 F1.0-S1 (AB#5900): the guard keeps a newer installed version, so an exact
+    ///     check (<see cref="IsCkModelExistingAsync" />) reports a usable model as missing.
+    /// </summary>
+    /// <param name="minimumModelId">The model name and the lowest acceptable version, typically the embedded id.</param>
+    Task<bool> IsCkModelSatisfiedAsync(CkModelId minimumModelId);
 
     /// <summary>
     ///     Customizes CkEnum values in the repository

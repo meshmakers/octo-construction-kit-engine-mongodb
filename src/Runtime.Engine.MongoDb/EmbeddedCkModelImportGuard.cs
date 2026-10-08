@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
+
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.Messages;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
@@ -86,38 +89,78 @@ internal static class EmbeddedCkModelImportGuard
     }
 
     /// <summary>
+    ///     Keys (tenant, embedded id, installed id) whose skip has already been logged at INFO/WARN and counted in this
+    ///     process (G-L2). <c>UpdateSystemCkModelAsync</c> runs on every tenant resolve — per GraphQL request in the
+    ///     asset repository — so an older service would otherwise log and count the same prevented downgrade per
+    ///     request. Bounded by tenants × models × installed versions.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, byte> ReportedSkips = new(StringComparer.Ordinal);
+
+    /// <summary>
     ///     Looks up the installed version, decides, and logs + counts a skip. Callers act on the decision only;
-    ///     a skip sends no tenant-update notification, runs no migration and leaves the CK cache alone.
+    ///     a skip sends no tenant-update notification, runs no migration and leaves the CK cache alone. This early
+    ///     decision saves the lock wait; <c>ExecuteImport</c> repeats it under the import lock (concurrent imports).
     /// </summary>
     internal static async Task<(EmbeddedImportDecision Decision, InstalledCkModel? Installed)> EvaluateAsync(
         ICkMongoDbRepositoryDataSource dataSource, CkModelId embedded, string tenantId, ILogger logger)
     {
         var installed = await FindInstalledAsync(dataSource, embedded.Name);
         var decision = Decide(embedded, installed?.ModelId);
-        switch (decision)
-        {
-            case EmbeddedImportDecision.SkipNewerInstalled:
-                logger.LogInformation(
-                    "Embedded CK model import skipped for tenant '{TenantId}': downgrade prevented, the tenant has '{InstalledModelId}', " +
-                    "the service embeds '{EmbeddedModelId}'",
-                    tenantId, installed!.ModelId, embedded);
-                CkModelImportDiagnostics.RecordEmbeddedImportSkipped(embedded.Name,
-                    CkModelImportDiagnostics.ReasonNewerInstalled);
-                break;
-            case EmbeddedImportDecision.SkipNewerMajorInstalled:
-                logger.LogWarning(
-                    "Embedded CK model import skipped for tenant '{TenantId}': the service embeds '{EmbeddedModelId}' (major {EmbeddedMajor}), " +
-                    "the tenant has '{InstalledModelId}' (major {InstalledMajor}); this service is too old for the tenant",
-                    tenantId, embedded, embedded.Version.Major, installed!.ModelId, installed.ModelId.Version.Major);
-                CkModelImportDiagnostics.RecordEmbeddedImportSkipped(embedded.Name,
-                    CkModelImportDiagnostics.ReasonNewerMajorInstalled);
-                break;
-            case EmbeddedImportDecision.AlreadyInstalled:
-                logger.LogDebug("CK model '{CkModelId}' already installed in tenant '{TenantId}' ({ModelState})",
-                    embedded, tenantId, installed!.ModelState);
-                break;
-        }
-
+        Report(decision, embedded, installed, tenantId, logger, underLock: false);
         return (decision, installed);
     }
+
+    /// <summary>
+    ///     Logs a skip once per process at INFO (same major) or WARN (higher major) and counts it once; repeats
+    ///     log at DEBUG only.
+    /// </summary>
+    internal static void Report(EmbeddedImportDecision decision, CkModelId embedded, InstalledCkModel? installed,
+        string? tenantId, ILogger logger, bool underLock)
+    {
+        if (decision == EmbeddedImportDecision.AlreadyInstalled)
+        {
+            logger.LogDebug("CK model '{CkModelId}' already installed in tenant '{TenantId}' ({ModelState})",
+                embedded, tenantId, installed!.ModelState);
+            return;
+        }
+
+        if (decision == EmbeddedImportDecision.Import)
+        {
+            return;
+        }
+
+        var first = ReportedSkips.TryAdd($"{tenantId}|{embedded.FullName}|{installed!.ModelId.FullName}", 0);
+        var where = underLock ? " (installed concurrently by another service, detected under the import lock)" : "";
+        if (decision == EmbeddedImportDecision.SkipNewerInstalled)
+        {
+            logger.Log(first ? LogLevel.Information : LogLevel.Debug,
+                "Embedded CK model import skipped for tenant '{TenantId}': downgrade prevented, the tenant has '{InstalledModelId}', " +
+                "the service embeds '{EmbeddedModelId}'{Where}",
+                tenantId, installed.ModelId, embedded, where);
+        }
+        else
+        {
+            logger.Log(first ? LogLevel.Warning : LogLevel.Debug,
+                "Embedded CK model import skipped for tenant '{TenantId}': the service embeds '{EmbeddedModelId}' (major {EmbeddedMajor}), " +
+                "the tenant has '{InstalledModelId}' (major {InstalledMajor}); this service is too old for the tenant{Where}",
+                tenantId, embedded, embedded.Version.Major, installed.ModelId, installed.ModelId.Version.Major, where);
+        }
+
+        if (first)
+        {
+            CkModelImportDiagnostics.RecordEmbeddedImportSkipped(embedded.Name,
+                decision == EmbeddedImportDecision.SkipNewerInstalled
+                    ? CkModelImportDiagnostics.ReasonNewerInstalled
+                    : CkModelImportDiagnostics.ReasonNewerMajorInstalled);
+        }
+    }
+
+    /// <summary>
+    ///     The <see cref="OperationResult" /> warning of a skipped embedded import, so callers (blueprint install,
+    ///     service setup) can report the real reason instead of a generic "not installed".
+    /// </summary>
+    internal static OperationMessage SkipWarning(CkModelId embedded, InstalledCkModel installed) =>
+        new(MessageLevel.Warning, null, 0,
+            $"Import of CK model '{embedded}' skipped: the tenant has '{installed.ModelId}' ({installed.ModelState}); " +
+            "an embedded/startup import never replaces a newer version (use an explicit ImportCk to downgrade).");
 }

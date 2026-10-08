@@ -1304,6 +1304,31 @@ dependencies via `MongoRuntimeRepositoryProvider`) and, through it, `ImportEmbed
 (System.StreamData descriptor, service-managed models — the guard that used to live only there). A skip sends
 **no** pre/post tenant-update notification, runs no migration and leaves the CK cache alone.
 
+- **The decision is repeated under the model import lock** (G-H1). The early decision only saves the lock wait:
+  while a caller waits, another service may install this or a newer version (parallel stack start, rolling update,
+  a fresh tenant set up by two services), and the old exact-id re-check under the lock missed the newer row, so
+  `InsertModelWithImportingState` deleted it. Embedded callers pass `TenantDatabaseSourceIdentifier.GuardAgainstDowngrade`;
+  `ExecuteImport` then decides by name under the lock and reports a skip in `TenantDatabaseSourceIdentifier.ImportOutcome`
+  (`SkippedUnderLock`, `InstalledModelId`). The caller sends the Post that pairs its Pre, runs no migration and does not
+  unload the cache. Explicit imports keep the exact-id re-check.
+- **Skips are reported to the caller** as a `Warning` in the `OperationResult` (the blueprint install path names the
+  installed row and its state in its error 25 instead of guessing at missing dependencies).
+- **Logged once per process** (G-L2): the first skip per (tenant, embedded id, installed id) logs INFO/WARN and is
+  counted; repeats log DEBUG only — `UpdateSystemCkModelAsync` runs on every tenant resolve (per GraphQL request in
+  the asset repository).
+- **Dependencies are checked before the Pre notification** (G-L1): a model whose exact dependencies are not installed
+  is skipped (WARN "missing dependencies") without any notification; the catalog load of the System restore also
+  moved before Pre. Only a `ModelValidationException` from the import itself still leaves an unpaired Pre (rare).
+- **Notifications of `UpdateSystemCkModelAsync` name the updated tenant** (the `tenantId` parameter). For child tenants
+  resolved through the system context they used to go to the system tenant.
+- **Existence checks downstream of the guard** (G-H2): a tenant may now legitimately have a newer version than a
+  service embeds. `SystemContext.IsSystemTenantExistingAsync` therefore uses `ITenantContext.IsCkModelSatisfiedAsync`
+  (by name, embedded version or newer) — with the exact check an older identity refused to start ("carries no usable
+  System CK model") and older services threw `SystemTenantDatabaseNotExisting` on every request.
+  `IsCkModelExistingAsync` stays exact (documented). Exact callers in other repos to review: identity
+  `DefaultConfigurationCreatorService` (System.Identity, System.Notification) and `CreateIdentityDataCommandRequestConsumer`,
+  comm-controller `TenantInitializationExtensions`, asset-repo `ModelsController` dependency status.
+
 - **Explicit imports stay unguarded** (platform-owner decision Q5): `ImportCkModelAsync(CkCompiledModelRoot)`
   (CLI/API `ImportCk`, bot import command) may downgrade, logged WARN `Explicit downgrade of CK model ... from X
   to Y` and counted in `octo.ck.explicit_import.downgraded` (tag `model`). An explicit downgrade of a model that
@@ -1324,6 +1349,17 @@ transaction) soft-resolves **`Available` and `ResolveFailed`** models; `Importin
 resolved `Available` models only, so a `ResolveFailed` model never recovered although the log promised it (R2-3:
 Basic.Accounting stayed `ResolveFailed` after System went back to the version it pins).
 
+- **Also without an import** (G-M1): when an embedded import finds its model already installed (or a newer one) in
+  state `ResolveFailed`, it calls `IDatabaseCkModelRepository.RevalidateAsync` instead of re-importing. Before F1.0 a
+  restart re-imported such a model and so healed it; without this the model would wait for an unrelated import. A
+  recovery unloads the CK cache and sends one Pre/Post pair; nothing is sent when nothing changed (no loop).
+- **Own transaction, retried** (G-L3): the state flip + re-validation run through `RunInTransactionWithRetryAsync`
+  (3 attempts on `TransientTransactionError` / `UnknownTransactionCommitResult` — parallel imports re-validate the same
+  models). Logs and counters are emitted after the commit. Once the element rows of an import are committed, a failure
+  of the post-work no longer deletes the `CkModel` row (it stays `Importing` and is replaced by the next import).
+- **Collections and indexes of recovered models** (G-M2): `UpdateCollectionsAsync` no longer drops empty collection
+  roots of `ResolveFailed` models, and every recovery runs `UpdateCollectionsAsync` + a scoped `UpdateIndexAsync` for the
+  recovered models.
 - The resolver sees `ResolveFailed` models only for this call: `TenantDatabaseSourceIdentifier.IncludeResolveFailedModels`
   widens the state filter of `IsExistingAsync(CkModelIdVersionRange)` and `TryLookupCkModelAsync`. The CK cache
   (`ModelLoaderService`), imports and every other lookup keep resolving `Available` models only.
@@ -1335,15 +1371,20 @@ Basic.Accounting stayed `ResolveFailed` after System went back to the version it
   `Available` (INFO, `octo.ck.model.revalidated{result=recovered}`; `UpdateModelStateAsync` flips the element rows
   too); still failing → stays, DEBUG only (`result=still_failed`, no log spam on every import).
 - The callers in `TenantContext` unload the tenant's CK cache after every import, so a recovered model's types are in
-  the next cache load (its collections and indexes exist: a model is `Available` after its own import and only later
-  flips to `ResolveFailed`).
+  the next cache load.
+- **S3 hand-off:** the missing-dependency seed and the engine's `RepositoryDependencyResolver` use the exact
+  `Dependencies`; range-retaining models must be judged by their persisted ranges (TODO in `ValidateDependencies`).
 - Also fixed on the way: an operator-precedence slip in `MongoDbRepositoryDataSource` (`a && b ? c : d`) that dropped
   the id filter of the base-type prefetch and loaded every `Available` type of the tenant.
 
 Pinned by `CkModelImportGuard/CkModelImportGuardTests` (real MongoDB, throwaway tenants: same-major and major skip,
 explicit downgrade + upgrade back, same-version short-circuit, embedded vs explicit service-model overloads,
-notification counts, log levels, counters, and the R2-3 recovery incl. "still failed" on an unrelated import) and
-`CkModelImportGuardDecisionTests` (decision table, failure propagation).
+notification counts and tenant ids, log levels and once-per-process logging, counters, operation-result warnings, the
+deterministic under-lock skip plus a concurrent-import smoke test, a system database with a newer System, the stale
+`ResolveFailed` heal with collection/index restore, the missing-dependency skip without notifications, and the R2-3
+recovery incl. "still failed" on an unrelated import) and `CkModelImportGuardDecisionTests` (decision table, failure
+propagation). The concurrent-import test rarely hits the lock path by itself; the deterministic under-lock test is
+the one that fails without the G-H1 fix.
 
 ### Service-Managed CK Model Auto-import (AB#4294)
 
