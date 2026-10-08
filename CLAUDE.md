@@ -199,9 +199,13 @@ Meter name: **`Meshmakers.Octo.MongoDb`** (registered in
 |------------|------|------|---------|
 | `octo.mongodb.command.duration` | Histogram (ms) | `command_name`, `database`, `status` | Latency distribution per command per tenant DB |
 | `octo.mongodb.command.errors` | Counter | `command_name`, `database`, `error_code` | Failure counts, tagged with the Mongo error code (e.g. `112` for WriteConflict) |
-| `octo.ck.embedded_import.skipped` | Counter | `model`, `reason` | Embedded CK model import skipped, tenant has a newer version (AB#5900, see *Embedded CK Model Import Guard*) |
-| `octo.ck.explicit_import.downgraded` | Counter | `model` | Explicit `ImportCk` replaced a newer installed version (AB#5900) |
-| `octo.ck.model.revalidated` | Counter | `result` (`recovered` / `still_failed`) | Post-import re-validation of `ResolveFailed` models (AB#5901) |
+| `octo.ck.embedded_import.skipped` (Prometheus `octo_ck_embedded_import_skipped_total`) | Counter | `model`, `reason` | Embedded CK model import skipped, tenant has a newer version (AB#5900, see *Embedded CK Model Import Guard*); counted once per process per (tenant, embedded, installed) |
+| `octo.ck.explicit_import.downgraded` (Prometheus `octo_ck_explicit_import_downgraded_total`) | Counter | `model` | Explicit `ImportCk` replaced a newer installed version (AB#5900) |
+| `octo.ck.model.revalidated` (Prometheus `octo_ck_model_revalidated_total`) | Counter | `result` (`recovered` / `still_failed`) | Post-import re-validation of `ResolveFailed` models (AB#5901) |
+
+The three `octo.ck.*` counters use curly-brace annotation units (`{import}`, `{model}`), which the Prometheus exporter
+does not append to the series name. A plain unit such as `count` would add a `_count` suffix
+(`octo_ck_embedded_import_skipped_count_total` — what the G1 E2E saw before D-G1-2).
 
 The `tenantId` is deliberately **not** a tag — `database` is used instead as the
 low-cardinality attribution dimension (it equals the tenant database name).
@@ -1339,6 +1343,15 @@ dependencies via `MongoRuntimeRepositoryProvider`) and, through it, `ImportEmbed
 - **Consequence for a service with an older embedded System:** it runs against the tenant's newer System (runtime
   code uses version-less ids, the cache is rebuilt from what is installed), but its own exact-pinned service model
   goes `ResolveFailed` until the service is upgraded — the v1 contract made visible instead of a silent downgrade.
+  **Runtime code must therefore never look up a CK element by a generated *versioned* id** (`SystemCkIds.Ck…Id` =
+  `System-2.5.0/…`): it is not in the cache of a tenant with a newer System. Use the version-less `RtCkId`
+  (`….ToRtCkId()` / `GetRtCkType`). D-G1-1: `AutoIncrementModifier` looked up `SystemCkIds.CkAutoIncrementTypeId`
+  on every entity insert, so an older service could not write anything into a tenant with a newer System (also its
+  migration-history rows); it now looks the type up version-less and only when an auto-increment attribute is
+  written (and no longer stops at the first batch entry without one — a pre-existing `return` instead of
+  `continue`). Sweep result (engine-mongodb `src/`): this was the only versioned generated-id lookup; the other
+  `GetCkType`/`GetCkRecord`/`GetCkEnum` calls take ids from the CK cache or the database, which are the installed
+  versions. Pinned by `OlderEmbeddedSystem_CanWriteEntities_IntoATenantWithANewerSystem`.
 - Counters live in `CkModelImportDiagnostics` on the meter `Meshmakers.Octo.MongoDb` (no tenant tag; the tenant
   is in the log line).
 

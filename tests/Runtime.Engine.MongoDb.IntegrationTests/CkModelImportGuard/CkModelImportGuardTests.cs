@@ -6,7 +6,10 @@ using Meshmakers.Octo.ConstructionKit.Contracts.Messages;
 using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
+using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
@@ -369,6 +372,124 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
             Assert.NotEmpty(fixture.Logs.Find(LogLevel.Warning, "due to missing dependencies", tenantId,
                 EmbeddedSystem.FullName));
         });
+    }
+
+    /// <summary>
+    ///     D-G1-1 (G1 E2E): a service whose embedded System is OLDER than the tenant's (the state the downgrade guard
+    ///     keeps) must still write entities. <c>AutoIncrementModifier</c> looked up the generated versioned
+    ///     <c>System-&lt;embedded&gt;/AutoIncrement-1</c> on every insert, which is not in the cache of a tenant with a
+    ///     newer System. One batch with a type WITHOUT auto-increment first and one WITH it second (the first entry
+    ///     used to end the whole batch's auto-increment pass).
+    /// </summary>
+    [Fact]
+    public async Task OlderEmbeddedSystem_CanWriteEntities_IntoATenantWithANewerSystem()
+    {
+        await WithTenantAsync("guardwrite", async (tenant, tenantId) =>
+        {
+            var newer = Bump(EmbeddedSystem, minor: 1);
+            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, newer));
+            await tenant.ImportCkModelAsync(TicketModel(newer));
+            Assert.Equal(newer.FullName, await InstalledAsync(tenantId, "System"));
+
+            var repository = tenant.GetTenantRepository();
+            using (var session = await repository.GetSessionAsync())
+            {
+                session.StartTransaction();
+                var counter = await repository.CreateTransientRtEntityAsync<RtAutoIncrement>();
+                counter.RtWellKnownName = "TicketNumber";
+                counter.CurrentValue = 41;
+                counter.End = 1000;
+                await repository.InsertOneRtEntityAsync(session, counter);
+                await session.CommitTransactionAsync();
+            }
+
+            var noteId = OctoObjectId.GenerateNewId();
+            var ticketId = OctoObjectId.GenerateNewId();
+            using (var session = await repository.GetSessionAsync())
+            {
+                session.StartTransaction();
+                var operationResult = new OperationResult();
+                await repository.ApplyChangesAsync(session, new List<IEntityUpdateInfo<RtEntity>>
+                {
+                    EntityUpdateInfo<RtEntity>.CreateInsert(new RtEntity(NoteTypeId, noteId,
+                        new Dictionary<string, object?> { { "Title", "no auto-increment" } })),
+                    EntityUpdateInfo<RtEntity>.CreateInsert(new RtEntity(TicketTypeId, ticketId,
+                        new Dictionary<string, object?> { { "Title", "with auto-increment" } }))
+                }, operationResult);
+                Assert.False(operationResult.HasErrors, operationResult.GetMessages());
+                await session.CommitTransactionAsync();
+            }
+
+            var database = GetTenantDatabase(tenantId);
+            var documents = new List<BsonDocument>();
+            foreach (var name in await (await database.ListCollectionNamesAsync(
+                         cancellationToken: TestContext.Current.CancellationToken)).ToListAsync(TestContext.Current.CancellationToken))
+            {
+                if (name.StartsWith("RtEntity_", StringComparison.Ordinal))
+                {
+                    documents.AddRange(await database.GetCollection<BsonDocument>(name)
+                        .Find(new BsonDocument("_id", new BsonDocument("$in", new BsonArray
+                        {
+                            ObjectId.Parse(noteId.ToString()), ObjectId.Parse(ticketId.ToString())
+                        }))).ToListAsync(TestContext.Current.CancellationToken));
+                }
+            }
+
+            Assert.Equal(2, documents.Count);
+            var ticket = documents.Single(d => d["_id"].AsObjectId.ToString() == ticketId.ToString());
+            Assert.Equal(42, ticket["attributes"]["number"].ToInt64());
+            Assert.False(documents.Single(d => d["_id"].AsObjectId.ToString() == noteId.ToString())["attributes"]
+                .AsBsonDocument.Contains("number"));
+        });
+    }
+
+    private static readonly RtCkId<CkTypeId> NoteTypeId = new("GuardWrite/Note");
+    private static readonly RtCkId<CkTypeId> TicketTypeId = new("GuardWrite/Ticket");
+
+    /// <summary>Note (no auto-increment) and Ticket (Number from the "TicketNumber" counter), on System <paramref name="system" />.</summary>
+    private static CkCompiledModelRoot TicketModel(CkModelId system)
+    {
+        var id = new CkModelId("GuardWrite-1.0.0");
+        CkTypeAttributeDto Title() => new()
+        {
+            CkAttributeId = new CkId<CkAttributeId>(id, new CkAttributeId("Title-1")), AttributeName = "Title",
+            IsOptional = true
+        };
+
+        return new CkCompiledModelRoot
+        {
+            ModelId = id,
+            Description = "D-G1-1 entity writes on a newer System",
+            Dependencies = [system],
+            Attributes =
+            [
+                new CkAttributeDto { AttributeId = new CkAttributeId("Title-1"), ValueType = AttributeValueTypesDto.String },
+                new CkAttributeDto { AttributeId = new CkAttributeId("Number-1"), ValueType = AttributeValueTypesDto.Int }
+            ],
+            Types =
+            [
+                new CkCompiledTypeDto
+                {
+                    TypeId = new CkTypeId("Note-1"), IsCollectionRoot = true,
+                    DerivedFromCkTypeId = new CkId<CkTypeId>(system, new CkTypeId("Entity-1")),
+                    Attributes = [Title()]
+                },
+                new CkCompiledTypeDto
+                {
+                    TypeId = new CkTypeId("Ticket-1"), IsCollectionRoot = true,
+                    DerivedFromCkTypeId = new CkId<CkTypeId>(system, new CkTypeId("Entity-1")),
+                    Attributes =
+                    [
+                        Title(),
+                        new CkTypeAttributeDto
+                        {
+                            CkAttributeId = new CkId<CkAttributeId>(id, new CkAttributeId("Number-1")),
+                            AttributeName = "Number", IsOptional = true, AutoIncrementReference = "TicketNumber"
+                        }
+                    ]
+                }
+            ]
+        };
     }
 
     private static async Task SetModelStateAsync(IMongoDatabase database, CkModelId modelId, int state)

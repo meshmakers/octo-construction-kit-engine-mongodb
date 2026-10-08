@@ -520,6 +520,11 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 : x.ModelState == ModelState.Available));
         var typeDict = allTypes.ToDictionary(x => x.CkTypeId, x => x);
 
+        // D-G1-3: a missing base type is expected for every type of a model whose dependency was just replaced
+        // (e.g. System 2.5.0 -> 2.6.0 with an exact-pinned dependent): the re-validation at the end of the import
+        // marks that model ResolveFailed and logs it once. One summary line here instead of one WARN per type.
+        var missingBaseTypes = new List<(CkId<CkTypeId> BaseCkTypeId, CkId<CkTypeId> InheritorCkTypeId)>();
+
         // Build inheritance chains in memory using the fetched data
         foreach (var collectionRoot in collectionRootsList)
         {
@@ -541,8 +546,9 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     }
                     else
                     {
-                        _logger.LogWarning("Base type '{BaseCkTypeId}' not found for '{InheritorCkTypeId}'",
+                        _logger.LogDebug("Base type '{BaseCkTypeId}' not found for '{InheritorCkTypeId}'",
                             inheritance.BaseCkTypeId, inheritance.InheritorCkTypeId);
+                        missingBaseTypes.Add((inheritance.BaseCkTypeId, inheritance.InheritorCkTypeId));
                         break;
                     }
                 }
@@ -556,6 +562,16 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
             // Reverse to get most base first
             baseTypes.Reverse();
             result[collectionRoot.CkTypeId] = baseTypes;
+        }
+
+        if (missingBaseTypes.Count > 0)
+        {
+            _logger.LogInformation(
+                "Index update of tenant '{TenantId}': base types not found for {Count} collection root(s), indexes of their " +
+                "base types are skipped (missing: {MissingBaseTypes}). Expected for models whose dependency was just " +
+                "replaced; they are marked ResolveFailed by the re-validation of the import",
+                TenantId, missingBaseTypes.Count,
+                string.Join(", ", missingBaseTypes.Select(m => m.BaseCkTypeId.FullName).Distinct().Take(5)));
         }
 
         return result;

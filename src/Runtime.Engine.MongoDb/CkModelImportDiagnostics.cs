@@ -9,6 +9,12 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb;
 ///     They are published on the existing meter <see cref="MongoCommandObservability.MeterName" />
 ///     (<c>Meshmakers.Octo.MongoDb</c>), which every service that calls <c>AddObservability()</c> already exports.
 ///     There is deliberately no tenant tag (cardinality); the tenant id is in the matching log line.
+///     <para>
+///         Units are curly-brace annotations (like <c>CrateDbDiagnostics</c>), which the Prometheus exporter does not
+///         append to the name: the series are <c>octo_ck_embedded_import_skipped_total</c>,
+///         <c>octo_ck_explicit_import_downgraded_total</c> and <c>octo_ck_model_revalidated_total</c> (D-G1-2; with
+///         <c>unit: "count"</c> they were exported as <c>…_count_total</c>).
+///     </para>
 /// </summary>
 public static class CkModelImportDiagnostics
 {
@@ -37,17 +43,17 @@ public static class CkModelImportDiagnostics
 
     private static readonly Counter<long> EmbeddedImportSkipped = Meter.CreateCounter<long>(
         EmbeddedImportSkippedCounterName,
-        unit: "count",
+        unit: "{import}",
         description: "Embedded CK model imports skipped because the tenant already has a newer version (downgrade prevented)");
 
     private static readonly Counter<long> ExplicitDowngrade = Meter.CreateCounter<long>(
         ExplicitDowngradeCounterName,
-        unit: "count",
+        unit: "{import}",
         description: "Explicit CK model imports that replaced a newer installed version");
 
     private static readonly Counter<long> ModelRevalidated = Meter.CreateCounter<long>(
         ModelRevalidatedCounterName,
-        unit: "count",
+        unit: "{model}",
         description: "Re-validation outcomes of ResolveFailed CK models after a CK model import");
 
     internal static void RecordEmbeddedImportSkipped(string modelName, string reason) =>

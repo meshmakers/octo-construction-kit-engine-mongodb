@@ -17,9 +17,6 @@ public class AutoIncrementModifier(
     public async Task RunAsync(IOctoSession session, IRepositoryDataSource repositoryDataSource,
         IEnumerable<RtEntity> documents)
     {
-        var autoIncrementGraphType = ckCacheService.GetCkType(repositoryDataSource.TenantId, SystemCkIds.CkAutoIncrementTypeId);
-        var autoIncrementCollection = repositoryDataSource.GetRtCollection<RtAutoIncrement>(autoIncrementGraphType);
-
         var documentList = documents.ToArray();
         var ckTypeIds = documentList.GroupBy(d => d.GetRtCkTypeId());
         HashSet<string> autoIncrementReferences = new();
@@ -36,7 +33,9 @@ public class AutoIncrementModifier(
                 .Select(x => x.AutoIncrementReference!).ToList();
             if (!typeAttributeGraphs.Any())
             {
-                return;
+                // Pre-existing bug fixed with D-G1-1: this was a `return`, which skipped the auto-increment
+                // assignment of every LATER type of a mixed batch.
+                continue;
             }
 
             // Add unique auto increment references of typeAttributeGraphs to hashset autoIncrementReferences
@@ -50,6 +49,15 @@ public class AutoIncrementModifier(
         {
             return;
         }
+
+        // Looked up VERSION-LESS and only when an auto-increment attribute is actually written (CK v2 F1.0, D-G1-1).
+        // The generated SystemCkIds.CkAutoIncrementTypeId carries the System version this service was compiled
+        // against (e.g. System-2.5.0/AutoIncrement-1); since the embedded-import downgrade guard keeps a NEWER System
+        // in a tenant, that versioned id is not in the tenant's CK cache, and the unconditional lookup made every
+        // entity insert of an older service fail.
+        var autoIncrementGraphType = ckCacheService.GetRtCkType(repositoryDataSource.TenantId,
+            SystemCkIds.CkAutoIncrementTypeId.ToRtCkId());
+        var autoIncrementCollection = repositoryDataSource.GetRtCollection<RtAutoIncrement>(autoIncrementGraphType);
 
         var autoIncrementerSet = await autoIncrementCollection.FindManyAsync(session,
             f => f.RtWellKnownName != null && autoIncrementReferences.Contains(f.RtWellKnownName));
@@ -66,7 +74,8 @@ public class AutoIncrementModifier(
                 .Where(a => !string.IsNullOrEmpty(a.AutoIncrementReference)).ToList();
             if (!typeIncrements.Any())
             {
-                return;
+                // Was a `return` (see above): it skipped every later entity of the batch.
+                continue;
             }
 
             foreach (var autoIncrementReference in typeIncrements)
