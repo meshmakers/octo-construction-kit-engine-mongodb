@@ -1,0 +1,7 @@
+$schema: https://schemas.meshmakers.cloud/blueprint-meta.schema.json
+blueprintId: TestFloorDepBp-1.1.0
+description: Test dependency blueprint in two versions (AB#6111 - a range floor must never downgrade an installed dependency)
+ckModelDependencies:
+  - System-[2.0,3.0)
+  - Test-[1.0,2.0)
+seedDataPath: seed-data/entities.yaml

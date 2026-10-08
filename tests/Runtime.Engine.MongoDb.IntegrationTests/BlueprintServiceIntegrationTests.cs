@@ -591,6 +591,107 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
         }
     }
 
+    // AB#6111: a blueprintDependencies floor is a minimum, never a target. Installing a root must
+    // not move a dependency the tenant already runs in a newer version back to the version the
+    // catalog resolution picked (test-2: Simulation-2.8.1 moved Base-2.11.0 back to 2.10.0).
+    private static readonly BlueprintId FloorDepV11 = new("TestFloorDepBp", "1.1.0");
+    private static readonly BlueprintId FloorRoot = new("TestFloorRootBp", "1.0.0");
+    private static readonly BlueprintId FloorPinnedRoot = new("TestFloorPinnedRootBp", "1.0.0");
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ApplyBlueprint_DependencyInstalledNewerThanCatalogResolution_IsKept(bool force)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var installations = _fixture.GetService<ITenantBlueprintInstallations>();
+        var tenantId = await _fixture.CreateTestTenantAsync("floor-keep");
+
+        try
+        {
+            // The tenant runs the dependency in 1.1.0 ...
+            (await blueprintService.ApplyBlueprintAsync(tenantId, FloorDepV11, force: false, ct))
+                .IsSuccess.Should().BeTrue();
+
+            // ... and records it as a version the catalogs no longer offer, so the resolver for
+            // TestFloorRootBp ([1.0,2.0)) picks a LOWER version (1.1.0) than the installed one
+            // (1.2.0) — the same shape as a dependency installed from a higher-version catalog.
+            var row = await installations.GetByBlueprintNameAsync(tenantId, "TestFloorDepBp", ct);
+            row!.BlueprintId = new BlueprintId("TestFloorDepBp", "1.2.0");
+            await installations.UpsertAsync(tenantId, row, ct);
+
+            var result = await blueprintService.ApplyBlueprintAsync(tenantId, FloorRoot, force, ct);
+
+            result.IsSuccess.Should().BeTrue(string.Join("; ", result.OperationResult.Messages.Select(m => m.MessageText)));
+            (await installations.GetByBlueprintNameAsync(tenantId, "TestFloorDepBp", ct))!
+                .BlueprintId.Should().Be(new BlueprintId("TestFloorDepBp", "1.2.0"), "a newer in-range dependency must be kept");
+            (await installations.GetByBlueprintNameAsync(tenantId, FloorRoot.Name, ct))!
+                .ResolvedDependencies.Should().ContainSingle()
+                .Which.Should().Be(new BlueprintId("TestFloorDepBp", "1.2.0"));
+            (await QueryAllCustomersAsync(tenantId)).Single(c => c.RtWellKnownName == "FloorDepCustomer")
+                .GetAttributeStringValueOrDefault("RtBlueprintSource")
+                .Should().Be(FloorDepV11.FullName, "the dependency's seed data must not be re-imported");
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyBlueprint_RootResolvesHighestDependencyVersion_NotTheFloor()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var installations = _fixture.GetService<ITenantBlueprintInstallations>();
+        var tenantId = await _fixture.CreateTestTenantAsync("floor-high");
+
+        try
+        {
+            var result = await blueprintService.ApplyBlueprintAsync(tenantId, FloorRoot, force: false, ct);
+
+            result.IsSuccess.Should().BeTrue();
+            (await installations.GetByBlueprintNameAsync(tenantId, "TestFloorDepBp", ct))!
+                .BlueprintId.Should().Be(FloorDepV11);
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyBlueprint_DependencyInstalledNewerThanDeclaredRange_FailsWithoutDowngrade()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var installations = _fixture.GetService<ITenantBlueprintInstallations>();
+        var tenantId = await _fixture.CreateTestTenantAsync("floor-pin");
+
+        try
+        {
+            (await blueprintService.ApplyBlueprintAsync(tenantId, FloorDepV11, force: false, ct))
+                .IsSuccess.Should().BeTrue();
+
+            // TestFloorPinnedRootBp requires TestFloorDepBp-[1.0,1.1): only 1.0.0 satisfies it.
+            var result = await blueprintService.ApplyBlueprintAsync(tenantId, FloorPinnedRoot, force: true, ct);
+
+            result.IsSuccess.Should().BeFalse();
+            result.OperationResult.Messages.Should().Contain(m => m.MessageText.Contains("Refusing to downgrade"));
+            (await installations.GetByBlueprintNameAsync(tenantId, "TestFloorDepBp", ct))!
+                .BlueprintId.Should().Be(FloorDepV11);
+            (await installations.GetByBlueprintNameAsync(tenantId, FloorPinnedRoot.Name, ct)).Should().BeNull();
+            (await QueryAllCustomersAsync(tenantId)).Single(c => c.RtWellKnownName == "FloorDepCustomer")
+                .GetAttributeStringValueOrDefault("RtBlueprintSource")
+                .Should().Be(FloorDepV11.FullName);
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
     [Fact]
     public async Task Uninstall_BlueprintWithoutDependents_RemovesLockedEntitiesAndInstallationRow()
     {

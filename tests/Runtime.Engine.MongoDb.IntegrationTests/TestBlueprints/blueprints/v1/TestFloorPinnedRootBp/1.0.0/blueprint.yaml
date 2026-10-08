@@ -1,0 +1,9 @@
+$schema: https://schemas.meshmakers.cloud/blueprint-meta.schema.json
+blueprintId: TestFloorPinnedRootBp-1.0.0
+description: Test root blueprint depending on TestFloorDepBp-[1.0,1.1) (AB#6111)
+ckModelDependencies:
+  - System-[2.0,3.0)
+  - Test-[1.0,2.0)
+blueprintDependencies:
+  - TestFloorDepBp-[1.0,1.1)
+seedDataPath: seed-data/entities.yaml
