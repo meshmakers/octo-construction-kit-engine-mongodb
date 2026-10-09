@@ -105,6 +105,42 @@ and their databases behind in the shared container.
 Swallowing a teardown failure loses it as a test result, deliberately: the reported line is the only
 trace, and the run's red/green verdict is already decided by the tests themselves.
 
+### Test layout, parallelism rules and the CI time budget (AB#6292)
+
+**Layout.** `tests/StreamData.UnitTests` (assembly `Runtime.Engine.UnitTests`, ~940 tests, seconds) and
+`tests/Runtime.Engine.MongoDb.IntegrationTests` (~590 tests against ONE shared Testcontainers MongoDB
+replica set, `Fixtures/SharedMongoDbContainer.cs`). Integration tests are grouped into xUnit collections
+(`Collections/*.cs`), each with a fixture that creates its own system tenant/database; the CK v2
+round-trip gate lives in `RoundTrip/` (`CkMetaModelRoundTripTests`, `CkMetaModelReflectionGateTests`,
+`CkMetaModelCacheRoundTripTests` in `CkModelImportMigrationCollection`; `CkV2CompatibilityTests` in
+`CkModelImportGuardCollection`; `ArchiveHiddenAccessTests` with its own fixture).
+
+**Parallelism rules for new integration tests** (`xunit.runner.json`: `parallelizeTestCollections: true`,
+`parallelizeAssembly: false`):
+
+- Tests inside one collection run serially; collections run concurrently. The wall clock is the
+  longest collection chain plus fixture setup, not the sum of all tests. Today the critical path is
+  `BlueprintServiceIntegrationTests` (~31 tests, one collection) and `DirectedRoleDeepGraphTests`.
+- Put a new long-running class into its own collection (own fixture or a fixture shared only where
+  the state really is shared) instead of appending to the longest one; a new fixture costs one tenant
+  setup (~2-5 s locally, 15-110 s on a loaded agent).
+- Never mutate process-wide state from a parallel collection (see the schema-prefix note below).
+
+**Measured (2026-10-09, AB#6292).** Locally (Mac mini, 14 cores, DebugL, `dotnet test <sln>`):
+integration suite 590 passed / 2 skipped in **4 m 07 s**; with the 45 new CK v2 / RoundTrip tests
+filtered out it is **also 4 m 07 s** - they add ~50 s of summed test time (7.5 %) but none to the
+critical path. On CI the same suite took 9 m 46 s (r3.5.0, 50936, 545 tests) and 21-31 min after
+the CK v2 work (51028, 51030, 51015), but every pre-existing class slowed down by the same factor
+(x2.8), the bare MongoDB container start went from 22 s (burst agent) / 43 s to 65 s, and the very
+same commit ran in 5 min on a burst agent (50769) and 38 min on a loaded one (50755). The CI growth is
+agent load (pve02 CPU steal, Epic AB#5711), not the new tests.
+
+**CI time budget (`azure-pipelines.yml`).** Target: Test step < 15 min on an uncontended agent (today
+~5-10 min). The Test step has **no** `retryCountOnTaskFailure` (a whole-step retry reran a deterministic
+red suite three times into the job timeout, 51009/51014, and hid a mass failure, 50546), its own
+`timeoutInMinutes: 50` below the explicit job `timeoutInMinutes: 70`, and `--blame-hang-timeout 15m`
+(no dump) so a single hung test aborts the run and is named in the log. Flaky tests are fixed or
+handled per test, never by retrying the step.
 
 ## Tenant Registry vs. Tenant Hierarchy (AB#5025)
 

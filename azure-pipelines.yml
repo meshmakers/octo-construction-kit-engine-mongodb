@@ -87,6 +87,10 @@ stages:
     jobs:
       - job: buildAndTest
         displayName: 'Build nuget and execute tests'
+        # Explicit job budget (AB#6292). The Test step has its own, clearly smaller
+        # timeout below, so a stuck or failing test run ends the job with a red Test
+        # step and its logs instead of an anonymous job-timeout cancellation.
+        timeoutInMinutes: 70
         pool:
           name: meshmakers-ci-agents
         steps:
@@ -137,12 +141,27 @@ stages:
               command: 'build'
               projects: $(SolutionFile)
               arguments: '--configuration $(BuildConfiguration) --no-restore /p:OctoNugetPrivateServer=$(nugetPrivateServer) /p:OctoPrivateGitHubApiKey=$(GitHubPAT) /p:OctoPublicGitHubApiKey=$(GitHubPAT)'
+          # Test fails fast (AB#6292):
+          #  - NO retryCountOnTaskFailure: a whole-step retry reran the full integration
+          #    suite (~10-30 min per pass) up to 3 times for one deterministic red test,
+          #    which pushed 51009 / 51014 into the 60-min job timeout, and it hid a mass
+          #    failure (50546: 109 failed, green on the retry). Flaky tests are handled
+          #    per test, never per step. Restore and Build keep their retries (network /
+          #    feed hiccups).
+          #  - timeoutInMinutes 50 < job 70: one green pass takes 5-38 min depending on
+          #    agent load (50769: 5 min on a burst agent, 50755: 38 min on a loaded one;
+          #    pve02 CPU steal, Epic AB#5711). A red test no longer waits for this limit -
+          #    the step ends after one pass; the limit only catches a hung run.
+          #  - --blame-hang-timeout 15m: a single test that runs longer than 15 min (the
+          #    slowest single test so far: 210 s on a heavily loaded agent, build 50546)
+          #    aborts the test host and names the hanging test in the log. No dump
+          #    (dump type none) - a full dump of the test host is GBs and not needed.
           - task: DotNetCoreCLI@2
-            retryCountOnTaskFailure: 2
             displayName: 'Test'
+            timeoutInMinutes: 50
             inputs:
               command: 'test'
-              arguments: '--configuration $(buildConfiguration) --no-build /p:OctoNugetPrivateServer=$(nugetPrivateServer)'
+              arguments: '--configuration $(buildConfiguration) --no-build /p:OctoNugetPrivateServer=$(nugetPrivateServer) --blame-hang --blame-hang-timeout 15m --blame-hang-dump-type none'
               projects: |
                 **/*Tests.csproj
               testRunTitle: 'CI'
