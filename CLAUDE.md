@@ -1303,6 +1303,18 @@ CK v2 adds these constructs to the compiled model. All of them follow the three-
 | `methods` (`CkTypeDto.Methods`) | `CkType.Methods` = the Contracts `CkMethodDto` family **embedded verbatim** (class maps in `MongoRepositoryClient.RegisterCkMethodClassMaps`, every optional member left out when default) | `ProcessCkTypesAndAssociations` (`null` when empty); `CkTypeMongoDataSourceMapper.ApplyUpdate` | types |
 | `implements` (`CkTypeDto.Implements`) | new collection `CkTypeInterfaceImplementation` (clone of `CkTypeInheritance`: one row per declared entry, owned by the model that declares the TYPE, reference persisted verbatim) | `ProcessCkTypesAndAssociations` | types (`null` when the type declares none) |
 | `interfaces` (`CkModelRootBase.Interfaces`) | new collection `CkInterface` (`_id` = `CkId<CkInterfaceId>`, embedded `CkInterfaceAttribute` members) | `ProcessCkInterfaces` (runs before the types) | model root (`null` when the model declares none) |
+| `minEngineVersion` (`CkCompiledModelRoot.MinEngineVersion`, Phase 1) | `CkModel.MinEngineVersion`, `SetIgnoreIfNull`, `Unset` on full update | as `ckLanguage` | model root |
+| `visibility` (Phase 1) | `Visibility` (Int32 enum, nullable, `SetIgnoreIfNull`) on `CkType`, `CkRecord`, `CkEnum`, `CkAttribute`, `CkAssociationRole`, `CkInterface`; embedded on `CkMethodDto` | the matching `Process*` | the matching element |
+| `derivable` (Phase 1) | `Derivable` on `CkType`, `CkRecord` (same mapping) | `ProcessCkTypesAndAssociations`, `ProcessCkRecords` | types, records |
+| interface `extends` / `associations` / `methods` / `deprecated` (Phase 1) | on the `CkInterface` document: `Extends` (`CkId<CkInterfaceId>` list), `Associations` (the Contracts `CkInterfaceAssociationDto` embedded, own class map), `Methods` (`CkMethodDto` embedded), `Deprecated` — all `SetIgnoreIfNull`, empty lists stored as absent | `ProcessCkInterfaces` | interfaces |
+| `targetCkInterfaceId` on a type association (Phase 1) | `CkTypeAssociation.TargetCkInterfaceId` (`SetIgnoreIfNull`; `TargetCkTypeId` stays set — the interface narrows the target) | `ProcessCkTypesAndAssociations` | type associations |
+
+**Decision — interface association members are embedded in the `CkInterface` document, not `CkTypeAssociation`
+rows** (F1.3-S2): they are declarations an implementing type must satisfy, not associations of a type, and nothing
+in index or collection maintenance reads them; `CkTypeAssociation` rows stay type-to-type (with an optional interface
+narrowing). Every mapper `ApplyUpdate` `Unset`s a null Phase 1 member so a full update keeps the v1 document shape.
+A forged compiled model that breaks visibility/derivable rules (messages 112/113) is refused on import — the import's
+hard resolve validates against the installed models read back from MongoDB (`ForgedModel_ViolatingDerivableOrVisibility_IsRefusedOnImport`).
 
 Both new collections go through the full plumbing: entity, class map, `CkIdSerializer`/`RtCkIdSerializer`
 for `CkInterfaceId` (`OctoInterfaceIdSerializer`), mapper, `ICkMongoDbRepositoryDataSource` property,

@@ -41,4 +41,10 @@ public class CkTypeAssociation
     /// Gets or sets a list of attributes of the target ck type id, that are referential integrity attributes
     /// </summary>
     public ICollection<CkId<CkAttributeId>>? TargetCkAttributeIds { get; set; }
+
+    /// <summary>
+    ///     CK v2 Phase 1 (F1.1-S5, AB#5915): the association targets a CK interface instead of a type (then
+    ///     <see cref="TargetCkTypeId" /> is null). Absent from the document when not set.
+    /// </summary>
+    public CkId<CkInterfaceId>? TargetCkInterfaceId { get; set; }
 }

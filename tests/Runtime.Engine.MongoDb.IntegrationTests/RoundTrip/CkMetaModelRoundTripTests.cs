@@ -76,7 +76,18 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
             Assert.NotNull(compiled);
             // Guard against a vacuous pass: the compiled model really carries every v2 construct.
             Assert.Equal(2, compiled.CkLanguage);
-            Assert.Equal(2, compiled.Interfaces!.Count);
+            Assert.Equal(4, compiled.Interfaces!.Count);
+            // Phase 1 constructs (F1.3-S2): every one of them is in the compiled model, so the gate covers it.
+            var labeled = compiled.Interfaces!.Single(i => i.InterfaceId.Name == "Labeled");
+            Assert.NotEmpty(labeled.Extends!);
+            Assert.NotEmpty(labeled.Associations!);
+            Assert.NotEmpty(labeled.Methods!);
+            Assert.True(compiled.Interfaces!.Single(i => i.InterfaceId.Name == "Legacy").Deprecated);
+            Assert.NotNull(compiled.Types!.Single(t => t.TypeId.Name == "Thing").Derivable);
+            Assert.NotNull(compiled.Types!.Single(t => t.TypeId.Name == "Widget").Visibility);
+            Assert.NotNull(compiled.Records!.Single().Derivable);
+            Assert.NotNull(compiled.Types!.Single(t => t.TypeId.Name == "Gadget").Associations!.Single().TargetCkInterfaceId);
+            Assert.NotNull(compiled.MinEngineVersion);
             Assert.Equal(3, compiled.Types!.Count(t => t.Implements is { Count: > 0 }));
             Assert.Equal(3, compiled.Types!.Single(t => t.TypeId.Name == "Thing").Methods!.Count);
             Assert.Equal(3, compiled.Records!.Single().Attributes!.Count(a => a.Access != null));
@@ -179,6 +190,21 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
                 .Find(new BsonDocument("_id", TestV1ModelId.FullName))
                 .SingleAsync(TestContext.Current.CancellationToken);
             Assert.DoesNotContain("ckLanguage", model.Names);
+            Assert.DoesNotContain("minEngineVersion", model.Names);
+            Assert.DoesNotContain("dependencyRanges", model.Names);
+
+            // Phase 1 members (F1.3-S2): none of them may appear in any CK document of a v1 import.
+            string[] phase1Elements = ["visibility", "derivable", "targetCkInterfaceId", "extends", "deprecated"];
+            foreach (var collection in new[]
+                     {
+                         "CkType", "CkRecord", "CkEnum", "CkAttribute", "CkAssociationRole", "CkTypeAssociation"
+                     })
+            {
+                var documents = await database.GetCollection<BsonDocument>(collection)
+                    .Find(new BsonDocument("ckModelId", TestV1ModelId.FullName))
+                    .ToListAsync(TestContext.Current.CancellationToken);
+                Assert.All(documents, d => Assert.Empty(d.Names.Intersect(phase1Elements)));
+            }
 
             var types = await database.GetCollection<BsonDocument>("CkType")
                 .Find(new BsonDocument("ckModelId", TestV1ModelId.FullName))
@@ -217,7 +243,8 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
                 .SingleAsync(TestContext.Current.CancellationToken);
             Assert.Equal(2, model["ckLanguage"].AsInt32);
 
-            Assert.Equal(["KitchenSinkCs-1.0.0/Coded-1", "KitchenSinkCs-1.0.0/Named-1"],
+            Assert.Equal(["KitchenSinkCs-1.0.0/Coded-1", "KitchenSinkCs-1.0.0/Labeled-1", "KitchenSinkCs-1.0.0/Legacy-1",
+                    "KitchenSinkCs-1.0.0/Named-1"],
                 await IdsAsync(database, "CkInterface", "_id"));
             Assert.Equal(
             [
@@ -228,7 +255,7 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
 
             // The next version drops one implements entry and one interface: nothing of 1.0.0 is left behind.
             var next = CkV2KitchenSinkModel.Build(systemId, new CkModelId("KitchenSinkCs-1.1.0"));
-            next.Interfaces!.RemoveAll(i => i.InterfaceId.Name == "Coded");
+            next.Interfaces!.RemoveAll(i => i.InterfaceId.Name is "Coded" or "Labeled" or "Legacy");
             next.Types!.Single(t => t.TypeId.Name == "Gadget").Implements = null;
             await tenant.ImportCkModelAsync(next);
 
@@ -250,6 +277,85 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
     ///     Message 91 (CkLanguageNotSupported): a model in a CK language this engine does not know is refused
     ///     before anything is written — persisting it would silently drop the constructs it cannot store.
     /// </summary>
+    /// <summary>
+    ///     F1.3-S2: a forged compiled model that breaks the visibility/derivable rules of another model is refused on
+    ///     IMPORT, not only at compile time (the import's hard resolve runs the F1.2-S3 checks 112/113 against the
+    ///     installed model read back from MongoDB — which only works because visibility and derivable survive the
+    ///     round trip).
+    /// </summary>
+    [Theory]
+    [InlineData("derive")]
+    [InlineData("internal")]
+    public async Task ForgedModel_ViolatingDerivableOrVisibility_IsRefusedOnImport(string violation)
+    {
+        await WithThrowawayTenantAsync("rtforged", async (tenant, tenantId) =>
+        {
+            var systemId = await GetInstalledSystemIdAsync(tenant);
+            var baseId = new CkModelId("ForgeBase-1.0.0");
+            await tenant.ImportCkModelAsync(new CkCompiledModelRoot
+            {
+                ModelId = baseId,
+                CkLanguage = 2,
+                MinEngineVersion = "3.4.0",
+                Dependencies = [systemId],
+                Attributes =
+                [
+                    new CkAttributeDto
+                    {
+                        AttributeId = new CkAttributeId("Secret-1"), ValueType = AttributeValueTypesDto.String,
+                        Visibility = CkVisibilityDto.Internal
+                    }
+                ],
+                Types =
+                [
+                    new CkCompiledTypeDto
+                    {
+                        TypeId = new CkTypeId("Base-1"), IsAbstract = true, Derivable = CkDerivableDto.Model,
+                        DerivedFromCkTypeId = new CkId<CkTypeId>(systemId, new CkTypeId("Entity-1"))
+                    }
+                ]
+            });
+
+            var forgedId = new CkModelId("Forged-1.0.0");
+            var forged = new CkCompiledModelRoot
+            {
+                ModelId = forgedId,
+                CkLanguage = 2,
+                MinEngineVersion = "3.4.0",
+                Dependencies = [baseId, systemId],
+                Types =
+                [
+                    new CkCompiledTypeDto
+                    {
+                        TypeId = new CkTypeId("Thing-1"),
+                        DerivedFromCkTypeId = violation == "derive"
+                            ? new CkId<CkTypeId>(baseId, new CkTypeId("Base-1"))
+                            : new CkId<CkTypeId>(systemId, new CkTypeId("Entity-1")),
+                        Attributes = violation == "internal"
+                            ?
+                            [
+                                new CkTypeAttributeDto
+                                {
+                                    CkAttributeId = new CkId<CkAttributeId>(baseId, new CkAttributeId("Secret-1")),
+                                    AttributeName = "Secret", IsOptional = true
+                                }
+                            ]
+                            : null
+                    }
+                ]
+            };
+
+            await Assert.ThrowsAnyAsync<Exception>(() => tenant.ImportCkModelAsync(forged));
+            Assert.Null(await LookupAsync(tenantId, forgedId));
+
+            // Control: the same model without the violation imports, so the refusal above is the rule, not noise.
+            forged.Types![0].DerivedFromCkTypeId = new CkId<CkTypeId>(systemId, new CkTypeId("Entity-1"));
+            forged.Types![0].Attributes = null;
+            await tenant.ImportCkModelAsync(forged);
+            Assert.NotNull(await LookupAsync(tenantId, forgedId));
+        });
+    }
+
     [Fact]
     public async Task CkLanguageAboveSupported_IsRejectedBeforeAnythingIsWritten()
     {

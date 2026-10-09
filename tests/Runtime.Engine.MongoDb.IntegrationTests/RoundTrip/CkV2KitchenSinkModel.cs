@@ -39,10 +39,21 @@ internal static class CkV2KitchenSinkModel
             Description = "CK v2 Phase 0 kitchen sink",
             CkLanguage = 2,
             Dependencies = [systemId],
+            // Phase 1: range-retaining dependency (F1.1-S2) and the minEngineVersion the compiler writes for v2.
+            DependencyRanges =
+            [
+                new CkModelDependencyDto
+                {
+                    Range = new CkModelIdVersionRange(systemId.Name,
+                        $"[{systemId.Version.Major}.0,{systemId.Version.Major + 1}.0)"),
+                    Floor = systemId.Version.ToString()
+                }
+            ],
+            MinEngineVersion = "3.4.0",
             Attributes =
             [
                 new CkAttributeDto { AttributeId = new CkAttributeId("Name-1"), ValueType = AttributeValueTypesDto.String },
-                new CkAttributeDto { AttributeId = new CkAttributeId("Alias-1"), ValueType = AttributeValueTypesDto.String },
+                new CkAttributeDto { AttributeId = new CkAttributeId("Alias-1"), ValueType = AttributeValueTypesDto.String, Visibility = CkVisibilityDto.Internal },
                 new CkAttributeDto { AttributeId = new CkAttributeId("Code-1"), ValueType = AttributeValueTypesDto.String },
                 new CkAttributeDto
                 {
@@ -60,6 +71,7 @@ internal static class CkV2KitchenSinkModel
                 new CkEnumDto
                 {
                     EnumId = new CkEnumId("Mode-1"),
+                    Visibility = CkVisibilityDto.Public,
                     Values =
                     [
                         new CkEnumValueDto { Key = 0, Name = "Fast" },
@@ -72,6 +84,8 @@ internal static class CkV2KitchenSinkModel
                 new CkRecordDto
                 {
                     RecordId = new CkRecordId("Address-1"),
+                    Visibility = CkVisibilityDto.Internal,
+                    Derivable = CkDerivableDto.Any,
                     Attributes =
                     [
                         Assign("Name", null),
@@ -99,7 +113,36 @@ internal static class CkV2KitchenSinkModel
                 new CkInterfaceDto
                 {
                     InterfaceId = new CkInterfaceId("Coded-1"),
+                    Visibility = CkVisibilityDto.Internal,
                     Attributes = [new CkInterfaceAttributeDto { CkAttributeId = Attribute("Code"), AttributeName = "Code" }]
+                },
+                // Phase 1 interface completion (F1.1-S5): extends, association and method members, deprecated.
+                new CkInterfaceDto
+                {
+                    InterfaceId = new CkInterfaceId("Labeled-1"),
+                    Extends = [Interface("Named")],
+                    Attributes =
+                    [
+                        new CkInterfaceAttributeDto { CkAttributeId = Attribute("Code"), AttributeName = "Code", IsOptional = true }
+                    ],
+                    Associations =
+                    [
+                        new CkInterfaceAssociationDto
+                        {
+                            CkRoleId = new CkId<CkAssociationRoleId>(id, new CkAssociationRoleId("Link-1")),
+                            TargetCkInterfaceId = Interface("Named"),
+                            Multiplicity = MultiplicitiesDto.N,
+                            IsOptional = true
+                        }
+                    ],
+                    Methods = [new CkMethodDto { MethodId = "Relabel-1", Visibility = CkVisibilityDto.Internal }]
+                },
+                new CkInterfaceDto
+                {
+                    InterfaceId = new CkInterfaceId("Legacy-1"),
+                    Deprecated = true,
+                    Extends = [Interface("Labeled")],
+                    Methods = [new CkMethodDto { MethodId = "Tag-1", Kind = CkMethodKindDto.Static }]
                 }
             ],
             AssociationRoles =
@@ -107,6 +150,7 @@ internal static class CkV2KitchenSinkModel
                 new CkAssociationRoleDto
                 {
                     AssociationRoleId = new CkAssociationRoleId("Link-1"),
+                    Visibility = CkVisibilityDto.Internal,
                     InboundName = "LinkedFrom",
                     OutboundName = "LinksTo",
                     InboundMultiplicity = MultiplicitiesDto.N,
@@ -126,6 +170,7 @@ internal static class CkV2KitchenSinkModel
                 new CkCompiledTypeDto
                 {
                     TypeId = new CkTypeId("Thing-1"),
+                    Derivable = CkDerivableDto.Model,
                     IsAbstract = true,
                     DerivedFromCkTypeId = new CkId<CkTypeId>(systemId, new CkTypeId("Entity-1")),
                     Implements = [Interface("Named")],
@@ -135,7 +180,7 @@ internal static class CkV2KitchenSinkModel
                         Assign("Alias", CkAttributeAccessDto.ReadOnly),
                         Assign("Secret", CkAttributeAccessDto.Hidden)
                     ],
-                    Methods = [method, RoundTripMethods.Static(), new CkMethodDto { MethodId = "Ping-1" }]
+                    Methods = [method, RoundTripMethods.Static(), new CkMethodDto { MethodId = "Ping-1", Visibility = CkVisibilityDto.Internal }]
                 },
                 new CkCompiledTypeDto
                 {
@@ -150,13 +195,16 @@ internal static class CkV2KitchenSinkModel
                         new CkTypeAssociationDto
                         {
                             CkRoleId = new CkId<CkAssociationRoleId>(id, new CkAssociationRoleId("Link-1")),
-                            TargetCkTypeId = new CkId<CkTypeId>(id, new CkTypeId("Widget-1"))
+                            TargetCkTypeId = new CkId<CkTypeId>(id, new CkTypeId("Widget-1")),
+                            // Phase 1: narrowed to an interface Widget implements.
+                            TargetCkInterfaceId = Interface("Named")
                         }
                     ]
                 },
                 new CkCompiledTypeDto
                 {
                     TypeId = new CkTypeId("Widget-1"),
+                    Visibility = CkVisibilityDto.Internal,
                     IsCollectionRoot = true,
                     DerivedFromCkTypeId = new CkId<CkTypeId>(systemId, new CkTypeId("Entity-1")),
                     Implements = [Interface("Named")],

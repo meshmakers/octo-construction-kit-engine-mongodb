@@ -607,6 +607,9 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.EnableChangeStreamPreAndPostImages).SetIgnoreIfDefault(true);
             // CK v2 (AB#5669): absent for types without methods (pre-v2 documents keep their shape).
             cm.MapMember(c => c.Methods).SetIgnoreIfNull(true);
+            // CK v2 Phase 1 (AB#5915): absent when undeclared, so v1 documents keep their shape.
+            cm.MapMember(c => c.Visibility).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.Derivable).SetIgnoreIfNull(true);
         });
 
         BsonClassMap.RegisterClassMap<CkRecord>(cm =>
@@ -621,6 +624,9 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.Attributes).SetIgnoreIfDefault(true);
             // AB#5533: absent for records without a key (documents written before stay valid).
             cm.MapMember(c => c.RecordKey).SetIgnoreIfDefault(true);
+            // CK v2 Phase 1 (AB#5915): absent when undeclared, so v1 documents keep their shape.
+            cm.MapMember(c => c.Visibility).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.Derivable).SetIgnoreIfNull(true);
         });
 
         BsonClassMap.RegisterClassMap<CkEnum>(cm =>
@@ -632,6 +638,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.Description).SetIgnoreIfDefault(true);
             cm.MapMember(c => c.IsExtensible).SetIgnoreIfDefault(true);
             cm.MapMember(c => c.Values).SetIsRequired(true);
+            // CK v2 Phase 1 (AB#5915): absent when undeclared, so v1 documents keep their shape.
+            cm.MapMember(c => c.Visibility).SetIgnoreIfNull(true);
         });
 
         BsonClassMap.RegisterClassMap<CkEnumValue>(cm =>
@@ -671,6 +679,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             // resolves through the persisted isRuntimeState mirror — that is what keeps documents
             // written by a pre-AB#5187 engine behaving exactly as before.
             cm.MapMember(c => c.Ownership).SetIgnoreIfDefault(true);
+            // CK v2 Phase 1 (AB#5915): absent when undeclared, so v1 documents keep their shape.
+            cm.MapMember(c => c.Visibility).SetIgnoreIfNull(true);
         });
 
         BsonClassMap.RegisterClassMap<CkAssociationRole>(cm =>
@@ -684,6 +694,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.InboundName).SetIgnoreIfDefault(true);
             cm.MapMember(c => c.OutboundMultiplicity).SetIgnoreIfDefault(true);
             cm.MapMember(c => c.OutboundName).SetIgnoreIfDefault(true);
+            // CK v2 Phase 1 (AB#5915): absent when undeclared, so v1 documents keep their shape.
+            cm.MapMember(c => c.Visibility).SetIgnoreIfNull(true);
         });
 
         BsonClassMap.RegisterClassMap<CkTypeAssociation>(cm =>
@@ -695,6 +707,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.RoleId).SetIsRequired(true);
             cm.MapMember(c => c.OriginCkTypeId).SetIsRequired(true);
             cm.MapMember(c => c.TargetCkTypeId).SetIsRequired(true);
+            // CK v2 Phase 1 (AB#5915): interface target, absent for type targets.
+            cm.MapMember(c => c.TargetCkInterfaceId).SetIgnoreIfNull(true);
         });
 
         BsonClassMap.RegisterClassMap<CkTypeAttribute>(cm =>
@@ -744,6 +758,25 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.CkModelId).SetIsRequired(true);
             cm.MapMember(c => c.Description).SetIgnoreIfDefault(true);
             cm.MapMember(c => c.Attributes).SetIsRequired(true);
+            // CK v2 Phase 1 (AB#5915): completed interface meta-model, every member absent when undeclared.
+            cm.MapMember(c => c.Extends).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.Associations).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.Methods).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.Deprecated).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.Visibility).SetIgnoreIfNull(true);
+        });
+
+        // CK v2 Phase 1 (AB#5915): interface association members, the Contracts DTO embedded in CkInterface.
+        BsonClassMap.RegisterClassMap<CkInterfaceAssociationDto>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.AutoMap();
+
+            cm.MapMember(c => c.CkRoleId).SetIsRequired(true);
+            cm.MapMember(c => c.TargetCkTypeId).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.TargetCkInterfaceId).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.Multiplicity).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.IsOptional).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkInterfaceAttribute>(cm =>

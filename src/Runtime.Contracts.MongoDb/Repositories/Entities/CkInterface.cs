@@ -37,6 +37,35 @@ public class CkInterface
     ///     The attribute members of the interface (embedded).
     /// </summary>
     public ICollection<CkInterfaceAttribute> Attributes { get; set; } = [];
+
+    /// <summary>
+    ///     CK v2 Phase 1 (F1.1-S5, AB#5915): interfaces this interface extends (members are inherited by the engine
+    ///     graph; only the declared list is stored). <c>null</c> when none.
+    /// </summary>
+    public List<CkId<CkInterfaceId>>? Extends { get; set; }
+
+    /// <summary>
+    ///     CK v2 Phase 1 (F1.1-S5): association members, the Contracts DTO embedded as-is (like type methods).
+    ///     Stored here and NOT as <c>CkTypeAssociation</c> rows: they are declarations an implementing type must
+    ///     satisfy, not associations of a type (decision recorded in CLAUDE.md). <c>null</c> when none.
+    /// </summary>
+    public List<CkInterfaceAssociationDto>? Associations { get; set; }
+
+    /// <summary>
+    ///     CK v2 Phase 1 (F1.1-S5): method declarations, embedded like <c>CkType.Methods</c>. <c>null</c> when none.
+    /// </summary>
+    public List<CkMethodDto>? Methods { get; set; }
+
+    /// <summary>
+    ///     CK v2 Phase 1 (F1.1-S5): the interface is deprecated (dependents get a compile warning). <c>null</c> = not
+    ///     declared.
+    /// </summary>
+    public bool? Deprecated { get; set; }
+
+    /// <summary>
+    ///     CK v2 Phase 1 (F1.1-S4, AB#5915): declared visibility; <c>null</c> = <c>Public</c> and absent from the document.
+    /// </summary>
+    public CkVisibilityDto? Visibility { get; set; }
 }
 
 /// <summary>

@@ -9,6 +9,30 @@ interfaces:
         name: Alias
         isOptional: true
   - interfaceId: Coded-1
+    visibility: Internal
     attributes:
       - id: ${this}/Code
         name: Code
+  # Phase 1 interface completion (F1.1-S5): extends, association and method members, deprecated.
+  - interfaceId: Labeled-1
+    extends:
+      - ${this}/Named-1
+    attributes:
+      - id: ${this}/Code
+        name: Code
+        isOptional: true
+    associations:
+      - id: ${this}/Link
+        targetCkInterfaceId: ${this}/Named-1
+        multiplicity: N
+        isOptional: true
+    methods:
+      - methodId: Relabel-1
+        visibility: Internal
+  - interfaceId: Legacy-1
+    deprecated: true
+    extends:
+      - ${this}/Labeled-1
+    methods:
+      - methodId: Tag-1
+        kind: Static

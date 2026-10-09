@@ -3,6 +3,7 @@ types:
   # Abstract base implementing Named; declares the full and the minimal method.
   - typeId: Thing
     isAbstract: true
+    derivable: Model
     derivedFromCkTypeId: ${System}/Entity
     implements:
       - ${this}/Named-1
@@ -47,6 +48,7 @@ types:
           timeoutSeconds: 30
           idempotent: true
       - methodId: Ping-1
+        visibility: Internal
       - methodId: Reindex-1
         kind: Static
         authorization:
@@ -63,8 +65,11 @@ types:
     associations:
       - id: ${this}/Link
         targetCkTypeId: ${this}/Widget
+        # Phase 1: the target is narrowed to an interface Widget implements.
+        targetCkInterfaceId: ${this}/Named-1
   # Unrelated type implementing Named.
   - typeId: Widget
+    visibility: Internal
     derivedFromCkTypeId: ${System}/Entity
     implements:
       - ${this}/Named-1

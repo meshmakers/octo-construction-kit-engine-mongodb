@@ -4,6 +4,7 @@ attributes:
     valueType: String
   - id: Alias
     valueType: String
+    visibility: Internal
   - id: Code
     valueType: String
   - id: Secret

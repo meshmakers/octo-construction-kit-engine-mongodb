@@ -198,6 +198,87 @@ public class CkMetaModelLegacyDocumentTests
         Assert.Equal(entity.CkInterfaceId, readBack.CkInterfaceId);
     }
 
+    // ---- Phase 1 members (F1.3-S2, AB#5915) ------------------------------------------------------------
+
+    private static readonly string[] Phase1Elements =
+        ["visibility", "derivable", "targetCkInterfaceId", "extends", "associations", "deprecated", "minEngineVersion"];
+
+    [Fact]
+    public void ClassicElements_WriteNoPhase1Element()
+    {
+        var documents = new[]
+        {
+            new CkModel { Id = ModelId, ModelId = ModelId.Name }.ToBsonDocument(),
+            NewType(null).ToBsonDocument(),
+            new CkRecord { CkModelId = ModelId, CkRecordId = new CkId<CkRecordId>(ModelId, new CkRecordId("Address-1")) }
+                .ToBsonDocument(),
+            new CkEnum { CkModelId = ModelId, CkEnumId = new CkId<CkEnumId>(ModelId, new CkEnumId("Mode-1")) }.ToBsonDocument(),
+            new CkAttribute
+            {
+                CkModelId = ModelId, CkAttributeId = new CkId<CkAttributeId>(ModelId, new CkAttributeId("Name-1")),
+                AttributeValueType = AttributeValueTypesDto.String
+            }.ToBsonDocument(),
+            new CkAssociationRole
+            {
+                CkModelId = ModelId, RoleId = new CkId<CkAssociationRoleId>(ModelId, new CkAssociationRoleId("Link-1")),
+                InboundName = "LinkedFrom", OutboundName = "LinksTo"
+            }.ToBsonDocument(),
+            new CkTypeAssociation
+            {
+                CkModelId = ModelId, RoleId = new CkId<CkAssociationRoleId>(ModelId, new CkAssociationRoleId("Link-1")),
+                OriginCkTypeId = new CkId<CkTypeId>(ModelId, new CkTypeId("Gadget-1")),
+                TargetCkTypeId = new CkId<CkTypeId>(ModelId, new CkTypeId("Widget-1"))
+            }.ToBsonDocument(),
+            new CkInterface
+            {
+                CkInterfaceId = new CkId<CkInterfaceId>(ModelId, new CkInterfaceId("Named-1")), CkModelId = ModelId
+            }.ToBsonDocument()
+        };
+
+        Assert.All(documents, d => Assert.Empty(d.Names.Intersect(Phase1Elements)));
+    }
+
+    [Fact]
+    public void Phase1Members_RoundTripVerbatim()
+    {
+        var type = NewType(null);
+        type.Visibility = CkVisibilityDto.Internal;
+        type.Derivable = CkDerivableDto.Model;
+        var typeBack = BsonSerializer.Deserialize<CkType>(type.ToBsonDocument());
+        Assert.Equal((CkVisibilityDto.Internal, CkDerivableDto.Model), (typeBack.Visibility, typeBack.Derivable));
+
+        var association = new CkTypeAssociation
+        {
+            CkModelId = ModelId, RoleId = new CkId<CkAssociationRoleId>(ModelId, new CkAssociationRoleId("Link-1")),
+            OriginCkTypeId = new CkId<CkTypeId>(ModelId, new CkTypeId("Gadget-1")),
+            TargetCkTypeId = new CkId<CkTypeId>(ModelId, new CkTypeId("Widget-1")),
+            TargetCkInterfaceId = new CkId<CkInterfaceId>(ModelId, new CkInterfaceId("Named-1"))
+        };
+        Assert.Equal(association.TargetCkInterfaceId,
+            BsonSerializer.Deserialize<CkTypeAssociation>(association.ToBsonDocument()).TargetCkInterfaceId);
+
+        var entity = new CkInterface
+        {
+            CkInterfaceId = new CkId<CkInterfaceId>(ModelId, new CkInterfaceId("Labeled-1")),
+            CkModelId = ModelId,
+            Extends = [new CkId<CkInterfaceId>(ModelId, new CkInterfaceId("Named-1"))],
+            Associations =
+            [
+                new CkInterfaceAssociationDto
+                {
+                    CkRoleId = new CkId<CkAssociationRoleId>(ModelId, new CkAssociationRoleId("Link-1")),
+                    TargetCkInterfaceId = new CkId<CkInterfaceId>(ModelId, new CkInterfaceId("Named-1")),
+                    Multiplicity = MultiplicitiesDto.N, IsOptional = true
+                }
+            ],
+            Methods = [new CkMethodDto { MethodId = "Relabel-1", Visibility = CkVisibilityDto.Internal }],
+            Deprecated = true,
+            Visibility = CkVisibilityDto.Internal
+        };
+        var back = BsonSerializer.Deserialize<CkInterface>(entity.ToBsonDocument());
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(entity), System.Text.Json.JsonSerializer.Serialize(back));
+    }
+
     private static void AssertSameMethod(CkMethodDto expected, CkMethodDto actual)
     {
         // Field by field through the JSON the engine uses for compiled models — a member the class map

@@ -192,7 +192,10 @@ public class CkTypeMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkTypeId>
             // Review N9: unset instead of writing an explicit null, so classic CkType documents keep their shape.
             document.Methods == null
                 ? update.Unset(p => p.Methods)
-                : update.Set(p => p.Methods, document.Methods)
+                : update.Set(p => p.Methods, document.Methods),
+            // CK v2 Phase 1 (AB#5915): Unset when null, so a full update keeps the v1 document shape.
+            document.Visibility == null ? update.Unset(p => p.Visibility) : update.Set(p => p.Visibility, document.Visibility),
+            document.Derivable == null ? update.Unset(p => p.Derivable) : update.Set(p => p.Derivable, document.Derivable)
         ];
 
         return update.Combine(list);
@@ -219,7 +222,10 @@ public class CkRecordMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkRecor
             update.Set(p => p.IsAbstract, document.IsAbstract),
             update.Set(p => p.IsFinal, document.IsFinal),
             // AB#5533: keep the record key in sync on update.
-            update.Set(p => p.RecordKey, document.RecordKey)
+            update.Set(p => p.RecordKey, document.RecordKey),
+            // CK v2 Phase 1 (AB#5915): Unset when null, so a full update keeps the v1 document shape.
+            document.Visibility == null ? update.Unset(p => p.Visibility) : update.Set(p => p.Visibility, document.Visibility),
+            document.Derivable == null ? update.Unset(p => p.Derivable) : update.Set(p => p.Derivable, document.Derivable)
         ];
 
         return update.Combine(list);
@@ -244,7 +250,9 @@ public class CkEnumMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkEnumId>
             update.Set(p => p.ModelState, document.ModelState),
             update.Set(p => p.UseFlags, document.UseFlags),
             update.Set(p => p.IsExtensible, document.IsExtensible),
-            update.Set(p => p.Values, document.Values)
+            update.Set(p => p.Values, document.Values),
+            // CK v2 Phase 1 (AB#5915): Unset when null, so a full update keeps the v1 document shape.
+            document.Visibility == null ? update.Unset(p => p.Visibility) : update.Set(p => p.Visibility, document.Visibility)
         ];
 
         return update.Combine(list);
@@ -271,7 +279,9 @@ public class CkAttributeMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkAt
             update.Set(p => p.DefaultValues, document.DefaultValues),
             update.Set(p => p.ValueCkEnumId, document.ValueCkEnumId),
             update.Set(p => p.ValueCkRecordId, document.ValueCkRecordId),
-            update.Set(p => p.Description, document.Description)
+            update.Set(p => p.Description, document.Description),
+            // CK v2 Phase 1 (AB#5915): Unset when null, so a full update keeps the v1 document shape.
+            document.Visibility == null ? update.Unset(p => p.Visibility) : update.Set(p => p.Visibility, document.Visibility)
         ];
 
         return update.Combine(list);
@@ -298,7 +308,9 @@ public class CkAssociationRoleMongoDataSourceMapper : IMongoDataSourceMapper<CkI
             update.Set(p => p.OutboundName, document.OutboundName),
             update.Set(p => p.InboundMultiplicity, document.InboundMultiplicity),
             update.Set(p => p.OutboundMultiplicity, document.OutboundMultiplicity),
-            update.Set(p => p.Attributes, document.Attributes)
+            update.Set(p => p.Attributes, document.Attributes),
+            // CK v2 Phase 1 (AB#5915): Unset when null, so a full update keeps the v1 document shape.
+            document.Visibility == null ? update.Unset(p => p.Visibility) : update.Set(p => p.Visibility, document.Visibility)
         ];
 
         return update.Combine(list);
@@ -324,7 +336,9 @@ public class CkTypeAssociationMongoDataSourceMapper : IMongoDataSourceMapper<Oct
             update.Set(p => p.RoleId, document.RoleId),
             update.Set(p => p.OriginCkTypeId, document.OriginCkTypeId),
             update.Set(p => p.TargetCkTypeId, document.TargetCkTypeId),
-            update.Set(p => p.TargetCkAttributeIds, document.TargetCkAttributeIds)
+            update.Set(p => p.TargetCkAttributeIds, document.TargetCkAttributeIds),
+            // CK v2 Phase 1 (AB#5915): Unset when null, so a full update keeps the v1 document shape.
+            document.TargetCkInterfaceId == null ? update.Unset(p => p.TargetCkInterfaceId) : update.Set(p => p.TargetCkInterfaceId, document.TargetCkInterfaceId)
         ];
 
         return update.Combine(list);
@@ -375,7 +389,13 @@ public class CkInterfaceMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkIn
             update.Set(p => p.CkModelId, document.CkModelId),
             update.Set(p => p.ModelState, document.ModelState),
             update.Set(p => p.Description, document.Description),
-            update.Set(p => p.Attributes, document.Attributes)
+            update.Set(p => p.Attributes, document.Attributes),
+            // CK v2 Phase 1 (AB#5915): Unset when null, so a full update keeps the v1 document shape.
+            document.Extends == null ? update.Unset(p => p.Extends) : update.Set(p => p.Extends, document.Extends),
+            document.Associations == null ? update.Unset(p => p.Associations) : update.Set(p => p.Associations, document.Associations),
+            document.Methods == null ? update.Unset(p => p.Methods) : update.Set(p => p.Methods, document.Methods),
+            document.Deprecated == null ? update.Unset(p => p.Deprecated) : update.Set(p => p.Deprecated, document.Deprecated),
+            document.Visibility == null ? update.Unset(p => p.Visibility) : update.Set(p => p.Visibility, document.Visibility)
         ];
 
         return update.Combine(list);

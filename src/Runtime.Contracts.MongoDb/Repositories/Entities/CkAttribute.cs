@@ -75,4 +75,9 @@ public class CkAttribute
     ///     Optional meta data of the attribute
     /// </summary>
     public ICollection<CkAttributeMetaData>? MetaData { get; set; }
+
+    /// <summary>
+    ///     CK v2 Phase 1 (F1.1-S4, AB#5915): declared visibility; <c>null</c> = <c>Public</c> and absent from the document.
+    /// </summary>
+    public CkVisibilityDto? Visibility { get; set; }
 }

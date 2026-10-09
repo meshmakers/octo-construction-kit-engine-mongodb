@@ -254,12 +254,20 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                         CkAttributeId = a.AttributeId,
                         AttributeName = a.AttributeName,
                         IsOptional = a.IsOptional
-                    }).ToList()
+                    }).ToList(),
+                    // CK v2 Phase 1 (AB#5915): completed interface meta-model.
+                    Extends = i.Extends,
+                    Associations = i.Associations,
+                    Methods = i.Methods,
+                    Deprecated = i.Deprecated,
+                    Visibility = i.Visibility
                 }).ToList(),
             Enums = ckEnums.Select(e => new CkEnumDto
             {
                 EnumId = e.CkEnumId.ElementId,
                 Description = e.Description,
+                // CK v2 Phase 1 (AB#5915)
+                Visibility = e.Visibility,
                 UseFlags = e.UseFlags,
                 IsExtensible = e.IsExtensible,
                 Values =
@@ -274,6 +282,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 Description = r.Description,
                 // AB#5533: the record key must survive the round-trip into the runtime CK cache.
                 RecordKey = r.RecordKey,
+                // CK v2 Phase 1 (AB#5915)
+                Visibility = r.Visibility,
+                Derivable = r.Derivable,
                 IsAbstract = r.IsAbstract,
                 IsFinal = r.IsFinal,
                 Attributes = r.Attributes.Select(a => new CkTypeAttributeDto
@@ -303,6 +314,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 // documents written before it existed (Ownership == null there).
                 Ownership = a.Ownership,
                 IsRuntimeState = a.IsRuntimeState,
+                // CK v2 Phase 1 (AB#5915)
+                Visibility = a.Visibility,
                 MetaData = a.MetaData?.Select(m =>
                     new CkAttributeMetaDataDto { Key = m.Key, Value = m.Value, Description = m.Description }).ToList()
             }).ToList(),
@@ -317,6 +330,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 DisplayNameRule = t.DisplayNameRule,
                 DisplayDescriptionRule = t.DisplayDescriptionRule,
                 OwnerAttributePath = t.OwnerAttributePath,
+                // CK v2 Phase 1 (AB#5915)
+                Visibility = t.Visibility,
+                Derivable = t.Derivable,
                 // CK v2 (AB#5669): the declared methods, embedded verbatim.
                 Methods = t.Methods,
                 // CK v2 (AB#5667): the declared implements entries; null when none, matching the compiled DTO.
@@ -338,6 +354,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     {
                         CkRoleId = a.RoleId,
                         TargetCkTypeId = a.TargetCkTypeId,
+                        // CK v2 Phase 1 (AB#5915): interface target.
+                        TargetCkInterfaceId = a.TargetCkInterfaceId,
                         TargetCkAttributeIds = a.TargetCkAttributeIds?.ToList()
                     }).ToList(),
                 DerivedFromCkTypeId = ckTypeInheritances.FirstOrDefault(x => x.InheritorCkTypeId == t.CkTypeId)
@@ -351,6 +369,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 OutboundMultiplicity = ar.OutboundMultiplicity,
                 InboundName = ar.InboundName,
                 OutboundName = ar.OutboundName,
+                // CK v2 Phase 1 (AB#5915)
+                Visibility = ar.Visibility,
                 Attributes = ar.Attributes.Select(a => new CkTypeAttributeDto
                 {
                     AttributeName = a.AttributeName,
@@ -1168,6 +1188,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     Description = ckEnumDto.Description,
                     UseFlags = ckEnumDto.UseFlags,
                     IsExtensible = ckEnumDto.IsExtensible,
+                    // CK v2 Phase 1 (AB#5915)
+                    Visibility = ckEnumDto.Visibility,
                     Values = ckEnumValues
                 };
                 transientCkModel.CkEnums.Add(ckEnum);
@@ -1205,6 +1227,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     RecordKey = string.IsNullOrWhiteSpace(ckRecordDto.RecordKey) ? null : ckRecordDto.RecordKey,
                     IsFinal = ckRecordDto.IsFinal,
                     IsAbstract = ckRecordDto.IsAbstract,
+                    // CK v2 Phase 1 (AB#5915)
+                    Visibility = ckRecordDto.Visibility,
+                    Derivable = ckRecordDto.Derivable,
                     Attributes = ckTypeAttributes
                 };
                 transientCkModel.CkRecords.Add(recordDto);
@@ -1231,6 +1256,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     OutboundName = modelAssociationRole.OutboundName,
                     InboundMultiplicity = modelAssociationRole.InboundMultiplicity,
                     OutboundMultiplicity = modelAssociationRole.OutboundMultiplicity,
+                    // CK v2 Phase 1 (AB#5915)
+                    Visibility = modelAssociationRole.Visibility,
                     Attributes = ckTypeAttributes
                 };
                 transientCkModel.CkAssociationRoles.Add(associationRole);
@@ -1429,6 +1456,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     // that an engine which does not know Ownership yet still reads correctly.
                     Ownership = ckAttributeDto.Ownership,
                     IsRuntimeState = ckAttributeDto.IsRuntimeState,
+                    // CK v2 Phase 1 (AB#5915)
+                    Visibility = ckAttributeDto.Visibility,
                     MetaData = ckAttributeDto.MetaData?.Select(m =>
                         new CkAttributeMetaData { Key = m.Key, Value = m.Value, Description = m.Description }).ToList()
                 };
@@ -1455,12 +1484,19 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 ModelState = ModelState.Importing,
                 CkInterfaceId = new CkId<CkInterfaceId>(compiledModel.ModelId, ckInterfaceDto.InterfaceId),
                 Description = ckInterfaceDto.Description,
-                Attributes = ckInterfaceDto.Attributes.Select(a => new CkInterfaceAttribute
+                Attributes = (ckInterfaceDto.Attributes ?? []).Select(a => new CkInterfaceAttribute
                 {
                     AttributeId = a.CkAttributeId,
                     AttributeName = a.AttributeName,
                     IsOptional = a.IsOptional
-                }).ToList()
+                }).ToList(),
+                // CK v2 Phase 1 (AB#5915): completed interface meta-model; empty lists are stored as absent, matching
+                // the compiled DTO (which omits them).
+                Extends = ckInterfaceDto.Extends is { Count: > 0 } ? ckInterfaceDto.Extends : null,
+                Associations = ckInterfaceDto.Associations is { Count: > 0 } ? ckInterfaceDto.Associations : null,
+                Methods = ckInterfaceDto.Methods is { Count: > 0 } ? ckInterfaceDto.Methods : null,
+                Deprecated = ckInterfaceDto.Deprecated,
+                Visibility = ckInterfaceDto.Visibility
             });
         }
     }
@@ -1511,6 +1547,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 OwnerAttributePath = ckTypeDto.OwnerAttributePath,
                 // CK v2 (AB#5669): declared methods, embedded verbatim; null keeps the pre-v2 document shape.
                 Methods = ckTypeDto.Methods is { Count: > 0 } ? ckTypeDto.Methods : null,
+                // CK v2 Phase 1 (AB#5915)
+                Visibility = ckTypeDto.Visibility,
+                Derivable = ckTypeDto.Derivable,
                 Attributes = ckTypeAttributes,
                 Indexes = textSearchDefinitions
             };
@@ -1555,6 +1594,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                         RoleId = association.CkRoleId,
                         OriginCkTypeId = new CkId<CkTypeId>(compiledModel.ModelId, ckType.CkTypeId.ElementId),
                         TargetCkTypeId = association.TargetCkTypeId,
+                        // CK v2 Phase 1 (AB#5915): interface target (TargetCkTypeId is null then).
+                        TargetCkInterfaceId = association.TargetCkInterfaceId,
                         TargetCkAttributeIds = association.TargetCkAttributeIds
                     };
                     transientCkModel.CkTypeAssociations.Add(ckTypeAssociation);

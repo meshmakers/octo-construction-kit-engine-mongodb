@@ -64,6 +64,17 @@ public class CkMetaModelCacheRoundTripTests(CkModelImportMigrationFixture fixtur
             Assert.Empty(widgetGraph.AllMethods);
             Assert.Equal(["Named-1"], widgetGraph.AllImplementedInterfaces.Select(i => i.ElementId.FullName));
 
+            // Phase 1 members (F1.3-S2) reach the cache rebuilt from Mongo.
+            Assert.Equal(CkDerivableDto.Model, thing.Derivable);
+            Assert.Equal(CkVisibilityDto.Internal, cacheService.GetRtCkType(tenantId, new RtCkId<CkTypeId>("KitchenSink/Widget")).Visibility);
+            var labeled = cacheService.GetRtCkInterface(tenantId, new RtCkId<CkInterfaceId>("KitchenSink/Labeled"));
+            Assert.Equal(["KitchenSink/Named-1"], labeled.DeclaredExtends.Select(i => i.ToRtCkId().FullName));
+            Assert.Single(labeled.DefinedAssociations);
+            Assert.Equal(["Relabel-1"], labeled.DefinedMethods.Select(m => m.MethodId));
+            Assert.True(cacheService.GetRtCkInterface(tenantId, new RtCkId<CkInterfaceId>("KitchenSink/Legacy")).Deprecated);
+            Assert.Equal(CkVisibilityDto.Internal,
+                cacheService.GetRtCkInterface(tenantId, new RtCkId<CkInterfaceId>("KitchenSink/Coded")).Visibility);
+
             // Declared methods (AB#5669), field by field
             Assert.Equal(["ChangePassword-2", "Ping-1", "Reindex-1"],
                 thing.DefinedMethods.Select(m => m.MethodId).Order(StringComparer.Ordinal));
