@@ -7,7 +7,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.RoundTrip;
 
 /// <summary>
-///     CK v2 Phase 0 round-trip gate (concept §4.6, the isRuntimeState lesson): compares a compiled model with
+///     CK v2 round-trip gate (JSON view; the hard gate is CkModelReflectionComparer) (concept §4.6, the isRuntimeState lesson): compares a compiled model with
 ///     its MongoDB read-back by serializing BOTH to JSON over all public properties — no hand-written list of
 ///     fields. A property added to any CK DTO that the persistence layer does not write AND read back shows up
 ///     as a difference automatically, which is exactly the failure class of AB#4589 / AB#5187 / AB#5533.
@@ -33,7 +33,7 @@ internal static class CkModelJsonComparer
         // PRE-EXISTING gap found by this gate (not CK v2): CkType.Indexes is persisted on the entity and consumed
         // from there (UpdateIndexAsync / AnalyseIndex), but TryLookupCkModelAsync has never mapped it back, so the
         // runtime graph carries no type indexes (only visible to MCP schema discovery and the text-index merge).
-        // Reading it back changes runtime resolution for every tenant, so it is reported, not fixed in Phase 0.
+        // Reading it back changes runtime resolution for every tenant, so it is reported and not changed in Phase 1.
         ["$.types[*].indexes"] = "pre-existing: type indexes are not read back (reported to the lead)"
     };
 

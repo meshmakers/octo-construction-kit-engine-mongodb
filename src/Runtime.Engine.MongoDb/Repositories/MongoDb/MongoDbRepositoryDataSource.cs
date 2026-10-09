@@ -669,6 +669,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 AnalyseIndex(inheritCkTypeInfo, regularIndices, ref textIndex);
             }
 
+            // Review M-M1 (G3): every type stored in this collection — base chain, root, all descendants. They share
+            // the attribute fields (attributes.<name>), so the Hidden backstop must consider all of them: a sibling's
+            // or a base's Hidden assignment would otherwise be indexed through another type's index or the merged
+            // text index.
+            var collectionTypes = baseTypes.Cast<CkType>().Append(collectionRootType)
+                .Concat(collectionRootType.Inheritances).DistinctBy(t => t.CkTypeId).ToList();
+
             // When there is no index defined, we drop all indexes for the collection in case
             // an index was removed in the CK model.
             if (regularIndices.Count == 0 && textIndex == null)
@@ -695,7 +702,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                 foreach (CkTypeIndex ckTypeIndex in keyValuePair.Value)
                 {
                     await PrepareAndCreateIndex(keyValuePair.Key, ckTypeIndex, repositoryIndices, collection,
-                        uniqueIndexNumber, collectionRootType, allCkAttributes, allCkRecords);
+                        uniqueIndexNumber, collectionRootType, allCkAttributes, allCkRecords, collectionTypes);
                     uniqueIndexNumber++;
                 }
 
@@ -705,7 +712,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     if (textIndex != null)
                     {
                         await PrepareAndCreateIndex(keyValuePair.Key, textIndex, repositoryIndices, collection,
-                            uniqueIndexNumber, collectionRootType, allCkAttributes, allCkRecords);
+                            uniqueIndexNumber, collectionRootType, allCkAttributes, allCkRecords, collectionTypes);
                     }
                     else
                     {
@@ -804,7 +811,8 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         IMongoDbDataSourceCollection<OctoObjectId, RtEntity> collection,
         int uniqueIndexNumber, CkTypeInfo? collectionRootType = null,
         IReadOnlyDictionary<CkId<CkAttributeId>, CkAttribute>? allCkAttributes = null,
-        IReadOnlyDictionary<CkId<CkRecordId>, CkRecord>? allCkRecords = null)
+        IReadOnlyDictionary<CkId<CkRecordId>, CkRecord>? allCkRecords = null,
+        IReadOnlyCollection<CkType>? collectionTypes = null)
     {
         if (ckTypeIndex.IndexType == IndexTypes.None)
         {
@@ -834,6 +842,12 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         {
             var metadataProvider = new DatabaseAttributeMetadataProvider(
                 indexDefiningType.Attributes, allCkAttributes, allCkRecords, isRecordContext: false);
+            // Review M-M1: the Hidden backstop looks at every type of the collection (see UpdateIndexesForCollectionRoot).
+            var hiddenProviders = (collectionTypes ?? [indexDefiningType])
+                .Append(indexDefiningType)
+                .Select(t => new DatabaseAttributeMetadataProvider(t.Attributes, allCkAttributes, allCkRecords,
+                    isRecordContext: false))
+                .ToList();
 
             foreach (var fields in localIndex.Fields)
             {
@@ -853,14 +867,15 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     // match the database applies to field names.
                     .Where(name =>
                     {
-                        if (Constants.IsSystemAttribute(name) || !metadataProvider.ReachesHiddenAttribute(name))
+                        if (Constants.IsSystemAttribute(name) ||
+                            !hiddenProviders.Any(provider => provider.ReachesHiddenAttribute(name)))
                         {
                             return true;
                         }
 
                         _logger.LogError(
                             "Skipping Hidden attribute '{AttributePath}' in a {IndexType} index on type '{CkTypeId}': " +
-                            "Hidden attributes are never indexed",
+                            "Hidden attributes are never indexed (a type stored in the same collection assigns it Hidden)",
                             name, localIndex.IndexType, indexDefiningType.CkTypeId);
                         return false;
                     }).Select(name =>

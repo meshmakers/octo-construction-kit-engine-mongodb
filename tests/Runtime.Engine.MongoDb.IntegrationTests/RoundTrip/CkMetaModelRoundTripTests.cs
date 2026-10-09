@@ -19,14 +19,14 @@ using Xunit;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.RoundTrip;
 
 /// <summary>
-///     CK v2 Phase 0 hard gate (AB#5667 / AB#5668 / AB#5669, concept §4.6): every model is imported into a
+///     CK v2 round-trip tests (AB#5667 / AB#5668 / AB#5669, AB#5914-AB#5916, concept §4.6; the reflection hard gate is CkMetaModelReflectionGateTests): every model is imported into a
 ///     throwaway tenant, read back through <see cref="IDatabaseCkModelRepository.TryLookupCkModelAsync" /> —
 ///     the path the runtime CK cache is rebuilt from — and compared with the compiled DTO as JSON over ALL
 ///     public properties (<see cref="CkModelJsonComparer" />). There is no hand-written field list: a CK DTO
 ///     property that the persistence layer does not write and read back fails this test by itself.
 ///     <para>
 ///         Corpus: the installed System model, <c>Test-1.0.0</c> and a kitchen-sink v2 model that uses every
-///         Phase 0 construct (ckLanguage 2, interfaces with required and optional members, declared and
+///         CK language 2 construct (ckLanguage 2, interfaces with required and optional members, declared and
 ///         inherited implements, all four access values on type / record / association-role assignments, a
 ///         method with every field, a static and a minimal one), twice: compiled by MSBuild from YAML
 ///         (<c>tests/TestCkModelKitchenSink</c>, <c>KitchenSink-1.0.0</c>, through the real compiler and catalog)

@@ -6,6 +6,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.ConstructionKit.Engine.Resolvers.Repository;
+using Meshmakers.Octo.ConstructionKit.Engine.Versioning;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.CkModelMigrations;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -520,6 +521,17 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 $"CK model '{compiledModel.ModelId}' declares ckLanguage {compiledModel.CkLanguage}, but this engine " +
                 $"supports up to {CkModelPropertiesDto.MaxSupportedCkLanguage} (CkLanguageNotSupported). " +
                 "Update the services to an engine version that supports it.");
+        }
+
+        // Review M-M2 (G3), message 126: a model that needs a newer engine (minEngineVersion) is refused here, before
+        // the import lock and before InsertModelWithImportingState deletes the installed rows of the model name — the
+        // resolver's own check runs only after that delete and would leave the installed version without its row.
+        if (!CkEngineVersion.IsSatisfiedBy(compiledModel.MinEngineVersion, CkEngineVersion.Current))
+        {
+            throw new ModelValidationException(
+                $"CK model '{compiledModel.ModelId}' requires construction kit engine version " +
+                $"{compiledModel.MinEngineVersion} or later (minEngineVersion, CkModelRequiresNewerEngine); this engine is " +
+                $"version {CkEngineVersion.Current?.ToString(3) ?? "unknown"}. Update the service before importing the model.");
         }
 
         // Acquire distributed lock to prevent parallel imports of the same model.

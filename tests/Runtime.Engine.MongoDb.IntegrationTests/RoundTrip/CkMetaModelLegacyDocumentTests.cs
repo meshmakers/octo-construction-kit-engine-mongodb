@@ -11,7 +11,7 @@ using Xunit;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.RoundTrip;
 
 /// <summary>
-///     CK v2 Phase 0 (AB#5667 / AB#5668 / AB#5669), document level, no database: the new meta-model members
+///     CK v2 (AB#5667 / AB#5668 / AB#5669, Phase 1 AB#5915), document level, no database: the new meta-model members
 ///     (<c>CkModel.ckLanguage</c>, <c>CkTypeAttribute.access</c>, <c>CkType.methods</c>) and the two new
 ///     collections (<c>CkInterface</c>, <c>CkTypeInterfaceImplementation</c>) against the BSON class maps.
 ///     <list type="number">

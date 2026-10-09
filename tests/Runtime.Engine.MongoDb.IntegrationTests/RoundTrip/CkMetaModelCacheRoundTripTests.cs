@@ -9,7 +9,7 @@ using Xunit;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.RoundTrip;
 
 /// <summary>
-///     CK v2 Phase 0 (contract §3.4, Test 2): the runtime CK cache — rebuilt from MongoDB, not from the
+///     CK v2 (contract §3.4, Test 2; Phase 1 fields AB#5915): the runtime CK cache — rebuilt from MongoDB, not from the
 ///     compiled catalog — carries the v2 members of the kitchen-sink model. Template:
 ///     <see cref="CkAttributeOwnershipPersistenceTests" />. The JSON gate (<see cref="CkMetaModelRoundTripTests" />)
 ///     proves the DTO read-back; this proves the read-back reaches the graph consumers use

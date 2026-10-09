@@ -31,7 +31,14 @@ internal class DatabaseAttributeMetadataProvider : IAttributeMetadataProvider
         _assignmentsByName = new Dictionary<string, CkTypeAttribute>(StringComparer.OrdinalIgnoreCase);
         foreach (var typeAttr in typeAttributes)
         {
-            _assignmentsByName[typeAttr.AttributeName] = typeAttr;
+            // Review E-L7: names are matched case-insensitively (storage is camelCase); when two assignments
+            // collide, a Hidden one wins so the backstop cannot be bypassed by a case variant.
+            if (!_assignmentsByName.TryGetValue(typeAttr.AttributeName, out var existing) ||
+                existing.Access != CkAttributeAccessDto.Hidden)
+            {
+                _assignmentsByName[typeAttr.AttributeName] = typeAttr;
+            }
+
             if (_allCkAttributes.TryGetValue(typeAttr.AttributeId, out var ckAttribute))
             {
                 _attributesByName[typeAttr.AttributeName] = ckAttribute;

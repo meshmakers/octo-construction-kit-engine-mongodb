@@ -1327,6 +1327,12 @@ row in the two new collections (pinned by `ClassicModel_DocumentsCarryNoCkV2Elem
 A *declared* `access: ReadWrite` is written (`0`) — the member is nullable, so only "undeclared" is absent, and
 the declared value reads back verbatim.
 
+**Import guard (message 126, minEngineVersion, review M-M2):** `ExecuteImport` refuses a model whose `MinEngineVersion`
+is above the running engine (`CkEngineVersion.IsSatisfiedBy`) next to the ckLanguage check — before the import lock and
+before `InsertModelWithImportingState` deletes the installed rows of the model name. The resolver's own 126 check runs
+only after that delete and left the installed version without its `CkModel` row
+(`ModelRequiringANewerEngine_IsRefusedBeforeTheInstalledVersionIsTouched`).
+
 **Import guard (message 91, CkLanguageNotSupported):** `ExecuteImport` refuses a model whose `CkLanguage` is
 above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before anything is written (the engine
 `ElementResolver` raises 91 on resolve too; this guard covers callers that bypass resolution).
@@ -1393,6 +1399,12 @@ the catalog side.
   **case-insensitively** like the database resolves field names) and logs ERROR `Skipping Hidden attribute ...`; an
   index left without fields is not created. The compiler rejects it already (message 106); this guards hand-edited and
   older compiled models (`HiddenAttribute_IsNeverIndexed_EvenThroughACaseInsensitivePath`, mutation-checked).
+  **Every type of the collection counts (review M-M1):** all types stored in one collection (base chain, root, every
+  descendant) share the attribute fields, so a path is skipped when *any* of them reaches a Hidden assignment — a
+  derived type indexing a Hidden attribute it inherits, or a sibling's Hidden assignment of a field another type
+  indexes, also through the merged text index (`HiddenAttributeOfAnotherTypeInTheCollection_IsNeverIndexed`,
+  mutation-checked against the old indexing-type-only check). Case variants of one name keep the Hidden assignment
+  (review E-L7).
 - **New collections are lazy.** `CkInterface` / `CkTypeInterfaceImplementation` are created by `UpdateCollectionsAsync`
   on the next import; reads on a tenant without them return empty and the cache loads
   (`TenantWithoutTheNewCollections_LoadsAndImportsV1ThenV2`). No startup migration.

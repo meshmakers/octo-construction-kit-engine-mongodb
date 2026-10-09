@@ -19,7 +19,7 @@ using Xunit;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 
 /// <summary>
-///     AB#5665 (CK v2 Phase 0 spike): a range-retaining model (dependency range + floor, major-qualified
+///     AB#5665 / AB#5914 (CK v2 range retention): a range-retaining model (dependency range + floor, major-qualified
 ///     references <c>RrBase@1/...</c>) survives the MongoDB round trip and stays <c>Available</c> when its
 ///     dependency gets an additive minor — while a classic exact-pinned model goes <c>ResolveFailed</c>.
 ///     <para>

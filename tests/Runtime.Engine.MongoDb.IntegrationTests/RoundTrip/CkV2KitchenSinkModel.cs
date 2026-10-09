@@ -4,7 +4,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.RoundTrip;
 
 /// <summary>
-///     CK v2 Phase 0 kitchen-sink model built in C# (contract §3.4): every new construct with every field set.
+///     CK language 2 kitchen-sink model built in C# (contract §3.4, extended in Phase 1): every new construct with every field set.
 ///     <list type="bullet">
 ///         <item><c>ckLanguage: 2</c></item>
 ///         <item>Interface <c>Named-1</c> (required <c>Name</c>, optional <c>Alias</c>) and <c>Coded-1</c> (<c>Code</c>)</item>
