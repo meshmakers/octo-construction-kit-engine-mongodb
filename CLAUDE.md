@@ -15,12 +15,16 @@ This is the MongoDB implementation of the OctoMesh Runtime Engine. It provides:
 # Build with local NuGet packages (development)
 dotnet build -c DebugL
 
-# Build for release
-dotnet build -c Release
+# Build in Release mode against a published release (version must be passed explicitly)
+dotnet build -c Release -p:OctoVersion=3.5.1
 
 # Run integration tests
 dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL
 ```
+
+Versions come only from the pipeline (AB#6291): `Directory.Build.props` has no release fallback, so a
+Debug/Release build without `-p:OctoVersion=X.Y.Z` (or `-p:OctoNugetPrivateServer=<feed>` for the main
+line `0.1.*`) fails fast with MSBuild error `OCTO0001`. Use `-c DebugL` locally.
 
 ## Test Configuration
 
@@ -100,6 +104,7 @@ and their databases behind in the shared container.
 
 Swallowing a teardown failure loses it as a test result, deliberately: the reported line is the only
 trace, and the run's red/green verdict is already decided by the tests themselves.
+
 
 ## Tenant Registry vs. Tenant Hierarchy (AB#5025)
 
