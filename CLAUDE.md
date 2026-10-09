@@ -1270,12 +1270,13 @@ the installed `CkModel` rows, `Available` + `Importing` during an import) binds 
 The rows themselves stay verbatim (the read-back must round-trip). Pinned by
 `CkRangeRetentionImportTests.RangeRetainingTypes_IndexMaintenanceFollowsMajorQualifiedBaseTypes` (red before).
 
-**F0.2 scenario as integration test.** `AdditiveSystemMinor_MixedExactAndRangeModels_RangeModelsStayAvailable`
+**Additive System minor with mixed models as integration test.** `AdditiveSystemMinor_MixedExactAndRangeModels_RangeModelsStayAvailable`
 imports an additive System minor (copy of the installed System, one more optional attribute) through
 `IDatabaseCkModelRepository.UpdateModelAsync` into a throwaway tenant holding exact-pinned models (the
 System.Bot / System.Communication shape) and range-retaining ones: exact pins go `ResolveFailed`, range-retaining
-models stay `Available` and resolve against the new System. Against the engine without the D2 fix it throws
-"Sequence contains more than one matching element" (the E2E failure). It uses the repository, not
+models stay `Available` and resolve against the new System. An engine whose dependency resolver matches ranges by
+overlap instead of structurally (fixed in the engine's range-retention port) throws "Sequence contains more than one
+matching element" here. It uses the repository, not
 `ITenantContext.ImportCkModelAsync`, because it isolates the repository behaviour. On the tenant path, the
 embedded-import guard (F1.0-S1, see *Embedded CK Model Import Guard*) keeps a newer System that a service does not
 embed; since Phase 1 a System bump therefore sticks, and exact-pinned service models go `ResolveFailed` until their
@@ -1373,7 +1374,8 @@ above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before a
 **No Mongo migration in Phase 1 (plan §4).** No System/System.* model gains a persisted field (all stay `ckLanguage`
 1, range retention is off by default), so Phase 1 needs no System version bump, no re-import and no data migration.
 Every new member is nullable and absent from v1 documents; the new collections (`CkInterface`,
-`CkTypeInterfaceImplementation`) are created lazily on the first v2 import. A v2 import makes the tenant unsafe for
+`CkTypeInterfaceImplementation`) are created empty by `UpdateCollectionsAsync` on the next import of any model, and only
+a v2 import writes rows into them. A v2 import makes the tenant unsafe for
 pre-Phase-1 services (they ignore `access`, so Hidden attributes would be exposed): no v2 model in a shared environment
 before every service there runs the Phase 1 engine; `minEngineVersion` and the `ck-models/v3` catalog path enforce it on
 the catalog side.
@@ -1418,8 +1420,27 @@ the catalog side.
   column builder (`ArchivePathTypeResolver`) refuses a Hidden column and a whole-record column whose record contains a
   Hidden sub-attribute, and `BuildRecordObject` leaves Hidden sub-attributes out like Secret ones (defence in depth).
   Pinned by `ArchiveHiddenAccessTests` (mutation-checked).
-- **New collections are lazy.** `CkInterface` / `CkTypeInterfaceImplementation` are created by `UpdateCollectionsAsync`
-  on the next import; reads on a tenant without them return empty and the cache loads
+- **Known limitations of the archive re-check (G3 re-review; Phase 4 prerequisites, User Story under F4.3 of Epic
+  AB#5584):**
+  - **N2 — services without stream data never re-check.** `RevalidateArchiveAccessAsync` needs the archive lifecycle
+    service, which only exists where a stream-data repository is registered. Identity, comm-controller and
+    platform-services own System.Identity, System.Communication and System.UI but register none, and the services that
+    do have stream data take the `AlreadyInstalled` branch for those models. An attribute made Hidden by one of those
+    models keeps being archived until a stream-data service re-checks (e.g. on its next own import).
+  - **N3 — `Failed` blocks the whole archive.** A `Failed` archive refuses every insert and every query (visible columns
+    included), pipeline writes throw `ArchiveNotActivatedException`, new data is lost until it is fixed. The transition
+    records no reason (one WARN line). Recovery: remove or change the offending column, then retry the activation; there
+    is no "drop column" operation yet.
+  - No production model uses Hidden on an archived attribute before Phase 4, so neither applies today.
+- **Backlog (G3 re-review N6/N7):**
+  - **N6 — cost:** the re-check runs after every single model import (also per model of a batch or blueprint): it
+    loads the cache, enumerates all archives and loads each active one, between the Pre and Post notification. Skip it
+    when the tenant cache has no Hidden assignment, and run it once per batch.
+  - **N7 — no compare-and-swap:** `SetStatusAsync` does not check the previous status, so a concurrent operator Disable
+    can be overwritten by `Failed`, and racing services write duplicate audit rows.
+- **New collections are lazy.** `CkInterface` / `CkTypeInterfaceImplementation` are created (empty) by
+  `UpdateCollectionsAsync` on the next import of any model, v1 included; only v2 imports write rows. Reads on a tenant
+  without them return empty and the cache loads
   (`TenantWithoutTheNewCollections_LoadsAndImportsV1ThenV2`). No startup migration.
 - **Rollback safety.** `V1Import_WritesTheSameCkDocumentsAsTheMainEngine` compares every `Ck*` document of a fresh
   tenant plus a `Test-1.0.0` import with a golden captured from engine-mongodb origin/main e816cd3

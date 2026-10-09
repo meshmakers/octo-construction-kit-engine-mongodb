@@ -32,7 +32,7 @@ internal static class CkModelReflectionComparer
         ["CkTypeDto.Indexes"] =
             "pre-existing: type indexes are stored on the CkType entity and consumed from there (UpdateIndexAsync), " +
             "but have never been read back; reading them back changes runtime resolution for every tenant (reported " +
-            "by the Phase 0 gate, decision pending)"
+            "by the round-trip gate, decision pending)"
     };
 
     /// <summary>Identity properties of collection elements, in order of preference.</summary>

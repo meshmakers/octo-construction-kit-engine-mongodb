@@ -162,10 +162,10 @@ public class CkRangeRetentionImportTests(CkModelImportMigrationFixture fixture)
     }
 
     /// <summary>
-    ///     F0.2 scenario (E2E D2): an additive System minor imported into a tenant that holds exact-pinned AND
-    ///     range-retaining models. The exact pins on the old System go ResolveFailed, the range-retaining models
-    ///     stay Available, and the import itself must not throw ("Sequence contains more than one matching
-    ///     element" before the D2 fix).
+    ///     Range retention (AB#5665 / AB#5914): an additive System minor imported into a tenant that holds
+    ///     exact-pinned AND range-retaining models. The exact pins on the old System go ResolveFailed, the
+    ///     range-retaining models stay Available, and the import itself must not throw ("Sequence contains more
+    ///     than one matching element" with a resolver that matches ranges by overlap).
     /// </summary>
     [Fact]
     public async Task AdditiveSystemMinor_MixedExactAndRangeModels_RangeModelsStayAvailable()

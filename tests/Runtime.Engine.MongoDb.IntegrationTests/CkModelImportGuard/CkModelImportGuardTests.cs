@@ -179,7 +179,7 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
     }
 
     /// <summary>
-    ///     R2-3 (the Basic.Accounting scenario of Phase 0 E2E run 2) with the v1 contract made visible: an exact-pinned
+    ///     R2-3 (the Basic.Accounting scenario found in an earlier CK v2 end-to-end run) with the v1 contract made visible: an exact-pinned
     ///     model goes <c>ResolveFailed</c> after a System bump, stays there (no downgrade by the embedded System any
     ///     more, no flapping on unrelated imports) and returns to <c>Available</c> by itself after the import that makes
     ///     its pin satisfiable again.
