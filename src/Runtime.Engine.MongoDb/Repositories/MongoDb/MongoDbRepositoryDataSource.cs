@@ -845,7 +845,25 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
                     name => _logger.LogWarning(
                         "Skipping Secret attribute '{AttributePath}' in a {IndexType} index on type '{CkTypeId}': " +
                         "Secret attributes are never indexed",
-                        name, localIndex.IndexType, indexDefiningType.CkTypeId)).Select(name =>
+                        name, localIndex.IndexType, indexDefiningType.CkTypeId))
+                    // CK v2 F1.3-S4 (review N6): never index a Hidden attribute either. Unlike Secret, Hidden has
+                    // no runtime backstop (the value is stored in plain text); a unique index would reveal values
+                    // through duplicate-key errors, a text index through search hits. The compiler rejects it
+                    // (message 106); this guards hand-edited or older compiled models and the case-insensitive
+                    // match the database applies to field names.
+                    .Where(name =>
+                    {
+                        if (Constants.IsSystemAttribute(name) || !metadataProvider.ReachesHiddenAttribute(name))
+                        {
+                            return true;
+                        }
+
+                        _logger.LogError(
+                            "Skipping Hidden attribute '{AttributePath}' in a {IndexType} index on type '{CkTypeId}': " +
+                            "Hidden attributes are never indexed",
+                            name, localIndex.IndexType, indexDefiningType.CkTypeId);
+                        return false;
+                    }).Select(name =>
                 {
                     if (Constants.IsSystemAttribute(name))
                     {

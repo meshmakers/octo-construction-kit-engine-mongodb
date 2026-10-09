@@ -1,5 +1,6 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
@@ -11,6 +12,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 internal class DatabaseAttributeMetadataProvider : IAttributeMetadataProvider
 {
     private readonly Dictionary<string, CkAttribute> _attributesByName;
+    private readonly Dictionary<string, CkTypeAttribute> _assignmentsByName;
     private readonly IReadOnlyDictionary<CkId<CkAttributeId>, CkAttribute> _allCkAttributes;
     private readonly IReadOnlyDictionary<CkId<CkRecordId>, CkRecord> _allCkRecords;
 
@@ -26,8 +28,10 @@ internal class DatabaseAttributeMetadataProvider : IAttributeMetadataProvider
 
         // Build lookup: AttributeName (PascalCase) → CkAttribute (with ValueType)
         _attributesByName = new Dictionary<string, CkAttribute>(StringComparer.OrdinalIgnoreCase);
+        _assignmentsByName = new Dictionary<string, CkTypeAttribute>(StringComparer.OrdinalIgnoreCase);
         foreach (var typeAttr in typeAttributes)
         {
+            _assignmentsByName[typeAttr.AttributeName] = typeAttr;
             if (_allCkAttributes.TryGetValue(typeAttr.AttributeId, out var ckAttribute))
             {
                 _attributesByName[typeAttr.AttributeName] = ckAttribute;
@@ -46,6 +50,42 @@ internal class DatabaseAttributeMetadataProvider : IAttributeMetadataProvider
         }
 
         valueType = default;
+        return false;
+    }
+
+    /// <summary>
+    ///     CK v2 F1.3-S4 (review N6): true when the attribute path reaches an assignment with <c>access: Hidden</c> —
+    ///     the terminal attribute or any record attribute on the way. Matched case-insensitively, like the database
+    ///     resolves field names: an index path <c>passwordHash</c> reaches the Hidden assignment <c>PasswordHash</c>.
+    /// </summary>
+    public bool ReachesHiddenAttribute(string attributePath)
+    {
+        DatabaseAttributeMetadataProvider? current = this;
+        foreach (var term in RtPathEvaluator.TokenizePath(attributePath))
+        {
+            if (current == null)
+            {
+                return false;
+            }
+
+            if (term.Type != PathType.Attribute)
+            {
+                continue;
+            }
+
+            if (!current._assignmentsByName.TryGetValue(term.Value, out var assignment))
+            {
+                return false;
+            }
+
+            if (assignment.Access == CkAttributeAccessDto.Hidden)
+            {
+                return true;
+            }
+
+            current = current.NavigateToRecord(term.Value) as DatabaseAttributeMetadataProvider;
+        }
+
         return false;
     }
 

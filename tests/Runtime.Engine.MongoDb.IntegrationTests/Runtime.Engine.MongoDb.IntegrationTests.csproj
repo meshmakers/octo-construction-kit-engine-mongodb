@@ -39,6 +39,10 @@
         <None Update="xunit.runner.json">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </None>
+        <!-- CK v2 F1.3-S4 (AB#5917): Ck* documents the main engine writes for a v1 import (rollback golden). -->
+        <None Update="testData\ckv2-golden-main-v1-ck-documents.txt">
+          <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
         <None Update="testData\sampleRtModel.yaml">
           <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </None>

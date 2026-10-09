@@ -1384,6 +1384,26 @@ the catalog side.
   models, while the inheritance chain binding follows `includeModelsInStateImporting`. Intentional: attribute
   metadata of all states is loaded anyway, and outside an import no `Importing` model exists.
 
+### Hidden Backstop and v1 / Rollback Compatibility (CK v2 F1.3-S4, AB#5917)
+
+- **Hidden is never indexed (review N6).** Unlike Secret, a Hidden attribute is stored in plain text and has no
+  runtime backstop, so a unique index would reveal values through duplicate-key errors and a text index through
+  search hits. `PrepareAndCreateIndex` drops every index path that reaches a Hidden assignment (terminal attribute or a
+  record attribute on the way, `DatabaseAttributeMetadataProvider.ReachesHiddenAttribute`, matched
+  **case-insensitively** like the database resolves field names) and logs ERROR `Skipping Hidden attribute ...`; an
+  index left without fields is not created. The compiler rejects it already (message 106); this guards hand-edited and
+  older compiled models (`HiddenAttribute_IsNeverIndexed_EvenThroughACaseInsensitivePath`, mutation-checked).
+- **New collections are lazy.** `CkInterface` / `CkTypeInterfaceImplementation` are created by `UpdateCollectionsAsync`
+  on the next import; reads on a tenant without them return empty and the cache loads
+  (`TenantWithoutTheNewCollections_LoadsAndImportsV1ThenV2`). No startup migration.
+- **Rollback safety.** `V1Import_WritesTheSameCkDocumentsAsTheMainEngine` compares every `Ck*` document of a fresh
+  tenant plus a `Test-1.0.0` import with a golden captured from engine-mongodb origin/main e816cd3
+  (`testData/ckv2-golden-main-v1-ck-documents.txt`, normalized by `CkDocumentSnapshot`: generated ObjectId ids and
+  index-state timestamps removed). The diff is empty: a tenant that only saw v1 imports through the Phase 1 engine can
+  go back to the main engine. Regenerate the golden only when the System or Test model itself changes.
+- A **v2 import** makes the tenant unsafe for pre-Phase-1 services (they ignore `access`, Hidden would be exposed) —
+  see *No Mongo migration in Phase 1* above.
+
 ### New meta-model field checklist (do this for EVERY new CK DTO property)
 
 1. Entity member (`Repositories/Entities/*`), nullable or defaulted so legacy documents read back unchanged.
