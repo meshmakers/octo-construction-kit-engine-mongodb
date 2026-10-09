@@ -22,6 +22,15 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.RoundTrip;
 ///         reports it. Verified manually as well by temporarily removing a read-back mapping (e.g.
 ///         <c>Visibility = t.Visibility</c> in <c>TryLookupCkModelAsync</c>): the gate fails with the property path.
 ///     </para>
+///     <para>
+///         <b>When this gate fails:</b> a new meta-model field touches every row of the <b>"Touch-point checklist
+///         (keep for every new CK field — contract §2.7)"</b> in the engine's <c>CLAUDE.md</c>
+///         (<c>octo-construction-kit-engine/CLAUDE.md</c>, section "CK v2: interfaces, attribute access, method
+///         definitions, visibility/derivable"). This gate is its row 10 (Mongo entity + write + read-back); row 7
+///         (SemVer diff + classifier rule + row test) has its own gate in the engine,
+///         <c>CkSemVerClassificationGuardTests</c> (AB#6272). Work through the whole checklist, not only the Mongo
+///         mapping that this test names.
+///     </para>
 /// </summary>
 [Collection(CkModelImportMigrationCollection.Name)]
 public class CkMetaModelReflectionGateTests(CkModelImportMigrationFixture fixture)

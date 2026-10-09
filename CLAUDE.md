@@ -1413,7 +1413,9 @@ above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before a
   `null`/default, every method field and the new collections round-trip.
 - The gate is the persistence half of the engine's touch-point checklist (octo-construction-kit-engine `CLAUDE.md`,
   CK v2 touch points): a new meta-model field is only done when both the engine checklist and the field checklist
-  below are complete and this gate is green.
+  below are complete and this gate is green. The gate's xmldoc points to that engine checklist directly (AB#6272):
+  its row 10 is this gate, its row 7 is the engine's classification guard `CkSemVerClassificationGuardTests`, which
+  fails when the new field has no diff, no probe or no classifier rule.
 
 **No Mongo migration in Phase 1 (plan §4).** No System/System.* model gains a persisted field (all stay `ckLanguage`
 1, range retention is off by default), so Phase 1 needs no System version bump, no re-import and no data migration.
