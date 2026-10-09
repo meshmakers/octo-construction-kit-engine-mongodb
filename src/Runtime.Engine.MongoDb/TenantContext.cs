@@ -287,7 +287,8 @@ public class TenantContext : ITenantContext
         }
     }
 
-    protected async Task UpdateSystemCkModelAsync(string normalizedDatabaseName, string tenantId, bool isRepositoryInCreation = false)
+    /// <returns>True when the System model was imported (the tenant's model set changed).</returns>
+    protected async Task<bool> UpdateSystemCkModelAsync(string normalizedDatabaseName, string tenantId, bool isRepositoryInCreation = false)
     {
         var databaseContext = CreateRepositoryDataSourceAsAdmin(normalizedDatabaseName, tenantId);
         // GuardAgainstDowngrade: ExecuteImport repeats the by-name decision under the import lock (G-H1).
@@ -302,13 +303,13 @@ public class TenantContext : ITenantContext
             tenantId, _logger);
         if (decision != EmbeddedImportDecision.Import)
         {
-            return;
+            return false;
         }
 
         // If either the database not exist or the model already exist, we do nothing.
         if (!isRepositoryInCreation && (!await IsDatabaseExistingAsync(normalizedDatabaseName)))
         {
-            return;
+            return false;
         }
 
         // Never seed the System CK model into an infrastructure-only shell of the SYSTEM database
@@ -322,7 +323,7 @@ public class TenantContext : ITenantContext
             && normalizedDatabaseName == NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName)
             && await IsDatabaseMaterializedOnlyByInfrastructureAsync(normalizedDatabaseName))
         {
-            return;
+            return false;
         }
 
         // Capture schema versions BEFORE updating (for migration detection)
@@ -374,7 +375,7 @@ public class TenantContext : ITenantContext
                     "Skipping System CK model update for tenant '{TenantId}' due to missing dependencies: {Message}. " +
                     "This update will be retried when the dependent CK model becomes available.",
                     tenantId, ex.Message);
-                return;
+                return false;
             }
 
             if (databaseSourceIdentifier.ImportOutcome.SkippedUnderLock)
@@ -386,7 +387,7 @@ public class TenantContext : ITenantContext
                     await _tenantNotifications.NotifyPosTenantUpdateAsync(tenantId, correlationId);
                 }
 
-                return;
+                return false;
             }
 
             // Run migrations after updating the System CK model
@@ -408,6 +409,7 @@ public class TenantContext : ITenantContext
             }
 
             _logger.LogInformation("System CK Model restored into tenant '{TenantId}'", tenantId);
+            return true;
         }
         catch (Exception ex)
         {
@@ -1510,8 +1512,13 @@ public class TenantContext : ITenantContext
         var context = new TenantContext(_loggerFactory, _systemConfiguration, _serviceProvider, tenantId,
             tenant.DatabaseName);
 
-        await UpdateSystemCkModelAsync(tenant.DatabaseName, tenant.TenantId);
+        var systemModelImported = await UpdateSystemCkModelAsync(tenant.DatabaseName, tenant.TenantId);
         await context.EnsureStreamDataCkModelIfEnabledAsync();
+        if (systemModelImported)
+        {
+            // CK v2 (review G3 E-M2): the System import ran on this (parent) context for the child tenant.
+            await context.RevalidateArchiveAccessAsync();
+        }
         await context.EnsureServiceManagedCkModelsImportedAsync();
 
         // AB#4945 lazy ownership claim: tenants attached/created before the ownership marker
@@ -2481,6 +2488,9 @@ public class TenantContext : ITenantContext
 
                 // Enqueue backfill sweeps for types whose display rules changed (AB#4812)
                 await EnqueueDisplayRuleSweepsAsync(displayRulesBeforeImport, tenantDatabaseSourceIdentifier);
+
+                // CK v2 (review G3 E-M2): a model change may make a column of an active archive reach Hidden.
+                await RevalidateArchiveAccessAsync();
             }
             catch (ModelValidationException ex)
             {
@@ -2619,6 +2629,9 @@ public class TenantContext : ITenantContext
 
             // Enqueue backfill sweeps for types whose display rules changed (AB#4812)
             await EnqueueDisplayRuleSweepsAsync(displayRulesBeforeImport, tenantDatabaseSourceIdentifier);
+
+            // CK v2 (review G3 E-M2): a model change may make a column of an active archive reach Hidden.
+            await RevalidateArchiveAccessAsync();
         }
         catch (ModelValidationException ex)
         {
@@ -2667,9 +2680,59 @@ public class TenantContext : ITenantContext
             _cacheService.Unload(TenantId);
         }
 
+        // A recovered model is back in the cache: its archives are checked like after an import (E-M2).
+        await RevalidateArchiveAccessAsync();
+
         var correlationId = Guid.NewGuid();
         await _tenantNotifications.NotifyPreTenantUpdateAsync(TenantId, correlationId);
         await _tenantNotifications.NotifyPosTenantUpdateAsync(TenantId, correlationId);
+    }
+
+    /// <summary>
+    ///     CK v2 (engine F1.2-S2, review G3 E-M2): after a CK model import or a re-validation that changed the model
+    ///     set, every ACTIVE archive of the tenant is re-checked with <c>IArchiveLifecycleService.RevalidateAccessAsync</c>
+    ///     — an archive whose column now reaches a Hidden attribute goes <c>Failed</c> and stops ingesting. Activation
+    ///     already refuses such columns; this covers a model change after activation. Best-effort: a failure here is
+    ///     logged as ERROR and does not fail the import that already succeeded. Skipped when the tenant has stream data
+    ///     disabled, no stream-data repository is registered or the System.StreamData model is not installed.
+    /// </summary>
+    internal async Task RevalidateArchiveAccessAsync()
+    {
+        try
+        {
+            var lifecycleService = GetArchiveLifecycleService();
+            if (lifecycleService == null || !await IsStreamDataEnabledAsync())
+            {
+                return;
+            }
+
+            // The import unloaded the cache; the access check reads the CK graph of the new model set.
+            await LoadCacheForTenantAsync();
+            if (!_cacheService.TryGetRtCkType(TenantId, ArchiveRtCkTypeId, out _))
+            {
+                return;
+            }
+
+            var activated = new List<OctoObjectId>();
+            await foreach (var archive in GetArchiveRuntimeStore().EnumerateAsync())
+            {
+                if (archive.Status == CkArchiveStatus.Activated)
+                {
+                    activated.Add(archive.RtId);
+                }
+            }
+
+            foreach (var archiveRtId in activated)
+            {
+                await lifecycleService.RevalidateAccessAsync(archiveRtId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Re-checking the archives of tenant '{TenantId}' against Hidden attributes failed after a CK model change",
+                TenantId);
+        }
     }
 
     /// <inheritdoc />

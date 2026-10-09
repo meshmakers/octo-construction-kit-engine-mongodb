@@ -3,6 +3,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.DependencyGraph;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
+using Meshmakers.Octo.Runtime.Engine.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 
@@ -47,6 +48,17 @@ internal static class ArchivePathTypeResolver
             }
 
             ckType ??= ckCache.GetRtCkType(tenantId, targetCkTypeId);
+
+            // CK v2 (engine F1.2-S2 / review G3 E-M2): no archive column may reach a Hidden attribute — a Hidden
+            // segment or a whole-record column whose record contains one. The lifecycle service refuses such archives
+            // on activation; this is the DDL-side backstop (same rule, ArchiveHiddenColumnGuard).
+            var hidden = ArchiveHiddenColumnGuard.FindHiddenAttribute(ckCache, tenantId, targetCkTypeId, column.Path);
+            if (hidden != null)
+            {
+                throw new UnresolvableArchivePathException(column.Path,
+                    $"it reaches the Hidden attribute '{hidden}'; Hidden attributes cannot be archived.");
+            }
+
             var crateType = ResolvePath(ckCache, tenantId, ckType, column.Path);
             resolved.Add(new ArchiveColumnDdl(column.Path, crateType, column.Required, column.Indexed));
         }
@@ -179,6 +191,13 @@ internal static class ArchivePathTypeResolver
 
             // AB#5533: a Secret sub-attribute is left out of the archived record object.
             if (attr.ValueType == AttributeValueTypesDto.Secret)
+            {
+                continue;
+            }
+
+            // CK v2 (review G3 E-M2): a Hidden sub-attribute is left out as well (defence in depth; the column is
+            // refused above when its record contains one).
+            if (attr.Access == CkAttributeAccessDto.Hidden)
             {
                 continue;
             }

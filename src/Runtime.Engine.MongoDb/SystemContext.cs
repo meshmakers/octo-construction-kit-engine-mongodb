@@ -317,7 +317,16 @@ public class SystemContext : TenantContext, ISystemContext
         // The infrastructure-shell guard (AB#4854) lives inside UpdateSystemCkModelAsync, at the
         // seed decision itself. A guard here would be check-then-act: a shell that materializes
         // between this method's probe and the seed would still be seeded, re-creating the wedge.
-        return UpdateSystemCkModelAsync(DatabaseName, TenantId);
+        return EnsureSystemCkModelAndRevalidateArchivesAsync();
+    }
+
+    private async Task EnsureSystemCkModelAndRevalidateArchivesAsync()
+    {
+        if (await UpdateSystemCkModelAsync(DatabaseName, TenantId))
+        {
+            // CK v2 (review G3 E-M2): archives of the system tenant are checked after a System import too.
+            await RevalidateArchiveAccessAsync();
+        }
     }
 
     #endregion Construction Kit Model Handling

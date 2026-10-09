@@ -1405,6 +1405,19 @@ the catalog side.
   indexes, also through the merged text index (`HiddenAttributeOfAnotherTypeInTheCollection_IsNeverIndexed`,
   mutation-checked against the old indexing-type-only check). Case variants of one name keep the Hidden assignment
   (review E-L7).
+- **The backstop does not rely on the engine graph's text-index merge.** Index maintenance merges the text indexes of
+  all types of a collection itself (`AnalyseIndex`, from the stored `CkType` documents); `CkTypeGraph.MergeTextIndexes`
+  in the engine (which, on main, never merges a derived text index into a root that has its own) is not involved, and
+  the runtime graph carries no type indexes anyway (pre-existing read-back gap).
+- **Archives never capture Hidden (review G3 E-M2, engine `ArchiveHiddenColumnGuard`).** `TenantContext` passes the CK
+  cache into `ArchiveLifecycleService` (activation refuses such columns) and, after every CK model import (explicit,
+  embedded, System restore of a child or the system tenant, and a re-validation that recovered models), calls
+  `RevalidateArchiveAccessAsync`: every **active** archive is re-checked with `RevalidateAccessAsync` and goes `Failed`
+  (stops ingesting) when a column now reaches a Hidden attribute — best-effort (ERROR log, the import is not failed);
+  skipped when stream data is off, no repository is registered or System.StreamData is not installed. The CrateDB
+  column builder (`ArchivePathTypeResolver`) refuses a Hidden column and a whole-record column whose record contains a
+  Hidden sub-attribute, and `BuildRecordObject` leaves Hidden sub-attributes out like Secret ones (defence in depth).
+  Pinned by `ArchiveHiddenAccessTests` (mutation-checked).
 - **New collections are lazy.** `CkInterface` / `CkTypeInterfaceImplementation` are created by `UpdateCollectionsAsync`
   on the next import; reads on a tenant without them return empty and the cache loads
   (`TenantWithoutTheNewCollections_LoadsAndImportsV1ThenV2`). No startup migration.
