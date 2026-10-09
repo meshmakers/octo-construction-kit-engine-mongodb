@@ -3,6 +3,6 @@
 # MongoDB round-trip gate (tests/.../RoundTrip) sees each of them. YAML twin of RoundTrip/CkV2KitchenSinkModel.cs.
 modelId: "KitchenSink-1.0.0"
 ckLanguage: 2
-description: "CK v2 Phase 0 kitchen sink"
+description: "CK language 2 kitchen sink"
 dependencies:
   - System-[2.5,3.0)

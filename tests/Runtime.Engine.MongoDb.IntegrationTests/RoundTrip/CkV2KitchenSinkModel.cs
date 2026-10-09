@@ -36,7 +36,7 @@ internal static class CkV2KitchenSinkModel
         return new CkCompiledModelRoot
         {
             ModelId = id,
-            Description = "CK v2 Phase 0 kitchen sink",
+            Description = "CK language 2 kitchen sink",
             CkLanguage = 2,
             Dependencies = [systemId],
             // Phase 1: range-retaining dependency (F1.1-S2) and the minEngineVersion the compiler writes for v2.
