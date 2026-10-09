@@ -1,5 +1,6 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Engine.Versioning;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.CkModelImportGuard;
@@ -202,6 +203,8 @@ public class CkV2CompatibilityTests(CkModelImportGuardFixture fixture)
     [Fact]
     public async Task ModelRequiringANewerEngine_IsRefusedBeforeTheInstalledVersionIsTouched()
     {
+        // Pin the running engine: DebugL is 999.0.0, CI 0.1.* (check skipped), release builds 3.x (AB#6274).
+        using var _ = CkEngineVersion.OverrideCurrentForTests(new Version(3, 4, 149));
         await WithTenantAsync("minengine", async (tenant, tenantId) =>
         {
             var systemId = await InstalledSystemAsync(tenantId);

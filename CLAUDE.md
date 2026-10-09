@@ -1332,7 +1332,10 @@ the declared value reads back verbatim.
 is above the running engine (`CkEngineVersion.IsSatisfiedBy`) next to the ckLanguage check — before the import lock and
 before `InsertModelWithImportingState` deletes the installed rows of the model name. The resolver's own 126 check runs
 only after that delete and left the installed version without its `CkModel` row
-(`ModelRequiringANewerEngine_IsRefusedBeforeTheInstalledVersionIsTouched`).
+(`ModelRequiringANewerEngine_IsRefusedBeforeTheInstalledVersionIsTouched`). That test pins the running engine with
+`CkEngineVersion.OverrideCurrentForTests` (engine test seam, AB#6274): the assembly version differs per build (DebugL
+`999.0.0`, main CI `0.1.*` where `Current` is `null` and the check is skipped, r-tag builds `3.x`), so tests of
+message 126 must never depend on it.
 
 **Import guard (message 91, CkLanguageNotSupported):** `ExecuteImport` refuses a model whose `CkLanguage` is
 above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before anything is written (the engine
