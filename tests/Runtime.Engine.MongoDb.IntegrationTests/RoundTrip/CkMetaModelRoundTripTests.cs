@@ -385,16 +385,19 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
         return string.Join(" | ", messages);
     }
 
-    private async Task AssertRoundTripAsync(string tenantId, CkCompiledModelRoot compiled)
+    internal async Task AssertRoundTripAsync(string tenantId, CkCompiledModelRoot compiled)
     {
         var readBack = await LookupAsync(tenantId, compiled.ModelId);
         Assert.NotNull(readBack);
 
-        var differences = CkModelJsonComparer.Compare(compiled, readBack);
+        // F1.3-S3: the reflection walk over every public property is the gate; the JSON comparison stays as a
+        // second view (it reports in the shape operators read compiled models in).
+        var differences = CkModelReflectionComparer.Compare(compiled, readBack)
+            .Concat(CkModelJsonComparer.Compare(compiled, readBack).Select(d => "json " + d)).ToList();
         Assert.True(differences.Count == 0,
             $"'{compiled.ModelId}' does not survive the MongoDB round trip ({differences.Count} difference(s)). " +
             "Persist the property (entity + class map + write + read-back, see the CLAUDE.md checklist) or, " +
-            "if it is legitimately not stored, add it to CkModelJsonComparer.RoundTripIgnoredPaths with a " +
+            "if it is legitimately not stored, add it to CkModelReflectionComparer.AllowList (and CkModelJsonComparer.RoundTripIgnoredPaths) with a " +
             "justification:" + Environment.NewLine + string.Join(Environment.NewLine, differences));
     }
 

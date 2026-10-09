@@ -29,9 +29,7 @@ internal static class CkModelJsonComparer
         ["$.$schema"] = "schema URI of the compiled file",
         // Migrations are consumed during import (CompiledModelCkMigrationContentProvider) and never stored.
         ["$.migrations"] = "migration scripts are executed on import, not persisted",
-        // F0.2 (AB#5665) owns dependency equality and asserts it in CkRangeRetentionImportTests.
-        ["$.dependencies"] = "owned by F0.2 (AB#5665)",
-        ["$.dependencyRanges"] = "owned by F0.2 (AB#5665)",
+
         // PRE-EXISTING gap found by this gate (not CK v2): CkType.Indexes is persisted on the entity and consumed
         // from there (UpdateIndexAsync / AnalyseIndex), but TryLookupCkModelAsync has never mapped it back, so the
         // runtime graph carries no type indexes (only visible to MCP schema discovery and the text-index merge).

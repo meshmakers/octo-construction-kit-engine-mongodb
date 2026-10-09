@@ -1331,7 +1331,18 @@ the declared value reads back verbatim.
 above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before anything is written (the engine
 `ElementResolver` raises 91 on resolve too; this guard covers callers that bypass resolution).
 
-**Round-trip gate (concept §4.6, the isRuntimeState lesson)** — `tests/.../RoundTrip/`:
+**Round-trip gate (concept §4.6, the isRuntimeState lesson) — MANDATORY for every meta-model change** —
+`tests/.../RoundTrip/`:
+
+- `CkMetaModelReflectionGateTests` (F1.3-S3, AB#5916) is the hard gate: every compiled model of the repository
+  (installed System, System.StreamData, `Test-1.0.0`, `Test-2.0.0`, the MSBuild kitchen sink `KitchenSink-1.0.0`, the
+  C# twin) → import → `TryLookupCkModelAsync` → `CkModelReflectionComparer`, a walk by **reflection over every public
+  property** of the DTO graph (runtime types of both sides; DTO = class name ending in `Dto`/`Root`; DTO collections
+  matched by identity, scalar collections in order). Intentionally unpersisted properties are in
+  `CkModelReflectionComparer.AllowList` with a reason: `CkCompiledModelRoot.Migrations` (executed on import) and the
+  pre-existing `CkTypeDto.Indexes` gap. `UnpersistedDtoProperty_FailsTheGate` is the automated mutation check (a type
+  DTO subclass with an unknown member goes through the real import and is reported); removing a read-back mapping
+  (e.g. `Visibility = t.Visibility`) fails the gate with the property path (verified).
 
 - `CkMetaModelRoundTripTests`: import → `TryLookupCkModelAsync` → compare the read-back with the compiled DTO
   as JSON over **all public properties** (`CkModelJsonComparer`, no hand-written field list). Corpus: installed
@@ -1339,8 +1350,8 @@ above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before a
   registered via `AddCkModelKitchenSinkV1()` in `CkModelImportMigrationFixture`) and its C#-built twin
   `CkV2KitchenSinkModel` (`KitchenSinkCs-1.0.0`, also used for the next-version replacement test).
   A new DTO property that is not persisted fails here by itself. `RoundTripIgnoredPaths` lists what is
-  legitimately not stored, each with a justification: `$schema`, `migrations`, `dependencies` /
-  `dependencyRanges` (F0.2 owns them) and the **pre-existing** gap `types[*].indexes` (type indexes are
+  legitimately not stored, each with a justification: `$schema`, `migrations` and the **pre-existing** gap
+  `types[*].indexes` (dependencies and dependency ranges are compared since Phase 1; type indexes are
   persisted on the entity and consumed from there, but have never been read back — found by this gate,
   reported, not changed in Phase 1 — it would change runtime resolution for every tenant). `defaultValues` / `autoCompleteValues` scalars compare by invariant text
   because the import converts them to the attribute's value type by design.
