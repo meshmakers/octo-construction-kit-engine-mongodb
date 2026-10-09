@@ -116,7 +116,8 @@ internal static class CkV2KitchenSinkModel
                         Assign("Alias", CkAttributeAccessDto.ReadWrite),
                         Assign("Code", CkAttributeAccessDto.ReadOnly),
                         Assign("Mode", CkAttributeAccessDto.MethodOnly),
-                        Assign("Secret", CkAttributeAccessDto.Hidden)
+                        // Hidden is not allowed on association roles (engine rule 108, Phase 1).
+                        Assign("Secret", CkAttributeAccessDto.ReadOnly)
                     ]
                 }
             ],

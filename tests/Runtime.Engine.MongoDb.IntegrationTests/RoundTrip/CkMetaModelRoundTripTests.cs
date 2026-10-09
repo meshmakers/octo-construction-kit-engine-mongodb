@@ -85,6 +85,70 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
         });
     }
 
+    /// <summary>
+    ///     Review L20: a type with three interfaces declared in reverse alphabetical order reads back in its declared
+    ///     order (MongoDB returns the implements rows in no defined order). The JSON gate compares string arrays in
+    ///     order, so any reordering fails here.
+    /// </summary>
+    [Fact]
+    public async Task TypeWithThreeInterfaces_ReadsBackInDeclaredOrder()
+    {
+        await WithThrowawayTenantAsync("rtl20order", async (tenant, tenantId) =>
+        {
+            var systemId = await GetInstalledSystemIdAsync(tenant);
+            var id = new CkModelId("ImplOrder-1.0.0");
+            CkInterfaceDto Interface(string name) => new()
+            {
+                InterfaceId = new CkInterfaceId($"{name}-1"),
+                Attributes =
+                [
+                    new CkInterfaceAttributeDto
+                    {
+                        CkAttributeId = new CkId<CkAttributeId>(id, new CkAttributeId("Code-1")),
+                        AttributeName = "Code", IsOptional = true
+                    }
+                ]
+            };
+            var model = new CkCompiledModelRoot
+            {
+                ModelId = id,
+                CkLanguage = 2,
+                Dependencies = [systemId],
+                Attributes = [new CkAttributeDto { AttributeId = new CkAttributeId("Code-1"), ValueType = AttributeValueTypesDto.String }],
+                Interfaces = [Interface("Alpha"), Interface("Beta"), Interface("Gamma")],
+                Types =
+                [
+                    new CkCompiledTypeDto
+                    {
+                        TypeId = new CkTypeId("Thing-1"),
+                        IsCollectionRoot = true,
+                        DerivedFromCkTypeId = new CkId<CkTypeId>(systemId, new CkTypeId("Entity-1")),
+                        Implements =
+                        [
+                            new CkId<CkInterfaceId>(id, new CkInterfaceId("Gamma-1")),
+                            new CkId<CkInterfaceId>(id, new CkInterfaceId("Beta-1")),
+                            new CkId<CkInterfaceId>(id, new CkInterfaceId("Alpha-1"))
+                        ],
+                        Attributes =
+                        [
+                            new CkTypeAttributeDto
+                            {
+                                CkAttributeId = new CkId<CkAttributeId>(id, new CkAttributeId("Code-1")),
+                                AttributeName = "Code", IsOptional = true
+                            }
+                        ]
+                    }
+                ]
+            };
+            await tenant.ImportCkModelAsync(model);
+
+            var readBack = await LookupAsync(tenantId, id);
+            Assert.Equal(["Gamma-1", "Beta-1", "Alpha-1"],
+                readBack!.Types!.Single().Implements!.Select(i => i.ElementId.FullName));
+            await AssertRoundTripAsync(tenantId, model);
+        });
+    }
+
     [Fact]
     public async Task CkV2KitchenSink_SurvivesTheMongoRoundTrip()
     {

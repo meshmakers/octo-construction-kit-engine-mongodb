@@ -178,7 +178,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             // AB#5665: range retention — persisted next to the exact closure.
             DependencyRanges = ckCompiledModel.DependencyRanges?.Select(CkModelDependency.FromDto).ToArray(),
             // CK v2 (AB#5584)
-            CkLanguage = ckCompiledModel.CkLanguage
+            CkLanguage = ckCompiledModel.CkLanguage,
+            // CK v2 (AB#5909)
+            MinEngineVersion = ckCompiledModel.MinEngineVersion
         });
         await ExecuteImport(ckCompiledModel, transientCkModel,
             sourceIdentifierObject.MongoDbRepositoryDataSource,
@@ -238,6 +240,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             DependencyRanges = ckModel.DependencyRanges?.Select(d => d.ToDto()).ToList(),
             // CK v2 (AB#5584): null for classic models, exactly like the compiled DTO.
             CkLanguage = ckModel.CkLanguage,
+            // CK v2 (AB#5909): the cache rebuild and the dependency resolver check it against the running engine.
+            MinEngineVersion = ckModel.MinEngineVersion,
             // CK v2 (AB#5667): null when the model declares none, matching the compiled DTO.
             Interfaces = ckInterfaces.Count == 0
                 ? null
@@ -372,7 +376,11 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     private static List<CkId<CkInterfaceId>>? ImplementsOf(CkId<CkTypeId> ckTypeId,
         IEnumerable<CkTypeInterfaceImplementation> implementations)
     {
-        var implements = implementations.Where(x => x.CkTypeId == ckTypeId).Select(x => x.CkInterfaceId).ToList();
+        // Review L20: declared order (Position), interface id (ordinal) as the tie-break for rows without a position.
+        var implements = implementations.Where(x => x.CkTypeId == ckTypeId)
+            .OrderBy(x => x.Position)
+            .ThenBy(x => x.CkInterfaceId.FullName, StringComparer.Ordinal)
+            .Select(x => x.CkInterfaceId).ToList();
         return implements.Count == 0 ? null : implements;
     }
 
@@ -845,12 +853,10 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         var resolveResult = await _repositoryModelResolver.SoftResolveAsync(ckModels.Select(x => x.Id).ToList(),
             originFileResolver, operationResult, sourceIdentifier);
 
-        // TODO CK v2 S3 (F1.0-S4 range-retention run, review I2): the missing-dependency seed below and the
-        // engine's RepositoryDependencyResolver both use the exact Dependencies. Range-retaining models must be
-        // judged by their persisted dependency ranges (CkModel.DependencyRanges, F1.3-S1), otherwise they go
-        // ResolveFailed on an additive System bump. ComputeFailedModels takes the dependencies as input so the
-        // ranges can be passed in there.
-        var failed = ComputeFailedModels(ckModels.Select(m => (m.Id, (IReadOnlyCollection<CkModelId>)(m.Dependencies ?? []))).ToList(),
+        // Review I2: range-retaining models are judged by their persisted ranges (+ floor), classic models by their
+        // exact pins — the same requirements the engine's RepositoryDependencyResolver uses. With exact pins only, a
+        // range-retaining model went ResolveFailed on every additive System bump.
+        var failed = ComputeFailedModels(ckModels.Select(m => (m.Id, RequirementsOf(m))).ToList(),
             resolveResult.SkippedModelIds, resolveResult.FailedModelIds);
 
         var recovered = new List<CkModelId>();
@@ -989,19 +995,19 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
     ///     its inheritance would otherwise be judged on a dependency that is not usable.
     /// </summary>
     internal static Dictionary<CkModelId, string> ComputeFailedModels(
-        IReadOnlyCollection<(CkModelId Id, IReadOnlyCollection<CkModelId> Dependencies)> models,
+        IReadOnlyCollection<(CkModelId Id, IReadOnlyCollection<CkModelIdVersionRange> Requirements)> models,
         IEnumerable<CkModelId> skippedModelIds, IEnumerable<CkModelId> inheritanceFailedModelIds)
     {
-        var installedIds = models.Select(m => m.Id).ToHashSet();
+        var installedIds = models.Select(m => m.Id).ToList();
         var failed = new Dictionary<CkModelId, string>();
 
         foreach (var model in models)
         {
-            var missing = model.Dependencies.Where(d => !installedIds.Contains(d)).ToList();
+            var missing = model.Requirements.Where(r => !installedIds.Any(r.IsSatisfiedBy)).ToList();
             if (missing.Count > 0)
             {
-                failed[model.Id] = "missing dependency " + string.Join(", ", missing.Select(m => m.FullName)) +
-                                   InstalledVersions(missing, installedIds);
+                failed[model.Id] = "missing dependency " + string.Join(", ", missing.Select(m => m.ToString())) +
+                                   InstalledVersions(missing.Select(m => m.Name), installedIds);
             }
         }
 
@@ -1015,6 +1021,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             failed.TryAdd(id, "inheritance resolution failed (typically a dependency changed its major version)");
         }
 
+        // A requirement that only failed models satisfy is unmet: propagate until nothing changes.
         bool changed;
         do
         {
@@ -1026,9 +1033,11 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     continue;
                 }
 
-                var failedDependency = model.Dependencies.FirstOrDefault(failed.ContainsKey);
-                if (failedDependency != null)
+                var unusable = model.Requirements.FirstOrDefault(r =>
+                    !installedIds.Any(id => r.IsSatisfiedBy(id) && !failed.ContainsKey(id)));
+                if (unusable != null)
                 {
+                    var failedDependency = installedIds.First(id => unusable.IsSatisfiedBy(id));
                     failed[model.Id] = $"dependency '{failedDependency.FullName}' is ResolveFailed";
                     changed = true;
                 }
@@ -1038,12 +1047,22 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
         return failed;
     }
 
-    private static string InstalledVersions(IEnumerable<CkModelId> missing, IReadOnlySet<CkModelId> installed)
+    /// <summary>
+    ///     Review I2: what a persisted model requires — its dependency ranges (effective range incl. floor) when it is
+    ///     range-retaining, otherwise its exact pins.
+    /// </summary>
+    internal static IReadOnlyCollection<CkModelIdVersionRange> RequirementsOf(CkModel model) =>
+        model.DependencyRanges != null
+            ? model.DependencyRanges.Select(d => d.ToDto().GetEffectiveRange()).ToList()
+            : (model.Dependencies ?? []).Select(d => d.ToVersionRange()).ToList();
+
+    private static string InstalledVersions(IEnumerable<string> missingNames, IReadOnlyCollection<CkModelId> installed)
     {
-        var details = missing
-            .Select(m => installed.FirstOrDefault(i => i.Name == m.Name))
+        var details = missingNames
+            .Select(name => installed.FirstOrDefault(i => i.Name == name))
             .Where(i => i != null)
             .Select(i => i!.FullName)
+            .Distinct()
             .ToList();
         return details.Count == 0 ? " (not installed)" : $" (installed: {string.Join(", ", details)})";
     }
@@ -1111,6 +1130,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 DependencyRanges = compiledModel.DependencyRanges?.Select(CkModelDependency.FromDto).ToArray(),
                 // CK v2 (AB#5584): absent for classic models.
                 CkLanguage = compiledModel.CkLanguage,
+                // CK v2 (AB#5909): absent for v1 models.
+                MinEngineVersion = compiledModel.MinEngineVersion,
                 Description = compiledModel.Description,
                 ModelState = ModelState.Importing
             });
@@ -1509,14 +1530,16 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             // CK v2 (AB#5667): one row per declared implements entry, persisted verbatim (like the inheritance row).
             if (ckTypeDto.Implements != null)
             {
-                foreach (var ckInterfaceId in ckTypeDto.Implements)
+                foreach (var (ckInterfaceId, position) in ckTypeDto.Implements.Select((id, i) => (id, i)))
                 {
                     transientCkModel.CkTypeInterfaceImplementations.Add(new CkTypeInterfaceImplementation
                     {
                         CkModelId = compiledModel.ModelId,
                         ModelState = ModelState.Importing,
                         CkTypeId = new CkId<CkTypeId>(compiledModel.ModelId, ckTypeDto.TypeId),
-                        CkInterfaceId = ckInterfaceId
+                        CkInterfaceId = ckInterfaceId,
+                        // Review L20: keeps the declared order across the round trip.
+                        Position = position
                     });
                 }
             }

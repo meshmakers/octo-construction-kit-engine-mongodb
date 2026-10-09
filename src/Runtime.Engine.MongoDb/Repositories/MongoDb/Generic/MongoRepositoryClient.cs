@@ -501,6 +501,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.Errors).SetIgnoreIfNull(true);
             cm.MapMember(c => c.Authorization).SetIgnoreIfNull(true);
             cm.MapMember(c => c.Execution).SetIgnoreIfNull(true);
+            // CK v2 Phase 1 (F1.1-S4): method visibility, absent when undeclared.
+            cm.MapMember(c => c.Visibility).SetIgnoreIfNull(true);
         });
 
         BsonClassMap.RegisterClassMap<CkMethodParameterDto>(cm =>
@@ -584,6 +586,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.DependencyRanges).SetIgnoreIfDefault(true);
             // CK v2 (AB#5584): absent for classic (ckLanguage 1) models.
             cm.MapMember(c => c.CkLanguage).SetIgnoreIfNull(true);
+            // CK v2 (AB#5909): absent for v1 models.
+            cm.MapMember(c => c.MinEngineVersion).SetIgnoreIfNull(true);
         });
 
         // Before CkType: the method DTOs are embedded in CkType.Methods.

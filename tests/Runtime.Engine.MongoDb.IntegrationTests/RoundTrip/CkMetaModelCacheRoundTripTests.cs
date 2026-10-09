@@ -87,7 +87,7 @@ public class CkMetaModelCacheRoundTripTests(CkModelImportMigrationFixture fixtur
             var link = cacheService.GetRtCkAssociationRole(tenantId, new RtCkId<CkAssociationRoleId>("KitchenSink/Link"));
             Assert.Equal(CkAttributeAccessDto.ReadOnly, link.AllAttributesByName["Code"].Access);
             Assert.Equal(CkAttributeAccessDto.MethodOnly, link.AllAttributesByName["Mode"].Access);
-            Assert.Equal(CkAttributeAccessDto.Hidden, link.AllAttributesByName["Secret"].Access);
+            Assert.Equal(CkAttributeAccessDto.ReadOnly, link.AllAttributesByName["Secret"].Access);
 
             // CK language (model level): CkCacheRoot.Models carries it, read through the persisted cache file.
             using var stream = new MemoryStream();

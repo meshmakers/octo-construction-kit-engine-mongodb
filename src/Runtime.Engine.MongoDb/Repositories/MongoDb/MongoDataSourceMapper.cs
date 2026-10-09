@@ -156,7 +156,11 @@ public class CkModelMongoDataSourceMapper : IMongoDataSourceMapper<CkModelId, Ck
             // CK v2 (AB#5584)
             document.CkLanguage == null
                 ? update.Unset(p => p.CkLanguage)
-                : update.Set(p => p.CkLanguage, document.CkLanguage)
+                : update.Set(p => p.CkLanguage, document.CkLanguage),
+            // CK v2 (AB#5909)
+            document.MinEngineVersion == null
+                ? update.Unset(p => p.MinEngineVersion)
+                : update.Set(p => p.MinEngineVersion, document.MinEngineVersion)
         ];
 
         return update.Combine(list);
@@ -399,7 +403,8 @@ public class CkTypeInterfaceImplementationMongoDataSourceMapper
             update.Set(p => p.CkModelId, document.CkModelId),
             update.Set(p => p.ModelState, document.ModelState),
             update.Set(p => p.CkTypeId, document.CkTypeId),
-            update.Set(p => p.CkInterfaceId, document.CkInterfaceId)
+            update.Set(p => p.CkInterfaceId, document.CkInterfaceId),
+            update.Set(p => p.Position, document.Position)
         ];
 
         return update.Combine(list);

@@ -48,6 +48,13 @@ public class CkModel
     public int? CkLanguage { get; init; }
 
     /// <summary>
+    ///     CK v2 (F1.1-S6, AB#5909): the lowest engine version that can read the model (<c>minEngineVersion</c>,
+    ///     written by the compiler for ckLanguage-2 and range-retaining models). <c>null</c> for v1 models and absent
+    ///     from their documents.
+    /// </summary>
+    public string? MinEngineVersion { get; init; }
+
+    /// <summary>
     ///     An optional description of the model
     /// </summary>
     public string? Description { get; set; }

@@ -2009,7 +2009,10 @@ public class TenantContext : ITenantContext
             GetArchiveRecomputeStateStore(),
             GetRecomputeJobStore(),
             // AB#5157: archive delete / clear drop the memoised coverage of the affected archive.
-            coverageInvalidator: GetArchiveCoverageCache());
+            coverageInvalidator: GetArchiveCoverageCache(),
+            // CK v2 Phase 1 (engine F1.2-S2, review M12): activation refuses archive columns that reach a Hidden
+            // attribute; the check needs the tenant's CK cache.
+            ckCacheService: _cacheService);
         _archiveLifecycleServiceResolved = true;
         return _archiveLifecycleService;
     }
@@ -2557,12 +2560,14 @@ public class TenantContext : ITenantContext
             throw TenantException.ModelNotFoundInACatalog(ckModelId);
         }
 
-        var missingDependencies = new List<CkModelId>();
-        foreach (var dependency in ckCompiledModelRoot.Dependencies ?? [])
+        // Range-retaining models are checked against their ranges (+ floor), classic models against their exact
+        // pins — the same requirements the resolver uses (CkCompiledModelRoot.GetResolutionRanges).
+        var missingDependencies = new List<CkModelIdVersionRange>();
+        foreach (var requirement in ckCompiledModelRoot.GetResolutionRanges())
         {
-            if (!await _ckModelRepositoryService.IsExistingAsync(dependency, tenantDatabaseSourceIdentifier))
+            if (!(await _ckModelRepositoryService.IsExistingAsync(requirement, tenantDatabaseSourceIdentifier)).Exists)
             {
-                missingDependencies.Add(dependency);
+                missingDependencies.Add(requirement);
             }
         }
 

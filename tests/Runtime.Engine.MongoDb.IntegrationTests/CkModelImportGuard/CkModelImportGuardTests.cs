@@ -370,8 +370,9 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
             Assert.Equal((pre, pos), (fixture.Notifications.PreUpdates, fixture.Notifications.PosUpdates));
             Assert.Empty(await GetTenantDatabase(tenantId).GetCollection<BsonDocument>("CkModel")
                 .Find(new BsonDocument("modelId", "Test")).ToListAsync(TestContext.Current.CancellationToken));
+            // The requirement is logged as the resolver sees it: the exact range of a classic pin, System-[x.y.z].
             Assert.NotEmpty(fixture.Logs.Find(LogLevel.Warning, "due to missing dependencies", tenantId,
-                EmbeddedSystem.FullName));
+                EmbeddedSystem.ToVersionRange().ToString()));
         });
     }
 

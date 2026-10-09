@@ -1235,7 +1235,7 @@ required to repopulate the flag — which is why the fix is paired with a `Syste
 patch bump (`ImportCkModelAsync` short-circuits on an already-installed version). Field name in
 Mongo is camelCase `isRuntimeState` (global `CamelCaseElementNameConvention`).
 
-### CK v2 Range Retention Round-Trip (AB#5665, Phase 0 spike)
+### CK v2 Range Retention Round-Trip (AB#5665, AB#5914)
 
 A model compiled with `OctoCkRangeRetention=true` (see the engine CLAUDE.md) carries
 `CkCompiledModelRoot.DependencyRanges` (`{range, floor}` per direct dependency) and stores references into
@@ -1276,8 +1276,10 @@ imports an additive System minor (copy of the installed System, one more optiona
 System.Bot / System.Communication shape) and range-retaining ones: exact pins go `ResolveFailed`, range-retaining
 models stay `Available` and resolve against the new System. Against the engine without the D2 fix it throws
 "Sequence contains more than one matching element" (the E2E failure). It uses the repository, not
-`ITenantContext.ImportCkModelAsync`, because the tenant path afterwards re-imports the host's **embedded** System
-(`UpdateSystemCkModelAsync`, no downgrade guard) — a live System bump needs every service to embed it.
+`ITenantContext.ImportCkModelAsync`, because it isolates the repository behaviour. On the tenant path, the
+embedded-import guard (F1.0-S1, see *Embedded CK Model Import Guard*) keeps a newer System that a service does not
+embed; since Phase 1 a System bump therefore sticks, and exact-pinned service models go `ResolveFailed` until their
+service ships the new System.
 
 `ValidateDependencies` now logs, for every model it marks `ResolveFailed`, what is unmet
 (`DescribeUnmetDependencies`): `RrBase-[1.0,2.0) (floor 1.1.0): installed RrBase-1.0.0` for range-retaining
@@ -1287,13 +1289,11 @@ Pinned by `CkRangeRetentionImportTests` (throwaway tenants): document shape, ver
 a range-retaining dependent stays `Available` across an additive minor of its dependency while an
 exact-pinned one goes `ResolveFailed`, the rebuilt cache binds to the new version, and a downgrade below the
 floor goes `ResolveFailed` with the range/floor/installed description. The test bumps a test base model, not
-System: `TenantContext.UpdateSystemCkModelAsync` re-imports the service's **embedded** System version
-whenever that exact version is missing (no downgrade guard on this path), so a System bump only sticks when
-every service embeds it.
+System, to stay independent of the System the test host embeds.
 
 ### CK v2 Meta-Model Persistence — interfaces, access, methods, ckLanguage (AB#5667 / AB#5668 / AB#5669)
 
-CK v2 Phase 0 adds four constructs to the compiled model. All of them follow the three-place rule
+CK v2 adds these constructs to the compiled model. All of them follow the three-place rule
 (entity + class map → write in `ExecuteImport` → read-back in `TryLookupCkModelAsync`):
 
 | Construct | Persisted as | Write | Read-back |
@@ -1330,13 +1330,36 @@ above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before a
   legitimately not stored, each with a justification: `$schema`, `migrations`, `dependencies` /
   `dependencyRanges` (F0.2 owns them) and the **pre-existing** gap `types[*].indexes` (type indexes are
   persisted on the entity and consumed from there, but have never been read back — found by this gate,
-  reported, not changed in Phase 0). `defaultValues` / `autoCompleteValues` scalars compare by invariant text
+  reported, not changed in Phase 1 — it would change runtime resolution for every tenant). `defaultValues` / `autoCompleteValues` scalars compare by invariant text
   because the import converts them to the attribute's value type by design.
 - `CkMetaModelCacheRoundTripTests`: the cache rebuilt from Mongo (YAML kitchen sink) exposes interfaces,
   declared AND inherited implements / methods (`AllImplementedInterfaces`, `AllMethods`, `ImplementingTypes`),
   methods field by field, `access` at all three assignment sites and `ckLanguage`.
 - `CkMetaModelLegacyDocumentTests`: BSON only — classic element sets, pre-v2 documents read back as
   `null`/default, every method field and the new collections round-trip.
+- The gate is the persistence half of the engine's touch-point checklist (octo-construction-kit-engine `CLAUDE.md`,
+  CK v2 touch points): a new meta-model field is only done when both the engine checklist and the field checklist
+  below are complete and this gate is green.
+
+**No Mongo migration in Phase 1 (plan §4).** No System/System.* model gains a persisted field (all stay `ckLanguage`
+1, range retention is off by default), so Phase 1 needs no System version bump, no re-import and no data migration.
+Every new member is nullable and absent from v1 documents; the new collections (`CkInterface`,
+`CkTypeInterfaceImplementation`) are created lazily on the first v2 import. A v2 import makes the tenant unsafe for
+pre-Phase-1 services (they ignore `access`, so Hidden attributes would be exposed): no v2 model in a shared environment
+before every service there runs the Phase 1 engine; `minEngineVersion` and the `ck-models/v3` catalog path enforce it on
+the catalog side.
+
+**Phase 1 additions (F1.3-S1, AB#5914):**
+- `implements` order (review L20): each `CkTypeInterfaceImplementation` row stores its `Position` in the declared list;
+  the read-back orders by it (interface id ordinal as tie-break), so multi-interface types round-trip in declared order
+  (`TypeWithThreeInterfaces_ReadsBackInDeclaredOrder`).
+- `CkModel.MinEngineVersion` (F1.1-S6) is persisted like `ckLanguage` (absent for v1, `Unset` on full update) and read
+  back, so the repository resolver can refuse a model that needs a newer engine (message 126).
+- Method `Visibility` (embedded `CkMethodDto`) is left out of the document when undeclared.
+- Hidden is not allowed on association-role assignments (engine rule 108); the kitchen sinks use `ReadOnly` there.
+- Index maintenance: `FetchAttributeMetadataAsync` always binds major-qualified references including `Importing`
+  models, while the inheritance chain binding follows `includeModelsInStateImporting`. Intentional: attribute
+  metadata of all states is loaded anyway, and outside an import no `Importing` model exists.
 
 ### New meta-model field checklist (do this for EVERY new CK DTO property)
 
@@ -1504,8 +1527,11 @@ Basic.Accounting stayed `ResolveFailed` after System went back to the version it
   too); still failing → stays, DEBUG only (`result=still_failed`, no log spam on every import).
 - The callers in `TenantContext` unload the tenant's CK cache after every import, so a recovered model's types are in
   the next cache load.
-- **S3 hand-off:** the missing-dependency seed and the engine's `RepositoryDependencyResolver` use the exact
-  `Dependencies`; range-retaining models must be judged by their persisted ranges (TODO in `ValidateDependencies`).
+- **Ranges (review I2, Phase 1):** `ComputeFailedModels` works on requirements (`RequirementsOf`): the persisted
+  `DependencyRanges` (effective range incl. floor) of a range-retaining model, the exact pins of a classic model — the
+  same requirements the engine's `RepositoryDependencyResolver` uses (`GetResolutionRanges`). A requirement that only
+  `ResolveFailed` models satisfy propagates the failure. The embedded-import dependency pre-check in
+  `TenantContext.ImportCkModelAsync(CkModelId, …)` uses `GetResolutionRanges` too.
 - Also fixed on the way: an operator-precedence slip in `MongoDbRepositoryDataSource` (`a && b ? c : d`) that dropped
   the id filter of the base-type prefetch and loaded every `Available` type of the tenant.
 
@@ -1859,10 +1885,11 @@ Europe (Continent)
 
 ### CK v2 Kitchen Sink (AB#5667 / AB#5668 / AB#5669)
 
-`TestCkModelKitchenSink` (`KitchenSink-1.0.0`, `ckLanguage: 2`) uses every CK v2 Phase 0 construct: interfaces
+`TestCkModelKitchenSink` (`KitchenSink-1.0.0`, `ckLanguage: 2`) uses every CK v2 construct: interfaces
 `Named-1` (required + optional member) and `Coded-1`; abstract `Thing` implements Named, `Gadget` derives from
-Thing (inherits Named) and implements Coded, unrelated `Widget` implements Named; all four `access` values on type,
-record (`Address`) and association-role (`Link`) assignments; methods `ChangePassword-2` (every field),
+Thing (inherits Named) and implements Coded, unrelated `Widget` implements Named; all four `access` values on type and
+record (`Address`) assignments, and `ReadWrite` / `ReadOnly` / `MethodOnly` on the association role `Link` (Hidden is
+not allowed on association roles, engine rule 108); methods `ChangePassword-2` (every field),
 `Reindex-1` (static) and `Ping-1` (minimal) on Thing. Extend it whenever a new meta-model field is added.
 
 ### Migration Test Data

@@ -29,12 +29,12 @@ public class CkModelImportGuardDecisionTests
     {
         var failed = DatabaseCkModelRepository.ComputeFailedModels(
         [
-            (new CkModelId("System-2.6.0"), []),
-            (new CkModelId("Basic-1.0.0"), [new CkModelId("System-2.5.0")])
+            Model("System-2.6.0"),
+            Model("Basic-1.0.0", "System-2.5.0")
         ], [], []);
 
         var reason = Assert.Single(failed).Value;
-        Assert.Contains("System-2.5.0", reason);
+        Assert.Contains("2.5.0", reason);
         Assert.Contains("installed: System-2.6.0", reason);
     }
 
@@ -43,9 +43,9 @@ public class CkModelImportGuardDecisionTests
     {
         var failed = DatabaseCkModelRepository.ComputeFailedModels(
         [
-            (new CkModelId("System-2.5.0"), []),
-            (new CkModelId("Basic-1.0.0"), [new CkModelId("System-2.5.0")]),
-            (new CkModelId("Basic.Accounting-1.0.0"), [new CkModelId("Basic-1.0.0"), new CkModelId("System-2.5.0")])
+            Model("System-2.5.0"),
+            Model("Basic-1.0.0", "System-2.5.0"),
+            Model("Basic.Accounting-1.0.0", "Basic-1.0.0", "System-2.5.0")
         ], [], []);
 
         Assert.Empty(failed);
@@ -60,11 +60,11 @@ public class CkModelImportGuardDecisionTests
     {
         var failed = DatabaseCkModelRepository.ComputeFailedModels(
         [
-            (new CkModelId("System-2.5.0"), []),
-            (new CkModelId("Basic-1.0.0"), [new CkModelId("System-2.5.0")]),
-            (new CkModelId("Basic.Accounting-1.0.0"), [new CkModelId("Basic-1.0.0")]),
-            (new CkModelId("Reports-1.0.0"), [new CkModelId("Basic.Accounting-1.0.0")]),
-            (new CkModelId("Unrelated-1.0.0"), [new CkModelId("System-2.5.0")])
+            Model("System-2.5.0"),
+            Model("Basic-1.0.0", "System-2.5.0"),
+            Model("Basic.Accounting-1.0.0", "Basic-1.0.0"),
+            Model("Reports-1.0.0", "Basic.Accounting-1.0.0"),
+            Model("Unrelated-1.0.0", "System-2.5.0")
         ], [], [new CkModelId("Basic-1.0.0")]);
 
         Assert.Equal(["Basic-1.0.0", "Basic.Accounting-1.0.0", "Reports-1.0.0"],
@@ -72,4 +72,30 @@ public class CkModelImportGuardDecisionTests
         Assert.Contains("inheritance", failed[new CkModelId("Basic-1.0.0")]);
         Assert.Contains("'Basic-1.0.0' is ResolveFailed", failed[new CkModelId("Basic.Accounting-1.0.0")]);
     }
+
+    /// <summary>
+    ///     Review I2: a range-retaining model is judged by its range (+ floor), not by the exact pin of its compile:
+    ///     an additive System minor does not fail it, a version below the floor does.
+    /// </summary>
+    [Fact]
+    public void ComputeFailedModels_RangeRequirement_SatisfiedByANewerMinor_FailsBelowTheFloor()
+    {
+        var range = new CkModelIdVersionRange("System", "[2.5.0,3.0.0)");
+        var failed = DatabaseCkModelRepository.ComputeFailedModels(
+        [
+            Model("System-2.6.0"),
+            (new CkModelId("RangeDep-1.0.0"), [range])
+        ], [], []);
+        Assert.Empty(failed);
+
+        failed = DatabaseCkModelRepository.ComputeFailedModels(
+        [
+            Model("System-2.4.0"),
+            (new CkModelId("RangeDep-1.0.0"), [range])
+        ], [], []);
+        Assert.Contains("installed: System-2.4.0", Assert.Single(failed).Value);
+    }
+
+    private static (CkModelId, IReadOnlyCollection<CkModelIdVersionRange>) Model(string id, params string[] exactPins) =>
+        (new CkModelId(id), exactPins.Select(p => new CkModelId(p).ToVersionRange()).ToList());
 }

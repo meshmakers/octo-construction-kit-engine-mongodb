@@ -37,4 +37,11 @@ public class CkTypeInterfaceImplementation
     ///     (a major-qualified reference of a range-retaining model stays major-qualified).
     /// </summary>
     public CkId<CkInterfaceId> CkInterfaceId { get; set; } = null!;
+
+    /// <summary>
+    ///     Review L20: zero-based position of the entry in the type's declared <c>implements</c> list. The read-back
+    ///     orders by it (then by the interface id, ordinal), so a type with several interfaces round-trips in its
+    ///     declared order regardless of the order MongoDB returns the rows in.
+    /// </summary>
+    public int Position { get; set; }
 }

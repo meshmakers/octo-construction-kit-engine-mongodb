@@ -18,7 +18,8 @@ associationRoles:
         name: Mode
         isOptional: true
         access: MethodOnly
+      # Hidden is not allowed on association roles (engine rule 108, Phase 1): no access guard there.
       - id: ${this}/Secret
         name: Secret
         isOptional: true
-        access: Hidden
+        access: ReadOnly
