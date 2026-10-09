@@ -1291,7 +1291,7 @@ exact-pinned one goes `ResolveFailed`, the rebuilt cache binds to the new versio
 floor goes `ResolveFailed` with the range/floor/installed description. The test bumps a test base model, not
 System, to stay independent of the System the test host embeds.
 
-### CK v2 Meta-Model Persistence — interfaces, access, methods, ckLanguage (AB#5667 / AB#5668 / AB#5669)
+### CK v2 Meta-Model Persistence — interfaces, access, methods, ckLanguage, visibility, derivable, interface extends/associations/methods/deprecated (AB#5667 / AB#5668 / AB#5669 / AB#5914 / AB#5915)
 
 CK v2 adds these constructs to the compiled model. All of them follow the three-place rule
 (entity + class map → write in `ExecuteImport` → read-back in `TryLookupCkModelAsync`):
@@ -1415,7 +1415,8 @@ the catalog side.
    association roles).
 5. A new collection additionally needs the plumbing list above (data source property, create list,
    `TransientCkModel`, bulk import, model state, `DeletePreviousVersion`, read-back query).
-6. Run `RoundTrip/CkMetaModelRoundTripTests` — it fails until steps 1–4 are done. Extend the kitchen sink
+6. Run the hard gate `RoundTrip/CkMetaModelReflectionGateTests` (reflection over every compiled model) and
+   `RoundTrip/CkMetaModelRoundTripTests` (JSON view, document shapes) — they fail until steps 1–4 are done. Extend the kitchen sink
    (C# and YAML) so the new field is actually set, and add a BSON legacy assertion.
 
 ### Attribute Ownership Round-Trip (AB#5187)
