@@ -1420,8 +1420,8 @@ the catalog side.
   column builder (`ArchivePathTypeResolver`) refuses a Hidden column and a whole-record column whose record contains a
   Hidden sub-attribute, and `BuildRecordObject` leaves Hidden sub-attributes out like Secret ones (defence in depth).
   Pinned by `ArchiveHiddenAccessTests` (mutation-checked).
-- **Known limitations of the archive re-check (G3 re-review; Phase 4 prerequisites, User Story under F4.3 of Epic
-  AB#5584):**
+- **Known limitations of the archive re-check (G3 re-review; Phase 4 prerequisites, User Story AB#6247 under F4.3
+  AB#5697, Epic AB#5584):**
   - **N2 — services without stream data never re-check.** `RevalidateArchiveAccessAsync` needs the archive lifecycle
     service, which only exists where a stream-data repository is registered. Identity, comm-controller and
     platform-services own System.Identity, System.Communication and System.UI but register none, and the services that
