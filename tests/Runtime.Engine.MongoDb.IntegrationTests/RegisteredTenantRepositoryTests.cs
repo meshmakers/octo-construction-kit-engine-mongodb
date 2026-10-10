@@ -1,6 +1,7 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Xunit;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
@@ -25,14 +26,23 @@ public class RegisteredTenantRepositoryTests(SystemFixture fixture)
         var systemContext = fixture.GetSystemContext();
         var ghost = new OctoTenant(NewTenantId(), $"db-{Guid.NewGuid():N}"[..20]);
 
-        // The resolving route proves the baseline: the tenant is unknown, so it fails ...
-        await Assert.ThrowsAnyAsync<Exception>(() => systemContext.FindTenantRepositoryAsync(ghost.TenantId));
+        // The resolving route proves the baseline: the tenant is unknown, so it fails, and it has to talk
+        // to MongoDB to find that out. The non-zero count also proves the command listener is attached ...
+        using (MongoRequestScope.Begin(out var resolvingStats))
+        {
+            await Assert.ThrowsAnyAsync<Exception>(() => systemContext.FindTenantRepositoryAsync(ghost.TenantId));
+            Assert.True(resolvingStats.CommandCount > 0);
+        }
 
-        // ... while the lightweight route trusts the registry entry and touches nothing.
-        var repository = systemContext.GetRegisteredTenantRepository(ghost);
+        // ... while the lightweight route trusts the registry entry and issues no MongoDB command at all.
+        using (MongoRequestScope.Begin(out var lightweightStats))
+        {
+            var repository = systemContext.GetRegisteredTenantRepository(ghost);
 
-        Assert.NotNull(repository);
-        Assert.Equal(ghost.TenantId, repository.TenantId);
+            Assert.NotNull(repository);
+            Assert.Equal(ghost.TenantId, repository.TenantId);
+            Assert.Equal(0, lightweightStats.CommandCount);
+        }
     }
 
     [Fact]
