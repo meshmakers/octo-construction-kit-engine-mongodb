@@ -281,7 +281,11 @@ public class CkAttributeMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkAt
             update.Set(p => p.ValueCkRecordId, document.ValueCkRecordId),
             update.Set(p => p.Description, document.Description),
             // CK v2 Phase 1 (AB#5915): Unset when null, so a full update keeps the v1 document shape.
-            document.Visibility == null ? update.Unset(p => p.Visibility) : update.Set(p => p.Visibility, document.Visibility)
+            document.Visibility == null ? update.Unset(p => p.Visibility) : update.Set(p => p.Visibility, document.Visibility),
+            // CK v2 (AB#6269): same rule for the security-sensitivity marker.
+            document.SecuritySensitive == null
+                ? update.Unset(p => p.SecuritySensitive)
+                : update.Set(p => p.SecuritySensitive, document.SecuritySensitive)
         ];
 
         return update.Combine(list);

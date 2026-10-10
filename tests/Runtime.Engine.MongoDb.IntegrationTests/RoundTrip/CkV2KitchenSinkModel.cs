@@ -53,7 +53,7 @@ internal static class CkV2KitchenSinkModel
             Attributes =
             [
                 new CkAttributeDto { AttributeId = new CkAttributeId("Name-1"), ValueType = AttributeValueTypesDto.String },
-                new CkAttributeDto { AttributeId = new CkAttributeId("Alias-1"), ValueType = AttributeValueTypesDto.String, Visibility = CkVisibilityDto.Internal },
+                new CkAttributeDto { AttributeId = new CkAttributeId("Alias-1"), ValueType = AttributeValueTypesDto.String, Visibility = CkVisibilityDto.Internal, SecuritySensitive = true },
                 new CkAttributeDto { AttributeId = new CkAttributeId("Code-1"), ValueType = AttributeValueTypesDto.String },
                 new CkAttributeDto
                 {

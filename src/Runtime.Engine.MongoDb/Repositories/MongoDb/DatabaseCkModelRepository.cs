@@ -317,6 +317,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                 IsRuntimeState = a.IsRuntimeState,
                 // CK v2 Phase 1 (AB#5915)
                 Visibility = a.Visibility,
+                // CK v2 (AB#6269)
+                SecuritySensitive = a.SecuritySensitive,
                 MetaData = a.MetaData?.Select(m =>
                     new CkAttributeMetaDataDto { Key = m.Key, Value = m.Value, Description = m.Description }).ToList()
             }).ToList(),
@@ -1470,6 +1472,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
                     IsRuntimeState = ckAttributeDto.IsRuntimeState,
                     // CK v2 Phase 1 (AB#5915)
                     Visibility = ckAttributeDto.Visibility,
+                    // CK v2 (AB#6269)
+                    SecuritySensitive = ckAttributeDto.SecuritySensitive,
                     MetaData = ckAttributeDto.MetaData?.Select(m =>
                         new CkAttributeMetaData { Key = m.Key, Value = m.Value, Description = m.Description }).ToList()
                 };

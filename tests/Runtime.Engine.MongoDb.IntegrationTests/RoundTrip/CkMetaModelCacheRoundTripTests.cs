@@ -74,6 +74,9 @@ public class CkMetaModelCacheRoundTripTests(CkModelImportMigrationFixture fixtur
             Assert.True(cacheService.GetRtCkInterface(tenantId, new RtCkId<CkInterfaceId>("KitchenSink/Legacy")).Deprecated);
             Assert.Equal(CkVisibilityDto.Internal,
                 cacheService.GetRtCkInterface(tenantId, new RtCkId<CkInterfaceId>("KitchenSink/Coded")).Visibility);
+            // CK v2 (AB#6269): the security-sensitivity marker reaches the cache rebuilt from Mongo.
+            Assert.True(cacheService.GetRtCkAttribute(tenantId, new RtCkId<CkAttributeId>("KitchenSink/Alias")).SecuritySensitive);
+            Assert.False(cacheService.GetRtCkAttribute(tenantId, new RtCkId<CkAttributeId>("KitchenSink/Name")).SecuritySensitive);
 
             // Declared methods (AB#5669), field by field
             Assert.Equal(["ChangePassword-2", "Ping-1", "Reindex-1"],

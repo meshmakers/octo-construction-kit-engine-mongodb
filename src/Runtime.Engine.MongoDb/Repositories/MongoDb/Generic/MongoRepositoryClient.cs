@@ -681,6 +681,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.Ownership).SetIgnoreIfDefault(true);
             // CK v2 Phase 1 (AB#5915): absent when undeclared, so v1 documents keep their shape.
             cm.MapMember(c => c.Visibility).SetIgnoreIfNull(true);
+            // CK v2 (AB#6269): absent when undeclared.
+            cm.MapMember(c => c.SecuritySensitive).SetIgnoreIfNull(true);
         });
 
         BsonClassMap.RegisterClassMap<CkAssociationRole>(cm =>

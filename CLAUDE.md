@@ -1348,6 +1348,7 @@ CK v2 adds these constructs to the compiled model. All of them follow the three-
 | `minEngineVersion` (`CkCompiledModelRoot.MinEngineVersion`, Phase 1) | `CkModel.MinEngineVersion`, `SetIgnoreIfNull`, `Unset` on full update | as `ckLanguage` | model root |
 | `visibility` (Phase 1) | `Visibility` (Int32 enum, nullable, `SetIgnoreIfNull`) on `CkType`, `CkRecord`, `CkEnum`, `CkAttribute`, `CkAssociationRole`, `CkInterface`; embedded on `CkMethodDto` | the matching `Process*` | the matching element |
 | `derivable` (Phase 1) | `Derivable` on `CkType`, `CkRecord` (same mapping) | `ProcessCkTypesAndAssociations`, `ProcessCkRecords` | types, records |
+| `securitySensitive` (AB#6269, Phase 2) | `CkAttribute.SecuritySensitive` (`bool?`, `SetIgnoreIfNull`, `Unset` on full update) | `ProcessCkAttributes` | attributes |
 | interface `extends` / `associations` / `methods` / `deprecated` (Phase 1) | on the `CkInterface` document: `Extends` (`CkId<CkInterfaceId>` list), `Associations` (the Contracts `CkInterfaceAssociationDto` embedded, own class map), `Methods` (`CkMethodDto` embedded), `Deprecated` — all `SetIgnoreIfNull`, empty lists stored as absent | `ProcessCkInterfaces` | interfaces |
 | `targetCkInterfaceId` on a type association (Phase 1) | `CkTypeAssociation.TargetCkInterfaceId` (`SetIgnoreIfNull`; `TargetCkTypeId` stays set — the interface narrows the target) | `ProcessCkTypesAndAssociations` | type associations |
 

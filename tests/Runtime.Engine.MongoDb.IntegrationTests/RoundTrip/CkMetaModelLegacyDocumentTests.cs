@@ -201,7 +201,8 @@ public class CkMetaModelLegacyDocumentTests
     // ---- Phase 1 members (F1.3-S2, AB#5915) ------------------------------------------------------------
 
     private static readonly string[] Phase1Elements =
-        ["visibility", "derivable", "targetCkInterfaceId", "extends", "associations", "deprecated", "minEngineVersion"];
+        ["visibility", "derivable", "targetCkInterfaceId", "extends", "associations", "deprecated", "minEngineVersion",
+            "securitySensitive"];
 
     [Fact]
     public void ClassicElements_WriteNoPhase1Element()
@@ -277,6 +278,25 @@ public class CkMetaModelLegacyDocumentTests
         };
         var back = BsonSerializer.Deserialize<CkInterface>(entity.ToBsonDocument());
         Assert.Equal(System.Text.Json.JsonSerializer.Serialize(entity), System.Text.Json.JsonSerializer.Serialize(back));
+    }
+
+    [Fact]
+    public void SecuritySensitive_RoundTripsVerbatim_AndIsAbsentWhenUndeclared()
+    {
+        // CK v2 (AB#6269)
+        CkAttribute NewAttribute(bool? securitySensitive) => new()
+        {
+            CkAttributeId = new CkId<CkAttributeId>(ModelId, new CkAttributeId("PasswordHash-1")), CkModelId = ModelId,
+            AttributeValueType = AttributeValueTypesDto.String, SecuritySensitive = securitySensitive
+        };
+
+        var marked = NewAttribute(true).ToBsonDocument();
+        Assert.True(marked["securitySensitive"].AsBoolean);
+        Assert.True(BsonSerializer.Deserialize<CkAttribute>(marked).SecuritySensitive);
+
+        var undeclared = NewAttribute(null).ToBsonDocument();
+        Assert.DoesNotContain("securitySensitive", undeclared.Names);
+        Assert.Null(BsonSerializer.Deserialize<CkAttribute>(undeclared).SecuritySensitive);
     }
 
     private static void AssertSameMethod(CkMethodDto expected, CkMethodDto actual)
