@@ -29,6 +29,9 @@ internal static class CkModelJsonComparer
         ["$.$schema"] = "schema URI of the compiled file",
         // Migrations are consumed during import (CompiledModelCkMigrationContentProvider) and never stored.
         ["$.migrations"] = "migration scripts are executed on import, not persisted",
+        // AB#6295: acknowledgements of the author are build and publish-time metadata (the publish gate reads them
+        // from the catalog JSON), a tenant never needs them.
+        ["$.compatibility"] = "compatibility.acknowledge is build and publish-time metadata, not needed in tenants",
 
         // PRE-EXISTING gap found by this gate (not CK v2): CkType.Indexes is persisted on the entity and consumed
         // from there (UpdateIndexAsync / AnalyseIndex), but TryLookupCkModelAsync has never mapped it back, so the

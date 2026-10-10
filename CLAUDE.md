@@ -1396,7 +1396,10 @@ above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before a
   C# twin) → import → `TryLookupCkModelAsync` → `CkModelReflectionComparer`, a walk by **reflection over every public
   property** of the DTO graph (runtime types of both sides; DTO = class name ending in `Dto`/`Root`; DTO collections
   matched by identity, scalar collections in order). Intentionally unpersisted properties are in
-  `CkModelReflectionComparer.AllowList` with a reason: `CkCompiledModelRoot.Migrations` (executed on import) and the
+  `CkModelReflectionComparer.AllowList` with a reason: `CkCompiledModelRoot.Migrations` (executed on import),
+  `CkCompiledModelRoot.Compatibility` (AB#6295: the author's `compatibility.acknowledge` entries are build and publish-time
+  metadata, the publish gate reads them from the catalog JSON; also listed in `CkModelJsonComparer.RoundTripIgnoredPaths`;
+  the C# kitchen sink carries a value, so removing the entry turns the gate red) and the
   pre-existing `CkTypeDto.Indexes` gap. `UnpersistedDtoProperty_FailsTheGate` is the automated mutation check (a type
   DTO subclass with an unknown member goes through the real import and is reported); removing a read-back mapping
   (e.g. `Visibility = t.Visibility`) fails the gate with the property path (verified).

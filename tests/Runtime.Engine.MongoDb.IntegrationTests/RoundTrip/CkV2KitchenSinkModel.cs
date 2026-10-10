@@ -38,6 +38,12 @@ internal static class CkV2KitchenSinkModel
             ModelId = id,
             Description = "CK language 2 kitchen sink",
             CkLanguage = 2,
+            // AB#6295: acknowledgements are publish-time metadata; the reflection gate lists the property in its
+            // AllowList, and this value proves the allow-list entry (without it the gate reports the property).
+            Compatibility = new CkCompatibilityDto
+            {
+                Acknowledge = [new CkAcknowledgeDto { Change = "TypeAttribute:Account-1/PasswordHash#Modified:access", Reason = "kitchen sink" }]
+            },
             Dependencies = [systemId],
             // Phase 1: range-retaining dependency (F1.1-S2) and the minEngineVersion the compiler writes for v2.
             DependencyRanges =
