@@ -1,0 +1,26 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+# AB#6313 / AB#6395 end-to-end coverage of the seed value guard (SeedValueGuardBlueprintIntegrationTests).
+# None of these carries an ownership marker (= SeedOwned), the shape the guard exists for.
+attributes:
+  - id: GuardText
+    description: Plain string, SeedOwned.
+    valueType: String
+  - id: GuardConfig
+    description: String that carries a serialized JSON configuration (the AB#6310 AdapterConfiguration shape).
+    valueType: String
+  - id: GuardTags
+    description: String array, SeedOwned.
+    valueType: StringArray
+  - id: GuardCount
+    description: Integer without a CK default, SeedOwned.
+    valueType: Int
+  - id: GuardLevel
+    description: Integer with a CK default of 5 (AB#6395).
+    valueType: Int
+    defaultValues:
+      - 5
+  - id: GuardMode
+    description: Integer with a CK default of 3 (AB#6395).
+    valueType: Int
+    defaultValues:
+      - 3

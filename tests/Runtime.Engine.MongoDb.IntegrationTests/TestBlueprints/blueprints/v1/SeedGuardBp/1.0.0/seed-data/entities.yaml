@@ -1,0 +1,21 @@
+$schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+dependencies:
+  - System-2.0.0
+  - Test-1.0.0
+entities:
+  - rtId: 507f1f77bcf86cd799439101
+    ckTypeId: Test/SeedGuardEntity
+    rtWellKnownName: GuardEntity
+    attributes:
+      - id: Test/GuardText
+        value: seed v1
+      - id: Test/GuardConfig
+        value: '{"Host":"eda.example.org","User":"svc-eda","Password":"seed-password","Port":8443,"Endpoint":"https://eda.example.org/api/v2"}'
+      - id: Test/GuardTags
+        value: ["a", "b"]
+      - id: Test/GuardCount
+        value: 4
+      - id: Test/GuardLevel
+        value: 9
+      - id: Test/GuardMode
+        value: 3

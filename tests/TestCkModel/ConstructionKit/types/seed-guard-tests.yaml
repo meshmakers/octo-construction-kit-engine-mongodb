@@ -1,0 +1,26 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+# AB#6313: entity with SeedOwned attributes of every shape the seed value guard distinguishes.
+types:
+  - typeId: SeedGuardEntity
+    derivedFromCkTypeId: ${System}/Entity
+    isFinal: false
+    isAbstract: false
+    attributes:
+      - id: ${this}/GuardText
+        name: GuardText
+        isOptional: true
+      - id: ${this}/GuardConfig
+        name: GuardConfig
+        isOptional: true
+      - id: ${this}/GuardTags
+        name: GuardTags
+        isOptional: true
+      - id: ${this}/GuardCount
+        name: GuardCount
+        isOptional: true
+      - id: ${this}/GuardLevel
+        name: GuardLevel
+        isOptional: true
+      - id: ${this}/GuardMode
+        name: GuardMode
+        isOptional: true
