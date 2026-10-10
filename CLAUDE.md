@@ -1332,6 +1332,10 @@ a range-retaining dependent stays `Available` across an additive minor of its de
 exact-pinned one goes `ResolveFailed`, the rebuilt cache binds to the new version, and a downgrade below the
 floor goes `ResolveFailed` with the range/floor/installed description. The test bumps a test base model, not
 System, to stay independent of the System the test host embeds.
+`UsedSurface_PersistsThroughTenantImport_ExactPinnedModelHasNone` (AB#4472 / AB#6273) imports a range-retaining
+dependent with `usedSurface` / `usedSurfaceHash` per range through `ITenantContext.ImportCkModelAsync` (the bot-services
+ImportCk path) and checks the `CkModel` document (list verbatim, hash recomputable) and the typed read-back; the
+exact-pinned twin has no such field.
 
 ### CK v2 Meta-Model Persistence — interfaces, access, methods, ckLanguage, visibility, derivable, interface extends/associations/methods/deprecated (AB#5667 / AB#5668 / AB#5669 / AB#5914 / AB#5915)
 

@@ -7,6 +7,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
+using Meshmakers.Octo.ConstructionKit.Engine.Resolvers.RangeRetention;
 using Meshmakers.Octo.ConstructionKit.Engine.Resolvers.Repository;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
@@ -113,6 +114,63 @@ public class CkRangeRetentionImportTests(CkModelImportMigrationFixture fixture)
             var description = DatabaseCkModelRepository.DescribeUnmetDependencies(
                 models.Single(m => m.Id.Name == "FloorDep"), models);
             Assert.Equal("RrBase-[1.0,2.0) (floor 1.1.0): installed RrBase-1.0.0", description);
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(systemContext, tenantId);
+        }
+    }
+
+    /// <summary>
+    ///     AB#4472 / AB#6273 (usedSurface E2E): the usedSurface list and hash a range-retaining model carries per
+    ///     dependency range reach the tenant's <c>CkModel</c> document through the real tenant import
+    ///     (<c>ITenantContext.ImportCkModelAsync</c>, the code path bot-services runs for ImportCk) and read back
+    ///     verbatim; an exact-pinned (v1) model document carries no such field.
+    /// </summary>
+    [Fact]
+    public async Task UsedSurface_PersistsThroughTenantImport_ExactPinnedModelHasNone()
+    {
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = $"rangeuse{Guid.NewGuid():N}"[..20];
+        try
+        {
+            await CreateChildAsync(tenantId);
+            var tenant = await GetChildAsync(tenantId);
+            var system = await GetInstalledSystemIdAsync(tenant);
+            var database = GetTenantDatabase(tenantId);
+
+            await tenant.ImportCkModelAsync(BuildBase("RrBase-1.0.0", system, withExtra: false));
+            var rangeDependent = BuildDependent("UseDep-1.0.0", "RrBase-1.0.0", system, rangeRetaining: true);
+            CkUsedSurfaceCollector.Apply(rangeDependent, null);
+            var exactDependent = BuildDependent("UseExact-1.0.0", "RrBase-1.0.0", system, rangeRetaining: false);
+            await tenant.ImportCkModelAsync(rangeDependent);
+            await tenant.ImportCkModelAsync(exactDependent);
+            Assert.Equal("UseDep-1.0.0=1, UseExact-1.0.0=1", await StatesAsync(database, "UseDep", "UseExact"));
+
+            var expected = rangeDependent.DependencyRanges!.ToDictionary(r => r.Range.Name);
+            Assert.Equal(["RrBase@1/Thing-1"], expected["RrBase"].UsedSurface);
+            Assert.Equal([$"System@{system.Version.Major}/Name-1"], expected["System"].UsedSurface);
+
+            var document = await SingleAsync(database, "CkModel", "_id", "UseDep-1.0.0");
+            foreach (var range in document["dependencyRanges"].AsBsonArray.Select(r => r.AsBsonDocument))
+            {
+                var name = range["range"].AsString.Split('-')[0];
+                Assert.Equal(expected[name].UsedSurface, range["usedSurface"].AsBsonArray.Select(v => v.AsString));
+                Assert.Equal(expected[name].UsedSurfaceHash, range["usedSurfaceHash"].AsString);
+                Assert.Equal(CkUsedSurfaceCollector.Hash(expected[name].UsedSurface!),
+                    range["usedSurfaceHash"].AsString);
+            }
+
+            var exactDocument = await SingleAsync(database, "CkModel", "_id", "UseExact-1.0.0");
+            Assert.False(exactDocument.Contains("dependencyRanges"));
+            Assert.DoesNotContain("usedSurface", exactDocument.ToJson(), StringComparison.Ordinal);
+
+            // Read back through the typed repository entity (the path the runtime and the catalog export use).
+            var typed = await database.GetCollection<CkModel>("CkModel")
+                .Find(Builders<CkModel>.Filter.Eq("_id", "UseDep-1.0.0"))
+                .SingleAsync(TestContext.Current.CancellationToken);
+            var dto = typed.DependencyRanges!.Single(d => d.Range.StartsWith("RrBase-", StringComparison.Ordinal));
+            Assert.Equal(["RrBase@1/Thing-1"], dto.UsedSurface);
         }
         finally
         {
