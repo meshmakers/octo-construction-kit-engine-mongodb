@@ -39,6 +39,9 @@ public class SeedValueGuardBlueprintIntegrationTests(BlueprintServiceFixture fix
     private const string V1Config =
         "{\"Host\":\"eda.example.org\",\"User\":\"svc-eda\",\"Password\":\"seed-password\",\"Port\":8443,\"Endpoint\":\"https://eda.example.org/api/v2\"}";
 
+    // What 2.0.0 seeds for GuardConfig: an empty skeleton.
+    private const string V2Config = "{\"Host\":\"\",\"User\":\"\",\"Password\":\"\",\"Port\":0,\"Endpoint\":\"\"}";
+
     public static TheoryData<BlueprintUpdateMode> UpdateModes => new() { BlueprintUpdateMode.Merge, BlueprintUpdateMode.Full };
 
     /// <summary>
@@ -80,8 +83,8 @@ public class SeedValueGuardBlueprintIntegrationTests(BlueprintServiceFixture fix
             ReasonOf(result.BlankedAttributes, "GuardLevel").Should().Be("ResetToDefault");
             var level = result.BlankedAttributes.Single(b => b.AttributeName == "GuardLevel");
             level.IncomingSummary.Should().Be("default (5)");
-            result.BlankedAttributes.Select(b => b.RtId).Distinct().Should().ContainSingle(entity.RtId.ToString());
-            result.BlankedAttributes.Select(b => b.CkTypeId).Distinct().Should().ContainSingle();
+            result.BlankedAttributes.Select(b => b.RtId).Distinct().Single().Should().Be(entity.RtId.ToString());
+            result.BlankedAttributes.Select(b => b.CkTypeId).Distinct().Single().Should().Contain("SeedGuardEntity");
         }
         finally
         {
@@ -208,12 +211,18 @@ public class SeedValueGuardBlueprintIntegrationTests(BlueprintServiceFixture fix
                 new BlueprintUpdateOptions { AllowBlanking = true }, ct);
 
             result.Success.Should().BeTrue(string.Join("; ", result.Errors));
-            result.BlankedAttributes.Should().NotBeEmpty().And.OnlyContain(b => b.AppliedOnUpdate);
+            result.BlankedAttributes.Select(b => b.AttributeName).Should().BeEquivalentTo(
+                ["GuardText", "GuardConfig", "GuardTags", "GuardCount", "GuardLevel"],
+                "exactly the five guarded shapes are reported (GuardMode stays at its default and is not)");
+            result.BlankedAttributes.Should().OnlyContain(b => b.AppliedOnUpdate);
 
             var entity = await GetGuardEntityAsync(tenantId);
             Show(entity, "GuardText").Should().BeEmpty();
+            Show(entity, "GuardConfig").Should().Be(V2Config, "the seed's empty JSON skeleton replaces the configuration once confirmed");
             Show(entity, "GuardTags").Should().BeEmpty();
             Show(entity, "GuardCount").Should().BeEmpty("omitted attribute without default is cleared once confirmed");
+            Show(entity, "GuardLevel").Should().Be("5", "an omitted attribute with a CK default is reset to the default once confirmed");
+            Show(entity, "GuardMode").Should().Be("3");
         }
         finally
         {
