@@ -54,7 +54,9 @@ types:
         authorization:
           roles: [ UserManagement ]
   # Inherits Named from Thing and implements Coded itself.
+  # AB#6334: internal — it implements the internal Coded-1 and uses the internal role Link.
   - typeId: Gadget
+    visibility: Internal
     derivedFromCkTypeId: ${this}/Thing
     implements:
       - ${this}/Coded-1
@@ -80,3 +82,6 @@ types:
         name: Mode
         isOptional: true
         access: ReadOnly
+      - id: ${this}/Hint
+        name: Hint
+        isOptional: true

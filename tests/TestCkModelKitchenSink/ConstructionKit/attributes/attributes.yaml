@@ -4,8 +4,11 @@ attributes:
     valueType: String
   - id: Alias
     valueType: String
-    visibility: Internal
     securitySensitive: true
+  # AB#6334 (129): internal elements are only referenced by internal ones (Hint by Widget).
+  - id: Hint
+    valueType: String
+    visibility: Internal
   - id: Code
     valueType: String
   - id: Secret

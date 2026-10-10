@@ -2033,6 +2033,9 @@ Thing (inherits Named) and implements Coded, unrelated `Widget` implements Named
 record (`Address`) assignments, and `ReadWrite` / `ReadOnly` / `MethodOnly` on the association role `Link` (Hidden is
 not allowed on association roles, engine rule 108); methods `ChangePassword-2` (every field),
 `Reindex-1` (static) and `Ping-1` (minimal) on Thing. Extend it whenever a new meta-model field is added.
+Since AB#6334 (message 129) internal elements may only be referenced by internal ones: `Gadget`, `Widget`, `Coded-1`,
+`Labeled-1` and `Legacy-1` are internal, and the internal attribute `Hint` (assigned by Widget) and the unreferenced
+internal record `Memo` keep every visibility kind covered (C# twin `CkV2KitchenSinkModel` likewise).
 
 ### Migration Test Data
 

@@ -85,12 +85,12 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
             Assert.True(compiled.Interfaces!.Single(i => i.InterfaceId.Name == "Legacy").Deprecated);
             Assert.NotNull(compiled.Types!.Single(t => t.TypeId.Name == "Thing").Derivable);
             Assert.NotNull(compiled.Types!.Single(t => t.TypeId.Name == "Widget").Visibility);
-            Assert.NotNull(compiled.Records!.Single().Derivable);
+            Assert.NotNull(compiled.Records!.Single(r => r.RecordId.Name == "Address").Derivable);
             Assert.NotNull(compiled.Types!.Single(t => t.TypeId.Name == "Gadget").Associations!.Single().TargetCkInterfaceId);
             Assert.NotNull(compiled.MinEngineVersion);
             Assert.Equal(3, compiled.Types!.Count(t => t.Implements is { Count: > 0 }));
             Assert.Equal(3, compiled.Types!.Single(t => t.TypeId.Name == "Thing").Methods!.Count);
-            Assert.Equal(3, compiled.Records!.Single().Attributes!.Count(a => a.Access != null));
+            Assert.Equal(3, compiled.Records!.Single(r => r.RecordId.Name == "Address").Attributes!.Count(a => a.Access != null));
 
             await AssertRoundTripAsync(tenantId, compiled);
         });

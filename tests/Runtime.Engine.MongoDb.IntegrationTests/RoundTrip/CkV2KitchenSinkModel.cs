@@ -56,7 +56,9 @@ internal static class CkV2KitchenSinkModel
             Attributes =
             [
                 new CkAttributeDto { AttributeId = new CkAttributeId("Name-1"), ValueType = AttributeValueTypesDto.String },
-                new CkAttributeDto { AttributeId = new CkAttributeId("Alias-1"), ValueType = AttributeValueTypesDto.String, Visibility = CkVisibilityDto.Internal, SecuritySensitive = true },
+                new CkAttributeDto { AttributeId = new CkAttributeId("Alias-1"), ValueType = AttributeValueTypesDto.String, SecuritySensitive = true },
+                // AB#6334 (129): internal elements are only referenced by internal ones (Hint by Widget).
+                new CkAttributeDto { AttributeId = new CkAttributeId("Hint-1"), ValueType = AttributeValueTypesDto.String, Visibility = CkVisibilityDto.Internal },
                 new CkAttributeDto { AttributeId = new CkAttributeId("Code-1"), ValueType = AttributeValueTypesDto.String },
                 new CkAttributeDto
                 {
@@ -87,7 +89,6 @@ internal static class CkV2KitchenSinkModel
                 new CkRecordDto
                 {
                     RecordId = new CkRecordId("Address-1"),
-                    Visibility = CkVisibilityDto.Internal,
                     Derivable = CkDerivableDto.Any,
                     Attributes =
                     [
@@ -96,6 +97,13 @@ internal static class CkV2KitchenSinkModel
                         Assign("Code", CkAttributeAccessDto.MethodOnly),
                         Assign("Secret", CkAttributeAccessDto.Hidden)
                     ]
+                },
+                // AB#6334: an internal record (Address is the value of a public method parameter, so it is public).
+                new CkRecordDto
+                {
+                    RecordId = new CkRecordId("Memo-1"),
+                    Visibility = CkVisibilityDto.Internal,
+                    Attributes = [Assign("Name", null)]
                 }
             ],
             Interfaces =
@@ -123,6 +131,8 @@ internal static class CkV2KitchenSinkModel
                 new CkInterfaceDto
                 {
                     InterfaceId = new CkInterfaceId("Labeled-1"),
+                    // AB#6334/AB#6335: internal — it uses the internal role Link and declares an internal method.
+                    Visibility = CkVisibilityDto.Internal,
                     Extends = [Interface("Named")],
                     Attributes =
                     [
@@ -143,6 +153,7 @@ internal static class CkV2KitchenSinkModel
                 new CkInterfaceDto
                 {
                     InterfaceId = new CkInterfaceId("Legacy-1"),
+                    Visibility = CkVisibilityDto.Internal,
                     Deprecated = true,
                     Extends = [Interface("Labeled")],
                     Methods = [new CkMethodDto { MethodId = "Tag-1", Kind = CkMethodKindDto.Static }]
@@ -188,6 +199,8 @@ internal static class CkV2KitchenSinkModel
                 new CkCompiledTypeDto
                 {
                     TypeId = new CkTypeId("Gadget-1"),
+                    // AB#6334: internal — it implements the internal Coded-1 and uses the internal role Link.
+                    Visibility = CkVisibilityDto.Internal,
                     IsCollectionRoot = true,
                     DerivedFromCkTypeId = new CkId<CkTypeId>(id, new CkTypeId("Thing-1")),
                     Implements = [Interface("Coded")],
@@ -214,7 +227,8 @@ internal static class CkV2KitchenSinkModel
                     Attributes =
                     [
                         Assign("Name", null, isOptional: false),
-                        Assign("Mode", CkAttributeAccessDto.ReadOnly)
+                        Assign("Mode", CkAttributeAccessDto.ReadOnly),
+                        Assign("Hint", null)
                     ]
                 }
             ]

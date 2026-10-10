@@ -14,7 +14,9 @@ interfaces:
       - id: ${this}/Code
         name: Code
   # Phase 1 interface completion (F1.1-S5): extends, association and method members, deprecated.
+  # AB#6334/AB#6335: internal — it uses the internal role Link and declares an internal method.
   - interfaceId: Labeled-1
+    visibility: Internal
     extends:
       - ${this}/Named-1
     attributes:
@@ -30,6 +32,7 @@ interfaces:
       - methodId: Relabel-1
         visibility: Internal
   - interfaceId: Legacy-1
+    visibility: Internal
     deprecated: true
     extends:
       - ${this}/Labeled-1
