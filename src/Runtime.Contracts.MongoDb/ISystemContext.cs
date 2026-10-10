@@ -88,6 +88,30 @@ public interface ISystemContext : ITenantContext
     Task<ITenantRepository?> TryFindTenantRepositoryAsync(string tenantId);
 
     /// <summary>
+    /// Lightweight repository access for a tenant that is already known from the registry (AB#6308).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Takes the tenant's database name from <paramref name="tenant"/> (an entry read via
+    /// <see cref="GetAllTenantsAsync"/> or <see cref="ITenantContext.TryGetChildTenantAsync"/>) and builds
+    /// the repository without any I/O: no <see cref="IsSystemTenantExistingAsync"/> probe
+    /// (2x <c>listDatabases</c>, <c>listCollections</c>, system CK-model read), no registry lookup, no admin
+    /// session and none of the resolve-time side effects of <see cref="FindTenantRepositoryAsync"/>
+    /// (system / stream-data / service-managed CK-model imports, ownership stamp).
+    /// </para>
+    /// <para>
+    /// Use it for read paths that touch a handful of collections in many tenants per request, such as
+    /// token issuance or tenant discovery. Use <see cref="FindTenantRepositoryAsync"/> where the tenant must be
+    /// brought up to date or its existence verified. The caller is trusted for <paramref name="tenant"/>: it
+    /// must come from the registry, it is not verified here. A registered tenant whose database or CK model is
+    /// missing fails on the first query, like any other repository access.
+    /// </para>
+    /// </remarks>
+    /// <param name="tenant">A registered tenant, including its database name (the system tenant is supported).</param>
+    /// <returns>The tenant repository, never null.</returns>
+    ITenantRepository GetRegisteredTenantRepository(OctoTenant tenant);
+
+    /// <summary>
     /// Ensures that the system construction kit model is imported into the tenant with the correct version.
     /// </summary>
     /// <returns>></returns>

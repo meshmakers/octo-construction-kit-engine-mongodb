@@ -240,6 +240,21 @@ public class SystemContext : TenantContext, ISystemContext
         return tenantContext.GetTenantRepository();
     }
 
+    /// <inheritdoc />
+    public ITenantRepository GetRegisteredTenantRepository(OctoTenant tenant)
+    {
+        ArgumentNullException.ThrowIfNull(tenant);
+
+        if (tenant.TenantId.NormalizeString() == TenantId)
+        {
+            return GetTenantRepository();
+        }
+
+        // Same detached construction the adapter-pool path uses (AB#4924): a TenantContext is only wiring,
+        // the repository it hands out opens connections lazily. Nothing here touches MongoDB.
+        return CreateDetachedTenantContext(tenant.TenantId, tenant.DatabaseName).GetTenantRepository();
+    }
+
     public async Task<ITenantRepository?> TryFindTenantRepositoryAsync(string tenantId)
     {
         var tenantContext = await TryFindTenantContextAsync(tenantId);
