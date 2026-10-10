@@ -121,6 +121,12 @@ round-trip gate lives in `RoundTrip/` (`CkMetaModelRoundTripTests`, `CkMetaModel
 - Tests inside one collection run serially; collections run concurrently. The wall clock is the
   longest collection chain plus fixture setup, not the sum of all tests. Today the critical path is
   `BlueprintServiceIntegrationTests` (~31 tests, one collection) and `DirectedRoleDeepGraphTests`.
+- `SeedValueGuardBlueprintIntegrationTests` (AB#6313/AB#6395, `TestBlueprints/.../SeedGuardBp`, CK type
+  `Test/SeedGuardEntity`) proves the engine's seed value guard against a real tenant: a blueprint update
+  with empty/omitted seed values keeps non-empty tenant values (Merge and Full), reports them, applies them
+  only with `AllowBlanking`, and an omitted attribute at its CK default is not reported. It has its own
+  collection. Adding CK elements to `TestCkModel` also requires the golden
+  `testData/ckv2-golden-main-v1-ck-documents.txt` to be extended (`CkV2CompatibilityTests`).
 - Put a new long-running class into its own collection (own fixture or a fixture shared only where
   the state really is shared) instead of appending to the longest one; a new fixture costs one tenant
   setup (~2-5 s locally, 15-110 s on a loaded agent).

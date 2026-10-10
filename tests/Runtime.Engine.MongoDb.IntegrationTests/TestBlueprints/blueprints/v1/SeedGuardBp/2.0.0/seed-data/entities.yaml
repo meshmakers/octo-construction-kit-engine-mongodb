@@ -1,0 +1,15 @@
+$schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+dependencies:
+  - System-2.0.0
+  - Test-1.0.0
+entities:
+  - rtId: 507f1f77bcf86cd799439101
+    ckTypeId: Test/SeedGuardEntity
+    rtWellKnownName: GuardEntity
+    attributes:
+      - id: Test/GuardText
+        value: ""
+      - id: Test/GuardConfig
+        value: '{"Host":"","User":"","Password":"","Port":0,"Endpoint":""}'
+      - id: Test/GuardTags
+        value: []
