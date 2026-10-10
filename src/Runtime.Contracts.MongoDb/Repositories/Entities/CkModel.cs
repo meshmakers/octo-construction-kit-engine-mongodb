@@ -76,10 +76,27 @@ public class CkModelDependency
     /// </summary>
     public string Floor { get; init; } = null!;
 
+    /// <summary>
+    ///     CK v2 (AB#4472): the dependency elements and members the model uses; <c>null</c> (absent from the document)
+    ///     for models compiled before usedSurface existed.
+    /// </summary>
+    public List<string>? UsedSurface { get; init; }
+
+    /// <summary>CK v2 (AB#4472): <c>sha256:&lt;hex&gt;</c> over <see cref="UsedSurface" />.</summary>
+    public string? UsedSurfaceHash { get; init; }
+
     /// <summary>Maps a DTO to the persisted form.</summary>
     public static CkModelDependency FromDto(CkModelDependencyDto dto) =>
-        new() { Range = dto.Range.FullName, Floor = dto.Floor };
+        new()
+        {
+            Range = dto.Range.FullName, Floor = dto.Floor, UsedSurface = dto.UsedSurface?.ToList(),
+            UsedSurfaceHash = dto.UsedSurfaceHash
+        };
 
     /// <summary>Maps the persisted form back to the DTO.</summary>
-    public CkModelDependencyDto ToDto() => new() { Range = new CkModelIdVersionRange(Range), Floor = Floor };
+    public CkModelDependencyDto ToDto() => new()
+    {
+        Range = new CkModelIdVersionRange(Range), Floor = Floor, UsedSurface = UsedSurface?.ToList(),
+        UsedSurfaceHash = UsedSurfaceHash
+    };
 }

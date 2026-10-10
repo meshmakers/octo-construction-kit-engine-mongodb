@@ -281,6 +281,26 @@ public class CkMetaModelLegacyDocumentTests
     }
 
     [Fact]
+    public void UsedSurface_RoundTripsVerbatim_AndLegacyDependencyDocumentsReadAsNull()
+    {
+        // CK v2 (AB#4472)
+        var dependency = new CkModelDependency
+        {
+            Range = "System-[2.5,3.0)", Floor = "2.5.0", UsedSurface = ["System@2/Entity-1", "System@2/Entity-1.Name"],
+            UsedSurfaceHash = "sha256:" + new string('a', 64)
+        };
+        var back = BsonSerializer.Deserialize<CkModelDependency>(dependency.ToBsonDocument());
+        Assert.Equal(dependency.UsedSurface, back.UsedSurface);
+        Assert.Equal(dependency.UsedSurfaceHash, back.UsedSurfaceHash);
+
+        var legacy = new BsonDocument { ["range"] = "System-[2.5,3.0)", ["floor"] = "2.5.0" };
+        var legacyBack = BsonSerializer.Deserialize<CkModelDependency>(legacy);
+        Assert.Null(legacyBack.UsedSurface);
+        Assert.Null(legacyBack.UsedSurfaceHash);
+        Assert.DoesNotContain("usedSurface", new CkModelDependency { Range = "System-[2.5,3.0)", Floor = "2.5.0" }.ToBsonDocument().Names);
+    }
+
+    [Fact]
     public void SecuritySensitive_RoundTripsVerbatim_AndIsAbsentWhenUndeclared()
     {
         // CK v2 (AB#6269)

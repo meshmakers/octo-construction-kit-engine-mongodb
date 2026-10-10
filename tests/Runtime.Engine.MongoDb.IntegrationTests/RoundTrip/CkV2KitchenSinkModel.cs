@@ -46,7 +46,10 @@ internal static class CkV2KitchenSinkModel
                 {
                     Range = new CkModelIdVersionRange(systemId.Name,
                         $"[{systemId.Version.Major}.0,{systemId.Version.Major + 1}.0)"),
-                    Floor = systemId.Version.ToString()
+                    Floor = systemId.Version.ToString(),
+                    // AB#4472: non-empty usedSurface so the reflection gate covers it
+                    UsedSurface = [$"{systemId.Name}@{systemId.Version.Major}/Entity-1", $"{systemId.Name}@{systemId.Version.Major}/Name-1"],
+                    UsedSurfaceHash = "sha256:" + new string('0', 64)
                 }
             ],
             MinEngineVersion = "3.4.0",

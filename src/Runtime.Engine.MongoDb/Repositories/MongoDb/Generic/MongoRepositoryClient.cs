@@ -575,6 +575,14 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                 new NullableSerializer<Guid>(new GuidSerializer(GuidRepresentation.Standard)));
         });
 
+        // CK v2 (AB#4472): usedSurface members are absent for models compiled before them.
+        BsonClassMap.RegisterClassMap<CkModelDependency>(cm =>
+        {
+            cm.AutoMap();
+            cm.MapMember(c => c.UsedSurface).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.UsedSurfaceHash).SetIgnoreIfNull(true);
+        });
+
         BsonClassMap.RegisterClassMap<CkModel>(cm =>
         {
             cm.SetIgnoreExtraElements(true);
