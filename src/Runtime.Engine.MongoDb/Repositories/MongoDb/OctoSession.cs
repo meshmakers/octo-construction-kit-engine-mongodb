@@ -16,6 +16,8 @@ internal abstract class OctoSession : IOctoSessionInternal
     private bool _isSessionActive;
     private bool _isSessionStarted;
     private bool _isDisposed;
+    private List<Func<Task>> _afterCommit = new();
+    private List<Func<Task>> _afterRollback = new();
 
     internal OctoSession(ILogger<OctoSession> logger, IClientSessionHandle clientSessionHandle, string applicationName,
         RtSecurityContext? securityContext = null)
@@ -43,6 +45,8 @@ internal abstract class OctoSession : IOctoSessionInternal
                 try
                 {
                     SessionHandle.AbortTransaction();
+                    _isSessionActive = false;
+                    RunCallbacksAsync(TakeCallbacks(_afterRollback), "rollback").GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {
@@ -76,6 +80,50 @@ internal abstract class OctoSession : IOctoSessionInternal
         _isSessionActive = true;
     }
 
+    public bool IsTransactionActive => _isSessionActive;
+
+    public void RegisterTransactionCallbacks(Func<Task>? afterCommit, Func<Task>? afterRollback = null)
+    {
+        if (!_isSessionActive)
+        {
+            throw SessionOperationException.SessionNotActive();
+        }
+
+        if (afterCommit != null)
+        {
+            _afterCommit.Add(afterCommit);
+        }
+
+        if (afterRollback != null)
+        {
+            _afterRollback.Add(afterRollback);
+        }
+    }
+
+    private static List<Func<Task>> TakeCallbacks(List<Func<Task>> source)
+    {
+        return source.ToList();
+    }
+
+    private async Task RunCallbacksAsync(IReadOnlyList<Func<Task>> callbacks, string phase)
+    {
+        _afterCommit = new List<Func<Task>>();
+        _afterRollback = new List<Func<Task>>();
+        foreach (var callback in callbacks)
+        {
+            try
+            {
+                await callback().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // The database state is already final. A failing side effect (e.g. GridFS cleanup) must not
+                // turn a committed transaction into an error; leftover bytes are orphans, not data loss.
+                _logger.LogWarning(ex, "[{ApplicationName}] After-{Phase} action failed", ApplicationName, phase);
+            }
+        }
+    }
+
     public async Task CommitTransactionAsync()
     {
         _logger.LogDebug("[{ApplicationName}, txnNumber {Id}] Commit transaction", ApplicationName,
@@ -88,6 +136,7 @@ internal abstract class OctoSession : IOctoSessionInternal
 
         await SessionHandle.CommitTransactionAsync();
         _isSessionActive = false;
+        await RunCallbacksAsync(TakeCallbacks(_afterCommit), "commit").ConfigureAwait(false);
     }
 
     public async Task AbortTransactionAsync()
@@ -103,6 +152,7 @@ internal abstract class OctoSession : IOctoSessionInternal
 
         _isSessionActive = false;
         await SessionHandle.AbortTransactionAsync();
+        await RunCallbacksAsync(TakeCallbacks(_afterRollback), "rollback").ConfigureAwait(false);
     }
 
     public IClientSessionHandle SessionHandle { get; }
