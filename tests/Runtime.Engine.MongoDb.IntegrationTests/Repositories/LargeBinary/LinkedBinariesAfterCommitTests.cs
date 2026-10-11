@@ -110,10 +110,9 @@ public class LinkedBinariesAfterCommitTests(ImportTestCkModelFixture fixture)
         var stored = await GetEntityAsync(tenantRepository, entity.RtId);
         var newBinaryId = stored!.Binary.BinaryId!.Value;
         Assert.Equal(ProductsSize, await ReadSizeAsync(tenantRepository, newBinaryId));
-        if (newBinaryId != oldBinaryId)
-        {
-            Assert.False(await BinaryExistsAsync(tenantRepository, oldBinaryId), "old bytes must be gone after commit");
-        }
+        // a full replace (delete + upload) always yields a new BinaryId
+        Assert.NotEqual(oldBinaryId, newBinaryId);
+        Assert.False(await BinaryExistsAsync(tenantRepository, oldBinaryId), "old bytes must be gone after commit");
     }
 
     [Fact]
@@ -182,16 +181,14 @@ public class LinkedBinariesAfterCommitTests(ImportTestCkModelFixture fixture)
         var oldBinaryId = entity.Binary.BinaryId!.Value;
 
         var update = new RtBinaryEntity { Binary = ProductsBinary(oldBinaryId) };
-        using (var session = await tenantRepository.GetSessionAsync())
-        {
-            session.StartTransaction();
-            await tenantRepository.UpdateOneRtEntityByIdAsync(session, entity.RtId, update);
-
-            // Fault injection: the Mongo transaction commits, but the process dies before the after-commit
-            // callbacks run (the session never executes OctoSession.CommitTransactionAsync's cleanup).
-            await ((IOctoSessionInternal)session).SessionHandle.CommitTransactionAsync(TestContext.Current.CancellationToken);
-            // Disposal of a session whose transaction is already committed must not run rollback cleanup.
-        }
+        // Fault injection: the Mongo transaction commits, then the process "dies" before any after-commit callback
+        // runs. This is modelled deliberately by committing the raw driver session and ABANDONING the OctoSession
+        // without disposing it - nothing of ours runs afterwards, exactly as after a crash. (Disposing would abort a
+        // committed transaction, which throws and is swallowed; that is not what a crash does.)
+        var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+        await tenantRepository.UpdateOneRtEntityByIdAsync(session, entity.RtId, update);
+        await ((IOctoSessionInternal)session).SessionHandle.CommitTransactionAsync(TestContext.Current.CancellationToken);
 
         var newBinaryId = update.Binary.BinaryId!.Value;
         var stored = await GetEntityAsync(tenantRepository, entity.RtId);
@@ -230,6 +227,123 @@ public class LinkedBinariesAfterCommitTests(ImportTestCkModelFixture fixture)
         }
 
         Assert.Equal(CustomersSize, await ReadSizeAsync(tenantRepository, oldBinaryId));
+    }
+
+    [Fact]
+    public async Task GuardedUpdate_WithLinkedBinary_IsRefused_AndLeavesTheBytesUntouched()
+    {
+        var tenantRepository = fixture.GetSystemContext().GetTenantRepository();
+        var entity = await InsertCommittedAsync(tenantRepository);
+        var oldBinaryId = entity.Binary.BinaryId!.Value;
+
+        var update = new RtBinaryEntity { Binary = ProductsBinary(oldBinaryId) };
+        using (var session = await tenantRepository.GetSessionAsync())
+        {
+            session.StartTransaction();
+            await Assert.ThrowsAsync<RuntimeRepositoryException>(() => tenantRepository.ApplyChangesAsync(session,
+                [EntityUpdateInfo<RtEntity>.CreateConditionalUpdate(entity.ToRtEntityId(), update,
+                    new AttributeNewerThanGuard("RtChangedDateTime", DateTime.UtcNow))],
+                new OperationResult()));
+            await session.CommitTransactionAsync();
+        }
+
+        Assert.Equal(CustomersSize, await ReadSizeAsync(tenantRepository, oldBinaryId));
+        var stored = await GetEntityAsync(tenantRepository, entity.RtId);
+        Assert.Equal(oldBinaryId, stored!.Binary.BinaryId);
+    }
+
+    [Fact]
+    public async Task Update_WithStaleBinaryId_StoresOwnerMetadata_SoTheEntityDeleteFindsTheBytes()
+    {
+        var tenantRepository = fixture.GetSystemContext().GetTenantRepository();
+        var entity = await InsertCommittedAsync(tenantRepository);
+        var staleBinaryId = entity.Binary.BinaryId!.Value;
+
+        // another session replaces the bytes first ...
+        await UpdateCommittedAsync(tenantRepository, entity.RtId, staleBinaryId);
+        Assert.False(await BinaryExistsAsync(tenantRepository, staleBinaryId));
+
+        // ... then a stale client sends the old BinaryId again
+        var update = new RtBinaryEntity { Binary = ProductsBinary(staleBinaryId) };
+        using (var session = await tenantRepository.GetSessionAsync())
+        {
+            session.StartTransaction();
+            await tenantRepository.UpdateOneRtEntityByIdAsync(session, entity.RtId, update);
+            await session.CommitTransactionAsync();
+        }
+
+        var currentBinaryId = update.Binary.BinaryId!.Value;
+        Assert.Equal(ProductsSize, await ReadSizeAsync(tenantRepository, currentBinaryId));
+
+        // The new file carries the owner, so deleting the entity removes it (no permanent orphan).
+        using var deleteSession = await tenantRepository.GetSessionAsync();
+        deleteSession.StartTransaction();
+        await tenantRepository.DeleteOneRtEntityByRtIdAsync<RtBinaryEntity>(deleteSession, entity.RtId,
+            DeleteOptions.Erase);
+        await deleteSession.CommitTransactionAsync();
+        Assert.False(await BinaryExistsAsync(tenantRepository, currentBinaryId));
+    }
+
+    [Fact]
+    public async Task Update_WithBinaryIdOfAnotherEntity_IsRefused_AndLeavesThatBinaryUntouched()
+    {
+        var tenantRepository = fixture.GetSystemContext().GetTenantRepository();
+        var victim = await InsertCommittedAsync(tenantRepository);
+        var attacker = await InsertCommittedAsync(tenantRepository);
+        var foreignBinaryId = victim.Binary.BinaryId!.Value;
+
+        using (var session = await tenantRepository.GetSessionAsync())
+        {
+            session.StartTransaction();
+            await Assert.ThrowsAsync<EntityNotFoundException>(() => tenantRepository.UpdateOneRtEntityByIdAsync(
+                session, attacker.RtId, new RtBinaryEntity { Binary = ProductsBinary(foreignBinaryId) }));
+            await session.AbortTransactionAsync();
+        }
+
+        Assert.Equal(CustomersSize, await ReadSizeAsync(tenantRepository, foreignBinaryId));
+        var stored = await GetEntityAsync(tenantRepository, victim.RtId);
+        Assert.Equal(foreignBinaryId, stored!.Binary.BinaryId);
+    }
+
+    [Fact]
+    public async Task Update_RacingSessions_LoserConflictsAndItsStagedBytesAreDeleted()
+    {
+        var tenantRepository = fixture.GetSystemContext().GetTenantRepository();
+        var entity = await InsertCommittedAsync(tenantRepository);
+        var oldBinaryId = entity.Binary.BinaryId!.Value;
+
+        var winner = new RtBinaryEntity { Binary = ProductsBinary(oldBinaryId) };
+        var loser = new RtBinaryEntity { Binary = ProductsBinary(oldBinaryId) };
+        using var winnerSession = await tenantRepository.GetSessionAsync();
+        winnerSession.StartTransaction();
+        await tenantRepository.UpdateOneRtEntityByIdAsync(winnerSession, entity.RtId, winner);
+
+        // the second session writes the same entity while the first transaction is still open: write conflict
+        using (var loserSession = await tenantRepository.GetSessionAsync())
+        {
+            loserSession.StartTransaction();
+            await Assert.ThrowsAnyAsync<Exception>(() =>
+                tenantRepository.UpdateOneRtEntityByIdAsync(loserSession, entity.RtId, loser));
+        } // dispose = abort: the loser's staged bytes are removed
+
+        await winnerSession.CommitTransactionAsync();
+
+        var stored = await GetEntityAsync(tenantRepository, entity.RtId);
+        Assert.Equal(winner.Binary.BinaryId, stored!.Binary.BinaryId);
+        Assert.Equal(ProductsSize, await ReadSizeAsync(tenantRepository, winner.Binary.BinaryId!.Value));
+        Assert.False(await BinaryExistsAsync(tenantRepository, loser.Binary.BinaryId!.Value),
+            "the loser's staged bytes must be deleted");
+        Assert.False(await BinaryExistsAsync(tenantRepository, oldBinaryId));
+    }
+
+    private static async Task UpdateCommittedAsync(ITenantRepository tenantRepository, OctoObjectId rtId,
+        OctoObjectId binaryId)
+    {
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+        await tenantRepository.UpdateOneRtEntityByIdAsync(session, rtId,
+            new RtBinaryEntity { Binary = ProductsBinary(binaryId) });
+        await session.CommitTransactionAsync();
     }
 
     private sealed class ThrowingStream : MemoryStream

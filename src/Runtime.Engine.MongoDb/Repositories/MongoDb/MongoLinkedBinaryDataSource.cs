@@ -169,14 +169,20 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
     }
 
     protected override async Task<OctoObjectId> ReplaceLargeBinaryAsync(IOctoSession session, string filename,
-        string contentType, BinaryType binaryType,
+        string contentType, BinaryType binaryType, RtEntityId? rtEntityId,
         OctoObjectId? binaryId, Stream stream, CancellationToken cancellationToken = new())
     {
-        if (binaryId != null && binaryType == BinaryType.FileSystem &&
-            TryGetActiveTransaction(session) is { } transaction)
+        if (binaryId != null && binaryType == BinaryType.FileSystem && rtEntityId != null)
         {
-            return await ReplaceInTransactionAsync(transaction, filename, contentType, binaryType, binaryId.Value, stream,
-                cancellationToken);
+            // AB#6540: a BinaryId supplied by the caller must belong to the entity that is being updated.
+            var existing = await FindFileAsync(binaryId.Value.ToObjectId(), cancellationToken);
+            EnsureOwnedBy(existing, rtEntityId.Value, binaryId.Value);
+
+            if (TryGetActiveTransaction(session) is { } transaction)
+            {
+                return await ReplaceInTransactionAsync(transaction, filename, contentType, binaryType,
+                    rtEntityId.Value, existing, binaryId.Value, stream, cancellationToken);
+            }
         }
 
         BsonDocument meta;
@@ -201,6 +207,10 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
         else
         {
             meta = new BsonDocument();
+            if (rtEntityId != null)
+            {
+                meta[Constants.RtEntityId] = rtEntityId.Value.ToString(CultureInfo.InvariantCulture);
+            }
         }
 
         meta[Constants.ContentType] = contentType;
@@ -217,6 +227,28 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
     private static IOctoSessionInternal? TryGetActiveTransaction(IOctoSession session)
     {
         return session is IOctoSessionInternal { IsTransactionActive: true } internalSession ? internalSession : null;
+    }
+
+    private async Task<GridFSFileInfo?> FindFileAsync(ObjectId id, CancellationToken cancellationToken)
+    {
+        var cursor = await _bucket.FindAsync(Builders<GridFSFileInfo>.Filter.Eq("_id", id),
+            cancellationToken: cancellationToken);
+        return await cursor.FirstOrDefaultAsync(cancellationToken);
+    }
+
+    /// <summary>
+    ///     AB#6540: a file that exists and names another owner is refused (reported as not found, so that a forged
+    ///     id reveals nothing). A missing file (already replaced by another session) and a file without owner
+    ///     metadata (written before the owner was recorded) are accepted.
+    /// </summary>
+    private static void EnsureOwnedBy(GridFSFileInfo? file, RtEntityId rtEntityId, OctoObjectId binaryId)
+    {
+        if (file?.Metadata != null &&
+            file.Metadata.TryGetValue(Constants.RtEntityId, out var owner) && owner.IsString &&
+            owner.AsString != rtEntityId.ToString(CultureInfo.InvariantCulture))
+        {
+            throw EntityNotFoundException.IdNotFound(nameof(IBinaryInfo), binaryId.ToString());
+        }
     }
 
     private async Task DeleteIfExistsAsync(ObjectId id, CancellationToken cancellationToken)
@@ -239,20 +271,19 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
     ///     bytes, which were fully uploaded before the commit.
     /// </summary>
     private async Task<OctoObjectId> ReplaceInTransactionAsync(IOctoSessionInternal transaction, string filename,
-        string contentType, BinaryType binaryType, OctoObjectId binaryId, Stream stream,
-        CancellationToken cancellationToken)
+        string contentType, BinaryType binaryType, RtEntityId rtEntityId, GridFSFileInfo? oldFile,
+        OctoObjectId binaryId, Stream stream, CancellationToken cancellationToken)
     {
         var oldId = binaryId.ToObjectId();
         var newId = ObjectId.GenerateNewId();
 
-        var cursor = await _bucket.FindAsync(Builders<GridFSFileInfo>.Filter.Eq("_id", oldId),
-            cancellationToken: cancellationToken);
-        var oldFile = await cursor.FirstOrDefaultAsync(cancellationToken);
-
-        // Keep the metadata of the existing file (e.g. the owning entity) so that the entity delete still finds it.
+        // Keep the metadata of the existing file so that the entity delete still finds it. The owning entity is always
+        // set from the caller: a stale BinaryId (the file was already replaced by another session) would otherwise
+        // produce a new file without owner metadata that no entity delete ever finds, i.e. a permanent orphan.
         var meta = oldFile?.Metadata?.DeepClone().AsBsonDocument ?? new BsonDocument();
         meta[Constants.ContentType] = contentType;
         meta[Constants.BinaryType] = binaryType;
+        meta[Constants.RtEntityId] = rtEntityId.ToString(CultureInfo.InvariantCulture);
 
         try
         {

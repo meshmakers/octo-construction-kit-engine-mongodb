@@ -16,6 +16,7 @@ internal abstract class OctoSession : IOctoSessionInternal
     private bool _isSessionActive;
     private bool _isSessionStarted;
     private bool _isDisposed;
+    private bool _commitAttempted;
     private List<Func<Task>> _afterCommit = new();
     private List<Func<Task>> _afterRollback = new();
 
@@ -45,12 +46,16 @@ internal abstract class OctoSession : IOctoSessionInternal
                 try
                 {
                     SessionHandle.AbortTransaction();
-                    _isSessionActive = false;
-                    RunCallbacksAsync(TakeCallbacks(_afterRollback), "rollback").GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "[{ApplicationName}] Failed to abort transaction during session disposal", ApplicationName);
+                }
+                finally
+                {
+                    // The cleanup of staged side effects must not depend on the abort having succeeded.
+                    _isSessionActive = false;
+                    RunRollbackCallbacksAsync().GetAwaiter().GetResult();
                 }
             }
 
@@ -105,6 +110,22 @@ internal abstract class OctoSession : IOctoSessionInternal
         return source.ToList();
     }
 
+    private async Task RunRollbackCallbacksAsync()
+    {
+        if (_commitAttempted)
+        {
+            // Outcome unknown (see CommitTransactionAsync): keep every byte, leftovers are orphans.
+            _logger.LogWarning(
+                "[{ApplicationName}] Transaction was not rolled back after a commit attempt; staged side effects are kept (possible orphans)",
+                ApplicationName);
+            _afterCommit = new List<Func<Task>>();
+            _afterRollback = new List<Func<Task>>();
+            return;
+        }
+
+        await RunCallbacksAsync(TakeCallbacks(_afterRollback), "rollback").ConfigureAwait(false);
+    }
+
     private async Task RunCallbacksAsync(IReadOnlyList<Func<Task>> callbacks, string phase)
     {
         _afterCommit = new List<Func<Task>>();
@@ -134,6 +155,10 @@ internal abstract class OctoSession : IOctoSessionInternal
             throw SessionOperationException.SessionNotActive();
         }
 
+        // From here on the outcome of the transaction may be unknown to us (the commit can have succeeded on the
+        // server while the call throws). Rollback side effects are never run after a commit attempt: deleting
+        // the staged bytes of a transaction that did commit would leave the entity without its bytes.
+        _commitAttempted = true;
         await SessionHandle.CommitTransactionAsync();
         _isSessionActive = false;
         await RunCallbacksAsync(TakeCallbacks(_afterCommit), "commit").ConfigureAwait(false);
@@ -151,8 +176,15 @@ internal abstract class OctoSession : IOctoSessionInternal
             SessionHandle.WrappedCoreSession.CurrentTransaction.TransactionNumber);
 
         _isSessionActive = false;
-        await SessionHandle.AbortTransactionAsync();
-        await RunCallbacksAsync(TakeCallbacks(_afterRollback), "rollback").ConfigureAwait(false);
+        try
+        {
+            await SessionHandle.AbortTransactionAsync();
+        }
+        finally
+        {
+            // The cleanup of staged side effects must not depend on the abort having succeeded.
+            await RunRollbackCallbacksAsync().ConfigureAwait(false);
+        }
     }
 
     public IClientSessionHandle SessionHandle { get; }

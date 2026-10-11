@@ -19,13 +19,25 @@ Callers of `ReplaceFileSystemBinaryAsync` must store the returned id (the engine
 Mechanism: `IOctoSessionInternal.RegisterTransactionCallbacks(afterCommit, afterRollback)` on `OctoSession`.
 Callbacks run once; a failing callback is logged and never thrown (the database state is already final).
 
+Edge cases (all covered by tests):
+
+| Situation | Behaviour |
+|---|---|
+| Abort (or dispose without commit) whose abort call throws | The rollback callbacks still run (`finally`): staged bytes are removed. |
+| `CommitTransactionAsync` throws | The outcome is unknown (the commit may have reached the server). **Neither callback set runs**, also not on a later abort/dispose: deleting the staged bytes of a transaction that did commit would leave the entity without its bytes. Staged bytes may stay behind as orphans. |
+| Crash after the commit, before the after-commit delete | Old bytes stay as orphans; the entity references the complete new bytes. |
+| Two sessions replace the same entity | The second hits a write conflict and aborts; its staged bytes are removed. |
+| Stale `BinaryId` (the file was already replaced by another session) | The new file is stored with the owner (`rtEntityId`) of the entity being updated, so an entity delete finds it. |
+| `BinaryId` that belongs to another entity | Refused as not found (AB#6540); that entity's bytes are untouched. A file without owner metadata is accepted. |
+| Update guard (`AttributeNewerThanGuard`) together with a linked binary | Refused by the engine (`BulkRtMutation`), because a non-matching guard skips the entity write silently. |
+
 ## Orphaned bytes
 
 A crash (or a failing delete) between the commit and the after-commit delete leaves the **old** bytes in GridFS
 without an entity that references them; a crash before the commit leaves the **new** (staged) bytes. Both are
 harmless orphans: no entity points to them, and entity reads never miss bytes. They are identified by their
 GridFS metadata (`rtEntityId`, content type, binary type `FileSystem`) combined with the fact that the entity with
-that `rtEntityId` references a different `BinaryId`. Until an automated sweep exists, orphans can be removed by a
+that `rtEntityId` references a different `BinaryId`. The automated sweep is **AB#6541** (it must exist before the file migration sweep AB#6183 is switched on). Until then, orphans can be removed by a
 maintenance job that deletes `fs.files` documents of binary type `FileSystem` whose `_id` is not referenced by the
 linked-binary attribute of the entity named in `metadata.rtEntityId` (and the matching `fs.chunks`). The cleanup
 must run outside active transactions and only for files older than the longest transaction timeout, so that bytes
@@ -53,4 +65,4 @@ The time is not linear: `DeleteAllFileSystemBinariesAsync` looks up the bytes of
 `metadata.rtEntityId`, and `fs.files` has no index on that field, so each entity costs a collection scan. The time the
 transaction stays open is the limiting factor (MongoDB `transactionLifetimeLimitSeconds`, default 60 s), not memory
 (about 150 KB allocated per entry, no measurable working-set growth). An index on `fs.files.metadata.rtEntityId` would make
-it linear; that is a separate change.
+it linear; that is **AB#6538**.
