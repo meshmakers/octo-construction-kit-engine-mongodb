@@ -175,9 +175,8 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
         if (binaryId != null && binaryType == BinaryType.FileSystem &&
             TryGetActiveTransaction(session) is { } transaction)
         {
-            await StageReplacementAsync(transaction, filename, contentType, binaryType, binaryId.Value, stream,
+            return await ReplaceInTransactionAsync(transaction, filename, contentType, binaryType, binaryId.Value, stream,
                 cancellationToken);
-            return binaryId.Value;
         }
 
         BsonDocument meta;
@@ -232,61 +231,46 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
         }
     }
 
-    private IMongoCollection<BsonDocument> GetBucketCollection(string suffix)
-    {
-        return _bucket.Database.GetCollection<BsonDocument>(_bucket.Options.BucketName + "." + suffix)
-            .WithReadPreference(ReadPreference.Primary)
-            .WithWriteConcern(WriteConcern.WMajority);
-    }
-
     /// <summary>
-    ///     Transactional replace: the new bytes are uploaded under a staging id; the old bytes stay readable until
-    ///     the transaction commits. After the commit the staging file is re-keyed to the original id (metadata
-    ///     only, no byte copy). On rollback the staging file is removed and nothing changes.
+    ///     Transactional replace (AB#6248): the new bytes are uploaded under a NEW id, which is returned so that the
+    ///     caller writes it into the entity inside the transaction. The old bytes stay readable until the commit and are
+    ///     deleted only after it; on rollback the new bytes are deleted and nothing changes. A crash between the commit
+    ///     and the delete leaves orphaned old bytes, never missing ones: the committed entity always references the new
+    ///     bytes, which were fully uploaded before the commit.
     /// </summary>
-    private async Task StageReplacementAsync(IOctoSessionInternal transaction, string filename, string contentType,
-        BinaryType binaryType, OctoObjectId binaryId, Stream stream, CancellationToken cancellationToken)
+    private async Task<OctoObjectId> ReplaceInTransactionAsync(IOctoSessionInternal transaction, string filename,
+        string contentType, BinaryType binaryType, OctoObjectId binaryId, Stream stream,
+        CancellationToken cancellationToken)
     {
-        var originalId = binaryId.ToObjectId();
-        var stagingId = ObjectId.GenerateNewId();
+        var oldId = binaryId.ToObjectId();
+        var newId = ObjectId.GenerateNewId();
 
-        var oldFile = await GetBucketCollection("files")
-            .Find(Builders<BsonDocument>.Filter.Eq("_id", originalId))
-            .FirstOrDefaultAsync(cancellationToken);
+        var cursor = await _bucket.FindAsync(Builders<GridFSFileInfo>.Filter.Eq("_id", oldId),
+            cancellationToken: cancellationToken);
+        var oldFile = await cursor.FirstOrDefaultAsync(cancellationToken);
 
         // Keep the metadata of the existing file (e.g. the owning entity) so that the entity delete still finds it.
-        var meta = oldFile != null && oldFile.TryGetValue("metadata", out var oldMeta) && oldMeta.IsBsonDocument
-            ? oldMeta.AsBsonDocument.DeepClone().AsBsonDocument
-            : new BsonDocument();
+        var meta = oldFile?.Metadata?.DeepClone().AsBsonDocument ?? new BsonDocument();
         meta[Constants.ContentType] = contentType;
         meta[Constants.BinaryType] = binaryType;
 
-        await _bucket.UploadFromStreamAsync(stagingId, filename, stream, new GridFSUploadOptions { Metadata = meta },
-            cancellationToken);
-
-        transaction.RegisterTransactionCallbacks(
-            () => SwapStagedAsync(originalId, stagingId),
-            () => DeleteIfExistsAsync(stagingId, CancellationToken.None));
-    }
-
-    private async Task SwapStagedAsync(ObjectId originalId, ObjectId stagingId)
-    {
-        var files = GetBucketCollection("files");
-        var chunks = GetBucketCollection("chunks");
-
-        var stagedFile = await files.Find(Builders<BsonDocument>.Filter.Eq("_id", stagingId))
-            .FirstOrDefaultAsync();
-        if (stagedFile == null)
+        try
         {
-            throw new InvalidOperationException($"Staged GridFS file '{stagingId}' not found.");
+            await _bucket.UploadFromStreamAsync(newId, filename, stream, new GridFSUploadOptions { Metadata = meta },
+                cancellationToken);
+        }
+        catch
+        {
+            // A failed upload may leave partial chunks behind. The old bytes are untouched and still referenced.
+            await DeleteIfExistsAsync(newId, CancellationToken.None).ConfigureAwait(false);
+            throw;
         }
 
-        await DeleteIfExistsAsync(originalId, CancellationToken.None).ConfigureAwait(false);
+        // Only now - the new bytes are complete - may the old bytes be scheduled for deletion after the commit.
+        transaction.RegisterTransactionCallbacks(
+            () => DeleteIfExistsAsync(oldId, CancellationToken.None),
+            () => DeleteIfExistsAsync(newId, CancellationToken.None));
 
-        stagedFile["_id"] = originalId;
-        await files.InsertOneAsync(stagedFile).ConfigureAwait(false);
-        await chunks.UpdateManyAsync(Builders<BsonDocument>.Filter.Eq("files_id", stagingId),
-            Builders<BsonDocument>.Update.Set("files_id", originalId)).ConfigureAwait(false);
-        await files.DeleteOneAsync(Builders<BsonDocument>.Filter.Eq("_id", stagingId)).ConfigureAwait(false);
+        return newId.ToOctoObjectId();
     }
 }

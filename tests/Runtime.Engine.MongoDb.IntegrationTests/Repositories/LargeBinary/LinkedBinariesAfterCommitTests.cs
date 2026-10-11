@@ -4,6 +4,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
@@ -116,55 +117,130 @@ public class LinkedBinariesAfterCommitTests(ImportTestCkModelFixture fixture)
     }
 
     [Fact]
-    public async Task Update_SameBinaryId_OldBytesRemainUntilCommit_ThenNewBytesUnderSameId()
+    public async Task Update_WithBinaryId_NewBytesGetNewId_OldBytesDeletedOnlyAfterCommit()
     {
         var tenantRepository = fixture.GetSystemContext().GetTenantRepository();
         var entity = await InsertCommittedAsync(tenantRepository);
-        var binaryId = entity.Binary.BinaryId!.Value;
+        var oldBinaryId = entity.Binary.BinaryId!.Value;
 
+        var update = new RtBinaryEntity { Binary = ProductsBinary(oldBinaryId) };
         using var session = await tenantRepository.GetSessionAsync();
         session.StartTransaction();
-        await tenantRepository.UpdateOneRtEntityByIdAsync(session, entity.RtId, new RtBinaryEntity
-        {
-            Binary = ProductsBinary(binaryId)
-        });
+        await tenantRepository.UpdateOneRtEntityByIdAsync(session, entity.RtId, update);
 
-        Assert.Equal(CustomersSize, await ReadSizeAsync(tenantRepository, binaryId));
+        // The id that is written into the entity inside the transaction is the staging id.
+        var newBinaryId = update.Binary.BinaryId!.Value;
+        Assert.NotEqual(oldBinaryId, newBinaryId);
+        Assert.Equal(CustomersSize, await ReadSizeAsync(tenantRepository, oldBinaryId));
+        Assert.Equal(ProductsSize, await ReadSizeAsync(tenantRepository, newBinaryId));
 
         await session.CommitTransactionAsync();
 
-        Assert.Equal(ProductsSize, await ReadSizeAsync(tenantRepository, binaryId));
         var stored = await GetEntityAsync(tenantRepository, entity.RtId);
-        Assert.Equal(binaryId, stored!.Binary.BinaryId);
+        Assert.Equal(newBinaryId, stored!.Binary.BinaryId);
         Assert.Equal("Products.pdf", stored.Binary.Filename);
+        Assert.Equal(ProductsSize, await ReadSizeAsync(tenantRepository, newBinaryId));
+        Assert.False(await BinaryExistsAsync(tenantRepository, oldBinaryId), "old bytes must be gone after commit");
 
-        // the entity delete must still find the replaced bytes
+        // the entity delete must still find the replaced bytes (owner metadata is carried over)
         using var deleteSession = await tenantRepository.GetSessionAsync();
         deleteSession.StartTransaction();
         await tenantRepository.DeleteOneRtEntityByRtIdAsync<RtBinaryEntity>(deleteSession, entity.RtId,
             DeleteOptions.Erase);
         await deleteSession.CommitTransactionAsync();
-        Assert.False(await BinaryExistsAsync(tenantRepository, binaryId));
+        Assert.False(await BinaryExistsAsync(tenantRepository, newBinaryId));
     }
 
     [Fact]
-    public async Task Update_SameBinaryId_Rollback_KeepsOldBytes()
+    public async Task Update_WithBinaryId_Rollback_KeepsOldBytesAndRemovesStagedBytes()
     {
         var tenantRepository = fixture.GetSystemContext().GetTenantRepository();
         var entity = await InsertCommittedAsync(tenantRepository);
-        var binaryId = entity.Binary.BinaryId!.Value;
+        var oldBinaryId = entity.Binary.BinaryId!.Value;
 
+        var update = new RtBinaryEntity { Binary = ProductsBinary(oldBinaryId) };
         using (var session = await tenantRepository.GetSessionAsync())
         {
             session.StartTransaction();
-            await tenantRepository.UpdateOneRtEntityByIdAsync(session, entity.RtId, new RtBinaryEntity
-            {
-                Binary = ProductsBinary(binaryId)
-            });
+            await tenantRepository.UpdateOneRtEntityByIdAsync(session, entity.RtId, update);
             await session.AbortTransactionAsync();
         }
 
-        Assert.Equal(CustomersSize, await ReadSizeAsync(tenantRepository, binaryId));
+        Assert.Equal(CustomersSize, await ReadSizeAsync(tenantRepository, oldBinaryId));
+        Assert.False(await BinaryExistsAsync(tenantRepository, update.Binary.BinaryId!.Value),
+            "staged bytes must be removed on rollback");
+        var stored = await GetEntityAsync(tenantRepository, entity.RtId);
+        Assert.Equal(oldBinaryId, stored!.Binary.BinaryId);
+        Assert.Equal("Customers.xlsx", stored.Binary.Filename);
+    }
+
+    [Fact]
+    public async Task Update_WithBinaryId_CrashBetweenCommitAndDelete_LeavesOrphanButNeverMissingBytes()
+    {
+        var tenantRepository = fixture.GetSystemContext().GetTenantRepository();
+        var entity = await InsertCommittedAsync(tenantRepository);
+        var oldBinaryId = entity.Binary.BinaryId!.Value;
+
+        var update = new RtBinaryEntity { Binary = ProductsBinary(oldBinaryId) };
+        using (var session = await tenantRepository.GetSessionAsync())
+        {
+            session.StartTransaction();
+            await tenantRepository.UpdateOneRtEntityByIdAsync(session, entity.RtId, update);
+
+            // Fault injection: the Mongo transaction commits, but the process dies before the after-commit
+            // callbacks run (the session never executes OctoSession.CommitTransactionAsync's cleanup).
+            await ((IOctoSessionInternal)session).SessionHandle.CommitTransactionAsync(TestContext.Current.CancellationToken);
+            // Disposal of a session whose transaction is already committed must not run rollback cleanup.
+        }
+
+        var newBinaryId = update.Binary.BinaryId!.Value;
+        var stored = await GetEntityAsync(tenantRepository, entity.RtId);
+
+        // never missing: the committed entity resolves to existing, complete bytes ...
+        Assert.Equal(newBinaryId, stored!.Binary.BinaryId);
+        Assert.Equal(ProductsSize, await ReadSizeAsync(tenantRepository, newBinaryId));
+        // ... orphaned: the old bytes were not deleted (documented, removable by the orphan cleanup).
+        Assert.True(await BinaryExistsAsync(tenantRepository, oldBinaryId));
+    }
+
+    [Fact]
+    public async Task Update_WithBinaryId_FailingUpload_KeepsOldBytesReferenced()
+    {
+        var tenantRepository = fixture.GetSystemContext().GetTenantRepository();
+        var entity = await InsertCommittedAsync(tenantRepository);
+        var oldBinaryId = entity.Binary.BinaryId!.Value;
+
+        var update = new RtBinaryEntity
+        {
+            Binary = new EntityBinaryInfo
+            {
+                BinaryId = oldBinaryId,
+                Filename = "Broken.bin",
+                ContentType = "application/octet-stream",
+                Stream = new ThrowingStream()
+            }
+        };
+        using (var session = await tenantRepository.GetSessionAsync())
+        {
+            session.StartTransaction();
+            await Assert.ThrowsAnyAsync<Exception>(() =>
+                tenantRepository.UpdateOneRtEntityByIdAsync(session, entity.RtId, update));
+            // even if the caller committed anyway, the old bytes must not have been scheduled for deletion
+            await session.CommitTransactionAsync();
+        }
+
+        Assert.Equal(CustomersSize, await ReadSizeAsync(tenantRepository, oldBinaryId));
+    }
+
+    private sealed class ThrowingStream : MemoryStream
+    {
+        public override int Read(byte[] buffer, int offset, int count) => throw new IOException("injected");
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => throw new IOException("injected");
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            => throw new IOException("injected");
     }
 
     [Fact]
@@ -192,7 +268,7 @@ public class LinkedBinariesAfterCommitTests(ImportTestCkModelFixture fixture)
         Binary = ProductsBinary(null)
     };
 
-    // A supplied BinaryId makes the engine replace the bytes under the same id (instead of uploading a new file).
+    // A supplied BinaryId makes the engine replace the bytes: the data source returns the id of the new bytes (AB#6248).
     private static EntityBinaryInfo ProductsBinary(OctoObjectId? binaryId) => new()
     {
         BinaryId = binaryId,
