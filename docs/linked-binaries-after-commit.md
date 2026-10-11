@@ -33,3 +33,24 @@ staged by an in-flight transaction are never removed.
 
 No persistence or CK schema change: the `BinaryId` is already stored in the entity's linked-binary attribute and
 GridFS metadata is carried over unchanged. Existing entities and their `BinaryId`s stay readable.
+
+## Cost of a large delete (measurement, AB#6248)
+
+`tests/.../LargeBinary/DeleteCapMeasurementTests.cs` (explicit, runs only with `OCTO_MEASURE_DELETE_CAP=500,1000,...`,
+results appended to `OCTO_MEASURE_OUT`) deletes N entities that each own a 4 KB linked binary in **one** transaction -
+the shape of the asset-repo recursive folder delete. Local run (Mac, Testcontainers MongoDB replica set, 2026-10-11):
+
+| Entries | Transaction open (apply) | Commit + deferred GridFS delete | Total |
+|---:|---:|---:|---:|
+| 500 | 0.5 s | 0.7 s | 1.2 s |
+| 1,000 | 0.8 s | 1.2 s | 1.9 s |
+| 2,000 | 2.4 s | 2.7 s | 5.0 s |
+| 5,000 | 11.1 s | 7.1 s | 18.2 s |
+| 10,000 | 36.1 s | 13.8 s | 49.9 s |
+| 20,000 (before the change: transaction aborted by the 60 s MongoDB transaction lifetime) | - | - | failed |
+
+The time is not linear: `DeleteAllFileSystemBinariesAsync` looks up the bytes of every entity by
+`metadata.rtEntityId`, and `fs.files` has no index on that field, so each entity costs a collection scan. The time the
+transaction stays open is the limiting factor (MongoDB `transactionLifetimeLimitSeconds`, default 60 s), not memory
+(about 150 KB allocated per entry, no measurable working-set growth). An index on `fs.files.metadata.rtEntityId` would make
+it linear; that is a separate change.
