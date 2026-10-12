@@ -498,6 +498,12 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         {
             effectiveToken.ThrowIfCancellationRequested();
             await CreateRtAssociationIndexesAsync();
+
+            // AB#6538: owner lookup of linked binaries
+            if (_repository is MongoRepository mongoRepository)
+            {
+                await GridFsOwnerIndex.EnsureAsync(mongoRepository.Database, effectiveToken);
+            }
         }
 
         _logger.LogInformation("Updating indexes of tenant '{TenantId}' completed", TenantId);
