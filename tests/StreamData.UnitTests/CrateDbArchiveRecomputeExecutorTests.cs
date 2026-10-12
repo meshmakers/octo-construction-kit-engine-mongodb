@@ -8,7 +8,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using Xunit;
 using Row = Meshmakers.Octo.Runtime.Engine.UnitTests.RecomputeCrateSimulator.Row;
 
@@ -18,7 +18,9 @@ namespace Meshmakers.Octo.Runtime.Engine.UnitTests;
 /// The commit sequence of a rollup recompute against an in-memory CrateDB
 /// (<see cref="RecomputeCrateSimulator"/>): the copy and the sweep run in row-counted slices
 /// whatever the range holds, the statements and refreshes keep their order around the pointer flip,
-/// and rows an uncommitted copy left under the next generation number are removed first (AB#6283).
+/// rows an uncommitted copy left under the next generation number are removed first, a failure
+/// behind the flip does not fail the call, and the dead rows it leaves are reclaimed from the
+/// pointer table (AB#6283).
 /// </summary>
 public class CrateDbArchiveRecomputeExecutorTests
 {
@@ -85,6 +87,11 @@ public class CrateDbArchiveRecomputeExecutorTests
         Assert.Equal(
             new[]
             {
+                // First call of the process for this rollup: dead rows below every pointer entry.
+                "ddl:create-genmap",
+                "refresh:genmap",
+                "read:pointers",
+                "count:below",
                 "ddl:drop-staging",
                 "ddl:create-staging",
                 "aggregate",
@@ -211,6 +218,250 @@ public class CrateDbArchiveRecomputeExecutorTests
         Assert.Equal(2, harness.Crate.Live.Count(r => r.RtId == series[0] && r.WindowStartMs < StartMs + 2 * HourMs));
     }
 
+    // ---- committed stays committed ----
+
+    [Fact]
+    public async Task SweepFailsAfterTheFlip_ChunkIsReportedDone_AndReclaimedOnTheNextCall()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(5);
+        harness.SeedLive(buckets: 12, series, generation: 3);
+        harness.Crate.Pointers.Add(new GenerationRange(StartMs, StartMs + 12 * HourMs, string.Empty, 3));
+        var sweeps = 0;
+        harness.Crate.BeforeStatement = (call, _) =>
+        {
+            if (call.Kind == "delete:superseded" && ++sweeps == 2)
+            {
+                throw new InvalidOperationException("sweep slice failed");
+            }
+        };
+
+        var result = await harness.RunAsync(buckets: 12, series);
+
+        // Reported as done: the pointer names generation 4 and its rows are complete.
+        Assert.Equal(60, result.RowsProcessed);
+        Assert.Equal(new GenerationRange(StartMs, StartMs + 12 * HourMs, string.Empty, 4), Assert.Single(harness.Crate.Pointers));
+        Assert.Equal(60, harness.Crate.Live.Count(r => r.Generation == 4));
+        // The rest of the cleanup still ran.
+        Assert.Contains("delete:contained-pointers", harness.Crate.Kinds);
+        // The failure is visible: what failed, where, and that readers are fine.
+        var warning = Assert.Single(harness.Logger.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("sweep of the superseded generations", warning.Message);
+        Assert.Contains("generation 4", warning.Message);
+        Assert.Contains($"[{StartMs},{StartMs + 12 * HourMs})", warning.Message);
+        Assert.IsType<InvalidOperationException>(warning.Exception);
+        var dead = harness.Crate.Live.Count(r => r.Generation == 3);
+        Assert.True(dead > 0, "the failed sweep left rows behind");
+
+        // The next call for the rollup — another range — makes up for it before it does its own work.
+        harness.Crate.BeforeStatement = null;
+        var before = harness.Crate.Calls.Count;
+        await harness.RunAsync(buckets: 2, series, firstBucket: 20);
+
+        var steps = harness.Crate.Kinds.Skip(before).ToList();
+        Assert.True(steps.IndexOf("delete:below") >= 0, "the dead rows have to be reclaimed");
+        Assert.True(steps.IndexOf("delete:below") < steps.IndexOf("aggregate"), "… before the call's own work");
+        Assert.DoesNotContain(harness.Crate.Live, r => r.Generation == 3);
+        Assert.Equal(60, harness.Crate.Live.Count(r => r.Generation == 4));
+
+        // Made up for once: a third call has nothing left to reclaim.
+        before = harness.Crate.Calls.Count;
+        await harness.RunAsync(buckets: 2, series, firstBucket: 30);
+        Assert.DoesNotContain(harness.Crate.Kinds.Skip(before), k => k is "count:below" or "delete:below" or "read:pointers");
+    }
+
+    [Fact]
+    public async Task PointerCleanupOrStagingCleanupFails_ChunkIsReportedDone()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(2);
+        harness.Crate.BeforeStatement = (call, _) =>
+        {
+            if (call.Kind == "delete:contained-pointers")
+            {
+                throw new InvalidOperationException("pointer cleanup failed");
+            }
+        };
+
+        var result = await harness.RunAsync(buckets: 3, series);
+
+        Assert.Equal(6, result.RowsProcessed);
+        Assert.Contains(harness.Logger.Entries,
+            e => e.Level == LogLevel.Warning && e.Message.Contains("removal of the contained pointer entries"));
+    }
+
+    [Fact]
+    public async Task FlipFails_Throws()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        harness.Crate.BeforeStatement = (call, _) =>
+        {
+            if (call.Kind == "flip")
+            {
+                throw new InvalidOperationException("flip failed");
+            }
+        };
+
+        // Before the commit point nothing is swallowed.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => harness.RunAsync(buckets: 3, Series(2)));
+    }
+
+    // ---- reclaim from the pointer table ----
+
+    [Fact]
+    public async Task Reclaim_DeletesOnlyGenerationsBelowThePointer_InsideItsRangeAndScope()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var x = OctoObjectId.GenerateNewId().ToString();
+        var y = OctoObjectId.GenerateNewId().ToString();
+        // An unscoped entry at generation 5 over the first 10 hours …
+        harness.Crate.Pointers.Add(new GenerationRange(StartMs, StartMs + 10 * HourMs, string.Empty, 5));
+        // … and an entry scoped to series x at generation 7 over hours 20 to 30.
+        harness.Crate.Pointers.Add(new GenerationRange(StartMs + 20 * HourMs, StartMs + 30 * HourMs, x, 7));
+
+        var dead = new[]
+        {
+            new Row(StartMs + 1 * HourMs, 3, x), // below the unscoped pointer
+            new Row(StartMs + 2 * HourMs, 0, y), // forward generation inside a pointer range: masked
+            new Row(StartMs + 9 * HourMs, 4, y),
+            new Row(StartMs + 21 * HourMs, 6, x), // below the scoped pointer, its series
+            new Row(StartMs + 22 * HourMs, 0, x),
+        };
+        var alive = new[]
+        {
+            new Row(StartMs + 1 * HourMs, 5, x), // the active generation
+            new Row(StartMs + 1 * HourMs, 9, x), // a newer, overlapping recompute that has not flipped yet
+            new Row(StartMs + 10 * HourMs, 3, x), // first instant behind the range (exclusive end)
+            new Row(StartMs - HourMs, 3, x), // before the range
+            new Row(StartMs + 15 * HourMs, 0, x), // generation 0 outside every pointer range
+            new Row(StartMs + 21 * HourMs, 7, x),
+            new Row(StartMs + 21 * HourMs, 6, y), // another series inside a scoped entry's range
+            new Row(StartMs + 21 * HourMs, 0, y),
+        };
+        harness.Crate.Live.AddRange(dead);
+        harness.Crate.Live.AddRange(alive);
+
+        // A recompute of an unrelated range through a fresh executor: the first call of a process.
+        await harness.RunAsync(buckets: 2, new[] { x }, firstBucket: 50);
+
+        Assert.All(dead, row => Assert.DoesNotContain(row, harness.Crate.Live));
+        Assert.All(alive, row => Assert.Contains(row, harness.Crate.Live));
+        // Strictly below, never "different from".
+        Assert.All(
+            harness.Crate.Calls.Where(c => c.Kind is "delete:below"),
+            c => Assert.Contains("\"generation\" < ", c.Text));
+        // The deleted rows are off the read path before the recompute goes on.
+        var steps = harness.Crate.Kinds.ToList();
+        Assert.Equal("refresh:live", steps[steps.LastIndexOf("delete:below") + 1]);
+    }
+
+    [Fact]
+    public async Task Reclaim_RunsInRowBoundedSlices_OncePerProcessAndRollup()
+    {
+        const int sliceTarget = 10;
+        var harness = new Harness(sliceTarget);
+        var series = Series(5);
+        harness.Crate.Pointers.Add(new GenerationRange(StartMs, StartMs + 40 * HourMs, string.Empty, 12));
+        harness.SeedLive(buckets: 40, series, generation: 12);
+        harness.SeedLive(buckets: 40, series, generation: 11); // what a killed sweep left
+
+        await harness.RunAsync(buckets: 2, series, firstBucket: 50);
+
+        var deletes = harness.Crate.Calls.Where(c => c.Kind == "delete:below").ToList();
+        Assert.True(deletes.Count > 1);
+        var counts = harness.Crate.Calls.Where(c => c.Kind == "count:below")
+            .ToLookup(RecomputeCrateSimulator.Bounds, c => c.Rows);
+        Assert.All(deletes, d => Assert.InRange(counts[RecomputeCrateSimulator.Bounds(d)].First(), 1, 2 * sliceTarget));
+        Assert.DoesNotContain(harness.Crate.Live, r => r.Generation == 11);
+        Assert.Equal(200, harness.Crate.Live.Count(r => r.Generation == 12));
+
+        // The same process does not walk the pointer table again …
+        var before = harness.Crate.Calls.Count;
+        await harness.RunAsync(buckets: 2, series, firstBucket: 60);
+        Assert.DoesNotContain("read:pointers", harness.Crate.Kinds.Skip(before));
+
+        // … a restarted one does, once.
+        harness.Executor = harness.NewExecutor();
+        before = harness.Crate.Calls.Count;
+        await harness.RunAsync(buckets: 2, series, firstBucket: 70);
+        Assert.Single(harness.Crate.Kinds.Skip(before), k => k == "read:pointers");
+    }
+
+    [Fact]
+    public async Task Reclaim_StopsWhenThePointerEntryChanged()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(5);
+        harness.Crate.Pointers.Add(new GenerationRange(StartMs, StartMs + 40 * HourMs, string.Empty, 12));
+        harness.SeedLive(buckets: 40, series, generation: 11);
+        // A rewind removes the pointer while the first reclaim statement runs: the range goes back
+        // to generation 0, and rows below 12 there are no longer dead.
+        harness.Crate.BeforeStatement = (call, _) =>
+        {
+            if (call.Kind == "delete:below")
+            {
+                harness.Crate.Pointers.Clear();
+            }
+        };
+
+        await harness.RunAsync(buckets: 2, series, firstBucket: 50);
+
+        Assert.Single(harness.Crate.Calls, c => c.Kind == "delete:below");
+        Assert.True(harness.Crate.Live.Count(r => r.Generation == 11) > 0);
+        // The entry is read again before every statement.
+        var steps = harness.Crate.Kinds.ToList();
+        Assert.Equal("count:pointer", steps[steps.IndexOf("delete:below") - 1]);
+    }
+
+    [Fact]
+    public async Task ReclaimFails_TheRecomputeStillRuns_AndTheReclaimIsRepeated()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(5);
+        harness.Crate.Pointers.Add(new GenerationRange(StartMs, StartMs + 4 * HourMs, string.Empty, 12));
+        harness.SeedLive(buckets: 4, series, generation: 11);
+        var fail = true;
+        harness.Crate.BeforeStatement = (call, _) =>
+        {
+            if (fail && call.Kind == "delete:below")
+            {
+                throw new InvalidOperationException("reclaim failed");
+            }
+        };
+
+        var result = await harness.RunAsync(buckets: 2, series, firstBucket: 50);
+
+        Assert.Equal(10, result.RowsProcessed);
+        Assert.Contains(harness.Logger.Entries,
+            e => e.Level == LogLevel.Warning && e.Message.Contains("reclaiming dead generations failed"));
+
+        fail = false;
+        await harness.RunAsync(buckets: 2, series, firstBucket: 60);
+        Assert.DoesNotContain(harness.Crate.Live, r => r.Generation == 11);
+    }
+
+    [Fact]
+    public async Task CallerCancelsDuringTheReclaim_ThrowsOperationCanceled()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(5);
+        harness.Crate.Pointers.Add(new GenerationRange(StartMs, StartMs + 4 * HourMs, string.Empty, 12));
+        harness.SeedLive(buckets: 4, series, generation: 11);
+        using var cts = new CancellationTokenSource();
+        harness.Token = cts.Token;
+        harness.Crate.BeforeStatement = (call, token) =>
+        {
+            if (call.Kind == "delete:below")
+            {
+                cts.Cancel();
+                token.ThrowIfCancellationRequested();
+            }
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => harness.RunAsync(buckets: 2, series, firstBucket: 50));
+    }
+
     // ---- helpers ----
 
     private static string[] Series(int count) =>
@@ -277,6 +528,8 @@ public class CrateDbArchiveRecomputeExecutorTests
 
         public RecomputeCrateSimulator Crate { get; }
 
+        public RecordingLogger Logger { get; } = new();
+
         public CrateDbArchiveRecomputeExecutor Executor { get; set; }
 
         /// <summary>The token every run is started with.</summary>
@@ -285,7 +538,7 @@ public class CrateDbArchiveRecomputeExecutorTests
         /// <summary>A second executor on the same tables — what a restarted process would be.</summary>
         public CrateDbArchiveRecomputeExecutor NewExecutor() => new(
             Tenant, Crate, Crate, _archiveStore, numberOfShards: 3, numberOfReplicas: -1,
-            NullLogger.Instance, rollupArchiveStore: null, sliceTargetRows: _sliceTargetRows);
+            Logger, rollupArchiveStore: null, sliceTargetRows: _sliceTargetRows);
 
         public void SeedLive(int buckets, IReadOnlyList<string> series, long generation, int firstBucket = 0)
         {

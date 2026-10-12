@@ -82,6 +82,18 @@ internal static class GenerationMapSqlBuilder
         $"SELECT \"range_start\", \"range_end\", \"rtid_scope\", \"{Constants.Generation}\" FROM {genMapTable};";
 
     /// <summary>
+    /// Builds the count of the pointer entries that are exactly the given one — 1 while the entry
+    /// stands, 0 once it was replaced by another generation or removed (a rewind, a later recompute).
+    /// </summary>
+    public static string BuildCountPointer(
+        string genMapTable, long rangeStartMs, long rangeEndMs, string rtIdScope, long generation) =>
+        $"SELECT COUNT(*) FROM {genMapTable} " +
+        $"WHERE \"range_start\" = {rangeStartMs.ToString(CultureInfo.InvariantCulture)} " +
+        $"AND \"range_end\" = {rangeEndMs.ToString(CultureInfo.InvariantCulture)} " +
+        $"AND \"rtid_scope\" = '{(rtIdScope ?? AllRtIdsScope).Replace("'", "''")}' " +
+        $"AND \"{Constants.Generation}\" = {generation.ToString(CultureInfo.InvariantCulture)};";
+
+    /// <summary>
     /// Builds the statement that keeps the part before <paramref name="fromBucketEnd"/> of every
     /// entry straddling it: a copy of the entry ending at the boundary, on the same generation and
     /// scope. Run before <see cref="BuildDeleteGenerationsFrom"/> on a watermark rewind — the rows

@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -33,6 +35,18 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// <see cref="CrateRecomputeOptions.SliceTargetRows"/> rows whatever the range holds. The unit of
 /// commit stays the whole call: every copy slice writes the same new generation, which no reader
 /// selects before the pointer names it, and every sweep slice runs after the flip and its refresh.
+/// </para>
+/// <para>
+/// Committed stays committed (AB#6283): once the pointer flip and its refresh have succeeded the
+/// call reports the range as done. A failure of the cleanup behind the flip — the sweep, the
+/// removal of contained pointer entries, the staging cleanup — is logged and not thrown, unless the
+/// caller cancelled. Failing the call there would make the orchestrator aggregate and copy the whole
+/// range again only to finish a delete, and keep the dependents of the rollup from being told about
+/// values readers already see. The rows such a sweep leaves behind are reclaimed from the pointer
+/// table: for a pointer entry of generation <c>g</c>, every reader selects a generation of at least
+/// <c>g</c> inside the entry's range (and scope), so rows below <c>g</c> there are dead. The reclaim
+/// runs for the entries of a failed sweep at the start of the next call for the rollup, and once
+/// per process and rollup over all entries — which is what survives a restart.
 /// </para>
 /// <para>
 /// Per-<c>rtId</c> scoped recompute (AB#4184): a non-null <c>rtIdScope</c> restricts the source
@@ -70,6 +84,12 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
     private readonly IRollupArchiveRuntimeStore? _rollupArchiveStore;
     private readonly RollupSourceBucketAggregator _bucketAggregator;
     private readonly int _sliceTargetRows;
+
+    // Rollups whose pointer entries were all checked for dead rows by this process, and the entries
+    // whose sweep failed and still has to be made up for. Both are keyed by the rollup's rtId.
+    private readonly ConcurrentDictionary<string, bool> _reclaimPassDone = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ConcurrentQueue<GenerationRange>> _pendingReclaims =
+        new(StringComparer.Ordinal);
 
     /// <summary>Constructs the executor for one tenant.</summary>
     /// <param name="tenantId">The tenant whose CrateDB schema holds the archives.</param>
@@ -147,6 +167,11 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         var sourceTable = TenantSchema.QualifiedArchiveTable(_tenantId, source.RtId.ToString());
         var liveTable = TenantSchema.QualifiedArchiveTable(_tenantId, rollup.RtId.ToString());
         var stagingTable = RollupRecomputeSqlBuilder.StagingTable(_tenantId, rollup.RtId.ToString());
+        var genMapTable = GenerationMapSqlBuilder.GenMapTable(_tenantId, rollup.RtId.ToString());
+
+        // Dead rows first: what a failed sweep of an earlier call left, and — once per process — what
+        // any earlier process left. Never fails this call; see ReclaimDeadGenerationsAsync.
+        await ReclaimDeadGenerationsAsync(rollup.RtId.ToString(), liveTable, genMapTable, cancellationToken);
 
         // Per-source resolution (AB#5157 §3) — the same binding the forward aggregation uses for
         // this (rollup, source) pair, resolved once per execution and reused for every bucket. A
@@ -242,8 +267,7 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         // live table under a fresh generation (the previous generation stays visible), then flip the
         // active-generation pointer in a single-row write — the actual commit — and finally sweep the
         // superseded rows. A crash before the flip leaves readers on the previous generation; a crash
-        // after the flip but before the sweep just leaves dead rows the next sweep / activation can GC.
-        var genMapTable = GenerationMapSqlBuilder.GenMapTable(_tenantId, rollup.RtId.ToString());
+        // after the flip but before the sweep just leaves dead rows, which the reclaim pass removes.
         await _managementClient.ExecuteDdlAsync(_tenantId, GenerationMapSqlBuilder.BuildCreateTable(genMapTable), cancellationToken);
         // The next generation is MAX(generation)+1 over the pointer table — a search read. Refresh
         // first, or a run that follows another within the refresh interval is handed the same number
@@ -293,39 +317,197 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
             CrateStatementClass.Maintenance, cancellationToken);
         await _databaseClient.RefreshArchiveTableAsync(_tenantId, genMapTable, CrateStatementClass.Maintenance, cancellationToken);
 
+        // ---- Committed. From here on a failure is logged, not thrown (unless the caller cancelled):
+        // readers are on the new generation, and what is left is cleanup. ----
+        // The bounds exactly as the pointer entry holds them.
+        var flipped = new GenerationRange(ToEpochMs(rangeStart), ToEpochMs(rangeEnd), scope, generation);
+
         // 3. Sweep the now-superseded generation(s) in the range (within the scope when set), again
         //    one statement per row-counted slice. The slices partition the WHOLE range, not only the
         //    windows that were staged: a window whose source rows are gone has no new row, and its
         //    old generation still has to go. Every slice runs after the flip and its refresh above.
         //    Refresh at the end so the deleted rows are gone from the read path when this method
         //    returns — the dependents of this rollup are recomputed right after it.
-        var swept = await RunSlicedAsync(
-            rangeStart, rangeEnd,
-            (from, to) => RollupRecomputeSqlBuilder.BuildCountSuperseded(liveTable, from, to, generation, rowScope),
-            (from, to) => RollupRecomputeSqlBuilder.BuildSweepSupersededGenerations(liveTable, from, to, generation, rowScope),
-            cancellationToken);
-        await _databaseClient.RefreshArchiveTableAsync(_tenantId, liveTable, CrateStatementClass.Maintenance, cancellationToken);
+        var swept = default(SlicedRun);
+        var sweepCompleted = await TryCleanupAsync("sweep of the superseded generations", rollup.RtId, flipped, async () =>
+        {
+            swept = await RunSlicedAsync(
+                rangeStart, rangeEnd,
+                (from, to) => RollupRecomputeSqlBuilder.BuildCountSuperseded(liveTable, from, to, generation, rowScope),
+                (from, to) => RollupRecomputeSqlBuilder.BuildSweepSupersededGenerations(liveTable, from, to, generation, rowScope),
+                cancellationToken);
+            await _databaseClient.RefreshArchiveTableAsync(_tenantId, liveTable, CrateStatementClass.Maintenance, cancellationToken);
+        }, cancellationToken);
+        if (!sweepCompleted)
+        {
+            // Made up for at the start of the next call for this rollup.
+            _pendingReclaims.GetOrAdd(rollup.RtId.ToString(), _ => new ConcurrentQueue<GenerationRange>()).Enqueue(flipped);
+        }
 
         // 3b. Drop the pointer entries the flip just made redundant (AB#5189). The pointer is keyed
         // on the exact range, so a recompute over a different range adds an entry rather than
-        // replacing the old one; after the sweep above, an entry contained in this range points at
-        // rows that no longer exist. Left alone they accumulate for the life of the rollup.
-        await _databaseClient.ExecuteNonQueryAsync(_tenantId,
-            GenerationMapSqlBuilder.BuildDeleteContainedPointers(genMapTable, rangeStart, rangeEnd, scope),
-            CrateStatementClass.Maintenance, cancellationToken);
-        await _databaseClient.RefreshArchiveTableAsync(_tenantId, genMapTable, CrateStatementClass.Maintenance, cancellationToken);
+        // replacing the old one; an entry contained in this range is outranked by the entry just
+        // flipped for every row it covers — also when the sweep above did not complete — so no
+        // reader selects through it any more. Left alone they accumulate for the life of the rollup.
+        await TryCleanupAsync("removal of the contained pointer entries", rollup.RtId, flipped, async () =>
+        {
+            await _databaseClient.ExecuteNonQueryAsync(_tenantId,
+                GenerationMapSqlBuilder.BuildDeleteContainedPointers(genMapTable, rangeStart, rangeEnd, scope),
+                CrateStatementClass.Maintenance, cancellationToken);
+            await _databaseClient.RefreshArchiveTableAsync(_tenantId, genMapTable, CrateStatementClass.Maintenance, cancellationToken);
+        }, cancellationToken);
 
         // 4. Drop staging.
-        await _managementClient.ExecuteDdlAsync(_tenantId, RollupRecomputeSqlBuilder.BuildDropIfExists(stagingTable), cancellationToken);
+        await TryCleanupAsync("staging cleanup", rollup.RtId, flipped, () =>
+            _managementClient.ExecuteDdlAsync(_tenantId, RollupRecomputeSqlBuilder.BuildDropIfExists(stagingTable), cancellationToken),
+            cancellationToken);
 
         _logger.LogInformation(
             "Recomputed rollup {RollupRtId} range [{From:O},{To:O}) scope '{Scope}' as generation {Generation}: " +
             "{Windows} windows / {Rows} staged rows copied in {CopySlices} statement(s), pointer flipped, " +
-            "{SweptRows} superseded rows swept in {SweepSlices} statement(s).",
+            "{SweptRows} superseded rows swept in {SweepSlices} statement(s){SweepNote}.",
             rollup.RtId, rangeStart, rangeEnd, rowScope ?? "(all)", generation, windows, rows,
-            copied.Statements, swept.Rows, swept.Statements);
+            copied.Statements, swept.Rows, swept.Statements,
+            sweepCompleted ? string.Empty : " — the sweep did not complete, the rest is reclaimed by the next call");
 
         return new RecomputeExecutionResult(rows, windows);
+    }
+
+    /// <summary>
+    /// Runs a step that follows the pointer flip. A failure is logged with what an operator needs to
+    /// find the rows and is not thrown — the range is committed. A cancellation by the caller is not
+    /// swallowed: it propagates, and the orchestrator records an interruption.
+    /// </summary>
+    /// <returns><c>true</c> when the step completed.</returns>
+    private async Task<bool> TryCleanupAsync(
+        string step, OctoObjectId rollupRtId, GenerationRange flipped, Func<Task> action,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await action();
+            return true;
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex,
+                "Rollup {RollupRtId} range [{FromMs},{ToMs}) scope '{Scope}' is committed as generation {Generation}, but the {Step} failed: {Error}. Readers are not affected.",
+                rollupRtId, flipped.StartMs, flipped.EndMs, flipped.Scope.Length == 0 ? "(all)" : flipped.Scope,
+                flipped.Generation, step, ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Deletes the rows no reader can select any more: inside the range (and scope) of a pointer
+    /// entry, every row of a generation <b>below</b> the entry's. Such rows are what a sweep that
+    /// did not complete leaves behind.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Why they are dead: the read predicate takes, for a row, the newest pointer entry whose range
+    /// and scope match it (<see cref="GenerationFilterSql"/>). A row inside an entry of generation
+    /// <c>g</c> is therefore read at a generation of at least <c>g</c>. Strictly below — a row above
+    /// <c>g</c> may belong to a newer recompute that overlaps the range, and rows outside every
+    /// entry are the forward aggregation's generation 0.
+    /// </para>
+    /// <para>
+    /// Two triggers: the entries whose sweep failed in this process, and — once per process and
+    /// rollup — every entry of the pointer table. The second is what makes the first survive a
+    /// restart, and what removes the rows left by sweeps that failed before this pass existed.
+    /// </para>
+    /// <para>
+    /// Before every statement the entry is read again; when it is gone or names another generation
+    /// (a rewind or a later recompute got in between) the entry is left alone. That narrows the
+    /// interval in which a concurrent rewind could hand the range back to generation 0 under a
+    /// running delete to the statement itself; it does not close it.
+    /// </para>
+    /// <para>
+    /// A failure is logged and leaves the work for the next call; it never fails the recompute.
+    /// </para>
+    /// </remarks>
+    private async Task ReclaimDeadGenerationsAsync(
+        string rollupRtId, string liveTable, string genMapTable, CancellationToken cancellationToken)
+    {
+        var fullPass = !_reclaimPassDone.ContainsKey(rollupRtId);
+        _pendingReclaims.TryGetValue(rollupRtId, out var pending);
+        var remembered = pending?.ToArray() ?? Array.Empty<GenerationRange>();
+        if (!fullPass && remembered.Length == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await _managementClient.ExecuteDdlAsync(
+                _tenantId, GenerationMapSqlBuilder.BuildCreateTable(genMapTable), cancellationToken);
+            // The entries are a search read; so is the re-read before every statement.
+            await _databaseClient.RefreshArchiveTableAsync(
+                _tenantId, genMapTable, CrateStatementClass.Maintenance, cancellationToken);
+
+            // The pass over all entries covers the remembered ones as well.
+            var entries = fullPass ? await ReadPointersAsync(genMapTable, cancellationToken) : remembered;
+
+            var reclaimed = 0L;
+            foreach (var entry in entries)
+            {
+                var entryScope = entry.Scope.Length == 0 ? null : entry.Scope;
+                var run = await RunSlicedAsync(
+                    FromEpochMs(entry.StartMs), FromEpochMs(entry.EndMs),
+                    (from, to) => RollupRecomputeSqlBuilder.BuildCountBelowGeneration(liveTable, from, to, entry.Generation, entryScope),
+                    (from, to) => RollupRecomputeSqlBuilder.BuildDeleteBelowGenerationSlice(liveTable, from, to, entry.Generation, entryScope),
+                    cancellationToken,
+                    async ct => await _databaseClient.GetCountAsync(
+                        _tenantId,
+                        GenerationMapSqlBuilder.BuildCountPointer(genMapTable, entry.StartMs, entry.EndMs, entry.Scope, entry.Generation),
+                        ct) == 1);
+                if (run.Statements > 0)
+                {
+                    reclaimed += run.Rows;
+                    _logger.LogInformation(
+                        "Rollup {RollupRtId}: reclaimed dead rows below generation {Generation} in [{FromMs},{ToMs}) scope '{Scope}' — {Rows} counted, {Statements} statement(s).",
+                        rollupRtId, entry.Generation, entry.StartMs, entry.EndMs, entryScope ?? "(all)", run.Rows, run.Statements);
+                }
+            }
+
+            if (reclaimed > 0)
+            {
+                await _databaseClient.RefreshArchiveTableAsync(
+                    _tenantId, liveTable, CrateStatementClass.Maintenance, cancellationToken);
+            }
+
+            // Done: drop exactly the remembered entries this pass covered (a sweep failing later
+            // enqueues again), and do the pass over all entries only once.
+            for (var i = 0; i < remembered.Length; i++)
+            {
+                pending!.TryDequeue(out _);
+            }
+
+            _reclaimPassDone[rollupRtId] = true;
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex,
+                "Rollup {RollupRtId}: reclaiming dead generations failed: {Error}. The recompute continues; the reclaim is repeated with the next call.",
+                rollupRtId, ex.Message);
+        }
+    }
+
+    private async Task<IReadOnlyList<GenerationRange>> ReadPointersAsync(
+        string genMapTable, CancellationToken cancellationToken)
+    {
+        var entries = new List<GenerationRange>();
+        await foreach (var row in _databaseClient.StreamRawRowsAsync(
+                           _tenantId, GenerationMapSqlBuilder.BuildSelectAll(genMapTable), cancellationToken))
+        {
+            entries.Add(new GenerationRange(
+                Convert.ToInt64(row["range_start"], CultureInfo.InvariantCulture),
+                Convert.ToInt64(row["range_end"], CultureInfo.InvariantCulture),
+                row.TryGetValue("rtid_scope", out var scope) && scope is not null ? scope.ToString() ?? string.Empty : string.Empty,
+                Convert.ToInt64(row[Constants.Generation], CultureInfo.InvariantCulture)));
+        }
+
+        return entries;
     }
 
     /// <summary>
@@ -336,13 +518,22 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
     /// twice the target rows — except a single instant that holds more by itself, which time cannot
     /// split.
     /// </summary>
+    /// <param name="rangeStart">Inclusive start of the range.</param>
+    /// <param name="rangeEnd">Exclusive end of the range.</param>
+    /// <param name="buildCount">Builds the count of the rows the statement would touch in a slice.</param>
+    /// <param name="buildStatement">Builds the statement for a slice.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="mayExecuteAsync">
+    /// Asked before every statement; <c>false</c> ends the run without executing it.
+    /// </param>
     /// <returns>The rows counted in the whole range and the statements executed.</returns>
     private async Task<SlicedRun> RunSlicedAsync(
         DateTime rangeStart,
         DateTime rangeEnd,
         Func<DateTime, DateTime, string> buildCount,
         Func<DateTime, DateTime, string> buildStatement,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task<bool>>? mayExecuteAsync = null)
     {
         var fromMs = ToEpochMs(rangeStart);
         var toMs = ToEpochMsCeiling(rangeEnd);
@@ -369,6 +560,11 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
             if (!planner.Accept(sliceRows) || sliceRows <= 0)
             {
                 continue;
+            }
+
+            if (mayExecuteAsync is not null && !await mayExecuteAsync(cancellationToken))
+            {
+                break;
             }
 
             await _databaseClient.ExecuteNonQueryAsync(
