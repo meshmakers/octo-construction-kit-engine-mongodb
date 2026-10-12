@@ -47,6 +47,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     private readonly IFormulaEngine _formulaEngine;
     private readonly IArchiveRecomputeStateStore? _recomputeStateStore;
     private readonly IArchiveAuditTrail? _archiveAuditTrail;
+    private readonly int _recomputeSliceTargetRows;
 
     public CrateDbStreamDataRepository(
         ILogger<CrateDbStreamDataRepository> logger,
@@ -59,7 +60,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         IFormulaEngine formulaEngine,
         IRollupArchiveRuntimeStore? rollupArchiveStore = null,
         IArchiveRecomputeStateStore? recomputeStateStore = null,
-        IArchiveAuditTrail? archiveAuditTrail = null)
+        IArchiveAuditTrail? archiveAuditTrail = null,
+        IOptions<CrateRecomputeOptions>? recomputeOptions = null)
     {
         _logger = logger;
         _ckCacheService = ckCacheService;
@@ -72,6 +74,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         _formulaEngine = formulaEngine;
         _recomputeStateStore = recomputeStateStore;
         _archiveAuditTrail = archiveAuditTrail;
+        _recomputeSliceTargetRows = recomputeOptions?.Value.SliceTargetRows ?? CrateRecomputeOptions.DefaultSliceTargetRows;
     }
 
     public Task EnsureDatabaseCreatedAsync()
@@ -1875,7 +1878,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         _recomputeExecutor ??= new CrateDbArchiveRecomputeExecutor(
             _tenantId, _databaseClient, _managementClient, _archiveStore,
             _configuration.NumberOfShards, _configuration.NumberOfReplicas, _logger,
-            _rollupArchiveStore);
+            _rollupArchiveStore, _recomputeSliceTargetRows);
 
         return _recomputeExecutor.ExecuteAsync(source, rollup, rangeStart, rangeEnd, rtIdScope, cancellationToken);
     }

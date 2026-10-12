@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 using Meshmakers.Octo.Runtime.Engine.StreamData;
 using Microsoft.Extensions.Logging;
@@ -20,10 +21,18 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The DELETE-then-INSERT swap is <b>not</b> atomic in CrateDB (no multi-statement transaction). The
-/// staging compute still narrows the inconsistency window to a single delete+insert rather than the
-/// N per-bucket in-place upserts the forward orchestrator would do. Full per-window
-/// generation-pointer atomicity is layered on with the Phase 6 read path.
+/// CrateDB has no multi-statement transaction, so the range is not replaced in place. The staged
+/// rows are copied into the live table under the next generation, a single-row write in the pointer
+/// table makes that generation the active one — the commit — and the superseded rows are swept
+/// afterwards (Phase 6).
+/// </para>
+/// <para>
+/// Row bound (AB#6283): the copy and the sweep each run as several statements over consecutive
+/// time slices of the range, and every slice is counted before it is executed
+/// (<see cref="ExportSlicePlanner"/>), so no statement touches more than twice
+/// <see cref="CrateRecomputeOptions.SliceTargetRows"/> rows whatever the range holds. The unit of
+/// commit stays the whole call: every copy slice writes the same new generation, which no reader
+/// selects before the pointer names it, and every sweep slice runs after the flip and its refresh.
 /// </para>
 /// <para>
 /// Per-<c>rtId</c> scoped recompute (AB#4184): a non-null <c>rtIdScope</c> restricts the source
@@ -60,6 +69,7 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
     private readonly ILogger _logger;
     private readonly IRollupArchiveRuntimeStore? _rollupArchiveStore;
     private readonly RollupSourceBucketAggregator _bucketAggregator;
+    private readonly int _sliceTargetRows;
 
     /// <summary>Constructs the executor for one tenant.</summary>
     /// <param name="tenantId">The tenant whose CrateDB schema holds the archives.</param>
@@ -74,6 +84,10 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
     /// per-source aggregation binding (AB#5157 §3 rule 2). Optional: without it a rollup source can
     /// only serve specs that name one of its physical columns verbatim.
     /// </param>
+    /// <param name="sliceTargetRows">
+    /// Rows a copy or sweep statement aims at (<see cref="CrateRecomputeOptions.SliceTargetRows"/>);
+    /// a statement holds at most twice that.
+    /// </param>
     public CrateDbArchiveRecomputeExecutor(
         string tenantId,
         IStreamDataDatabaseClient databaseClient,
@@ -82,8 +96,14 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         int numberOfShards,
         int numberOfReplicas,
         ILogger logger,
-        IRollupArchiveRuntimeStore? rollupArchiveStore = null)
+        IRollupArchiveRuntimeStore? rollupArchiveStore = null,
+        int sliceTargetRows = CrateRecomputeOptions.DefaultSliceTargetRows)
     {
+        if (sliceTargetRows <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(sliceTargetRows), "The slice target must be positive.");
+        }
+
         _tenantId = tenantId;
         _databaseClient = databaseClient;
         _managementClient = managementClient;
@@ -92,6 +112,7 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         _numberOfReplicas = numberOfReplicas;
         _logger = logger;
         _rollupArchiveStore = rollupArchiveStore;
+        _sliceTargetRows = sliceTargetRows;
         _bucketAggregator = new RollupSourceBucketAggregator(tenantId, databaseClient, managementClient, logger);
     }
 
@@ -200,13 +221,12 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
 
             // This per-bucket INSERT ... SELECT is the recompute source read. It runs through
             // CrateDatabaseClient.ExecuteNonQueryAsync, which is wrapped in the shared Polly resilience
-            // pipeline (per-attempt timeout + retry on the transient connector-reset class). AB#4283:
-            // the range-scale timeout ("the operation was canceled" on a decade-long recompute) is now
-            // handled one level up — RecomputeOrchestrator.RecomputeArchiveAsync splits [from, to) into
-            // bounded bucket-aligned chunks and calls this executor once per chunk, so neither this
-            // aggregate loop nor the staging→live copy / sweep below ever spans more than a chunk's
-            // worth of buckets in a single statement. Do NOT add another retry loop here (it would
-            // multiply against the Polly retries and amplify load on a struggling cluster).
+            // pipeline (timeout + retry on the transient connector-reset class). AB#4283: the
+            // orchestrator splits [from, to) into bucket-aligned chunks and calls this executor once
+            // per chunk, which bounds the number of these statements per call; the rows a chunk holds
+            // are bounded further down, by the slices of the copy and the sweep (AB#6283). Do NOT add
+            // another retry loop here (it would multiply against the Polly retries and amplify load on
+            // a struggling cluster).
             rows += await _bucketAggregator.AggregateAsync(
                 source, bucketStart, bucketEnd, scope, BuildAggregateSql, DiscardStagedBucketAsync, cancellationToken);
             windows++;
@@ -230,12 +250,38 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         // and its staged rows collide with the previous run's on the primary key.
         await _databaseClient.RefreshArchiveTableAsync(_tenantId, genMapTable, CrateStatementClass.Maintenance, cancellationToken);
         var generation = await ReadNextGenerationAsync(genMapTable, cancellationToken);
+        var rowScope = string.IsNullOrEmpty(scope) ? null : scope;
 
-        // 1. Stage → live under the new generation. Refresh so the rows are on the read path before
-        //    the pointer flip makes them authoritative.
-        await _databaseClient.ExecuteNonQueryAsync(_tenantId,
-            RollupRecomputeSqlBuilder.BuildInsertFromStagingWithGeneration(liveTable, stagingTable, columnNames, generation),
-            CrateStatementClass.Maintenance, cancellationToken);
+        // 0. Leftover guard. The generation number comes from the pointer table alone, so a copy that
+        //    was cut short before its flip (timeout, node loss, shutdown) left rows under the very
+        //    number this run was just handed. They meet this run's rows on the primary key: the copy
+        //    would not replace them, and a row for an entity this run no longer produces would stay
+        //    and become visible with the flip. Remove them first. The count is a search read and has
+        //    to see what the earlier attempt wrote — hence the refresh before it.
+        await _databaseClient.RefreshArchiveTableAsync(_tenantId, liveTable, CrateStatementClass.Maintenance, cancellationToken);
+        var leftovers = await RunSlicedAsync(
+            rangeStart, rangeEnd,
+            (from, to) => RollupRecomputeSqlBuilder.BuildCountGeneration(liveTable, from, to, generation, rowScope),
+            (from, to) => RollupRecomputeSqlBuilder.BuildDeleteGenerationSlice(liveTable, from, to, generation, rowScope),
+            cancellationToken);
+        if (leftovers.Rows > 0)
+        {
+            _logger.LogWarning(
+                "Rollup {RollupRtId} range [{From:O},{To:O}) scope '{Scope}': removed {Rows} rows an earlier, uncommitted copy left under generation {Generation} before copying.",
+                rollup.RtId, rangeStart, rangeEnd, rowScope ?? "(all)", leftovers.Rows, generation);
+            await _databaseClient.RefreshArchiveTableAsync(_tenantId, liveTable, CrateStatementClass.Maintenance, cancellationToken);
+        }
+
+        // 1. Stage → live under the new generation, one statement per row-counted slice of the range
+        //    (every staged window starts inside it). The slices read staging, refreshed above, and
+        //    write disjoint keys, so nothing has to be refreshed between them. Refresh once at the
+        //    end so the rows are on the read path before the pointer flip makes them authoritative.
+        var copied = await RunSlicedAsync(
+            rangeStart, rangeEnd,
+            (from, to) => RollupRecomputeSqlBuilder.BuildCountStaged(stagingTable, from, to),
+            (from, to) => RollupRecomputeSqlBuilder.BuildInsertFromStagingSlice(
+                liveTable, stagingTable, columnNames, generation, from, to),
+            cancellationToken);
         await _databaseClient.RefreshArchiveTableAsync(_tenantId, liveTable, CrateStatementClass.Maintenance, cancellationToken);
 
         // 2. Flip the pointer (atomic commit) — scoped to the entity when a per-rtId recompute.
@@ -247,14 +293,17 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
             CrateStatementClass.Maintenance, cancellationToken);
         await _databaseClient.RefreshArchiveTableAsync(_tenantId, genMapTable, CrateStatementClass.Maintenance, cancellationToken);
 
-        // 3. Sweep the now-superseded generation(s) in the range (within the scope when set), and
-        //    refresh so the deleted rows are gone from the read path when this method returns — the
-        //    dependents of this rollup are recomputed right after it.
-        await _databaseClient.ExecuteNonQueryAsync(_tenantId,
-            RollupRecomputeSqlBuilder.BuildSweepSupersededGenerations(
-                liveTable, rangeStart, rangeEnd, generation,
-                string.IsNullOrEmpty(scope) ? null : scope),
-            CrateStatementClass.Maintenance, cancellationToken);
+        // 3. Sweep the now-superseded generation(s) in the range (within the scope when set), again
+        //    one statement per row-counted slice. The slices partition the WHOLE range, not only the
+        //    windows that were staged: a window whose source rows are gone has no new row, and its
+        //    old generation still has to go. Every slice runs after the flip and its refresh above.
+        //    Refresh at the end so the deleted rows are gone from the read path when this method
+        //    returns — the dependents of this rollup are recomputed right after it.
+        var swept = await RunSlicedAsync(
+            rangeStart, rangeEnd,
+            (from, to) => RollupRecomputeSqlBuilder.BuildCountSuperseded(liveTable, from, to, generation, rowScope),
+            (from, to) => RollupRecomputeSqlBuilder.BuildSweepSupersededGenerations(liveTable, from, to, generation, rowScope),
+            cancellationToken);
         await _databaseClient.RefreshArchiveTableAsync(_tenantId, liveTable, CrateStatementClass.Maintenance, cancellationToken);
 
         // 3b. Drop the pointer entries the flip just made redundant (AB#5189). The pointer is keyed
@@ -271,11 +320,81 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
 
         _logger.LogInformation(
             "Recomputed rollup {RollupRtId} range [{From:O},{To:O}) scope '{Scope}' as generation {Generation}: " +
-            "{Windows} windows / {Rows} staged rows, pointer flipped + superseded rows swept.",
-            rollup.RtId, rangeStart, rangeEnd, string.IsNullOrEmpty(scope) ? "(all)" : scope, generation, windows, rows);
+            "{Windows} windows / {Rows} staged rows copied in {CopySlices} statement(s), pointer flipped, " +
+            "{SweptRows} superseded rows swept in {SweepSlices} statement(s).",
+            rollup.RtId, rangeStart, rangeEnd, rowScope ?? "(all)", generation, windows, rows,
+            copied.Statements, swept.Rows, swept.Statements);
 
         return new RecomputeExecutionResult(rows, windows);
     }
+
+    /// <summary>
+    /// Runs one statement per time slice of <c>[rangeStart, rangeEnd)</c>, each slice sized by a
+    /// count taken before it is executed: propose, count, accept or narrow
+    /// (<see cref="ExportSlicePlanner"/>). The accepted slices partition the range without gap or
+    /// overlap; an empty slice costs its count and no statement. A slice is executed with at most
+    /// twice the target rows — except a single instant that holds more by itself, which time cannot
+    /// split.
+    /// </summary>
+    /// <returns>The rows counted in the whole range and the statements executed.</returns>
+    private async Task<SlicedRun> RunSlicedAsync(
+        DateTime rangeStart,
+        DateTime rangeEnd,
+        Func<DateTime, DateTime, string> buildCount,
+        Func<DateTime, DateTime, string> buildStatement,
+        CancellationToken cancellationToken)
+    {
+        var fromMs = ToEpochMs(rangeStart);
+        var toMs = ToEpochMsCeiling(rangeEnd);
+        var total = await _databaseClient.GetCountAsync(
+            _tenantId, buildCount(FromEpochMs(fromMs), FromEpochMs(toMs)), cancellationToken);
+        if (total <= 0)
+        {
+            return new SlicedRun(0, 0);
+        }
+
+        var planner = new ExportSlicePlanner(fromMs, toMs, total, _sliceTargetRows);
+        var statements = 0;
+        while (planner.TryNext(out var sliceFromMs, out var sliceToMs))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var sliceFrom = FromEpochMs(sliceFromMs);
+            var sliceTo = FromEpochMs(sliceToMs);
+            // A proposal over the whole range was counted a moment ago.
+            var sliceRows = sliceFromMs == fromMs && sliceToMs == toMs
+                ? total
+                : await _databaseClient.GetCountAsync(_tenantId, buildCount(sliceFrom, sliceTo), cancellationToken);
+
+            if (!planner.Accept(sliceRows) || sliceRows <= 0)
+            {
+                continue;
+            }
+
+            await _databaseClient.ExecuteNonQueryAsync(
+                _tenantId, buildStatement(sliceFrom, sliceTo), CrateStatementClass.Maintenance, cancellationToken);
+            statements++;
+        }
+
+        return new SlicedRun(total, statements);
+    }
+
+    private readonly record struct SlicedRun(long Rows, int Statements);
+
+    private static long ToEpochMs(DateTime value) => new DateTimeOffset(AsUtc(value)).ToUnixTimeMilliseconds();
+
+    /// <summary>The first whole millisecond at or behind <paramref name="value"/>, as an exclusive end.</summary>
+    private static long ToEpochMsCeiling(DateTime value)
+    {
+        var utc = AsUtc(value);
+        var ms = new DateTimeOffset(utc).ToUnixTimeMilliseconds();
+        return utc.Ticks % TimeSpan.TicksPerMillisecond == 0 ? ms : ms + 1;
+    }
+
+    private static DateTime FromEpochMs(long value) => DateTimeOffset.FromUnixTimeMilliseconds(value).UtcDateTime;
+
+    private static DateTime AsUtc(DateTime value) =>
+        value.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(value, DateTimeKind.Utc) : value.ToUniversalTime();
 
     /// <summary>
     /// Reads the next monotonic generation for the archive (<c>MAX(generation)+1</c> from the genmap

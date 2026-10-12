@@ -23,6 +23,7 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
     private readonly IOptions<StreamDataConfiguration> _configuration;
     private readonly IFormulaEngine _formulaEngine;
     private readonly IArchiveAuditTrail? _archiveAuditTrail;
+    private readonly IOptions<CrateRecomputeOptions>? _recomputeOptions;
 
     public CrateDbStreamDataRepositoryFactory(
         ILoggerFactory loggerFactory,
@@ -31,7 +32,8 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
         IStreamDataDatabaseManagementClient managementClient,
         IOptions<StreamDataConfiguration> configuration,
         IFormulaEngine formulaEngine,
-        IArchiveAuditTrail? archiveAuditTrail = null)
+        IArchiveAuditTrail? archiveAuditTrail = null,
+        IOptions<CrateRecomputeOptions>? recomputeOptions = null)
     {
         _loggerFactory = loggerFactory;
         _ckCacheService = ckCacheService;
@@ -40,6 +42,7 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
         _configuration = configuration;
         _formulaEngine = formulaEngine;
         _archiveAuditTrail = archiveAuditTrail;
+        _recomputeOptions = recomputeOptions;
     }
 
     public IStreamDataRepository Create(
@@ -59,7 +62,8 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
             _formulaEngine,
             rollupArchiveStore,
             recomputeStateStore,
-            _archiveAuditTrail);
+            _archiveAuditTrail,
+            _recomputeOptions);
     }
 
     public async Task DeleteArchiveTablesAsync(string tenantId, IReadOnlyList<OctoObjectId> archiveRtIds)
