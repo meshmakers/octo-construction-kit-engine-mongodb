@@ -69,7 +69,7 @@ default 60 s), not memory (about 150 KB allocated per entry, no measurable worki
 ### Owner index (AB#6538)
 
 The tenant index setup (`UpdateIndexAsync`, a full update that is not scoped to one model; it runs when a tenant is
-created and on every index update) creates the index `metadata_rtEntityId_1` on `fs.files.metadata.rtEntityId`. It is
+created and on every full index update; a scoped update of one model does not touch it) creates the index `metadata_rtEntityId_1` on `fs.files.metadata.rtEntityId`. It is
 **sparse**, because temporary binaries have no owner. Creating an index with an identical definition is a no-op, so the
 setup can be repeated and run concurrently. The owner lookups that use it are `DeleteAllFileSystemBinariesAsync` and the
 orphan sweep (AB#6541). Existing tenants get the index with the next full index update after the engine-mongodb release;
