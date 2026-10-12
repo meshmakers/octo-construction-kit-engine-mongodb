@@ -92,12 +92,12 @@ public class CrateDbArchiveRecomputeExecutorTests
                 "refresh:genmap",
                 "read:pointers",
                 "count:below",
+                // First use of the staging table by the process.
                 "ddl:drop-staging",
                 "ddl:create-staging",
                 "aggregate",
                 // The staged rows have to be on the read path before the copy reads them.
                 "refresh:staging",
-                "ddl:create-genmap",
                 // The next generation is a search read over the pointer table.
                 "refresh:genmap",
                 "read:next-generation",
@@ -115,6 +115,7 @@ public class CrateDbArchiveRecomputeExecutorTests
                 "refresh:live",
                 "delete:contained-pointers",
                 "refresh:genmap",
+                // 60 staged rows are more than the slice target: dropped, not emptied.
                 "ddl:drop-staging",
             },
             harness.Steps());
@@ -460,6 +461,129 @@ public class CrateDbArchiveRecomputeExecutorTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => harness.RunAsync(buckets: 2, series, firstBucket: 50));
+    }
+
+    // ---- staging table ----
+
+    [Fact]
+    public async Task Staging_IsCreatedOncePerProcess_WithoutReplicas_SmallRunIssuesNoDdl_LargeRunDropsOnce()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(2);
+
+        // First use by the process: whatever is there goes, and the table is created — one shard,
+        // no replicas, whatever the archive tables are configured with.
+        await harness.RunAsync(buckets: 2, series);
+        var ddl = harness.Crate.Calls.Where(c => c.Kind.StartsWith("ddl:", StringComparison.Ordinal)).ToList();
+        Assert.Equal(new[] { "ddl:create-genmap", "ddl:drop-staging", "ddl:create-staging" }, ddl.Select(c => c.Kind));
+        Assert.EndsWith("CLUSTERED INTO 1 SHARDS WITH (number_of_replicas = 0);", ddl[2].Text);
+        // 4 staged rows: emptied and kept.
+        Assert.Equal("delete:all-staged", harness.Crate.Kinds.Last());
+        Assert.True(harness.Crate.StagingExists);
+        Assert.Empty(harness.Crate.Staging);
+
+        // A second small run: no DDL at all — only the check that the kept table is empty.
+        var before = harness.Crate.Calls.Count;
+        await harness.RunAsync(buckets: 2, series, firstBucket: 10);
+        var second = harness.Crate.Kinds.Skip(before).ToList();
+        Assert.DoesNotContain(second, k => k.StartsWith("ddl:", StringComparison.Ordinal));
+        Assert.Equal(new[] { "refresh:staging", "count:all-staged", "aggregate" }, second.Take(3));
+
+        // A large run (60 staged rows): still no DDL to start with, one drop at the end.
+        before = harness.Crate.Calls.Count;
+        await harness.RunAsync(buckets: 12, Series(5), firstBucket: 20);
+        var third = harness.Crate.Kinds.Skip(before).ToList();
+        Assert.Equal(new[] { "ddl:drop-staging" }, third.Where(k => k.StartsWith("ddl:", StringComparison.Ordinal)));
+        Assert.Equal("ddl:drop-staging", third[^1]);
+        Assert.DoesNotContain("delete:all-staged", third);
+
+        // The run after it creates the table again — and does not drop first.
+        before = harness.Crate.Calls.Count;
+        await harness.RunAsync(buckets: 2, series, firstBucket: 40);
+        var fourth = harness.Crate.Kinds.Skip(before).ToList();
+        Assert.Equal(new[] { "ddl:create-staging" }, fourth.Where(k => k.StartsWith("ddl:", StringComparison.Ordinal)));
+        Assert.Equal("ddl:create-staging", fourth[0]);
+    }
+
+    [Fact]
+    public async Task Staging_RowsOfAFailedRun_AreRemovedBeforeTheNextRunStages()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(2);
+        await harness.RunAsync(buckets: 2, series);
+
+        // A run that fails after staging leaves its rows in the kept table …
+        harness.Crate.BeforeStatement = (call, _) =>
+        {
+            if (call.Kind == "copy")
+            {
+                throw new InvalidOperationException("copy failed");
+            }
+        };
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => harness.RunAsync(buckets: 3, new[] { series[0], "stale" }, firstBucket: 10));
+        Assert.Equal(6, harness.Crate.Staging.Count);
+
+        // … and the next run must not copy them: a few rows are deleted (and refreshed away) …
+        harness.Crate.BeforeStatement = null;
+        var before = harness.Crate.Calls.Count;
+        await harness.RunAsync(buckets: 3, series, firstBucket: 10);
+        Assert.Equal(
+            new[] { "refresh:staging", "count:all-staged", "delete:all-staged", "refresh:staging", "aggregate" },
+            harness.Crate.Kinds.Skip(before).Take(5));
+        Assert.DoesNotContain(harness.Crate.Live, r => r.RtId == "stale");
+
+        // … many rows are dropped with the table.
+        harness.Crate.BeforeStatement = (call, _) =>
+        {
+            if (call.Kind == "copy")
+            {
+                throw new InvalidOperationException("copy failed");
+            }
+        };
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => harness.RunAsync(buckets: 12, Series(5), firstBucket: 20));
+        harness.Crate.BeforeStatement = null;
+        before = harness.Crate.Calls.Count;
+        await harness.RunAsync(buckets: 2, series, firstBucket: 20);
+        Assert.Equal(
+            new[] { "refresh:staging", "count:all-staged", "ddl:drop-staging", "ddl:create-staging", "aggregate" },
+            harness.Crate.Kinds.Skip(before).Take(5));
+    }
+
+    [Fact]
+    public async Task Staging_DroppedBehindTheProcess_IsCreatedAgain()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(2);
+        await harness.RunAsync(buckets: 2, series);
+
+        // Another instance dropped the table after a large run of its own, or the archive's tables
+        // were dropped and the archive came back.
+        harness.Crate.StagingExists = false;
+
+        var result = await harness.RunAsync(buckets: 2, series, firstBucket: 10);
+
+        Assert.Equal(4, result.RowsProcessed);
+        Assert.True(harness.Crate.StagingExists);
+    }
+
+    [Fact]
+    public async Task Staging_AnotherProcess_StartsWithAFreshTable()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(2);
+        await harness.RunAsync(buckets: 2, series);
+        // A crashed process left rows in the table it had created.
+        harness.Crate.Staging.Add(new Row(StartMs + 10 * HourMs, 0, "stale"));
+
+        harness.Executor = harness.NewExecutor();
+        var before = harness.Crate.Calls.Count;
+        await harness.RunAsync(buckets: 2, series, firstBucket: 10);
+
+        var ddl = harness.Crate.Kinds.Skip(before).Where(k => k.StartsWith("ddl:", StringComparison.Ordinal)).ToList();
+        Assert.Equal(new[] { "ddl:create-genmap", "ddl:drop-staging", "ddl:create-staging" }, ddl);
+        Assert.DoesNotContain(harness.Crate.Live, r => r.RtId == "stale");
     }
 
     // ---- helpers ----

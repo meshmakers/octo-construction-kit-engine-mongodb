@@ -49,6 +49,15 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// per process and rollup over all entries — which is what survives a restart.
 /// </para>
 /// <para>
+/// Staging table (AB#6283): one shard, no replicas — it is disposable, losing it fails one call,
+/// which is retried — and it is kept between runs instead of being created and dropped by every
+/// call. Per process and rollup it is dropped and created once, on first use (which also removes a
+/// leftover of another shape or of a crashed process). After that a run of up to
+/// <see cref="CrateRecomputeOptions.SliceTargetRows"/> staged rows issues no DDL at all: the rows
+/// are deleted at the end. A larger run drops the table instead — deleting millions of staged rows
+/// costs about as much as the sweep, a drop costs nothing — and the next run creates it again.
+/// </para>
+/// <para>
 /// Per-<c>rtId</c> scoped recompute (AB#4184): a non-null <c>rtIdScope</c> restricts the source
 /// aggregation, the generation-pointer entry (genmap <c>rtid_scope</c>), and the post-flip sweep to
 /// that single entity, so a recompute of one metering point leaves every other entity's rows (and
@@ -78,8 +87,6 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
     private readonly IStreamDataDatabaseClient _databaseClient;
     private readonly IStreamDataDatabaseManagementClient _managementClient;
     private readonly IArchiveRuntimeStore _archiveStore;
-    private readonly int _numberOfShards;
-    private readonly int _numberOfReplicas;
     private readonly ILogger _logger;
     private readonly IRollupArchiveRuntimeStore? _rollupArchiveStore;
     private readonly RollupSourceBucketAggregator _bucketAggregator;
@@ -91,13 +98,26 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
     private readonly ConcurrentDictionary<string, ConcurrentQueue<GenerationRange>> _pendingReclaims =
         new(StringComparer.Ordinal);
 
+    // What this process knows about each rollup's staging table (keyed by the rollup's rtId): the
+    // CREATE statement it was last created with, and whether it currently exists. No entry ⇒ never
+    // touched by this process.
+    private readonly ConcurrentDictionary<string, StagingTableState> _stagingTables = new(StringComparer.Ordinal);
+
+    // Rollups whose pointer table this process has ensured.
+    private readonly ConcurrentDictionary<string, bool> _ensuredGenMaps = new(StringComparer.Ordinal);
+
     /// <summary>Constructs the executor for one tenant.</summary>
     /// <param name="tenantId">The tenant whose CrateDB schema holds the archives.</param>
     /// <param name="databaseClient">Data-plane CrateDB client (aggregation, copy, sweep).</param>
     /// <param name="managementClient">DDL client (staging table create / drop, genmap).</param>
     /// <param name="archiveStore">Archive snapshots (the rollup's columns + aggregations).</param>
-    /// <param name="numberOfShards">Shard count for the staging table.</param>
-    /// <param name="numberOfReplicas">Replica count for the staging table.</param>
+    /// <param name="numberOfShards">
+    /// Not used any more: the staging table is always created with one shard (AB#6283). Kept so the
+    /// constructor stays source compatible.
+    /// </param>
+    /// <param name="numberOfReplicas">
+    /// Not used any more: the staging table is always created without replicas (AB#6283).
+    /// </param>
     /// <param name="logger">Logger.</param>
     /// <param name="rollupArchiveStore">
     /// Rollup snapshots — needed to resolve a rollup <em>source's</em> logical specs for the
@@ -128,8 +148,8 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         _databaseClient = databaseClient;
         _managementClient = managementClient;
         _archiveStore = archiveStore;
-        _numberOfShards = numberOfShards;
-        _numberOfReplicas = numberOfReplicas;
+        _ = numberOfShards;
+        _ = numberOfReplicas;
         _logger = logger;
         _rollupArchiveStore = rollupArchiveStore;
         _sliceTargetRows = sliceTargetRows;
@@ -196,14 +216,13 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         var resolvedAggregations = RollupAggregationColumns.ResolveForSource(
             aggregations, rollup.RtId, source, sourceRollup);
 
-        // Fresh staging: drop any leftover from a crashed run, recreate with the live windowed shape.
-        // includeGeneration:true so the shared RollupAggregationSqlBuilder (which now always writes a
-        // generation column) targets a matching schema; staging's generation is always 0 and is
-        // overridden to the new generation when the staged rows are copied into the live table.
-        await _managementClient.ExecuteDdlAsync(_tenantId, RollupRecomputeSqlBuilder.BuildDropIfExists(stagingTable), cancellationToken);
-        await _managementClient.ExecuteDdlAsync(_tenantId,
-            ArchiveDdlGenerator.GenerateCreateWindowedTable(stagingTable, resolvedColumns, _numberOfShards, _numberOfReplicas, includeGeneration: true),
-            cancellationToken);
+        // An empty staging table with the live windowed shape. includeGeneration:true so the shared
+        // RollupAggregationSqlBuilder (which always writes a generation column) targets a matching
+        // schema; staging's generation is always 0 and is overridden to the new generation when the
+        // staged rows are copied into the live table. One shard, no replicas: see the class remarks.
+        var createStagingSql = ArchiveDdlGenerator.GenerateCreateWindowedTable(
+            stagingTable, resolvedColumns, numberOfShards: 1, numberOfReplicas: 0, includeGeneration: true);
+        await PrepareStagingAsync(rollup.RtId.ToString(), stagingTable, createStagingSql, cancellationToken);
 
         // Calendar buckets snap to this zone's local wall-clock boundaries (AB#4300 / O6); null ⇒
         // UTC. Resolved once per recompute — the enumerator yields the zone-correct UTC instants
@@ -268,7 +287,7 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         // active-generation pointer in a single-row write — the actual commit — and finally sweep the
         // superseded rows. A crash before the flip leaves readers on the previous generation; a crash
         // after the flip but before the sweep just leaves dead rows, which the reclaim pass removes.
-        await _managementClient.ExecuteDdlAsync(_tenantId, GenerationMapSqlBuilder.BuildCreateTable(genMapTable), cancellationToken);
+        await EnsureGenMapAsync(rollup.RtId.ToString(), genMapTable, cancellationToken);
         // The next generation is MAX(generation)+1 over the pointer table — a search read. Refresh
         // first, or a run that follows another within the refresh interval is handed the same number
         // and its staged rows collide with the previous run's on the primary key.
@@ -357,9 +376,10 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
             await _databaseClient.RefreshArchiveTableAsync(_tenantId, genMapTable, CrateStatementClass.Maintenance, cancellationToken);
         }, cancellationToken);
 
-        // 4. Drop staging.
-        await TryCleanupAsync("staging cleanup", rollup.RtId, flipped, () =>
-            _managementClient.ExecuteDdlAsync(_tenantId, RollupRecomputeSqlBuilder.BuildDropIfExists(stagingTable), cancellationToken),
+        // 4. Clear staging: empty and keep a small table, drop a large one (see the class remarks).
+        //    Whatever a failure leaves here, the next run finds and removes before it stages.
+        await TryCleanupAsync("staging cleanup", rollup.RtId, flipped,
+            () => ClearStagingAsync(rollup.RtId.ToString(), stagingTable, copied.Rows, cancellationToken),
             cancellationToken);
 
         _logger.LogInformation(
@@ -371,6 +391,121 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
             sweepCompleted ? string.Empty : " — the sweep did not complete, the rest is reclaimed by the next call");
 
         return new RecomputeExecutionResult(rows, windows);
+    }
+
+    /// <summary>
+    /// Leaves an existing, empty staging table of the given shape behind — with as little DDL as the
+    /// state allows.
+    /// </summary>
+    private async Task PrepareStagingAsync(
+        string rollupRtId, string stagingTable, string createSql, CancellationToken cancellationToken)
+    {
+        if (!_stagingTables.TryGetValue(rollupRtId, out var state) || state.CreateSql != createSql)
+        {
+            // First use by this process, or the rollup's columns changed: whatever is there may be
+            // of another shape or hold a crashed run's rows.
+            await RecreateStagingAsync(rollupRtId, stagingTable, createSql, cancellationToken);
+            return;
+        }
+
+        if (!state.Exists)
+        {
+            // The last run dropped it (a large run).
+            await _managementClient.ExecuteDdlAsync(_tenantId, createSql, cancellationToken);
+            _stagingTables[rollupRtId] = state with { Exists = true };
+            return;
+        }
+
+        // Kept from the last run. It is empty unless that run failed before clearing it, or failed
+        // to clear it; the count is a search read, hence the refresh.
+        long leftover;
+        try
+        {
+            await _databaseClient.RefreshArchiveTableAsync(_tenantId, stagingTable, CrateStatementClass.Maintenance, cancellationToken);
+            leftover = await _databaseClient.GetCountAsync(
+                _tenantId, RollupRecomputeSqlBuilder.BuildCountAllStaged(stagingTable), cancellationToken);
+        }
+        catch (Exception ex) when (CrateDbStreamDataRepository.IsMissingTableError(ex))
+        {
+            // Dropped behind this process's back — by another instance after a large run, or with
+            // the archive.
+            await RecreateStagingAsync(rollupRtId, stagingTable, createSql, cancellationToken);
+            return;
+        }
+
+        if (leftover <= 0)
+        {
+            return;
+        }
+
+        if (leftover <= _sliceTargetRows)
+        {
+            await _databaseClient.ExecuteNonQueryAsync(
+                _tenantId, RollupRecomputeSqlBuilder.BuildDeleteAllStaged(stagingTable),
+                CrateStatementClass.Maintenance, cancellationToken);
+            // The aggregation upserts into staging and the copy reads it: the deleted rows have to
+            // be off the read path before either.
+            await _databaseClient.RefreshArchiveTableAsync(_tenantId, stagingTable, CrateStatementClass.Maintenance, cancellationToken);
+            return;
+        }
+
+        await RecreateStagingAsync(rollupRtId, stagingTable, createSql, cancellationToken);
+    }
+
+    private async Task RecreateStagingAsync(
+        string rollupRtId, string stagingTable, string createSql, CancellationToken cancellationToken)
+    {
+        await _managementClient.ExecuteDdlAsync(
+            _tenantId, RollupRecomputeSqlBuilder.BuildDropIfExists(stagingTable), cancellationToken);
+        _stagingTables[rollupRtId] = new StagingTableState(createSql, Exists: false);
+        await _managementClient.ExecuteDdlAsync(_tenantId, createSql, cancellationToken);
+        _stagingTables[rollupRtId] = new StagingTableState(createSql, Exists: true);
+    }
+
+    /// <summary>
+    /// Removes the staged rows of a finished run: a delete that keeps the table when they are few, a
+    /// drop when they are many.
+    /// </summary>
+    private async Task ClearStagingAsync(
+        string rollupRtId, string stagingTable, long stagedRows, CancellationToken cancellationToken)
+    {
+        if (stagedRows <= 0)
+        {
+            return;
+        }
+
+        if (stagedRows <= _sliceTargetRows)
+        {
+            await _databaseClient.ExecuteNonQueryAsync(
+                _tenantId, RollupRecomputeSqlBuilder.BuildDeleteAllStaged(stagingTable),
+                CrateStatementClass.Maintenance, cancellationToken);
+            return;
+        }
+
+        await _managementClient.ExecuteDdlAsync(
+            _tenantId, RollupRecomputeSqlBuilder.BuildDropIfExists(stagingTable), cancellationToken);
+        if (_stagingTables.TryGetValue(rollupRtId, out var state))
+        {
+            _stagingTables[rollupRtId] = state with { Exists = false };
+        }
+    }
+
+    private readonly record struct StagingTableState(string CreateSql, bool Exists);
+
+    /// <summary>
+    /// The pointer table is created at rollup activation; creating it here when absent covers
+    /// rollups activated before it existed. Once per process and rollup.
+    /// </summary>
+    private async Task EnsureGenMapAsync(string rollupRtId, string genMapTable, CancellationToken cancellationToken)
+    {
+        if (_ensuredGenMaps.ContainsKey(rollupRtId))
+        {
+            return;
+        }
+
+        await _managementClient.ExecuteDdlAsync(
+            _tenantId, GenerationMapSqlBuilder.BuildCreateTable(genMapTable), cancellationToken);
+        _ensuredGenMaps[rollupRtId] = true;
     }
 
     /// <summary>
@@ -439,8 +574,7 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
 
         try
         {
-            await _managementClient.ExecuteDdlAsync(
-                _tenantId, GenerationMapSqlBuilder.BuildCreateTable(genMapTable), cancellationToken);
+            await EnsureGenMapAsync(rollupRtId, genMapTable, cancellationToken);
             // The entries are a search read; so is the re-read before every statement.
             await _databaseClient.RefreshArchiveTableAsync(
                 _tenantId, genMapTable, CrateStatementClass.Maintenance, cancellationToken);

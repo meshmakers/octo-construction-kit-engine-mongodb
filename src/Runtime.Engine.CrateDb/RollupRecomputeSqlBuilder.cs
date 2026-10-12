@@ -23,8 +23,8 @@ internal static class RollupRecomputeSqlBuilder
     /// <summary>
     /// Per-archive staging table identifier in the tenant schema, e.g.
     /// <c>"tenant"."archive_&lt;rollupRtId&gt;__rc"</c>. Deterministic (one per archive): the coalesce
-    /// policy guarantees at most one active recompute per archive, so a stable name is safe and lets
-    /// a crashed run's leftover table be dropped on the next attempt.
+    /// policy guarantees at most one active recompute per archive, so a stable name is safe. The
+    /// table is kept between runs and dropped with its archive (<see cref="ArchiveTableDrop"/>).
     /// </summary>
     public static string StagingTable(string tenantId, string rollupRtId) =>
         $"\"{TenantSchema.SchemaName(tenantId)}\".\"archive_{rollupRtId}__rc\"";
@@ -70,6 +70,10 @@ internal static class RollupRecomputeSqlBuilder
             $"INSERT INTO {liveTable} ({cols}, \"{Constants.Generation}\") " +
             $"SELECT {cols}, {g} FROM {stagingTable} WHERE {WindowStartIn(from, to)};";
     }
+
+    /// <summary>Builds the count of every row in the staging table.</summary>
+    public static string BuildCountAllStaged(string stagingTable) =>
+        $"SELECT COUNT(*) FROM {stagingTable};";
 
     /// <summary>Builds <c>DELETE FROM {staging};</c> — empties a staging table that is kept.</summary>
     public static string BuildDeleteAllStaged(string stagingTable) =>

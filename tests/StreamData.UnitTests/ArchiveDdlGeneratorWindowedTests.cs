@@ -95,6 +95,21 @@ public class ArchiveDdlGeneratorWindowedTests
     }
 
     [Fact]
+    public void GenerateCreateWindowedTable_OneShardWithoutReplicas_SaysSoExplicitly()
+    {
+        // The shape of the recompute staging table (AB#6283): replicas 0 has to be written out —
+        // leaving the clause away would hand the table the cluster default.
+        var sql = ArchiveDdlGenerator.GenerateCreateWindowedTable(
+            qualifiedTableName: "\"acmecorp\".\"archive_rollup1__rc\"",
+            columns: System.Array.Empty<ArchiveColumnDdl>(),
+            numberOfShards: 1,
+            numberOfReplicas: 0,
+            includeGeneration: true);
+
+        Assert.EndsWith(") CLUSTERED INTO 1 SHARDS WITH (number_of_replicas = 0);", sql);
+    }
+
+    [Fact]
     public void GenerateCreateTimeRangeTable_RejectsEmptyQualifiedTable()
     {
         Assert.Throws<System.ArgumentException>(() =>

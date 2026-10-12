@@ -115,13 +115,14 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
     {
         await NewSut().DeleteArchiveAsync(Archive);
 
-        // The archive table itself is dropped exactly once (excluding the genmap side-table below).
+        // The archive table itself is dropped exactly once (excluding the side-tables below).
         A.CallTo(() => _mgmt.ExecuteDdlAsync(
                 "tenant-x",
                 A<string>.That.Matches(sql =>
                     sql.Contains("DROP TABLE IF EXISTS")
                     && sql.Contains($"archive_{Archive}")
-                    && !sql.Contains("__genmap"))))
+                    && !sql.Contains("__genmap")
+                    && !sql.Contains("__rc"))))
             .MustHaveHappenedOnceExactly();
 
         // The Phase-6 generation-map side-table is dropped too (IF EXISTS — no-op for non-rollups).
@@ -131,6 +132,21 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
                     sql.Contains("DROP TABLE IF EXISTS")
                     && sql.Contains($"archive_{Archive}__genmap"))))
             .MustHaveHappenedOnceExactly();
+    }
+
+    [Fact]
+    public async Task ArchiveTableDrop_DropsTheStagingTableToo()
+    {
+        // The recompute staging table of a rollup is kept between runs (AB#6283), so nothing but
+        // the archive's own drop removes it.
+        await NewSut().DeleteArchiveAsync(Archive);
+
+        A.CallTo(() => _mgmt.ExecuteDdlAsync(
+                "tenant-x",
+                $"DROP TABLE IF EXISTS {RollupRecomputeSqlBuilder.StagingTable("tenant-x", Archive.ToString())};"))
+            .MustHaveHappenedOnceExactly();
+        // Nothing else in the tenant's schema is touched: the data table, the pointer table, staging.
+        A.CallTo(() => _mgmt.ExecuteDdlAsync("tenant-x", A<string>._)).MustHaveHappened(3, Times.Exactly);
     }
 
     [Fact]

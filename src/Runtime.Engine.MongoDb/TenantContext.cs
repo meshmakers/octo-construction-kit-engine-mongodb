@@ -985,15 +985,15 @@ public class TenantContext : ITenantContext
         {
             _logger.LogError(ex,
                 "Dropped database {DatabaseName} of tenant {TenantId} but failed to drop the stream data (CrateDB) " +
-                "tables of its archives; drop them manually in the tenant's schema (the __genmap side-table " +
-                "exists only for rollup archives): {Tables}", databaseName, tenantId, DescribeArchiveTables(archives));
+                "tables of its archives; drop them manually in the tenant's schema (the __genmap and __rc " +
+                "side-tables exist only for rollup archives): {Tables}", databaseName, tenantId, DescribeArchiveTables(archives));
         }
     }
 
-    /// <summary>Both table names of every archive, so the manual remediation in the log is complete.</summary>
+    /// <summary>Every table name of every archive, so the manual remediation in the log is complete.</summary>
     private static string DescribeArchiveTables(IReadOnlyList<OctoObjectId> archives)
     {
-        return string.Join(", ", archives.Select(rtId => $"archive_{rtId}, archive_{rtId}__genmap"));
+        return string.Join(", ", archives.Select(rtId => $"archive_{rtId}, archive_{rtId}__genmap, archive_{rtId}__rc"));
     }
 
     /// <summary>
@@ -2298,10 +2298,12 @@ public class TenantContext : ITenantContext
         var audit = _serviceProvider.GetService<IArchiveAuditTrail>()
                     ?? new LoggingArchiveAuditTrail(_loggerFactory.CreateLogger<LoggingArchiveAuditTrail>());
 
-        // AB#4283: a decade-long recompute/backfill is split into bucket-aligned chunks so no single
-        // CrateDB statement exceeds the per-statement timeout. Chunk size is overridable via
-        // OCTO_StreamData__RecomputeMaxBucketsPerChunk for tuning against a specific cluster; the
-        // default is sized to stay well inside the 30s statement budget.
+        // AB#4283: a decade-long recompute/backfill is split into bucket-aligned chunks, which bounds
+        // the per-bucket aggregation statements and the duration of one chunk. The rows a chunk's
+        // copy and sweep statements touch are bounded inside the executor, by row-counted slices
+        // (AB#6283, StreamData:Recompute:SliceTargetRows) — the chunk size is not what keeps a
+        // statement inside its time budget. Overridable via
+        // OCTO_StreamData__RecomputeMaxBucketsPerChunk for tuning against a specific cluster.
         var maxBucketsPerChunk = ResolveRecomputeMaxBucketsPerChunk();
 
         _recomputeOrchestrator = new RecomputeOrchestrator(

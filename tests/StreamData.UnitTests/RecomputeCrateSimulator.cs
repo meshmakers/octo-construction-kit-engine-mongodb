@@ -95,8 +95,10 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
         long rows;
         if (countQuery.Contains($"FROM {_stagingTable}", StringComparison.Ordinal))
         {
-            kind = "count:staged";
-            rows = RangeRegex.IsMatch(countQuery) ? Select(Staging, countQuery).Count() : Staging.Count;
+            EnsureStagingExists();
+            var ranged = RangeRegex.IsMatch(countQuery);
+            kind = ranged ? "count:staged" : "count:all-staged";
+            rows = ranged ? Select(Staging, countQuery).Count() : Staging.Count;
         }
         else if (countQuery.Contains($"FROM {_liveTable}", StringComparison.Ordinal))
         {
@@ -145,6 +147,11 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (qualifiedTable == _stagingTable)
+        {
+            EnsureStagingExists();
+        }
+
         var call = new Call("refresh:" + TableName(qualifiedTable), qualifiedTable);
         BeforeStatement?.Invoke(call, cancellationToken);
         Calls.Add(call);
@@ -244,6 +251,7 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
         }
         else if (kind == "ddl:create-staging")
         {
+            // CREATE TABLE IF NOT EXISTS: an existing table keeps its rows.
             StagingExists = true;
         }
 
@@ -251,6 +259,15 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
     }
 
     // ---- statement model ----
+
+    private void EnsureStagingExists()
+    {
+        if (!StagingExists)
+        {
+            // CrateDB's wording for a missing table.
+            throw new InvalidOperationException($"RelationUnknown[Relation '{_stagingTable}' unknown]");
+        }
+    }
 
     private string Classify(string sql)
     {
@@ -293,10 +310,7 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
         {
             case "aggregate":
             {
-                if (!StagingExists)
-                {
-                    throw new InvalidOperationException("Aggregation into a staging table that does not exist.");
-                }
+                EnsureStagingExists();
 
                 var staged = StageForAggregate(_aggregates++).ToList();
                 Staging.AddRange(staged);
@@ -304,6 +318,7 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
             }
             case "copy":
             {
+                EnsureStagingExists();
                 var generation = long.Parse(CopyGenerationRegex.Match(sql).Groups["g"].Value, CultureInfo.InvariantCulture);
                 var rows = (RangeRegex.IsMatch(sql) ? Select(Staging, sql) : Staging).ToList();
                 foreach (var row in rows)
@@ -349,6 +364,7 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
             }
             case "delete:all-staged":
             {
+                EnsureStagingExists();
                 var count = Staging.Count;
                 Staging.Clear();
                 return count;
