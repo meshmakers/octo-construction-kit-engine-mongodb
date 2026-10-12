@@ -35,13 +35,31 @@ Edge cases (all covered by tests):
 
 A crash (or a failing delete) between the commit and the after-commit delete leaves the **old** bytes in GridFS
 without an entity that references them; a crash before the commit leaves the **new** (staged) bytes. Both are
-harmless orphans: no entity points to them, and entity reads never miss bytes. They are identified by their
-GridFS metadata (`rtEntityId`, content type, binary type `FileSystem`) combined with the fact that the entity with
-that `rtEntityId` references a different `BinaryId`. The automated sweep is **AB#6541** (it must exist before the file migration sweep AB#6183 is switched on). Until then, orphans can be removed by a
-maintenance job that deletes `fs.files` documents of binary type `FileSystem` whose `_id` is not referenced by the
-linked-binary attribute of the entity named in `metadata.rtEntityId` (and the matching `fs.chunks`). The cleanup
-must run outside active transactions and only for files older than the longest transaction timeout, so that bytes
-staged by an in-flight transaction are never removed.
+harmless orphans: no entity points to them, and entity reads never miss bytes. They are removed by the orphan sweep (**AB#6541**, `GridFsOrphanSweeper` in engine-mongodb).
+
+### Orphan sweep
+
+A FileSystem GridFS file is an **orphan** when no entity of the tenant references its `_id` in a linked-binary
+attribute - whatever its `metadata.rtEntityId` says (old bytes after a crash between commit and delete, staged bytes
+after a crash before commit, bytes without owner metadata, bytes of a deleted entity). Referenced bytes are never
+orphans; temporary binaries are never touched.
+
+- **Dry run is the default.** It reports per tenant the number of examined, referenced, young and orphaned files, the
+  chunks and the total size of the orphans and the duration, and deletes nothing. The log line contains counts only
+  (no file names, no ids of customer data).
+- **Removal** is an explicit option (`Remove = true`). It deletes orphaned files and their chunks only when they are
+  older than the **grace period** (default 24 h, never below 10 minutes = ten times the 60 s transaction lifetime;
+  a shorter value is refused). The candidate list is taken before the references are read, so bytes that an in-flight
+  transaction has staged (they are younger than the grace period) are never removed. The run is idempotent and safe to
+  repeat; a second run finds nothing.
+- **References** are read server side in one pass per `RtEntity*` collection: only the ObjectIds found in
+  `attributes.<attribute>.binaryId` are returned, never whole entity documents. The engine manages linked binaries only
+  as attributes of a type (`BulkRtMutation` iterates the type's `BinaryLinked` attributes), so the top-level attributes
+  are complete. Should a binary id be stored elsewhere (a future record support), it would be reported as an orphan:
+  run the dry run on every tenant and compare before the first removal.
+- **Runbook** (before the files migration sweep AB#6183 is switched on): dry run on every tenant, review the counts, then
+  remove with the default grace period. The trigger per tenant is the system API of the asset repository (separate
+  change, same story).
 
 No persistence or CK schema change: the `BinaryId` is already stored in the entity's linked-binary attribute and
 GridFS metadata is carried over unchanged. Existing entities and their `BinaryId`s stay readable.
