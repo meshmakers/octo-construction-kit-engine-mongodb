@@ -586,6 +586,111 @@ public class CrateDbArchiveRecomputeExecutorTests
         Assert.DoesNotContain(harness.Crate.Live, r => r.RtId == "stale");
     }
 
+    // ---- the state outlives the executor ----
+
+    [Fact]
+    public async Task TwoExecutorsOfOneProcess_ShareTheState_TheSecondIssuesNoStagingDdlAndNoSecondReclaimPass()
+    {
+        // The repository — and its executor — is created per request and per orchestrator tick; what
+        // is "once per process" has to survive that.
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(2);
+        var process = new RecomputeProcessState();
+        harness.Crate.Pointers.Add(new GenerationRange(StartMs + 90 * HourMs, StartMs + 91 * HourMs, string.Empty, 3));
+
+        harness.Executor = harness.NewExecutor(process);
+        await harness.RunAsync(buckets: 2, series);
+        Assert.Contains("ddl:create-staging", harness.Crate.Kinds);
+        Assert.Contains("read:pointers", harness.Crate.Kinds);
+
+        // The next request: a new executor, the same process.
+        harness.Executor = harness.NewExecutor(process);
+        var before = harness.Crate.Calls.Count;
+        var result = await harness.RunAsync(buckets: 2, series, firstBucket: 10);
+
+        Assert.Equal(4, result.RowsProcessed);
+        var second = harness.Crate.Kinds.Skip(before).ToList();
+        Assert.DoesNotContain(second, k => k.StartsWith("ddl:", StringComparison.Ordinal));
+        Assert.DoesNotContain(second, k => k is "read:pointers" or "count:below" or "delete:below");
+        Assert.Equal(new[] { "refresh:staging", "count:all-staged", "aggregate" }, second.Take(3));
+    }
+
+    [Fact]
+    public async Task AFailedSweep_IsMadeUpForByTheNextExecutorOfTheProcess()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(5);
+        var process = new RecomputeProcessState();
+        harness.SeedLive(buckets: 12, series, generation: 3);
+        harness.Crate.Pointers.Add(new GenerationRange(StartMs, StartMs + 12 * HourMs, string.Empty, 3));
+        harness.Crate.BeforeStatement = (call, _) =>
+        {
+            if (call.Kind == "delete:superseded")
+            {
+                throw new InvalidOperationException("sweep failed");
+            }
+        };
+        harness.Executor = harness.NewExecutor(process);
+        await harness.RunAsync(buckets: 12, series);
+        Assert.Equal(60, harness.Crate.Live.Count(r => r.Generation == 3));
+
+        harness.Crate.BeforeStatement = null;
+        harness.Executor = harness.NewExecutor(process);
+        var before = harness.Crate.Calls.Count;
+        await harness.RunAsync(buckets: 2, series, firstBucket: 20);
+
+        Assert.DoesNotContain(harness.Crate.Live, r => r.Generation == 3);
+        // Only the remembered entry — not another pass over the whole pointer table.
+        Assert.DoesNotContain("read:pointers", harness.Crate.Kinds.Skip(before));
+    }
+
+    [Fact]
+    public async Task DroppingTheArchivesTables_ForgetsTheState_TheNextRunStartsFromScratch()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(2);
+        var process = new RecomputeProcessState();
+        harness.Executor = harness.NewExecutor(process);
+        await harness.RunAsync(buckets: 2, series);
+        Assert.True(process.StagingTables.ContainsKey(harness.LiveTable));
+
+        // Archive delete / tenant drop in this process: the tables go, and what was remembered about
+        // them with them.
+        var management = A.Fake<IStreamDataDatabaseManagementClient>();
+        await ArchiveTableDrop.DropAsync(management, Tenant, harness.RollupRtId.ToString(), process);
+        harness.Crate.StagingExists = false;
+        harness.Crate.Pointers.Clear();
+        harness.Crate.Live.Clear();
+
+        Assert.False(process.StagingTables.ContainsKey(harness.LiveTable));
+        Assert.False(process.EnsuredGenMaps.ContainsKey(harness.LiveTable));
+        Assert.False(process.ReclaimPassDone.ContainsKey(harness.LiveTable));
+
+        // The archive comes back under the same rtId (re-import): first use again.
+        harness.Executor = harness.NewExecutor(process);
+        var before = harness.Crate.Calls.Count;
+        await harness.RunAsync(buckets: 2, series);
+        Assert.Equal(
+            new[] { "ddl:create-genmap", "ddl:drop-staging", "ddl:create-staging" },
+            harness.Crate.Kinds.Skip(before).Where(k => k.StartsWith("ddl:", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void ProcessState_IsKeyedByTheQualifiedTable_SoTenantsDoNotShareEntries()
+    {
+        var process = new RecomputeProcessState();
+        var one = TenantSchema.QualifiedArchiveTable("tenantone", "rollup1");
+        var two = TenantSchema.QualifiedArchiveTable("tenanttwo", "rollup1");
+        process.ReclaimPassDone[one] = true;
+        process.ReclaimPassDone[two] = true;
+
+        process.Forget(one);
+
+        Assert.NotEqual(one, two);
+        Assert.False(process.ReclaimPassDone.ContainsKey(one));
+        Assert.True(process.ReclaimPassDone.ContainsKey(two));
+    }
+
     // ---- helpers ----
 
     private static string[] Series(int count) =>
@@ -658,6 +763,17 @@ public class CrateDbArchiveRecomputeExecutorTests
 
         /// <summary>The token every run is started with.</summary>
         public CancellationToken Token { get; set; } = TestContext.Current.CancellationToken;
+
+        /// <summary>
+        /// An executor the way the repository builds one: short-lived, with the state of the process
+        /// handed in. Two of them sharing a state are two requests of one process.
+        /// </summary>
+        public CrateDbArchiveRecomputeExecutor NewExecutor(RecomputeProcessState state) => new(
+            Tenant, Crate, Crate, _archiveStore, Logger, rollupArchiveStore: null, _sliceTargetRows, state);
+
+        public string LiveTable => TenantSchema.QualifiedArchiveTable(Tenant, _rollupRtId.ToString());
+
+        public OctoObjectId RollupRtId => _rollupRtId;
 
         /// <summary>A second executor on the same tables — what a restarted process would be.</summary>
         public CrateDbArchiveRecomputeExecutor NewExecutor() => new(

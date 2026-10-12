@@ -48,6 +48,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     private readonly IArchiveRecomputeStateStore? _recomputeStateStore;
     private readonly IArchiveAuditTrail? _archiveAuditTrail;
     private readonly int _recomputeSliceTargetRows;
+    private readonly RecomputeProcessState _recomputeProcessState;
 
     public CrateDbStreamDataRepository(
         ILogger<CrateDbStreamDataRepository> logger,
@@ -61,7 +62,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         IRollupArchiveRuntimeStore? rollupArchiveStore = null,
         IArchiveRecomputeStateStore? recomputeStateStore = null,
         IArchiveAuditTrail? archiveAuditTrail = null,
-        IOptions<CrateRecomputeOptions>? recomputeOptions = null)
+        IOptions<CrateRecomputeOptions>? recomputeOptions = null,
+        RecomputeProcessState? recomputeProcessState = null)
     {
         _logger = logger;
         _ckCacheService = ckCacheService;
@@ -74,6 +76,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         _formulaEngine = formulaEngine;
         _recomputeStateStore = recomputeStateStore;
         _archiveAuditTrail = archiveAuditTrail;
+        // Without a state handed in (a repository built outside the factory) the memos live as long
+        // as this repository does.
+        _recomputeProcessState = recomputeProcessState ?? new RecomputeProcessState();
         _recomputeSliceTargetRows = recomputeOptions?.Value.SliceTargetRows ?? CrateRecomputeOptions.DefaultSliceTargetRows;
     }
 
@@ -332,7 +337,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     {
         _logger.LogDebug("Dropping archive table {Table} for tenant {TenantId}",
             TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()), _tenantId);
-        await ArchiveTableDrop.DropAsync(_managementClient, _tenantId, archiveRtId.ToString());
+        await ArchiveTableDrop.DropAsync(_managementClient, _tenantId, archiveRtId.ToString(), _recomputeProcessState);
     }
 
     public async Task InsertAsync(OctoObjectId archiveRtId, StreamDataPoint datapoint)
@@ -1875,10 +1880,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     {
         // Reuse this repository's already-wired CrateDB clients / config / archive store — the
         // recompute executor needs the exact same plumbing as bucket aggregation.
+        // This repository — and with it the executor — lives as long as the tenant context that
+        // created it: one request, one orchestrator tick. What a recompute has to remember for the
+        // life of the process is in _recomputeProcessState, which the singleton factory hands in.
         _recomputeExecutor ??= new CrateDbArchiveRecomputeExecutor(
-            _tenantId, _databaseClient, _managementClient, _archiveStore,
-            _configuration.NumberOfShards, _configuration.NumberOfReplicas, _logger,
-            _rollupArchiveStore, _recomputeSliceTargetRows);
+            _tenantId, _databaseClient, _managementClient, _archiveStore, _logger,
+            _rollupArchiveStore, _recomputeSliceTargetRows, _recomputeProcessState);
 
         return _recomputeExecutor.ExecuteAsync(source, rollup, rangeStart, rangeEnd, rtIdScope, cancellationToken);
     }

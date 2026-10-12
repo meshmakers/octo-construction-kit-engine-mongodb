@@ -13,10 +13,20 @@ internal static class ArchiveTableDrop
     /// <paramref name="archiveRtId"/> in the schema of <paramref name="tenantId"/>. Every statement
     /// is <c>DROP TABLE IF EXISTS</c>.
     /// </summary>
+    /// <param name="managementClient">DDL client.</param>
+    /// <param name="tenantId">The tenant whose schema holds the tables.</param>
+    /// <param name="archiveRtId">The archive.</param>
+    /// <param name="recomputeState">
+    /// The process's recompute state, which remembers the staging and pointer table of a rollup; it
+    /// forgets them here, so that an archive coming back under the same rtId starts from scratch.
+    /// </param>
     public static async Task DropAsync(IStreamDataDatabaseManagementClient managementClient, string tenantId,
-        string archiveRtId)
+        string archiveRtId, RecomputeProcessState? recomputeState = null)
     {
         var qualifiedTable = TenantSchema.QualifiedArchiveTable(tenantId, archiveRtId);
+        // Before the first statement: a drop that fails half-way must not leave the memo of a table
+        // that may be gone.
+        recomputeState?.Forget(qualifiedTable);
         await managementClient.ExecuteDdlAsync(tenantId, ArchiveDdlGenerator.GenerateDropTable(qualifiedTable));
 
         // Drop the Phase-6 generation-map side-table too (IF EXISTS — no-op for raw / time-range

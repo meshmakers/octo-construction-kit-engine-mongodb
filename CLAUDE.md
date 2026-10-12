@@ -1020,6 +1020,19 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
   issues no DDL (the rows are deleted at the end, the next run refreshes and counts to make sure it
   starts empty), a larger run drops the table at the end and the next run creates it. Because it is
   kept, `ArchiveTableDrop` drops it with the archive.
+- **"Per process" means `RecomputeProcessState`** — the executor cannot remember anything itself:
+  `TenantContext` is created per request and per orchestrator tick, it creates its stream data
+  repository (`GetStreamDataRepository`), and the repository creates its executor. The staging memo,
+  the pointer-table memo, the "reclaim pass done" memo and the remembered failed sweeps therefore live
+  in `RecomputeProcessState`, held by the singleton `CrateDbStreamDataRepositoryFactory` and handed to
+  every repository and executor; entries are keyed by the schema-qualified live table (tenant schema
+  with instance prefix + archive rtId). `ArchiveTableDrop` forgets an archive's entries when this
+  process drops its tables; a drop by another process is covered by the executor's "staging table is
+  gone" path. Do not put such a memo into a field of the executor, the repository or the tenant
+  context — it would be reset with every job (`CREATE`/`DROP` of the staging table and a full reclaim
+  pass per job). The public executor constructor, used outside the factory, has a state of its own.
+  `RollupSourceBucketAggregator`'s own pointer-table memo is still per instance: the forward path
+  issues `CREATE TABLE IF NOT EXISTS …__genmap` once per tick and rollup source.
 - **Statement budget (AB#6283)** — `CrateStatementClass { Interactive, Maintenance }`. Every
   statement of the executor and of `RollupSourceBucketAggregator` (so the forward aggregation too)
   is sent as `Maintenance` with the caller's token: `IStreamDataDatabaseClient.ExecuteNonQueryAsync /

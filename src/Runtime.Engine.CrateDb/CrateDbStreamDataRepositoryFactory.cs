@@ -25,6 +25,10 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
     private readonly IArchiveAuditTrail? _archiveAuditTrail;
     private readonly IOptions<CrateRecomputeOptions>? _recomputeOptions;
 
+    // The factory is a singleton, the repositories it creates are not (one per tenant context, i.e.
+    // per request / orchestrator tick). What a recompute remembers "per process" therefore lives here.
+    private readonly RecomputeProcessState _recomputeProcessState = new();
+
     public CrateDbStreamDataRepositoryFactory(
         ILoggerFactory loggerFactory,
         ICkCacheService ckCacheService,
@@ -63,14 +67,15 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
             rollupArchiveStore,
             recomputeStateStore,
             _archiveAuditTrail,
-            _recomputeOptions);
+            _recomputeOptions,
+            _recomputeProcessState);
     }
 
     public async Task DeleteArchiveTablesAsync(string tenantId, IReadOnlyList<OctoObjectId> archiveRtIds)
     {
         foreach (var archiveRtId in archiveRtIds)
         {
-            await ArchiveTableDrop.DropAsync(_managementClient, tenantId, archiveRtId.ToString());
+            await ArchiveTableDrop.DropAsync(_managementClient, tenantId, archiveRtId.ToString(), _recomputeProcessState);
         }
     }
 }
