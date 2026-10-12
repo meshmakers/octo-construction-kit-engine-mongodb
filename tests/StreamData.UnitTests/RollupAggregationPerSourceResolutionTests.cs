@@ -439,7 +439,8 @@ public class RollupAggregationPerSourceResolutionTests
         // No computed columns on the parent (the post-aggregation evaluation bails out on null).
         A.CallTo(() => h.ArchiveStore.GetAsync(ParentId)).Returns(Task.FromResult<ArchiveSnapshot?>(null));
         string? sql = null;
-        A.CallTo(() => h.Db.ExecuteNonQueryAsync("tenant-x", A<string>._, A<CancellationToken>._))
+        A.CallTo(() => h.Db.ExecuteNonQueryAsync(
+                "tenant-x", A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
             .Invokes(call => sql = call.GetArgument<string>(1))
             .Returns(1);
 
@@ -458,7 +459,8 @@ public class RollupAggregationPerSourceResolutionTests
         var parent = Parent(Spec("Amount.Value", CkRollupFunction.Sum));
         A.CallTo(() => h.ArchiveStore.GetAsync(ParentId)).Returns(Task.FromResult<ArchiveSnapshot?>(null));
         string? sql = null;
-        A.CallTo(() => h.Db.ExecuteNonQueryAsync("tenant-x", A<string>._, A<CancellationToken>._))
+        A.CallTo(() => h.Db.ExecuteNonQueryAsync(
+                "tenant-x", A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
             .Invokes(call => sql = call.GetArgument<string>(1))
             .Returns(1);
 
@@ -481,5 +483,7 @@ public class RollupAggregationPerSourceResolutionTests
             () => h.NewSut().AggregateBucketAsync(childArchive, parent, BucketStart, BucketEnd, CancellationToken.None));
 
         A.CallTo(() => h.Db.ExecuteNonQueryAsync(A<string>._, A<string>._, A<CancellationToken>._)).MustNotHaveHappened();
+        A.CallTo(() => h.Db.ExecuteNonQueryAsync(
+            A<string>._, A<string>._, A<CrateStatementClass>._, A<CancellationToken>._)).MustNotHaveHappened();
     }
 }

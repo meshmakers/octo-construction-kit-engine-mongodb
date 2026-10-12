@@ -154,9 +154,10 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         // includeGeneration:true so the shared RollupAggregationSqlBuilder (which now always writes a
         // generation column) targets a matching schema; staging's generation is always 0 and is
         // overridden to the new generation when the staged rows are copied into the live table.
-        await _managementClient.ExecuteDdlAsync(_tenantId, RollupRecomputeSqlBuilder.BuildDropIfExists(stagingTable));
+        await _managementClient.ExecuteDdlAsync(_tenantId, RollupRecomputeSqlBuilder.BuildDropIfExists(stagingTable), cancellationToken);
         await _managementClient.ExecuteDdlAsync(_tenantId,
-            ArchiveDdlGenerator.GenerateCreateWindowedTable(stagingTable, resolvedColumns, _numberOfShards, _numberOfReplicas, includeGeneration: true));
+            ArchiveDdlGenerator.GenerateCreateWindowedTable(stagingTable, resolvedColumns, _numberOfShards, _numberOfReplicas, includeGeneration: true),
+            cancellationToken);
 
         // Calendar buckets snap to this zone's local wall-clock boundaries (AB#4300 / O6); null ⇒
         // UTC. Resolved once per recompute — the enumerator yields the zone-correct UTC instants
@@ -190,10 +191,11 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
             // delete is a search operation, so the staged rows have to be on the read path first.
             async Task DiscardStagedBucketAsync(CancellationToken ct)
             {
-                await _databaseClient.RefreshArchiveTableAsync(_tenantId, stagingTable);
+                await _databaseClient.RefreshArchiveTableAsync(_tenantId, stagingTable, CrateStatementClass.Maintenance, ct);
                 await _databaseClient.ExecuteNonQueryAsync(_tenantId,
-                    RollupRecomputeSqlBuilder.BuildDeleteStagedBucket(stagingTable, bucketStart), ct);
-                await _databaseClient.RefreshArchiveTableAsync(_tenantId, stagingTable);
+                    RollupRecomputeSqlBuilder.BuildDeleteStagedBucket(stagingTable, bucketStart),
+                    CrateStatementClass.Maintenance, ct);
+                await _databaseClient.RefreshArchiveTableAsync(_tenantId, stagingTable, CrateStatementClass.Maintenance, ct);
             }
 
             // This per-bucket INSERT ... SELECT is the recompute source read. It runs through
@@ -213,7 +215,7 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         // CrateDB applies inserts to the read path asynchronously, so the staged aggregates are not
         // yet visible to the next statement. Refresh staging before the staging->live copy, otherwise
         // the INSERT ... SELECT FROM staging reads zero rows and the live table ends up empty.
-        await _databaseClient.RefreshArchiveTableAsync(_tenantId, stagingTable);
+        await _databaseClient.RefreshArchiveTableAsync(_tenantId, stagingTable, CrateStatementClass.Maintenance, cancellationToken);
 
         // ---- Atomic swap via the per-window generation pointer (Phase 6) ----
         // Instead of a non-atomic DELETE+INSERT over the live range, copy the staged rows into the
@@ -222,19 +224,19 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         // superseded rows. A crash before the flip leaves readers on the previous generation; a crash
         // after the flip but before the sweep just leaves dead rows the next sweep / activation can GC.
         var genMapTable = GenerationMapSqlBuilder.GenMapTable(_tenantId, rollup.RtId.ToString());
-        await _managementClient.ExecuteDdlAsync(_tenantId, GenerationMapSqlBuilder.BuildCreateTable(genMapTable));
+        await _managementClient.ExecuteDdlAsync(_tenantId, GenerationMapSqlBuilder.BuildCreateTable(genMapTable), cancellationToken);
         // The next generation is MAX(generation)+1 over the pointer table — a search read. Refresh
         // first, or a run that follows another within the refresh interval is handed the same number
         // and its staged rows collide with the previous run's on the primary key.
-        await _databaseClient.RefreshArchiveTableAsync(_tenantId, genMapTable);
+        await _databaseClient.RefreshArchiveTableAsync(_tenantId, genMapTable, CrateStatementClass.Maintenance, cancellationToken);
         var generation = await ReadNextGenerationAsync(genMapTable, cancellationToken);
 
         // 1. Stage → live under the new generation. Refresh so the rows are on the read path before
         //    the pointer flip makes them authoritative.
         await _databaseClient.ExecuteNonQueryAsync(_tenantId,
             RollupRecomputeSqlBuilder.BuildInsertFromStagingWithGeneration(liveTable, stagingTable, columnNames, generation),
-            cancellationToken);
-        await _databaseClient.RefreshArchiveTableAsync(_tenantId, liveTable);
+            CrateStatementClass.Maintenance, cancellationToken);
+        await _databaseClient.RefreshArchiveTableAsync(_tenantId, liveTable, CrateStatementClass.Maintenance, cancellationToken);
 
         // 2. Flip the pointer (atomic commit) — scoped to the entity when a per-rtId recompute.
         //    Refresh so every reader selects the new generation BEFORE the sweep removes the old one:
@@ -242,8 +244,8 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         await _databaseClient.ExecuteNonQueryAsync(_tenantId,
             GenerationMapSqlBuilder.BuildUpsertPointer(
                 genMapTable, rangeStart, rangeEnd, scope, generation),
-            cancellationToken);
-        await _databaseClient.RefreshArchiveTableAsync(_tenantId, genMapTable);
+            CrateStatementClass.Maintenance, cancellationToken);
+        await _databaseClient.RefreshArchiveTableAsync(_tenantId, genMapTable, CrateStatementClass.Maintenance, cancellationToken);
 
         // 3. Sweep the now-superseded generation(s) in the range (within the scope when set), and
         //    refresh so the deleted rows are gone from the read path when this method returns — the
@@ -252,8 +254,8 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
             RollupRecomputeSqlBuilder.BuildSweepSupersededGenerations(
                 liveTable, rangeStart, rangeEnd, generation,
                 string.IsNullOrEmpty(scope) ? null : scope),
-            cancellationToken);
-        await _databaseClient.RefreshArchiveTableAsync(_tenantId, liveTable);
+            CrateStatementClass.Maintenance, cancellationToken);
+        await _databaseClient.RefreshArchiveTableAsync(_tenantId, liveTable, CrateStatementClass.Maintenance, cancellationToken);
 
         // 3b. Drop the pointer entries the flip just made redundant (AB#5189). The pointer is keyed
         // on the exact range, so a recompute over a different range adds an entry rather than
@@ -261,11 +263,11 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         // rows that no longer exist. Left alone they accumulate for the life of the rollup.
         await _databaseClient.ExecuteNonQueryAsync(_tenantId,
             GenerationMapSqlBuilder.BuildDeleteContainedPointers(genMapTable, rangeStart, rangeEnd, scope),
-            cancellationToken);
-        await _databaseClient.RefreshArchiveTableAsync(_tenantId, genMapTable);
+            CrateStatementClass.Maintenance, cancellationToken);
+        await _databaseClient.RefreshArchiveTableAsync(_tenantId, genMapTable, CrateStatementClass.Maintenance, cancellationToken);
 
         // 4. Drop staging.
-        await _managementClient.ExecuteDdlAsync(_tenantId, RollupRecomputeSqlBuilder.BuildDropIfExists(stagingTable));
+        await _managementClient.ExecuteDdlAsync(_tenantId, RollupRecomputeSqlBuilder.BuildDropIfExists(stagingTable), cancellationToken);
 
         _logger.LogInformation(
             "Recomputed rollup {RollupRtId} range [{From:O},{To:O}) scope '{Scope}' as generation {Generation}: " +

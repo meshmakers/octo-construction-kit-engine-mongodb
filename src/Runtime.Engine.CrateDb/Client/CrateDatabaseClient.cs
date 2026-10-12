@@ -10,6 +10,8 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
 using Polly;
+using Polly.Timeout;
+using System.Diagnostics;
 using System.Text;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
@@ -41,6 +43,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     private readonly ICrateDbConnectionAccess _connectionAccess;
     private readonly StreamDataConfiguration _configuration;
     private readonly ResiliencePipeline _resilience;
+    private readonly TimeSpan _interactiveStatementTimeout;
+    private readonly TimeSpan _maintenanceStatementTimeout;
 
     /// <summary>
     /// Constructor.
@@ -49,15 +53,20 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     /// <param name="connectionAccess"></param>
     /// <param name="configuration"></param>
     /// <param name="resilienceOptions">Tunables for the timeout/retry/circuit-breaker pipeline (concept §8 T13).</param>
+    /// <param name="instanceConfiguration"></param>
+    /// <param name="recomputeOptions">Carries the command timeout of maintenance statements.</param>
     public CrateDatabaseClient(ILogger<CrateDatabaseClient> logger, ICrateDbConnectionAccess connectionAccess,
         IOptions<StreamDataConfiguration> configuration,
         IOptions<CrateResilienceOptions> resilienceOptions,
-        IOptions<StreamDataInstanceConfiguration> instanceConfiguration)
+        IOptions<StreamDataInstanceConfiguration> instanceConfiguration,
+        IOptions<CrateRecomputeOptions> recomputeOptions)
     {
         _logger = logger;
         _connectionAccess = connectionAccess;
         _configuration = configuration.Value;
-        _resilience = CrateResiliencePipeline.Build(resilienceOptions.Value);
+        _resilience = CrateResiliencePipeline.Build(resilienceOptions.Value, logger);
+        _interactiveStatementTimeout = resilienceOptions.Value.PerAttemptTimeout;
+        _maintenanceStatementTimeout = recomputeOptions.Value.CommandTimeout;
 
         // AB#4946: configure the process-wide schema instance prefix from the root "StreamData"
         // section (env OCTO_STREAMDATA__SCHEMAINSTANCEPREFIX — uniform across services). The
@@ -530,30 +539,103 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
              + conflictUpdates;
     }
 
-    public async Task RefreshArchiveTableAsync(string tenantId, string qualifiedTable)
+    public Task RefreshArchiveTableAsync(string tenantId, string qualifiedTable)
+        => RefreshArchiveTableAsync(tenantId, qualifiedTable, CrateStatementClass.Interactive, CancellationToken.None);
+
+    public async Task RefreshArchiveTableAsync(string tenantId, string qualifiedTable,
+        CrateStatementClass statementClass, CancellationToken cancellationToken)
     {
-        await _resilience.ExecuteAsync(async _ =>
-        {
-            await using var lease = await LeaseConnectionAsync(tenantId);
-            await lease.Connection.ExecuteAsync(string.Format(Queries.RefreshTable, qualifiedTable));
-        });
+        await ExecuteStatementAsync(tenantId, string.Format(Queries.RefreshTable, qualifiedTable),
+            statementClass, "refresh", cancellationToken);
     }
 
-    public async Task<int> ExecuteNonQueryAsync(string tenantId, string sql, CancellationToken cancellationToken = default)
+    public Task<int> ExecuteNonQueryAsync(string tenantId, string sql, CancellationToken cancellationToken = default)
+        => ExecuteNonQueryAsync(tenantId, sql, CrateStatementClass.Interactive, cancellationToken);
+
+    public Task<int> ExecuteNonQueryAsync(string tenantId, string sql, CrateStatementClass statementClass,
+        CancellationToken cancellationToken)
+        => ExecuteStatementAsync(tenantId, sql, statementClass, "non-query", cancellationToken);
+
+    /// <summary>
+    /// The one path of every statement that returns no rows (non-query, refresh, DDL). The caller's
+    /// token and the pipeline's timeout token both reach the driver, and the command timeout is set
+    /// explicitly from the statement class instead of being left to the driver's default. The
+    /// pipeline's timeout sits a margin behind the command timeout, so the driver ends an overdue
+    /// statement first and the server's answer says what happened.
+    /// </summary>
+    private async Task<int> ExecuteStatementAsync(string tenantId, string sql, CrateStatementClass statementClass,
+        string kind, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(sql))
         {
             throw new ArgumentException("sql must not be empty.", nameof(sql));
         }
 
-        return await _resilience.ExecuteAsync(async _ =>
+        var budget = statementClass == CrateStatementClass.Maintenance
+            ? _maintenanceStatementTimeout
+            : _interactiveStatementTimeout;
+        var commandTimeoutSeconds = Math.Max(1, (int)Math.Ceiling(budget.TotalSeconds));
+        var started = Stopwatch.GetTimestamp();
+
+        var context = ResilienceContextPool.Shared.Get($"{statementClass}.{kind}", cancellationToken);
+        context.Properties.Set(CrateResiliencePipeline.CallTimeoutKey,
+            TimeSpan.FromSeconds(commandTimeoutSeconds) + CrateResiliencePipeline.CallTimeoutMargin);
+        try
         {
-            await using var lease = await LeaseConnectionAsync(tenantId, cancellationToken);
-            // Dapper's ExecuteAsync returns the number of affected rows (Npgsql surfaces the
-            // CrateDB `INSERT 0 N` / `UPDATE N` row count via NpgsqlCommand.ExecuteNonQuery).
-            return await lease.Connection.ExecuteAsync(sql);
-        });
+            return await _resilience.ExecuteAsync(async ctx =>
+            {
+                await using var lease = await LeaseConnectionAsync(tenantId, ctx.CancellationToken);
+                var attemptStarted = Stopwatch.GetTimestamp();
+                try
+                {
+                    // Dapper's ExecuteAsync returns the number of affected rows (Npgsql surfaces the
+                    // CrateDB `INSERT 0 N` / `UPDATE N` row count via NpgsqlCommand.ExecuteNonQuery).
+                    return await lease.Connection.ExecuteAsync(new CommandDefinition(
+                        sql, commandTimeout: commandTimeoutSeconds, cancellationToken: ctx.CancellationToken));
+                }
+                catch (PostgresException ex) when (IsJobKilled(ex))
+                {
+                    // CrateDB answers every cancellation of a statement with XX000 "Job killed",
+                    // whoever asked for it. Tell the two cases this client causes apart; a kill by
+                    // anyone else passes through unchanged.
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        throw new OperationCanceledException(
+                            "The CrateDB statement was cancelled by the caller.", ex, cancellationToken);
+                    }
+
+                    var elapsed = Stopwatch.GetElapsedTime(attemptStarted);
+                    if (elapsed >= TimeSpan.FromSeconds(commandTimeoutSeconds))
+                    {
+                        throw new StreamDataStatementTimeoutException(
+                            statementClass, TimeSpan.FromSeconds(commandTimeoutSeconds), elapsed, Abbreviate(sql), ex);
+                    }
+
+                    throw;
+                }
+            }, context);
+        }
+        catch (TimeoutRejectedException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The driver could not end the statement inside the margin (or the retries used the
+            // budget up), so the pipeline's timeout ended the call.
+            throw new StreamDataStatementTimeoutException(
+                statementClass, TimeSpan.FromSeconds(commandTimeoutSeconds), Stopwatch.GetElapsedTime(started),
+                Abbreviate(sql), ex);
+        }
+        finally
+        {
+            ResilienceContextPool.Shared.Return(context);
+        }
     }
+
+    /// <summary>CrateDB's answer to a cancelled statement: <c>XX000</c>, "Job killed. …".</summary>
+    private static bool IsJobKilled(PostgresException ex) =>
+        string.Equals(ex.SqlState, "XX000", StringComparison.Ordinal)
+        && ex.MessageText.Contains("Job killed", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The head of a statement for an error message: enough to name the kind and the table.</summary>
+    private static string Abbreviate(string sql) => sql.Length <= 160 ? sql : sql[..160] + " …";
 
     public async Task ExecuteBulkAsync(string tenantId, string parameterizedSql,
         IReadOnlyList<IReadOnlyList<object?>> argumentSets, CancellationToken cancellationToken = default)
@@ -759,19 +841,16 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         });
     }
 
-    public async Task ExecuteDdlAsync(string tenantId, string sql)
-    {
-        if (string.IsNullOrWhiteSpace(sql))
-        {
-            throw new ArgumentException("sql must not be empty.", nameof(sql));
-        }
+    public Task ExecuteDdlAsync(string tenantId, string sql)
+        => ExecuteDdlAsync(tenantId, sql, CrateStatementClass.Interactive, CancellationToken.None);
 
-        await _resilience.ExecuteAsync(async _ =>
-        {
-            await using var lease = await LeaseConnectionAsync(tenantId);
-            var connection = lease.Connection;
-            await connection.ExecuteAsync(sql);
-        });
+    public Task ExecuteDdlAsync(string tenantId, string sql, CancellationToken cancellationToken)
+        => ExecuteDdlAsync(tenantId, sql, CrateStatementClass.Maintenance, cancellationToken);
+
+    private async Task ExecuteDdlAsync(string tenantId, string sql, CrateStatementClass statementClass,
+        CancellationToken cancellationToken)
+    {
+        await ExecuteStatementAsync(tenantId, sql, statementClass, "ddl", cancellationToken);
     }
 
     private Task<NpgsqlConnection> CreateConnectionAsync(string tenantId, CancellationToken cancellationToken = default)
