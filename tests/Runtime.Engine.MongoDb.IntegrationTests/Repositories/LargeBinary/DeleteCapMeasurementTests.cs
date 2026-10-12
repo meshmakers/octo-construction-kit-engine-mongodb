@@ -10,9 +10,18 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
+
+using Microsoft.Extensions.Options;
+
+using MongoDB.Bson;
+using MongoDB.Driver;
+
 using TestCkModel.Generated.Test.v1;
 
 using Xunit;
+
+using DeleteOptions = Meshmakers.Octo.Runtime.Contracts.Repositories.DeleteOptions;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Repositories.LargeBinary;
 
@@ -35,6 +44,7 @@ public class DeleteCapMeasurementTests(ImportTestCkModelFixture fixture)
         Assert.SkipUnless(!string.IsNullOrWhiteSpace(sizes), "OCTO_MEASURE_DELETE_CAP not set");
         var outFile = Environment.GetEnvironmentVariable("OCTO_MEASURE_OUT") ?? "delete-cap-measure.txt";
         var tenantRepository = fixture.GetSystemContext().GetTenantRepository();
+        var ownerIndex = await ApplyOwnerIndexSwitchAsync();
 
         foreach (var n in sizes!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                      .Select(int.Parse))
@@ -77,9 +87,48 @@ public class DeleteCapMeasurementTests(ImportTestCkModelFixture fixture)
 
             await File.AppendAllTextAsync(outFile, string.Create(CultureInfo.InvariantCulture,
                 $"entries={n} fileBytes={FileBytes} apply_ms={applyMs} commit_ms={commitMs} total_ms={total.ElapsedMilliseconds} " +
-                $"allocated_mb={allocatedMb} workingset_delta_mb={workingSetMb} leftover_of_50_sampled={remaining} outcome={outcome}{Environment.NewLine}"),
+                $"allocated_mb={allocatedMb} workingset_delta_mb={workingSetMb} leftover_of_50_sampled={remaining} owner_index={ownerIndex} outcome={outcome}{Environment.NewLine}"),
                 TestContext.Current.CancellationToken);
         }
+    }
+
+    /// <summary>
+    ///     AB#6538: OCTO_MEASURE_OWNER_INDEX=off drops the index on fs.files.metadata.rtEntityId, "on" (default) makes sure
+    ///     it exists (tenant index update), so that the same machine can be measured before and after.
+    /// </summary>
+    private async Task<string> ApplyOwnerIndexSwitchAsync()
+    {
+        var mode = Environment.GetEnvironmentVariable("OCTO_MEASURE_OWNER_INDEX")?.Trim().ToLowerInvariant() ?? "on";
+        var systemContext = fixture.GetSystemContext();
+        var config = fixture.GetService<IOptions<OctoSystemConfiguration>>().Value;
+        var client = new MongoClient(new MongoUrlBuilder
+        {
+            Server = MongoServerAddress.Parse(config.DatabaseHost),
+            Username = config.AdminUser,
+            Password = config.AdminUserPassword,
+            AuthenticationSource = config.AuthenticationDatabaseName,
+            DatabaseName = config.AuthenticationDatabaseName,
+            DirectConnection = config.UseDirectConnection
+        }.ToMongoUrl());
+        var files = client.GetDatabase(config.SystemDatabaseName).GetCollection<BsonDocument>("fs.files");
+
+        if (mode == "off")
+        {
+            try
+            {
+                await files.Indexes.DropOneAsync("metadata_rtEntityId_1", TestContext.Current.CancellationToken);
+            }
+            catch (MongoCommandException)
+            {
+                // not present
+            }
+
+            return "off";
+        }
+
+        using var adminSession = await systemContext.GetAdminSessionAsync();
+        await systemContext.UpdateIndexesAsync(adminSession);
+        return "on";
     }
 
     // Entities are inserted with BinaryId == null so that the engine uploads the bytes; the entity id doubles as the

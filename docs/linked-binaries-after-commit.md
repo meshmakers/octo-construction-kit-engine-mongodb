@@ -68,6 +68,20 @@ default 60 s), not memory (about 150 KB allocated per entry, no measurable worki
 
 ### Owner index (AB#6538)
 
+Measured with `DeleteCapMeasurementTests` on the same machine and database (4 KB files; `OCTO_MEASURE_OWNER_INDEX=off|on`
+drops or creates the index before the run):
+
+| Entries | Transaction open (apply), no index | Transaction open (apply), with index | Commit + deferred GridFS delete (with index) | Total with index |
+|---:|---:|---:|---:|---:|
+| 5,000 | 11.7 s | 2.3 s | 5.7 s | 7.9 s |
+| 10,000 | 37.4 s | 4.4 s | 12.2 s | 16.6 s |
+
+With the index the time inside the transaction grows linearly (2.3 s to 4.4 s for twice the entries) and the 10,000-entry
+transaction stays open for 4.4 s instead of 37.4 s. The after-commit delete (12.2 s) is outside the transaction. The
+asset-repo limit `FilesOptions.MaxDeleteEntries` (5,000) is **not** changed by this work: raising it is a decision of the
+product owner (the total of 16.6 s at 10,000 entries is a 3.6x margin to the 60 s transaction lifetime, the story asks for
+more than 4x). These numbers were not taken on the restored sbeg-sized tenant.
+
 The tenant index setup (`UpdateIndexAsync`, a full update that is not scoped to one model; it runs when a tenant is
 created and on every index update) creates the index `metadata_rtEntityId_1` on `fs.files.metadata.rtEntityId`. It is
 **sparse**, because temporary binaries have no owner. Creating an index with an identical definition is a no-op, so the
