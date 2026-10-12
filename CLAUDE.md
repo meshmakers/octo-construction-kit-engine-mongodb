@@ -1036,9 +1036,14 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
 - **Statement budget (AB#6283)** — `CrateStatementClass { Interactive, Maintenance }`. Every
   statement of the executor and of `RollupSourceBucketAggregator` (so the forward aggregation too)
   is sent as `Maintenance` with the caller's token: `IStreamDataDatabaseClient.ExecuteNonQueryAsync /
-  RefreshArchiveTableAsync(…, CrateStatementClass, CancellationToken)` and
-  `IStreamDataDatabaseManagementClient.ExecuteDdlAsync(…, CancellationToken)`. `CrateDatabaseClient`
-  runs all non-query paths through one helper that passes the caller's token **and** the resilience
+  RefreshArchiveTableAsync / GetCountAsync(…, CrateStatementClass, CancellationToken)` and
+  `IStreamDataDatabaseManagementClient.ExecuteDdlAsync(…, CancellationToken)`. The counts that size
+  the recompute's slices (and its staging and pointer checks) are maintenance statements too — a
+  count under the interactive 30 s default in front of a statement with a two-minute budget would be
+  the weakest link. The older `GetCountAsync` overloads are unchanged (pipeline default, no explicit
+  command timeout). `CrateDatabaseClient`
+  runs all non-query paths and the classed count through one helper (`ExecuteWithBudgetAsync`) that
+  passes the caller's token **and** the resilience
   pipeline's token to the driver and sets the command timeout explicitly — `Interactive`:
   `StreamData:Resilience:PerAttemptTimeout` (30 s), `Maintenance`:
   `StreamData:Recompute:CommandTimeout`. The pipeline's timeout comes from the call's
@@ -1048,7 +1053,11 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
   `<class>.<kind>` and the exception type). CrateDB answers every cancellation with
   `XX000: Job killed`; the helper maps it to `OperationCanceledException` when the caller's token is
   cancelled and to `StreamDataStatementTimeoutException` when the budget elapsed, and passes any
-  other kill through. That exception is deliberately not a connection failure for
+  other kill through (`ClassifyJobKilled`). "Budget elapsed" is either of two things: the attempt ran
+  for its command timeout, or the pipeline's call-wide timeout cancelled the call — the command
+  timeout restarts with every retry and only after the connection lease, so a late attempt is ended
+  by the pipeline before its own command timeout, and CrateDB answers that with the same `XX000`
+  (Npgsql turns only `57014` into a cancellation, so Polly never sees one to convert). That exception is deliberately not a connection failure for
   `RecomputeOrchestrator.IsTransientConnectionFailure`: a statement that exceeded its budget will
   exceed it again under the same load, and the range-level retry is the answer.
 

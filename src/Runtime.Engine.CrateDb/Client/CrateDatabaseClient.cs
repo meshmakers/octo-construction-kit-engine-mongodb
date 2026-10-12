@@ -178,6 +178,11 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     public Task<long> GetCountAsync(string tenantId, string countQuery)
         => GetCountAsync(tenantId, countQuery, CancellationToken.None);
 
+    public Task<long> GetCountAsync(string tenantId, string countQuery, CrateStatementClass statementClass,
+        CancellationToken cancellationToken)
+        => ExecuteWithBudgetAsync(tenantId, countQuery, statementClass, "count", cancellationToken,
+            (connection, command) => connection.ExecuteScalarAsync<long>(command));
+
     public async Task<long> GetCountAsync(string tenantId, string countQuery, CancellationToken cancellationToken)
     {
         return await _resilience.ExecuteAsync(async token =>
@@ -557,14 +562,33 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         => ExecuteStatementAsync(tenantId, sql, statementClass, "non-query", cancellationToken);
 
     /// <summary>
-    /// The one path of every statement that returns no rows (non-query, refresh, DDL). The caller's
-    /// token and the pipeline's timeout token both reach the driver, and the command timeout is set
-    /// explicitly from the statement class instead of being left to the driver's default. The
-    /// pipeline's timeout sits a margin behind the command timeout, so the driver ends an overdue
-    /// statement first and the server's answer says what happened.
+    /// The one path of every statement that returns no rows (non-query, refresh, DDL).
     /// </summary>
-    private async Task<int> ExecuteStatementAsync(string tenantId, string sql, CrateStatementClass statementClass,
+    private Task<int> ExecuteStatementAsync(string tenantId, string sql, CrateStatementClass statementClass,
         string kind, CancellationToken cancellationToken)
+        // Dapper's ExecuteAsync returns the number of affected rows (Npgsql surfaces the
+        // CrateDB `INSERT 0 N` / `UPDATE N` row count via NpgsqlCommand.ExecuteNonQuery).
+        => ExecuteWithBudgetAsync(tenantId, sql, statementClass, kind, cancellationToken,
+            (connection, command) => connection.ExecuteAsync(command));
+
+    /// <summary>
+    /// Runs one statement under the time budget of its class. The caller's token and the pipeline's
+    /// timeout token both reach the driver, and the command timeout is set explicitly from the
+    /// statement class instead of being left to the driver's default. The pipeline's timeout sits a
+    /// margin behind the command timeout, so the driver normally ends an overdue statement first and
+    /// the server's answer says what happened.
+    /// </summary>
+    /// <remarks>
+    /// The pipeline's timeout is ONE budget for the whole call — the wait for a connection and every
+    /// retry included — while the command timeout restarts with each attempt. After a transient
+    /// failure and a retry, or a slow connection lease, the pipeline's timeout can therefore end a
+    /// statement that has not used up its own command timeout: it cancels the context's token, the
+    /// driver cancels the statement, and CrateDB answers <c>XX000: Job killed</c> like for any other
+    /// cancellation (the driver only turns <c>57014</c> into a cancellation, so the pipeline never
+    /// sees one). That kill is the budget running out as well, and is reported as such.
+    /// </remarks>
+    private async Task<T> ExecuteWithBudgetAsync<T>(string tenantId, string sql, CrateStatementClass statementClass,
+        string kind, CancellationToken cancellationToken, Func<NpgsqlConnection, CommandDefinition, Task<T>> execute)
     {
         if (string.IsNullOrWhiteSpace(sql))
         {
@@ -575,11 +599,12 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             ? _maintenanceStatementTimeout
             : _interactiveStatementTimeout;
         var commandTimeoutSeconds = Math.Max(1, (int)Math.Ceiling(budget.TotalSeconds));
+        var commandTimeout = TimeSpan.FromSeconds(commandTimeoutSeconds);
         var started = Stopwatch.GetTimestamp();
 
         var context = ResilienceContextPool.Shared.Get($"{statementClass}.{kind}", cancellationToken);
         context.Properties.Set(CrateResiliencePipeline.CallTimeoutKey,
-            TimeSpan.FromSeconds(commandTimeoutSeconds) + CrateResiliencePipeline.CallTimeoutMargin);
+            commandTimeout + CrateResiliencePipeline.CallTimeoutMargin);
         try
         {
             return await _resilience.ExecuteAsync(async ctx =>
@@ -588,30 +613,30 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
                 var attemptStarted = Stopwatch.GetTimestamp();
                 try
                 {
-                    // Dapper's ExecuteAsync returns the number of affected rows (Npgsql surfaces the
-                    // CrateDB `INSERT 0 N` / `UPDATE N` row count via NpgsqlCommand.ExecuteNonQuery).
-                    return await lease.Connection.ExecuteAsync(new CommandDefinition(
+                    return await execute(lease.Connection, new CommandDefinition(
                         sql, commandTimeout: commandTimeoutSeconds, cancellationToken: ctx.CancellationToken));
                 }
                 catch (PostgresException ex) when (IsJobKilled(ex))
                 {
                     // CrateDB answers every cancellation of a statement with XX000 "Job killed",
-                    // whoever asked for it. Tell the two cases this client causes apart; a kill by
+                    // whoever asked for it. Tell the cases this client causes apart; a kill by
                     // anyone else passes through unchanged.
-                    if (cancellationToken.IsCancellationRequested)
+                    switch (ClassifyJobKilled(
+                                cancellationToken.IsCancellationRequested,
+                                ctx.CancellationToken.IsCancellationRequested,
+                                Stopwatch.GetElapsedTime(attemptStarted),
+                                commandTimeout))
                     {
-                        throw new OperationCanceledException(
-                            "The CrateDB statement was cancelled by the caller.", ex, cancellationToken);
+                        case JobKilledCause.CallerCancelled:
+                            throw new OperationCanceledException(
+                                "The CrateDB statement was cancelled by the caller.", ex, cancellationToken);
+                        case JobKilledCause.BudgetElapsed:
+                            // Elapsed over the whole call: that is what the budget was spent on.
+                            throw new StreamDataStatementTimeoutException(
+                                statementClass, commandTimeout, Stopwatch.GetElapsedTime(started), Abbreviate(sql), ex);
+                        default:
+                            throw;
                     }
-
-                    var elapsed = Stopwatch.GetElapsedTime(attemptStarted);
-                    if (elapsed >= TimeSpan.FromSeconds(commandTimeoutSeconds))
-                    {
-                        throw new StreamDataStatementTimeoutException(
-                            statementClass, TimeSpan.FromSeconds(commandTimeoutSeconds), elapsed, Abbreviate(sql), ex);
-                    }
-
-                    throw;
                 }
             }, context);
         }
@@ -620,13 +645,45 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             // The driver could not end the statement inside the margin (or the retries used the
             // budget up), so the pipeline's timeout ended the call.
             throw new StreamDataStatementTimeoutException(
-                statementClass, TimeSpan.FromSeconds(commandTimeoutSeconds), Stopwatch.GetElapsedTime(started),
-                Abbreviate(sql), ex);
+                statementClass, commandTimeout, Stopwatch.GetElapsedTime(started), Abbreviate(sql), ex);
         }
         finally
         {
             ResilienceContextPool.Shared.Return(context);
         }
+    }
+
+    /// <summary>Who had a statement killed that CrateDB reports as <c>XX000: Job killed</c>.</summary>
+    internal enum JobKilledCause
+    {
+        /// <summary>The caller's token was cancelled.</summary>
+        CallerCancelled,
+
+        /// <summary>The statement's command timeout, or the call-wide timeout of the pipeline, ran out.</summary>
+        BudgetElapsed,
+
+        /// <summary>Neither — someone else killed the job; the server's error passes through.</summary>
+        Foreign,
+    }
+
+    /// <summary>
+    /// Decides what a "Job killed" answer means. The caller's cancellation wins. Otherwise it is the
+    /// budget when this attempt ran for its command timeout (the driver cancelled it) or when the
+    /// pipeline's call-wide timeout has cancelled the context — the second covers an attempt that
+    /// started late, after a retry or a slow connection lease, and was ended before its own command
+    /// timeout.
+    /// </summary>
+    internal static JobKilledCause ClassifyJobKilled(
+        bool callerCancelled, bool callTimeoutCancelled, TimeSpan attemptElapsed, TimeSpan commandTimeout)
+    {
+        if (callerCancelled)
+        {
+            return JobKilledCause.CallerCancelled;
+        }
+
+        return attemptElapsed >= commandTimeout || callTimeoutCancelled
+            ? JobKilledCause.BudgetElapsed
+            : JobKilledCause.Foreign;
     }
 
     /// <summary>CrateDB's answer to a cancelled statement: <c>XX000</c>, "Job killed. …".</summary>

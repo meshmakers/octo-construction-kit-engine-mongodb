@@ -433,7 +433,8 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         {
             await _databaseClient.RefreshArchiveTableAsync(_tenantId, stagingTable, CrateStatementClass.Maintenance, cancellationToken);
             leftover = await _databaseClient.GetCountAsync(
-                _tenantId, RollupRecomputeSqlBuilder.BuildCountAllStaged(stagingTable), cancellationToken);
+                _tenantId, RollupRecomputeSqlBuilder.BuildCountAllStaged(stagingTable),
+                CrateStatementClass.Maintenance, cancellationToken);
         }
         catch (Exception ex) when (CrateDbStreamDataRepository.IsMissingTableError(ex))
         {
@@ -602,7 +603,7 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
                     async ct => await _databaseClient.GetCountAsync(
                         _tenantId,
                         GenerationMapSqlBuilder.BuildCountPointer(genMapTable, entry.StartMs, entry.EndMs, entry.Scope, entry.Generation),
-                        ct) == 1);
+                        CrateStatementClass.Maintenance, ct) == 1);
                 if (run.Statements > 0)
                 {
                     reclaimed += run.Rows;
@@ -679,8 +680,11 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
     {
         var fromMs = ToEpochMs(rangeStart);
         var toMs = ToEpochMsCeiling(rangeEnd);
+        // The counts are maintenance statements like the statements they size: same budget, same
+        // token, same errors.
         var total = await _databaseClient.GetCountAsync(
-            _tenantId, buildCount(FromEpochMs(fromMs), FromEpochMs(toMs)), cancellationToken);
+            _tenantId, buildCount(FromEpochMs(fromMs), FromEpochMs(toMs)), CrateStatementClass.Maintenance,
+            cancellationToken);
         if (total <= 0)
         {
             return new SlicedRun(0, 0);
@@ -697,7 +701,8 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
             // A proposal over the whole range was counted a moment ago.
             var sliceRows = sliceFromMs == fromMs && sliceToMs == toMs
                 ? total
-                : await _databaseClient.GetCountAsync(_tenantId, buildCount(sliceFrom, sliceTo), cancellationToken);
+                : await _databaseClient.GetCountAsync(
+                    _tenantId, buildCount(sliceFrom, sliceTo), CrateStatementClass.Maintenance, cancellationToken);
 
             if (!planner.Accept(sliceRows) || sliceRows <= 0)
             {

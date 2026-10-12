@@ -86,11 +86,20 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
     // ---- IStreamDataDatabaseClient ----
 
     public Task<long> GetCountAsync(string tenantId, string countQuery)
-        => GetCountAsync(tenantId, countQuery, CancellationToken.None);
+        => throw new NotSupportedException("The recompute counts with its statement class and token.");
 
     public Task<long> GetCountAsync(string tenantId, string countQuery, CancellationToken cancellationToken)
+        => throw new NotSupportedException("The recompute counts with its statement class and token.");
+
+    public Task<long> GetCountAsync(string tenantId, string countQuery, CrateStatementClass statementClass,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (statementClass != CrateStatementClass.Maintenance)
+        {
+            throw new InvalidOperationException($"Recompute count sent as {statementClass}: {countQuery}");
+        }
+
         string kind;
         long rows;
         if (countQuery.Contains($"FROM {_stagingTable}", StringComparison.Ordinal))

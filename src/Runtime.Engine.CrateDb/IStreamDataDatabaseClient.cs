@@ -111,6 +111,16 @@ public interface IStreamDataDatabaseClient
     Task<long> GetCountAsync(string tenantId, string countQuery, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Executes a COUNT query under the time budget of <paramref name="statementClass"/> and returns
+    /// the total number of matching rows. For the counts that size the statements of a background
+    /// run (the slices of a rollup recompute): they belong to the same class as the statements they
+    /// size, and fail the same way — <see cref="StreamDataStatementTimeoutException"/> when the
+    /// budget runs out, <see cref="OperationCanceledException"/> for a cancelled token.
+    /// </summary>
+    Task<long> GetCountAsync(string tenantId, string countQuery, CrateStatementClass statementClass,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Executes a non-query SQL statement (INSERT / UPDATE / DELETE / upsert) and returns the
     /// number of affected rows. Used by the rollup orchestrator for the bucket-aggregation upsert
     /// (rollup-archives concept §5).
