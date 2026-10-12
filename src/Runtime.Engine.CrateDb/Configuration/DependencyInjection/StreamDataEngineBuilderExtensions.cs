@@ -43,6 +43,13 @@ public static class StreamDataEngineBuilderExtensions
         builder.Services.AddOptions<CrateResilienceOptions>()
             .BindConfiguration("StreamData:Resilience");
 
+        // AB#6283: slice size and command timeout of the recompute / rollup aggregation statements.
+        // The host's recompute orchestrator options are bound to the same section; the property
+        // names do not collide.
+        builder.Services.AddOptions<CrateRecomputeOptions>()
+            .BindConfiguration(CrateRecomputeOptions.SectionName)
+            .Validate(o => o.IsValid(), CrateRecomputeOptions.ValidationMessage);
+
         // Register CrateDatabaseClient as singleton, exposed via multiple interfaces
         builder.Services.AddSingleton<CrateDatabaseClient>();
         builder.Services.AddSingleton<IStreamDataDatabaseClient>(p => p.GetRequiredService<CrateDatabaseClient>());

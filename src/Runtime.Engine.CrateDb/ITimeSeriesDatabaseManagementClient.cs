@@ -26,4 +26,11 @@ public interface IStreamDataDatabaseManagementClient
     /// <see cref="ArchiveDdlGenerator"/>.
     /// </summary>
     Task ExecuteDdlAsync(string tenantId, string sql);
+
+    /// <summary>
+    /// Executes a single DDL statement of a background run (rollup recompute, rollup aggregation)
+    /// under the <see cref="CrateStatementClass.Maintenance"/> time budget; the token cancels the
+    /// wait for a connection and the statement itself.
+    /// </summary>
+    Task ExecuteDdlAsync(string tenantId, string sql, CancellationToken cancellationToken);
 }

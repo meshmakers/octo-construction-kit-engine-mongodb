@@ -23,8 +23,8 @@ internal static class RollupRecomputeSqlBuilder
     /// <summary>
     /// Per-archive staging table identifier in the tenant schema, e.g.
     /// <c>"tenant"."archive_&lt;rollupRtId&gt;__rc"</c>. Deterministic (one per archive): the coalesce
-    /// policy guarantees at most one active recompute per archive, so a stable name is safe and lets
-    /// a crashed run's leftover table be dropped on the next attempt.
+    /// policy guarantees at most one active recompute per archive, so a stable name is safe. The
+    /// table is kept between runs and dropped with its archive (<see cref="ArchiveTableDrop"/>).
     /// </summary>
     public static string StagingTable(string tenantId, string rollupRtId) =>
         $"\"{TenantSchema.SchemaName(tenantId)}\".\"archive_{rollupRtId}__rc\"";
@@ -34,15 +34,30 @@ internal static class RollupRecomputeSqlBuilder
         $"DROP TABLE IF EXISTS {qualifiedTable};";
 
     /// <summary>
-    /// Builds the generation-aware staging copy (AB#4184, Phase 6): inserts the staged rows into the
-    /// live table stamping every row with <paramref name="generation"/> via a literal in the SELECT
-    /// list, instead of copying staging's own generation. The new-generation rows coexist with the
-    /// previous generation (the generation column is part of the rollup PK) until the pointer flips
-    /// and <see cref="BuildSweepSupersededGenerations"/> removes the old rows. No live DELETE happens
+    /// Builds the count of the staged rows whose window starts in <c>[from, to)</c> — what a copy
+    /// slice over that range would insert.
+    /// </summary>
+    public static string BuildCountStaged(string stagingTable, DateTime from, DateTime to) =>
+        $"SELECT COUNT(*) FROM {stagingTable} WHERE {WindowStartIn(from, to)};";
+
+    /// <summary>
+    /// Builds one slice of the generation-aware staging copy (AB#4184, Phase 6): inserts the staged
+    /// rows whose window starts in <c>[from, to)</c> into the live table, stamping every row with
+    /// <paramref name="generation"/> via a literal in the SELECT list instead of copying staging's
+    /// own generation. The new-generation rows coexist with the previous generation (the generation
+    /// column is part of the rollup PK) until the pointer flips and
+    /// <see cref="BuildSweepSupersededGenerations"/> removes the old rows. No live DELETE happens
     /// before the pointer flips, so a crash mid-copy leaves readers on the previous generation.
     /// </summary>
-    public static string BuildInsertFromStagingWithGeneration(
-        string liveTable, string stagingTable, IReadOnlyList<string> columnNames, long generation)
+    /// <remarks>
+    /// The copy runs as several such statements, each bounded by a row count the caller measured
+    /// (AB#6283): one statement over a whole chunk grows with the rows of the chunk and has no upper
+    /// bound. The slices write disjoint keys of the same generation, and no reader can select that
+    /// generation before the pointer names it, so splitting the copy changes nothing a reader sees.
+    /// </remarks>
+    public static string BuildInsertFromStagingSlice(
+        string liveTable, string stagingTable, IReadOnlyList<string> columnNames, long generation,
+        DateTime from, DateTime to)
     {
         if (columnNames.Count == 0)
         {
@@ -53,8 +68,16 @@ internal static class RollupRecomputeSqlBuilder
         var g = generation.ToString(CultureInfo.InvariantCulture);
         return
             $"INSERT INTO {liveTable} ({cols}, \"{Constants.Generation}\") " +
-            $"SELECT {cols}, {g} FROM {stagingTable};";
+            $"SELECT {cols}, {g} FROM {stagingTable} WHERE {WindowStartIn(from, to)};";
     }
+
+    /// <summary>Builds the count of every row in the staging table.</summary>
+    public static string BuildCountAllStaged(string stagingTable) =>
+        $"SELECT COUNT(*) FROM {stagingTable};";
+
+    /// <summary>Builds <c>DELETE FROM {staging};</c> — empties a staging table that is kept.</summary>
+    public static string BuildDeleteAllStaged(string stagingTable) =>
+        $"DELETE FROM {stagingTable};";
 
     /// <summary>
     /// Builds the delete of one bucket's staged rows (all entities) — used when a bucket has to be
@@ -76,20 +99,67 @@ internal static class RollupRecomputeSqlBuilder
     /// Builds the post-flip sweep: removes the now-superseded rows in <c>[from, to)</c> whose
     /// generation differs from the active one. Runs <b>after</b> the pointer flip, so no consistent
     /// generation is ever removed from under a reader. Optionally scoped to a single
-    /// <paramref name="rtIdScope"/> (empty/null = whole range).
+    /// <paramref name="rtIdScope"/> (empty/null = whole range). The executor calls it once per
+    /// row-counted slice of the recomputed range (<see cref="BuildCountSuperseded"/>).
     /// </summary>
     public static string BuildSweepSupersededGenerations(
         string liveTable, DateTime from, DateTime to, long generation, string? rtIdScope = null)
     {
         var g = generation.ToString(CultureInfo.InvariantCulture);
-        var scopeClause = string.IsNullOrEmpty(rtIdScope)
-            ? string.Empty
-            : $" AND \"{Constants.RtId}\" = '{rtIdScope.Replace("'", "''")}'";
         return
             $"DELETE FROM {liveTable} WHERE \"{Constants.WindowStart}\" >= {ToEpochMs(from)} " +
             $"AND \"{Constants.WindowStart}\" < {ToEpochMs(to)} " +
-            $"AND \"{Constants.Generation}\" != {g}{scopeClause};";
+            $"AND \"{Constants.Generation}\" != {g}{ScopeClause(rtIdScope)};";
     }
+
+    /// <summary>
+    /// Builds the count of the rows <see cref="BuildSweepSupersededGenerations"/> would delete for
+    /// the same arguments.
+    /// </summary>
+    public static string BuildCountSuperseded(
+        string liveTable, DateTime from, DateTime to, long generation, string? rtIdScope = null) =>
+        $"SELECT COUNT(*) FROM {liveTable} WHERE {WindowStartIn(from, to)} " +
+        $"AND \"{Constants.Generation}\" != {generation.ToString(CultureInfo.InvariantCulture)}{ScopeClause(rtIdScope)};";
+
+    /// <summary>
+    /// Builds the count of the rows of exactly <paramref name="generation"/> in <c>[from, to)</c>
+    /// (within the scope when set).
+    /// </summary>
+    public static string BuildCountGeneration(
+        string liveTable, DateTime from, DateTime to, long generation, string? rtIdScope = null) =>
+        $"SELECT COUNT(*) FROM {liveTable} WHERE {WindowStartIn(from, to)} " +
+        $"AND \"{Constants.Generation}\" = {generation.ToString(CultureInfo.InvariantCulture)}{ScopeClause(rtIdScope)};";
+
+    /// <summary>
+    /// Builds the delete of the rows of exactly <paramref name="generation"/> in <c>[from, to)</c>
+    /// (within the scope when set) — the rows a copy that never committed left under the generation
+    /// number the next run is handed again.
+    /// </summary>
+    public static string BuildDeleteGenerationSlice(
+        string liveTable, DateTime from, DateTime to, long generation, string? rtIdScope = null) =>
+        $"DELETE FROM {liveTable} WHERE {WindowStartIn(from, to)} " +
+        $"AND \"{Constants.Generation}\" = {generation.ToString(CultureInfo.InvariantCulture)}{ScopeClause(rtIdScope)};";
+
+    /// <summary>
+    /// Builds the count of the rows in <c>[from, to)</c> (within the scope when set) whose
+    /// generation is <b>below</b> <paramref name="generation"/>.
+    /// </summary>
+    public static string BuildCountBelowGeneration(
+        string liveTable, DateTime from, DateTime to, long generation, string? rtIdScope = null) =>
+        $"SELECT COUNT(*) FROM {liveTable} WHERE {WindowStartIn(from, to)} " +
+        $"AND \"{Constants.Generation}\" < {generation.ToString(CultureInfo.InvariantCulture)}{ScopeClause(rtIdScope)};";
+
+    /// <summary>
+    /// Builds the delete of the rows in <c>[from, to)</c> (within the scope when set) whose
+    /// generation is <b>below</b> <paramref name="generation"/> — the reclaim of what a sweep left
+    /// behind. Given a pointer entry for the range at that generation, every reader selects a
+    /// generation at or above it there, so those rows are dead. Strictly below, never "different
+    /// from": the rows of a newer recompute overlapping the range lie above it and must stay.
+    /// </summary>
+    public static string BuildDeleteBelowGenerationSlice(
+        string liveTable, DateTime from, DateTime to, long generation, string? rtIdScope = null) =>
+        $"DELETE FROM {liveTable} WHERE {WindowStartIn(from, to)} " +
+        $"AND \"{Constants.Generation}\" < {generation.ToString(CultureInfo.InvariantCulture)}{ScopeClause(rtIdScope)};";
 
     /// <summary>
     /// Builds the delete of all recomputed (generation &gt; 0) rows at or after
@@ -101,6 +171,14 @@ internal static class RollupRecomputeSqlBuilder
     public static string BuildDeleteRecomputedRowsFrom(string liveTable, DateTime fromBucketEnd) =>
         $"DELETE FROM {liveTable} WHERE \"{Constants.WindowStart}\" >= {ToEpochMs(fromBucketEnd)} " +
         $"AND \"{Constants.Generation}\" != 0;";
+
+    private static string WindowStartIn(DateTime from, DateTime to) =>
+        $"\"{Constants.WindowStart}\" >= {ToEpochMs(from)} AND \"{Constants.WindowStart}\" < {ToEpochMs(to)}";
+
+    private static string ScopeClause(string? rtIdScope) =>
+        string.IsNullOrEmpty(rtIdScope)
+            ? string.Empty
+            : $" AND \"{Constants.RtId}\" = '{rtIdScope.Replace("'", "''")}'";
 
     private static string ToEpochMs(DateTime value)
     {

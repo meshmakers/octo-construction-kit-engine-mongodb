@@ -264,7 +264,8 @@ public class RollupSourceGenerationReadTests
         await harness.Aggregator.AggregateAsync(source, BucketStart, BucketEnd, null, harness.BuildSql, null, CancellationToken.None);
         await harness.Aggregator.AggregateAsync(source, BucketStart, BucketEnd, null, harness.BuildSql, null, CancellationToken.None);
 
-        A.CallTo(() => harness.Management.ExecuteDdlAsync(Tenant, A<string>.That.Contains("__genmap")))
+        A.CallTo(() => harness.Management.ExecuteDdlAsync(
+                Tenant, A<string>.That.Contains("__genmap"), A<CancellationToken>._))
             .MustHaveHappenedOnceExactly();
     }
 
@@ -350,7 +351,8 @@ public class RollupSourceGenerationReadTests
                     PointerReads++;
                     return ToRows(_pointerStates.Dequeue());
                 });
-            A.CallTo(() => Client.ExecuteNonQueryAsync(Tenant, A<string>._, A<CancellationToken>._))
+            A.CallTo(() => Client.ExecuteNonQueryAsync(
+                    Tenant, A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
                 .Returns(RowsPerStatement);
 
             Aggregator = new RollupSourceBucketAggregator(Tenant, Client, Management, NullLogger.Instance);

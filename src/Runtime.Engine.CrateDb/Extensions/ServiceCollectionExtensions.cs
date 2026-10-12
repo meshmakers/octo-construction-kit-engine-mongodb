@@ -2,6 +2,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -22,6 +23,14 @@ public static class ServiceCollectionExtensions
         where TConfigureOptions : class, IConfigureNamedOptions<StreamDataConfiguration>
     {
         services.ConfigureOptions(typeof(TConfigureOptions));
+
+        // AB#6283: slice size and command timeout of the recompute / rollup aggregation statements.
+        // A host composed through this method need not have an IConfiguration; bind the section
+        // when there is one, keep the defaults (or the host's own Configure) otherwise.
+        services.AddOptions<CrateRecomputeOptions>()
+            .Configure<IServiceProvider>((options, provider) =>
+                provider.GetService<IConfiguration>()?.GetSection(CrateRecomputeOptions.SectionName).Bind(options))
+            .Validate(o => o.IsValid(), CrateRecomputeOptions.ValidationMessage);
 
         // Register CrateDatabaseClient as singleton, exposed via multiple interfaces
         services.AddSingleton<CrateDatabaseClient>();

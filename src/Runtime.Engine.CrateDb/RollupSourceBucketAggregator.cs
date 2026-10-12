@@ -90,18 +90,20 @@ internal sealed class RollupSourceBucketAggregator
     {
         if (source.RollupAggregations is null)
         {
-            return await _databaseClient.ExecuteNonQueryAsync(_tenantId, buildSql(null), cancellationToken);
+            return await _databaseClient.ExecuteNonQueryAsync(
+                _tenantId, buildSql(null), CrateStatementClass.Maintenance, cancellationToken);
         }
 
         var genMapTable = GenerationMapSqlBuilder.GenMapTable(_tenantId, source.RtId.ToString());
-        await EnsureGenMapAsync(genMapTable);
+        await EnsureGenMapAsync(genMapTable, cancellationToken);
 
         for (var attempt = 1; ; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             var before = await LoadOverlappingAsync(genMapTable, bucketStart, bucketEnd, rtIdScope, cancellationToken);
-            var rows = await _databaseClient.ExecuteNonQueryAsync(_tenantId, buildSql(before), cancellationToken);
+            var rows = await _databaseClient.ExecuteNonQueryAsync(
+                _tenantId, buildSql(before), CrateStatementClass.Maintenance, cancellationToken);
             var after = await LoadOverlappingAsync(genMapTable, bucketStart, bucketEnd, rtIdScope, cancellationToken);
 
             if (SamePointers(before, after))
@@ -133,14 +135,15 @@ internal sealed class RollupSourceBucketAggregator
     /// pointer read strict — a failing read is then a real failure and never mistaken for "no
     /// pointer entries", which would send the scan to generation 0 and hide recomputed rows.
     /// </summary>
-    private async Task EnsureGenMapAsync(string genMapTable)
+    private async Task EnsureGenMapAsync(string genMapTable, CancellationToken cancellationToken)
     {
         if (_ensuredGenMaps.ContainsKey(genMapTable))
         {
             return;
         }
 
-        await _managementClient.ExecuteDdlAsync(_tenantId, GenerationMapSqlBuilder.BuildCreateTable(genMapTable));
+        await _managementClient.ExecuteDdlAsync(
+            _tenantId, GenerationMapSqlBuilder.BuildCreateTable(genMapTable), cancellationToken);
         _ensuredGenMaps[genMapTable] = true;
     }
 

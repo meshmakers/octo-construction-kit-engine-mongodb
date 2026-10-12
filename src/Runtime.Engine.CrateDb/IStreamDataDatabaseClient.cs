@@ -4,6 +4,26 @@ using Meshmakers.Octo.Runtime.Contracts.StreamData;
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 
 /// <summary>
+/// Decides the time budget of a CrateDB statement: its command timeout and the resilience
+/// pipeline's timeout around it.
+/// </summary>
+public enum CrateStatementClass
+{
+    /// <summary>
+    /// Statements a caller waits for (ingest, queries, lifecycle). Budget:
+    /// <see cref="CrateResilienceOptions.PerAttemptTimeout"/>.
+    /// </summary>
+    Interactive,
+
+    /// <summary>
+    /// Statements of the rollup recompute and the rollup aggregation, which run in the background
+    /// and may legitimately take longer. Budget:
+    /// <see cref="Configuration.CrateRecomputeOptions.CommandTimeout"/>.
+    /// </summary>
+    Maintenance,
+}
+
+/// <summary>
 /// Provides data access to a stream data database. After T17 every operation targets a per-archive
 /// table identified by its schema-qualified name; the legacy single-tenant table is gone.
 /// </summary>
@@ -91,11 +111,31 @@ public interface IStreamDataDatabaseClient
     Task<long> GetCountAsync(string tenantId, string countQuery, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Executes a COUNT query under the time budget of <paramref name="statementClass"/> and returns
+    /// the total number of matching rows. For the counts that size the statements of a background
+    /// run (the slices of a rollup recompute): they belong to the same class as the statements they
+    /// size, and fail the same way — <see cref="StreamDataStatementTimeoutException"/> when the
+    /// budget runs out, <see cref="OperationCanceledException"/> for a cancelled token.
+    /// </summary>
+    Task<long> GetCountAsync(string tenantId, string countQuery, CrateStatementClass statementClass,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Executes a non-query SQL statement (INSERT / UPDATE / DELETE / upsert) and returns the
     /// number of affected rows. Used by the rollup orchestrator for the bucket-aggregation upsert
     /// (rollup-archives concept §5).
     /// </summary>
     Task<int> ExecuteNonQueryAsync(string tenantId, string sql, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Executes a non-query SQL statement under the time budget of <paramref name="statementClass"/>
+    /// and returns the number of affected rows. The token cancels the wait for a connection and the
+    /// statement itself. A statement that runs out of its budget fails with
+    /// <see cref="StreamDataStatementTimeoutException"/>, a cancelled token with
+    /// <see cref="OperationCanceledException"/>.
+    /// </summary>
+    Task<int> ExecuteNonQueryAsync(string tenantId, string sql, CrateStatementClass statementClass,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Executes one parameterised non-query statement once per argument set in a single CrateDB
@@ -113,6 +153,14 @@ public interface IStreamDataDatabaseClient
     /// in; the repository does NOT call it after every insert because it is expensive under load.
     /// </summary>
     Task RefreshArchiveTableAsync(string tenantId, string qualifiedTable);
+
+    /// <summary>
+    /// <see cref="RefreshArchiveTableAsync(string, string)"/> under the time budget of
+    /// <paramref name="statementClass"/>; the token cancels the wait for a connection and the
+    /// refresh itself.
+    /// </summary>
+    Task RefreshArchiveTableAsync(string tenantId, string qualifiedTable, CrateStatementClass statementClass,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns per-table storage stats (row count, on-disk size, health) for every entry in

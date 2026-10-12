@@ -1,5 +1,6 @@
 using System.IO;
 using System.Net.Sockets;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using Polly;
 using Polly.CircuitBreaker;
@@ -11,10 +12,16 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// <summary>
 /// Builds the Polly resilience pipeline that wraps every CrateDB call from
 /// <c>CrateDatabaseClient</c>. Concept §8 T13 — three layers, in outside-in order:
-/// timeout (each attempt is bounded), retry (handles transient PostgreSQL/Npgsql errors with
-/// exponential backoff + jitter), circuit breaker (cuts the cluster off after sustained failure
-/// so callers fail fast and metrics can flag the outage).
+/// timeout (one budget across the call and its retries), retry (handles transient
+/// PostgreSQL/Npgsql errors with exponential backoff + jitter), circuit breaker (cuts the cluster
+/// off after sustained failure so callers fail fast and metrics can flag the outage).
 /// </summary>
+/// <remarks>
+/// One pipeline, and therefore one circuit breaker, serves every statement class. A call that
+/// needs another budget than <see cref="CrateResilienceOptions.PerAttemptTimeout"/> sets it on its
+/// <see cref="ResilienceContext"/> (<see cref="CallTimeoutKey"/>); the timeout only ends a call
+/// whose callback observes the context's cancellation token.
+/// </remarks>
 public static class CrateResiliencePipeline
 {
     /// <summary>
@@ -24,20 +31,41 @@ public static class CrateResiliencePipeline
     public static readonly TimeSpan DefaultPerAttemptTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>
+    /// Time the pipeline's timeout is set behind a call's command timeout, so that the driver's own
+    /// timeout fires first and yields the precise error.
+    /// </summary>
+    internal static readonly TimeSpan CallTimeoutMargin = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Context property carrying the timeout of one call. Absent (or not positive) ⇒
+    /// <see cref="CrateResilienceOptions.PerAttemptTimeout"/>.
+    /// </summary>
+    internal static readonly ResiliencePropertyKey<TimeSpan> CallTimeoutKey = new("crate.call-timeout");
+
+    /// <summary>
     /// Builds the default resilience pipeline. Public so consumers can compose extra strategies
     /// or replace it for tests.
     /// </summary>
-    public static ResiliencePipeline Build(CrateResilienceOptions? options = null)
+    /// <param name="options">Tunables; defaults when null.</param>
+    /// <param name="logger">
+    /// When given, the opening of the circuit breaker is logged with the operation that tripped it.
+    /// </param>
+    public static ResiliencePipeline Build(CrateResilienceOptions? options = null, ILogger? logger = null)
     {
         options ??= new CrateResilienceOptions();
 
         var builder = new ResiliencePipelineBuilder();
 
-        // Outermost: per-attempt timeout. Wraps the retry + the underlying call so each retry
-        // gets its own clean budget rather than competing with prior attempts.
+        // Outermost: the timeout. It wraps the retry and the underlying call, so it is one budget
+        // across the first attempt and its retries, not a budget per attempt. The value comes from
+        // the call's context when the call set one.
         builder.AddTimeout(new TimeoutStrategyOptions
         {
             Timeout = options.PerAttemptTimeout,
+            TimeoutGenerator = args => new ValueTask<TimeSpan>(
+                args.Context.Properties.TryGetValue(CallTimeoutKey, out var callTimeout) && callTimeout > TimeSpan.Zero
+                    ? callTimeout
+                    : options.PerAttemptTimeout),
             Name = "crate.timeout",
         });
 
@@ -76,6 +104,18 @@ public static class CrateResiliencePipeline
             MinimumThroughput = options.CircuitMinimumThroughput,
             BreakDuration = options.CircuitBreakDuration,
             Name = "crate.circuit-breaker",
+            // Which call site fed the breaker decides whether an outage was caused by background
+            // statements or hit interactive ones as well; without this line that cannot be told.
+            OnOpened = args =>
+            {
+                logger?.LogWarning(
+                    args.Outcome.Exception,
+                    "CrateDB circuit breaker opened for {BreakDuration}; tripped by operation '{OperationKey}' with {ExceptionType}.",
+                    args.BreakDuration,
+                    args.Context.OperationKey ?? "(none)",
+                    args.Outcome.Exception?.GetType().FullName ?? "(no exception)");
+                return default;
+            },
         });
 
         return builder.Build();
@@ -89,7 +129,10 @@ public static class CrateResiliencePipeline
 /// </summary>
 public sealed class CrateResilienceOptions
 {
-    /// <summary>Per-attempt timeout (default 30 s).</summary>
+    /// <summary>
+    /// Timeout of one call including its retries (default 30 s). The name is historical: the
+    /// timeout is the outermost layer of the pipeline, so the retries share it.
+    /// </summary>
     public TimeSpan PerAttemptTimeout { get; set; } = CrateResiliencePipeline.DefaultPerAttemptTimeout;
 
     /// <summary>Maximum retry attempts after the initial call (default 3).</summary>

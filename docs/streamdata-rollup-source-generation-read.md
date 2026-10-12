@@ -110,16 +110,43 @@ own — so a recompute of another series does not make it repeat.
 
 Every step another statement depends on is followed by an explicit refresh:
 
-| Step | Statement | Refresh after | Why |
+| Step | Statement | Refresh | Why |
 |---|---|---|---|
 | 0 | read next generation (`MAX(generation)+1`) | pointer table **before** | a run directly after another would otherwise be handed the same number, and its rows would collide with the previous run's on the primary key |
-| 1 | copy staged rows as generation `N+1` | live table | the rows must be readable before they become authoritative |
+| 0a | leftover guard: count the rows already under `N+1` in the range, delete them | live table **before** the count; live table after a delete | the number comes from the pointer table alone, so a copy that never committed left rows under the number the next run is handed; the count has to see them, and they have to be gone before the copy |
+| 1 | copy staged rows as generation `N+1`, one statement per slice | live table, once after the last slice | the rows must be readable before they become authoritative |
 | 2 | flip the pointer to `N+1` | pointer table | every reader must select `N+1` **before** `N` is removed |
-| 3 | sweep generations other than `N+1` | live table | the dependents of this rollup are recomputed right after it; the deleted rows must be gone |
+| 3 | sweep generations other than `N+1`, one statement per slice | live table, once after the last slice | the dependents of this rollup are recomputed right after it; the deleted rows must be gone |
 | 4 | delete pointer entries contained in the range | pointer table | readers must not pick up an entry whose rows are gone |
 
 The order of step 2's refresh and step 3 is what the pointer check in 2.2 relies on: once a reader
 can observe the old generation as missing, it can also observe the new pointer.
+
+**Slices.** Steps 0a, 1 and 3 do not run as one statement over the range. The range is cut into
+consecutive time slices by `window_start`; each slice is counted, and executed only when it holds
+at most twice the target (`StreamData:Recompute:SliceTargetRows`, default 100,000) — otherwise it
+is proposed again narrower. A statement over a whole range grows with the rows of the range and has
+no upper bound; a slice has one, whatever the data looks like. This changes nothing a reader sees:
+
+- every copy slice writes the same generation `N+1`, and no reader selects `N+1` before the pointer
+  names it (2.1: the predicate is never absent);
+- the flip stays a single-row write for the whole range — the commit;
+- every sweep slice runs after the flip and its refresh, so the statement of 2.2 holds for each.
+
+A reader therefore sees generation `N` completely or `N+1` completely, as with one statement on
+each side of the flip. The slices of one step cover disjoint `window_start` ranges and need no
+refresh between them. The sweep slices partition the whole range, not only the windows that were
+staged: a window whose source rows are gone has no new row, and its old generation still has to go.
+
+**After the flip the range is committed.** A failure of step 3 or 4 does not fail the recompute
+(unless the caller cancelled): readers are on `N+1`, the dependents are told, and nothing is
+aggregated again to finish a delete. The rows step 3 did not remove are dead, and they are found
+from the pointer table alone: inside the range (and scope) of a pointer entry of generation `g`,
+every reader selects a generation of at least `g` — the predicate takes the newest matching entry —
+so rows below `g` there cannot be selected by anyone. A reclaim pass deletes exactly those, in
+slices, at the start of a later recompute call: for the entries whose sweep failed, and once per
+process for every entry of the rollup, so that a restart loses nothing. It deletes strictly below
+`g`; rows above `g` may belong to a newer recompute that overlaps the range.
 
 ### 2.4 A rewind keeps the pointer of the rows it does not rewind
 
@@ -165,6 +192,13 @@ So a bucket read from a rollup source costs two pointer reads more, and a recomp
 0.1 s more for its refreshes. The first rollup level reads a raw or time-range archive and is not
 affected at all. Refresh cost on larger tables and on clusters with replicas has not been measured.
 
+The slices of 2.3 add one range count per slice of the copy, of the sweep and of the leftover
+guard — answered from the index — and one refresh of the live table before the leftover guard. A
+recompute whose range holds no more rows than the slice target runs each step as one statement
+behind one count. The first recompute call of a process for a rollup additionally counts the dead
+rows of every pointer entry (one statement per entry; a rollup with many entries pays that once).
+None of this has been measured on a cluster with replicas.
+
 Two alternatives were measured and rejected: selecting the highest generation per key with a
 window function (about nine times the statement time), and joining the pointer table as a
 correlated sub-query (no result within two minutes for one day).
@@ -178,6 +212,14 @@ correlated sub-query (no result within two minutes for one day).
   ranges accumulates entries (roughly one per recomputed range that is not contained in a later
   one). Section 2.1 makes this irrelevant for the aggregation; the query path still renders all
   entries. Pruning entries is a separate topic.
+- A rewind does not wait for a running recompute. Its row delete (`generation != 0` from the
+  boundary on) and the forward aggregation that follows can meet a sweep slice or a reclaim slice
+  of the same range, which may then delete freshly aggregated generation-0 rows. The reclaim pass reads its pointer entry again before every statement and stops when the
+  entry is gone or changed, which narrows the interval to one statement and does not close it.
+  Do not rewind a rollup while a recompute of it is running.
+- Rows of a generation above every pointer of their range — a copy that never committed — are not
+  found by the reclaim pass. The leftover guard removes them when their number comes up again, and
+  the sweep of any later recompute covering the range removes them in any case.
 - A manual recompute may write a generation for a bucket the forward aggregation has not closed
   yet; the bucket then exists at generation 0 and at the recomputed generation. Readers following
   the rule above see the recomputed one. Constraining manual recomputes to closed buckets of the
@@ -185,6 +227,12 @@ correlated sub-query (no result within two minutes for one day).
 
 ## 6. Tests
 
+- `StreamData.UnitTests/CrateDbArchiveRecomputeExecutorTests` — the commit sequence against an
+  in-memory stand-in for the three tables: statements and refreshes in order, the slices of the copy
+  and the sweep (partition of the range, row bound), the leftover guard, a failure behind the flip,
+  the reclaim pass (below the pointer only, inside range and scope, stopped by a changed entry).
+- `octo-asset-repo-services` → `RollupRecomputeRowBoundTests` — the same against a real CrateDB
+  with a slice target of 20 rows.
 - `StreamData.UnitTests/RollupSourceGenerationReadTests` — the predicate (overlap selection,
   generation-0 baseline, raw/time-range sources untouched, inside the First/Last ranking
   sub-select), the pointer check (kept, repeated, given up; unrelated ranges ignored), the rewind
