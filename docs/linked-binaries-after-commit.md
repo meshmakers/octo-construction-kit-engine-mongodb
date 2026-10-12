@@ -62,7 +62,15 @@ the shape of the asset-repo recursive folder delete. Local run (Mac, Testcontain
 | 20,000 (before the change: transaction aborted by the 60 s MongoDB transaction lifetime) | - | - | failed |
 
 The time is not linear: `DeleteAllFileSystemBinariesAsync` looks up the bytes of every entity by
-`metadata.rtEntityId`, and `fs.files` has no index on that field, so each entity costs a collection scan. The time the
-transaction stays open is the limiting factor (MongoDB `transactionLifetimeLimitSeconds`, default 60 s), not memory
-(about 150 KB allocated per entry, no measurable working-set growth). An index on `fs.files.metadata.rtEntityId` would make
-it linear; that is **AB#6538**.
+`metadata.rtEntityId`. The measurements above were taken **without** an index on that field, so each entity cost a
+collection scan. The time the transaction stays open is the limiting factor (MongoDB `transactionLifetimeLimitSeconds`,
+default 60 s), not memory (about 150 KB allocated per entry, no measurable working-set growth).
+
+### Owner index (AB#6538)
+
+The tenant index setup (`UpdateIndexAsync`, a full update that is not scoped to one model; it runs when a tenant is
+created and on every index update) creates the index `metadata_rtEntityId_1` on `fs.files.metadata.rtEntityId`. It is
+**sparse**, because temporary binaries have no owner. Creating an index with an identical definition is a no-op, so the
+setup can be repeated and run concurrently. The owner lookups that use it are `DeleteAllFileSystemBinariesAsync` and the
+orphan sweep (AB#6541). Existing tenants get the index with the next full index update after the engine-mongodb release;
+building the index on a very large `fs.files` takes time (MongoDB builds it online; plan the first index update of such a tenant outside peak load).
