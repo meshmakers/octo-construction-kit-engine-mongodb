@@ -68,6 +68,13 @@ default 60 s), not memory (about 150 KB allocated per entry, no measurable worki
 
 ### Owner index (AB#6538)
 
+The tenant index setup (`UpdateIndexAsync`, a full update that is not scoped to one model; it runs when a tenant is
+created and on every index update) creates the index `metadata_rtEntityId_1` on `fs.files.metadata.rtEntityId`. It is
+**sparse**, because temporary binaries have no owner. Creating an index with an identical definition is a no-op, so the
+setup can be repeated and run concurrently. The owner lookups that use it are `DeleteAllFileSystemBinariesAsync` and the
+orphan sweep (AB#6541). Existing tenants get the index with the next full index update after the engine-mongodb release;
+building the index on a very large `fs.files` takes time (MongoDB builds it online; plan the first index update of such a tenant outside peak load).
+
 Measured with `DeleteCapMeasurementTests` on the same machine and database (4 KB files; `OCTO_MEASURE_OWNER_INDEX=off|on`
 drops or creates the index before the run):
 
@@ -81,10 +88,3 @@ transaction stays open for 4.4 s instead of 37.4 s. The after-commit delete (12.
 asset-repo limit `FilesOptions.MaxDeleteEntries` (5,000) is **not** changed by this work: raising it is a decision of the
 product owner (the total of 16.6 s at 10,000 entries is a 3.6x margin to the 60 s transaction lifetime, the story asks for
 more than 4x). These numbers were not taken on the restored sbeg-sized tenant.
-
-The tenant index setup (`UpdateIndexAsync`, a full update that is not scoped to one model; it runs when a tenant is
-created and on every index update) creates the index `metadata_rtEntityId_1` on `fs.files.metadata.rtEntityId`. It is
-**sparse**, because temporary binaries have no owner. Creating an index with an identical definition is a no-op, so the
-setup can be repeated and run concurrently. The owner lookups that use it are `DeleteAllFileSystemBinariesAsync` and the
-orphan sweep (AB#6541). Existing tenants get the index with the next full index update after the engine-mongodb release;
-building the index on a very large `fs.files` takes time (MongoDB builds it online; plan the first index update of such a tenant outside peak load).
