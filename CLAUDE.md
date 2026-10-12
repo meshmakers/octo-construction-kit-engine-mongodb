@@ -962,16 +962,93 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
 - **Executor flip** (`CrateDbArchiveRecomputeExecutor`) — compute into staging, then **refresh the
   staging table** (CrateDB applies inserts to the read path asynchronously, so the staging→live
   `INSERT … SELECT` would otherwise copy zero rows — found by the integration test below), then:
-  (1) `BuildInsertFromStagingWithGeneration` copies staged rows into the live table stamped with the
-  next generation `N+1` (the previous generation stays visible); (2) `RefreshArchiveTableAsync`;
+  (0) leftover guard: rows already under the next generation `N+1` in the range are deleted first;
+  (1) `BuildInsertFromStagingSlice` copies the staged rows into the live table stamped with `N+1`
+  (the previous generation stays visible); (2) `RefreshArchiveTableAsync`;
   (3) `GenerationMapSqlBuilder.BuildUpsertPointer` flips the pointer to `N+1` — the **atomic commit**;
-  (4) `BuildSweepSupersededGenerations` deletes the now-superseded generations in the range; (5) drop
-  staging. A crash before the flip leaves readers on the previous generation; a crash after the flip
-  but before the sweep just leaves dead rows the next sweep/activation reclaims. **Every step the
-  next statement or reader depends on is followed by a refresh — the genmap table included:** before
-  `MAX(generation)+1` is read, after the flip (readers must select `N+1` before `N` is swept), after
-  the sweep (the dependents recompute right after this rollup), after the contained-pointer delete.
-  Search reads see the last refresh, not the last write; do not remove one of these as "redundant".
+  (4) `BuildSweepSupersededGenerations` deletes the now-superseded generations in the range; (5) the
+  contained pointer entries are deleted; (6) staging is cleared. A crash before the flip leaves
+  readers on the previous generation; a crash after the flip but before the sweep just leaves dead
+  rows the reclaim pass removes. **Every step the next statement or reader depends on is followed by
+  a refresh — the genmap table included:** before `MAX(generation)+1` is read, the live table before
+  the leftover guard counts, after the copy, after the flip (readers must select `N+1` before `N` is
+  swept), after the sweep (the dependents recompute right after this rollup), after the
+  contained-pointer delete. Search reads see the last refresh, not the last write; do not remove one
+  of these as "redundant".
+- **Row bound (AB#6283)** — the copy (1), the sweep (4), the leftover guard (0) and the reclaim pass
+  each run as **one statement per time slice** of the range, and every slice is **counted before it
+  is executed** (`ExportSlicePlanner`, the planner of the archive export: propose, count, accept or
+  narrow). No statement touches more than twice `StreamData:Recompute:SliceTargetRows` rows,
+  whatever a chunk holds — the orchestrator's chunking by buckets bounds the number of aggregation
+  statements, not the rows, and an estimate of rows per bucket fails on an archive that is sparse
+  for a year and dense afterwards. The bound lives in the executor because only there the rows are
+  there to be counted. The unit of commit is unchanged — the whole call: all copy slices write the
+  same generation `N+1`, which no reader selects before the pointer names it, the flip is still one
+  single-row write, and every sweep slice runs after the flip and its genmap refresh. There is no
+  refresh between the slices of one step (disjoint `window_start` ranges). The sweep slices
+  partition the **whole** range, not only the staged windows: a window whose source rows are gone
+  has no new row, and its old generation still has to go. Do not move the bound into the
+  orchestrator as smaller chunks: every chunk writes a pointer entry, and the query path renders
+  every entry into its `CASE`.
+- **Leftover guard** — the next generation number is read from the pointer table only, so a copy
+  that was cut short before its flip leaves rows under the very number the retry is handed. CrateDB
+  **skips** a row whose primary key exists in an `INSERT … SELECT` without `ON CONFLICT` (no error):
+  the retry would adopt the first attempt's values and keep rows for entities it no longer produces
+  (pinned by `RollupRecomputeRowBoundTests.LeftoverRowsAtTheNextGeneration_AreNotAdopted`). Hence
+  step (0), restricted to the range and scope of the call.
+- **Committed stays committed (AB#6283)** — once the flip and its refresh have succeeded,
+  `ExecuteAsync` reports the range as done. A failure in the sweep, the contained-pointer delete or
+  the staging cleanup is logged as a warning (rollup, range, scope, generation, step) and **not
+  thrown**, unless the caller's token is cancelled (then the orchestrator records an interruption and
+  re-runs the chunk, whose sweep `!= N'` removes everything). Throwing there made the orchestrator
+  fail the job although readers already saw the new generation, kept the dependents from being
+  enqueued, and made every retry aggregate and copy a further full generation only to finish a
+  delete.
+- **Reclaim pass** — the rows a failed sweep leaves are found from the pointer table, with no extra
+  state: for a pointer entry `(range, scope, g)` every reader selects a generation `>= g` inside the
+  range (the read `CASE` takes the newest matching entry), so rows there with `generation < g` are
+  dead. `ReclaimDeadGenerationsAsync` deletes them in slices, at the start of `ExecuteAsync`: for the
+  entries whose sweep failed in this process, and **once per process and rollup for all entries** —
+  which is what survives a pod restart and what removes dead rows left before this pass existed. It
+  uses `<`, never `!=` (a newer overlapping recompute's rows lie above `g`), re-reads the entry
+  before every statement and leaves it alone when it is gone or changed (a rewind in between), and
+  never fails the recompute. Not covered: rows *above* every pointer of their range (an uncommitted
+  copy) — the leftover guard and the sweep of any later recompute over the range remove those.
+- **Staging table** — `archive_<rtId>__rc`, one shard, `number_of_replicas = 0` (disposable: losing
+  it fails one call, which is retried), and **kept between runs**. Per process and rollup it is
+  dropped and created once, on first use; after that a run of up to `SliceTargetRows` staged rows
+  issues no DDL (the rows are deleted at the end, the next run refreshes and counts to make sure it
+  starts empty), a larger run drops the table at the end and the next run creates it. Because it is
+  kept, `ArchiveTableDrop` drops it with the archive.
+- **Statement budget (AB#6283)** — `CrateStatementClass { Interactive, Maintenance }`. Every
+  statement of the executor and of `RollupSourceBucketAggregator` (so the forward aggregation too)
+  is sent as `Maintenance` with the caller's token: `IStreamDataDatabaseClient.ExecuteNonQueryAsync /
+  RefreshArchiveTableAsync(…, CrateStatementClass, CancellationToken)` and
+  `IStreamDataDatabaseManagementClient.ExecuteDdlAsync(…, CancellationToken)`. `CrateDatabaseClient`
+  runs all non-query paths through one helper that passes the caller's token **and** the resilience
+  pipeline's token to the driver and sets the command timeout explicitly — `Interactive`:
+  `StreamData:Resilience:PerAttemptTimeout` (30 s), `Maintenance`:
+  `StreamData:Recompute:CommandTimeout`. The pipeline's timeout comes from the call's
+  `ResilienceContext` (`CrateResiliencePipeline.CallTimeoutKey`, command timeout + 5 s, so the
+  driver's timeout fires first); it is **one budget across the retries**, and there is one pipeline
+  and one circuit breaker for both classes (its opening is logged with the operation key
+  `<class>.<kind>` and the exception type). CrateDB answers every cancellation with
+  `XX000: Job killed`; the helper maps it to `OperationCanceledException` when the caller's token is
+  cancelled and to `StreamDataStatementTimeoutException` when the budget elapsed, and passes any
+  other kill through. That exception is deliberately not a connection failure for
+  `RecomputeOrchestrator.IsTransientConnectionFailure`: a statement that exceeded its budget will
+  exceed it again under the same load, and the range-level retry is the answer.
+
+  | Option | Env var | Default | Meaning |
+  |---|---|---|---|
+  | `StreamData:Recompute:SliceTargetRows` | `OCTO_STREAMDATA__RECOMPUTE__SLICETARGETROWS` | `100000` | rows a copy / sweep / reclaim statement aims at (at most twice that); also the keep-or-drop threshold of the staging table. `> 0`. |
+  | `StreamData:Recompute:CommandTimeout` | `OCTO_STREAMDATA__RECOMPUTE__COMMANDTIMEOUT` | `00:02:00` | command timeout of every `Maintenance` statement. `>= 1 s`. |
+
+  Bound to `CrateRecomputeOptions` in `AddCrateDbStreamDataRepository` (and, when the host has an
+  `IConfiguration`, in `AddStreamDataDatabase`); the host's `RecomputeOrchestratorOptions` share the
+  section under other property names. Not bounded by this: the rewind's
+  `DELETE … window_start >= B AND generation != 0` is still one statement over everything behind
+  the boundary.
 - **A rollup as the source of the next level** — `RollupAggregationSqlBuilder` reads a rollup source
   through the same predicate as the read path (`GenerationFilterSql`, entries overlapping the bucket
   only, `generation = 0` when none), in the recompute executor and in the forward
@@ -992,7 +1069,11 @@ has no multi-statement transaction. The mechanism is a per-window `generation` p
   Testcontainer and asserts the generation flip, the no-mixed-read filter (an injected uncommitted
   generation stays hidden), and the post-flip sweep. This is the automated replacement for the
   previously-manual live validation; it caught both the staging-refresh bug above and the empty-genmap
-  baseline-filter bug.
+  baseline-filter bug. `RollupRecomputeRowBoundTests` (slice target 20) covers the slices, the
+  leftover guard and the reclaim pass against the same CrateDB, `RollupRecomputeStatementBudgetTests`
+  a 300,000-row recompute under a one-second statement budget and the timeout / cancellation
+  mapping. The commit sequence itself is pinned without a database by
+  `CrateDbArchiveRecomputeExecutorTests` (`RecomputeCrateSimulator`).
 - **Upgrade self-heal:** `EnsureWindowedTableShapeAsync(requireGenerationColumn: isRollup)` drops an
   existing rollup table that is on the windowed shape but lacks the `generation` column (provisioned
   before Phase 6) so the subsequent `CREATE TABLE IF NOT EXISTS` re-adds it with the generation-keyed
@@ -1774,7 +1855,7 @@ when the caller says so. `DeleteChildTenantMetadataAsync` / `DropChildTenantAsyn
 `dropStreamData` (default **false**): with `true` the archives of the child are collected into the
 `TenantDeletionHandle.StreamDataArchives` *before* the record is deleted (the last moment the child
 resolves — the entities are gone with the database), and `DropTenantDatabaseAsync` drops exactly those
-archives' tables (data table + `__genmap` side-table, each `DROP TABLE IF EXISTS`, all statuses) through
+archives' tables (data table, `__genmap` side-table and `__rc` recompute staging table, each `DROP TABLE IF EXISTS`, all statuses) through
 `IStreamDataRepositoryFactory.DeleteArchiveTablesAsync(tenantId, rtIds)` after the Mongo drop. The
 guard in `DisableStreamDataAsync` (see *StreamData: Archives and Rollups*) only ensures nothing is
 *live* by then. Who passes `true`: the tenant delete REST endpoint and `ClearChildTenantAsync` (Clear
