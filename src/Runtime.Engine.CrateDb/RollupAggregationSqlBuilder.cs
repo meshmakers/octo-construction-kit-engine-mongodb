@@ -238,7 +238,7 @@ internal static class RollupAggregationSqlBuilder
         // shared with TimeRangeArchive. The source side now also branches (Phase 8 / concept §7):
         // raw archive ⇒ single `timestamp` column, windowed source ⇒ (window_start, window_end)
         // with `was_updated` propagation.
-        AppendInsertColumnList(sb, targetTable, resolved, includeWasUpdated: sourceUsesWindowedStorage);
+        AppendInsertColumnList(sb, targetTable, resolved);
 
         // ---- SELECT ... FROM source WHERE <time-predicate> GROUP BY rtId ----
         sb.Append("SELECT '").Append(bucketStartLiteral).Append("'::timestamp AS \"").Append(Constants.WindowStart).Append("\", ")
@@ -255,6 +255,10 @@ internal static class RollupAggregationSqlBuilder
             // the target column is NOT NULL, and CrateDB leaves such a row out of INSERT ... SELECT
             // without an error — the rollup would lose the whole (series, bucket) row.
             sb.Append(", COALESCE(MAX(\"").Append(Constants.WasUpdated).Append("\"), FALSE) AS \"").Append(Constants.WasUpdated).Append('"');
+        }
+        else
+        {
+            AppendFreshWasUpdated(sb);
         }
         // Window length of a windowed source row in epoch milliseconds — the TWA weight when the
         // source is a TimeRangeArchive (concept-time-weighted §3: the windows ARE the coverage).
@@ -481,13 +485,14 @@ internal static class RollupAggregationSqlBuilder
             ? string.Empty
             : $" AND \"{Constants.RtId}\" = '{EscapeLiteral(rtIdScope)}'";
 
-        AppendInsertColumnList(sb, targetTable, resolved, includeWasUpdated: false);
+        AppendInsertColumnList(sb, targetTable, resolved);
 
         sb.Append("SELECT '").Append(bucketStartLiteral).Append("'::timestamp AS \"").Append(Constants.WindowStart).Append("\", ")
           .Append('\'').Append(bucketEndLiteral).Append("'::timestamp AS \"").Append(Constants.WindowEnd).Append("\", ")
           .Append('"').Append(Constants.RtId).Append("\", ")
           .Append('\'').Append(EscapeLiteral(rollupCkTypeId)).Append("' AS \"").Append(Constants.CkTypeId).Append("\", ")
           .Append("MAX(\"").Append(Constants.RtWellKnownName).Append("\") AS \"").Append(Constants.RtWellKnownName).Append('"');
+        AppendFreshWasUpdated(sb);
         foreach (var agg in resolved)
         {
             var spec = agg.Spec;
@@ -605,22 +610,28 @@ internal static class RollupAggregationSqlBuilder
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Appends the <c>was_updated</c> value of a freshly aggregated row for a source that carries no
+    /// flag (a raw archive): the literal <c>FALSE</c>. The column is always part of the INSERT list
+    /// (AB#6647): CrateDB before 5.10.12 can store the new rows of an upsert that also hits existing
+    /// keys without a deterministic column DEFAULT on the replica copy, so the flag is never left to
+    /// the DDL default.
+    /// </summary>
+    private static void AppendFreshWasUpdated(StringBuilder sb) =>
+        sb.Append(", FALSE AS \"").Append(Constants.WasUpdated).Append('"');
+
     private static void AppendInsertColumnList(
         StringBuilder sb,
         string targetTable,
-        IReadOnlyList<RollupSourceAggregation> resolved,
-        bool includeWasUpdated)
+        IReadOnlyList<RollupSourceAggregation> resolved)
     {
         sb.Append("INSERT INTO ").Append(targetTable).Append(" (")
           .Append('"').Append(Constants.WindowStart).Append("\", ")
           .Append('"').Append(Constants.WindowEnd).Append("\", ")
           .Append('"').Append(Constants.RtId).Append("\", ")
           .Append('"').Append(Constants.CkTypeId).Append("\", ")
-          .Append('"').Append(Constants.RtWellKnownName).Append('"');
-        if (includeWasUpdated)
-        {
-            sb.Append(", \"").Append(Constants.WasUpdated).Append('"');
-        }
+          .Append('"').Append(Constants.RtWellKnownName).Append("\", ")
+          .Append('"').Append(Constants.WasUpdated).Append('"');
         foreach (var agg in resolved)
         {
             foreach (var c in agg.Columns)

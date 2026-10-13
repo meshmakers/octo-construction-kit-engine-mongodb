@@ -38,9 +38,30 @@ public class ConflictPrecedenceSqlTests
     {
         var sql = CrateDatabaseClient.BuildTimeRangeInsertSql("\"t\".\"archive_a\"", Columns);
 
-        // The pre-1.13.0 shape, byte for byte: no archive changes behaviour until it opts in.
+        // The pre-1.13.0 update list: no archive changes behaviour until it opts in.
         Assert.Contains("\"amountvalue\" = EXCLUDED.\"amountvalue\"", sql);
+        Assert.Contains("\"was_updated\" = TRUE, ", sql);
         Assert.DoesNotContain("CASE WHEN", sql);
+        Assert.DoesNotContain("COALESCE", sql);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AFreshTimeRangeRowWritesWasUpdatedExplicitly(bool guarded)
+    {
+        // AB#6647: CrateDB before 5.10.12 stores the new rows of a multi-row upsert that also hits an
+        // existing key in the same shard without a deterministic column DEFAULT on the replica copy.
+        // The flag was left to `DEFAULT FALSE` and came back as NULL from a NOT NULL column, which a
+        // rollup then dropped. A column named in the INSERT list is not affected, so the flag is
+        // written as a literal — with and without a guard, because the unguarded statement mixes
+        // new and existing keys just the same.
+        var sql = CrateDatabaseClient.BuildTimeRangeInsertSql(
+            "\"t\".\"archive_a\"", Columns, conflictPrecedence: guarded ? QualityThenDate : null, rowCount: 2);
+
+        Assert.Contains("\"sourcedocumentdate\", \"was_updated\") VALUES ", sql);
+        Assert.Contains("$8, FALSE), ($9, ", sql);
+        Assert.Contains("$16, FALSE) ON CONFLICT", sql);
     }
 
     [Fact]
@@ -132,7 +153,22 @@ public class ConflictPrecedenceSqlTests
         // retroactive-write detection. If a write that changed nothing still flipped them, both would
         // report activity that never happened.
         Assert.Contains("THEN CURRENT_TIMESTAMP ELSE \"rtchangeddatetime\" END", sql);
-        Assert.Contains("THEN TRUE ELSE \"was_updated\" END", sql);
+        // The stored flag is read through COALESCE (AB#6647): a row CrateDB stored without the flag
+        // must leave a losing write as FALSE instead of keeping a NULL in a NOT NULL column.
+        Assert.Contains("THEN TRUE ELSE COALESCE(\"was_updated\", FALSE) END", sql);
+        Assert.DoesNotContain("ELSE \"was_updated\" END", sql);
+    }
+
+    [Fact]
+    public void OnlyTheFlagIsReadThroughCoalesce()
+    {
+        // A user column or the change timestamp falling back to a constant would invent data; the
+        // NULL replacement is for the one NOT NULL bookkeeping column that has a defined fresh value.
+        var sql = CrateDatabaseClient.BuildTimeRangeInsertSql(
+            "\"t\".\"archive_a\"", Columns, conflictPrecedence: QualityThenDate);
+
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(sql, "COALESCE"));
+        Assert.Contains("ELSE \"amountvalue\" END", sql);
     }
 
     [Fact]

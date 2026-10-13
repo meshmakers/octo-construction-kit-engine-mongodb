@@ -42,10 +42,23 @@ public class MultiRowInsertSqlTests
     {
         var sql = CrateDatabaseClient.BuildTimeRangeInsertSql("\"t\".\"archive_a\"", Columns, rowCount: 3);
 
-        // 5 standard columns + 3 user columns = 8 parameters per row.
-        Assert.Contains("VALUES ($1, $2, $3, $4, $5, $6, $7, $8), ($9,", sql);
-        Assert.Contains("$24) ON CONFLICT", sql);
+        // 5 standard columns + 3 user columns = 8 parameters per row; was_updated follows as the
+        // literal FALSE (AB#6647) and must not shift the numbering.
+        Assert.Contains("VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE), ($9,", sql);
+        Assert.Contains("$24, FALSE) ON CONFLICT", sql);
         Assert.DoesNotContain("$25", sql);
+    }
+
+    [Fact]
+    public void EveryTimeRangeRowWritesWasUpdatedFalse()
+    {
+        // AB#6647: the flag of a fresh row is never left to the column DEFAULT — in every row of
+        // the statement, since the rows CrateDB stored without it were the new ones next to a
+        // conflicting one.
+        var sql = CrateDatabaseClient.BuildTimeRangeInsertSql("\"t\".\"archive_a\"", Columns, rowCount: 1000);
+
+        Assert.Contains("\"sourcedocumentdate\", \"was_updated\") VALUES ", sql);
+        Assert.Equal(1000, Regex.Matches(sql, @", FALSE\)").Count);
     }
 
     [Fact]
@@ -63,8 +76,8 @@ public class MultiRowInsertSqlTests
         var sql = CrateDatabaseClient.BuildTimeRangeInsertSql("\"t\".\"archive_a\"", Columns,
             generationTracked: true, rowCount: 3);
 
-        Assert.Equal(3, Regex.Matches(sql, @", 0\)").Count);
-        Assert.Contains("\"generation\")", sql);
+        Assert.Equal(3, Regex.Matches(sql, @", FALSE, 0\)").Count);
+        Assert.Contains("\"was_updated\", \"generation\")", sql);
     }
 
     [Fact]

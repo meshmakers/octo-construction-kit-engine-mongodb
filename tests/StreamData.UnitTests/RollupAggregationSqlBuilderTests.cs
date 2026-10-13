@@ -152,6 +152,27 @@ public class RollupAggregationSqlBuilderTests
         Assert.EndsWith(";", sql);
     }
 
+    [Theory]
+    [InlineData(CkRollupFunction.Sum)]
+    [InlineData(CkRollupFunction.First)]
+    [InlineData(CkRollupFunction.TimeWeightedAvg)]
+    public void Build_RawSource_WritesWasUpdatedFalseExplicitly(CkRollupFunction fn)
+    {
+        // AB#6647: a re-aggregated bucket (open-bucket refresh, rewind) is an upsert that mixes
+        // existing and new series. CrateDB before 5.10.12 can store the new rows of such a statement
+        // without a deterministic column DEFAULT on the replica copy, so the flag of a fresh row is
+        // written as a literal in every statement shape (plain, First / Last sub-select, LOCF carry)
+        // instead of being left to `DEFAULT FALSE`.
+        var aggregations = new[] { new CkRollupAggregationSpec("voltage", fn, null) };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false);
+
+        Assert.Contains("\"cktypeid\", \"rtwellknownname\", \"was_updated\", ", sql);
+        Assert.Contains("MAX(\"rtwellknownname\") AS \"rtwellknownname\", FALSE AS \"was_updated\", ", sql);
+    }
+
     [Fact]
     public void Build_WindowedSource_UsesFullyContainedWindowPredicate()
     {

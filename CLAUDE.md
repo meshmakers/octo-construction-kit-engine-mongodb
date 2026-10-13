@@ -805,7 +805,19 @@ before.**
   defect. Do not "simplify" it into a conjunction.
 - **The guard wraps every assignment**, `rtchangeddatetime` and `was_updated` included
   (`Guarded(...)` → `CASE WHEN <guard> THEN <incoming> ELSE "col" END`), so a losing write leaves no
-  trace at all.
+  trace at all. For `was_updated` the fallback is `COALESCE("was_updated", FALSE)` (next rule).
+- **No column of an upsert relies on a deterministic column DEFAULT (AB#6647).** CrateDB before
+  5.10.12 (measured: 5.9.10, 5.9.13, 5.10.10) stores the NEW rows of an `INSERT … ON CONFLICT DO
+  UPDATE` that also hits an existing key in the same shard without such defaults on the **replica**
+  copy. `was_updated BOOLEAN NOT NULL DEFAULT FALSE` then reads as NULL there (`IS NULL` finds
+  nothing, `GROUP BY` does, a read answers from either copy) and a rollup over it drops the row.
+  So `BuildTimeRangeInsertSql` names `was_updated` in the INSERT list with the literal `FALSE` in
+  every row, and `RollupAggregationSqlBuilder` always names it too (`FALSE AS "was_updated"` over a
+  raw source, `COALESCE(MAX(...), FALSE)` over a windowed one); `generation` and the genmap's
+  `rtid_scope` were always written explicitly. `CURRENT_TIMESTAMP` defaults are shipped from the
+  primary and are safe. A new column with a constant DEFAULT has to be written by every upsert
+  that can insert a row. The single-node test container cannot show this (no replica); the proof
+  is `TimeRangeInsertReplicaFlagTests` in `octo-asset-repo-services`, on a two-node cluster.
 - **Null rules:** stored NULL is always replaceable (otherwise the first write freezes the history);
   an incoming NULL never displaces a stored value (a write that cannot prove it is better must not
   win); both NULL is a tie and falls through to the next key. The **last** key admits equality, which

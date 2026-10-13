@@ -179,7 +179,14 @@ ON CONFLICT ("timestamp", "rtid", "cktypeid") DO UPDATE SET
   ...
 ```
 
-The windowed variant differs only in the conflict target and in carrying `"was_updated" = TRUE` instead of the `rtcreationdatetime` no-op (§5: an "ever updated" signal, set on any conflict, not value-change detection).
+The windowed variant differs in the conflict target, in carrying `"was_updated" = TRUE` instead of the `rtcreationdatetime` no-op (§5: an "ever updated" signal, set on any conflict, not value-change detection), and in writing the flag of a fresh row explicitly:
+
+```sql
+INSERT INTO {schema}.{table} ("window_start", "window_end", "rtid", "cktypeid", "rtwellknownname", <user columns>, "was_updated")
+VALUES ($1, $2, ..., FALSE), ($n+1, $n+2, ..., FALSE), ...
+```
+
+**No column of an upsert relies on a deterministic column `DEFAULT`.** CrateDB before 5.10.12 (5.9.10, 5.9.13 and 5.10.10 were measured) stores the *new* rows of an `INSERT … ON CONFLICT DO UPDATE` that also hits an existing key in the same shard without such defaults — on the **replica** copy only. A flag left to `DEFAULT FALSE` is then missing there: the `NOT NULL` column reads as NULL, `IS NULL` does not find the rows, `GROUP BY` does, and a read returns one answer or the other depending on the copy that serves it. A column named in the INSERT list is not affected, and neither are `CURRENT_TIMESTAMP` defaults (their value is shipped from the primary). The rollup aggregation statement follows the same rule: over a raw source, which has no flag to inherit, it selects `FALSE AS "was_updated"`.
 
 Implications:
 
@@ -211,12 +218,12 @@ The clause becomes a guard wrapped around every assignment, including the standa
 ```sql
 ON CONFLICT (...) DO UPDATE SET
   "rtchangeddatetime" = CASE WHEN <guard> THEN CURRENT_TIMESTAMP ELSE "rtchangeddatetime" END,
-  "was_updated"       = CASE WHEN <guard> THEN TRUE ELSE "was_updated" END,
+  "was_updated"       = CASE WHEN <guard> THEN TRUE ELSE COALESCE("was_updated", FALSE) END,
   "user_col_1"        = CASE WHEN <guard> THEN EXCLUDED."user_col_1" ELSE "user_col_1" END,
   ...
 ```
 
-so a losing write leaves **no trace at all** — not even a changed timestamp. `<guard>` for keys `k1 … kn` is
+so a losing write leaves **no trace at all** — not even a changed timestamp. The `COALESCE` only matters for a row that was stored without its flag (see *Upsert semantics*): a losing write leaves it as `FALSE` instead of keeping the NULL. `<guard>` for keys `k1 … kn` is
 
 ```
 (better(k1) OR (equal(k1) AND (better(k2) OR (equal(k2) AND … (better(kn) OR equal(kn))))))
