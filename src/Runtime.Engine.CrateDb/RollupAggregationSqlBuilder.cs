@@ -123,8 +123,8 @@ internal static class RollupAggregationSqlBuilder
     /// True when the source archive uses the windowed <c>(window_start, window_end)</c> storage
     /// layout (either a <c>TimeRangeArchive</c> or a <c>RollupArchive</c>). In that case the time
     /// predicate is the fully-contained rule <c>window_start &gt;= B_start AND window_end &lt;= B_end</c>
-    /// and <c>was_updated</c> from the source is propagated via <c>MAX(was_updated)</c> so retro-
-    /// corrections cascade. False ⇒ raw archive with the single <c>timestamp</c> column and the
+    /// and <c>was_updated</c> from the source is propagated via <c>COALESCE(MAX(was_updated), FALSE)</c>
+    /// so retro-corrections cascade and a group without any stored flag still yields its row. False ⇒ raw archive with the single <c>timestamp</c> column and the
     /// half-open <c>timestamp &gt;= B_start AND timestamp &lt; B_end</c> predicate. Phase 8 / concept-time-
     /// range §7. Must be true when any binding is a rule-2 (child aggregation) binding — a rollup
     /// source is always windowed.
@@ -251,7 +251,10 @@ internal static class RollupAggregationSqlBuilder
             // Inherit retro-correction flag from source — any flagged source row taints the rollup
             // row. Concept §6 + §7. The conflict branch below additionally flips to TRUE on every
             // re-aggregation regardless of source state.
-            sb.Append(", MAX(\"").Append(Constants.WasUpdated).Append("\") AS \"").Append(Constants.WasUpdated).Append('"');
+            // COALESCE (AB#6647): a group whose source flags are all NULL would aggregate to NULL,
+            // the target column is NOT NULL, and CrateDB leaves such a row out of INSERT ... SELECT
+            // without an error — the rollup would lose the whole (series, bucket) row.
+            sb.Append(", COALESCE(MAX(\"").Append(Constants.WasUpdated).Append("\"), FALSE) AS \"").Append(Constants.WasUpdated).Append('"');
         }
         // Window length of a windowed source row in epoch milliseconds — the TWA weight when the
         // source is a TimeRangeArchive (concept-time-weighted §3: the windows ARE the coverage).

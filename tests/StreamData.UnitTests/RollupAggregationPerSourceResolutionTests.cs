@@ -162,7 +162,7 @@ public class RollupAggregationPerSourceResolutionTests
         Assert.DoesNotContain("SUM(\"amountvalue\")", sql);
         // Windowed source: fully-contained predicate + was_updated propagation, as for any rollup source.
         Assert.Contains("WHERE \"window_start\" >= '2026-05-11T14:00:00.0000000Z'::timestamp AND \"window_end\" <= '2026-05-11T15:00:00.0000000Z'::timestamp", sql);
-        Assert.Contains("MAX(\"was_updated\") AS \"was_updated\"", sql);
+        Assert.Contains("COALESCE(MAX(\"was_updated\"), FALSE) AS \"was_updated\"", sql);
     }
 
     [Fact]
