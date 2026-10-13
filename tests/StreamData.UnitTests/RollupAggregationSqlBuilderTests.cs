@@ -178,11 +178,34 @@ public class RollupAggregationSqlBuilderTests
             SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
             sourceUsesWindowedStorage: true);
 
-        // Insert side: was_updated is in the target column list and SELECT MAX(was_updated).
+        // Insert side: was_updated is in the target column list and SELECT MAX(was_updated),
+        // NULL-safe (AB#6647).
         Assert.Contains("\"was_updated\"", sql);
-        Assert.Contains("MAX(\"was_updated\") AS \"was_updated\"", sql);
+        Assert.Contains("COALESCE(MAX(\"was_updated\"), FALSE) AS \"was_updated\"", sql);
         // Conflict side still flips to TRUE — re-aggregation is itself a correction.
         Assert.Contains("\"was_updated\" = TRUE", sql);
+    }
+
+    [Theory]
+    [InlineData(CkRollupFunction.Sum)]
+    [InlineData(CkRollupFunction.First)]
+    [InlineData(CkRollupFunction.Last)]
+    [InlineData(CkRollupFunction.TimeWeightedAvg)]
+    public void Build_WindowedSource_WasUpdatedAggregateIsNullSafe(CkRollupFunction fn)
+    {
+        // AB#6647: a source group whose was_updated flags are all NULL aggregates to NULL; the
+        // target column is NOT NULL and CrateDB leaves such a row out of INSERT ... SELECT without
+        // an error. Every statement shape over a windowed source (plain aggregate, the First / Last
+        // rank sub-select, window-weighted TWA) must therefore coalesce the flag to FALSE.
+        var aggregations = new[] { new CkRollupAggregationSpec("voltage", fn, null) };
+
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, aggregations, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: true);
+
+        Assert.Contains(", COALESCE(MAX(\"was_updated\"), FALSE) AS \"was_updated\"", sql);
+        // The bare aggregate must not survive anywhere in the statement.
+        Assert.DoesNotContain(", MAX(\"was_updated\") AS \"was_updated\"", sql);
     }
 
     [Fact]
