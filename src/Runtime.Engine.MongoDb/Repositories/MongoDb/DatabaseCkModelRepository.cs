@@ -5,6 +5,7 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Engine.Resolvers.Repository;
 using Meshmakers.Octo.ConstructionKit.Engine.Versioning;
 using Meshmakers.Octo.Runtime.Contracts;
@@ -93,7 +94,7 @@ internal readonly struct SessionScope : IAsyncDisposable
 /// <summary>
 ///     Implements a CK model repository that stores the CK model in a (octo) database.
 /// </summary>
-public class DatabaseCkModelRepository : IDatabaseCkModelRepository
+public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepositoryVersionLister
 {
     private readonly IRepositoryModelResolver _repositoryModelResolver;
     private readonly ICkModelImportAuditTrail _importAuditTrail;
@@ -144,6 +145,25 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository
             .First();
 
         return new ModelExistingResult { Exists = true, ModelId = latestSatisfiedModel.Id };
+    }
+
+    /// <summary>
+    ///     AB#4468: the versions of <paramref name="ckModelName" /> that <c>IsExistingAsync(range)</c> considers (state
+    ///     <c>Available</c>, plus <c>ResolveFailed</c> during the post-import re-validation), ascending. The engine's
+    ///     <c>RepositoryDependencyResolver</c> names them in the rejection of an unsatisfiable dependency range.
+    /// </summary>
+    public async Task<IReadOnlyList<CkModelId>> ListVersionsAsync(string ckModelName, object? sourceIdentifier = null)
+    {
+        var sourceIdentifierObject =
+            ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
+                sourceIdentifier);
+
+        await using var scope = await SessionScope.CreateAsync(sourceIdentifierObject);
+        var includeResolveFailed = sourceIdentifierObject.IncludeResolveFailedModels;
+        var ckModels = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels.FindManyAsync(scope.Session,
+            e => e.ModelId == ckModelName && (e.ModelState == ModelState.Available ||
+                                              (includeResolveFailed && e.ModelState == ModelState.ResolveFailed)));
+        return ckModels.Select(m => m.Id).OrderBy(id => id.Version).ToList();
     }
 
     /// <inheritdoc />

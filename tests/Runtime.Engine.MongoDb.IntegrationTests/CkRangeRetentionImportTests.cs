@@ -220,6 +220,54 @@ public class CkRangeRetentionImportTests(CkModelImportMigrationFixture fixture)
     }
 
     /// <summary>
+    ///     AB#4468: the tenant import side of the SemVer resolution matrix (the same table as the engine's catalog and
+    ///     repository resolvers and the re-validation unit tests). A range-retaining dependent of
+    ///     <c>RrBase-[1.0,2.0)</c> is imported into a tenant that holds one version of the base: the floor version, a
+    ///     higher minor/patch than the floor (resolves, the dependent is Available), a version below the floor or a
+    ///     higher major (rejected; the message names the range and the installed version, nothing is installed).
+    ///     The base is a test model, not System, for the reason given on the class.
+    /// </summary>
+    [Theory]
+    [InlineData("1.0.0", "1.0.0", true)]
+    [InlineData("1.2.1", "1.0.0", true)]
+    [InlineData("1.0.0", "1.1.0", false)]
+    [InlineData("2.0.0", "1.0.0", false)]
+    public async Task SemVerMatrix_ImportOfRangeRetainingDependent_AgainstInstalledBaseVersion(
+        string installedBase, string dependentFloor, bool expectedAvailable)
+    {
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = $"rangemtx{Guid.NewGuid():N}"[..20];
+        try
+        {
+            await CreateChildAsync(tenantId);
+            var tenant = await GetChildAsync(tenantId);
+            var system = await GetInstalledSystemIdAsync(tenant);
+            var database = GetTenantDatabase(tenantId);
+            await tenant.ImportCkModelAsync(BuildBase($"RrBase-{installedBase}", system, withExtra: false));
+
+            var dependent = BuildDependent("MatrixDep-1.0.0", $"RrBase-{dependentFloor}", system, rangeRetaining: true);
+            var failure = await Record.ExceptionAsync(() => tenant.ImportCkModelAsync(dependent));
+
+            if (expectedAvailable)
+            {
+                Assert.Null(failure);
+                Assert.Equal("MatrixDep-1.0.0=1", await StatesAsync(database, "MatrixDep"));
+            }
+            else
+            {
+                var message = Assert.IsAssignableFrom<ModelValidationException>(failure).Message;
+                Assert.Contains("RrBase-[", message);
+                Assert.Contains($"visible version of RrBase ({installedBase})", message);
+                Assert.Equal("", await StatesAsync(database, "MatrixDep"));
+            }
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(systemContext, tenantId);
+        }
+    }
+
+    /// <summary>
     ///     Range retention (AB#5665 / AB#5914): an additive System minor imported into a tenant that holds
     ///     exact-pinned AND range-retaining models. The exact pins on the old System go ResolveFailed, the
     ///     range-retaining models stay Available, and the import itself must not throw ("Sequence contains more
