@@ -361,27 +361,37 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // where generation 0 is the active lane. Exported rows of a swept table carry exactly
         // one (the active) generation per window, so collapsing onto 0 is faithful; transient
         // unswept duplicates collapse via the upsert.
+        //
+        // AB#6647: was_updated is written explicitly as FALSE for a fresh row instead of being left
+        // to the column DEFAULT. CrateDB before 5.10.12 stores the new rows of a multi-row upsert
+        // that also hits an existing key in the same shard WITHOUT a deterministic DEFAULT on the
+        // replica copy: the flag is then missing there, reads as NULL although the column is
+        // NOT NULL, and a rollup over it loses the row. A column named in the INSERT list is not
+        // affected. No column of this statement may rely on a deterministic DEFAULT
+        // (CURRENT_TIMESTAMP defaults are shipped from the primary and are safe).
         var allColumns = new List<string>(6 + userColumnNames.Count)
         {
             Constants.WindowStart, Constants.WindowEnd, Constants.RtId, Constants.CkTypeId, Constants.RtWellKnownName
         };
         allColumns.AddRange(userColumnNames);
 
-        var columnList = string.Join(", ", allColumns.Select(c => $"\"{c}\""));
+        var columnList = string.Join(", ", allColumns.Select(c => $"\"{c}\"")) + $", \"{Constants.WasUpdated}\"";
         if (generationTracked)
         {
             columnList += $", \"{Constants.Generation}\"";
         }
 
-        var values = BuildValuesList(allColumns.Count, rowCount, generationTracked ? ", 0" : string.Empty);
+        var values = BuildValuesList(allColumns.Count, rowCount, generationTracked ? ", FALSE, 0" : ", FALSE");
         var conflictGenerationSuffix = generationTracked ? $", \"{Constants.Generation}\"" : string.Empty;
         var guard = BuildConflictGuard(conflictPrecedence ?? [], userColumnNames);
         var conflictUpdates = BuildConflictUpdates(userColumnNames, guard);
 
+        // The rejected branch reads the stored flag through COALESCE: a row stored without the flag
+        // (see above) must come out of a losing write as FALSE, not keep its NULL.
         return $"INSERT INTO {qualifiedTable} ({columnList}) VALUES {values} "
              + $"ON CONFLICT (\"{Constants.WindowStart}\", \"{Constants.WindowEnd}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\"{conflictGenerationSuffix}) "
              + $"DO UPDATE SET \"{Constants.RtChangedDateTime}\" = {Guarded("CURRENT_TIMESTAMP", Constants.RtChangedDateTime, guard)}, "
-             + $"\"{Constants.WasUpdated}\" = {Guarded("TRUE", Constants.WasUpdated, guard)}"
+             + $"\"{Constants.WasUpdated}\" = {Guarded("TRUE", Constants.WasUpdated, guard, storedNullReplacement: "FALSE")}"
              + conflictUpdates;
     }
 
@@ -469,12 +479,23 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
     /// <summary>
     /// Renders one <c>ON CONFLICT DO UPDATE</c> assignment: the incoming value unguarded, or a
-    /// <c>CASE</c> that falls back to the stored column when the guard rejects the write.
+    /// <c>CASE</c> that falls back to the stored column when the guard rejects the write. With
+    /// <paramref name="storedNullReplacement"/> the fallback reads the stored column through
+    /// <c>COALESCE</c>, for a <c>NOT NULL</c> column whose stored value may be missing (AB#6647).
     /// </summary>
-    private static string Guarded(string incomingExpression, string storedColumn, string? guard)
-        => guard is null
-            ? incomingExpression
-            : $"CASE WHEN {guard} THEN {incomingExpression} ELSE \"{storedColumn}\" END";
+    private static string Guarded(
+        string incomingExpression, string storedColumn, string? guard, string? storedNullReplacement = null)
+    {
+        if (guard is null)
+        {
+            return incomingExpression;
+        }
+
+        var stored = storedNullReplacement is null
+            ? $"\"{storedColumn}\""
+            : $"COALESCE(\"{storedColumn}\", {storedNullReplacement})";
+        return $"CASE WHEN {guard} THEN {incomingExpression} ELSE {stored} END";
+    }
 
     /// <summary>
     /// Renders the user-column part of the <c>DO UPDATE SET</c> list (leading comma included), or
