@@ -1399,7 +1399,20 @@ Mongo is camelCase `isRuntimeState` (global `CamelCaseElementNameConvention`).
 
 ### CK v2 Range Retention Round-Trip (AB#5665, AB#5914)
 
-A model compiled with `OctoCkRangeRetention=true` (see the engine CLAUDE.md) carries
+**Contract for classic models (decided 2026-10-14, AB#6675 / AB#6691): "unchanged semantics", not "unchanged bytes".**
+Range retention is the compiler default since AB#6675 (the property/option `OctoCkRangeRetention` / `-rr` is gone; the code-level
+`CkCompilerOptions.RangeRetention = false` remains for tests and re-pin tooling), and engines below 3.5.1 refuse a range-retaining
+model (`minEngineVersion` 3.5.1) - so a model newly compiled from unchanged sources is persisted with `dependencyRanges`,
+`minEngineVersion` and major-qualified references, and a rollback to an older engine can no longer read it. What stays: a classic
+(exact-pinned) model - published before the switch or compiled with `RangeRetention=false` - keeps its exact pre-v2 document shape and its
+exact-pin resolution/`ResolveFailed` lifecycle, and a model that resolves, behaves the same. The tests pin both: the classic shape and the
+golden on a classic variant of Test-1.0.0 (`Fixtures/ClassicModelFactory`: no ranges, no minEngineVersion, concrete ids), the default
+(`RangeRetainingImport_WritesRangesMinEngineVersionAndMajorQualifiedReferences`,
+`RangeRetainingModel_DocumentCarriesRangesAndMinEngineVersion`) and the import-guard lifecycle for both flavours
+(`ResolveFailedModel_..._ExactPinModel` with a minor System bump, `..._WhenItsRangeBecomesSatisfiable` with a System of the next major;
+a minor bump keeps a range-retaining model `Available`).
+
+A model compiled with range retention (the default, see the engine CLAUDE.md) carries
 `CkCompiledModelRoot.DependencyRanges` (`{range, floor}` per direct dependency) and stores references into
 its dependencies **major-qualified** (`System@2/Entity-1`). The three-place rule applies:
 

@@ -1,4 +1,5 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
@@ -173,8 +174,35 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
     }
 
     /// <summary>
-    ///     Classic models must keep their exact document shape: no new element and no row in the new
-    ///     collections, so an engine that predates CK v2 reads them unchanged.
+    ///     The default since AB#6675: the model compiled by the current engine is range-retaining, so its document
+    ///     carries <c>dependencyRanges</c> and <c>minEngineVersion</c> (3.5.1: engines below refuse it) but still no
+    ///     <c>ckLanguage</c>.
+    /// </summary>
+    [Fact]
+    public async Task RangeRetainingModel_DocumentCarriesRangesAndMinEngineVersion()
+    {
+        await WithThrowawayTenantAsync("rtrange", async (tenant, tenantId) =>
+        {
+            var operationResult = new OperationResult();
+            await tenant.ImportCkModelAsync(TestV1ModelId, operationResult);
+            Assert.False(operationResult.HasErrors);
+
+            var model = await GetTenantDatabase(tenantId).GetCollection<BsonDocument>("CkModel")
+                .Find(new BsonDocument("_id", TestV1ModelId.FullName))
+                .SingleAsync(TestContext.Current.CancellationToken);
+            Assert.Equal("3.5.1", model["minEngineVersion"].AsString);
+            Assert.Contains("dependencyRanges", model.Names);
+            Assert.DoesNotContain("ckLanguage", model.Names);
+        });
+    }
+
+    /// <summary>
+    ///     Classic (exact-pinned) models must keep their exact document shape: no new element and no row in the new
+    ///     collections, so an engine that predates CK v2 reads them unchanged. Range retention is the compiler default
+    ///     since AB#6675, so the classic Test-1.0.0 is derived with <see cref="ClassicModelFactory" /> (what
+    ///     <c>RangeRetention=false</c> compiles; the same shape as every model published before the switch). A model
+    ///     compiled by the current engine carries <c>dependencyRanges</c> and <c>minEngineVersion</c> by design, see
+    ///     <see cref="RangeRetainingModel_DocumentCarriesRangesAndMinEngineVersion" />.
     /// </summary>
     [Fact]
     public async Task ClassicModel_DocumentsCarryNoCkV2Elements()
@@ -182,7 +210,9 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
         await WithThrowawayTenantAsync("rtv1shape", async (tenant, tenantId) =>
         {
             var operationResult = new OperationResult();
-            await tenant.ImportCkModelAsync(TestV1ModelId, operationResult);
+            await tenant.ImportCkModelAsync(await ClassicModelFactory.CreateAsync(
+                fixture.GetService<ICatalogService>(), fixture.GetService<ICkJsonSerializer>(), TestV1ModelId,
+                await GetInstalledSystemIdAsync(tenant)));
             Assert.False(operationResult.HasErrors);
 
             var database = GetTenantDatabase(tenantId);
