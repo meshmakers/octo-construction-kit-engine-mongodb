@@ -1,4 +1,5 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories.Entities;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.UnitTests;
@@ -143,6 +144,63 @@ public class CkModelImportGuardDecisionTests
         ], [], []);
 
         Assert.Equal(expectedFailed, failed.Count == 1);
+    }
+
+    // AB#6674 (Thor): the stored reason is plain text with model names, versions, ranges and pins only - never a path
+    // separator, a tenant value or an entity value; several causes are joined with "; " and the text is capped.
+    [Fact]
+    public void BuildReason_IsPlainTextOfNamesAndVersions_WithoutPathsOrTenantValues_AndCapped()
+    {
+        const string tenant = "acme-tenant-4711";
+        var system = new CkModel { Id = new CkModelId("System-2.4.0"), ModelId = "System" };
+        var rangeDependent = new CkModel
+        {
+            Id = new CkModelId("Dep-1.0.0"), ModelId = "Dep",
+            DependencyRanges =
+            [
+                new CkModelDependency { Range = "System-[2.5,3.0)", Floor = "2.5.0" },
+                new CkModelDependency { Range = "Missing-[1.0,2.0)", Floor = "1.0.0" }
+            ]
+        };
+        var pinned = new CkModel
+        {
+            Id = new CkModelId("Pinned-1.0.0"), ModelId = "Pinned", Dependencies = [new CkModelId("System-2.5.0")]
+        };
+        var installed = new[] { system, rangeDependent, pinned };
+
+        var reasons = new[]
+        {
+            DatabaseCkModelRepository.BuildReason(rangeDependent, installed, "missing dependency System-[2.5,3.0)"),
+            DatabaseCkModelRepository.BuildReason(pinned, installed, "missing dependency System-[2.5.0]"),
+            DatabaseCkModelRepository.BuildReason(rangeDependent, installed, "dependency 'System-2.4.0' is ResolveFailed"),
+            DatabaseCkModelRepository.BuildReason(rangeDependent, installed, "a dependency does not resolve"),
+            DatabaseCkModelRepository.BuildReason(rangeDependent, installed,
+                "inheritance resolution failed (typically a dependency changed its major version)")
+        };
+
+        Assert.Equal("Unmet dependency: System-[2.5,3.0) (floor 2.5.0): installed System-2.4.0; " +
+                     "Missing-[1.0,2.0) (floor 1.0.0): installed none", reasons[0]);
+        Assert.Equal("Unmet dependency: exact pin System-2.5.0: installed System-2.4.0", reasons[1]);
+        foreach (var reason in reasons)
+        {
+            Assert.DoesNotContain("/", reason);
+            Assert.DoesNotContain("\\", reason);
+            Assert.DoesNotContain(tenant, reason);
+            Assert.True(reason.Length <= 1000);
+            Assert.False(char.IsLower(reason[0]));
+        }
+
+        // Many causes are capped with an ellipsis.
+        var many = new CkModel
+        {
+            Id = new CkModelId("Many-1.0.0"), ModelId = "Many",
+            DependencyRanges = Enumerable.Range(0, 100)
+                .Select(i => new CkModelDependency { Range = $"VeryLongDependencyName{i}-[1.0,2.0)", Floor = "1.0.0" })
+                .ToArray()
+        };
+        var capped = DatabaseCkModelRepository.BuildReason(many, [many], "missing dependency x");
+        Assert.Equal(1000, capped.Length);
+        Assert.EndsWith("…", capped);
     }
 
     private static (CkModelId, IReadOnlyCollection<CkModelIdVersionRange>) Model(string id, params string[] exactPins) =>

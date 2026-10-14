@@ -890,10 +890,13 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
     ///     version (<see cref="DescribeUnmetDependencies" />); for a propagated or inheritance failure the short cause
     ///     of <see cref="ComputeFailedModels" />. Names and versions only — no paths, no secrets.
     /// </summary>
-    internal static string BuildReason(CkModel model, IEnumerable<CkModel> installedModels, string computedReason) =>
-        computedReason.StartsWith("missing dependency", StringComparison.Ordinal)
+    internal static string BuildReason(CkModel model, IEnumerable<CkModel> installedModels, string computedReason)
+    {
+        var text = computedReason.StartsWith("missing dependency", StringComparison.Ordinal)
             ? "Unmet dependency: " + DescribeUnmetDependencies(model, installedModels.ToList())
             : char.ToUpperInvariant(computedReason[0]) + computedReason.Substring(1);
+        return Truncate(text)!;
+    }
 
     /// <summary>
     ///     Outcome of one re-validation pass (CK v2 F1.0-S2, AB#5901). Logged and counted by
