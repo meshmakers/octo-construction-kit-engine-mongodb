@@ -96,6 +96,55 @@ public class CkModelImportGuardDecisionTests
         Assert.Contains("installed: System-2.4.0", Assert.Single(failed).Value);
     }
 
+    /// <summary>
+    ///     AB#4468: the tenant (re-validation) side of the SemVer resolution matrix — the same table as the engine's
+    ///     catalog and repository resolvers. A tenant holds one version per model. A range-retaining dependent of
+    ///     <c>System-[2.5,3.0)</c> (floor 2.5.0) stays Available on 2.5.0 and on a higher minor/patch (2.6.1), fails on a
+    ///     version below the floor (2.4.9) and on a higher major (3.0.0), and the reason names the range and the
+    ///     installed version. No special treatment for System / Meshmakers-shipped models; an exact pin keeps exact
+    ///     match.
+    /// </summary>
+    [Theory]
+    [InlineData("2.5.0", false)]
+    [InlineData("2.6.1", false)]
+    [InlineData("2.9.9", false)]
+    [InlineData("2.4.9", true)]
+    [InlineData("3.0.0", true)]
+    public void ComputeFailedModels_SemVerMatrix_RangeRetainingDependent(string installedSystem, bool expectedFailed)
+    {
+        var range = new CkModelIdVersionRange("System", "[2.5.0,3.0.0)");
+        var failed = DatabaseCkModelRepository.ComputeFailedModels(
+        [
+            Model($"System-{installedSystem}"),
+            (new CkModelId("RangeDep-1.0.0"), [range])
+        ], [], []);
+
+        if (!expectedFailed)
+        {
+            Assert.Empty(failed);
+            return;
+        }
+
+        var reason = Assert.Single(failed).Value;
+        Assert.Contains(range.ToString(), reason);
+        Assert.Contains($"installed: System-{installedSystem}", reason);
+    }
+
+    [Theory]
+    [InlineData("2.5.0", false)]
+    [InlineData("2.6.1", true)]
+    [InlineData("2.4.9", true)]
+    public void ComputeFailedModels_SemVerMatrix_ExactPinKeepsExactMatch(string installedSystem, bool expectedFailed)
+    {
+        var failed = DatabaseCkModelRepository.ComputeFailedModels(
+        [
+            Model($"System-{installedSystem}"),
+            Model("Pinned-1.0.0", "System-2.5.0")
+        ], [], []);
+
+        Assert.Equal(expectedFailed, failed.Count == 1);
+    }
+
     private static (CkModelId, IReadOnlyCollection<CkModelIdVersionRange>) Model(string id, params string[] exactPins) =>
         (new CkModelId(id), exactPins.Select(p => new CkModelId(p).ToVersionRange()).ToList());
 }

@@ -1801,6 +1801,18 @@ Basic.Accounting stayed `ResolveFailed` after System went back to the version it
 - Also fixed on the way: an operator-precedence slip in `MongoDbRepositoryDataSource` (`a && b ? c : d`) that dropped
   the id filter of the base-type prefetch and loaded every `Available` type of the tenant.
 
+- **SemVer resolution matrix (AB#4468).** The same table as the engine's catalog and repository resolvers
+  (engine `docs/ck-semver-rules.md`, "Dependency resolution by SemVer"): a range-retaining dependent of
+  `System-[2.5,3.0)` (floor 2.5.0) stays `Available` on 2.5.0 and on a higher minor/patch (2.6.1), is `ResolveFailed`
+  on a version below the floor (2.4.9) and on a higher major (3.0.0), and the reason names the range and the installed
+  version; an exact pin keeps exact match; no special treatment for System / Meshmakers-shipped models. Pinned by
+  `CkModelImportGuardDecisionTests.ComputeFailedModels_SemVerMatrix_*` (unit) and
+  `CkRangeRetentionImportTests.SemVerMatrix_ImportOfRangeRetainingDependent_AgainstInstalledBaseVersion` (real
+  MongoDB: an import against an unsatisfiable range throws, nothing is installed, and the message names the range and
+  the installed version). `DatabaseCkModelRepository` implements the engine's optional `IRepositoryVersionLister`
+  (`ListVersionsAsync`: the versions `IsExistingAsync(range)` considers, ascending) so that the engine's
+  `RepositoryDependencyResolver` can name them in the rejection.
+
 Pinned by `CkModelImportGuard/CkModelImportGuardTests` (real MongoDB, throwaway tenants: same-major and major skip,
 explicit downgrade + upgrade back, same-version short-circuit, embedded vs explicit service-model overloads,
 notification counts and tenant ids, log levels and once-per-process logging, counters, operation-result warnings, the
