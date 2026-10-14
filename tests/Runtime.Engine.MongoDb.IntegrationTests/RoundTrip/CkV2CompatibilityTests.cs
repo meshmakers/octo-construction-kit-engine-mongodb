@@ -1,5 +1,7 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Engine.Versioning;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
@@ -271,8 +273,12 @@ public class CkV2CompatibilityTests(CkModelImportGuardFixture fixture)
     /// <summary>
     ///     The golden file holds the <c>Ck*</c> documents engine-mongodb origin/main (e816cd3, pre-S3) wrote for a
     ///     fresh tenant plus a <c>Test-1.0.0</c> import (System and Test models). The Phase 1 engine must write exactly
-    ///     the same documents — then a rollback to the main engine reads them unchanged. Regenerate only when the
-    ///     System or Test model itself changes (both lines must change together in that case).
+    ///     the same documents for an exact-pinned (classic) model — AB#6675 made range retention the compiler default,
+    ///     so the classic Test-1.0.0 is derived with <see cref="ClassicModelFactory" /> (= what <c>RangeRetention=false</c>
+    ///     compiles; models published before the switch look like this). The contract for classic models is "unchanged
+    ///     semantics", no longer "unchanged bytes" for newly compiled models: see
+    ///     <see cref="RangeRetainingImport_WritesRangesMinEngineVersionAndMajorQualifiedReferences" /> for the default.
+    ///     Regenerate only when the System or Test model itself changes (both lines must change together in that case).
     /// </summary>
     [Fact]
     public async Task V1Import_WritesTheSameCkDocumentsAsTheMainEngine()
@@ -280,7 +286,9 @@ public class CkV2CompatibilityTests(CkModelImportGuardFixture fixture)
         await WithTenantAsync("golden", async (tenant, tenantId) =>
         {
             var result = new OperationResult();
-            await tenant.ImportCkModelAsync(new CkModelId("Test-1.0.0"), result);
+            await tenant.ImportCkModelAsync(await ClassicModelFactory.CreateAsync(
+                fixture.GetService<ICatalogService>(), fixture.GetService<ICkJsonSerializer>(),
+                new CkModelId("Test-1.0.0"), await InstalledSystemAsync(tenantId)));
             Assert.False(result.HasErrors);
 
             var database = GetTenantDatabase(tenantId);
@@ -299,6 +307,31 @@ public class CkV2CompatibilityTests(CkModelImportGuardFixture fixture)
             Assert.True(missing.Count == 0 && extra.Count == 0,
                 $"v1 Ck* documents differ from the main engine:\nonly main:\n{string.Join("\n", missing.Take(5))}\n" +
                 $"only Phase 1:\n{string.Join("\n", extra.Take(5))}");
+        });
+    }
+
+    /// <summary>
+    ///     The default since AB#6675: a model compiled by the current engine (Test-1.0.0 declares <c>System-[2.0,3.0)</c>)
+    ///     is persisted range-retaining - <c>dependencyRanges</c>, <c>minEngineVersion</c> 3.5.1 and references into System
+    ///     major-qualified (<c>System@2/ParentChild-1</c>). Engines below 3.5.1 refuse such a model, which is why the contract
+    ///     for classic models is "unchanged semantics" (they resolve and behave the same), not "unchanged bytes".
+    /// </summary>
+    [Fact]
+    public async Task RangeRetainingImport_WritesRangesMinEngineVersionAndMajorQualifiedReferences()
+    {
+        await WithTenantAsync("rangedoc", async (tenant, tenantId) =>
+        {
+            var result = new OperationResult();
+            await tenant.ImportCkModelAsync(new CkModelId("Test-1.0.0"), result);
+            Assert.False(result.HasErrors);
+
+            var database = GetTenantDatabase(tenantId);
+            var model = await database.GetCollection<BsonDocument>("CkModel")
+                .Find(new BsonDocument("_id", "Test-1.0.0")).SingleAsync(TestContext.Current.CancellationToken);
+            Assert.Equal("3.5.1", model["minEngineVersion"].AsString);
+            Assert.Contains("dependencyRanges", model.Names);
+            var actual = await CkDocumentSnapshot.TakeAsync(database, ["Test-1.0.0"], TestContext.Current.CancellationToken);
+            Assert.Contains("System@2/ParentChild-1", actual);
         });
     }
 
