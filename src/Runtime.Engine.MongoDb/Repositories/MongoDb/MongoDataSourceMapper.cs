@@ -160,7 +160,12 @@ public class CkModelMongoDataSourceMapper : IMongoDataSourceMapper<CkModelId, Ck
             // CK v2 (AB#5909)
             document.MinEngineVersion == null
                 ? update.Unset(p => p.MinEngineVersion)
-                : update.Set(p => p.MinEngineVersion, document.MinEngineVersion)
+                : update.Set(p => p.MinEngineVersion, document.MinEngineVersion),
+            // AB#6674: the re-validation reason; unset (not an explicit null) so documents of models that are not
+            // failed keep their shape, and a full update never leaves a stale reason behind.
+            document.ResolveFailedReason == null
+                ? update.Unset(p => p.ResolveFailedReason)
+                : update.Set(p => p.ResolveFailedReason, document.ResolveFailedReason)
         ];
 
         return update.Combine(list);

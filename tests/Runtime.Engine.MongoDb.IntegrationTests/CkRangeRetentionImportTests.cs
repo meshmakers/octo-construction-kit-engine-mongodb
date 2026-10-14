@@ -122,6 +122,67 @@ public class CkRangeRetentionImportTests(CkModelImportMigrationFixture fixture)
     }
 
     /// <summary>
+    ///     AB#6674: the reason a model is <c>ResolveFailed</c> is persisted with the state by the post-import
+    ///     re-validation (plain text: dependency, declared range or pin, installed version), read back through the
+    ///     tenant repository (the path of LibraryStatus and GraphQL), cleared when the model recovers, and absent for
+    ///     healthy models (old documents without the field load as "no reason").
+    /// </summary>
+    [Fact]
+    public async Task ResolveFailedReason_IsPersisted_ReadBack_AndClearedOnRecovery()
+    {
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = $"rangerea{Guid.NewGuid():N}"[..20];
+        try
+        {
+            await CreateChildAsync(tenantId);
+            var tenant = await GetChildAsync(tenantId);
+            var system = await GetInstalledSystemIdAsync(tenant);
+            var database = GetTenantDatabase(tenantId);
+
+            await tenant.ImportCkModelAsync(BuildBase("RrBase-1.1.0", system, withExtra: true));
+            await tenant.ImportCkModelAsync(BuildDependent("ReasonDep-1.0.0", "RrBase-1.1.0", system, rangeRetaining: true));
+            await tenant.ImportCkModelAsync(BuildDependent("ReasonExact-1.0.0", "RrBase-1.1.0", system, rangeRetaining: false));
+            // Healthy models carry no reason in their document.
+            Assert.False((await SingleAsync(database, "CkModel", "_id", "ReasonDep-1.0.0")).Contains("resolveFailedReason"));
+
+            // The dependency leaves the dependents' requirements: below the floor / not the pinned version.
+            await tenant.ImportCkModelAsync(BuildBase("RrBase-1.0.0", system, withExtra: false));
+
+            Assert.Equal("ReasonDep-1.0.0=2, ReasonExact-1.0.0=2", await StatesAsync(database, "ReasonDep", "ReasonExact"));
+            var range = (await SingleAsync(database, "CkModel", "_id", "ReasonDep-1.0.0"))["resolveFailedReason"].AsString;
+            Assert.Equal("Unmet dependency: RrBase-[1.0,2.0) (floor 1.1.0): installed RrBase-1.0.0", range);
+            var exact = (await SingleAsync(database, "CkModel", "_id", "ReasonExact-1.0.0"))["resolveFailedReason"].AsString;
+            Assert.Contains("exact pin RrBase-1.1.0", exact);
+            Assert.Contains("installed RrBase-1.0.0", exact);
+
+            // Read-back through the tenant repository, after the CK cache was dropped (persisted, not in memory).
+            var cacheService = fixture.GetService<ICkCacheService>();
+            if (cacheService.IsTenantLoaded(tenantId))
+            {
+                cacheService.Unload(tenantId);
+            }
+
+            var repository = tenant.GetTenantRepository();
+            var session = await repository.GetSessionAsync();
+            var models = await repository.GetCkModelsAsync(session, null,
+                Meshmakers.Octo.Runtime.Contracts.Repositories.Query.RtEntityQueryOptions.Create());
+            Assert.Equal(range, models.Items.Single(m => m.Id.Name == "ReasonDep").ResolveFailedReason);
+            Assert.Null(models.Items.Single(m => m.Id.Name == "RrBase").ResolveFailedReason);
+
+            // The dependency is restored: the models are Available again and the reason is gone.
+            await tenant.ImportCkModelAsync(BuildBase("RrBase-1.1.0", system, withExtra: true));
+
+            Assert.Equal("ReasonDep-1.0.0=1, ReasonExact-1.0.0=1", await StatesAsync(database, "ReasonDep", "ReasonExact"));
+            Assert.False((await SingleAsync(database, "CkModel", "_id", "ReasonDep-1.0.0")).Contains("resolveFailedReason"));
+            Assert.False((await SingleAsync(database, "CkModel", "_id", "ReasonExact-1.0.0")).Contains("resolveFailedReason"));
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(systemContext, tenantId);
+        }
+    }
+
+    /// <summary>
     ///     AB#4472 / AB#6273 (usedSurface E2E): the usedSurface list and hash a range-retaining model carries per
     ///     dependency range reach the tenant's <c>CkModel</c> document through the real tenant import
     ///     (<c>ITenantContext.ImportCkModelAsync</c>, the code path bot-services runs for ImportCk) and read back

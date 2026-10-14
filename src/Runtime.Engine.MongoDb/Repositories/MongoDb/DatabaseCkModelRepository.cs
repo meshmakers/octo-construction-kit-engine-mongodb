@@ -834,9 +834,12 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         }
     }
 
+    /// <summary>Upper bound of <see cref="CkModel.ResolveFailedReason" /> (names and versions only, a few entries).</summary>
+    private const int MaxReasonLength = 1000;
+
     private static async Task UpdateModelStateAsync(IOctoSession sessionComplete,
         ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource,
-        CkModelId ckModelId, ModelState modelState)
+        CkModelId ckModelId, ModelState modelState, string? resolveFailedReason = null)
     {
         await mongoDbRepositoryDataSource.CkTypeAssociations.UpdateManyAsync(sessionComplete,
             Builders<CkTypeAssociation>.Filter.Eq(x => x.CkModelId, ckModelId),
@@ -870,8 +873,29 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
             Builders<CkTypeInterfaceImplementation>.Filter.Eq(x => x.CkModelId, ckModelId),
             Builders<CkTypeInterfaceImplementation>.Update.Set(x => x.ModelState, modelState));
 
+        // AB#6674: the reason travels with the state: set while ResolveFailed, unset otherwise.
+        var reason = modelState == ModelState.ResolveFailed ? Truncate(resolveFailedReason) : null;
         await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(sessionComplete, ckModelId,
-            Builders<CkModel>.Update.Set(x => x.ModelState, modelState));
+            reason == null
+                ? Builders<CkModel>.Update.Set(x => x.ModelState, modelState).Unset(x => x.ResolveFailedReason)
+                : Builders<CkModel>.Update.Set(x => x.ModelState, modelState).Set(x => x.ResolveFailedReason, reason));
+    }
+
+    private static string? Truncate(string? reason) =>
+        reason == null ? null : reason.Length <= MaxReasonLength ? reason : reason.Substring(0, MaxReasonLength - 1) + "…";
+
+    /// <summary>
+    ///     AB#6674: the plain-text, self-contained reason stored with a <c>ResolveFailed</c> model. For an unmet
+    ///     requirement it names the dependency, the declared range (and floor) or the exact pin and the installed
+    ///     version (<see cref="DescribeUnmetDependencies" />); for a propagated or inheritance failure the short cause
+    ///     of <see cref="ComputeFailedModels" />. Names and versions only — no paths, no secrets.
+    /// </summary>
+    internal static string BuildReason(CkModel model, IEnumerable<CkModel> installedModels, string computedReason)
+    {
+        var text = computedReason.StartsWith("missing dependency", StringComparison.Ordinal)
+            ? "Unmet dependency: " + DescribeUnmetDependencies(model, installedModels.ToList())
+            : char.ToUpperInvariant(computedReason[0]) + computedReason.Substring(1);
+        return Truncate(text)!;
     }
 
     /// <summary>
@@ -921,7 +945,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
             var isFailed = failed.ContainsKey(ckModel.Id);
             if (ckModel.ModelState == ModelState.Available && isFailed)
             {
-                await UpdateModelStateAsync(session, mongoDbRepositoryDataSource, ckModel.Id, ModelState.ResolveFailed);
+                await UpdateModelStateAsync(session, mongoDbRepositoryDataSource, ckModel.Id, ModelState.ResolveFailed,
+                    BuildReason(ckModel, ckModels, failed[ckModel.Id]));
                 newlyFailed.Add((ckModel.Id, failed[ckModel.Id]));
             }
             else if (ckModel.ModelState == ModelState.ResolveFailed && !isFailed)
@@ -931,6 +956,15 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
             }
             else if (ckModel.ModelState == ModelState.ResolveFailed)
             {
+                // AB#6674: the reason follows the installed versions (a dependency moved but still does not satisfy);
+                // written only when it changed, so an unrelated import does not rewrite every failed model.
+                var reason = Truncate(BuildReason(ckModel, ckModels, failed[ckModel.Id]));
+                if (!string.Equals(ckModel.ResolveFailedReason, reason, StringComparison.Ordinal))
+                {
+                    await mongoDbRepositoryDataSource.CkModels.UpdateOneAsync(session, ckModel.Id,
+                        Builders<CkModel>.Update.Set(x => x.ResolveFailedReason, reason));
+                }
+
                 stillFailed.Add((ckModel.Id, failed[ckModel.Id]));
             }
         }

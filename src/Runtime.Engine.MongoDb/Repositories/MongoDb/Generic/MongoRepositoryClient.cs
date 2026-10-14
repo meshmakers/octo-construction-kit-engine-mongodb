@@ -596,6 +596,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.CkLanguage).SetIgnoreIfNull(true);
             // CK v2 (AB#5909): absent for v1 models.
             cm.MapMember(c => c.MinEngineVersion).SetIgnoreIfNull(true);
+            // AB#6674: absent unless the model is ResolveFailed; old documents load as "no reason".
+            cm.MapMember(c => c.ResolveFailedReason).SetIgnoreIfNull(true);
         });
 
         // Before CkType: the method DTOs are embedded in CkType.Methods.
