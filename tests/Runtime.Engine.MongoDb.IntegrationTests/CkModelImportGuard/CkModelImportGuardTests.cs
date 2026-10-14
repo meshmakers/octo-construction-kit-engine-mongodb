@@ -179,13 +179,67 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
     }
 
     /// <summary>
-    ///     R2-3 (the Basic.Accounting scenario found in an earlier CK v2 end-to-end run) with the v1 contract made visible: an exact-pinned
+    ///     R2-3 (the Basic.Accounting scenario found in an earlier CK v2 end-to-end run) with the v1 contract made visible, for a
+    ///     model that is still exact-pinned (published before range retention became the compiler default, AB#6675; here
+    ///     <see cref="ClassicTestV1Async" /> = what <c>RangeRetention=false</c> compiles): an exact-pinned
     ///     model goes <c>ResolveFailed</c> after a System bump, stays there (no downgrade by the embedded System any
     ///     more, no flapping on unrelated imports) and returns to <c>Available</c> by itself after the import that makes
     ///     its pin satisfiable again.
     /// </summary>
     [Fact]
-    public async Task ResolveFailedModel_ReturnsToAvailable_WhenItsPinBecomesSatisfiable()
+    public async Task ResolveFailedModel_ReturnsToAvailable_WhenItsPinBecomesSatisfiable_ExactPinModel()
+    {
+        await WithTenantAsync("revalid", async (tenant, tenantId) =>
+        {
+            using var counters = new CkCounterRecorder();
+            var result = new OperationResult();
+            await tenant.ImportCkModelAsync(await ClassicTestV1Async());
+            Assert.False(result.HasErrors);
+            Assert.Equal(1, await StateAsync(tenantId, TestV1ModelId)); // Available
+
+            // Additive System bump: Test-1.0.0 pins the embedded System exactly → ResolveFailed.
+            var newer = Bump(EmbeddedSystem, minor: 1);
+            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, newer));
+            Assert.Equal(2, await StateAsync(tenantId, TestV1ModelId)); // ResolveFailed
+
+            // The embedded System no longer reverts the bump, so the model stays ResolveFailed ...
+            await ResolveAsync(tenantId);
+            Assert.Equal(newer.FullName, await InstalledAsync(tenantId, "System"));
+            Assert.Equal(2, await StateAsync(tenantId, TestV1ModelId));
+
+            // ... and an unrelated import re-validates it without flipping it (pin still unmet).
+            var stillFailedBefore = counters.Sum(CkModelImportDiagnostics.ModelRevalidatedCounterName,
+                ("result", CkModelImportDiagnostics.ResultStillFailed));
+            await tenant.ImportCkModelAsync(Unrelated(newer));
+            Assert.Equal(2, await StateAsync(tenantId, TestV1ModelId));
+            Assert.True(counters.Sum(CkModelImportDiagnostics.ModelRevalidatedCounterName,
+                ("result", CkModelImportDiagnostics.ResultStillFailed)) > stillFailedBefore);
+
+            // The import that satisfies the pin again heals it — no manual action.
+            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, EmbeddedSystem));
+            Assert.Equal(1, await StateAsync(tenantId, TestV1ModelId));
+            Assert.True(counters.Sum(CkModelImportDiagnostics.ModelRevalidatedCounterName,
+                ("result", CkModelImportDiagnostics.ResultRecovered)) >= 1);
+            Assert.NotEmpty(fixture.Logs.Find(LogLevel.Information, "resolves again", TestV1ModelId.FullName));
+
+            // Its element rows were flipped back too, so the cache rebuilt from Mongo has its types again.
+            var typeStates = await GetTenantDatabase(tenantId).GetCollection<BsonDocument>("CkType")
+                .Find(new BsonDocument("ckModelId", TestV1ModelId.FullName))
+                .ToListAsync(TestContext.Current.CancellationToken);
+            Assert.NotEmpty(typeStates);
+            Assert.All(typeStates, t => Assert.Equal(1, t["modelState"].AsInt32));
+        });
+    }
+
+    /// <summary>
+    ///     The same lifecycle for a range-retaining model (the default since AB#6675, Test-1.0.0 declares
+    ///     <c>System-[2.5,3.0)</c> as compiled): a minor System bump keeps it <c>Available</c>; a System of the next MAJOR leaves its
+    ///     range unsatisfied, so it goes <c>ResolveFailed</c>, stays there (no downgrade by the embedded System, no
+    ///     flapping on unrelated imports) and returns to <c>Available</c> by itself after the import that makes its range
+    ///     satisfiable again.
+    /// </summary>
+    [Fact]
+    public async Task ResolveFailedModel_ReturnsToAvailable_WhenItsRangeBecomesSatisfiable()
     {
         await WithTenantAsync("revalid", async (tenant, tenantId) =>
         {
@@ -195,8 +249,12 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
             Assert.False(result.HasErrors);
             Assert.Equal(1, await StateAsync(tenantId, TestV1ModelId)); // Available
 
-            // Additive System bump: Test-1.0.0 pins the embedded System exactly → ResolveFailed.
-            var newer = Bump(EmbeddedSystem, minor: 1);
+            // Additive System bump: the range [2.5,3.0) still holds, the model stays Available.
+            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, Bump(EmbeddedSystem, minor: 1)));
+            Assert.Equal(1, await StateAsync(tenantId, TestV1ModelId));
+
+            // System of the next major: the range is unsatisfied → ResolveFailed.
+            var newer = new CkModelId("System", new CkVersion(EmbeddedSystem.Version.Major + 1, 0, 0));
             await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, newer));
             Assert.Equal(2, await StateAsync(tenantId, TestV1ModelId)); // ResolveFailed
 
@@ -353,14 +411,16 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
 
     /// <summary>
     ///     G-L1: an embedded import whose dependencies are not installed is skipped BEFORE the Pre notification (no
-    ///     unpaired Pre, no Post): here Test-1.0.0 pins the embedded System exactly while the tenant has a newer one.
+    ///     unpaired Pre, no Post): here Test-1.0.0 (range <c>System-[2.5,3.0)</c> since AB#6675; a minor bump would
+    ///     still satisfy it) meets a System of the next major.
     /// </summary>
     [Fact]
     public async Task EmbeddedImportWithMissingDependency_SendsNoNotification()
     {
         await WithTenantAsync("guarddeps", async (tenant, tenantId) =>
         {
-            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, Bump(EmbeddedSystem, minor: 1)));
+            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem,
+                new CkModelId("System", new CkVersion(EmbeddedSystem.Version.Major + 1, 0, 0))));
 
             var (pre, pos) = (fixture.Notifications.PreUpdates, fixture.Notifications.PosUpdates);
             var result = new OperationResult();
@@ -370,9 +430,9 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
             Assert.Equal((pre, pos), (fixture.Notifications.PreUpdates, fixture.Notifications.PosUpdates));
             Assert.Empty(await GetTenantDatabase(tenantId).GetCollection<BsonDocument>("CkModel")
                 .Find(new BsonDocument("modelId", "Test")).ToListAsync(TestContext.Current.CancellationToken));
-            // The requirement is logged as the resolver sees it: the exact range of a classic pin, System-[x.y.z].
+            // The requirement is logged as the resolver sees it: the declared range of the range-retaining model.
             Assert.NotEmpty(fixture.Logs.Find(LogLevel.Warning, "due to missing dependencies", tenantId,
-                EmbeddedSystem.ToVersionRange().ToString()));
+                "System-[2.5,3.0)"));
         });
     }
 
@@ -609,6 +669,11 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
         Assert.False(operationResult.HasErrors, string.Join("; ", operationResult.Messages));
         return renamed;
     }
+
+    /// <summary>Test-1.0.0 as an exact-pinned model (see <see cref="ClassicModelFactory" />).</summary>
+    private Task<CkCompiledModelRoot> ClassicTestV1Async() =>
+        ClassicModelFactory.CreateAsync(fixture.GetService<ICatalogService>(), fixture.GetService<ICkJsonSerializer>(),
+            TestV1ModelId, EmbeddedSystem);
 
     private async Task ResolveAsync(string tenantId)
     {
