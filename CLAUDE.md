@@ -1834,6 +1834,22 @@ check itself lives in the engine (`BlueprintService.AddOutOfRangeInstalledCkMode
 `docs/blueprints.md`); `MongoRuntimeRepositoryProvider.EnsureCkModelInstalledAsync` is unchanged (it still keeps a
 satisfying-or-newer installed model by name and installs the floor otherwise).
 
+### ResolveFailed reason (AB#6674)
+
+`CkModel.ResolveFailedReason` (BSON `resolveFailedReason`, nullable string, `SetIgnoreIfNull`) holds the plain-text reason a
+model is `ResolveFailed`: written together with the state by `ValidateDependencies` (post-import re-validation,
+`UpdateModelStateAsync(..., reason)`), cleared (`$unset`) when the model recovers or an import replaces it, rewritten
+only when the text changed while a model stays failed (`CkModels.UpdateOneAsync`, no element-row rewrite). The three-place
+rule: entity + class map (`MongoRepositoryClient`), write (`UpdateModelStateAsync` and the full-update
+`CkModelMongoDataSourceMapper`, which unsets instead of writing null - pinned by `CkModelUpdateMapperTests`), read-back
+(`GetCkModelsAsync`, `FindManyAsync`). Text (`BuildReason`): for an unmet requirement `Unmet dependency: ` +
+`DescribeUnmetDependencies` (range + floor or exact pin, installed version - e.g. `Unmet dependency: RrBase-[1.0,2.0) (floor
+1.1.0): installed RrBase-1.0.0`), otherwise the short cause of `ComputeFailedModels` capitalised (`A dependency does not
+resolve`, `Dependency 'X-1.0.0' is ResolveFailed`, ...); names and versions only, capped at 1000 characters. Old documents
+without the field load as "no reason". Pinned by `CkRangeRetentionImportTests.ResolveFailedReason_IsPersisted_ReadBack_AndClearedOnRecovery`
+(real MongoDB: failed -> reason persisted and read back through the tenant repository after the CK cache was dropped ->
+dependency restored -> reason gone). The public surface (LibraryStatus, GraphQL `CkModel`, CLI) lives in asset-repo / octo-cli.
+
 ### Service-Managed CK Model Auto-import (AB#4294)
 
 `TenantContext.EnsureServiceManagedCkModelsImportedAsync` runs on every tenant-resolve

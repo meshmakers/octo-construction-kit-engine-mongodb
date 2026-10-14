@@ -55,6 +55,14 @@ public class CkModel
     public string? MinEngineVersion { get; init; }
 
     /// <summary>
+    ///     AB#6674: why the model is <see cref="ModelState.ResolveFailed" /> — plain text naming the dependency, the
+    ///     declared range or pin and the installed version, written by the post-import re-validation and cleared when
+    ///     the model recovers. <c>null</c> (absent from the document) when the model is not failed or when the
+    ///     document predates the field.
+    /// </summary>
+    public string? ResolveFailedReason { get; init; }
+
+    /// <summary>
     ///     An optional description of the model
     /// </summary>
     public string? Description { get; set; }
