@@ -1,0 +1,9 @@
+$schema: https://schemas.meshmakers.cloud/blueprint-meta.schema.json
+blueprintId: TestCkRangeBp-1.0.0
+description: Test blueprint whose CK model dependencies are ranges over a range-retaining and a classic model the tenant already runs (AB#6672 - the floor is a minimum, never a target)
+ckModelDependencies:
+  - System-[2.0,3.0)
+  - Test-[1.0,2.0)
+  - RrBase-[1.0,2.0)
+  - ClassicBase-[1.0,2.0)
+seedDataPath: seed-data/entities.yaml

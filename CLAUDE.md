@@ -1822,6 +1822,18 @@ recovery incl. "still failed" on an unrelated import) and `CkModelImportGuardDec
 propagation). The concurrent-import test rarely hits the lock path by itself; the deterministic under-lock test is
 the one that fails without the G-H1 fix.
 
+### Blueprint CK dependency ranges against the installed version (AB#6672)
+
+`BlueprintServiceIntegrationTests`-style coverage for `ckModelDependencies` ranges lives in
+`BlueprintCkDependencyRangeIntegrationTests` (collection `BlueprintServiceCollection`, blueprint `TestCkRangeBp` 1.0.0 / 2.0.0):
+`RrBase` (range-retaining) and `ClassicBase` (exact-pinned) are imported into a throwaway tenant first (they are in no catalog, so
+the test proves the install step does not touch a model that is already inside its range). Inside the range (at the floor, or
+newer) the model is kept; above the range the apply fails **before** any CK model of the blueprint is installed (`Test` stays
+uninstalled, no installation row), naming blueprint, model, installed version and range; the update path shows the same. The
+check itself lives in the engine (`BlueprintService.AddOutOfRangeInstalledCkModelErrorsAsync`, see the engine's
+`docs/blueprints.md`); `MongoRuntimeRepositoryProvider.EnsureCkModelInstalledAsync` is unchanged (it still keeps a
+satisfying-or-newer installed model by name and installs the floor otherwise).
+
 ### Service-Managed CK Model Auto-import (AB#4294)
 
 `TenantContext.EnsureServiceManagedCkModelsImportedAsync` runs on every tenant-resolve
