@@ -1576,6 +1576,17 @@ the catalog side.
 - `CkModel.MinEngineVersion` (F1.1-S6) is persisted like `ckLanguage` (absent for v1, `Unset` on full update) and read
   back, so the repository resolver can refuse a model that needs a newer engine (message 126).
 - Method `Visibility` (embedded `CkMethodDto`) is left out of the document when undeclared.
+
+**Phase 3 addition (AB#6878, touch-point row 10 of `execution.handler`, engine AB#6877):**
+- `execution.handler` (`CkMethodExecutionDto.Handler`, `'service'` | `'pipeline'`) is persisted inside the embedded
+  `CkMethodDto.Execution` (class map `CkMethodExecutionDto` in `MongoRepositoryClient.RegisterCkMethodClassMaps`,
+  `SetIgnoreIfNull`). An undeclared handler is left out of the document, so models without the key stay
+  byte-identical and documents written before the field read back as `null`, i.e. the effective handler
+  `service` (`CkMethodHandlers.Effective`, `CkMethodGraph.Handler`). There is no separate write or read-back site:
+  the DTO is embedded verbatim. Gates: both kitchen sinks (C# `RoundTripMethods.Full` and the YAML
+  `TestCkModelKitchenSink` method `ChangePassword-2`) declare `handler: pipeline`; `CkMetaModelReflectionGateTests`,
+  `CkMetaModelCacheRoundTripTests` (cache rebuilt from Mongo) and `CkMetaModelLegacyDocumentTests` cover it.
+  Do not publish a model with `handler: pipeline` before this persistence is released: an older service drops the value on import.
 - Hidden is not allowed on association-role assignments (engine rule 108); the kitchen sinks use `ReadOnly` there.
 - Index maintenance: `FetchAttributeMetadataAsync` always binds major-qualified references including `Importing`
   models, while the inheritance chain binding follows `includeModelsInStateImporting`. Intentional: attribute

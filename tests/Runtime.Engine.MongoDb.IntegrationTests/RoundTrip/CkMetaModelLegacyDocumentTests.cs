@@ -134,6 +134,52 @@ public class CkMetaModelLegacyDocumentTests
     }
 
     [Fact]
+    public void MethodExecutionHandler_PipelineRoundTrips_AndUndeclaredIsOmittedAndReadsAsService()
+    {
+        // AB#6878: a declared handler is persisted verbatim ...
+        var methods = new List<CkMethodDto>
+        {
+            new()
+            {
+                MethodId = "Run-1", Execution = new CkMethodExecutionDto { Handler = CkMethodHandlers.Pipeline }
+            },
+            new() { MethodId = "Ping-1", Execution = new CkMethodExecutionDto { TimeoutSeconds = 30 } }
+        };
+        var document = NewType(methods).ToBsonDocument();
+        Assert.Equal("pipeline", document["methods"][0]["execution"]["handler"].AsString);
+
+        // ... an undeclared one is left out (documents of models without the key stay byte-identical).
+        Assert.DoesNotContain("handler", document["methods"][1]["execution"].AsBsonDocument.Names);
+
+        var readBack = BsonSerializer.Deserialize<CkType>(document);
+        Assert.Equal("pipeline", readBack.Methods![0].Execution!.Handler);
+        Assert.Null(readBack.Methods[1].Execution!.Handler);
+        Assert.Equal(CkMethodHandlers.Service, CkMethodHandlers.Effective(readBack.Methods[1].Execution!.Handler));
+    }
+
+    [Fact]
+    public void MethodExecution_DocumentWrittenBeforeTheHandlerField_ReadsAsService()
+    {
+        var legacy = new BsonDocument
+        {
+            ["methods"] = new BsonArray
+            {
+                new BsonDocument
+                {
+                    ["methodId"] = "Ping-1",
+                    ["execution"] = new BsonDocument { ["timeoutSeconds"] = 20, ["idempotent"] = true }
+                }
+            }
+        };
+
+        var execution = BsonSerializer.Deserialize<CkMethodDto>(legacy["methods"][0].AsBsonDocument).Execution!;
+        Assert.Null(execution.Handler);
+        Assert.Equal(CkMethodHandlers.Service, CkMethodHandlers.Effective(execution.Handler));
+        Assert.Equal(20, execution.TimeoutSeconds);
+        Assert.True(execution.Idempotent);
+    }
+
+    [Fact]
     public void CkInterface_RoundTrips()
     {
         var entity = new CkInterface
