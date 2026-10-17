@@ -555,6 +555,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
 
             cm.MapMember(c => c.TimeoutSeconds).SetIgnoreIfNull(true);
             cm.MapMember(c => c.Idempotent).SetIgnoreIfDefault(true);
+            // CK v2 Phase 3 (AB#6878): handler kind ('service' | 'pipeline'); null (omitted) reads as 'service'.
+            cm.MapMember(c => c.Handler).SetIgnoreIfNull(true);
         });
     }
 

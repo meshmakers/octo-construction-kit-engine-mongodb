@@ -84,6 +84,11 @@ public class CkMetaModelCacheRoundTripTests(CkModelImportMigrationFixture fixtur
             Assert.Equal(System.Text.Json.JsonSerializer.Serialize(RoundTripMethods.Full(modelId)),
                 System.Text.Json.JsonSerializer.Serialize(thing.DefinedMethods.Single(m => m.MethodId == "ChangePassword-2")));
             Assert.Equal(CkMethodExecutionDto.DefaultTimeoutSeconds, thing.AllMethods["Ping-1"].TimeoutSeconds);
+            // Handler kind (AB#6878): a pipeline-handled method keeps it through Mongo, an undeclared one is 'service'.
+            Assert.Equal(CkMethodHandlers.Pipeline, thing.AllMethods["ChangePassword-2"].Handler);
+            Assert.Equal("pipeline", thing.AllMethods["ChangePassword-2"].Definition.Execution?.Handler);
+            Assert.Equal(CkMethodHandlers.Service, thing.AllMethods["Ping-1"].Handler);
+            Assert.Null(thing.AllMethods["Ping-1"].Definition.Execution?.Handler);
 
             // Access (AB#5668) at all three assignment read-back sites: type, record, association role
             Assert.Equal(CkAttributeAccessDto.Hidden, thing.AllAttributesByName["Secret"].Access);

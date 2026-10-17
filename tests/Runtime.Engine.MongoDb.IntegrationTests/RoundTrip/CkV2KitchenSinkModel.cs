@@ -290,6 +290,6 @@ internal static class RoundTripMethods
         {
             Roles = ["UserManagement"], AllowSelf = true, Scopes = ["octo_api", "extra"]
         },
-        Execution = new CkMethodExecutionDto { TimeoutSeconds = 30, Idempotent = true }
+        Execution = new CkMethodExecutionDto { TimeoutSeconds = 30, Idempotent = true, Handler = CkMethodHandlers.Pipeline }
     };
 }
