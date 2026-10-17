@@ -332,6 +332,168 @@ public class MultipleOriginDirectAssociationsRtQueryTests
     }
 
     [Fact]
+    public async Task Sorted_Paginated_WithFieldFilter_TotalCount_ReflectsFilteredSet()
+    {
+        // AB#6249: sort + take + fieldFilter runs on the optimized path. totalCount used to be the
+        // number of associations (6) instead of the number of matching targets (1), which made
+        // the consumer report INCOMPLETE_SLICE.
+        var systemContext = _fixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var salzburgRtId = OctoObjectId.Parse("66803ecf4aa85720dda96a99");
+
+        var queryOptions = RtEntityQueryOptions.Create()
+            .SortOrder("Name", SortOrders.Ascending)
+            .FieldFilter("Name", FieldFilterOperator.Equals, "Tennengau / Hallein");
+
+        var result = await tenantRepository.GetRtAssociationTargetsAsync(session,
+            [salzburgRtId], TestCkIds.RtCkStateOrProvinceTypeId,
+            SystemCkIds.RtCkParentChildRoleId,
+            TestCkIds.RtCkDistrictTypeId, GraphDirections.Inbound, null,
+            queryOptions, null, 2);
+
+        Assert.Single(result);
+        var salzburg = result.First().Value;
+        Assert.Equal(1, salzburg.TotalCount);
+        Assert.Single(salzburg.Items);
+    }
+
+    [Fact]
+    public async Task Sorted_Paginated_WithFieldFilter_NoMatch_TotalCountIsZero()
+    {
+        var systemContext = _fixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var salzburgRtId = OctoObjectId.Parse("66803ecf4aa85720dda96a99");
+
+        var queryOptions = RtEntityQueryOptions.Create()
+            .SortOrder("Name", SortOrders.Ascending)
+            .FieldFilter("Name", FieldFilterOperator.Equals, "does not exist");
+
+        var result = await tenantRepository.GetRtAssociationTargetsAsync(session,
+            [salzburgRtId], TestCkIds.RtCkStateOrProvinceTypeId,
+            SystemCkIds.RtCkParentChildRoleId,
+            TestCkIds.RtCkDistrictTypeId, GraphDirections.Inbound, null,
+            queryOptions, 0, 2);
+
+        Assert.Single(result);
+        var salzburg = result.First().Value;
+        Assert.Equal(0, salzburg.TotalCount);
+        Assert.Empty(salzburg.Items);
+    }
+
+    [Fact]
+    public async Task Sorted_Paginated_WithFieldFilter_ManyMatches_TotalCountIsFilteredTotal()
+    {
+        // The filter matches more targets than the page holds: totalCount must be the filtered total.
+        var systemContext = _fixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var salzburgRtId = OctoObjectId.Parse("66803ecf4aa85720dda96a99");
+
+        var all = await tenantRepository.GetRtAssociationTargetsAsync(session,
+            [salzburgRtId], TestCkIds.RtCkStateOrProvinceTypeId,
+            SystemCkIds.RtCkParentChildRoleId,
+            TestCkIds.RtCkDistrictTypeId, GraphDirections.Inbound, null,
+            RtEntityQueryOptions.Create());
+        var excluded = all.First().Value.Items.First().GetAttributeStringValue("Name");
+
+        var queryOptions = RtEntityQueryOptions.Create()
+            .SortOrder("Name", SortOrders.Ascending)
+            .FieldFilter("Name", FieldFilterOperator.NotEquals, excluded);
+
+        var result = await tenantRepository.GetRtAssociationTargetsAsync(session,
+            [salzburgRtId], TestCkIds.RtCkStateOrProvinceTypeId,
+            SystemCkIds.RtCkParentChildRoleId,
+            TestCkIds.RtCkDistrictTypeId, GraphDirections.Inbound, null,
+            queryOptions, 0, 2);
+
+        Assert.Single(result);
+        var salzburg = result.First().Value;
+        Assert.Equal(5, salzburg.TotalCount);
+        Assert.Equal(2, salzburg.Items.Count());
+    }
+
+    [Fact]
+    public async Task DenseOrigin_ReversedPath_WithFieldFilter_TotalCountReflectsFilteredSet()
+    {
+        var systemContext = _fixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var salzburgRtId = OctoObjectId.Parse("66803ecf4aa85720dda96a99");
+
+        var queryOptions = RtEntityQueryOptions.Create()
+            .SortOrder("Name", SortOrders.Ascending)
+            .FieldFilter("Name", FieldFilterOperator.Equals, "Tennengau / Hallein");
+
+        var originalThreshold = ReverseNavigationOptions.EdgeThreshold;
+        ReverseNavigationOptions.EdgeThreshold = 0;
+        try
+        {
+            var result = await tenantRepository.GetRtAssociationTargetsAsync(session,
+                [salzburgRtId], TestCkIds.RtCkStateOrProvinceTypeId,
+                SystemCkIds.RtCkParentChildRoleId,
+                TestCkIds.RtCkDistrictTypeId, GraphDirections.Inbound, null,
+                queryOptions, 0, 2);
+
+            var salzburg = result.Single().Value;
+            Assert.Equal(1, salzburg.TotalCount);
+            Assert.Single(salzburg.Items);
+        }
+        finally
+        {
+            ReverseNavigationOptions.EdgeThreshold = originalThreshold;
+        }
+    }
+
+    [Fact]
+    public async Task DenseOrigin_ReversedPath_WithFieldFilter_FullPage_TotalCountReflectsFilteredSet()
+    {
+        var systemContext = _fixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var salzburgRtId = OctoObjectId.Parse("66803ecf4aa85720dda96a99");
+
+        var queryOptions = RtEntityQueryOptions.Create()
+            .SortOrder("Name", SortOrders.Ascending)
+            .FieldFilter("Name", FieldFilterOperator.NotEquals, "Tennengau / Hallein");
+
+        var originalThreshold = ReverseNavigationOptions.EdgeThreshold;
+        ReverseNavigationOptions.EdgeThreshold = 0;
+        try
+        {
+            var result = await tenantRepository.GetRtAssociationTargetsAsync(session,
+                [salzburgRtId], TestCkIds.RtCkStateOrProvinceTypeId,
+                SystemCkIds.RtCkParentChildRoleId,
+                TestCkIds.RtCkDistrictTypeId, GraphDirections.Inbound, null,
+                queryOptions, 0, 2);
+
+            var salzburg = result.Single().Value;
+            Assert.Equal(5, salzburg.TotalCount);
+            Assert.Equal(2, salzburg.Items.Count());
+        }
+        finally
+        {
+            ReverseNavigationOptions.EdgeThreshold = originalThreshold;
+        }
+    }
+
+    [Fact]
     public async Task MixedOrigins_DenseAndSparse_BothAnswered()
     {
         // A dataloader batch can mix dense and sparse origins: dense ones go reversed,

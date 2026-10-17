@@ -275,14 +275,15 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
                         continue;
                     }
 
-                    var targets = await ExecuteReversedNavigationAsync(session, originId,
+                    var (targets, filteredTotal) = await ExecuteReversedNavigationAsync(session, originId,
                         collectionGroups[0].ToList(), renderedFieldFilter, sortStage!, skip, take.Value,
                         innerLocalFieldRtIdName, connectToFieldName);
 
                     reversedResults.Add(new QueryMultipleResult<TTargetEntity>
                     {
                         Id = new RtEntityId(originEntityCkTypeId, originId),
-                        TotalCount = edgeCount,
+                        // AB#6249: with a field filter the edge count is not the size of the result set.
+                        TotalCount = filteredTotal ?? edgeCount,
                         Targets = targets
                     });
                 }
@@ -347,6 +348,16 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
                 if (renderedFieldFilter != null)
                 {
                     innerPipeline.Add(new BsonDocument("$match", renderedFieldFilter));
+
+                    // AB#6249: the association count (assocCount) says nothing about how many targets
+                    // survive the field filter. Count the filtered set before sort+limit; the count
+                    // travels on the targets as _assocCount, exactly like the unfiltered path.
+                    innerPipeline.Add(new BsonDocument("$setWindowFields", new BsonDocument("output",
+                        new BsonDocument("_assocCount", new BsonDocument
+                        {
+                            { "$sum", 1 },
+                            { "window", new BsonDocument("documents", new BsonArray { "unbounded", "unbounded" }) }
+                        }))));
                 }
 
                 // Sort inside the lookup
@@ -386,22 +397,27 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
                     new BsonDocument("target", "$target0")));
             }
 
-            // Embed assocCount (from $group) into each target element for totalCount.
-            // This uses the association count which is already computed and avoids expensive
-            // $setWindowFields that would need to scan all target entities.
-            pipelineStages.Add(new BsonDocument("$addFields", new BsonDocument("target",
-                new BsonDocument("$map", new BsonDocument
+            // Embed the total into each target element for totalCount. Without a field filter this is
+            // the association count already computed by $group (avoids expensive $setWindowFields over
+            // all target entities). With a field filter the inner pipeline has already counted the
+            // filtered set per collection group (AB#6249); several groups are summed here.
+            if (renderedFieldFilter == null)
+            {
+                pipelineStages.Add(BuildEmbedAssocCountStage("$assocCount"));
+            }
+            else if (collectionGroups.Count > 1)
+            {
+                var summands = new BsonArray();
+                for (var i = 0; i < collectionGroups.Count; i++)
                 {
-                    { "input", "$target" },
-                    { "as", "t" },
-                    {
-                        "in", new BsonDocument("$mergeObjects", new BsonArray
-                        {
-                            "$$t",
-                            new BsonDocument("_assocCount", "$assocCount")
-                        })
-                    }
-                }))));
+                    summands.Add(new BsonDocument("$ifNull",
+                        new BsonArray { new BsonDocument("$arrayElemAt", new BsonArray { $"$target{i}._assocCount", 0 }), 0 }));
+                }
+
+                pipelineStages.Add(new BsonDocument("$addFields",
+                    new BsonDocument("_filteredTotal", new BsonDocument("$add", summands))));
+                pipelineStages.Add(BuildEmbedAssocCountStage("$_filteredTotal"));
+            }
 
             // Unwind and replace root to produce flat target entity documents
             pipelineStages.Add(new BsonDocument("$unwind", "$target"));
@@ -591,6 +607,23 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         return new MultipleOriginResultSet<TTargetEntity>(result);
     }
 
+    private static BsonDocument BuildEmbedAssocCountStage(string countExpression)
+    {
+        return new BsonDocument("$addFields", new BsonDocument("target",
+            new BsonDocument("$map", new BsonDocument
+            {
+                { "input", "$target" },
+                { "as", "t" },
+                {
+                    "in", new BsonDocument("$mergeObjects", new BsonArray
+                    {
+                        "$$t",
+                        new BsonDocument("_assocCount", countExpression)
+                    })
+                }
+            })));
+    }
+
     private FilterDefinition<RtAssociation> BuildEdgeCountFilter(OctoObjectId originRtId, string connectToFieldName,
         string innerLocalFieldCkIdName, IReadOnlyList<RtCkId<CkTypeId>> allTargetCkIds)
     {
@@ -619,7 +652,7 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
     ///     existence per candidate via an indexed $lookup, stopping as soon as the requested
     ///     page is filled. Cost scales with the page size instead of the origin's edge count.
     /// </summary>
-    private async Task<List<TTargetEntity>> ExecuteReversedNavigationAsync(IOctoSession session,
+    private async Task<(List<TTargetEntity> Targets, long? FilteredTotal)> ExecuteReversedNavigationAsync(IOctoSession session,
         OctoObjectId originRtId, IReadOnlyList<CkTypeGraph> groupGraphs, BsonDocument? renderedFieldFilter,
         BsonDocument sortStage, int? skip, int take, string innerLocalFieldRtIdName, string connectToFieldName)
     {
@@ -695,6 +728,10 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
         stages.Add(new BsonDocument("$match", new BsonDocument("_edgeProbe.0", new BsonDocument("$exists", true))));
         stages.Add(new BsonDocument("$project", new BsonDocument("_edgeProbe", 0)));
 
+        // Everything above is the full filtered+connected set; the count pipeline reuses it.
+        var countStages = new List<BsonDocument>(stages);
+        countStages.RemoveAt(countStages.IndexOf(sortStage));
+
         if (skip is > 0)
         {
             stages.Add(new BsonDocument("$skip", skip.Value));
@@ -709,7 +746,33 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
             fluent = fluent.AppendStage(new BsonDocumentPipelineStageDefinition<TTargetEntity, TTargetEntity>(stage));
         }
 
-        return await fluent.ToListAsync();
+        var targets = await fluent.ToListAsync();
+
+        if (renderedFieldFilter == null)
+        {
+            return (targets, null);
+        }
+
+        // AB#6249: with a field filter the edge count is not the result size. A page that is not
+        // full already tells the exact total; only a full page needs the (sort-free) count pass.
+        var offset = skip ?? 0;
+        if (targets.Count < take)
+        {
+            return (targets, offset + targets.Count);
+        }
+
+        var countFluent = _mongoDbRepositoryDataSource.GetRtDatabaseCollection<TTargetEntity>(groupGraphs[0])
+            .Aggregate(session);
+        foreach (var stage in countStages)
+        {
+            countFluent = countFluent.AppendStage(
+                new BsonDocumentPipelineStageDefinition<TTargetEntity, TTargetEntity>(stage));
+        }
+
+        var counted = await countFluent
+            .Group(new BsonDocument { { "_id", BsonNull.Value }, { "n", new BsonDocument("$sum", 1) } })
+            .FirstOrDefaultAsync();
+        return (targets, counted == null ? 0 : counted["n"].ToInt64());
     }
 
 
