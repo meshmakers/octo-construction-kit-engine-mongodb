@@ -1,3 +1,5 @@
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.UpgradeGuard;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.UpgradeGuard;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 
@@ -2746,6 +2748,18 @@ public class TenantContext : ITenantContext
             new CkModelIdVersionRange(minimumModelId.Name, minimumModelId.Version.ToString()),
             new TenantDatabaseSourceIdentifier(null, repositoryDataSource, TenantId));
         return r.Exists;
+    }
+
+    /// <inheritdoc />
+    public async Task<CkUpgradeGuardResult> EvaluateCkUpdateAsync(IReadOnlyCollection<CkCompiledModelRoot> updateSet,
+        IReadOnlyCollection<CkModelId>? availableDependentVersions = null,
+        CancellationToken cancellationToken = default)
+    {
+        // Read-only: the tenant's own (non-admin) data source, no import lock, no session transaction.
+        var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
+        return await _serviceProvider.GetRequiredService<ITenantUpgradeGuard>().EvaluateAsync(
+            new TenantDatabaseSourceIdentifier(null, repositoryDataSource, TenantId), updateSet,
+            availableDependentVersions, cancellationToken);
     }
 
     public async Task<bool> IsCkModelExistingAsync(CkModelId ckModelId)

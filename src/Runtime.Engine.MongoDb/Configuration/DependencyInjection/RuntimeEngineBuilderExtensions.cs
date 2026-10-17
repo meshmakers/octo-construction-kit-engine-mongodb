@@ -18,6 +18,7 @@ using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services.Defaults;
 
 using Microsoft.Extensions.DependencyInjection;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.UpgradeGuard;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
@@ -58,6 +59,8 @@ public static class RuntimeEngineBuilderExtensions
         // Add services of Persistence module
         builder.Services.AddTransient<IDatabaseCkModelRepository, DatabaseCkModelRepository>();
         builder.Services.AddTransient<IModelRepository>(sp => sp.GetRequiredService<IDatabaseCkModelRepository>());
+        // Tenant upgrade guard (CK v2 F2.5, AB#6867): read-only; uses the checker/diff/classifier of the CK engine.
+        builder.Services.AddTransient<ITenantUpgradeGuard, TenantUpgradeGuard>();
         builder.Services.AddSingleton<ISystemContext, SystemContext>();
         builder.Services.AddSingleton<IModelLoaderService, ModelLoaderService>();
         builder.Services.AddSingleton<IMetricsContext, MetricsContext>();
