@@ -4,6 +4,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.Runtime.Contracts.Blueprints;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.UpgradeGuard;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
@@ -402,6 +403,25 @@ public interface ITenantContext
     /// <param name="ckCompiledModelRoot"></param>
     /// <returns></returns>
     Task ImportCkModelAsync(CkCompiledModelRoot ckCompiledModelRoot);
+
+    /// <summary>
+    ///     Tenant upgrade guard (CK v2 F2.5, AB#6867): computes which installed models importing
+    ///     <paramref name="updateSet" /> would break (turn <c>ResolveFailed</c>), without importing anything. Strictly
+    ///     read-only: no tenant write, no job, no catalog access - it judges the compiled candidates against the models
+    ///     persisted in the tenant. The set is judged as the post-state, so a dependent that the set replaces with a
+    ///     version that fits is not a blocker. Only <c>Available</c> installed models are dependents; models that are
+    ///     already <c>ResolveFailed</c>, service-managed (<c>System</c>, <c>System.*</c>) candidates and candidates of
+    ///     another major than the installed one are never reported.
+    /// </summary>
+    /// <param name="updateSet">The compiled candidate models the caller intends to import together.</param>
+    /// <param name="availableDependentVersions">
+    ///     Optional versions the caller could additionally import (for example from the catalogs); used only to fill
+    ///     <see cref="CkUpgradeBlocker.SuggestedDependentUpdate" />.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the evaluation.</param>
+    Task<CkUpgradeGuardResult> EvaluateCkUpdateAsync(IReadOnlyCollection<CkCompiledModelRoot> updateSet,
+        IReadOnlyCollection<CkModelId>? availableDependentVersions = null,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     ///     Embedded/startup import of a construction kit model from the catalogs (service tenant setup,
