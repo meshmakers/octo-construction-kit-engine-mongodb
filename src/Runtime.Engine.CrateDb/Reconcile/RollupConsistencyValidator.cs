@@ -7,6 +7,29 @@ using Microsoft.Extensions.Logging;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb.Reconcile;
 
+/// <summary>A part of a pointer entry that no higher entry outranks and that holds no row of the entry's generation.</summary>
+internal sealed record PointerGap(GenerationRange Entry, long FromMs, long ToMs);
+
+/// <summary>Rows of a generation that none of <see cref="Covering"/> (the entries of that or a higher generation) covers.</summary>
+internal sealed record OrphanSet(long Generation, long Rows, IReadOnlyList<GenerationRange> Covering, long FirstWindowStartMs, long LastWindowStartMs);
+
+/// <summary>The watermark is ahead of the last rollup row while a source holds rows in between.</summary>
+internal sealed record WatermarkGap(DateTime? LastRowEnd, DateTime Watermark, long SourceRows);
+
+/// <summary>
+/// What the validator found for one rollup, in the form the repair works from; <see cref="Findings"/> is the report.
+/// </summary>
+internal sealed record RollupAnalysis(
+    bool MissingGenerationMap,
+    IReadOnlyList<GenerationRange> Pointers,
+    IReadOnlyList<PointerGap> PointerGaps,
+    IReadOnlyList<OrphanSet> Orphans,
+    WatermarkGap? Watermark,
+    IReadOnlyList<RollupConsistencyFinding> Findings)
+{
+    public static readonly RollupAnalysis None = new(false, [], [], [], null, []);
+}
+
 /// <summary>
 /// Checks the rollups of a tenant for the inconsistencies a restore, or a dump taken during a recompute, can leave
 /// (AB#5967 slice 2 / AB#6968; <see cref="RollupConsistencyCheck"/>). <b>Read only:</b> counts and MIN/MAX statements, no row is
@@ -54,13 +77,26 @@ internal sealed class RollupConsistencyValidator(
         return new RollupConsistencyReport(entries, clock.GetUtcNow().UtcDateTime);
     }
 
-    /// <summary>The findings for one rollup; empty when it is consistent or has no tables yet.</summary>
+    /// <summary>The findings for one rollup; empty when it is consistent or has no tables yet. Each one is logged as a warning.</summary>
     internal async Task<IReadOnlyList<RollupConsistencyFinding>> ValidateRollupAsync(
         RollupArchiveSnapshot rollup, CancellationToken cancellationToken)
     {
+        var analysis = await AnalyzeAsync(rollup, cancellationToken);
+        foreach (var finding in analysis.Findings)
+        {
+            logger.LogWarning("Rollup {RollupRtId} of tenant {TenantId} is inconsistent ({Check}): {Message}",
+                rollup.RtId, tenantId, finding.Check, finding.Message);
+        }
+
+        return analysis.Findings;
+    }
+
+    /// <summary>Runs the four checks of one rollup and keeps what the repair needs next to the findings.</summary>
+    internal async Task<RollupAnalysis> AnalyzeAsync(RollupArchiveSnapshot rollup, CancellationToken cancellationToken)
+    {
         if (rollup.Status == CkArchiveStatus.Created)
         {
-            return [];
+            return RollupAnalysis.None;
         }
 
         var id = rollup.RtId.ToString();
@@ -68,124 +104,131 @@ internal sealed class RollupConsistencyValidator(
         var live = TenantSchema.QualifiedArchiveTable(tenantId, id);
         if (!await TableExistsAsync(liveName, cancellationToken))
         {
-            return [];
+            return RollupAnalysis.None;
         }
 
         var findings = new List<RollupConsistencyFinding>();
         var genMapName = liveName + "__genmap";
         var genMap = GenerationMapSqlBuilder.GenMapTable(tenantId, id);
         var pointers = new List<GenerationRange>();
-        if (await TableExistsAsync(genMapName, cancellationToken))
-        {
-            await databaseClient.RefreshArchiveTableAsync(tenantId, genMap, CrateStatementClass.Maintenance, cancellationToken);
-            pointers.AddRange(await ReadPointersAsync(genMap, cancellationToken));
-        }
-        else
+        var missingMap = !await TableExistsAsync(genMapName, cancellationToken);
+        if (missingMap)
         {
             findings.Add(new RollupConsistencyFinding(RollupConsistencyCheck.MissingGenerationMap,
                 $"Rollup {rollup.RtId} has a table but no generation map table ({genMapName}); recomputed rows cannot be selected."));
         }
+        else
+        {
+            await databaseClient.RefreshArchiveTableAsync(tenantId, genMap, CrateStatementClass.Maintenance, cancellationToken);
+            pointers.AddRange(await ReadPointersAsync(genMap, cancellationToken));
+        }
 
         await databaseClient.RefreshArchiveTableAsync(tenantId, live, CrateStatementClass.Maintenance, cancellationToken);
-        findings.AddRange(await CheckPointersWithoutRowsAsync(rollup, live, pointers, cancellationToken));
+
+        var gaps = await CheckPointersWithoutRowsAsync(live, pointers, cancellationToken);
+        findings.AddRange(gaps.Select(g => PointerGapFinding(rollup, g)));
+
+        var orphans = new List<OrphanSet>();
         if (rollup.RecomputeInProgress)
         {
             logger.LogDebug("Rollup {RollupRtId}: a recompute is running, orphan rows are not checked.", rollup.RtId);
         }
         else
         {
-            findings.AddRange(await CheckOrphansAsync(rollup, live, pointers, cancellationToken));
+            orphans.AddRange(await CheckOrphansAsync(live, pointers, cancellationToken));
+            findings.AddRange(orphans.Select(o => OrphanFinding(rollup, o)));
         }
 
-        findings.AddRange(await CheckWatermarkAsync(rollup, live, cancellationToken));
-
-        foreach (var finding in findings)
+        var watermark = await CheckWatermarkAsync(rollup, live, cancellationToken);
+        if (watermark is not null)
         {
-            logger.LogWarning("Rollup {RollupRtId} of tenant {TenantId} is inconsistent ({Check}): {Message}",
-                rollup.RtId, tenantId, finding.Check, finding.Message);
+            findings.Add(WatermarkFinding(rollup, watermark));
         }
 
-        return findings;
+        return new RollupAnalysis(missingMap, pointers, gaps, orphans, watermark, findings);
     }
 
     // (a) ------------------------------------------------------------------------------------------------------
 
-    private async Task<IEnumerable<RollupConsistencyFinding>> CheckPointersWithoutRowsAsync(
-        RollupArchiveSnapshot rollup, string live, IReadOnlyList<GenerationRange> pointers, CancellationToken cancellationToken)
+    private async Task<List<PointerGap>> CheckPointersWithoutRowsAsync(
+        string live, IReadOnlyList<GenerationRange> pointers, CancellationToken cancellationToken)
     {
-        var findings = new List<RollupConsistencyFinding>();
+        var gaps = new List<PointerGap>();
         foreach (var entry in pointers.OrderBy(p => p.StartMs).ThenBy(p => p.Generation))
         {
             foreach (var (fromMs, toMs) in RollupConsistencySql.GovernedRanges(entry, pointers))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var from = FromMs(fromMs);
-                var to = FromMs(toMs);
                 var rows = await databaseClient.GetCountAsync(tenantId,
-                    RollupRecomputeSqlBuilder.BuildCountGeneration(live, from, to, entry.Generation, entry.Scope.Length == 0 ? null : entry.Scope),
+                    RollupRecomputeSqlBuilder.BuildCountGeneration(live, FromMs(fromMs), FromMs(toMs), entry.Generation,
+                        entry.Scope.Length == 0 ? null : entry.Scope),
                     CrateStatementClass.Maintenance, cancellationToken);
                 if (rows == 0)
                 {
-                    findings.Add(new RollupConsistencyFinding(RollupConsistencyCheck.PointerWithoutRows,
-                        $"Rollup {rollup.RtId}: the pointer names generation {entry.Generation} for [{from:O}, {to:O})" +
-                        (entry.Scope.Length == 0 ? string.Empty : $" of entity {entry.Scope}") +
-                        ", but the table holds no row of that generation there; readers see empty windows.",
-                        from, to, entry.Generation, 0));
+                    gaps.Add(new PointerGap(entry, fromMs, toMs));
                 }
             }
         }
 
-        return findings;
+        return gaps;
     }
+
+    private static RollupConsistencyFinding PointerGapFinding(RollupArchiveSnapshot rollup, PointerGap gap) => new(
+        RollupConsistencyCheck.PointerWithoutRows,
+        $"Rollup {rollup.RtId}: the pointer names generation {gap.Entry.Generation} for [{FromMs(gap.FromMs):O}, {FromMs(gap.ToMs):O})" +
+        (gap.Entry.Scope.Length == 0 ? string.Empty : $" of entity {gap.Entry.Scope}") +
+        ", but the table holds no row of that generation there; readers see empty windows.",
+        FromMs(gap.FromMs), FromMs(gap.ToMs), gap.Entry.Generation, 0);
 
     // (b) ------------------------------------------------------------------------------------------------------
 
-    private async Task<IEnumerable<RollupConsistencyFinding>> CheckOrphansAsync(
-        RollupArchiveSnapshot rollup, string live, IReadOnlyList<GenerationRange> pointers, CancellationToken cancellationToken)
+    private async Task<List<OrphanSet>> CheckOrphansAsync(
+        string live, IReadOnlyList<GenerationRange> pointers, CancellationToken cancellationToken)
     {
-        var findings = new List<RollupConsistencyFinding>();
-        await foreach (var summary in ReadGenerationSummaryAsync(live, cancellationToken))
+        var orphans = new List<OrphanSet>();
+        foreach (var summary in await ReadGenerationSummaryAsync(live, cancellationToken))
         {
             var covering = pointers.Where(p => p.Generation >= summary.Generation).ToList();
-            var lastMs = summary.LastWindowStartMs;
             // Nothing to count when one unscoped covering entry spans all rows of the generation.
-            if (covering.Any(p => p.Scope.Length == 0 && p.StartMs <= summary.FirstWindowStartMs && lastMs < p.EndMs))
+            if (covering.Any(p => p.Scope.Length == 0 && p.StartMs <= summary.FirstWindowStartMs && summary.LastWindowStartMs < p.EndMs))
             {
                 continue;
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            var orphans = await databaseClient.GetCountAsync(tenantId,
+            var count = await databaseClient.GetCountAsync(tenantId,
                 RollupConsistencySql.BuildCountOrphans(live, summary.Generation, covering), CrateStatementClass.Maintenance, cancellationToken);
-            if (orphans > 0)
+            if (count > 0)
             {
-                findings.Add(new RollupConsistencyFinding(RollupConsistencyCheck.OrphansAbovePointer,
-                    $"Rollup {rollup.RtId}: {orphans} row(s) of generation {summary.Generation} lie outside every pointer entry of that or a higher generation " +
-                    "(window starts between " + FromMs(summary.FirstWindowStartMs).ToString("O", CultureInfo.InvariantCulture) + " and " +
-                    FromMs(lastMs).ToString("O", CultureInfo.InvariantCulture) + "); no reader selects them and no sweep removes them.",
-                    FromMs(summary.FirstWindowStartMs), FromMs(lastMs + 1), summary.Generation, orphans));
+                orphans.Add(new OrphanSet(summary.Generation, count, covering, summary.FirstWindowStartMs, summary.LastWindowStartMs));
             }
         }
 
-        return findings;
+        return orphans;
     }
+
+    private static RollupConsistencyFinding OrphanFinding(RollupArchiveSnapshot rollup, OrphanSet orphan) => new(
+        RollupConsistencyCheck.OrphansAbovePointer,
+        $"Rollup {rollup.RtId}: {orphan.Rows} row(s) of generation {orphan.Generation} lie outside every pointer entry of that or a higher generation " +
+        $"(window starts between {FromMs(orphan.FirstWindowStartMs).ToString("O", CultureInfo.InvariantCulture)} and " +
+        $"{FromMs(orphan.LastWindowStartMs).ToString("O", CultureInfo.InvariantCulture)}); no reader selects them and no sweep removes them.",
+        FromMs(orphan.FirstWindowStartMs), FromMs(orphan.LastWindowStartMs + 1), orphan.Generation, orphan.Rows);
 
     // (c) ------------------------------------------------------------------------------------------------------
 
-    private async Task<IEnumerable<RollupConsistencyFinding>> CheckWatermarkAsync(
+    internal async Task<WatermarkGap?> CheckWatermarkAsync(
         RollupArchiveSnapshot rollup, string live, CancellationToken cancellationToken)
     {
-        var findings = new List<RollupConsistencyFinding>();
         if (rollup.LastAggregatedBucketEnd is not { } watermarkRaw)
         {
-            return findings;
+            return null;
         }
 
         var watermark = DateTime.SpecifyKind(watermarkRaw, DateTimeKind.Utc);
         var lastRowEnd = await ReadLastWindowEndAsync(live, cancellationToken);
         if (lastRowEnd is { } end && end >= watermark)
         {
-            return findings;
+            return null;
         }
 
         var from = lastRowEnd ?? DateTime.UnixEpoch;
@@ -202,17 +245,22 @@ internal sealed class RollupConsistencyValidator(
             var sourceRows = await CountSourceRowsAsync(source.SourceArchiveRtId, spanFrom, spanTo, cancellationToken);
             if (sourceRows > 0)
             {
-                var gap = lastRowEnd is null ? (TimeSpan?)null : watermark - from;
-                findings.Add(new RollupConsistencyFinding(RollupConsistencyCheck.WatermarkAheadOfRows,
-                    lastRowEnd is null
-                        ? $"Rollup {rollup.RtId}: the watermark is {watermark:O}, but the table holds no rows although source {source.SourceArchiveRtId} has {sourceRows} row(s) before it; the forward aggregation would not fill them."
-                        : $"Rollup {rollup.RtId}: the watermark is {watermark:O}, {gap} ahead of the last rollup row (ends {from:O}), and source {source.SourceArchiveRtId} has {sourceRows} row(s) in between; the forward aggregation would not fill the gap.",
-                    from, watermark, null, sourceRows, gap));
-                break; // one finding per rollup names the gap; the repair rewinds to the end of the rollup data
+                return new WatermarkGap(lastRowEnd, watermark, sourceRows);
             }
         }
 
-        return findings;
+        return null;
+    }
+
+    private static RollupConsistencyFinding WatermarkFinding(RollupArchiveSnapshot rollup, WatermarkGap gap)
+    {
+        var from = gap.LastRowEnd ?? DateTime.UnixEpoch;
+        var span = gap.LastRowEnd is null ? (TimeSpan?)null : gap.Watermark - from;
+        return new RollupConsistencyFinding(RollupConsistencyCheck.WatermarkAheadOfRows,
+            gap.LastRowEnd is null
+                ? $"Rollup {rollup.RtId}: the watermark is {gap.Watermark:O}, but the table holds no rows although a source has {gap.SourceRows} row(s) before it; the forward aggregation would not fill them."
+                : $"Rollup {rollup.RtId}: the watermark is {gap.Watermark:O}, {span} ahead of the last rollup row (ends {from:O}), and a source has {gap.SourceRows} row(s) in between; the forward aggregation would not fill the gap.",
+            from, gap.Watermark, null, gap.SourceRows, span);
     }
 
     private async Task<long> CountSourceRowsAsync(OctoObjectId sourceRtId, DateTime from, DateTime to, CancellationToken cancellationToken)
@@ -237,13 +285,47 @@ internal sealed class RollupConsistencyValidator(
         }
     }
 
+    /// <summary>The first row of the earliest source of the rollup; null when no source holds a row.</summary>
+    internal async Task<DateTime?> ReadEarliestSourceTimeAsync(RollupArchiveSnapshot rollup, CancellationToken cancellationToken)
+    {
+        DateTime? earliest = null;
+        foreach (var reference in rollup.Sources)
+        {
+            var source = await archiveStore.GetAsync(reference.SourceArchiveRtId);
+            if (source is null)
+            {
+                continue;
+            }
+
+            var table = TenantSchema.QualifiedArchiveTable(tenantId, reference.SourceArchiveRtId.ToString());
+            var column = source.UsesWindowedStorage ? Constants.WindowStart : Constants.Timestamp;
+            try
+            {
+                await foreach (var row in databaseClient.StreamRawRowsAsync(
+                                   tenantId, RollupConsistencySql.BuildMinSourceTime(table, column), cancellationToken))
+                {
+                    if (row.TryGetValue("min_time", out var value) && AsUtc(value) is { } time && (earliest is null || time < earliest))
+                    {
+                        earliest = time;
+                    }
+                }
+            }
+            catch (Exception ex) when (CrateDbStreamDataRepository.IsMissingTableError(ex))
+            {
+                // no table, no rows
+            }
+        }
+
+        return earliest;
+    }
+
     // reads ----------------------------------------------------------------------------------------------------
 
-    private async Task<bool> TableExistsAsync(string tableName, CancellationToken cancellationToken)
+    internal async Task<bool> TableExistsAsync(string tableName, CancellationToken cancellationToken)
         => await databaseClient.GetCountAsync(tenantId, RollupConsistencySql.BuildTableExists(tenantId, tableName),
             CrateStatementClass.Maintenance, cancellationToken) > 0;
 
-    private async Task<IReadOnlyList<GenerationRange>> ReadPointersAsync(string genMap, CancellationToken cancellationToken)
+    internal async Task<IReadOnlyList<GenerationRange>> ReadPointersAsync(string genMap, CancellationToken cancellationToken)
     {
         var entries = new List<GenerationRange>();
         await foreach (var row in databaseClient.StreamRawRowsAsync(
@@ -261,8 +343,7 @@ internal sealed class RollupConsistencyValidator(
 
     private readonly record struct GenerationSummary(long Generation, long Rows, long FirstWindowStartMs, long LastWindowStartMs);
 
-    private async IAsyncEnumerable<GenerationSummary> ReadGenerationSummaryAsync(
-        string live, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    private async Task<List<GenerationSummary>> ReadGenerationSummaryAsync(string live, CancellationToken cancellationToken)
     {
         var rows = new List<GenerationSummary>();
         await foreach (var row in databaseClient.StreamRawRowsAsync(
@@ -275,10 +356,7 @@ internal sealed class RollupConsistencyValidator(
                 ToMs(AsUtc(row["hi"]) ?? DateTime.UnixEpoch)));
         }
 
-        foreach (var summary in rows.OrderBy(r => r.Generation))
-        {
-            yield return summary;
-        }
+        return rows.OrderBy(r => r.Generation).ToList();
     }
 
     private async Task<DateTime?> ReadLastWindowEndAsync(string live, CancellationToken cancellationToken)

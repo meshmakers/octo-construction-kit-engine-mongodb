@@ -77,6 +77,18 @@ internal static class GenerationMapSqlBuilder
             $"ON CONFLICT (\"range_start\", \"range_end\", \"rtid_scope\") DO UPDATE SET \"{Constants.Generation}\" = {g};";
     }
 
+    /// <summary>
+    /// Builds the delete of exactly one pointer entry (range, scope and generation all match). Used by the rollup repair to remove
+    /// an entry whose generation has no rows (AB#6968).
+    /// </summary>
+    public static string BuildDeletePointer(
+        string genMapTable, long rangeStartMs, long rangeEndMs, string rtIdScope, long generation) =>
+        $"DELETE FROM {genMapTable} " +
+        $"WHERE \"range_start\" = {rangeStartMs.ToString(CultureInfo.InvariantCulture)} " +
+        $"AND \"range_end\" = {rangeEndMs.ToString(CultureInfo.InvariantCulture)} " +
+        $"AND \"rtid_scope\" = '{(rtIdScope ?? AllRtIdsScope).Replace("'", "''")}' " +
+        $"AND \"{Constants.Generation}\" = {generation.ToString(CultureInfo.InvariantCulture)};";
+
     /// <summary>Builds <c>SELECT range_start, range_end, rtid_scope, generation FROM {genmap};</c>.</summary>
     public static string BuildSelectAll(string genMapTable) =>
         $"SELECT \"range_start\", \"range_end\", \"rtid_scope\", \"{Constants.Generation}\" FROM {genMapTable};";

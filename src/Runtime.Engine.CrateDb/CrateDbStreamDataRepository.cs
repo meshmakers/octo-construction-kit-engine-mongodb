@@ -2048,6 +2048,28 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             .ValidateAsync(rollupRtIds, cancellationToken);
     }
 
+    /// <inheritdoc />
+    public Task<RollupRepairReport> RepairRollupsAsync(
+        IReadOnlyCollection<OctoObjectId>? rollupRtIds = null, bool dryRun = false, CancellationToken cancellationToken = default)
+    {
+        if (_rollupArchiveStore is null)
+        {
+            var empty = new RollupConsistencyReport([], DateTime.UtcNow);
+            return Task.FromResult(new RollupRepairReport(dryRun, empty, [], dryRun ? null : empty, null));
+        }
+
+        var validator = new RollupConsistencyValidator(
+            _tenantId, _databaseClient, _archiveStore, _rollupArchiveStore, _logger, TimeProvider.System);
+        // The repair's own executor sweeps at once and is not held back by the marker it is there to clear.
+        var repairer = new RollupRepairer(
+            _tenantId, _databaseClient, _managementClient, _archiveStore, _rollupArchiveStore, this, validator, ReconcileMarker,
+            () => new CrateDbArchiveRecomputeExecutor(
+                _tenantId, _databaseClient, _managementClient, _archiveStore, _logger, _rollupArchiveStore,
+                _recomputeSliceTargetRows, _recomputeProcessState, TimeSpan.Zero, TimeProvider.System),
+            _logger);
+        return repairer.RepairAsync(rollupRtIds, dryRun, cancellationToken);
+    }
+
     private CrateDbArchiveRecomputeExecutor RecomputeExecutor => _recomputeExecutor ??= new CrateDbArchiveRecomputeExecutor(
         _tenantId, _databaseClient, _managementClient, _archiveStore, _logger,
         _rollupArchiveStore, _recomputeSliceTargetRows, _recomputeProcessState, _sweepGracePeriod, TimeProvider.System);

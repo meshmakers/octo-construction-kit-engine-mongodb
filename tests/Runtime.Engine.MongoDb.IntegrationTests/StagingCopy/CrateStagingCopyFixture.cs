@@ -260,7 +260,8 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
     /// </summary>
     internal CrateDbStreamDataRepository NewReconcileRepository(
         string tenantId, IReadOnlyList<RollupArchiveSnapshot> rollups, IReadOnlyList<OctoObjectId> sources,
-        RecomputeProcessState? state = null, IOptions<CrateRecomputeOptions>? options = null, IRollupArchiveRuntimeStore? rollupStore = null)
+        RecomputeProcessState? state = null, IOptions<CrateRecomputeOptions>? options = null, IRollupArchiveRuntimeStore? rollupStore = null,
+        IStreamDataDatabaseClient? databaseClient = null)
     {
         var archives = A.Fake<IArchiveRuntimeStore>();
         var type = new RtCkId<CkTypeId>("Test", new CkTypeId("Sensor"));
@@ -292,7 +293,7 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
         }
 
         return new CrateDbStreamDataRepository(NullLogger<CrateDbStreamDataRepository>.Instance,
-            A.Fake<ICkCacheService>(), Client, Client, Configuration, tenantId, archives, A.Fake<IFormulaEngine>(),
+            A.Fake<ICkCacheService>(), databaseClient ?? Client, Client, Configuration, tenantId, archives, A.Fake<IFormulaEngine>(),
             store, recomputeStateStore: null, archiveAuditTrail: null, options, state);
     }
 

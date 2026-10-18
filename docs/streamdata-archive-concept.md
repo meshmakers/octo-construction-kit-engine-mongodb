@@ -985,6 +985,28 @@ this feature run unchanged. The restore job sets it after the archive tables wer
 or the repair has run. A process remembers an answer for five seconds (set and clear update it at once), another process sees a change
 within that time. What the marker blocks: see "Gate" below.
 
+**Rollup repair.** `RepairRollupsAsync(rollupRtIds, dryRun)` (`RollupRepairer`) validates, repairs, validates again and returns
+`RollupRepairReport` (`Before`, the `Actions`, `After`, `FailedStep`). Per rollup, in this order, each step needing the one before:
+
+1. *Create the generation map* when the table is missing (`CreateGenerationMap`).
+2. *Delete the orphans* (`DeleteOrphans`): the rows of a generation that no pointer entry of that or a higher generation covers. The
+   pointed generations are not touched. This runs before any recompute so the generation numbers a recompute is handed are free.
+3. *Recompute the pointer gaps* (`RecomputePointerRange`): only the part of an entry that no higher entry outranks and that holds no row
+   of its generation, with the entry's scope, once per source validity span. The recompute runs on its own executor with an immediate
+   sweep (no grace period: the rows below are the repair's garbage and no dump is waiting). The new generation replaces the gap in one
+   pointer write; **rows recomputed later than the pointer lie outside the gap and stay**. A recompute that leaves no row (the source
+   holds nothing there) has its entry removed, and so is an entry of the old generation that ends without any row: the window then
+   reads empty, which is what the source says, and the validator is ok.
+4. *Rewind the watermark* (`RewindWatermark`) to the end of the rollup data (the first source bucket when the rollup is empty) and clear
+   the recompute generations behind it, exactly as the `rewindRollupWatermark` mutation does; the forward aggregation fills the gap on
+   its next tick. The step decides again when it runs: a recompute before it can have filled the rollup up to the watermark.
+
+A failing step ends the repair of its rollup, its remaining steps are `Skipped`, and `FailedStep` names rollup and step; other rollups go
+on. **The marker is cleared only when no step failed and the second validation is ok**, never on a dry run, so a failing repair leaves
+the tenant blocked (see "Gate"). A dry run lists the steps as `Planned` and changes nothing (`After` is null). The repair is idempotent:
+a second run on a repaired tenant plans nothing. It should run while the tenant is marked pending (or when no recompute runs): it
+recomputes ranges and rewinds the watermark, which a running orchestrator would race with.
+
 **Dump.** The plan cuts the data table into counted time slices with the planner of the row export (`ExportSlicePlanner`,
 target `ArchiveCopyOptions.TargetSliceRows`). Each slice is one statement,
 `COPY <table> WHERE <time> >= from AND <time> < to TO DIRECTORY '<location>/<rtId>/data/<slice>' WITH (compression = 'gzip', ...)`,

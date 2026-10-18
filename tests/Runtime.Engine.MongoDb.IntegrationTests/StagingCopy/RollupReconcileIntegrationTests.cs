@@ -1,6 +1,8 @@
+using FakeItEasy;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Reconcile;
 using Xunit;
 
@@ -166,6 +168,329 @@ public class RollupReconcileIntegrationTests(CrateStagingCopyFixture fixture)
         var report = await c.Repository.ValidateRollupsAsync([OctoObjectId.GenerateNewId()], Ct);
 
         Assert.Empty(report.Rollups);
+    }
+
+    // ---- repair --------------------------------------------------------------------------------------------
+
+    /// <summary>
+    ///     A rollup built the way the platform builds it: 48 hourly source rows, one bucket each aggregated forward at
+    ///     generation 0 through the repository, the watermark at the end. The "unrestored reference" the repair is
+    ///     compared with is what a reader sees of it.
+    /// </summary>
+    private sealed class RepairRig
+    {
+        private readonly CrateStagingCopyFixture _fixture;
+
+        private RepairRig(CrateStagingCopyFixture fixture) => _fixture = fixture;
+
+        public string Tenant { get; private init; } = null!;
+        public OctoObjectId Raw { get; private init; }
+        public OctoObjectId Rollup { get; private init; }
+        public ArchiveSnapshot RawSnapshot { get; private init; } = null!;
+        public RollupArchiveSnapshot Snapshot { get; private init; } = null!;
+        public InMemoryRollupStore Store { get; private init; } = null!;
+        public CrateDbStreamDataRepository Repository { get; private set; } = null!;
+        public RecomputeProcessState State { get; } = new();
+        public string Live => TenantSchema.QualifiedArchiveTable(Tenant, Rollup.ToString());
+        public string GenMap => GenerationMapSqlBuilder.GenMapTable(Tenant, Rollup.ToString());
+
+        public static async Task<RepairRig> CreateAsync(
+            CrateStagingCopyFixture fixture, int rawHours = 48, IStreamDataDatabaseClient? databaseClient = null)
+        {
+            var tenant = CrateStagingCopyFixture.NewTenantId();
+            var raw = OctoObjectId.GenerateNewId();
+            var rollup = OctoObjectId.GenerateNewId();
+            await fixture.CreateRawArchiveAsync(tenant, raw, rawHours);
+            var type = new RtCkId<CkTypeId>("Test", new CkTypeId("Sensor"));
+            var specs = new[] { new CkRollupAggregationSpec("Value", CkRollupFunction.Sum, null) };
+            var snapshot = new RollupArchiveSnapshot(rollup, type, CkArchiveStatus.Activated, "hourly", [new RollupSourceReference(raw)],
+                TimeSpan.FromHours(1), TimeSpan.Zero, Origin.AddHours(rawHours), specs, null);
+            var rig = new RepairRig(fixture)
+            {
+                Tenant = tenant,
+                Raw = raw,
+                Rollup = rollup,
+                Snapshot = snapshot,
+                RawSnapshot = new ArchiveSnapshot(raw, type, CkArchiveStatus.Activated, "raw", [new CkArchiveColumnSpec("Value", true, false)]),
+                Store = new InMemoryRollupStore(snapshot)
+            };
+            rig.Repository = fixture.NewReconcileRepository(tenant, [snapshot], [raw], rig.State, null, rig.Store, databaseClient);
+            await rig.Repository.EnsureArchiveCreatedAsync(new ArchiveSnapshot(rollup, type, CkArchiveStatus.Activated, "hourly",
+                RollupColumnGenerator.Generate(specs)) { RollupAggregations = specs, Period = TimeSpan.FromHours(1) });
+            await rig.AggregateForwardAsync(0, rawHours);
+            return rig;
+        }
+
+        /// <summary>The forward aggregation of the buckets [fromHour, toHour), as the orchestrator does it tick by tick.</summary>
+        public async Task AggregateForwardAsync(int fromHour, int toHour)
+        {
+            for (var h = fromHour; h < toHour; h++)
+            {
+                await Repository.AggregateBucketAsync(RawSnapshot, Store.GetAsync(Rollup).Result!, Origin.AddHours(h), Origin.AddHours(h + 1), Ct);
+            }
+
+            await _fixture.SqlAsync($"REFRESH TABLE {Live}");
+        }
+
+        /// <summary>A recompute of [fromHour, toHour) through the repository, with the immediate sweep of a repository without options.</summary>
+        public async Task RecomputeAsync(int fromHour, int toHour)
+        {
+            await Repository.ExecuteAsync(RawSnapshot, Store.GetAsync(Rollup).Result!, Origin.AddHours(fromHour), Origin.AddHours(toHour), null, Ct);
+        }
+
+        public async Task SqlAsync(string sql)
+        {
+            await _fixture.SqlAsync(sql);
+            await _fixture.SqlAsync($"REFRESH TABLE {Live}");
+            await _fixture.SqlAsync($"REFRESH TABLE {GenMap}");
+        }
+
+        public async Task<long> CountAsync(string where) => await _fixture.CountAsync($"SELECT COUNT(*) FROM {Live} WHERE {where}");
+
+        public async Task<List<string>> PointersAsync()
+        {
+            await _fixture.SqlAsync($"REFRESH TABLE {GenMap}");
+            return (await _fixture.QueryAsync($"SELECT \"range_start\", \"range_end\", \"rtid_scope\", \"generation\" FROM {GenMap} ORDER BY 1, 2, 3, 4"))
+                .Select(r => string.Join("|", r.Values)).ToList();
+        }
+
+        /// <summary>What a reader sees: window and value of the rows the pointer selects (the read predicate of the query path).</summary>
+        public async Task<List<string>> ActiveViewAsync()
+        {
+            await _fixture.SqlAsync($"REFRESH TABLE {Live}");
+            await _fixture.SqlAsync($"REFRESH TABLE {GenMap}");
+            var ranges = (await _fixture.QueryAsync($"SELECT \"range_start\", \"range_end\", \"rtid_scope\", \"generation\" FROM {GenMap}"))
+                .Select(r => new GenerationRange(Convert.ToInt64(r["range_start"]), Convert.ToInt64(r["range_end"]),
+                    Convert.ToString(r["rtid_scope"]) ?? string.Empty, Convert.ToInt64(r["generation"])))
+                .ToList();
+            var predicate = GenerationFilterSql.Render(ranges);
+            return (await _fixture.QueryAsync($"SELECT \"window_start\", \"value_sum\" FROM {Live} WHERE {predicate} ORDER BY 1"))
+                .Select(r => string.Join("|", Convert.ToDateTime(r["window_start"]).ToUniversalTime().ToString("O"), r["value_sum"])).ToList();
+        }
+    }
+
+    [Fact]
+    public async Task Repair_WatermarkAheadOfTheRows_RewindsToTheEndOfTheData_AndTheForwardAggregationRestoresTheReference()
+    {
+        var rig = await RepairRig.CreateAsync(fixture);
+        var reference = await rig.ActiveViewAsync();
+        Assert.Equal(48, reference.Count);
+        await rig.SqlAsync($"DELETE FROM {rig.Live} WHERE \"window_start\" >= 1767225600000 + 24 * 3600000"); // the restored rollup ends after 24 hours
+
+        var report = await rig.Repository.RepairRollupsAsync(null, false, Ct);
+
+        var action = Assert.Single(report.Actions);
+        Assert.Equal(RollupRepairKind.RewindWatermark, action.Kind);
+        Assert.Equal(RollupRepairStatus.Done, action.Status);
+        Assert.Equal((rig.Rollup, Origin.AddHours(24), true), rig.Store.WatermarkWrites.Single());
+        Assert.False(report.Before.IsOk);
+        Assert.True(report.After!.IsOk);
+        Assert.True(report.IsOk);
+        // the forward aggregation, from the rewound watermark on, fills the gap: the values are the reference's
+        await rig.AggregateForwardAsync(24, 48);
+        Assert.Equal(reference, await rig.ActiveViewAsync());
+    }
+
+    [Fact]
+    public async Task Repair_PointerWithoutRows_RecomputesTheRange_ValuesEqualTheReference_AndNoWindowStaysEmpty()
+    {
+        var rig = await RepairRig.CreateAsync(fixture);
+        await rig.RecomputeAsync(0, 24); // generation 1 over day 1; the sweep removed the generation 0 rows there
+        var reference = await rig.ActiveViewAsync();
+        await rig.SqlAsync($"DELETE FROM {rig.Live} WHERE \"generation\" = 1"); // the restore lost the rows, the pointer stayed
+        Assert.Equal(24, (await rig.ActiveViewAsync()).Count); // day 2 only: day 1 is empty
+
+        var report = await rig.Repository.RepairRollupsAsync(null, false, Ct);
+
+        Assert.True(report.IsOk);
+        Assert.Equal(RollupConsistencyCheck.PointerWithoutRows, report.Before.Rollups.Single().Findings.Single().Check);
+        Assert.Contains(report.Actions, a => a is { Kind: RollupRepairKind.RecomputePointerRange, Status: RollupRepairStatus.Done });
+        Assert.Equal(reference, await rig.ActiveViewAsync());
+        Assert.Equal(48, reference.Count);
+        // the old entry is gone, the recompute's entry names rows that exist
+        Assert.DoesNotContain(await rig.PointersAsync(), p => p.EndsWith("|1", StringComparison.Ordinal));
+        Assert.True(report.After!.IsOk);
+    }
+
+    [Fact]
+    public async Task Repair_AHoleInTheMiddle_RecomputesOnlyThatRange_AndKeepsTheRowsRecomputedLater()
+    {
+        var rig = await RepairRig.CreateAsync(fixture);
+        await rig.RecomputeAsync(0, 48);   // generation 1 over both days
+        await rig.RecomputeAsync(10, 20);  // generation 2 over hours 10..20, recomputed later
+        var reference = await rig.ActiveViewAsync();
+        var laterRows = await rig.CountAsync("\"generation\" = 2");
+        var laterSum = await fixture.CountAsync($"SELECT CAST(SUM(\"value_sum\") AS BIGINT) FROM {rig.Live} WHERE \"generation\" = 2");
+        await rig.SqlAsync($"DELETE FROM {rig.Live} WHERE \"generation\" = 1"); // the rows of generation 1 are lost
+
+        var report = await rig.Repository.RepairRollupsAsync(null, false, Ct);
+
+        Assert.True(report.IsOk);
+        var recomputed = report.Actions.Where(a => a is { Kind: RollupRepairKind.RecomputePointerRange, RangeFromUtc: not null, Status: RollupRepairStatus.Done }).ToList();
+        // two holes, and the rows lost behind hour 20 also leave the watermark ahead of the rollup data
+        Assert.Equal(2, report.Before.Rollups.Single().Findings.Count(f => f.Check == RollupConsistencyCheck.PointerWithoutRows));
+        Assert.Single(report.Before.Rollups.Single().Findings, f => f.Check == RollupConsistencyCheck.WatermarkAheadOfRows);
+        // ... but the recompute of the holes filled the rollup up to the watermark again, so the watermark is left alone
+        Assert.Empty(rig.Store.WatermarkWrites);
+        Assert.Contains(recomputed, a => a.RangeFromUtc == Origin && a.RangeToUtc == Origin.AddHours(10));
+        Assert.Contains(recomputed, a => a.RangeFromUtc == Origin.AddHours(20) && a.RangeToUtc == Origin.AddHours(48));
+        Assert.DoesNotContain(recomputed, a => a.RangeFromUtc < Origin.AddHours(20) && a.RangeToUtc > Origin.AddHours(10)
+                                               && a.RangeFromUtc != Origin); // the later range is not recomputed again
+        Assert.Equal(laterRows, await rig.CountAsync("\"generation\" = 2")); // not deleted
+        Assert.Equal(laterSum, await fixture.CountAsync($"SELECT CAST(SUM(\"value_sum\") AS BIGINT) FROM {rig.Live} WHERE \"generation\" = 2"));
+        Assert.Equal(reference, await rig.ActiveViewAsync());
+    }
+
+    [Fact]
+    public async Task Repair_Orphans_AreDeleted_AndThePointedGenerationIsUntouched()
+    {
+        var rig = await RepairRig.CreateAsync(fixture);
+        await rig.RecomputeAsync(0, 24); // generation 1
+        var reference = await rig.ActiveViewAsync();
+        var pointedRows = await rig.CountAsync("\"generation\" = 1");
+        await rig.SqlAsync(
+            $"INSERT INTO {rig.Live} (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\", \"was_updated\", \"generation\", \"value_sum\") " +
+            "SELECT CAST(1767225600000 + CAST(generate_series AS BIGINT) * 3600000 AS TIMESTAMP WITH TIME ZONE), " +
+            "CAST(1767225600000 + (CAST(generate_series AS BIGINT) + 1) * 3600000 AS TIMESTAMP WITH TIME ZONE), 'rt1', 'Test/Sensor-1', FALSE, 9, 99.0 " +
+            "FROM generate_series(30, 39)");
+        Assert.Equal(10, await rig.CountAsync("\"generation\" = 9"));
+
+        var report = await rig.Repository.RepairRollupsAsync(null, false, Ct);
+
+        Assert.True(report.IsOk);
+        Assert.Contains(report.Before.Rollups.Single().Findings, f => f.Check == RollupConsistencyCheck.OrphansAbovePointer && f.Generation == 9 && f.Rows == 10);
+        Assert.Equal(0, await rig.CountAsync("\"generation\" = 9"));
+        Assert.Equal(pointedRows, await rig.CountAsync("\"generation\" = 1"));
+        Assert.Equal(reference, await rig.ActiveViewAsync());
+    }
+
+    [Fact]
+    public async Task Repair_AMissingGenerationMap_IsCreated()
+    {
+        var rig = await RepairRig.CreateAsync(fixture);
+        var reference = await rig.ActiveViewAsync();
+        await fixture.SqlAsync($"DROP TABLE {rig.GenMap}");
+
+        var report = await rig.Repository.RepairRollupsAsync(null, false, Ct);
+
+        Assert.True(report.IsOk);
+        Assert.Contains(report.Actions, a => a is { Kind: RollupRepairKind.CreateGenerationMap, Status: RollupRepairStatus.Done });
+        Assert.Equal(reference, await rig.ActiveViewAsync());
+    }
+
+    [Fact]
+    public async Task Repair_APointerWhoseSourceHoldsNothing_IsRemoved_SoTheValidatorIsOk()
+    {
+        var rig = await RepairRig.CreateAsync(fixture, rawHours: 24);
+        // a pointer into a range the source does not cover (hours 30..40), with no rows behind it
+        await rig.SqlAsync(GenerationMapSqlBuilder.BuildUpsertPointer(rig.GenMap, Origin.AddHours(30), Origin.AddHours(40), "", 7));
+        Assert.False((await rig.Repository.ValidateRollupsAsync(null, Ct)).IsOk);
+
+        var report = await rig.Repository.RepairRollupsAsync(null, false, Ct);
+
+        Assert.True(report.IsOk);
+        Assert.DoesNotContain(await rig.PointersAsync(), p => p.Contains("|7", StringComparison.Ordinal));
+        Assert.True((await rig.Repository.ValidateRollupsAsync(null, Ct)).IsOk);
+    }
+
+    [Fact]
+    public async Task Repair_DryRun_ListsThePlannedSteps_AndChangesNothing()
+    {
+        var rig = await RepairRig.CreateAsync(fixture);
+        await rig.RecomputeAsync(0, 48);
+        await rig.RecomputeAsync(10, 20);
+        await rig.SqlAsync($"DELETE FROM {rig.Live} WHERE \"generation\" = 1");
+        await rig.SqlAsync($"DELETE FROM {rig.Live} WHERE \"window_start\" >= 1767225600000 + 40 * 3600000");
+        await rig.Repository.SetRestoreReconcilePendingAsync(true, Ct);
+        var viewBefore = await rig.ActiveViewAsync();
+        var pointersBefore = await rig.PointersAsync();
+        var rowsBefore = await rig.CountAsync("1 = 1");
+
+        var report = await rig.Repository.RepairRollupsAsync(null, dryRun: true, Ct);
+
+        Assert.True(report.DryRun);
+        Assert.Null(report.After);
+        Assert.NotEmpty(report.Actions);
+        Assert.All(report.Actions, a => Assert.Equal(RollupRepairStatus.Planned, a.Status));
+        Assert.Contains(report.Actions, a => a.Kind == RollupRepairKind.RecomputePointerRange);
+        Assert.Contains(report.Actions, a => a.Kind == RollupRepairKind.RewindWatermark);
+        Assert.Equal(viewBefore, await rig.ActiveViewAsync());
+        Assert.Equal(pointersBefore, await rig.PointersAsync());
+        Assert.Equal(rowsBefore, await rig.CountAsync("1 = 1"));
+        Assert.Empty(rig.Store.WatermarkWrites);
+        Assert.True(await rig.Repository.IsRestoreReconcilePendingAsync(Ct)); // a dry run does not clear the marker
+    }
+
+    [Fact]
+    public async Task Repair_IsIdempotent_ASecondRunFindsNothingToDo()
+    {
+        var rig = await RepairRig.CreateAsync(fixture);
+        await rig.RecomputeAsync(0, 48);
+        await rig.RecomputeAsync(10, 20);
+        await rig.SqlAsync($"DELETE FROM {rig.Live} WHERE \"generation\" = 1");
+        var first = await rig.Repository.RepairRollupsAsync(null, false, Ct);
+        var viewAfterFirst = await rig.ActiveViewAsync();
+        var pointersAfterFirst = await rig.PointersAsync();
+
+        var second = await rig.Repository.RepairRollupsAsync(null, false, Ct);
+
+        Assert.True(first.IsOk);
+        Assert.NotEmpty(first.Actions);
+        Assert.True(second.IsOk);
+        Assert.Empty(second.Actions);
+        Assert.True(second.Before.IsOk);
+        Assert.Equal(viewAfterFirst, await rig.ActiveViewAsync());
+        Assert.Equal(pointersAfterFirst, await rig.PointersAsync());
+    }
+
+    [Fact]
+    public async Task Repair_ClearsTheMarker_OnlyWhenTheTenantValidatesOkAfterwards()
+    {
+        var rig = await RepairRig.CreateAsync(fixture);
+        await rig.Repository.SetRestoreReconcilePendingAsync(true, Ct);
+
+        var consistent = await rig.Repository.RepairRollupsAsync(null, false, Ct);
+
+        Assert.True(consistent.IsOk);
+        Assert.Empty(consistent.Actions);
+        Assert.False(await rig.Repository.IsRestoreReconcilePendingAsync(Ct));
+    }
+
+    [Fact]
+    public async Task Repair_WhenAStepFails_TheMarkerStays_TheFailingStepIsNamed_AndTheRestOfTheRollupIsSkipped()
+    {
+        var broken = A.Fake<IStreamDataDatabaseClient>(o => o.Wrapping(fixture.Client));
+        A.CallTo(() => broken.ExecuteNonQueryAsync(A<string>._, A<string>.That.Contains("\"generation\" = 9"),
+                A<CrateStatementClass>._, A<CancellationToken>._))
+            .Throws(new InvalidOperationException("CrateDB is unavailable"));
+        var rig = await RepairRig.CreateAsync(fixture, databaseClient: broken);
+        await rig.RecomputeAsync(0, 48);
+        await rig.RecomputeAsync(10, 20);
+        await rig.SqlAsync($"DELETE FROM {rig.Live} WHERE \"generation\" = 1"); // a hole: a later step of the same rollup
+        await rig.SqlAsync(
+            $"INSERT INTO {rig.Live} (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\", \"was_updated\", \"generation\", \"value_sum\") " +
+            "VALUES (1767225600000, 1767229200000, 'rt7', 'Test/Sensor-1', FALSE, 9, 1.0)");
+        await rig.Repository.SetRestoreReconcilePendingAsync(true, Ct);
+        var pointersBefore = await rig.PointersAsync();
+
+        var report = await rig.Repository.RepairRollupsAsync(null, false, Ct);
+
+        Assert.False(report.IsOk);
+        Assert.NotNull(report.FailedStep);
+        Assert.Contains(rig.Rollup.ToString(), report.FailedStep, StringComparison.Ordinal);
+        Assert.Contains("generation 9", report.FailedStep, StringComparison.Ordinal);
+        Assert.Contains("CrateDB is unavailable", report.FailedStep, StringComparison.Ordinal);
+        Assert.Equal(RollupRepairKind.DeleteOrphans, report.Actions[0].Kind);
+        Assert.Equal(RollupRepairStatus.Failed, report.Actions[0].Status);
+        Assert.All(report.Actions.Skip(1), a => Assert.Equal(RollupRepairStatus.Skipped, a.Status));
+        Assert.True(await rig.Repository.IsRestoreReconcilePendingAsync(Ct)); // the marker stays
+        Assert.Equal(pointersBefore, await rig.PointersAsync()); // nothing after the failing step ran
+
+        // CrateDB is back: the same repair on a healthy repository finishes the job and clears the marker
+        var healthy = fixture.NewReconcileRepository(rig.Tenant, [rig.Snapshot], [rig.Raw], new RecomputeProcessState(), null, rig.Store);
+        var second = await healthy.RepairRollupsAsync(null, false, Ct);
+        Assert.True(second.IsOk);
+        Assert.False(await healthy.IsRestoreReconcilePendingAsync(Ct));
     }
 
     // ---- marker --------------------------------------------------------------------------------------------
