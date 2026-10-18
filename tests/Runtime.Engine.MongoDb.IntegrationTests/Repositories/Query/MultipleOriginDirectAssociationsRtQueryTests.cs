@@ -534,4 +534,81 @@ public class MultipleOriginDirectAssociationsRtQueryTests
             ReverseNavigationOptions.EdgeThreshold = originalThreshold;
         }
     }
+
+    // AB#6892: take 0 is the count-only use case (children(first: 0) { totalCount }); Mongo rejects
+    // "$limit: 0" and "$slice: [x, skip, 0]", which used to surface as MONGO_COMMAND.
+    [Theory]
+    [InlineData(false, false, null, 6)]
+    [InlineData(true, false, null, 6)]
+    [InlineData(true, false, 2, 6)]
+    [InlineData(false, false, 0, 6)]
+    [InlineData(true, true, null, 1)]
+    [InlineData(false, true, null, 1)]
+    public async Task Take0_ReturnsNoItemsAndRealTotalCount(bool sorted, bool filtered, int? skip, long expectedTotal)
+    {
+        var systemContext = _fixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var salzburgRtId = OctoObjectId.Parse("66803ecf4aa85720dda96a99");
+
+        var queryOptions = RtEntityQueryOptions.Create();
+        if (sorted)
+        {
+            queryOptions.SortOrder("Name", SortOrders.Ascending);
+        }
+
+        if (filtered)
+        {
+            queryOptions.FieldFilter("Name", FieldFilterOperator.Equals, "Tennengau / Hallein");
+        }
+
+        var result = await tenantRepository.GetRtAssociationTargetsAsync(session,
+            [salzburgRtId], TestCkIds.RtCkStateOrProvinceTypeId,
+            SystemCkIds.RtCkParentChildRoleId,
+            TestCkIds.RtCkDistrictTypeId, GraphDirections.Inbound, null,
+            queryOptions, skip, 0);
+
+        Assert.Single(result);
+        var salzburg = result.First().Value;
+        Assert.Equal(expectedTotal, salzburg.TotalCount);
+        Assert.Empty(salzburg.Items);
+    }
+
+    [Fact]
+    public async Task Take0_DenseOriginReversedPath_ReturnsNoItemsAndRealTotalCount()
+    {
+        var systemContext = _fixture.GetSystemContext();
+        var tenantRepository = systemContext.GetTenantRepository();
+
+        using var session = await tenantRepository.GetSessionAsync();
+        session.StartTransaction();
+
+        var salzburgRtId = OctoObjectId.Parse("66803ecf4aa85720dda96a99");
+
+        var queryOptions = RtEntityQueryOptions.Create()
+            .SortOrder("Name", SortOrders.Descending);
+
+        var originalThreshold = ReverseNavigationOptions.EdgeThreshold;
+        ReverseNavigationOptions.EdgeThreshold = 0;
+        try
+        {
+            var result = await tenantRepository.GetRtAssociationTargetsAsync(session,
+                [salzburgRtId], TestCkIds.RtCkStateOrProvinceTypeId,
+                SystemCkIds.RtCkParentChildRoleId,
+                TestCkIds.RtCkDistrictTypeId, GraphDirections.Inbound, null,
+                queryOptions, null, 0);
+
+            Assert.Single(result);
+            var salzburg = result.First().Value;
+            Assert.Equal(6, salzburg.TotalCount);
+            Assert.Empty(salzburg.Items);
+        }
+        finally
+        {
+            ReverseNavigationOptions.EdgeThreshold = originalThreshold;
+        }
+    }
 }
