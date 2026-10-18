@@ -15,6 +15,12 @@ public class ConfigurationErrorException : Exception
     {
     }
 
+    public static Exception OutOfRangeConfigurationValue(string configurationName, long value, long min, long max)
+    {
+        return new ConfigurationErrorException(
+            $"Impossible to apply '{configurationName}' setting with value '{value}': Value must be between {min} and {max}.");
+    }
+
     public static Exception InvalidConfigurationValue(string configurationName, string? value)
     {
         return new ConfigurationErrorException(

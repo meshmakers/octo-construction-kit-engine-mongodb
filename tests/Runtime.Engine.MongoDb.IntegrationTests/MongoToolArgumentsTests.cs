@@ -1,7 +1,10 @@
 using FluentAssertions;
 
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
+
+using Microsoft.Extensions.Configuration;
 
 using Xunit;
 
@@ -67,6 +70,67 @@ public class MongoToolArgumentsTests
         args.Should().Contain("--nsInclude=test.*");
         args.Should().NotContain(a => a.StartsWith("--nsFrom="));
         args.Should().NotContain(a => a.StartsWith("--nsTo="));
+    }
+
+    [Fact]
+    public void BuildMongoRestoreArguments_AlwaysEmitsAnExplicitBatchSize_DefaultingTo100()
+    {
+        var options = new MongoRestoreOptions { Database = "test", Archive = "/tmp/archive.tar.gz", Gzip = true };
+
+        var args = MongoToolArguments.BuildMongoRestoreArguments(options, ConnectionString, null, null);
+
+        args.Should().ContainSingle(a => a.StartsWith("--batchSize="));
+        args.Should().Contain("--batchSize=100");
+    }
+
+    [Fact]
+    public void BuildMongoRestoreArguments_UsesTheConfiguredDefault_AndTheOptionOverridesIt()
+    {
+        var options = new MongoRestoreOptions { Database = "test", Archive = "/tmp/a.gz" };
+
+        MongoToolArguments.BuildMongoRestoreArguments(options, ConnectionString, null, null, 25)
+            .Should().Contain("--batchSize=25");
+
+        options.BatchSize = 10;
+        MongoToolArguments.BuildMongoRestoreArguments(options, ConnectionString, null, null, 25)
+            .Should().Contain("--batchSize=10").And.NotContain("--batchSize=25");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    [InlineData(1001)]
+    public void BuildMongoRestoreArguments_WithBatchSizeOutOfRange_Throws(int batchSize)
+    {
+        var options = new MongoRestoreOptions { Database = "test", Archive = "/tmp/a.gz", BatchSize = batchSize };
+
+        var act = () => MongoToolArguments.BuildMongoRestoreArguments(options, ConnectionString, null, null);
+
+        act.Should().Throw<ArgumentOutOfRangeException>().WithMessage("*between 1 and 1000*");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(1001)]
+    public void SystemConfiguration_WithInvalidMongoRestoreBatchSize_FailsNamingTheOption(int value)
+    {
+        var act = () => new OctoSystemConfiguration { MongoRestoreBatchSize = value };
+
+        act.Should().Throw<ConfigurationErrorException>().WithMessage("*MongoRestoreBatchSize*between 1 and 1000*");
+    }
+
+    [Fact]
+    public void SystemConfiguration_BoundFromConfiguration_FailsAtBindWithTheOptionName()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["System:MongoRestoreBatchSize"] = "5000" })
+            .Build();
+
+        var act = () => configuration.GetSection("System").Get<OctoSystemConfiguration>();
+
+        act.Should().Throw<Exception>().Which.ToString().Should().Contain("MongoRestoreBatchSize");
+        new OctoSystemConfiguration().MongoRestoreBatchSize.Should().Be(100);
     }
 
     [Fact]

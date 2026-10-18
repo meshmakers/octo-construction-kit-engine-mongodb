@@ -61,7 +61,8 @@ internal static partial class MongoToolArguments
     }
 
     public static List<string> BuildMongoRestoreArguments(MongoRestoreOptions options, string connectionString,
-        string? adminUser, string? adminUserPassword)
+        string? adminUser, string? adminUserPassword,
+        int defaultBatchSize = OctoSystemConfiguration.DefaultMongoRestoreBatchSize)
     {
         var args = new List<string>
         {
@@ -69,6 +70,17 @@ internal static partial class MongoToolArguments
         };
 
         AddAuthentication(args, adminUser, adminUserPassword);
+
+        // Always explicit (AB#6981): the tool's default of 1000 documents overshoots the server's 48 MB message limit
+        // for documents averaging above ~48 KB. Rationale at OctoSystemConfiguration.MongoRestoreBatchSize.
+        var batchSize = options.BatchSize ?? defaultBatchSize;
+        if (batchSize is < OctoSystemConfiguration.MinMongoRestoreBatchSize or > OctoSystemConfiguration.MaxMongoRestoreBatchSize)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), batchSize,
+                $"The mongorestore batch size must be between {OctoSystemConfiguration.MinMongoRestoreBatchSize} and {OctoSystemConfiguration.MaxMongoRestoreBatchSize}.");
+        }
+
+        args.Add($"--batchSize={batchSize}");
 
         // Namespace mapping (for restoring to different database name)
         if (!string.IsNullOrEmpty(options.NsFrom) && !string.IsNullOrEmpty(options.NsTo))

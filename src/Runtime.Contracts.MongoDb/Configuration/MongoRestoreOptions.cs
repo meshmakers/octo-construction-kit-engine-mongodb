@@ -23,6 +23,12 @@ public class MongoRestoreOptions
     public bool RestoreDbUsersAndRoles { get; set; }
     public int? NumParallelCollections { get; set; }
 
+    /// <summary>
+    /// Documents per bulk insert (<c>--batchSize</c>). <c>null</c> uses
+    /// <see cref="OctoSystemConfiguration.MongoRestoreBatchSize"/> (AB#6981); the tool is never left to its own default.
+    /// </summary>
+    public int? BatchSize { get; set; }
+
     public static MongoRestoreOptions FromArchive(string archivePath, string database)
     {
         return new MongoRestoreOptions

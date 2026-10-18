@@ -50,6 +50,48 @@ public class OctoSystemConfiguration()
 
     public string AuthenticationDatabaseName { get; set; } = "admin";
 
+    /// <summary>Lowest accepted <see cref="MongoRestoreBatchSize"/>.</summary>
+    public const int MinMongoRestoreBatchSize = 1;
+
+    /// <summary>Highest accepted <see cref="MongoRestoreBatchSize"/> (the tool's own default is 1000).</summary>
+    public const int MaxMongoRestoreBatchSize = 1000;
+
+    /// <summary>Default of <see cref="MongoRestoreBatchSize"/>.</summary>
+    public const int DefaultMongoRestoreBatchSize = 100;
+
+    private int _mongoRestoreBatchSize = DefaultMongoRestoreBatchSize;
+
+    /// <summary>
+    /// Documents per bulk insert of <c>mongorestore --batchSize</c> (AB#6981). Environment variable
+    /// <c>OCTO_System__MongoRestoreBatchSize</c>. Default 100, valid 1..1000; anything else fails when the
+    /// configuration is bound, naming this option.
+    /// </summary>
+    /// <remarks>
+    /// The server accepts a message of at most 48,000,000 bytes (<c>maxMessageSizeBytes</c>) and a document of at most
+    /// 16 MiB (<c>maxBsonObjectSize</c>). The tool flushes a batch when the count reaches the batch size or the bytes reach
+    /// 48 MB, but it checks the bytes only after it added a document, so a batch that is just below the limit plus one
+    /// more document plus the message envelope is over it (mongo-tools TOOLS-4142, TOOLS-4145, TOOLS-2875). With the
+    /// tool's default of 1000 documents that happens once the average document is above about 48 KB: restoring
+    /// 864,070 documents of 73 KB failed with <c>msgLen 48000084 &gt; 48000000</c>. A count of 100 keeps a batch at
+    /// 100 x average, i.e. below the byte limit for averages up to about 480 KB, so the byte rule is never what ends a
+    /// batch and the overshoot cannot happen; a single document is at most 16 MiB, far below the message limit. The cost
+    /// is more round trips for small documents. Raise it for collections of tiny documents, lower it when the average document is above 480 KB.
+    /// </remarks>
+    public int MongoRestoreBatchSize
+    {
+        get => _mongoRestoreBatchSize;
+        set
+        {
+            if (value < MinMongoRestoreBatchSize || value > MaxMongoRestoreBatchSize)
+            {
+                throw ConfigurationErrorException.OutOfRangeConfigurationValue(nameof(MongoRestoreBatchSize), value,
+                    MinMongoRestoreBatchSize, MaxMongoRestoreBatchSize);
+            }
+
+            _mongoRestoreBatchSize = value;
+        }
+    }
+
     public bool UseTls { get; set; } = false;
 
     public bool AllowInsecureTls { get; set; } = true;

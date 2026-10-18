@@ -1320,6 +1320,19 @@ The full text is `docs/streamdata-archive-concept.md` §18a and, for the sweep, 
   row = not pending): the hosted services skip a marked tenant (`RestoreReconcileGate`), `AggregateBucketAsync` and the
   executor refuse with `RestoreReconcilePendingException`, the sweep returns 0; only the repair runs and clears it.
 
+### mongorestore Batch Size (AB#6981)
+
+`MongoToolArguments.BuildMongoRestoreArguments` always passes `--batchSize`: `MongoRestoreOptions.BatchSize` when set, else
+`OctoSystemConfiguration.MongoRestoreBatchSize` (default **100**, valid 1..1000, env `OCTO_System__MongoRestoreBatchSize`; an
+invalid value throws `ConfigurationErrorException` naming the option when the configuration is bound, an invalid per-call value
+throws `ArgumentOutOfRangeException`). Without it the tool's 1000 documents per batch can end a message over the server's
+48,000,000 bytes (`maxMessageSizeBytes`) once documents average above ~48 KB: the restore of a collection of 864,070 EDA messages
+(73 KB average) died with `msgLen 48000084 > 48000000` after 250,447 documents (mongorestore 100.16.0, MongoDB 8.0.12; mongo-tools
+TOOLS-4142, TOOLS-4145, TOOLS-2875 describe the byte rule overshooting). 100 documents keep a batch below the limit for averages up
+to ~480 KB; the rationale is in the xml doc of the property. Restore requirement: lower the value when a collection averages above
+~480 KB. Test: `LargeDocumentRestoreTests` (2400 documents averaging above 70 KB through the real dump and restore; not red without the
+fix against the local MongoDB container, see the comment in the test), `MongoToolArgumentsTests`. No CHANGELOG file exists in this repo.
+
 ### Archive Export — Time Slices, Not Keyset Pages
 
 `CrateDbStreamDataRepository.ExportRowsAsync` is the scan behind a tenant dump with archive data
