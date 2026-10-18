@@ -23,7 +23,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.UpgradeGuard;
 ///         <item>range-retaining dependent: the engine's <see cref="ICkSurfaceSatisfactionChecker" /> judges range, floor,
 ///             every referenced element and every <c>usedSurface</c> member; its findings are mapped to blocker kinds;</item>
 ///         <item>never dependents: models that are <c>ResolveFailed</c> or being imported; never replacements: service-managed
-///             models (<c>System</c>, <c>System.*</c>), candidates of another major than the installed one (a parallel
+///             models (<c>System</c>, <c>System.*</c>) unless the caller asks for them (explicit imports, AB#6966),
+    ///             candidates of another major than the installed one (a parallel
 ///             install) and candidates that are not installed.</item>
 ///     </list>
 ///     Uses persisted data only: the dependents come from the tenant's database, never from a catalog.
@@ -53,13 +54,13 @@ public class TenantUpgradeGuard : ITenantUpgradeGuard
     public Task<CkUpgradeGuardResult> EvaluateAsync(TenantDatabaseSourceIdentifier source,
         IReadOnlyCollection<CkCompiledModelRoot> updateSet,
         IReadOnlyCollection<CkModelId>? availableDependentVersions = null,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default, bool includeServiceManagedModels = false) =>
         EvaluateAsync(new MongoInstalledCkModelReader(_repository, source), updateSet, availableDependentVersions,
-            cancellationToken);
+            cancellationToken, includeServiceManagedModels);
 
     internal async Task<CkUpgradeGuardResult> EvaluateAsync(IInstalledCkModelReader reader,
         IReadOnlyCollection<CkCompiledModelRoot> updateSet, IReadOnlyCollection<CkModelId>? availableDependentVersions,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool includeServiceManagedModels = false)
     {
         ArgumentNullException.ThrowIfNull(updateSet);
         if (updateSet.Count == 0)
@@ -68,7 +69,7 @@ public class TenantUpgradeGuard : ITenantUpgradeGuard
         }
 
         var installed = await reader.ListInstalledAsync(cancellationToken).ConfigureAwait(false);
-        var replacements = FindReplacements(updateSet, installed);
+        var replacements = FindReplacements(updateSet, installed, includeServiceManagedModels);
         if (replacements.Count == 0)
         {
             return CkUpgradeGuardResult.None;
@@ -79,7 +80,7 @@ public class TenantUpgradeGuard : ITenantUpgradeGuard
             .Where(m => m.ModelState == ModelState.Available && !replacedNames.Contains(m.Id.Name))
             .Select(m => new Dependent(m.Id, m.Dependencies ?? [], m.DependencyRanges?.Select(r => r.ToDto()).ToList(),
                 null, false))
-            .Concat(updateSet.Where(c => !IsServiceManaged(c.ModelId.Name))
+            .Concat(updateSet.Where(c => includeServiceManagedModels || !IsServiceManaged(c.ModelId.Name))
                 .Select(c => new Dependent(c.ModelId, c.Dependencies ?? [], c.DependencyRanges, c, true)))
             .ToList();
 
@@ -175,13 +176,14 @@ public class TenantUpgradeGuard : ITenantUpgradeGuard
         modelName.StartsWith("System.", StringComparison.OrdinalIgnoreCase);
 
     private static List<(CkCompiledModelRoot Candidate, CkModel Installed)> FindReplacements(
-        IReadOnlyCollection<CkCompiledModelRoot> updateSet, IReadOnlyList<CkModel> installed)
+        IReadOnlyCollection<CkCompiledModelRoot> updateSet, IReadOnlyList<CkModel> installed,
+        bool includeServiceManagedModels)
     {
         var result = new List<(CkCompiledModelRoot, CkModel)>();
         foreach (var candidate in updateSet)
         {
             var id = candidate.ModelId;
-            if (IsServiceManaged(id.Name))
+            if (!includeServiceManagedModels && IsServiceManaged(id.Name))
             {
                 continue;
             }

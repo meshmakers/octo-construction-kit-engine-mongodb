@@ -19,8 +19,12 @@ public interface ITenantUpgradeGuard
     /// <param name="updateSet">The compiled candidates to be imported together.</param>
     /// <param name="availableDependentVersions">Optional versions offered to fill the suggestion of a blocker.</param>
     /// <param name="cancellationToken">Cancels the evaluation.</param>
+    /// <param name="includeServiceManagedModels">
+    ///     True for explicit callers (file import, its preview): service-managed candidates (<c>System</c>, <c>System.*</c>)
+    ///     are judged as replacements too. False (default) keeps them out, as for every service-driven path (AB#6966).
+    /// </param>
     Task<CkUpgradeGuardResult> EvaluateAsync(TenantDatabaseSourceIdentifier source,
         IReadOnlyCollection<CkCompiledModelRoot> updateSet,
         IReadOnlyCollection<CkModelId>? availableDependentVersions = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default, bool includeServiceManagedModels = false);
 }
