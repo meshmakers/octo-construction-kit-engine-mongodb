@@ -45,30 +45,53 @@ internal sealed class RollupRepairQueue(
         $"VALUES ({Lit(tenant)}, {Lit(requestId)}, 'Pending', {Num(requestedMs)}, 0, 0, {Lit(rollups)}, {Lit(planned)}, '');";
 
     internal static string BuildSelect(string table, string tenant, string? requestId) =>
-        "SELECT \"request_id\", \"state\", \"requested_at_ms\", \"started_at_ms\", \"finished_at_ms\", \"rollups\", \"planned\", \"report\" " +
+        "SELECT \"request_id\", \"state\", \"requested_at_ms\", \"started_at_ms\", \"finished_at_ms\", \"rollups\", \"planned\", \"report\", \"_seq_no\", \"_primary_term\" " +
         $"FROM {table} WHERE \"tenant_id\" = {Lit(tenant)}" + (requestId is null ? string.Empty : $" AND \"request_id\" = {Lit(requestId)}") + ";";
 
-    internal static string BuildClaim(string table, string tenant, string requestId, string seenState, long startedMs) =>
+    /// <summary>
+    /// The claim is an optimistic-concurrency update: it applies only to the version of the row that was read (<c>_seq_no</c> and
+    /// <c>_primary_term</c>), so of several replicas reading the same pending request exactly one wins.
+    /// </summary>
+    internal static string BuildClaim(string table, string tenant, string requestId, long seqNo, long primaryTerm, long startedMs) =>
         $"UPDATE {table} SET \"state\" = 'Running', \"started_at_ms\" = {Num(startedMs)} " +
-        $"WHERE \"tenant_id\" = {Lit(tenant)} AND \"request_id\" = {Lit(requestId)} AND \"state\" = {Lit(seenState)};";
+        $"WHERE \"tenant_id\" = {Lit(tenant)} AND \"request_id\" = {Lit(requestId)} " +
+        $"AND \"_seq_no\" = {Num(seqNo)} AND \"_primary_term\" = {Num(primaryTerm)};";
 
     internal static string BuildComplete(string table, string tenant, string requestId, string state, long finishedMs, string report) =>
         $"UPDATE {table} SET \"state\" = {Lit(state)}, \"finished_at_ms\" = {Num(finishedMs)}, \"report\" = {Lit(report)} " +
         $"WHERE \"tenant_id\" = {Lit(tenant)} AND \"request_id\" = {Lit(requestId)};";
 
     /// <summary>A queued request as stored; the ids of the rollups it is limited to (null = all).</summary>
-    internal sealed record Row(RollupRepairRequest Request, IReadOnlyCollection<OctoObjectId>? Rollups, long StartedAtMs, string RawState);
+    internal sealed record Row(
+        RollupRepairRequest Request, IReadOnlyCollection<OctoObjectId>? Rollups, long StartedAtMs, string RawState,
+        long SeqNo, long PrimaryTerm, string RollupsText);
 
     public async Task<RollupRepairRequest> EnqueueAsync(
         IReadOnlyCollection<OctoObjectId>? rollupRtIds, IReadOnlyList<RollupRepairAction> planned, CancellationToken cancellationToken)
     {
+        var rollupsText = rollupRtIds is null
+            ? string.Empty
+            : JsonSerializer.Serialize(rollupRtIds.Select(r => r.ToString()).OrderBy(s => s, StringComparer.Ordinal));
+
+        // One active request per tenant and rollup set: a second call while one is pending, or running within its lease,
+        // returns that request instead of queueing a duplicate (the repair is idempotent, so the rare race of two calls in
+        // the same instant costs a second run, not a wrong result).
+        var nowMs = clock.GetUtcNow().ToUnixTimeMilliseconds();
+        var active = (await ReadAsync(null, cancellationToken)).FirstOrDefault(r =>
+            r.RollupsText == rollupsText &&
+            (r.RawState == "Pending" || (r.RawState == "Running" && nowMs - r.StartedAtMs <= (long)RunningTimeout.TotalMilliseconds)));
+        if (active is not null)
+        {
+            logger.LogInformation("A rollup repair for the same rollups of tenant {TenantId} is already active: {RequestId}.", tenantId, active.Request.RequestId);
+            return active.Request;
+        }
+
         var requestId = Guid.NewGuid().ToString("N");
         var now = clock.GetUtcNow();
         await managementClient.ExecuteDdlAsync(tenantId, BuildCreateTable(QualifiedTable), cancellationToken);
         await databaseClient.ExecuteNonQueryAsync(tenantId,
             BuildInsert(QualifiedTable, tenantId, requestId, now.ToUnixTimeMilliseconds(),
-                rollupRtIds is null ? string.Empty : JsonSerializer.Serialize(rollupRtIds.Select(r => r.ToString())),
-                JsonSerializer.Serialize(planned)),
+                rollupsText, JsonSerializer.Serialize(planned)),
             CrateStatementClass.Maintenance, cancellationToken);
         await databaseClient.RefreshArchiveTableAsync(tenantId, QualifiedTable, CrateStatementClass.Maintenance, cancellationToken);
         logger.LogInformation("Rollup repair {RequestId} of tenant {TenantId} is queued with {Steps} planned step(s).", requestId, tenantId, planned.Count);
@@ -93,7 +116,8 @@ internal sealed class RollupRepairQueue(
             }
 
             var won = await databaseClient.ExecuteNonQueryAsync(tenantId,
-                BuildClaim(QualifiedTable, tenantId, row.Request.RequestId, row.RawState, nowMs), CrateStatementClass.Maintenance, cancellationToken);
+                BuildClaim(QualifiedTable, tenantId, row.Request.RequestId, row.SeqNo, row.PrimaryTerm, nowMs),
+                CrateStatementClass.Maintenance, cancellationToken);
             if (won > 0)
             {
                 await databaseClient.RefreshArchiveTableAsync(tenantId, QualifiedTable, CrateStatementClass.Maintenance, cancellationToken);
@@ -143,7 +167,9 @@ internal sealed class RollupRepairQueue(
                 var rollups = rollupsText.Length == 0
                     ? null
                     : (IReadOnlyCollection<OctoObjectId>)JsonSerializer.Deserialize<List<string>>(rollupsText)!.Select(OctoObjectId.Parse).ToList();
-                rows.Add(new Row(request, rollups, Convert.ToInt64(r["started_at_ms"], CultureInfo.InvariantCulture), rawState));
+                rows.Add(new Row(request, rollups, Convert.ToInt64(r["started_at_ms"], CultureInfo.InvariantCulture), rawState,
+                    Convert.ToInt64(r["_seq_no"], CultureInfo.InvariantCulture), Convert.ToInt64(r["_primary_term"], CultureInfo.InvariantCulture),
+                    rollupsText));
             }
         }
         catch (Exception ex) when (CrateDbStreamDataRepository.IsMissingTableError(ex))

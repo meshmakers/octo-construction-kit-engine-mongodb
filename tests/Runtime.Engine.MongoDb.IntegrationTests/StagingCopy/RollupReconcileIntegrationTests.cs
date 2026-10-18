@@ -576,6 +576,39 @@ public class RollupReconcileIntegrationTests(CrateStagingCopyFixture fixture)
     }
 
     [Fact]
+    public async Task Enqueue_ASecondCallWhileOneIsActive_ReturnsTheExistingRequest_ADifferentRollupSetGetsItsOwn()
+    {
+        var rig = await BrokenRigAsync(fixture);
+
+        var first = await rig.Repository.EnqueueRollupRepairAsync(null, Ct);
+        var second = await rig.Repository.EnqueueRollupRepairAsync(null, Ct);
+        var other = await rig.Repository.EnqueueRollupRepairAsync([rig.Rollup], Ct);
+
+        Assert.Equal(first.RequestId, second.RequestId);
+        Assert.NotEqual(first.RequestId, other.RequestId);
+
+        // once the first has ended, the same call queues a new request
+        await rig.Repository.RunPendingRollupRepairsAsync(Ct);
+        var third = await rig.Repository.EnqueueRollupRepairAsync(null, Ct);
+        Assert.NotEqual(first.RequestId, third.RequestId);
+    }
+
+    [Fact]
+    public async Task Enqueue_TwoReplicasClaimingTheSameRequest_ExactlyOneWins()
+    {
+        var rig = await BrokenRigAsync(fixture);
+        var request = await rig.Repository.EnqueueRollupRepairAsync(null, Ct);
+        var table = $"\"{TenantSchema.SchemaName(rig.Tenant)}\".\"__rollup_repair\"";
+        var row = (await fixture.QueryAsync($"SELECT \"_seq_no\" AS s, \"_primary_term\" AS p FROM {table} WHERE \"request_id\" = '{request.RequestId}'")).Single();
+        var claim = RollupRepairQueue.BuildClaim(table, rig.Tenant, request.RequestId, Convert.ToInt64(row["s"]), Convert.ToInt64(row["p"]), 1);
+
+        // both replicas read the same version and send the claim at the same moment
+        var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => fixture.Client.ExecuteNonQueryAsync(rig.Tenant, claim, CrateStatementClass.Maintenance, Ct)));
+
+        Assert.Equal(1, results.Sum());
+    }
+
+    [Fact]
     public async Task Enqueue_ARunningRequest_IsNotClaimedAgain_AndAnUnknownIdIsNull()
     {
         var rig = await BrokenRigAsync(fixture);
