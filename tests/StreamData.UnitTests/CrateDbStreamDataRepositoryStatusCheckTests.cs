@@ -122,6 +122,7 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
                     sql.Contains("DROP TABLE IF EXISTS")
                     && sql.Contains($"archive_{Archive}")
                     && !sql.Contains("__genmap")
+                    && !sql.Contains("__sweep")
                     && !sql.Contains("__rc"))))
             .MustHaveHappenedOnceExactly();
 
@@ -145,8 +146,13 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
                 "tenant-x",
                 $"DROP TABLE IF EXISTS {RollupRecomputeSqlBuilder.StagingTable("tenant-x", Archive.ToString())};"))
             .MustHaveHappenedOnceExactly();
-        // Nothing else in the tenant's schema is touched: the data table, the pointer table, staging.
-        A.CallTo(() => _mgmt.ExecuteDdlAsync("tenant-x", A<string>._)).MustHaveHappened(3, Times.Exactly);
+        // The pending-sweep record table (AB#6968) goes with the archive as well.
+        A.CallTo(() => _mgmt.ExecuteDdlAsync(
+                "tenant-x",
+                $"DROP TABLE IF EXISTS {PendingSweepSqlBuilder.SweepTable("tenant-x", Archive.ToString())};"))
+            .MustHaveHappenedOnceExactly();
+        // Nothing else in the tenant's schema is touched: the data table, the pointer table, staging, the sweep records.
+        A.CallTo(() => _mgmt.ExecuteDdlAsync("tenant-x", A<string>._)).MustHaveHappened(4, Times.Exactly);
     }
 
     [Fact]

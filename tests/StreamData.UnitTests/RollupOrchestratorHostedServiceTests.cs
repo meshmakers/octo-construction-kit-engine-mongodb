@@ -130,6 +130,67 @@ public class RollupOrchestratorHostedServiceTests
         A.CallTo(() => orchestratorB.TickAsync(A<CancellationToken>._)).MustHaveHappened();
     }
 
+    private (IRollupOrchestrator Orchestrator, IStreamDataRepository Repository) MarkedTenant(string tenantId, Func<bool> pending)
+    {
+        A.CallTo(() => _tenantSource.GetTenantIdsAsync(A<CancellationToken>._)).Returns(new[] { tenantId });
+        var orchestrator = A.Fake<IRollupOrchestrator>();
+        var repository = A.Fake<IStreamDataRepository>();
+        A.CallTo(() => repository.IsRestoreReconcilePendingAsync(A<CancellationToken>._)).ReturnsLazily(() => Task.FromResult(pending()));
+        var context = A.Fake<ITenantContext>();
+        A.CallTo(() => context.GetRollupOrchestrator()).Returns(orchestrator);
+        A.CallTo(() => context.GetStreamDataRepository()).Returns(repository);
+        A.CallTo(() => _systemContext.TryFindTenantContextAsync(tenantId)).Returns(context);
+        return (orchestrator, repository);
+    }
+
+    private static int Calls<T>(T fake, string methodName) where T : class =>
+        Fake.GetCalls(fake).Count(c => c.Method.Name == methodName);
+
+    [Fact]
+    public async Task Tick_TenantMarkedRestoreReconcilePending_IsSkipped_NoForwardAggregation()
+    {
+        var (orchestrator, repository) = MarkedTenant("restored", () => true);
+
+        var sut = NewSut();
+        await sut.StartAsync(CancellationToken.None);
+        await WaitForTickAsync(() => Calls(repository, "IsRestoreReconcilePendingAsync") >= 3);
+        await sut.StopAsync(CancellationToken.None);
+
+        Assert.True(Calls(repository, "IsRestoreReconcilePendingAsync") >= 3);
+        A.CallTo(() => orchestrator.TickAsync(A<CancellationToken>._)).MustNotHaveHappened();
+    }
+
+    [Fact]
+    public async Task Tick_TenantIsReleased_WhenTheMarkerIsCleared()
+    {
+        var pending = true;
+        var (orchestrator, repository) = MarkedTenant("released", () => Volatile.Read(ref pending));
+
+        var sut = NewSut();
+        await sut.StartAsync(CancellationToken.None);
+        await WaitForTickAsync(() => Calls(repository, "IsRestoreReconcilePendingAsync") >= 2);
+        A.CallTo(() => orchestrator.TickAsync(A<CancellationToken>._)).MustNotHaveHappened();
+        Volatile.Write(ref pending, false);
+        await WaitForTickAsync(() => Calls(orchestrator, "TickAsync") >= 1);
+        await sut.StopAsync(CancellationToken.None);
+
+        A.CallTo(() => orchestrator.TickAsync(A<CancellationToken>._)).MustHaveHappened();
+    }
+
+    [Fact]
+    public async Task Tick_RepositoryWithoutTheMarker_IsNeverHeldBack()
+    {
+        var (orchestrator, repository) = MarkedTenant("legacy", () => false);
+        A.CallTo(() => repository.IsRestoreReconcilePendingAsync(A<CancellationToken>._)).Throws(new ArchiveCopyNotSupportedException());
+
+        var sut = NewSut();
+        await sut.StartAsync(CancellationToken.None);
+        await WaitForTickAsync(() => Calls(orchestrator, "TickAsync") >= 2);
+        await sut.StopAsync(CancellationToken.None);
+
+        A.CallTo(() => orchestrator.TickAsync(A<CancellationToken>._)).MustHaveHappened();
+    }
+
     [Fact]
     public async Task Tick_OneTenantThrows_DoesNotStopOthers()
     {

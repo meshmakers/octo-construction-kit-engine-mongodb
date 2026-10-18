@@ -924,6 +924,187 @@ Until implemented, breakage manifests as runtime exceptions on the data plane.
 
 ---
 
+## 18a. Native copy to and from a staging location (AB#5967)
+
+`IStreamDataRepository.PlanArchiveCopyAsync`, `CopyToStagingAsync`, `CopyFromStagingAsync`, `DescribeArchiveTableAsync`
+and `GetStorageVersionAsync` (engine contract, `Runtime.Contracts/StreamData`) are implemented by `Copy/StagingCopyRunner`
+with CrateDB's own `COPY TO DIRECTORY` / `COPY FROM`. The concept is
+`octo-construction-kit-engine/docs/concept-tenant-backup-native-archive-dump.md`. `SupportsStagingCopy` is true when the
+database client can run a statement once under a timeout of its own (`ICrateCopyClient`, implemented by `CrateDatabaseClient`).
+`DumpArchiveToStagingAsync` and `LoadArchiveFromStagingAsync` (slice 2, AB#6968) wrap plan, copy and load of one archive and
+add the generation map of a rollup, the repeat rule and the row-count verification (below).
+
+**Rollups: the generation map and the repeat rule.** A rollup is two tables, `archive_<rtId>` and `archive_<rtId>__genmap`, and a
+recompute changes both without a transaction: new rows under generation N+1, the pointer flip in the map, the sweep of
+generation N. The map is the last slice of a plan (`ArchiveCopySlice.ForGenerationMap`, one folder `<rtId>/genmap/all`; an
+empty map has no slice). `CopyToStagingAsync` copies it **first**, the data slices after it; `CopyFromStagingAsync` loads the data
+**first** and the map **last**, so a pointer never names a version whose rows are not loaded yet.
+`DumpArchiveToStagingAsync` (class `RollupArchiveDumper`) adds the repeat rule: plan, read the map (refresh, then select), copy
+map and data, read the map again; when the two reads differ, a recompute flipped a pointer in between and the rollup is copied
+again, up to `ArchiveCopyOptions.MaxMapAttempts` (default 3) times, then the dump fails with
+`ArchiveCopyRefusedException(GenerationMapKeptMoving)` naming the rollup. The result states `Attempts`, `MapReadAtUtc` (the first
+read of the attempt that stands) and `LastDataCopiedAtUtc`, both from a clock that never goes backwards; the caller compares
+their difference with the sweep grace period (below). An archive that is not a rollup is copied once and its map is never read.
+Files of an earlier attempt with other slice keys stay in the staging area; the manifest names only the slices of the final plan.
+Rows of a version above the pointer that a recompute in progress had already written (before its flip) are in the dump; the
+validator finds them after the restore as orphans and the repair removes them.
+
+`LoadArchiveFromStagingAsync` returns `ArchiveCopyLoadResult.RowCountVerified`: true when the data table holds exactly the
+counted rows and, for a rollup, the map holds the counted pointer entries; false when a slice failed, the counts differ or the
+load stopped early. The restore job treats an unverified archive as failed.
+
+**Sweep grace period (configuration reference).** The sweep of the generations a recompute superseded is deferred so that a dump
+which copied the map before a flip still finds the rows its copy names. Setting `StreamData:Recompute:SweepGracePeriod`
+(env `OCTO_STREAMDATA__RECOMPUTE__SWEEPGRACEPERIOD`, `CrateRecomputeOptions`): time span, default `02:00:00`, `00:00:00` sweeps at
+once (the behaviour before AB#6968), a negative value fails the start (`ValidateOnStart`, message names the key). The pending
+sweeps are rows in `archive_<rtId>__sweep` next to the generation map, dropped with the archive. Cost of the delay: the superseded
+rows occupy the table until the sweep, and reads scan a larger table (measured on a 28.8 million row rollup, see the measurements
+in the AB#6968 hand-over). An executor or repository built without options (outside the host's DI) keeps the immediate sweep.
+Rule of the concept: `octo-construction-kit-engine/docs/concept-rollup-recompute.md`, "Sweep grace period".
+
+**Where a recompute can hit a dump.** The measured placement matrix (flip between map copy and data copy, with and without sweep, after the
+data, after the dump; grace period and repeat rule on or off) is in the engine concept `concept-tenant-backup-native-archive-dump.md`,
+section "Placement matrix"; with grace period and repeat rule on every placement restores without defects.
+
+**Rollup consistency validator and the restore reconcile marker (AB#6968).** `ValidateRollupsAsync` (`RollupConsistencyValidator`)
+checks every rollup of the tenant, or the requested ones, with counts and MIN/MAX statements only (plus the small pointer table); no row is
+read and nothing is changed. A rollup the validator cannot look at is **never reported as consistent**: its entry carries
+`NotChecked` (`RollupNotChecked`: `Cause` and an English `Reason`) and `IsOk` is false for the entry and for the report, so "nothing found"
+never means "not looked at" (a restore of five rollups whose load failed had been reported as "7 rollups consistent"). Causes:
+`NoLiveTable` (no table, any status other than Created: what a failed load leaves), `NeverActivated` (status Created, no table; listed
+for information only - `RollupNotChecked.IsBlocking` is false, the entry and the report stay ok and the marker is not kept, because a
+rollup without data cannot be inconsistent and blocking the tenant's rollups for it would stop aggregation, recompute and reclaim for
+good; logged at information level), `SourceMissing` (a source entity is gone, or an
+activated source has no table: the watermark check would read "no rows"; the other checks still run and their findings are listed next to
+it). A rollup with a table is validated whatever its status (a deliberately disabled rollup is checked and can be ok). A rollup with a
+table but without its generation map is a finding, not a gap: the repair can create the map. Four checks (`RollupConsistencyCheck`),
+each finding names the rollup and the range:
+
+| Check | Finding | Condition |
+|---|---|---|
+| (a) `PointerWithoutRows` | one per range | a pointer entry holds **no row at all** of its generation in its range **and a source holds rows in that range** (clipped to the source's validity and to the entry's entity). An entry over a range the source is empty in is a correct empty recompute or backfill - the flip is what makes readers see "empty" instead of an older generation - and is no finding; a source that is itself a rollup counts only the rows live under its own pointer, so rows of a generation it superseded (sweep grace period) do not bring the false alarm back; reported for the parts no entry of a higher generation outranks (an unscoped entry is outranked by higher unscoped entries and by higher entries of its own scope). An entry with rows somewhere is not reported: its range may reach past the data (quiet source) or leave a tail after a later entry outranked a part of it - measured on a 28.8 million row rollup, a per-range check flagged exactly that tail |
+| (b) `OrphansAbovePointer` | one per generation | rows of a generation that no entry of that or a higher generation covers (range and, for a scoped entry, entity); not checked while `RecomputeInProgress`; without a pointer table every recomputed row is an orphan |
+| (c) `WatermarkAheadOfRows` | one per rollup | the watermark of the metadata is newer than the last rollup row (`MAX(window_end)`) and a source holds rows in between (counted per validity span of the source); a quiet source is no finding |
+| (d) `MissingGenerationMap` | one per rollup | the rollup table exists, its `__genmap` table does not |
+
+A recompute that legitimately produced no rows (the source holds nothing there) looks like (a); the repair resolves it for good
+(it recomputes, and removes an entry that stays empty). The validator logs a warning per finding. The host runs it once per process
+and tenant with the first recompute tick, so an inconsistent rollup is visible in the log at start. Cost: see the measurement in the
+hand-over; the statements on a 28.8 million row rollup are counts of the generation column and one pointer read.
+
+*Marker.* `IsRestoreReconcilePendingAsync` / `SetRestoreReconcilePendingAsync`: a row keyed by the tenant id in the schema's table
+`__restore_reconcile`, created by the first `Set(true)`. **No row, or no table, means not pending**, so tenants and backups from before
+this feature run unchanged. The restore job sets it after the archive tables were loaded and clears it when the validator reports ok
+or the repair has run; **never while an entry is blocking `NotChecked`** (`NoLiveTable`, `SourceMissing`): the repair skips a rollup without a table (it must not turn a missing table
+into an empty one), says why in the final validation (`failedStep` names the first unchecked rollup) and leaves the marker set until the
+rollup is restored or activated and validates. A repair of some rollups only clears the marker only when the whole tenant validates ok.
+The bot additionally keeps the marker while an archive of the backup failed to restore (it knows the manifest) and restores every source
+before the rollups that read it, leaving a source that was disabled in the backup activated, marker set, until its rollups are back.
+Deleting a tenant removes the marker row, the repair queue rows (`IStreamDataRepositoryFactory.DeleteTenantStateAsync`; a table is dropped
+only when no other tenant of the shared schema has a row in it) and, with the archive tables, the `__sweep` records, so a tenant created again
+under the same id starts without a marker. A process remembers an answer for five seconds (set and clear update it at once), another process sees a change
+within that time. What the marker blocks: see "Gate" below.
+
+**Rollup repair.** `RepairRollupsAsync(rollupRtIds, dryRun)` (`RollupRepairer`) validates, repairs, validates again and returns
+`RollupRepairReport` (`Before`, the `Actions`, `After`, `FailedStep`). Per rollup, in this order, each step needing the one before:
+
+1. *Create the generation map* when the table is missing (`CreateGenerationMap`).
+2. *Lost map with recomputed rows.* When the map is missing while rows of generation 1 or higher remain, nothing says which generation
+   is authoritative where, and the generation-0 rows of recomputed ranges were swept: deleting the rows as orphans would leave the
+   windows empty, rebuilding pointers from the rows could name an incomplete generation. The repair therefore recomputes the **whole
+   extent of the rollup** from its sources in one step (`RecomputePointerRange`); the recompute's sweep removes every other generation.
+   Without rows of generation 1 or higher the map is simply created.
+2b. *Delete the orphans* (`DeleteOrphans`): the rows of a generation that no pointer entry of that or a higher generation covers. The
+   pointed generations are not touched. This runs before any recompute so the generation numbers a recompute is handed are free.
+3. *Recompute the pointer gaps* (`RecomputePointerRange`): only the part of an entry that no higher entry outranks and that holds no row
+   of its generation, with the entry's scope, once per source validity span. The recompute runs on its own executor with an immediate
+   sweep (no grace period: the rows below are the repair's garbage and no dump is waiting). The new generation replaces the gap in one
+   pointer write; **rows recomputed later than the pointer lie outside the gap and stay**. A recompute that leaves no row (the source
+   holds nothing there) has its entry removed, and so is an entry of the old generation that ends without any row: the window then
+   reads empty, which is what the source says, and the validator is ok.
+4. *Rewind the watermark* (`RewindWatermark`) to the end of the rollup data (the first source bucket when the rollup is empty) and clear
+   the recompute generations behind it, exactly as the `rewindRollupWatermark` mutation does; the forward aggregation fills the gap on
+   its next tick. The step decides again when it runs: a recompute before it can have filled the rollup up to the watermark.
+
+A failing step ends the repair of its rollup, its remaining steps are `Skipped`, and `FailedStep` names rollup and step; other rollups go
+on. **The marker is cleared only when no step failed and the second validation is ok**, never on a dry run, so a failing repair leaves
+the tenant blocked (see "Gate"). A dry run lists the steps as `Planned` and changes nothing (`After` is null). The repair is idempotent:
+a second run on a repaired tenant plans nothing. It should run while the tenant is marked pending (or when no recompute runs): it
+recomputes ranges and rewinds the watermark, which a running orchestrator would race with.
+
+**Queued repair.** `RepairRollupsAsync` runs inline and belongs inside a job of its own (the restore job). The operator surfaces (REST,
+CLI, MCP) use `EnqueueRollupRepairAsync(rollupRtIds)`: it plans (a dry run), records the request in the schema's table
+`__rollup_repair` (key: tenant id and request id, every column explicit, state `Pending`) and returns at once with the planned steps and
+the request id. The host's recompute tick calls `RunPendingRollupRepairsAsync` before it applies the gate - queued repairs are what
+releases a marked tenant - claims the pending requests (`UPDATE … WHERE state = <seen>`; a request left `Running` by a process that died is
+claimed again after 30 minutes, the repair being idempotent), runs `RepairRollupsAsync`, and writes `Done` or `Failed` together with the
+`RollupRepairReport`. `GetRollupRepairRequestAsync(id)` answers the state. The repair clears the marker when its final validation is ok; a
+`Failed` request keeps it and its report names the failing step. The id is the request id of this table, not a `RecomputeJob` id: the
+recomputes of the repair run in the repair's own ungated executor, because the pending-range drain of the orchestrator is held back by the marker.
+
+**Gate.** While the marker is set, nothing writes to the rollups of the tenant except the repair: the host's rollup tick
+(`RollupOrchestratorHostedService`) and recompute tick (`RecomputeOrchestratorHostedService`, which also runs the deferred sweeps)
+skip the tenant and say why once at information level (`RestoreReconcileGate`); a direct call is refused with
+`RestoreReconcilePendingException` - `CrateDbArchiveRecomputeExecutor.ExecuteAsync` (and with it the reclaim and the sweep at its start)
+and `AggregateBucketAsync` (forward aggregation); `SweepSupersededGenerationsAsync` returns 0. The repair's own executor has no gate.
+Validate and repair, and everything that reads, are never held back. A tenant without the marker costs one catalogue statement per
+five seconds and process (no statement on the table when it does not exist).
+
+**Dump.** The plan cuts the data table into counted time slices with the planner of the row export (`ExportSlicePlanner`,
+target `ArchiveCopyOptions.TargetSliceRows`). Each slice is one statement,
+`COPY <table> WHERE <time> >= from AND <time> < to TO DIRECTORY '<location>/<rtId>/data/<slice>' WITH (compression = 'gzip', ...)`,
+gzip-compressed line-wise JSON, sent as a maintenance statement with `ArchiveCopyOptions.CommandTimeout`. It reports the rows
+copied; a difference to the rows counted is a warning (the tenant stays online), not a failure. A failed slice ends the copy,
+earlier slices stay valid, and a cancelled token stops between two slices.
+
+**Load.** Into a freshly created table: the dumped columns are compared with the table (a missing column stops the load
+before anything is changed), the free disk space per node is checked against nine times the staged size, then
+`number_of_replicas = 0, refresh_interval = 0` are set and the previous values remembered. Each slice is
+`COPY <table> FROM '<location>/<rtId>/data/<slice>/*' WITH (compression = 'gzip', ...) RETURN SUMMARY`; a slice is loaded when
+`success_count` equals the counted rows and `error_count` is 0. The settings are restored when the enumeration ends, also
+after a failed slice, an exception or a cancelled caller. Afterwards the segments are merged (`OPTIMIZE ... max_num_segments = 1`,
+switch off with `OptimizeAfterLoad = false`). A slice loaded again after a failure uses `OverwriteDuplicates = true`. A NULL in a
+column that has a DEFAULT is not preserved: the default applies.
+
+**Credential.** The text of a `COPY` carries the storage credential (S3 key and secret in the URI, `sas_token` or `key` in
+`WITH`). Four things keep it away from logs, exceptions, traces and the server's job log:
+
+- `CopyStatement` keeps the executed text and the redacted text together; only the code that executes it calls `Reveal()`.
+  The rules are `ArchiveCopyRedaction` and `ArchiveCopyStagingLocation` of the engine: the user info of the URI is dropped, every
+  `WITH` option is masked unless it is on a short list of harmless ones.
+- A failing statement raises `StreamDataCopyStatementException` (scrubbed message, redacted statement, no inner exception, no data)
+  or `StreamDataStatementTimeoutException` (redacted statement, no inner exception); a copy statement is never retried by the
+  resilience pipeline. Failed slices carry the same scrubbed message.
+- `COPY` commands and batches are excluded from the Npgsql tracing (`CrateDbConnectionAccess.ConfigureTracing`), so the
+  injected OpenTelemetry instrumentation records no span with their text; other commands are traced as before.
+- `JobLogFilterGuard` reads `stats.jobs_log_filter` before every dump and load and refuses (`ArchiveCopyRefusedException`,
+  `JobLogNotFiltered`) unless the filter excludes `COPY` (`stmt NOT ILIKE 'copy %'`), because CrateDB records the full text of a
+  finished statement in `sys.jobs_log`. Setting it belongs to the infrastructure (`SET GLOBAL PERSISTENT`).
+
+**Readiness preflight, two doors (AB#6969).** `StagingCopyReadinessProbe` (`Copy/`) is the one implementation of "can the storage
+run the native copy": it reads `stats.jobs_log_filter` (`JobLogFilterGuard`) and the node versions and returns a
+`StagingCopyReadiness`. It only reads, never throws for a missing prerequisite (the answer says so, with the statement to run, and no
+credential), and its failure to ask is an answer too (`Supported`, not ready, the scrubbed reason). Two members delegate to it:
+`IStreamDataRepository.CheckStagingCopyReadinessAsync` (tenant-bound) and `IStreamDataRepositoryFactory.CheckStagingCopyReadinessAsync`
+(cluster-level; default implementation answers "not supported"). The factory member needs no tenant, no CK cache and no
+`IArchiveRuntimeStore`, which is what the tenant restore needs: it has to know that the archive data can be loaded **before** it replaces the
+tenant's database, and a tenant context built at that point would load the CK cache from the old database. The statements run on a
+connection labelled `default` (the label the health check uses); no tenant schema is touched. Tests: `StagingCopyReadinessProbeTests`
+(simulated CrateDB) and `StagingCopyIntegrationTests.ClusterReadiness_*` (CrateDB container: ready, filter removed -> not ready with the reason,
+filter restored, equal to the repository's answer).
+
+**Tests that use the local kind cluster are opt-in.** `StagingCopyLocalS3Tests` and `RollupLocalMeasurementTests` (fixture
+`LocalKindStagingFixture`) read the CrateDB and the SeaweedFS of the machine's kind cluster and create tables and objects in
+a schema and prefix of their own. They run only with `OCTO_TEST_LOCAL_KIND=1` and are skipped with that reason otherwise, so a
+plain `dotnet test` never reaches a developer's long-lived cluster. The two measurements additionally need their own variables
+(`OCTO_STAGING_MEASURE_SOURCE_TENANT`; `OCTO_ROLLUP_MEASURE_SOURCE_TENANT` and `OCTO_ROLLUP_MEASURE_ROLLUP`).
+
+Tests: `StreamData.UnitTests/Copy` (statements and redaction with canary values, the runner against a simulated CrateDB) and
+`Runtime.Engine.MongoDb.IntegrationTests/StagingCopy` (a CrateDB container copying to `file://` in its own file system: round
+trip with the same rows, sums and time bounds per month under another tenant id, failed loads, the guard, the job log,
+tracing). `COPY TO DIRECTORY` does not create directories on a file system, so those tests create the slice folders first;
+an object store needs none.
+
 ## 19. References
 
 - Pain points & current architecture analysis: see ADO Issue (this document is linked).

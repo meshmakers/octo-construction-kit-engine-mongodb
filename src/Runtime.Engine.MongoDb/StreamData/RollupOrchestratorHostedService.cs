@@ -22,6 +22,7 @@ internal sealed class RollupOrchestratorHostedService : BackgroundService
     private readonly IRollupTenantSource _tenantSource;
     private readonly IOptionsMonitor<RollupOrchestratorOptions> _options;
     private readonly ILogger<RollupOrchestratorHostedService> _logger;
+    private readonly RestoreReconcileGate _gate;
 
     public RollupOrchestratorHostedService(
         ISystemContext systemContext,
@@ -33,6 +34,7 @@ internal sealed class RollupOrchestratorHostedService : BackgroundService
         _tenantSource = tenantSource;
         _options = options;
         _logger = logger;
+        _gate = new RestoreReconcileGate(logger);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -125,6 +127,11 @@ internal sealed class RollupOrchestratorHostedService : BackgroundService
             // Tenant has not imported the System.StreamData model (never opted in), or no rollup
             // store wired — quietly skip. Note the gate is model presence, not the tenant's enabled
             // flag: DisableStreamDataAsync keeps the model, and refuses while rollups are Activated.
+            return;
+        }
+
+        if (await _gate.IsBlockedAsync(tenantId, tenantContext, "the rollup tick", cancellationToken))
+        {
             return;
         }
 

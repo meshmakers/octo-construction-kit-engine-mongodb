@@ -1297,6 +1297,48 @@ Semantics preserved:
   active-generation predicate when `GenerationTracked` — previously the downsampling path missed
   it entirely, so a read during a recompute double-counted the swapped windows.
 
+### Native Copy, Sweep Grace Period, Rollup Validate/Repair, Restore Reconcile Marker (AB#5967)
+
+The full text is `docs/streamdata-archive-concept.md` §18a and, for the sweep, the engine's `concept-rollup-recompute.md`
+("Sweep grace period"); this is what to keep in mind when touching the code.
+
+- **Native copy** (`Runtime.Engine.CrateDb/Copy/`): `COPY … TO DIRECTORY` / `COPY … FROM` per counted time slice
+  (`StagingCopyRunner`), the storage credential only inside `CopyStatement` (never log `Reveal()`). A rollup's generation
+  map is the last slice of a plan: a dump copies it first and the data after it, a load the data first and the map last. The
+  repeat rule is `RollupArchiveDumper` (read map, copy, read map; repeat up to `MaxMapAttempts`, then
+  `GenerationMapKeptMoving`). The plan in a dump result carries the rows the copy *reported*, not the counted rows.
+- **Sweep grace period** (`StreamData:Recompute:SweepGracePeriod`, default 2 h, 0 = at once): a recompute no longer sweeps
+  or removes contained pointer entries at the flip; it writes a row into `archive_<rtId>__sweep`
+  (`PendingSweepSqlBuilder`, every column explicit - AB#6647) and `SweepDueAsync` executes the due ones (at the start of a
+  recompute of that rollup and from the host's recompute tick via `SweepSupersededGenerationsAsync`). The sweep deletes rows
+  strictly *below* the entry's generation and drops the record of an entry that was replaced. The once-per-process reclaim
+  pass skips entries with a record. A repository/executor built without options keeps the immediate sweep.
+- **NotChecked (AB#6968)**: a rollup the validator cannot look at gets `RollupConsistencyEntry.NotChecked` (`NoLiveTable`,
+  `NeverActivated`, `SourceMissing` + reason, `IsBlocking`) and is not ok unless it is `NeverActivated` (informational: a rollup without
+  data cannot be inconsistent, and blocking would stop the whole tenant's rollups for good); `RollupConsistencyReport.IsOk` is false
+  while any entry blocks, the repair skips a rollup without a table, and the marker is not cleared (`RollupRepairer`: also not after a repair of some rollups unless the
+  whole tenant validates ok). Tests: `RollupConsistencyValidatorTests`, `RollupRepairerTests`, `RollupReconcileIntegrationTests`.
+- **Validate / repair** (`Reconcile/`): `RollupConsistencyValidator` is read only (counts, MIN/MAX); the checks work on the
+  *governed* part of a pointer entry (the entry minus the ranges of higher generations). `RollupRepairer` order: create map,
+  delete orphans, recompute gaps (own executor, immediate sweep, no gate), rewind watermark (decided again when it runs).
+- **Restore reconcile marker** (`RestoreReconcileMarker`, table `__restore_reconcile`, row keyed by the full tenant id; no
+  row = not pending): the hosted services skip a marked tenant (`RestoreReconcileGate`), `AggregateBucketAsync` and the
+  executor refuse with `RestoreReconcilePendingException`, the sweep returns 0; only the repair runs and clears it.
+
+### mongorestore Batch Size (AB#6981)
+
+`MongoToolArguments.BuildMongoRestoreArguments` always passes `--batchSize`: `MongoRestoreOptions.BatchSize` when set, else
+`OctoSystemConfiguration.MongoRestoreBatchSize` (default **100**, valid 1..1000, env `OCTO_System__MongoRestoreBatchSize`; an
+invalid value throws `ConfigurationErrorException` naming the option when the configuration is bound, an invalid per-call value
+throws `ArgumentOutOfRangeException`). Without it the tool's 1000 documents per batch can end a message over the server's
+48,000,000 bytes (`maxMessageSizeBytes`) once documents average above ~48 KB: the restore of a collection of 864,070 EDA messages
+(73 KB average) died with `msgLen 48000084 > 48000000` after 250,447 documents (mongorestore 100.16.0, MongoDB 8.0.12; mongo-tools
+TOOLS-4142, TOOLS-4145, TOOLS-2875 describe the byte rule overshooting). 100 documents keep a batch below the limit for typical documents
+(averages up to ~480 KB) - it reduces the risk, it does not exclude it: the count bounds the number of documents, not their size, so a few
+documents near 16 MiB can still exceed the limit; the rationale is in the xml doc of the property. Restore requirement: lower the value
+when a collection averages above ~480 KB or holds very large documents. Test: `LargeDocumentRestoreTests` (2400 documents averaging above 70 KB through the real dump and restore; not red without the
+fix against the local MongoDB container, see the comment in the test), `MongoToolArgumentsTests`. No CHANGELOG file exists in this repo.
+
 ### Archive Export — Time Slices, Not Keyset Pages
 
 `CrateDbStreamDataRepository.ExportRowsAsync` is the scan behind a tenant dump with archive data
@@ -1986,6 +2028,12 @@ Mongo-only restore keeps the stream data), the blueprint create-rollback, the de
 octo-common-services (builds its handle from the lifecycle record, no archives) and the test cleanups.
 `DetachChildTenantAsync` keeps everything for a later attach.
 
+The tenant-level state of the restore reconcile feature goes too (AB#6968): `IStreamDataRepositoryFactory.DeleteTenantStateAsync`
+deletes the tenant's rows from `__restore_reconcile` (marker) and `__rollup_repair` (queue) and drops such a table only when it is
+empty afterwards, because the schema is shared (rows are keyed by the full tenant id); a tenant re-created under the same id must not
+inherit a set marker. The per-archive `__sweep` record tables are `ArchiveTableDrop`'s. It runs when the tenant had the stream data
+model loaded (`TenantDeletionHandle.StreamDataModelPresent`), also with no archive left; a tenant without the model never touches CrateDB.
+
 Two rules of that drop are deliberate. **Per-archive, never "everything in the tenant's schema"**:
 `TenantSchema.SchemaName` strips `-` and `_` from the tenant id, so `acme-corp`, `acme_corp` and
 `acmecorp` share one CrateDB schema — a schema-wide drop (the previously unused
@@ -1995,8 +2043,9 @@ is false at instance level; a failure is an ERROR log listing the `archive_<rtId
 (every statement is idempotent). It runs only after the Mongo drop succeeded — when `dropDatabase`
 itself throws, the user drop and the table drop are both skipped and the exception propagates — and it
 goes through the CrateDB resilience pipeline: the factory stops at the first failure, so with CrateDB
-unreachable a Delete/Clear of a tenant *with archives* blocks for up to ~2 min (timeout × retries) before
-logging the error; it never fails the drop, and tenants without archives never touch CrateDB.
+unreachable a Delete/Clear of a tenant *with the stream data model* (also one without archives, because of the tenant state
+cleanup above) blocks for up to ~2 min (timeout × retries) before logging the error; it never fails the drop, and tenants
+without the stream data model never touch CrateDB.
 
 **The resurrection window is not fully closed, and since AB#4762 it bites harder.** Background work
 that outlives the delete — above all a `tenant_setup_retry` entry, whose retry loop keeps calling

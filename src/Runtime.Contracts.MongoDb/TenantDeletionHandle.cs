@@ -26,14 +26,39 @@ namespace Meshmakers.Octo.Runtime.Contracts.MongoDb;
 ///     restore, where the same archives continue to exist afterwards), when the tenant has no
 ///     archives, or for a handle built from a lifecycle record after the fact.
 /// </param>
+/// <param name="StreamDataModelPresent">
+///     True when the tenant had the System.StreamData model loaded when the metadata was deleted (it may still have no archive). The
+///     tenant-level stream data state (restore reconcile marker, rollup repair queue; AB#6968) is removed with the database only
+///     then, so a tenant that never used stream data does not touch CrateDB on delete.
+/// </param>
 public sealed record TenantDeletionHandle(
     string DatabaseName,
     Guid CorrelationId,
-    IReadOnlyList<OctoObjectId> StreamDataArchives)
+    IReadOnlyList<OctoObjectId> StreamDataArchives,
+    bool StreamDataModelPresent = false)
 {
     /// <summary>A handle for a plain database drop: no stream data tables go with the database.</summary>
     public TenantDeletionHandle(string databaseName, Guid correlationId)
         : this(databaseName, correlationId, [])
     {
+    }
+
+    /// <summary>
+    ///     Binary compatibility: the shape before <see cref="StreamDataModelPresent" /> existed. A package compiled against the
+    ///     earlier engine-mongodb keeps working next to this one (pipeline builds float on the main line, so such a mix can be
+    ///     loaded); without this constructor and the matching <c>Deconstruct</c> the call fails with a MissingMethodException.
+    /// </summary>
+    public TenantDeletionHandle(string databaseName, Guid correlationId, IReadOnlyList<OctoObjectId> streamDataArchives)
+        : this(databaseName, correlationId, streamDataArchives, false)
+    {
+    }
+
+    /// <summary>Binary compatibility with consumers compiled before <see cref="StreamDataModelPresent" /> existed.</summary>
+    public void Deconstruct(
+        out string databaseName, out Guid correlationId, out IReadOnlyList<OctoObjectId> streamDataArchives)
+    {
+        databaseName = DatabaseName;
+        correlationId = CorrelationId;
+        streamDataArchives = StreamDataArchives;
     }
 }

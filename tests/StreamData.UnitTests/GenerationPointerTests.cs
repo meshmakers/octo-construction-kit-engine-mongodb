@@ -124,6 +124,25 @@ public class GenerationPointerTests
     }
 
     [Fact]
+    public void BuildDeleteContainedPointers_WithABound_TouchesOnlyEntriesOfALowerGeneration()
+    {
+        var genMap = GenerationMapSqlBuilder.GenMapTable("acmecorp", "rollup1");
+        var from = new DateTime(2026, 5, 11, 0, 0, 0, DateTimeKind.Utc);
+        var to = new DateTime(2026, 5, 11, 12, 0, 0, DateTimeKind.Utc);
+        var fromMs = new DateTimeOffset(from).ToUnixTimeMilliseconds();
+        var toMs = new DateTimeOffset(to).ToUnixTimeMilliseconds();
+
+        var sql = GenerationMapSqlBuilder.BuildDeleteContainedPointers(genMap, from, to, "mp-1", belowGeneration: 4);
+
+        // The deferred removal runs after the grace period: an entry of a newer recompute inside the range stays.
+        Assert.Equal(
+            $"DELETE FROM {genMap} WHERE \"range_start\" >= {fromMs} AND \"range_end\" <= {toMs} " +
+            "AND \"rtid_scope\" = 'mp-1' AND \"generation\" < 4 " +
+            $"AND NOT (\"range_start\" = {fromMs} AND \"range_end\" = {toMs} AND \"rtid_scope\" = 'mp-1');",
+            sql);
+    }
+
+    [Fact]
     public void BuildDeleteContainedPointers_EscapesTheScope()
     {
         var genMap = GenerationMapSqlBuilder.GenMapTable("acmecorp", "rollup1");

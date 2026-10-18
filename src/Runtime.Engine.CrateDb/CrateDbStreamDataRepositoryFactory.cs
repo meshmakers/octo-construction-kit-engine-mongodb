@@ -4,6 +4,8 @@ using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Copy;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Reconcile;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -24,6 +26,7 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
     private readonly IFormulaEngine _formulaEngine;
     private readonly IArchiveAuditTrail? _archiveAuditTrail;
     private readonly IOptions<CrateRecomputeOptions>? _recomputeOptions;
+    private readonly TimeProvider? _timeProvider;
 
     // The factory is a singleton, the repositories it creates are not (one per tenant context, i.e.
     // per request / orchestrator tick). What a recompute remembers "per process" therefore lives here.
@@ -37,8 +40,10 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
         IOptions<StreamDataConfiguration> configuration,
         IFormulaEngine formulaEngine,
         IArchiveAuditTrail? archiveAuditTrail = null,
-        IOptions<CrateRecomputeOptions>? recomputeOptions = null)
+        IOptions<CrateRecomputeOptions>? recomputeOptions = null,
+        TimeProvider? timeProvider = null)
     {
+        _timeProvider = timeProvider;
         _loggerFactory = loggerFactory;
         _ckCacheService = ckCacheService;
         _databaseClient = databaseClient;
@@ -68,8 +73,21 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
             recomputeStateStore,
             _archiveAuditTrail,
             _recomputeOptions,
-            _recomputeProcessState);
+            _recomputeProcessState,
+            _timeProvider);
     }
+
+    /// <inheritdoc />
+    public Task<StagingCopyReadiness> CheckStagingCopyReadinessAsync(CancellationToken cancellationToken = default)
+        => StagingCopyReadinessProbe.CheckAsync(
+            _loggerFactory.CreateLogger<CrateDbStreamDataRepositoryFactory>(),
+            StagingCopyReadinessProbe.ClusterConnectionLabel,
+            _databaseClient as ICrateCopyClient,
+            cancellationToken);
+
+    /// <inheritdoc />
+    public Task DeleteTenantStateAsync(string tenantId, CancellationToken cancellationToken = default)
+        => TenantStateTableDrop.DropAsync(_databaseClient, _managementClient, tenantId, _recomputeProcessState, cancellationToken);
 
     public async Task DeleteArchiveTablesAsync(string tenantId, IReadOnlyList<OctoObjectId> archiveRtIds)
     {

@@ -9,6 +9,8 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Copy;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Reconcile;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 using Microsoft.Extensions.Logging;
@@ -48,7 +50,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     private readonly IArchiveRecomputeStateStore? _recomputeStateStore;
     private readonly IArchiveAuditTrail? _archiveAuditTrail;
     private readonly int _recomputeSliceTargetRows;
+    private readonly TimeSpan _sweepGracePeriod;
+    private readonly TimeProvider _clock;
     private readonly RecomputeProcessState _recomputeProcessState;
+    private readonly ICrateCopyClient? _copyClient;
+    private StagingCopyRunner? _stagingCopy;
 
     public CrateDbStreamDataRepository(
         ILogger<CrateDbStreamDataRepository> logger,
@@ -63,11 +69,18 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         IArchiveRecomputeStateStore? recomputeStateStore = null,
         IArchiveAuditTrail? archiveAuditTrail = null,
         IOptions<CrateRecomputeOptions>? recomputeOptions = null,
-        RecomputeProcessState? recomputeProcessState = null)
+        RecomputeProcessState? recomputeProcessState = null,
+        TimeProvider? timeProvider = null)
     {
+        // The clock of the sweep grace period, the restore marker, the repair queue and the dump times; a host can register its
+        // own TimeProvider (tests fake it to make a deferred sweep due).
+        _clock = timeProvider ?? TimeProvider.System;
         _logger = logger;
         _ckCacheService = ckCacheService;
         _databaseClient = databaseClient;
+        // The staging copy needs the client that can run a statement once under a timeout of its own; a
+        // client that cannot (a test double) leaves SupportsStagingCopy false.
+        _copyClient = databaseClient as ICrateCopyClient;
         _managementClient = managementClient;
         _archiveStore = archiveStore;
         _rollupArchiveStore = rollupArchiveStore;
@@ -80,6 +93,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // as this repository does.
         _recomputeProcessState = recomputeProcessState ?? new RecomputeProcessState();
         _recomputeSliceTargetRows = recomputeOptions?.Value.SliceTargetRows ?? CrateRecomputeOptions.DefaultSliceTargetRows;
+        // A repository built without options (outside the host's DI) sweeps at once, as it always did; the
+        // host's options default to the two hours of CrateRecomputeOptions.DefaultSweepGracePeriod.
+        _sweepGracePeriod = recomputeOptions?.Value.SweepGracePeriod ?? TimeSpan.Zero;
     }
 
     public Task EnsureDatabaseCreatedAsync()
@@ -1579,6 +1595,134 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         _ => null,
     };
 
+    // --- Native copy to and from a staging location (AB#5967) ---------------------------------------
+    // The logic lives in Copy/StagingCopyRunner; this is the delegation of the contract members.
+
+    /// <inheritdoc />
+    public bool SupportsStagingCopy => _copyClient is not null;
+
+    /// <inheritdoc />
+    public async Task<ArchiveCopyPlan> PlanArchiveCopyAsync(
+        OctoObjectId archiveRtId, ArchiveCopyOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        var runner = RequireStagingCopy(archiveRtId);
+        var target = await ResolveCopyTargetAsync(archiveRtId);
+        return await runner.PlanAsync(target, options ?? new ArchiveCopyOptions(), cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<ArchiveCopySliceResult> CopyToStagingAsync(
+        OctoObjectId archiveRtId, ArchiveCopyPlan plan, ArchiveCopyStagingLocation location,
+        ArchiveCopyOptions? options = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var runner = RequireStagingCopy(archiveRtId);
+        var target = await ResolveCopyTargetAsync(archiveRtId);
+        await foreach (var result in runner.CopyToAsync(
+                           target, plan, location, options ?? new ArchiveCopyOptions(), cancellationToken))
+        {
+            yield return result;
+        }
+    }
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<ArchiveCopySliceResult> CopyFromStagingAsync(
+        OctoObjectId archiveRtId, ArchiveCopyPlan plan, ArchiveCopyStagingLocation location,
+        ArchiveCopyOptions? options = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var runner = RequireStagingCopy(archiveRtId);
+        var target = await ResolveCopyTargetAsync(archiveRtId);
+        await foreach (var result in runner.CopyFromAsync(
+                           target, plan, location, options ?? new ArchiveCopyOptions(), cancellationToken))
+        {
+            yield return result;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<ArchiveTableDescription> DescribeArchiveTableAsync(
+        OctoObjectId archiveRtId, ArchiveCopyTable table, CancellationToken cancellationToken = default)
+    {
+        var runner = RequireStagingCopy(archiveRtId);
+        var target = await ResolveCopyTargetAsync(archiveRtId);
+        return await runner.DescribeAsync(target, table, new ArchiveCopyOptions(), cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<string> GetStorageVersionAsync(CancellationToken cancellationToken = default)
+        => RequireStagingCopy(null).GetStorageVersionAsync(new ArchiveCopyOptions(), cancellationToken);
+
+    private StagingCopyRunner RequireStagingCopy(OctoObjectId? archiveRtId)
+    {
+        if (_copyClient is null)
+        {
+            throw new ArchiveCopyNotSupportedException(archiveRtId);
+        }
+
+        return _stagingCopy ??= new StagingCopyRunner(_logger, _tenantId, _copyClient);
+    }
+
+    private async Task<ArchiveCopyTarget> ResolveCopyTargetAsync(OctoObjectId archiveRtId)
+    {
+        // The copy does not require an Activated archive (a Disabled archive keeps its table); the snapshot
+        // only tells the storage shape, which decides the time axis.
+        var snapshot = await _archiveStore.GetAsync(archiveRtId)
+            ?? throw new ArchiveNotFoundException(archiveRtId);
+        var tableName = TenantSchema.ArchiveTableName(archiveRtId.ToString());
+        return new ArchiveCopyTarget(archiveRtId, TenantSchema.SchemaName(_tenantId), tableName,
+            snapshot.UsesWindowedStorage ? Constants.WindowStart : Constants.Timestamp,
+            // A rollup has a generation map next to its data table; every other archive never touches one.
+            snapshot.RollupAggregations is not null ? tableName + "__genmap" : null);
+    }
+
+    /// <inheritdoc />
+    public Task<StagingCopyReadiness> CheckStagingCopyReadinessAsync(CancellationToken cancellationToken = default)
+        => StagingCopyReadinessProbe.CheckAsync(_logger, _tenantId, _copyClient, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<ArchiveCopyDumpResult> DumpArchiveToStagingAsync(
+        OctoObjectId archiveRtId, ArchiveCopyStagingLocation location, ArchiveCopyOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        var runner = RequireStagingCopy(archiveRtId);
+        var target = await ResolveCopyTargetAsync(archiveRtId);
+        var dumper = new RollupArchiveDumper(_logger, _tenantId, _copyClient!, runner, _clock);
+        return await dumper.DumpAsync(target, location, options ?? new ArchiveCopyOptions(), cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<ArchiveCopyLoadResult> LoadArchiveFromStagingAsync(
+        OctoObjectId archiveRtId, ArchiveCopyPlan plan, ArchiveCopyStagingLocation location,
+        ArchiveCopyOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        var runner = RequireStagingCopy(archiveRtId);
+        var target = await ResolveCopyTargetAsync(archiveRtId);
+        var outcome = new LoadOutcome();
+        var results = new List<ArchiveCopySliceResult>();
+        await foreach (var result in runner.CopyFromAsync(
+                           target, plan, location, options ?? new ArchiveCopyOptions(), outcome, cancellationToken))
+        {
+            results.Add(result);
+        }
+
+        var expectedData = plan.Slices.Where(s => s.Table == ArchiveCopyTable.Data).Sum(s => s.RowCount);
+        var expectedMap = plan.Slices.Where(s => s.Table == ArchiveCopyTable.GenerationMap).Sum(s => s.RowCount);
+        long? loaded = outcome.DataRows is null ? null : outcome.DataRows + (outcome.MapRows ?? 0);
+        var verified = results.Count == plan.Slices.Count && results.All(r => r.IsSuccess)
+                       && outcome.DataRows == expectedData
+                       && (!target.HasGenerationMap || outcome.MapRows == expectedMap);
+        if (!verified)
+        {
+            _logger.LogWarning(
+                "Archive {ArchiveRtId} of tenant {TenantId}: the row count after the load is not verified " +
+                "(data {DataRows} of {ExpectedData}, generation map {MapRows} of {ExpectedMap}).",
+                archiveRtId, _tenantId, outcome.DataRows, expectedData, outcome.MapRows, expectedMap);
+        }
+
+        return new ArchiveCopyLoadResult(archiveRtId, results, plan.TotalRows, loaded, verified);
+    }
+
     /// <inheritdoc />
     public async Task ImportRowsAsync(
         OctoObjectId archiveRtId,
@@ -1749,6 +1893,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         DateTime bucketEnd,
         CancellationToken cancellationToken)
     {
+        // A restored tenant's rollups are not aggregated further until they are reconciled (AB#6968): the watermark of the
+        // metadata may be ahead of the rows, and aggregating on from it would leave the gap for good.
+        if (await ReconcileMarker.IsPendingAsync(cancellationToken))
+        {
+            throw new RestoreReconcilePendingException(_tenantId, rollup.RtId, "forward aggregation");
+        }
+
         var sourceTable = TenantSchema.QualifiedArchiveTable(_tenantId, sourceArchive.RtId.ToString());
         var targetTable = TenantSchema.QualifiedArchiveTable(_tenantId, rollup.RtId.ToString());
 
@@ -1883,11 +2034,158 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // This repository — and with it the executor — lives as long as the tenant context that
         // created it: one request, one orchestrator tick. What a recompute has to remember for the
         // life of the process is in _recomputeProcessState, which the singleton factory hands in.
-        _recomputeExecutor ??= new CrateDbArchiveRecomputeExecutor(
-            _tenantId, _databaseClient, _managementClient, _archiveStore, _logger,
-            _rollupArchiveStore, _recomputeSliceTargetRows, _recomputeProcessState);
+        return RecomputeExecutor.ExecuteAsync(source, rollup, rangeStart, rangeEnd, rtIdScope, cancellationToken);
+    }
 
-        return _recomputeExecutor.ExecuteAsync(source, rollup, rangeStart, rangeEnd, rtIdScope, cancellationToken);
+    // --- Rollup consistency after a restore (AB#6968) --------------------------------------------------
+
+    private RestoreReconcileMarker ReconcileMarker => new(
+        _tenantId, _databaseClient, _managementClient, _recomputeProcessState, _clock, _logger);
+
+    /// <inheritdoc />
+    public Task<bool> IsRestoreReconcilePendingAsync(CancellationToken cancellationToken = default)
+        => ReconcileMarker.IsPendingAsync(cancellationToken);
+
+    /// <inheritdoc />
+    public Task SetRestoreReconcilePendingAsync(bool pending, CancellationToken cancellationToken = default)
+        => ReconcileMarker.SetAsync(pending, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<RollupConsistencyReport> ValidateRollupsAsync(
+        IReadOnlyCollection<OctoObjectId>? rollupRtIds = null, CancellationToken cancellationToken = default)
+    {
+        if (_rollupArchiveStore is null)
+        {
+            return Task.FromResult(new RollupConsistencyReport([], DateTime.UtcNow));
+        }
+
+        return new RollupConsistencyValidator(
+            _tenantId, _databaseClient, _archiveStore, _rollupArchiveStore, _logger, _clock)
+            .ValidateAsync(rollupRtIds, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<RollupRepairReport> RepairRollupsAsync(
+        IReadOnlyCollection<OctoObjectId>? rollupRtIds = null, bool dryRun = false, CancellationToken cancellationToken = default)
+    {
+        if (_rollupArchiveStore is null)
+        {
+            var empty = new RollupConsistencyReport([], DateTime.UtcNow);
+            return Task.FromResult(new RollupRepairReport(dryRun, empty, [], dryRun ? null : empty, null));
+        }
+
+        var validator = new RollupConsistencyValidator(
+            _tenantId, _databaseClient, _archiveStore, _rollupArchiveStore, _logger, _clock);
+        // The repair's own executor sweeps at once and is not held back by the marker it is there to clear.
+        var repairer = new RollupRepairer(
+            _tenantId, _databaseClient, _managementClient, _archiveStore, _rollupArchiveStore, this, validator, ReconcileMarker,
+            () => new CrateDbArchiveRecomputeExecutor(
+                _tenantId, _databaseClient, _managementClient, _archiveStore, _logger, _rollupArchiveStore,
+                _recomputeSliceTargetRows, _recomputeProcessState, TimeSpan.Zero, _clock),
+            _logger);
+        return repairer.RepairAsync(rollupRtIds, dryRun, cancellationToken);
+    }
+
+    private RollupRepairQueue RepairQueue => new(_tenantId, _databaseClient, _managementClient, _clock, _logger);
+
+    /// <inheritdoc />
+    public async Task<RollupRepairRequest> EnqueueRollupRepairAsync(
+        IReadOnlyCollection<OctoObjectId>? rollupRtIds = null, CancellationToken cancellationToken = default)
+    {
+        if (_rollupArchiveStore is null)
+        {
+            throw new ArchiveCopyNotSupportedException();
+        }
+
+        var plan = await RepairRollupsAsync(rollupRtIds, dryRun: true, cancellationToken);
+        return await RepairQueue.EnqueueAsync(rollupRtIds, plan.Actions, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<RollupRepairRequest?> GetRollupRepairRequestAsync(string requestId, CancellationToken cancellationToken = default)
+        => RepairQueue.GetAsync(requestId, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<int> RunPendingRollupRepairsAsync(CancellationToken cancellationToken = default)
+    {
+        if (_rollupArchiveStore is null)
+        {
+            return 0;
+        }
+
+        var queue = RepairQueue;
+        var ran = 0;
+        foreach (var row in await queue.ClaimRunnableAsync(cancellationToken))
+        {
+            RollupRepairReport report;
+            try
+            {
+                // The lease is renewed while the repair runs: a repair of a large tenant can outlast RunningTimeout.
+                report = await queue.RunWithLeaseAsync(row.Request.RequestId,
+                    () => RepairRollupsAsync(row.Rollups, dryRun: false, cancellationToken),
+                    RollupRepairQueue.RenewInterval, cancellationToken);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogError(ex, "The queued rollup repair {RequestId} of tenant {TenantId} failed.", row.Request.RequestId, _tenantId);
+                var none = new RollupConsistencyReport([], DateTime.UtcNow);
+                report = new RollupRepairReport(false, none, [], null, $"the repair could not run: {ex.Message}");
+            }
+
+            await queue.CompleteAsync(row.Request.RequestId, report, cancellationToken);
+            ran++;
+        }
+
+        return ran;
+    }
+
+    private CrateDbArchiveRecomputeExecutor RecomputeExecutor => _recomputeExecutor ??= new CrateDbArchiveRecomputeExecutor(
+        _tenantId, _databaseClient, _managementClient, _archiveStore, _logger,
+        _rollupArchiveStore, _recomputeSliceTargetRows, _recomputeProcessState, _sweepGracePeriod, _clock, ReconcileMarker);
+
+    /// <inheritdoc />
+    public async Task<int> SweepSupersededGenerationsAsync(CancellationToken cancellationToken = default)
+    {
+        if (_rollupArchiveStore is null)
+        {
+            return 0;
+        }
+
+        // A restored tenant is left alone until its rollups are reconciled (AB#6968): deleting rows a pointer still names is
+        // what the sweep must not do on an unreconciled rollup.
+        if (await ReconcileMarker.IsPendingAsync(cancellationToken))
+        {
+            _logger.LogDebug("The deferred sweep of tenant {TenantId} is skipped: restore reconcile pending.", _tenantId);
+            return 0;
+        }
+
+        // One catalogue query for the tenant: most rollups never deferred a sweep and cost nothing more.
+        HashSet<string> recordTables;
+        try
+        {
+            recordTables = await RecomputeExecutor.ListSweepTablesAsync(cancellationToken);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "Listing the pending-sweep tables of tenant {TenantId} failed: {Error}.", _tenantId, ex.Message);
+            return 0;
+        }
+
+        if (recordTables.Count == 0)
+        {
+            return 0;
+        }
+
+        var swept = 0;
+        await foreach (var rollup in _rollupArchiveStore.EnumerateAsync().WithCancellation(cancellationToken))
+        {
+            if (recordTables.Contains(PendingSweepSqlBuilder.SweepTableName(rollup.RtId.ToString())))
+            {
+                swept += await RecomputeExecutor.SweepDueAsync(rollup.RtId, cancellationToken, tableKnownToExist: true);
+            }
+        }
+
+        return swept;
     }
 
     /// <summary>

@@ -693,6 +693,280 @@ public class CrateDbArchiveRecomputeExecutorTests
 
     // ---- helpers ----
 
+    // ---- sweep grace period (AB#6968) ----------------------------------------------------------------
+
+    private static readonly TimeSpan Grace = TimeSpan.FromHours(2);
+
+    private sealed class ManualClock(DateTimeOffset start) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = start;
+
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    /// <summary>
+    /// What a reader sees: the rows whose generation is the one the newest pointer entry that contains their window
+    /// names (generation 0 when none does) - the predicate of <see cref="GenerationFilterSql"/>.
+    /// </summary>
+    private static List<(long Window, string RtId, long Generation)> ReadersView(RecomputeCrateSimulator crate) =>
+        crate.Live
+            .Where(r => r.Generation == crate.Pointers
+                .Where(p => p.StartMs <= r.WindowStartMs && r.WindowStartMs < p.EndMs && (p.Scope.Length == 0 || p.Scope == r.RtId))
+                .Select(p => p.Generation).DefaultIfEmpty(0).Max())
+            .Select(r => (r.WindowStartMs, r.RtId, r.Generation))
+            .OrderBy(r => r.WindowStartMs).ThenBy(r => r.RtId)
+            .ToList();
+
+    private (Harness Harness, ManualClock Clock, string[] Series) GraceHarness()
+    {
+        var clock = new ManualClock(new DateTimeOffset(2026, 5, 20, 8, 0, 0, TimeSpan.Zero));
+        var harness = new Harness(sliceTargetRows: 10);
+        harness.Executor = harness.NewExecutor(new RecomputeProcessState(), Grace, clock);
+        var series = Series(3);
+        harness.SeedLive(buckets: 12, series, generation: 3);
+        harness.Crate.Pointers.Add(new GenerationRange(StartMs, StartMs + 12 * HourMs, string.Empty, 3));
+        // A smaller entry inside the range: outranked by the flip, removed by the sweep.
+        harness.Crate.Pointers.Add(new GenerationRange(StartMs, StartMs + 4 * HourMs, string.Empty, 2));
+        return (harness, clock, series);
+    }
+
+    [Fact]
+    public async Task Grace_AfterTheFlip_PreviousRowsAndPointerEntriesStay_AndReadersSeeTheNewValues()
+    {
+        var (harness, _, series) = GraceHarness();
+        var before = ReadersView(harness.Crate);
+
+        await harness.RunAsync(buckets: 12, series);
+
+        // Both versions are in the table, both pointer entries exist, nothing was swept.
+        Assert.Equal(3 * 12 + 3 * 12, harness.Crate.Live.Count);
+        Assert.Contains(harness.Crate.Pointers, p => p.Generation == 2);
+        Assert.DoesNotContain(harness.Crate.Calls, c => c.Kind is "delete:superseded" or "delete:below" or "delete:contained-pointers");
+        var record = Assert.Single(harness.Crate.Sweeps);
+        Assert.Equal(new GenerationRange(StartMs, StartMs + 12 * HourMs, string.Empty, 4), record.Entry);
+        Assert.Equal(new DateTimeOffset(2026, 5, 20, 8, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds(), record.FlippedAtMs);
+        // The readers select the new generation: same windows and series, all on generation 4.
+        var after = ReadersView(harness.Crate);
+        Assert.Equal(before.Select(r => (r.Window, r.RtId)), after.Select(r => (r.Window, r.RtId)));
+        Assert.All(after, r => Assert.Equal(4, r.Generation));
+    }
+
+    [Fact]
+    public async Task Grace_TheSweepRunsOnlyAfterTheFlipTimePlusTheGracePeriod_AndReadersSeeTheSameValuesBeforeAndAfter()
+    {
+        var (harness, clock, series) = GraceHarness();
+        await harness.RunAsync(buckets: 12, series);
+        var duringGrace = ReadersView(harness.Crate);
+
+        clock.Now += Grace - TimeSpan.FromMilliseconds(1);
+        Assert.Equal(0, await harness.Executor.SweepDueAsync(harness.RollupRtId, harness.Token));
+        Assert.Equal(72, harness.Crate.Live.Count); // not yet
+
+        clock.Now += TimeSpan.FromMilliseconds(1);
+        Assert.Equal(1, await harness.Executor.SweepDueAsync(harness.RollupRtId, harness.Token));
+
+        Assert.Equal(36, harness.Crate.Live.Count);
+        Assert.All(harness.Crate.Live, r => Assert.Equal(4, r.Generation));
+        Assert.DoesNotContain(harness.Crate.Pointers, p => p.Generation == 2); // the contained entry is gone
+        Assert.Contains(harness.Crate.Pointers, p => p.Generation == 4);
+        Assert.Empty(harness.Crate.Sweeps); // the record is gone with the sweep
+        Assert.Equal(duringGrace, ReadersView(harness.Crate)); // the same values before and after the sweep
+    }
+
+    [Fact]
+    public async Task Grace_ANewerEntryInsideTheRange_SurvivesTheDeferredRemovalOfContainedPointerEntries()
+    {
+        var (harness, clock, series) = GraceHarness();
+        await harness.RunAsync(buckets: 12, series);
+
+        // Within the grace period a recompute of a sub-range flipped an entry of a higher generation (its own sweep record is
+        // another matter): it governs its rows, so the deferred removal of the first recompute must not take it.
+        var newer = new GenerationRange(StartMs + HourMs, StartMs + 3 * HourMs, string.Empty, 6);
+        harness.Crate.Pointers.Add(newer);
+
+        clock.Now += Grace;
+        Assert.Equal(1, await harness.Executor.SweepDueAsync(harness.RollupRtId, harness.Token));
+
+        Assert.Contains(newer, harness.Crate.Pointers);
+        Assert.DoesNotContain(harness.Crate.Pointers, p => p.Generation == 2); // the older contained entry still goes
+        Assert.Contains(harness.Crate.Pointers, p => p.Generation == 4);
+    }
+
+    [Fact]
+    public async Task Grace_ARestartBetweenFlipAndSweep_StillExecutesThePendingSweep()
+    {
+        var (harness, clock, series) = GraceHarness();
+        await harness.RunAsync(buckets: 12, series);
+
+        // A new process: new executor, empty process state - only the CrateDB rows are left.
+        clock.Now += Grace;
+        harness.Executor = harness.NewExecutor(new RecomputeProcessState(), Grace, clock);
+        var swept = await harness.Executor.SweepDueAsync(harness.RollupRtId, harness.Token);
+
+        Assert.Equal(1, swept);
+        Assert.Equal(36, harness.Crate.Live.Count);
+        Assert.Empty(harness.Crate.Sweeps);
+    }
+
+    [Fact]
+    public async Task Grace_TheNextRecomputeAfterTheGracePeriod_SweepsTheEarlierOne_WithoutAnyTick()
+    {
+        var (harness, clock, series) = GraceHarness();
+        await harness.RunAsync(buckets: 12, series);
+        harness.SeedLive(buckets: 2, series, generation: 0, firstBucket: 40); // an unrelated range
+
+        clock.Now += Grace;
+        await harness.RunAsync(buckets: 2, series, firstBucket: 40);
+
+        // The sweep of the first recompute ran at the start of the second; the second one is pending itself.
+        Assert.DoesNotContain(harness.Crate.Live, r => r.Generation == 3 && r.WindowStartMs < StartMs + 12 * HourMs);
+        var pending = Assert.Single(harness.Crate.Sweeps);
+        Assert.Equal(StartMs + 40 * HourMs, pending.Entry.StartMs);
+    }
+
+    [Fact]
+    public async Task Grace_TheFullReclaimPassOfANewProcess_LeavesEntriesWithAPendingSweepAlone()
+    {
+        var (harness, clock, series) = GraceHarness();
+        await harness.RunAsync(buckets: 12, series);
+
+        // A restarted process makes its once-per-process pass over all pointer entries on its first recompute
+        // (another range): the rows below the first recompute's entry are not dead yet, a dump may need them.
+        clock.Now += TimeSpan.FromMinutes(5);
+        harness.Executor = harness.NewExecutor(new RecomputeProcessState(), Grace, clock);
+        harness.SeedLive(buckets: 2, series, generation: 0, firstBucket: 40);
+        await harness.RunAsync(buckets: 2, series, firstBucket: 40);
+
+        Assert.Equal(36, harness.Crate.Live.Count(r => r.Generation == 3));
+        Assert.Equal(36, harness.Crate.Live.Count(r => r.Generation == 4));
+    }
+
+    [Fact]
+    public async Task Grace_AnEntryReplacedByANewerRecompute_DropsItsRecordWithoutDeleting()
+    {
+        var (harness, clock, series) = GraceHarness();
+        await harness.RunAsync(buckets: 12, series);
+        // A later recompute of the same range replaced the entry (its own record and sweep are another matter).
+        harness.Crate.Pointers.RemoveAll(p => p.Generation == 4);
+        harness.Crate.Pointers.Add(new GenerationRange(StartMs, StartMs + 12 * HourMs, string.Empty, 9));
+        var callsBefore = harness.Crate.Calls.Count;
+
+        clock.Now += Grace;
+        Assert.Equal(1, await harness.Executor.SweepDueAsync(harness.RollupRtId, harness.Token));
+
+        Assert.Empty(harness.Crate.Sweeps);
+        Assert.DoesNotContain(harness.Crate.Calls.Skip(callsBefore), c => c.Kind.StartsWith("delete:b", StringComparison.Ordinal));
+        Assert.Equal(72, harness.Crate.Live.Count); // nothing was removed on the strength of a replaced entry
+    }
+
+    [Fact]
+    public async Task Grace_ASweepThatFails_KeepsTheRecordAndIsRepeated()
+    {
+        var (harness, clock, series) = GraceHarness();
+        await harness.RunAsync(buckets: 12, series);
+        clock.Now += Grace;
+        harness.Crate.BeforeStatement = (call, _) =>
+        {
+            if (call.Kind == "delete:below")
+            {
+                throw new InvalidOperationException("node lost");
+            }
+        };
+
+        Assert.Equal(0, await harness.Executor.SweepDueAsync(harness.RollupRtId, harness.Token));
+        Assert.Single(harness.Crate.Sweeps);
+
+        harness.Crate.BeforeStatement = null;
+        Assert.Equal(1, await harness.Executor.SweepDueAsync(harness.RollupRtId, harness.Token));
+        Assert.Empty(harness.Crate.Sweeps);
+        Assert.Equal(36, harness.Crate.Live.Count);
+    }
+
+    [Fact]
+    public async Task Grace_Zero_SweepsAtOnce_AndNeverTouchesTheRecordTable()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        harness.Executor = harness.NewExecutor(new RecomputeProcessState(), TimeSpan.Zero);
+        var series = Series(3);
+        harness.SeedLive(buckets: 12, series, generation: 3);
+        harness.Crate.Pointers.Add(new GenerationRange(StartMs, StartMs + 12 * HourMs, string.Empty, 3));
+
+        await harness.RunAsync(buckets: 12, series);
+
+        Assert.Equal(36, harness.Crate.Live.Count);
+        Assert.All(harness.Crate.Live, r => Assert.Equal(4, r.Generation));
+        Assert.Contains(harness.Crate.Calls, c => c.Kind == "delete:contained-pointers");
+        Assert.DoesNotContain(harness.Crate.Calls, c => c.Kind.Contains("sweep", StringComparison.Ordinal));
+        Assert.False(harness.Crate.SweepTableExists);
+    }
+
+    [Fact]
+    public async Task Grace_FailingToRecordTheSweep_FallsBackToTheReclaimOfTheNextCall()
+    {
+        var (harness, _, series) = GraceHarness();
+        harness.Crate.BeforeStatement = (call, _) =>
+        {
+            if (call.Kind == "record-sweep")
+            {
+                throw new InvalidOperationException("cannot write");
+            }
+        };
+
+        var result = await harness.RunAsync(buckets: 12, series);
+        harness.Crate.BeforeStatement = null;
+
+        Assert.Equal(36, result.RowsProcessed); // committed stays committed
+        Assert.Empty(harness.Crate.Sweeps);
+        // The entry is remembered for the reclaim at the start of the next call for the rollup (without the grace period).
+        harness.SeedLive(buckets: 2, series, generation: 0, firstBucket: 40);
+        await harness.RunAsync(buckets: 2, series, firstBucket: 40);
+        Assert.DoesNotContain(harness.Crate.Live, r => r.Generation == 3);
+    }
+
+    [Fact]
+    public async Task Grace_TheTenantSweepTick_FindsRecordTablesWithOneQuery()
+    {
+        var (harness, clock, series) = GraceHarness();
+        await harness.RunAsync(buckets: 12, series);
+        clock.Now += Grace;
+
+        var tables = await harness.Executor.ListSweepTablesAsync(harness.Token);
+
+        Assert.Single(tables);
+        Assert.Equal(1, harness.Crate.Calls.Count(c => c.Kind == "read:sweep-tables"));
+    }
+
+    [Fact]
+    public async Task RestoreGate_WhileTheTenantIsMarked_NoStatementIsSent_AndTheCallerIsToldWhy()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var markerDb = A.Fake<IStreamDataDatabaseClient>();
+        A.CallTo(() => markerDb.GetCountAsync(A<string>._, A<string>._, A<CrateStatementClass>._, A<CancellationToken>._)).Returns(1L);
+        var gate = new Meshmakers.Octo.Runtime.Engine.CrateDb.Reconcile.RestoreReconcileMarker(
+            Tenant, markerDb, A.Fake<IStreamDataDatabaseManagementClient>(), new RecomputeProcessState(), TimeProvider.System,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        harness.Executor = new CrateDbArchiveRecomputeExecutor(Tenant, harness.Crate, harness.Crate, A.Fake<IArchiveRuntimeStore>(),
+            harness.Logger, rollupArchiveStore: null, 10, new RecomputeProcessState(), TimeSpan.Zero, TimeProvider.System, gate);
+        var series = Series(2);
+        harness.SeedLive(buckets: 3, series, generation: 1);
+
+        var ex = await Assert.ThrowsAsync<RestoreReconcilePendingException>(() => harness.RunAsync(buckets: 3, series));
+
+        Assert.Contains("restore reconcile pending", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(harness.RollupRtId.ToString(), ex.Message, StringComparison.Ordinal);
+        Assert.Empty(harness.Crate.Calls); // not a count, not a refresh, not a statement
+        Assert.Equal(6, harness.Crate.Live.Count);
+    }
+
+    [Fact]
+    public void Grace_NegativeValue_IsRefused_ByTheExecutor()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            harness.NewExecutor(new RecomputeProcessState(), TimeSpan.FromSeconds(-1)));
+    }
+
     private static string[] Series(int count) =>
         Enumerable.Range(0, count).Select(_ => OctoObjectId.GenerateNewId().ToString()).ToArray();
 
@@ -768,8 +1042,10 @@ public class CrateDbArchiveRecomputeExecutorTests
         /// An executor the way the repository builds one: short-lived, with the state of the process
         /// handed in. Two of them sharing a state are two requests of one process.
         /// </summary>
-        public CrateDbArchiveRecomputeExecutor NewExecutor(RecomputeProcessState state) => new(
-            Tenant, Crate, Crate, _archiveStore, Logger, rollupArchiveStore: null, _sliceTargetRows, state);
+        public CrateDbArchiveRecomputeExecutor NewExecutor(
+            RecomputeProcessState state, TimeSpan? sweepGracePeriod = null, TimeProvider? clock = null) => new(
+            Tenant, Crate, Crate, _archiveStore, Logger, rollupArchiveStore: null, _sliceTargetRows, state,
+            sweepGracePeriod ?? TimeSpan.Zero, clock ?? TimeProvider.System);
 
         public string LiveTable => TenantSchema.QualifiedArchiveTable(Tenant, _rollupRtId.ToString());
 

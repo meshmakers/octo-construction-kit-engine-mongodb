@@ -2,6 +2,7 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Copy;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Dapper;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -21,7 +22,7 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 /// Client for interacting with the stream data database.
 /// </summary>
 internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatabaseManagementClient,
-    IStreamDataHealthCheckClient
+    IStreamDataHealthCheckClient, ICrateCopyClient
 {
     /// <summary>
     /// AB#4278: maximum rows written under one resilience (Polly) envelope. A bulk insert of millions
@@ -714,6 +715,99 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
     /// <summary>The head of a statement for an error message: enough to name the kind and the table.</summary>
     private static string Abbreviate(string sql) => sql.Length <= 160 ? sql : sql[..160] + " …";
+
+    /// <summary>
+    /// Runs one statement of the staging copy (AB#5967) once, under a command timeout of its own and
+    /// without the resilience pipeline: a retry could repeat a <c>COPY FROM</c> that already loaded rows.
+    /// The statement text of a <c>COPY</c> carries the storage credential, and so does the message of the
+    /// driver's exception, so no driver exception leaves this method: a failure becomes a
+    /// <see cref="StreamDataCopyStatementException"/> with a scrubbed message and no inner exception, an
+    /// overdue statement a <see cref="StreamDataStatementTimeoutException"/> with the redacted text, and a
+    /// cancelled token an <see cref="OperationCanceledException"/>.
+    /// </summary>
+    public async Task<CrateStatementResult> ExecuteStatementAsync(string tenantId, CopyStatement statement,
+        TimeSpan commandTimeout, CancellationToken cancellationToken)
+    {
+        var timeoutSeconds = Math.Max(1, (int)Math.Ceiling(commandTimeout.TotalSeconds));
+        var timeout = TimeSpan.FromSeconds(timeoutSeconds);
+        var started = Stopwatch.GetTimestamp();
+
+        // The driver ends an overdue statement at its command timeout; this token ends a call that does not
+        // get that far (a connection that never opens), a margin behind it.
+        using var callTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        callTimeout.CancelAfter(timeout + CrateResiliencePipeline.CallTimeoutMargin);
+
+        try
+        {
+            await using var lease = await LeaseConnectionAsync(tenantId, callTimeout.Token);
+            await using var command = new NpgsqlCommand(statement.Reveal(), lease.Connection)
+            {
+                CommandTimeout = timeoutSeconds
+            };
+
+            if (!statement.ReturnsRows)
+            {
+                var affected = await command.ExecuteNonQueryAsync(callTimeout.Token);
+                return new CrateStatementResult(affected, []);
+            }
+
+            var rows = new List<IReadOnlyDictionary<string, object?>>();
+            await using var reader = await command.ExecuteReaderAsync(callTimeout.Token);
+            while (await reader.ReadAsync(callTimeout.Token))
+            {
+                var row = new Dictionary<string, object?>(reader.FieldCount, StringComparer.Ordinal);
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    row[reader.GetName(i)] = ReadCell(reader, i);
+                }
+
+                rows.Add(row);
+            }
+
+            return new CrateStatementResult(Math.Max(0, reader.RecordsAffected), rows);
+        }
+        catch (Exception ex) when (ex is not StreamDataCopyStatementException and not StreamDataStatementTimeoutException)
+        {
+            // Nothing below may let `ex` escape: its message can hold the statement text.
+            var elapsed = Stopwatch.GetElapsedTime(started);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException("The CrateDB statement was cancelled by the caller.", cancellationToken);
+            }
+
+            var isJobKilled = ex is PostgresException pg && IsJobKilled(pg);
+            var isTimeout = ex is OperationCanceledException || ex is TimeoutException ||
+                            ex is NpgsqlException { InnerException: TimeoutException } ||
+                            (isJobKilled && ClassifyJobKilled(false, callTimeout.IsCancellationRequested, elapsed, timeout)
+                                == JobKilledCause.BudgetElapsed);
+            if (isTimeout)
+            {
+                throw new StreamDataStatementTimeoutException(
+                    CrateStatementClass.Maintenance, timeout, elapsed, AbbreviateCopy(statement.Redacted), innerException: null);
+            }
+
+            var (sqlState, reason) = ex is PostgresException postgres
+                ? (postgres.SqlState, postgres.MessageText + (string.IsNullOrEmpty(postgres.Detail) ? string.Empty : " " + postgres.Detail))
+                : (null, ex.Message);
+            throw new StreamDataCopyStatementException(statement.Redacted, sqlState, statement.Scrub(reason));
+        }
+    }
+
+    /// <summary>The head of a redacted staging statement for an error message; long enough to name the location.</summary>
+    private static string AbbreviateCopy(string redacted) => redacted.Length <= 400 ? redacted : redacted[..400] + " …";
+
+    /// <summary>One cell of a result row; a type the driver cannot materialise reads as <c>null</c>.</summary>
+    private static object? ReadCell(NpgsqlDataReader reader, int ordinal)
+    {
+        try
+        {
+            return reader.IsDBNull(ordinal) ? null : reader.GetValue(ordinal);
+        }
+        catch (Exception ex) when (ex is InvalidCastException or NotSupportedException)
+        {
+            return null;
+        }
+    }
 
     public async Task ExecuteBulkAsync(string tenantId, string parameterizedSql,
         IReadOnlyList<IReadOnlyList<object?>> argumentSets, CancellationToken cancellationToken = default)

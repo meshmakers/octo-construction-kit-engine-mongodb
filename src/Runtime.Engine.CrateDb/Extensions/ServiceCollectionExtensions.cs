@@ -30,7 +30,8 @@ public static class ServiceCollectionExtensions
         services.AddOptions<CrateRecomputeOptions>()
             .Configure<IServiceProvider>((options, provider) =>
                 provider.GetService<IConfiguration>()?.GetSection(CrateRecomputeOptions.SectionName).Bind(options))
-            .Validate(o => o.IsValid(), CrateRecomputeOptions.ValidationMessage);
+            .Validate(o => o.IsValid(), CrateRecomputeOptions.ValidationMessage)
+            .ValidateOnStart();
 
         // Register CrateDatabaseClient as singleton, exposed via multiple interfaces
         services.AddSingleton<CrateDatabaseClient>();

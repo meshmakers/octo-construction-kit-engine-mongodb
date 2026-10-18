@@ -48,7 +48,10 @@ public static class StreamDataEngineBuilderExtensions
         // names do not collide.
         builder.Services.AddOptions<CrateRecomputeOptions>()
             .BindConfiguration(CrateRecomputeOptions.SectionName)
-            .Validate(o => o.IsValid(), CrateRecomputeOptions.ValidationMessage);
+            .Validate(o => o.IsValid(), CrateRecomputeOptions.ValidationMessage)
+            // An unusable value (a negative SweepGracePeriod) stops the service at start with the message,
+            // not at the first recompute hours later.
+            .ValidateOnStart();
 
         // Register CrateDatabaseClient as singleton, exposed via multiple interfaces
         builder.Services.AddSingleton<CrateDatabaseClient>();

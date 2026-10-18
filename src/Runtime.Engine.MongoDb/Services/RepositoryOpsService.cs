@@ -75,7 +75,8 @@ public class RepositoryOpsService(
     {
         var args = MongoToolArguments.BuildMongoRestoreArguments(options,
             GetConnectionString(options.Database).ToString(),
-            systemConfigurationOptions.Value.AdminUser, systemConfigurationOptions.Value.AdminUserPassword);
+            systemConfigurationOptions.Value.AdminUser, systemConfigurationOptions.Value.AdminUserPassword,
+            systemConfigurationOptions.Value.MongoRestoreBatchSize);
 
         logger.LogInformation("Executing mongorestore with options: {Options}",
             MongoToolArguments.ToDisplayString("mongorestore", args));

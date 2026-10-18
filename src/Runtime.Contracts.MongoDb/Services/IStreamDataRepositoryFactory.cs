@@ -44,4 +44,36 @@ public interface IStreamDataRepositoryFactory
     /// is idempotent, the caller logs the full list for a manual retry.
     /// </remarks>
     Task DeleteArchiveTablesAsync(string tenantId, IReadOnlyList<OctoObjectId> archiveRtIds);
+
+    /// <summary>
+    /// Removes the tenant-level stream data state that is not owned by one archive - the restore reconcile marker and the rollup
+    /// repair queue (AB#6968) - when the tenant is deleted for good, so a tenant re-created under the same id starts clean and its
+    /// rollups are not blocked by a marker the deleted one left. Idempotent; a default implementation (no such state) does nothing.
+    /// </summary>
+    /// <remarks>
+    /// Deletes the tenant's <b>rows</b> and drops a table only when it is empty afterwards: the CrateDB schema is shared by tenants
+    /// whose ids differ only in <c>-</c> and <c>_</c>, so another tenant's rows must survive.
+    /// </remarks>
+    Task DeleteTenantStateAsync(string tenantId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    /// <summary>
+    /// Asks the storage cluster - not a tenant - whether the native copy of archive data to a staging
+    /// location can run: whether the cluster setting that keeps COPY statements out of the job log is
+    /// set, and which version the nodes run. The answer is the one
+    /// <see cref="IStreamDataRepository.CheckStagingCopyReadinessAsync"/> gives; this member exists so a
+    /// caller can ask <em>before</em> it touches the tenant.
+    /// </summary>
+    /// <remarks>
+    /// Needs no tenant context, no CK cache and no <see cref="IArchiveRuntimeStore"/>: a restore has to
+    /// know that the archive data can be loaded before it replaces the tenant's database, and building a
+    /// tenant context at that point would load the CK cache from the database that is about to be replaced.
+    /// Side-effect free (two reads of cluster state, nothing is written or changed) and never throws for a
+    /// missing prerequisite - the prerequisite not being met is the answer
+    /// (<see cref="StagingCopyReadiness.IsReady"/> is <c>false</c> and
+    /// <see cref="StagingCopyReadiness.Reason"/> says what to do). A factory whose storage cannot copy
+    /// answers "not supported".
+    /// </remarks>
+    Task<StagingCopyReadiness> CheckStagingCopyReadinessAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult(new StagingCopyReadiness(false, false, null,
+            "This stream data backend does not support the native copy to a staging location."));
 }

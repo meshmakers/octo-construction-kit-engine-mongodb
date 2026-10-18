@@ -77,6 +77,18 @@ internal static class GenerationMapSqlBuilder
             $"ON CONFLICT (\"range_start\", \"range_end\", \"rtid_scope\") DO UPDATE SET \"{Constants.Generation}\" = {g};";
     }
 
+    /// <summary>
+    /// Builds the delete of exactly one pointer entry (range, scope and generation all match). Used by the rollup repair to remove
+    /// an entry whose generation has no rows (AB#6968).
+    /// </summary>
+    public static string BuildDeletePointer(
+        string genMapTable, long rangeStartMs, long rangeEndMs, string rtIdScope, long generation) =>
+        $"DELETE FROM {genMapTable} " +
+        $"WHERE \"range_start\" = {rangeStartMs.ToString(CultureInfo.InvariantCulture)} " +
+        $"AND \"range_end\" = {rangeEndMs.ToString(CultureInfo.InvariantCulture)} " +
+        $"AND \"rtid_scope\" = '{(rtIdScope ?? AllRtIdsScope).Replace("'", "''")}' " +
+        $"AND \"{Constants.Generation}\" = {generation.ToString(CultureInfo.InvariantCulture)};";
+
     /// <summary>Builds <c>SELECT range_start, range_end, rtid_scope, generation FROM {genmap};</c>.</summary>
     public static string BuildSelectAll(string genMapTable) =>
         $"SELECT \"range_start\", \"range_end\", \"rtid_scope\", \"{Constants.Generation}\" FROM {genMapTable};";
@@ -144,16 +156,25 @@ internal static class GenerationMapSqlBuilder
     /// dropped; a scoped flip sweeps one entity's rows only, so only contained entries of that same
     /// scope are.
     /// </para>
+    /// <para>
+    /// <paramref name="belowGeneration"/> bounds the delete to entries of a lower generation, the same strict bound as the
+    /// sweep of the rows. The immediate path runs right after the flip, when the flipped entry outranks every contained
+    /// one; the deferred path runs up to the sweep grace period later, and a newer recompute of a sub-range may have
+    /// flipped an entry of a higher generation in the meantime - that entry still governs its rows and must stay.
+    /// </para>
     /// </remarks>
     public static string BuildDeleteContainedPointers(
-        string genMapTable, DateTime from, DateTime to, string rtIdScope)
+        string genMapTable, DateTime from, DateTime to, string rtIdScope, long? belowGeneration = null)
     {
         var fromMs = ToEpochMs(from);
         var toMs = ToEpochMs(to);
         var scope = (rtIdScope ?? AllRtIdsScope).Replace("'", "''");
         var scopeClause = scope.Length == 0 ? string.Empty : $" AND \"rtid_scope\" = '{scope}'";
+        var generationClause = belowGeneration is { } generation
+            ? $" AND \"{Constants.Generation}\" < {generation.ToString(CultureInfo.InvariantCulture)}"
+            : string.Empty;
         return
-            $"DELETE FROM {genMapTable} WHERE \"range_start\" >= {fromMs} AND \"range_end\" <= {toMs}{scopeClause} " +
+            $"DELETE FROM {genMapTable} WHERE \"range_start\" >= {fromMs} AND \"range_end\" <= {toMs}{scopeClause}{generationClause} " +
             $"AND NOT (\"range_start\" = {fromMs} AND \"range_end\" = {toMs} AND \"rtid_scope\" = '{scope}');";
     }
 
