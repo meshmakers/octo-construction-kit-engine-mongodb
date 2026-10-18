@@ -962,6 +962,10 @@ rows occupy the table until the sweep, and reads scan a larger table (measured o
 in the AB#6968 hand-over). An executor or repository built without options (outside the host's DI) keeps the immediate sweep.
 Rule of the concept: `octo-construction-kit-engine/docs/concept-rollup-recompute.md`, "Sweep grace period".
 
+**Where a recompute can hit a dump.** The measured placement matrix (flip between map copy and data copy, with and without sweep, after the
+data, after the dump; grace period and repeat rule on or off) is in the engine concept `concept-tenant-backup-native-archive-dump.md`,
+section "Placement matrix"; with grace period and repeat rule on every placement restores without defects.
+
 **Rollup consistency validator and the restore reconcile marker (AB#6968).** `ValidateRollupsAsync` (`RollupConsistencyValidator`)
 checks every rollup of the tenant, or the requested ones, with counts and MIN/MAX statements only (plus the small pointer table); no row is
 read and nothing is changed. A rollup that was never activated has no tables and is skipped. Four checks (`RollupConsistencyCheck`),
