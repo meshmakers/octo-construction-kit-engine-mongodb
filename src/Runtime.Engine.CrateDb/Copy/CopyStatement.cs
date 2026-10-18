@@ -92,6 +92,24 @@ internal sealed class CopyStatement
     }
 
     /// <summary>
+    /// <c>COPY &lt;table&gt; TO DIRECTORY '&lt;location&gt;' WITH (compression = 'gzip', …)</c> — a whole (small) table, the
+    /// generation map of a rollup, without a time condition.
+    /// </summary>
+    public static CopyStatement CopyToWhole(string qualifiedTable, ArchiveCopyStagingLocation location)
+    {
+        string Render(bool redacted)
+        {
+            var sb = new StringBuilder();
+            sb.Append("COPY ").Append(qualifiedTable)
+                .Append(" TO DIRECTORY ").Append(Literal(redacted ? location.RedactedUri : location.RevealUri()))
+                .Append(" WITH (").Append(Options(location, redacted, overwriteDuplicates: null)).Append(')');
+            return sb.ToString();
+        }
+
+        return new CopyStatement(Render(false), Render(true), returnsRows: false, location.Scrub);
+    }
+
+    /// <summary>
     /// <c>COPY &lt;table&gt; FROM '&lt;location&gt;/*' WITH (compression = 'gzip', …) RETURN SUMMARY</c> — loads
     /// every file of a slice folder. The summary has one row per file and node.
     /// </summary>

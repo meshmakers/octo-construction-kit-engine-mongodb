@@ -76,8 +76,82 @@ internal sealed class SimulatedCrate : ICrateCopyClient
         return Task.FromResult(Answer(statement.Reveal()));
     }
 
+    // ---- the generation map of a rollup (AB#6968) ---------------------------------------------------------
+
+    /// <summary>One entry of a generation map.</summary>
+    public readonly record struct MapRow(long Start, long End, string Scope, long Generation);
+
+    public List<MapRow> SourceMap { get; } = [];
+    public List<MapRow> TargetMap { get; } = [];
+    public Dictionary<string, List<MapRow>> MapStore { get; } = new();
+
+    /// <summary>The columns of the map tables; empty = the rollup has no map table.</summary>
+    public string[] MapColumns { get; set; } = ["range_start", "range_end", "rtid_scope", "generation"];
+
+    /// <summary>How often the source map was read with a SELECT (the reads of the repeat rule).</summary>
+    public int MapReads { get; private set; }
+
+    private CrateStatementResult AnswerMap(string sql)
+    {
+        var isSource = sql.Contains(SourceTable, StringComparison.Ordinal);
+        if (sql.Contains("information_schema.columns", StringComparison.Ordinal))
+        {
+            return new CrateStatementResult(0, MapColumns
+                .Select(c => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+                {
+                    ["column_name"] = c, ["data_type"] = c == "rtid_scope" ? "text" : "bigint"
+                }).ToList());
+        }
+
+        if (sql.StartsWith("SELECT COUNT(*)", StringComparison.Ordinal))
+        {
+            return Row(("count", (long)(isSource ? SourceMap : TargetMap).Count));
+        }
+
+        if (sql.StartsWith("SELECT \"range_start\"", StringComparison.Ordinal))
+        {
+            MapReads++;
+            return new CrateStatementResult(0, SourceMap
+                .Select(m => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+                {
+                    ["range_start"] = m.Start, ["range_end"] = m.End, ["rtid_scope"] = m.Scope, ["generation"] = m.Generation
+                }).ToList());
+        }
+
+        if (sql.StartsWith("COPY", StringComparison.Ordinal) && sql.Contains(" TO DIRECTORY ", StringComparison.Ordinal))
+        {
+            MapStore[ArchiveCopyRedaction.RedactUri(Unquote(CopyToTarget.Match(sql).Groups["uri"].Value))] = SourceMap.ToList();
+            return new CrateStatementResult(SourceMap.Count, []);
+        }
+
+        if (sql.StartsWith("COPY", StringComparison.Ordinal) && sql.Contains(" FROM ", StringComparison.Ordinal))
+        {
+            var key = ArchiveCopyRedaction.RedactUri(Unquote(CopyFromSource.Match(sql).Groups["uri"].Value));
+            if (!MapStore.TryGetValue(key, out var rows))
+            {
+                return new CrateStatementResult(0, [Summary(0, 0)]);
+            }
+
+            var loaded = 0;
+            foreach (var row in rows.Where(row => !TargetMap.Contains(row)))
+            {
+                TargetMap.Add(row);
+                loaded++;
+            }
+
+            return new CrateStatementResult(0, [Summary(loaded, 0)]);
+        }
+
+        return CrateStatementResult.Empty; // REFRESH TABLE
+    }
+
     private CrateStatementResult Answer(string sql)
     {
+        if (sql.Contains("__genmap", StringComparison.Ordinal))
+        {
+            return AnswerMap(sql);
+        }
+
         if (sql.Contains("sys.cluster", StringComparison.Ordinal))
         {
             return Row(("jobs_log_filter", Filter));

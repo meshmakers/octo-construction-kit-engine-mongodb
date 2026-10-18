@@ -12,9 +12,22 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb.Copy;
 /// <param name="Schema">Tenant schema (unquoted).</param>
 /// <param name="TableName">Table name (unquoted).</param>
 /// <param name="TimeColumn"><c>window_start</c> on a windowed archive, <c>timestamp</c> on a raw one.</param>
-internal sealed record ArchiveCopyTarget(OctoObjectId ArchiveRtId, string Schema, string TableName, string TimeColumn)
+/// <param name="GenerationMapTableName">
+/// Name of the generation map table (unquoted) when the archive is a rollup; <c>null</c> for every other archive,
+/// whose copy never reads or writes a map.
+/// </param>
+internal sealed record ArchiveCopyTarget(
+    OctoObjectId ArchiveRtId, string Schema, string TableName, string TimeColumn, string? GenerationMapTableName = null)
 {
     public string QualifiedTable => $"\"{Schema}\".\"{TableName}\"";
+
+    /// <summary>True for a rollup archive: it has a generation map next to its data table.</summary>
+    public bool HasGenerationMap => GenerationMapTableName is not null;
+
+    /// <summary>The generation map table; throws for an archive without one.</summary>
+    public string QualifiedGenerationMap => GenerationMapTableName is { } name
+        ? $"\"{Schema}\".\"{name}\""
+        : throw new InvalidOperationException($"Archive '{ArchiveRtId}' is not a rollup and has no generation map.");
 }
 
 /// <summary>
@@ -26,8 +39,10 @@ internal sealed record ArchiveCopyTarget(OctoObjectId ArchiveRtId, string Schema
 /// <remarks>
 /// <para>The credential of the staging location stays inside <see cref="CopyStatement"/>: log lines, result
 /// messages and exceptions of this class carry only redacted text.</para>
-/// <para>Generation maps of rollups are not copied yet (slice 2 of the feature): a plan has data slices only
-/// and a plan with a generation-map slice is refused.</para>
+/// <para>The generation map of a rollup (slice 2, AB#6968) is the last slice of a plan. A dump copies it first
+/// and the data after it, a load loads the data first and the map last, so a pointer never names a version whose
+/// rows are not there (concept §6). The repeat rule around a dump of a rollup lives in
+/// <see cref="RollupArchiveDumper"/>.</para>
 /// </remarks>
 internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateCopyClient client)
 {
@@ -78,11 +93,44 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
             }
         }
 
+        var tables = new List<ArchiveTableDescription> { description };
+        if (target.HasGenerationMap)
+        {
+            var map = await DescribeAsync(target, ArchiveCopyTable.GenerationMap, options, cancellationToken);
+            if (map.Columns.Count == 0)
+            {
+                // The validator reports a rollup without its map (check d); the copy has nothing to take along.
+                logger.LogWarning("Rollup {ArchiveRtId} of tenant {TenantId} has no generation map table; the plan has data slices only.",
+                    target.ArchiveRtId, tenantId);
+            }
+            else
+            {
+                tables.Add(map);
+                var mapRows = await CountGenerationMapAsync(target, options, cancellationToken);
+                if (mapRows > 0)
+                {
+                    slices.Add(ArchiveCopySlice.ForGenerationMap(mapRows)); // always the last slice
+                }
+            }
+        }
+
         logger.LogInformation(
             "Planned the native copy of archive {ArchiveRtId} of tenant {TenantId}: {Slices} slices, {Rows} rows.",
             target.ArchiveRtId, tenantId, slices.Count, slices.Sum(s => s.RowCount));
-        return new ArchiveCopyPlan(target.ArchiveRtId, [description], slices);
+        return new ArchiveCopyPlan(target.ArchiveRtId, tables, slices);
     }
+
+    /// <summary>Rows of the generation map (after a refresh: the count is a search, it sees the last refresh only).</summary>
+    internal async Task<long> CountGenerationMapAsync(
+        ArchiveCopyTarget target, ArchiveCopyOptions options, CancellationToken cancellationToken)
+    {
+        await RefreshAsync(target.QualifiedGenerationMap, options, cancellationToken);
+        return await CountAsync($"SELECT COUNT(*) FROM {target.QualifiedGenerationMap}", options, cancellationToken);
+    }
+
+    internal Task RefreshAsync(string qualifiedTable, ArchiveCopyOptions options, CancellationToken cancellationToken)
+        => client.ExecuteStatementAsync(tenantId, CopyStatement.Plain($"REFRESH TABLE {qualifiedTable}"),
+            options.CommandTimeout, cancellationToken);
 
     // ---- description -------------------------------------------------------------------------------------
 
@@ -122,7 +170,10 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
         EnsurePlanFits(target, plan, mustBeSameArchive: true);
         await JobLogFilterGuard.EnsureFilteredAsync(client, tenantId, options, target.ArchiveRtId, cancellationToken);
 
-        foreach (var slice in plan.Slices)
+        // The generation map first, the data after it (concept §6): rows a recompute adds in between are of a
+        // version the copied map does not name yet, and the version the map names is still in the table because
+        // its sweep is deferred by the grace period.
+        foreach (var slice in plan.Slices.OrderBy(s => s.Table == ArchiveCopyTable.GenerationMap ? 0 : 1))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var result = await CopySliceToAsync(target, plan, slice, location, options, cancellationToken);
@@ -139,8 +190,18 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
         ArchiveCopyOptions options, CancellationToken cancellationToken)
     {
         var sliceLocation = location.WithSubPath(slice.GetStagingPath(plan.ArchiveRtId));
-        var statement = CopyStatement.CopyTo(target.QualifiedTable, target.TimeColumn,
-            slice.FromUtc!.Value, slice.ToUtc!.Value, sliceLocation);
+        CopyStatement statement;
+        if (slice.Table == ArchiveCopyTable.GenerationMap)
+        {
+            // A flip is visible to a search after the next refresh only; the copy is a search.
+            await RefreshAsync(target.QualifiedGenerationMap, options, cancellationToken);
+            statement = CopyStatement.CopyToWhole(target.QualifiedGenerationMap, sliceLocation);
+        }
+        else
+        {
+            statement = CopyStatement.CopyTo(target.QualifiedTable, target.TimeColumn,
+                slice.FromUtc!.Value, slice.ToUtc!.Value, sliceLocation);
+        }
 
         var started = Stopwatch.GetTimestamp();
         try
@@ -167,9 +228,18 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
     // ---- COPY FROM ---------------------------------------------------------------------------------------
 
     /// <summary>Loads the slices of <paramref name="plan"/> one at a time; see <see cref="IStreamDataRepository.CopyFromStagingAsync"/>.</summary>
+    public IAsyncEnumerable<ArchiveCopySliceResult> CopyFromAsync(
+        ArchiveCopyTarget target, ArchiveCopyPlan plan, ArchiveCopyStagingLocation location, ArchiveCopyOptions options,
+        CancellationToken cancellationToken)
+        => CopyFromAsync(target, plan, location, options, outcome: null, cancellationToken);
+
+    /// <summary>
+    /// As above; <paramref name="outcome"/> receives the rows the tables hold when the load got to the end
+    /// (<see cref="IStreamDataRepository.LoadArchiveFromStagingAsync"/> turns them into the verification).
+    /// </summary>
     public async IAsyncEnumerable<ArchiveCopySliceResult> CopyFromAsync(
         ArchiveCopyTarget target, ArchiveCopyPlan plan, ArchiveCopyStagingLocation location, ArchiveCopyOptions options,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+        LoadOutcome? outcome, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         options.Validate();
         EnsurePlanFits(target, plan, mustBeSameArchive: false);
@@ -181,13 +251,15 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
         logger.LogInformation("Loading archive {ArchiveRtId} of tenant {TenantId} into CrateDB {Version}.",
             target.ArchiveRtId, tenantId, await GetStorageVersionAsync(options, cancellationToken));
 
+        var dataSlices = plan.Slices.Where(s => s.Table == ArchiveCopyTable.Data).ToList();
+        var mapSlices = plan.Slices.Where(s => s.Table == ArchiveCopyTable.GenerationMap).ToList();
         var previous = await ReadTableSettingsAsync(target, options, cancellationToken);
         var settingsRestored = false;
         var allLoaded = true;
         await ApplyBulkSettingsAsync(target, options, cancellationToken);
         try
         {
-            foreach (var slice in plan.Slices)
+            foreach (var slice in dataSlices)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var result = await CopySliceFromAsync(target, plan, slice, location, options, cancellationToken);
@@ -202,7 +274,30 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
             // Back to the normal settings before the merge, then the merge itself (concept §7, step 6).
             await RestoreSettingsAsync(target, previous, options, CancellationToken.None);
             settingsRestored = true;
-            await FinishLoadAsync(target, plan, options, cancellationToken);
+            var dataRows = await FinishLoadAsync(target, plan, options, cancellationToken);
+            if (outcome is not null)
+            {
+                outcome.DataRows = dataRows;
+            }
+
+            // The generation map last: a pointer must never name a version whose rows are not loaded yet.
+            foreach (var slice in mapSlices)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var result = await CopySliceFromAsync(target, plan, slice, location, options, cancellationToken);
+                yield return result;
+                if (!result.IsSuccess)
+                {
+                    allLoaded = false;
+                    yield break;
+                }
+            }
+
+            if (target.HasGenerationMap && outcome is not null)
+            {
+                await RefreshAsync(target.QualifiedGenerationMap, options, cancellationToken);
+                outcome.MapRows = await CountAsync($"SELECT COUNT(*) FROM {target.QualifiedGenerationMap}", options, cancellationToken);
+            }
         }
         finally
         {
@@ -225,7 +320,9 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
         ArchiveCopyOptions options, CancellationToken cancellationToken)
     {
         var sliceLocation = location.WithSubPath(slice.GetStagingPath(plan.ArchiveRtId));
-        var statement = CopyStatement.CopyFrom(target.QualifiedTable, sliceLocation, options.OverwriteDuplicates);
+        var statement = CopyStatement.CopyFrom(
+            slice.Table == ArchiveCopyTable.GenerationMap ? target.QualifiedGenerationMap : target.QualifiedTable,
+            sliceLocation, options.OverwriteDuplicates);
 
         var started = Stopwatch.GetTimestamp();
         try
@@ -265,20 +362,18 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
     private async Task EnsureColumnsExistAsync(
         ArchiveCopyTarget target, ArchiveCopyPlan plan, ArchiveCopyOptions options, CancellationToken cancellationToken)
     {
-        var dumped = plan.Tables.FirstOrDefault(t => t.Table == ArchiveCopyTable.Data);
-        if (dumped is null)
+        foreach (var dumped in plan.Tables)
         {
-            return;
-        }
-
-        var existing = (await DescribeAsync(target, ArchiveCopyTable.Data, options, cancellationToken))
-            .Columns.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var missing = dumped.Columns.Select(c => c.Name).Where(c => !existing.Contains(c)).ToList();
-        if (missing.Count > 0)
-        {
-            throw new ArchiveCopyRefusedException(ArchiveCopyRefusalReason.ColumnMissing,
-                $"The table of archive '{target.ArchiveRtId}' has no column {string.Join(", ", missing.Select(m => $"'{m}'"))} " +
-                "that the dump contains. Nothing was loaded.", target.ArchiveRtId);
+            var existing = (await DescribeAsync(target, dumped.Table, options, cancellationToken))
+                .Columns.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var missing = dumped.Columns.Select(c => c.Name).Where(c => !existing.Contains(c)).ToList();
+            if (missing.Count > 0)
+            {
+                var what = dumped.Table == ArchiveCopyTable.Data ? "The table" : "The generation map table";
+                throw new ArchiveCopyRefusedException(ArchiveCopyRefusalReason.ColumnMissing,
+                    $"{what} of archive '{target.ArchiveRtId}' has no column {string.Join(", ", missing.Select(m => $"'{m}'"))} " +
+                    "that the dump contains. Nothing was loaded.", target.ArchiveRtId);
+            }
         }
     }
 
@@ -359,7 +454,7 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
         }
     }
 
-    private async Task FinishLoadAsync(
+    private async Task<long> FinishLoadAsync(
         ArchiveCopyTarget target, ArchiveCopyPlan plan, ArchiveCopyOptions options, CancellationToken cancellationToken)
     {
         await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain($"REFRESH TABLE {target.QualifiedTable}"),
@@ -384,11 +479,14 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
         }
 
         var rows = await CountAsync($"SELECT COUNT(*) FROM {target.QualifiedTable}", options, cancellationToken);
-        if (rows != plan.TotalRows)
+        var expected = plan.Slices.Where(s => s.Table == ArchiveCopyTable.Data).Sum(s => s.RowCount);
+        if (rows != expected)
         {
             logger.LogWarning("Archive {ArchiveRtId} holds {Rows} rows after the load, the dump counted {Expected}.",
-                target.ArchiveRtId, rows, plan.TotalRows);
+                target.ArchiveRtId, rows, expected);
         }
+
+        return rows;
     }
 
     // ---- helpers -----------------------------------------------------------------------------------------
@@ -401,10 +499,13 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
                 $"The plan was made for archive '{plan.ArchiveRtId}', not for '{target.ArchiveRtId}'.", nameof(plan));
         }
 
-        if (plan.Slices.Any(s => s.Table != ArchiveCopyTable.Data))
+        var planHasMap = plan.Tables.Any(t => t.Table == ArchiveCopyTable.GenerationMap) ||
+                         plan.Slices.Any(s => s.Table == ArchiveCopyTable.GenerationMap);
+        if (planHasMap && !target.HasGenerationMap)
         {
-            throw new NotSupportedException(
-                "Copying the generation map of a rollup archive is not implemented yet; the plan holds a generation-map slice.");
+            throw new ArchiveCopyRefusedException(ArchiveCopyRefusalReason.ColumnMissing,
+                $"The dump of archive '{plan.ArchiveRtId}' contains a generation map, but archive '{target.ArchiveRtId}' is not a rollup " +
+                "and has no generation map table. Nothing was loaded.", target.ArchiveRtId);
         }
     }
 
@@ -478,4 +579,12 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
             : FormattableString.Invariant($"{bytes} bytes");
 
     private sealed record TableSettings(string NumberOfReplicas, long? RefreshIntervalMs);
+}
+
+/// <summary>The rows the tables of an archive hold after a load that ran to the end; <c>null</c> = not reached.</summary>
+internal sealed class LoadOutcome
+{
+    public long? DataRows { get; set; }
+
+    public long? MapRows { get; set; }
 }

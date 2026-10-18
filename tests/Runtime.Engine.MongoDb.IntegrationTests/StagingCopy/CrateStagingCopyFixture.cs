@@ -192,6 +192,67 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
         }
     }
 
+    /// <summary>The first window of the rollups the tests create: 2026-01-01 00:00 UTC.</summary>
+    internal static readonly DateTime RollupOrigin = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    private const long RollupOriginMs = 1767225600000;
+
+    /// <summary>
+    ///     Creates the data table and the generation map of a rollup. With <paramref name="generations" /> &gt; 0 it also
+    ///     fills them: 480 hourly windows at generation 0, and for every generation g in 1..n a day (24 windows) at
+    ///     generation g with its pointer entry. The superseded generation-0 rows of those days stay, as they do
+    ///     while the sweep of a recompute is deferred. The pointer of the last generation is scoped to one entity.
+    /// </summary>
+    internal async Task CreateRollupAsync(string tenantId, OctoObjectId rollupRtId, int generations = 0)
+    {
+        var table = TenantSchema.QualifiedArchiveTable(tenantId, rollupRtId.ToString());
+        var genMap = GenerationMapSqlBuilder.GenMapTable(tenantId, rollupRtId.ToString());
+        await SqlAsync(ArchiveDdlGenerator.GenerateCreateWindowedTable(table,
+            [new ArchiveColumnDdl("Value", new CrateColumnType.Primitive("DOUBLE PRECISION"), false, false)],
+            numberOfShards: 2, numberOfReplicas: 0, includeGeneration: true));
+        await SqlAsync(GenerationMapSqlBuilder.BuildCreateTable(genMap));
+        if (generations == 0)
+        {
+            return;
+        }
+
+        await InsertRollupRowsAsync(table, generation: 0, firstHour: 0, lastHour: 479, valueBase: 0);
+        for (var g = 1; g <= generations; g++)
+        {
+            var firstHour = 24 * (g - 1);
+            await InsertRollupRowsAsync(table, g, firstHour, firstHour + 23, valueBase: 1000 * g);
+            await SqlAsync(GenerationMapSqlBuilder.BuildUpsertPointer(genMap,
+                RollupOrigin.AddHours(firstHour), RollupOrigin.AddHours(firstHour + 24),
+                g == generations ? "rt1" : GenerationMapSqlBuilder.AllRtIdsScope, g));
+        }
+
+        await SqlAsync($"REFRESH TABLE {table}");
+        await SqlAsync($"REFRESH TABLE {genMap}");
+    }
+
+    private Task InsertRollupRowsAsync(string table, long generation, int firstHour, int lastHour, int valueBase)
+        => SqlAsync(
+            $"INSERT INTO {table} (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\", \"was_updated\", \"generation\", \"value\") " +
+            $"SELECT CAST({RollupOriginMs} + CAST(generate_series AS BIGINT) * 3600000 AS TIMESTAMP WITH TIME ZONE), " +
+            $"CAST({RollupOriginMs} + (CAST(generate_series AS BIGINT) + 1) * 3600000 AS TIMESTAMP WITH TIME ZONE), " +
+            $"'rt1', 'Test/Sensor-1', FALSE, {generation}, {valueBase} + generate_series * 1.5 FROM generate_series({firstHour}, {lastHour})");
+
+    /// <summary>A repository over this CrateDB for the rollup <paramref name="rollupRtId" /> of <paramref name="tenantId" />.</summary>
+    internal CrateDbStreamDataRepository NewRollupRepository(string tenantId, OctoObjectId rollupRtId)
+    {
+        var store = A.Fake<IArchiveRuntimeStore>();
+        A.CallTo(() => store.GetAsync(rollupRtId)).Returns(new ArchiveSnapshot(rollupRtId,
+            new RtCkId<CkTypeId>("Test", new CkTypeId("Sensor")), CkArchiveStatus.Activated, "rollup",
+            new[] { new CkArchiveColumnSpec("Value", true, false) })
+        {
+            RollupAggregations = [new CkRollupAggregationSpec("Value", CkRollupFunction.Sum, null)],
+            Period = TimeSpan.FromHours(1)
+        });
+
+        return new CrateDbStreamDataRepository(NullLogger<CrateDbStreamDataRepository>.Instance,
+            A.Fake<ICkCacheService>(), Client, Client, Configuration, tenantId, store, A.Fake<IFormulaEngine>());
+    }
+
     /// <summary>A repository over this CrateDB for <paramref name="archiveRtIds"/> of <paramref name="tenantId"/>.</summary>
     internal CrateDbStreamDataRepository NewRepository(string tenantId, params OctoObjectId[] archiveRtIds)
     {

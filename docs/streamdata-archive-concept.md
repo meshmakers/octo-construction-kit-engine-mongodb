@@ -931,7 +931,27 @@ and `GetStorageVersionAsync` (engine contract, `Runtime.Contracts/StreamData`) a
 with CrateDB's own `COPY TO DIRECTORY` / `COPY FROM`. The concept is
 `octo-construction-kit-engine/docs/concept-tenant-backup-native-archive-dump.md`. `SupportsStagingCopy` is true when the
 database client can run a statement once under a timeout of its own (`ICrateCopyClient`, implemented by `CrateDatabaseClient`).
-The generation map of a rollup is not copied yet (slice 2 of the feature).
+`DumpArchiveToStagingAsync` and `LoadArchiveFromStagingAsync` (slice 2, AB#6968) wrap plan, copy and load of one archive and
+add the generation map of a rollup, the repeat rule and the row-count verification (below).
+
+**Rollups: the generation map and the repeat rule.** A rollup is two tables, `archive_<rtId>` and `archive_<rtId>__genmap`, and a
+recompute changes both without a transaction: new rows under generation N+1, the pointer flip in the map, the sweep of
+generation N. The map is the last slice of a plan (`ArchiveCopySlice.ForGenerationMap`, one folder `<rtId>/genmap/all`; an
+empty map has no slice). `CopyToStagingAsync` copies it **first**, the data slices after it; `CopyFromStagingAsync` loads the data
+**first** and the map **last**, so a pointer never names a version whose rows are not loaded yet.
+`DumpArchiveToStagingAsync` (class `RollupArchiveDumper`) adds the repeat rule: plan, read the map (refresh, then select), copy
+map and data, read the map again; when the two reads differ, a recompute flipped a pointer in between and the rollup is copied
+again, up to `ArchiveCopyOptions.MaxMapAttempts` (default 3) times, then the dump fails with
+`ArchiveCopyRefusedException(GenerationMapKeptMoving)` naming the rollup. The result states `Attempts`, `MapReadAtUtc` (the first
+read of the attempt that stands) and `LastDataCopiedAtUtc`, both from a clock that never goes backwards; the caller compares
+their difference with the sweep grace period (below). An archive that is not a rollup is copied once and its map is never read.
+Files of an earlier attempt with other slice keys stay in the staging area; the manifest names only the slices of the final plan.
+Rows of a version above the pointer that a recompute in progress had already written (before its flip) are in the dump; the
+validator finds them after the restore as orphans and the repair removes them.
+
+`LoadArchiveFromStagingAsync` returns `ArchiveCopyLoadResult.RowCountVerified`: true when the data table holds exactly the
+counted rows and, for a rollup, the map holds the counted pointer entries; false when a slice failed, the counts differ or the
+load stopped early. The restore job treats an unverified archive as failed.
 
 **Dump.** The plan cuts the data table into counted time slices with the planner of the row export (`ExportSlicePlanner`,
 target `ArchiveCopyOptions.TargetSliceRows`). Each slice is one statement,

@@ -1659,9 +1659,54 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // only tells the storage shape, which decides the time axis.
         var snapshot = await _archiveStore.GetAsync(archiveRtId)
             ?? throw new ArchiveNotFoundException(archiveRtId);
-        return new ArchiveCopyTarget(archiveRtId, TenantSchema.SchemaName(_tenantId),
-            TenantSchema.ArchiveTableName(archiveRtId.ToString()),
-            snapshot.UsesWindowedStorage ? Constants.WindowStart : Constants.Timestamp);
+        var tableName = TenantSchema.ArchiveTableName(archiveRtId.ToString());
+        return new ArchiveCopyTarget(archiveRtId, TenantSchema.SchemaName(_tenantId), tableName,
+            snapshot.UsesWindowedStorage ? Constants.WindowStart : Constants.Timestamp,
+            // A rollup has a generation map next to its data table; every other archive never touches one.
+            snapshot.RollupAggregations is not null ? tableName + "__genmap" : null);
+    }
+
+    /// <inheritdoc />
+    public async Task<ArchiveCopyDumpResult> DumpArchiveToStagingAsync(
+        OctoObjectId archiveRtId, ArchiveCopyStagingLocation location, ArchiveCopyOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        var runner = RequireStagingCopy(archiveRtId);
+        var target = await ResolveCopyTargetAsync(archiveRtId);
+        var dumper = new RollupArchiveDumper(_logger, _tenantId, _copyClient!, runner, TimeProvider.System);
+        return await dumper.DumpAsync(target, location, options ?? new ArchiveCopyOptions(), cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<ArchiveCopyLoadResult> LoadArchiveFromStagingAsync(
+        OctoObjectId archiveRtId, ArchiveCopyPlan plan, ArchiveCopyStagingLocation location,
+        ArchiveCopyOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        var runner = RequireStagingCopy(archiveRtId);
+        var target = await ResolveCopyTargetAsync(archiveRtId);
+        var outcome = new LoadOutcome();
+        var results = new List<ArchiveCopySliceResult>();
+        await foreach (var result in runner.CopyFromAsync(
+                           target, plan, location, options ?? new ArchiveCopyOptions(), outcome, cancellationToken))
+        {
+            results.Add(result);
+        }
+
+        var expectedData = plan.Slices.Where(s => s.Table == ArchiveCopyTable.Data).Sum(s => s.RowCount);
+        var expectedMap = plan.Slices.Where(s => s.Table == ArchiveCopyTable.GenerationMap).Sum(s => s.RowCount);
+        long? loaded = outcome.DataRows is null ? null : outcome.DataRows + (outcome.MapRows ?? 0);
+        var verified = results.Count == plan.Slices.Count && results.All(r => r.IsSuccess)
+                       && outcome.DataRows == expectedData
+                       && (!target.HasGenerationMap || outcome.MapRows == expectedMap);
+        if (!verified)
+        {
+            _logger.LogWarning(
+                "Archive {ArchiveRtId} of tenant {TenantId}: the row count after the load is not verified " +
+                "(data {DataRows} of {ExpectedData}, generation map {MapRows} of {ExpectedMap}).",
+                archiveRtId, _tenantId, outcome.DataRows, expectedData, outcome.MapRows, expectedMap);
+        }
+
+        return new ArchiveCopyLoadResult(archiveRtId, results, plan.TotalRows, loaded, verified);
     }
 
     /// <inheritdoc />

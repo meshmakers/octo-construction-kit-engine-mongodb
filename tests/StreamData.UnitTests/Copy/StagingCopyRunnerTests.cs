@@ -245,7 +245,7 @@ public class StagingCopyRunnerTests
     }
 
     [Fact]
-    public async Task CopyTo_RefusesAPlanOfAnotherArchive_AndAGenerationMapSlice()
+    public async Task CopyTo_RefusesAPlanOfAnotherArchive_AndAGenerationMapSliceForAnArchiveWithoutAMap()
     {
         WithData();
         var runner = Runner();
@@ -253,8 +253,10 @@ public class StagingCopyRunnerTests
 
         await Assert.ThrowsAsync<ArgumentException>(() =>
             Collect(runner.CopyToAsync(SourceTarget, plan with { ArchiveRtId = Restored }, Location, Small, Ct)));
-        await Assert.ThrowsAsync<NotSupportedException>(() => Collect(runner.CopyToAsync(SourceTarget,
+        // Since AB#6968 a rollup's map is copied; an archive that is not a rollup has none to copy.
+        var refused = await Assert.ThrowsAsync<ArchiveCopyRefusedException>(() => Collect(runner.CopyToAsync(SourceTarget,
             new ArchiveCopyPlan(Source, [], [ArchiveCopySlice.ForGenerationMap(3)]), Location, Small, Ct)));
+        Assert.Contains("not a rollup", refused.Message, StringComparison.Ordinal);
     }
 
     // ---- COPY FROM -----------------------------------------------------------------------------------------
