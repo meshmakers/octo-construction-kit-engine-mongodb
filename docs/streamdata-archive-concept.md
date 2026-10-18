@@ -997,7 +997,12 @@ hand-over; the statements on a 28.8 million row rollup are counts of the generat
 this feature run unchanged. The restore job sets it after the archive tables were loaded and clears it when the validator reports ok
 or the repair has run; **never while an entry is blocking `NotChecked`** (`NoLiveTable`, `SourceMissing`): the repair skips a rollup without a table (it must not turn a missing table
 into an empty one), says why in the final validation (`failedStep` names the first unchecked rollup) and leaves the marker set until the
-rollup is restored or activated and validates. A repair of some rollups only clears the marker only when the whole tenant validates ok. A process remembers an answer for five seconds (set and clear update it at once), another process sees a change
+rollup is restored or activated and validates. A repair of some rollups only clears the marker only when the whole tenant validates ok.
+The bot additionally keeps the marker while an archive of the backup failed to restore (it knows the manifest) and restores every source
+before the rollups that read it, leaving a source that was disabled in the backup activated, marker set, until its rollups are back.
+Deleting a tenant removes the marker row, the repair queue rows (`IStreamDataRepositoryFactory.DeleteTenantStateAsync`; a table is dropped
+only when no other tenant of the shared schema has a row in it) and, with the archive tables, the `__sweep` records, so a tenant created again
+under the same id starts without a marker. A process remembers an answer for five seconds (set and clear update it at once), another process sees a change
 within that time. What the marker blocks: see "Gate" below.
 
 **Rollup repair.** `RepairRollupsAsync(rollupRtIds, dryRun)` (`RollupRepairer`) validates, repairs, validates again and returns
