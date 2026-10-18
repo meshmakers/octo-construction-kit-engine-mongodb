@@ -47,6 +47,9 @@ public sealed class LocalS3Store
     /// <summary>The endpoint CrateDB uses inside the cluster (host and port in an <c>s3://</c> URI).</summary>
     public string CrateEndpoint => "seaweedfs.octo-infra:8333";
 
+    /// <summary>A store that is not there, with the reason; touches nothing.</summary>
+    public static LocalS3Store Unavailable(string reason) => new(null, null, reason);
+
     public static async Task<LocalS3Store> ConnectAsync()
     {
         string? access;

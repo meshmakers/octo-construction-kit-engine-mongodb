@@ -34,8 +34,18 @@ public sealed class LocalKindStagingFixture : IAsyncLifetime
 
     public string Reason { get; private set; } = string.Empty;
 
+    /// <summary>Environment variable that opts the tests in: they touch the kind cluster of the machine, so they never run by chance.</summary>
+    public const string OptInVariable = "OCTO_TEST_LOCAL_KIND";
+
     public async ValueTask InitializeAsync()
     {
+        if (Environment.GetEnvironmentVariable(OptInVariable) != "1")
+        {
+            Reason = $"the tests that use the local kind cluster run only with {OptInVariable}=1";
+            Store = LocalS3Store.Unavailable(Reason);
+            return;
+        }
+
         Store = await LocalS3Store.ConnectAsync();
         if (!Store.Available)
         {

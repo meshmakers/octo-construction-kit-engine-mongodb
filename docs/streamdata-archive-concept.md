@@ -1065,6 +1065,12 @@ column that has a DEFAULT is not preserved: the default applies.
   `JobLogNotFiltered`) unless the filter excludes `COPY` (`stmt NOT ILIKE 'copy %'`), because CrateDB records the full text of a
   finished statement in `sys.jobs_log`. Setting it belongs to the infrastructure (`SET GLOBAL PERSISTENT`).
 
+**Tests that use the local kind cluster are opt-in.** `StagingCopyLocalS3Tests` and `RollupLocalMeasurementTests` (fixture
+`LocalKindStagingFixture`) read the CrateDB and the SeaweedFS of the machine's kind cluster and create tables and objects in
+a schema and prefix of their own. They run only with `OCTO_TEST_LOCAL_KIND=1` and are skipped with that reason otherwise, so a
+plain `dotnet test` never reaches a developer's long-lived cluster. The two measurements additionally need their own variables
+(`OCTO_STAGING_MEASURE_SOURCE_TENANT`; `OCTO_ROLLUP_MEASURE_SOURCE_TENANT` and `OCTO_ROLLUP_MEASURE_ROLLUP`).
+
 Tests: `StreamData.UnitTests/Copy` (statements and redaction with canary values, the runner against a simulated CrateDB) and
 `Runtime.Engine.MongoDb.IntegrationTests/StagingCopy` (a CrateDB container copying to `file://` in its own file system: round
 trip with the same rows, sums and time bounds per month under another tenant id, failed loads, the guard, the job log,
