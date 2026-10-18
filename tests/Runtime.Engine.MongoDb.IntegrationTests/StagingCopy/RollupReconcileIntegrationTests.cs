@@ -1,5 +1,9 @@
 using FakeItEasy;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.Runtime.Contracts.Formulas;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
@@ -59,6 +63,42 @@ public class RollupReconcileIntegrationTests(CrateStagingCopyFixture fixture)
         var report = await c.Repository.ValidateRollupsAsync(null, Ct);
         return report.Rollups.Single().Findings;
     }
+
+    // ---- tenant delete leaves nothing of this feature behind ---------------------------------------------------
+
+    [Fact]
+    public async Task TenantDelete_RemovesTheMarkerTheRepairQueueAndTheSweepRecords_AndLeavesANeighbourInTheSharedSchemaAlone()
+    {
+        var rig = await RepairRig.CreateAsync(fixture);
+        var neighbour = rig.Tenant.Insert(3, "_"); // the same CrateDB schema (SchemaName strips '-' and '_'), another tenant
+        Assert.Equal(TenantSchema.SchemaName(rig.Tenant), TenantSchema.SchemaName(neighbour));
+        var neighbourRepository = fixture.NewReconcileRepository(neighbour, [], []);
+        await rig.Repository.SetRestoreReconcilePendingAsync(true, Ct);
+        await rig.Repository.EnqueueRollupRepairAsync(null, Ct);
+        await neighbourRepository.SetRestoreReconcilePendingAsync(true, Ct);
+        var sweepTable = PendingSweepSqlBuilder.SweepTable(rig.Tenant, rig.Rollup.ToString());
+        await rig.SqlAsync(PendingSweepSqlBuilder.BuildCreateTable(sweepTable));
+        await rig.SqlAsync(PendingSweepSqlBuilder.BuildUpsert(sweepTable, new GenerationRange(0, 3_600_000, "", 2), 1));
+        Assert.True(await TableCountAsync(rig.Tenant) >= 5); // data, genmap, sweep, marker, queue (and the raw archive)
+        IStreamDataRepositoryFactory factory = new CrateDbStreamDataRepositoryFactory(
+            NullLoggerFactory.Instance, A.Fake<ICkCacheService>(), fixture.Client, fixture.Client, fixture.Configuration,
+            A.Fake<IFormulaEngine>());
+
+        await factory.DeleteArchiveTablesAsync(rig.Tenant, [rig.Raw, rig.Rollup]);
+        await factory.DeleteTenantStateAsync(rig.Tenant, Ct);
+
+        // the neighbour's marker row is still there, so the shared marker table is kept
+        var marker = $"\"{TenantSchema.SchemaName(rig.Tenant)}\".\"{RestoreReconcileMarker.TableName}\"";
+        Assert.Equal(1, await fixture.CountAsync($"SELECT COUNT(*) FROM {marker} WHERE \"tenant_id\" = '{neighbour}'"));
+        Assert.Equal(0, await fixture.CountAsync($"SELECT COUNT(*) FROM {marker} WHERE \"tenant_id\" = '{rig.Tenant}'"));
+
+        await factory.DeleteTenantStateAsync(neighbour, Ct);
+
+        Assert.Equal(0, await TableCountAsync(rig.Tenant));
+    }
+
+    private Task<long> TableCountAsync(string tenant) => fixture.CountAsync(
+        $"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '{TenantSchema.SchemaName(tenant)}'");
 
     // ---- a rollup whose table is missing -------------------------------------------------------------------
 

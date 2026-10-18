@@ -963,9 +963,11 @@ public class TenantContext : ITenantContext
     ///     or stream data is disabled at instance level (no CrateDB configured).
     /// </summary>
     private async Task DropStreamDataArchiveTablesAsync(string tenantId, string databaseName,
-        IReadOnlyList<OctoObjectId> archives)
+        IReadOnlyList<OctoObjectId> archives, bool streamDataModelPresent)
     {
-        if (archives.Count == 0)
+        // Nothing to drop for a tenant that never had the stream data model: it does not touch CrateDB. A tenant that has the model
+        // but no (more) archive can still own tenant-level state - the restore reconcile marker of an archive that was deleted later.
+        if (archives.Count == 0 && !streamDataModelPresent)
         {
             return;
         }
@@ -983,16 +985,24 @@ public class TenantContext : ITenantContext
 
         try
         {
-            await factory.DeleteArchiveTablesAsync(tenantId, archives);
-            _logger.LogInformation("Dropped the stream data tables of {Count} archive(s) of tenant {TenantId}",
-                archives.Count, tenantId);
+            if (archives.Count > 0)
+            {
+                await factory.DeleteArchiveTablesAsync(tenantId, archives);
+                _logger.LogInformation("Dropped the stream data tables of {Count} archive(s) of tenant {TenantId}",
+                    archives.Count, tenantId);
+            }
+
+            // The tenant-level state (restore reconcile marker, rollup repair queue; AB#6968): a tenant re-created under this id must
+            // not inherit a set marker.
+            await factory.DeleteTenantStateAsync(tenantId);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex,
                 "Dropped database {DatabaseName} of tenant {TenantId} but failed to drop the stream data (CrateDB) " +
                 "tables of its archives; drop them manually in the tenant's schema (the __genmap, __rc and __sweep " +
-                "side-tables exist only for rollup archives): {Tables}", databaseName, tenantId, DescribeArchiveTables(archives));
+                "side-tables exist only for rollup archives; also delete the rows of this tenant from __restore_reconcile " +
+                "and __rollup_repair): {Tables}", databaseName, tenantId, DescribeArchiveTables(archives));
         }
     }
 
@@ -1010,13 +1020,13 @@ public class TenantContext : ITenantContext
     ///     CkCacheException). Read failures propagate: called before anything is deleted, so an
     ///     unreadable tenant fails the delete instead of leaking its tables.
     /// </summary>
-    private async Task<IReadOnlyList<OctoObjectId>> CollectStreamDataArchivesAsync(IOctoAdminSession adminSession,
-        string tenantId)
+    private async Task<(IReadOnlyList<OctoObjectId> Archives, bool ModelPresent)> CollectStreamDataArchivesAsync(
+        IOctoAdminSession adminSession, string tenantId)
     {
         var child = await TryGetChildTenantContextAsync(adminSession, tenantId);
         if (child is null || !_cacheService.TryGetRtCkType(child.TenantId, ArchiveRtCkTypeId, out _))
         {
-            return [];
+            return ([], false);
         }
 
         var archives = new List<OctoObjectId>();
@@ -1025,7 +1035,7 @@ public class TenantContext : ITenantContext
             archives.Add(archive.RtId);
         }
 
-        return archives;
+        return (archives, true);
     }
 
     // ReSharper disable once MemberCanBePrivate.Global
@@ -1058,9 +1068,9 @@ public class TenantContext : ITenantContext
         // Collected BEFORE the record deletion: this is the last moment the child resolves, and the
         // archive entities are gone with its database. Only when the caller drops the tenant for good;
         // a database swap (restore over an existing tenant) keeps the archives and their tables.
-        var streamDataArchives = dropStreamData
+        var (streamDataArchives, streamDataModelPresent) = dropStreamData
             ? await CollectStreamDataArchivesAsync(adminSession, tenantId)
-            : [];
+            : ([], false);
 
         Guid correlationId = Guid.NewGuid();
 
@@ -1083,7 +1093,7 @@ public class TenantContext : ITenantContext
                 DeleteOptions.Erase);
         }
 
-        return new TenantDeletionHandle(octoTenant.DatabaseName, correlationId, streamDataArchives);
+        return new TenantDeletionHandle(octoTenant.DatabaseName, correlationId, streamDataArchives, streamDataModelPresent);
     }
 
     /// <inheritdoc />
@@ -1127,7 +1137,7 @@ public class TenantContext : ITenantContext
                     "the credential has to be removed manually", normalizedDatabaseName, tenantId);
             }
 
-            await DropStreamDataArchiveTablesAsync(tenantId, normalizedDatabaseName, handle.StreamDataArchives);
+            await DropStreamDataArchiveTablesAsync(tenantId, normalizedDatabaseName, handle.StreamDataArchives, handle.StreamDataModelPresent);
         }
         finally
         {

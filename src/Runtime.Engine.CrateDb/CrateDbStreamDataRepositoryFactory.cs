@@ -5,6 +5,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Copy;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Reconcile;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -83,6 +84,10 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
             StagingCopyReadinessProbe.ClusterConnectionLabel,
             _databaseClient as ICrateCopyClient,
             cancellationToken);
+
+    /// <inheritdoc />
+    public Task DeleteTenantStateAsync(string tenantId, CancellationToken cancellationToken = default)
+        => TenantStateTableDrop.DropAsync(_databaseClient, _managementClient, tenantId, _recomputeProcessState, cancellationToken);
 
     public async Task DeleteArchiveTablesAsync(string tenantId, IReadOnlyList<OctoObjectId> archiveRtIds)
     {

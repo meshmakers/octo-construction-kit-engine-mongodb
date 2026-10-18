@@ -46,6 +46,17 @@ public interface IStreamDataRepositoryFactory
     Task DeleteArchiveTablesAsync(string tenantId, IReadOnlyList<OctoObjectId> archiveRtIds);
 
     /// <summary>
+    /// Removes the tenant-level stream data state that is not owned by one archive - the restore reconcile marker and the rollup
+    /// repair queue (AB#6968) - when the tenant is deleted for good, so a tenant re-created under the same id starts clean and its
+    /// rollups are not blocked by a marker the deleted one left. Idempotent; a default implementation (no such state) does nothing.
+    /// </summary>
+    /// <remarks>
+    /// Deletes the tenant's <b>rows</b> and drops a table only when it is empty afterwards: the CrateDB schema is shared by tenants
+    /// whose ids differ only in <c>-</c> and <c>_</c>, so another tenant's rows must survive.
+    /// </remarks>
+    Task DeleteTenantStateAsync(string tenantId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    /// <summary>
     /// Asks the storage cluster - not a tenant - whether the native copy of archive data to a staging
     /// location can run: whether the cluster setting that keeps COPY statements out of the job log is
     /// set, and which version the nodes run. The answer is the one

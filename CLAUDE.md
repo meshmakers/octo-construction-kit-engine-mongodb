@@ -2027,6 +2027,12 @@ Mongo-only restore keeps the stream data), the blueprint create-rollback, the de
 octo-common-services (builds its handle from the lifecycle record, no archives) and the test cleanups.
 `DetachChildTenantAsync` keeps everything for a later attach.
 
+The tenant-level state of the restore reconcile feature goes too (AB#6968): `IStreamDataRepositoryFactory.DeleteTenantStateAsync`
+deletes the tenant's rows from `__restore_reconcile` (marker) and `__rollup_repair` (queue) and drops such a table only when it is
+empty afterwards, because the schema is shared (rows are keyed by the full tenant id); a tenant re-created under the same id must not
+inherit a set marker. The per-archive `__sweep` record tables are `ArchiveTableDrop`'s. It runs when the tenant had the stream data
+model loaded (`TenantDeletionHandle.StreamDataModelPresent`), also with no archive left; a tenant without the model never touches CrateDB.
+
 Two rules of that drop are deliberate. **Per-archive, never "everything in the tenant's schema"**:
 `TenantSchema.SchemaName` strips `-` and `_` from the tenant id, so `acme-corp`, `acme_corp` and
 `acmecorp` share one CrateDB schema — a schema-wide drop (the previously unused
