@@ -28,9 +28,10 @@ public class LargeDocumentRestoreTests(SystemFixture systemFixture)
     private const int BoundaryDocumentBytes = 100_000;
     private const int BsonFramingBytes = 28;
 
-    // Not shown red without the fix: with the tool's default of 1000 documents (BatchSize = 1000) mongorestore 100.16.0 restored
-    // both data sets against the local MongoDB container. The failure depends on where a batch ends relative to the limit, which
-    // these generated sets do not reproduce; the tests prove the explicit batch size works on large documents.
+    // This test does NOT reproduce the mongorestore 100.16.0 overshoot locally: with the tool's default of 1000 documents
+    // (BatchSize = 1000) it also restored both generated data sets. The real failure came after 250,000 documents of 73 KB on
+    // average (msgLen 48000084). The test guards that large documents restore with the explicit batch size; the regression proof
+    // is the restore of the sbeg copy (AB#6981 acceptance criterion 3).
 
     /// <summary>Sizes spread around 73 KB with a multi-MB document every 37th, like the EDA messages of the failing tenant.</summary>
     [Fact]
