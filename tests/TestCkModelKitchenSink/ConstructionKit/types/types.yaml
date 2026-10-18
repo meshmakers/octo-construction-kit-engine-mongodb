@@ -47,13 +47,16 @@ types:
         execution:
           timeoutSeconds: 30
           idempotent: true
-          handler: pipeline
+          handler: service
       - methodId: Ping-1
         visibility: Internal
       - methodId: Reindex-1
         kind: Static
         authorization:
           roles: [ UserManagement ]
+        execution:
+          timeoutSeconds: 60
+          handler: pipeline
   # Inherits Named from Thing and implements Coded itself.
   # AB#6334: internal — it implements the internal Coded-1 and uses the internal role Link.
   - typeId: Gadget
