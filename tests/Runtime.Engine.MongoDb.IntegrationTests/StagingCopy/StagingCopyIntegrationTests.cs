@@ -1,10 +1,15 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using FakeItEasy;
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.Runtime.Contracts.Formulas;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Copy;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.StagingCopy;
@@ -128,6 +133,43 @@ public class StagingCopyIntegrationTests(CrateStagingCopyFixture fixture)
         {
             await fixture.SetJobLogFilterAsync(JobLogFilterGuard.RecommendedFilter);
         }
+    }
+
+    [Fact]
+    public async Task ClusterReadiness_NeedsNoTenant_AnswersLikeTheRepository_AndChangesNothing()
+    {
+        // AB#6969: no tenant, no archive store, no CK cache - only the cluster is asked.
+        IStreamDataRepositoryFactory factory = new CrateDbStreamDataRepositoryFactory(
+            NullLoggerFactory.Instance, A.Fake<ICkCacheService>(), fixture.Client, fixture.Client,
+            fixture.Configuration, A.Fake<IFormulaEngine>());
+        var repo = fixture.NewRepository(CrateStagingCopyFixture.NewTenantId());
+
+        var ready = await factory.CheckStagingCopyReadinessAsync(Ct);
+
+        Assert.True(ready.IsReady);
+        Assert.Equal("5.10.10", ready.StorageVersion);
+        Assert.Null(ready.Reason);
+        Assert.Equal(await repo.CheckStagingCopyReadinessAsync(Ct), ready);
+        try
+        {
+            await fixture.SetJobLogFilterAsync(null);
+            var notReady = await factory.CheckStagingCopyReadinessAsync(Ct);
+
+            Assert.False(notReady.IsReady);
+            Assert.True(notReady.Supported);
+            Assert.False(notReady.JobLogFilterSet);
+            Assert.Contains("stats.jobs_log_filter", notReady.Reason, StringComparison.Ordinal);
+            Assert.Equal(await repo.CheckStagingCopyReadinessAsync(Ct), notReady);
+
+            // The probe only reads: asking did not set the filter.
+            Assert.False((await factory.CheckStagingCopyReadinessAsync(Ct)).IsReady);
+        }
+        finally
+        {
+            await fixture.SetJobLogFilterAsync(JobLogFilterGuard.RecommendedFilter);
+        }
+
+        Assert.True((await factory.CheckStagingCopyReadinessAsync(Ct)).IsReady);
     }
 
     [Fact]

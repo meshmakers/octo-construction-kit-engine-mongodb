@@ -4,6 +4,7 @@ using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Copy;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -74,6 +75,14 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
             _recomputeProcessState,
             _timeProvider);
     }
+
+    /// <inheritdoc />
+    public Task<StagingCopyReadiness> CheckStagingCopyReadinessAsync(CancellationToken cancellationToken = default)
+        => StagingCopyReadinessProbe.CheckAsync(
+            _loggerFactory.CreateLogger<CrateDbStreamDataRepositoryFactory>(),
+            StagingCopyReadinessProbe.ClusterConnectionLabel,
+            _databaseClient as ICrateCopyClient,
+            cancellationToken);
 
     public async Task DeleteArchiveTablesAsync(string tenantId, IReadOnlyList<OctoObjectId> archiveRtIds)
     {

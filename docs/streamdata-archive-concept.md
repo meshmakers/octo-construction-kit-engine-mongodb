@@ -1065,6 +1065,18 @@ column that has a DEFAULT is not preserved: the default applies.
   `JobLogNotFiltered`) unless the filter excludes `COPY` (`stmt NOT ILIKE 'copy %'`), because CrateDB records the full text of a
   finished statement in `sys.jobs_log`. Setting it belongs to the infrastructure (`SET GLOBAL PERSISTENT`).
 
+**Readiness preflight, two doors (AB#6969).** `StagingCopyReadinessProbe` (`Copy/`) is the one implementation of "can the storage
+run the native copy": it reads `stats.jobs_log_filter` (`JobLogFilterGuard`) and the node versions and returns a
+`StagingCopyReadiness`. It only reads, never throws for a missing prerequisite (the answer says so, with the statement to run, and no
+credential), and its failure to ask is an answer too (`Supported`, not ready, the scrubbed reason). Two members delegate to it:
+`IStreamDataRepository.CheckStagingCopyReadinessAsync` (tenant-bound) and `IStreamDataRepositoryFactory.CheckStagingCopyReadinessAsync`
+(cluster-level; default implementation answers "not supported"). The factory member needs no tenant, no CK cache and no
+`IArchiveRuntimeStore`, which is what the tenant restore needs: it has to know that the archive data can be loaded **before** it replaces the
+tenant's database, and a tenant context built at that point would load the CK cache from the old database. The statements run on a
+connection labelled `default` (the label the health check uses); no tenant schema is touched. Tests: `StagingCopyReadinessProbeTests`
+(simulated CrateDB) and `StagingCopyIntegrationTests.ClusterReadiness_*` (CrateDB container: ready, filter removed -> not ready with the reason,
+filter restored, equal to the repository's answer).
+
 **Tests that use the local kind cluster are opt-in.** `StagingCopyLocalS3Tests` and `RollupLocalMeasurementTests` (fixture
 `LocalKindStagingFixture`) read the CrateDB and the SeaweedFS of the machine's kind cluster and create tables and objects in
 a schema and prefix of their own. They run only with `OCTO_TEST_LOCAL_KIND=1` and are skipped with that reason otherwise, so a
