@@ -83,6 +83,46 @@ public class TenantUpgradeGuardIntegrationTests(CkModelImportMigrationFixture fi
     }
 
     [Fact]
+    public async Task ExplicitCaller_JudgesAServiceManagedSystemCandidate_TheDefaultDoesNot()
+    {
+        // AB#6966: a file import of System must be judged; every service-driven path keeps skipping it.
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = $"upgsys{Guid.NewGuid():N}"[..20];
+        try
+        {
+            await CreateChildAsync(tenantId);
+            var tenant = await GetChildAsync(tenantId);
+            var system = await GetInstalledSystemIdAsync(tenant);
+            await tenant.ImportCkModelAsync(BuildBase("SBase-1.0.0", system, withExtra: false));
+            await tenant.ImportCkModelAsync(BuildDependent("SExact-1.0.0", "SBase-1.0.0", system, rangeRetaining: false));
+            var database = GetTenantDatabase(tenantId);
+            var before = await SnapshotAsync(database);
+
+            var newerSystem = new CkCompiledModelRoot
+            {
+                ModelId = new CkModelId("System", new Version(system.Version.Major, system.Version.Minor + 1, 0).ToString()),
+                Types = []
+            };
+
+            var byDefault = await tenant.EvaluateCkUpdateAsync([newerSystem], null, TestContext.Current.CancellationToken);
+            Assert.Empty(byDefault.Blockers);
+
+            var explicitCaller =
+                await tenant.EvaluateExplicitCkImportAsync([newerSystem], null, TestContext.Current.CancellationToken);
+            Assert.True(explicitCaller.IsBlocked);
+            Assert.Contains(explicitCaller.Blockers,
+                b => b.Dependent.FullName == "SExact-1.0.0" && b.Kind == CkUpgradeBlockerKind.ExactPin &&
+                     b.Update.Name == "System");
+
+            Assert.Equal(before, await SnapshotAsync(database));
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(systemContext, tenantId);
+        }
+    }
+
+    [Fact]
     public async Task PersistedLegacyRangeRetainingModelWithoutUsedSurface_IsCheckedByReferences_AndAnnounced()
     {
         var systemContext = fixture.GetSystemContext();

@@ -320,6 +320,71 @@ public class TenantUpgradeGuardTests
         Assert.Empty(result.Blockers);
     }
 
+    private static Task<CkUpgradeGuardResult> EvaluateExplicit(FakeInstalledModels installed,
+        params CkCompiledModelRoot[] updateSet) =>
+        GuardModels.Guard().EvaluateAsync(installed, updateSet, null, CancellationToken.None, true);
+
+    /// <summary>The repro of AB#6966: System-2.8.0 drops the attribute a System.Identity-like dependent uses.</summary>
+    private static FakeInstalledModels SystemTenant() => new FakeInstalledModels()
+        .Install(GuardModels.Basic("2.5.0", name: "System"))
+        .Install(GuardModels.RangeDependent("System.Identity-2.26.0", baseName: "System", range: "[2.5,3.0)",
+            floor: "2.5.0"));
+
+    [Fact]
+    public async Task ExplicitCaller_BreakingSystemCandidate_IsJudgedAndBlocks()
+    {
+        var result = await EvaluateExplicit(SystemTenant(), GuardModels.Basic("2.8.0", name: "System", withAsset: false));
+
+        Assert.True(result.IsBlocked);
+        var blocker = Assert.Single(result.Blockers);
+        Assert.Equal(CkUpgradeBlockerKind.ElementRemoved, blocker.Kind);
+        Assert.Equal("System.Identity-2.26.0", blocker.Dependent.FullName);
+        Assert.Equal("System-2.8.0", blocker.Update.FullName);
+    }
+
+    [Fact]
+    public async Task DefaultCaller_BreakingSystemCandidate_IsStillSkipped()
+    {
+        // Pins that the service-driven paths (blueprint apply/update, FixAll, batch import) keep skipping System.
+        var result = await Evaluate(SystemTenant(), GuardModels.Basic("2.8.0", name: "System", withAsset: false));
+
+        Assert.Empty(result.Blockers);
+    }
+
+    [Fact]
+    public async Task ExplicitCaller_AdditiveSystemCandidate_IsNotBlocked()
+    {
+        var result = await EvaluateExplicit(SystemTenant(),
+            GuardModels.Basic("2.8.0", name: "System", extraAssetAttribute: "Extra"));
+
+        Assert.Empty(result.Blockers);
+    }
+
+    [Fact]
+    public async Task ExplicitCaller_HarmlessSystemDowngrade_IsNotBlocked_BreakingOneIs()
+    {
+        var installed = new FakeInstalledModels()
+            .Install(GuardModels.Basic("2.8.0", name: "System"))
+            .Install(GuardModels.RangeDependent("System.Identity-2.26.0", baseName: "System", range: "[2.5,3.0)",
+                floor: "2.5.0"));
+
+        Assert.Empty((await EvaluateExplicit(installed, GuardModels.Basic("2.5.0", name: "System"))).Blockers);
+
+        var breaking = await EvaluateExplicit(installed, GuardModels.Basic("2.5.0", name: "System", withAsset: false));
+        Assert.Equal(CkUpgradeBlockerKind.ElementRemoved, Assert.Single(breaking.Blockers).Kind);
+    }
+
+    [Fact]
+    public async Task ExplicitCaller_FirstInstallAndSameVersionAndOtherMajorSystem_AreNoReplacement()
+    {
+        var empty = new FakeInstalledModels();
+        Assert.Empty((await EvaluateExplicit(empty, GuardModels.Basic("2.8.0", name: "System"))).Blockers);
+
+        var tenant = SystemTenant();
+        Assert.Empty((await EvaluateExplicit(tenant, GuardModels.Basic("2.5.0", name: "System", withAsset: false))).Blockers);
+        Assert.Empty((await EvaluateExplicit(tenant, GuardModels.Basic("3.0.0", name: "System", withAsset: false))).Blockers);
+    }
+
     [Fact]
     public async Task CandidateOfAnotherMajor_IsAParallelInstall_NotABlocker()
     {

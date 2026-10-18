@@ -2766,6 +2766,17 @@ public class TenantContext : ITenantContext
             availableDependentVersions, cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task<CkUpgradeGuardResult> EvaluateExplicitCkImportAsync(
+        IReadOnlyCollection<CkCompiledModelRoot> updateSet, IReadOnlyCollection<CkModelId>? availableDependentVersions = null,
+        CancellationToken cancellationToken = default)
+    {
+        var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
+        return await _serviceProvider.GetRequiredService<ITenantUpgradeGuard>().EvaluateAsync(
+            new TenantDatabaseSourceIdentifier(null, repositoryDataSource, TenantId), updateSet,
+            availableDependentVersions, cancellationToken, includeServiceManagedModels: true);
+    }
+
     public async Task<bool> IsCkModelExistingAsync(CkModelId ckModelId)
     {
         var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);

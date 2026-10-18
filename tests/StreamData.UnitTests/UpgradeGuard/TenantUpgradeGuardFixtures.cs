@@ -27,9 +27,9 @@ internal static class GuardModels
     /// </summary>
     internal static CkCompiledModelRoot Basic(string version, bool withAsset = true, bool internalAsset = false,
         AttributeValueTypesDto codeType = AttributeValueTypesDto.String, string? extraAssetAttribute = null,
-        bool codeOnAsset = true)
+        bool codeOnAsset = true, string name = "Basic")
     {
-        var id = new CkModelId("Basic", version);
+        var id = new CkModelId(name, version);
         var attributes = new List<CkTypeAttributeDto>();
         if (codeOnAsset)
         {
@@ -80,10 +80,10 @@ internal static class GuardModels
     ///     derived from <c>Basic@2/Asset-1</c> that reuses <c>Basic@2/Code-1</c>.
     /// </summary>
     internal static CkCompiledModelRoot RangeDependent(string id, string[]? usedSurface = null,
-        string? ownAttribute = null, string floor = "2.4.0", string range = "[2.4,3.0)")
+        string? ownAttribute = null, string floor = "2.4.0", string range = "[2.4,3.0)", string baseName = "Basic")
     {
         var modelId = new CkModelId(id);
-        var basic = CkModelId.MajorQualified("Basic", 2);
+        var basic = CkModelId.MajorQualified(baseName, 2);
         var attributes = new List<CkTypeAttributeDto>
         {
             new()
@@ -103,13 +103,13 @@ internal static class GuardModels
         return new CkCompiledModelRoot
         {
             ModelId = modelId,
-            Dependencies = [new CkModelId("Basic-2.4.0")],
+            Dependencies = [new CkModelId(baseName, "2.4.0")],
             DependencyRanges =
             [
                 new CkModelDependencyDto
                 {
-                    Range = new CkModelIdVersionRange("Basic", range), Floor = floor,
-                    UsedSurface = usedSurface?.ToList() ?? ["Basic@2/Asset-1", "Basic@2/Code-1"]
+                    Range = new CkModelIdVersionRange(baseName, range), Floor = floor,
+                    UsedSurface = usedSurface?.ToList() ?? [baseName + "@2/Asset-1", baseName + "@2/Code-1"]
                 }
             ],
             Types =

@@ -1783,8 +1783,10 @@ dependencies via `MongoRuntimeRepositoryProvider`) and, through it, `ImportEmbed
   `DefaultConfigurationCreatorService` (System.Identity, System.Notification) and `CreateIdentityDataCommandRequestConsumer`,
   comm-controller `TenantInitializationExtensions`, asset-repo `ModelsController` dependency status.
 
-- **Explicit imports stay unguarded** (platform-owner decision Q5): `ImportCkModelAsync(CkCompiledModelRoot)`
-  (CLI/API `ImportCk`, bot import command) may downgrade, logged WARN `Explicit downgrade of CK model ... from X
+- **Explicit imports may downgrade** (platform-owner decision Q5): `ImportCkModelAsync(CkCompiledModelRoot)`
+  (CLI/API `ImportCk`, bot import command) is not guarded itself; since AB#6966 the *API endpoint* judges the file with
+  `EvaluateExplicitCkImportAsync` (tenant upgrade guard, below) before it queues the job and refuses a breaking one unless forced.
+  A downgrade that passes may happen, logged WARN `Explicit downgrade of CK model ... from X
   to Y` and counted in `octo.ck.explicit_import.downgraded` (tag `model`). An explicit downgrade of a model that
   this process *embeds* in a newer version does not stick: the next tenant resolve (at the latest, the migration
   step of the import itself) sees "installed older" and upgrades it back.
@@ -2249,6 +2251,11 @@ was `DatabaseCkModelRepository.ValidateDependencies`, which runs *after* the imp
 // Runtime.Contracts.MongoDb: ITenantContext (implemented by TenantContext)
 Task<CkUpgradeGuardResult> EvaluateCkUpdateAsync(IReadOnlyCollection<CkCompiledModelRoot> updateSet,
     IReadOnlyCollection<CkModelId>? availableDependentVersions = null, CancellationToken cancellationToken = default);
+
+// Explicit callers only (AB#6966): the file import and its preview. Same rules, but service-managed candidates
+// (System, System.*) are judged as replacements too, in either direction.
+Task<CkUpgradeGuardResult> EvaluateExplicitCkImportAsync(IReadOnlyCollection<CkCompiledModelRoot> updateSet,
+    IReadOnlyCollection<CkModelId>? availableDependentVersions = null, CancellationToken cancellationToken = default);
 ```
 
 Result types (`Meshmakers.Octo.Runtime.Contracts.MongoDb.UpgradeGuard`):
@@ -2278,7 +2285,10 @@ transient in `AddMongoDbRuntimeRepository`) is the same service for code that al
   checker against every phrase, so an engine rewording turns a test red; structured findings in `CkDependentCheck` would remove the
   text coupling - open point for the engine).
 - *Never reported*: dependents that are `ResolveFailed` or `Importing` (not caused by the update); service-managed candidates
-  (`System`, `System.*` - the embedded-import downgrade guard and the service version decide there); candidates of another major than the
+  (`System`, `System.*` - the embedded-import downgrade guard and the service version decide there) **unless the caller is explicit**:
+  `EvaluateExplicitCkImportAsync` / `ITenantUpgradeGuard.EvaluateAsync(..., includeServiceManagedModels: true)` judge them like any
+  model (AB#6966: a System file import that removes a used attribute left the tenant unloadable; a downgrade is judged like an
+  upgrade, a harmless one is no blocker). Blueprint apply/update, FixAll, the batch import and the embedded import keep the default; candidates of another major than the
   installed one (a parallel install); candidates that are not installed or have the installed version; a `ResolveFailed` installed
   base (the update may repair it).
 - *Unknowns are announced, not guessed*: a range-retaining dependent without `usedSurface` (compiled before AB#4472) is judged by its

@@ -394,8 +394,10 @@ public interface ITenantContext
 
     /// <summary>
     ///     Explicit import of a construction kit model into the tenant (CLI/API <c>ImportCk</c>, bot import
-    ///     command). Not downgrade-guarded: replacing a newer installed version of the same model is allowed —
-    ///     the operator's escape hatch — but logged as WARN <c>explicit downgrade from X to Y</c> and counted in
+    ///     command). This method itself is not guarded (the embedded path has its own downgrade guard); the
+    ///     <b>API</b> endpoint judges the file with <see cref="EvaluateExplicitCkImportAsync" /> before it queues the import
+    ///     and refuses a breaking one unless forced (AB#6966). A downgrade is allowed here — the operator's escape
+    ///     hatch — but logged as WARN <c>explicit downgrade from X to Y</c> and counted in
     ///     <c>octo.ck.explicit_import.downgraded</c> (CK v2 F1.0-S1, AB#5900). Like every import, it ends with the
     ///     re-validation of all installed models, which returns <c>ResolveFailed</c> models whose dependencies
     ///     became satisfiable to <c>Available</c> (AB#5901).
@@ -420,6 +422,21 @@ public interface ITenantContext
     /// </param>
     /// <param name="cancellationToken">Cancels the evaluation.</param>
     Task<CkUpgradeGuardResult> EvaluateCkUpdateAsync(IReadOnlyCollection<CkCompiledModelRoot> updateSet,
+        IReadOnlyCollection<CkModelId>? availableDependentVersions = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    ///     The tenant upgrade guard for an <b>explicit</b> caller (CK v2 F2.5, AB#6966): the file import
+    ///     (<c>ImportCk</c>) and its read-only preview (<c>CheckUpgrade</c>). Identical to
+    ///     <see cref="EvaluateCkUpdateAsync" /> except that service-managed candidates (<c>System</c>, <c>System.*</c>)
+    ///     are judged as replacements too, in either direction (a downgrade that breaks an installed model is a blocker,
+    ///     one that breaks nothing is not). Service-driven paths (embedded/startup import, blueprint apply/update, FixAll,
+    ///     batch import) keep using <see cref="EvaluateCkUpdateAsync" /> and never judge System.
+    /// </summary>
+    /// <param name="updateSet">The compiled candidate models the caller intends to import together.</param>
+    /// <param name="availableDependentVersions">Optional versions used only to fill the suggestion of a blocker.</param>
+    /// <param name="cancellationToken">Cancels the evaluation.</param>
+    Task<CkUpgradeGuardResult> EvaluateExplicitCkImportAsync(IReadOnlyCollection<CkCompiledModelRoot> updateSet,
         IReadOnlyCollection<CkModelId>? availableDependentVersions = null,
         CancellationToken cancellationToken = default);
 
