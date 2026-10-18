@@ -256,9 +256,11 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
         var previous = await ReadTableSettingsAsync(target, options, cancellationToken);
         var settingsRestored = false;
         var allLoaded = true;
-        await ApplyBulkSettingsAsync(target, options, cancellationToken);
         try
         {
+            // Inside the try: an ALTER that fails after the server applied it (command timeout, cancellation) must still
+            // reach the restore in the finally; restoring the values read above is harmless when nothing was applied.
+            await ApplyBulkSettingsAsync(target, options, cancellationToken);
             foreach (var slice in dataSlices)
             {
                 cancellationToken.ThrowIfCancellationRequested();

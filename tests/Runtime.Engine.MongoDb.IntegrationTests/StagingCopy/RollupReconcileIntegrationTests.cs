@@ -727,6 +727,38 @@ public class RollupReconcileIntegrationTests(CrateStagingCopyFixture fixture)
     }
 
     [Fact]
+    public async Task Enqueue_ARepairThatOutlastsTheTimeout_RenewsItsLease_AndIsNotClaimedByAnotherReplica()
+    {
+        var rig = await BrokenRigAsync(fixture);
+        var request = await rig.Repository.EnqueueRollupRepairAsync(null, Ct);
+        var table = $"\"{TenantSchema.SchemaName(rig.Tenant)}\".\"__rollup_repair\"";
+        var leaseAtStart = DateTimeOffset.UtcNow.AddMinutes(-29).ToUnixTimeMilliseconds(); // the lease would end in a minute
+        await fixture.SqlAsync($"UPDATE {table} SET \"state\" = 'Running', \"started_at_ms\" = {leaseAtStart} WHERE \"request_id\" = '{request.RequestId}'");
+        await fixture.SqlAsync($"REFRESH TABLE {table}");
+        var queue = new RollupRepairQueue(rig.Tenant, fixture.Client, fixture.Client, TimeProvider.System, NullLogger.Instance);
+
+        // the repair is "running" for 1.5 s; the lease is renewed every 200 ms
+        await queue.RunWithLeaseAsync(request.RequestId, async () =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(1500), Ct);
+            return 0;
+        }, TimeSpan.FromMilliseconds(200), Ct);
+
+        await fixture.SqlAsync($"REFRESH TABLE {table}"); // a search read sees the last refresh, not the last write
+        var row = (await fixture.QueryAsync($"SELECT \"state\" AS s, \"started_at_ms\" AS t FROM {table} WHERE \"request_id\" = '{request.RequestId}'")).Single();
+        Assert.Equal("Running", Convert.ToString(row["s"]));
+        Assert.True(Convert.ToInt64(row["t"]) > leaseAtStart + (long)TimeSpan.FromMinutes(28).TotalMilliseconds,
+            "the lease was not renewed while the repair ran");
+
+        // no renewal happens once the work has ended
+        var renewed = Convert.ToInt64(row["t"]);
+        await Task.Delay(TimeSpan.FromMilliseconds(600), Ct);
+        await fixture.SqlAsync($"REFRESH TABLE {table}");
+        var later = (await fixture.QueryAsync($"SELECT \"started_at_ms\" AS t FROM {table} WHERE \"request_id\" = '{request.RequestId}'")).Single();
+        Assert.Equal(renewed, Convert.ToInt64(later["t"]));
+    }
+
+    [Fact]
     public async Task Enqueue_ASecondCallWhileOneIsActive_ReturnsTheExistingRequest_ADifferentRollupSetGetsItsOwn()
     {
         var rig = await BrokenRigAsync(fixture);

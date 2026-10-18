@@ -73,9 +73,12 @@ public class OctoSystemConfiguration()
     /// more document plus the message envelope is over it (mongo-tools TOOLS-4142, TOOLS-4145, TOOLS-2875). With the
     /// tool's default of 1000 documents that happens once the average document is above about 48 KB: restoring
     /// 864,070 documents of 73 KB failed with <c>msgLen 48000084 &gt; 48000000</c>. A count of 100 keeps a batch at
-    /// 100 x average, i.e. below the byte limit for averages up to about 480 KB, so the byte rule is never what ends a
-    /// batch and the overshoot cannot happen; a single document is at most 16 MiB, far below the message limit. The cost
-    /// is more round trips for small documents. Raise it for collections of tiny documents, lower it when the average document is above 480 KB.
+    /// 100 x average, i.e. below the byte limit for typical documents (averages up to about 480 KB), so the byte rule is
+    /// rarely what ends a batch and the overshoot becomes unlikely. It is not a guarantee: the count bounds the number of
+    /// documents, not their total size, so a batch of a few documents near the 16 MiB limit can still exceed the message
+    /// limit. The cost is more round trips for small documents. Raise it for collections of tiny documents, lower it when
+    /// the average document is above 480 KB or the collection holds very large documents. The figures were measured with
+    /// mongorestore 100.16.0; check the version a deployment ships before relying on them.
     /// </remarks>
     public int MongoRestoreBatchSize
     {

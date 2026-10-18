@@ -728,7 +728,8 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
             if (await StillCurrentAsync(cancellationToken))
             {
                 await _databaseClient.ExecuteNonQueryAsync(_tenantId,
-                    GenerationMapSqlBuilder.BuildDeleteContainedPointers(genMapTable, from, to, entry.Scope),
+                    GenerationMapSqlBuilder.BuildDeleteContainedPointers(genMapTable, from, to, entry.Scope,
+                        belowGeneration: entry.Generation),
                     CrateStatementClass.Maintenance, cancellationToken);
                 await _databaseClient.RefreshArchiveTableAsync(_tenantId, genMapTable, CrateStatementClass.Maintenance, cancellationToken);
             }

@@ -2120,7 +2120,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             RollupRepairReport report;
             try
             {
-                report = await RepairRollupsAsync(row.Rollups, dryRun: false, cancellationToken);
+                // The lease is renewed while the repair runs: a repair of a large tenant can outlast RunningTimeout.
+                report = await queue.RunWithLeaseAsync(row.Request.RequestId,
+                    () => RepairRollupsAsync(row.Rollups, dryRun: false, cancellationToken),
+                    RollupRepairQueue.RenewInterval, cancellationToken);
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {

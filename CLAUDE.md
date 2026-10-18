@@ -1333,9 +1333,10 @@ invalid value throws `ConfigurationErrorException` naming the option when the co
 throws `ArgumentOutOfRangeException`). Without it the tool's 1000 documents per batch can end a message over the server's
 48,000,000 bytes (`maxMessageSizeBytes`) once documents average above ~48 KB: the restore of a collection of 864,070 EDA messages
 (73 KB average) died with `msgLen 48000084 > 48000000` after 250,447 documents (mongorestore 100.16.0, MongoDB 8.0.12; mongo-tools
-TOOLS-4142, TOOLS-4145, TOOLS-2875 describe the byte rule overshooting). 100 documents keep a batch below the limit for averages up
-to ~480 KB; the rationale is in the xml doc of the property. Restore requirement: lower the value when a collection averages above
-~480 KB. Test: `LargeDocumentRestoreTests` (2400 documents averaging above 70 KB through the real dump and restore; not red without the
+TOOLS-4142, TOOLS-4145, TOOLS-2875 describe the byte rule overshooting). 100 documents keep a batch below the limit for typical documents
+(averages up to ~480 KB) - it reduces the risk, it does not exclude it: the count bounds the number of documents, not their size, so a few
+documents near 16 MiB can still exceed the limit; the rationale is in the xml doc of the property. Restore requirement: lower the value
+when a collection averages above ~480 KB or holds very large documents. Test: `LargeDocumentRestoreTests` (2400 documents averaging above 70 KB through the real dump and restore; not red without the
 fix against the local MongoDB container, see the comment in the test), `MongoToolArgumentsTests`. No CHANGELOG file exists in this repo.
 
 ### Archive Export — Time Slices, Not Keyset Pages
@@ -2042,8 +2043,9 @@ is false at instance level; a failure is an ERROR log listing the `archive_<rtId
 (every statement is idempotent). It runs only after the Mongo drop succeeded — when `dropDatabase`
 itself throws, the user drop and the table drop are both skipped and the exception propagates — and it
 goes through the CrateDB resilience pipeline: the factory stops at the first failure, so with CrateDB
-unreachable a Delete/Clear of a tenant *with archives* blocks for up to ~2 min (timeout × retries) before
-logging the error; it never fails the drop, and tenants without archives never touch CrateDB.
+unreachable a Delete/Clear of a tenant *with the stream data model* (also one without archives, because of the tenant state
+cleanup above) blocks for up to ~2 min (timeout × retries) before logging the error; it never fails the drop, and tenants
+without the stream data model never touch CrateDB.
 
 **The resurrection window is not fully closed, and since AB#4762 it bites harder.** Background work
 that outlives the delete — above all a `tenant_setup_retry` entry, whose retry loop keeps calling

@@ -37,6 +37,9 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
     private static readonly Regex ContainedRegex = new(
         "\"range_start\" >= (?<from>-?\\d+) AND \"range_end\" <= (?<to>-?\\d+)", RegexOptions.CultureInvariant);
 
+    private static readonly Regex PointerBelowGenerationRegex = new(
+        "\"generation\" < (?<g>\\d+)", RegexOptions.CultureInvariant);
+
     private static readonly Regex PointerScopeRegex = new(
         "\"rtid_scope\" = '(?<scope>[^']*)'", RegexOptions.CultureInvariant);
 
@@ -460,9 +463,12 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
                 // The last scope literal belongs to the "other than the entry just flipped" clause.
                 var flippedScope = scopes[^1].Groups["scope"].Value;
                 var onlyScope = scopes.Count > 1 ? scopes[0].Groups["scope"].Value : null;
+                var below = PointerBelowGenerationRegex.Match(sql);
+                long? belowGeneration = below.Success ? long.Parse(below.Groups["g"].Value, CultureInfo.InvariantCulture) : null;
                 return Pointers.RemoveAll(p =>
                     p.StartMs >= from && p.EndMs <= to
                     && (onlyScope is null || p.Scope == onlyScope)
+                    && (belowGeneration is null || p.Generation < belowGeneration)
                     && !(p.StartMs == from && p.EndMs == to && p.Scope == flippedScope));
             }
             case "delete:staged-bucket":

@@ -13,8 +13,9 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb.Reconcile;
 /// </summary>
 /// <remarks>
 /// Every column is written explicitly and none has a default (AB#6647); "not yet" is 0 / empty text, not NULL. A request left
-/// <c>Running</c> longer than <see cref="RunningTimeout"/> belongs to a process that died and is claimed again - the repair is idempotent.
-/// A claim is an <c>UPDATE … WHERE state = &lt;seen&gt;</c>; two processes claiming at once can both win, which costs a second
+/// <c>Running</c> longer than <see cref="RunningTimeout"/> without a renewal belongs to a process that died and is claimed again - the
+/// repair is idempotent. While a repair runs, <see cref="RunWithLeaseAsync{T}"/> renews the lease every <see cref="RenewInterval"/>, so a
+/// repair of a large tenant that takes longer than the timeout is not claimed by another replica. A claim is an <c>UPDATE … WHERE state = &lt;seen&gt;</c>; two processes claiming at once can both win, which costs a second
 /// (idempotent) run, not a wrong result.
 /// </remarks>
 internal sealed class RollupRepairQueue(
@@ -25,6 +26,10 @@ internal sealed class RollupRepairQueue(
     ILogger logger)
 {
     public static readonly TimeSpan RunningTimeout = TimeSpan.FromMinutes(30);
+
+    /// <summary>How often a running repair renews its lease; a third of the timeout leaves room for two missed renewals.</summary>
+    public static readonly TimeSpan RenewInterval = TimeSpan.FromTicks(RunningTimeout.Ticks / 3);
+
     public const string TableName = "__rollup_repair";
 
     public string QualifiedTable => $"\"{TenantSchema.SchemaName(tenantId)}\".\"{TableName}\"";
@@ -56,6 +61,11 @@ internal sealed class RollupRepairQueue(
         $"UPDATE {table} SET \"state\" = 'Running', \"started_at_ms\" = {Num(startedMs)} " +
         $"WHERE \"tenant_id\" = {Lit(tenant)} AND \"request_id\" = {Lit(requestId)} " +
         $"AND \"_seq_no\" = {Num(seqNo)} AND \"_primary_term\" = {Num(primaryTerm)};";
+
+    /// <summary>Renews the lease of a running request; a request that is no longer running is left alone.</summary>
+    internal static string BuildRenew(string table, string tenant, string requestId, long startedMs) =>
+        $"UPDATE {table} SET \"started_at_ms\" = {Num(startedMs)} " +
+        $"WHERE \"tenant_id\" = {Lit(tenant)} AND \"request_id\" = {Lit(requestId)} AND \"state\" = 'Running';";
 
     internal static string BuildComplete(string table, string tenant, string requestId, string state, long finishedMs, string report) =>
         $"UPDATE {table} SET \"state\" = {Lit(state)}, \"finished_at_ms\" = {Num(finishedMs)}, \"report\" = {Lit(report)} " +
@@ -155,6 +165,53 @@ internal sealed class RollupRepairQueue(
 
     internal static string BuildRelease(string table, string tenant, string requestId) =>
         $"UPDATE {table} SET \"state\" = 'Pending', \"started_at_ms\" = 0 WHERE \"tenant_id\" = {Lit(tenant)} AND \"request_id\" = {Lit(requestId)};";
+
+    /// <summary>
+    /// Runs <paramref name="work"/> (the repair of a claimed request) and renews the lease of the request every
+    /// <paramref name="interval"/> until it ends, so that <see cref="ClaimRunnableAsync"/> of another replica does not see an
+    /// expired lease while the repair is alive. A renewal that fails is logged and tried again at the next interval; the
+    /// repair itself is not affected. A process that dies stops renewing, and its request is claimed again after the timeout.
+    /// </summary>
+    internal async Task<T> RunWithLeaseAsync<T>(
+        string requestId, Func<Task<T>> work, TimeSpan interval, CancellationToken cancellationToken)
+    {
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var heartbeat = Task.Run(async () =>
+        {
+            try
+            {
+                using var timer = new PeriodicTimer(interval, clock);
+                while (await timer.WaitForNextTickAsync(stop.Token))
+                {
+                    try
+                    {
+                        await databaseClient.ExecuteNonQueryAsync(tenantId,
+                            BuildRenew(QualifiedTable, tenantId, requestId, clock.GetUtcNow().ToUnixTimeMilliseconds()),
+                            CrateStatementClass.Maintenance, stop.Token);
+                    }
+                    catch (Exception ex) when (!stop.IsCancellationRequested)
+                    {
+                        logger.LogWarning(ex, "Renewing the lease of rollup repair {RequestId} of tenant {TenantId} failed: {Error}.",
+                            requestId, tenantId, ex.Message);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // the repair ended
+            }
+        }, CancellationToken.None);
+
+        try
+        {
+            return await work();
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            await heartbeat;
+        }
+    }
 
     public async Task CompleteAsync(string requestId, RollupRepairReport report, CancellationToken cancellationToken)
     {

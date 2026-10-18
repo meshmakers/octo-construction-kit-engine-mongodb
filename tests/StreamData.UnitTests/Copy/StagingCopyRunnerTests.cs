@@ -378,6 +378,30 @@ public class StagingCopyRunnerTests
     }
 
     [Fact]
+    public async Task CopyFrom_TheBulkSettingsStatementFails_StillPutsTheSettingsBack()
+    {
+        var plan = await Dumped();
+        var alters = 0;
+        _crate.Fault = statement =>
+        {
+            // The first ALTER is the one that switches to the bulk settings: it fails (e.g. a command timeout after the
+            // server applied it), so the table may already sit on replicas 0 / refresh 0 without the runner having noticed.
+            if (statement.Reveal().StartsWith("ALTER TABLE", StringComparison.Ordinal) && ++alters == 1)
+            {
+                throw new TimeoutException("the bulk settings statement timed out");
+            }
+        };
+
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            Collect(Runner().CopyFromAsync(RestoreTarget, plan, Location, Small, Ct)));
+
+        // The restore ran with the values read before (the second ALTER) and nothing was loaded.
+        Assert.Equal(2, alters);
+        Assert.Equal(["0-1/1000"], _crate.SettingsHistory);
+        Assert.Empty(_crate.TargetRows);
+    }
+
+    [Fact]
     public async Task CopyFrom_Cancelled_PutsTheSettingsBack()
     {
         var plan = await Dumped();

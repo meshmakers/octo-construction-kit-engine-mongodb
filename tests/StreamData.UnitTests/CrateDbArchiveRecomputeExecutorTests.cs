@@ -774,6 +774,25 @@ public class CrateDbArchiveRecomputeExecutorTests
     }
 
     [Fact]
+    public async Task Grace_ANewerEntryInsideTheRange_SurvivesTheDeferredRemovalOfContainedPointerEntries()
+    {
+        var (harness, clock, series) = GraceHarness();
+        await harness.RunAsync(buckets: 12, series);
+
+        // Within the grace period a recompute of a sub-range flipped an entry of a higher generation (its own sweep record is
+        // another matter): it governs its rows, so the deferred removal of the first recompute must not take it.
+        var newer = new GenerationRange(StartMs + HourMs, StartMs + 3 * HourMs, string.Empty, 6);
+        harness.Crate.Pointers.Add(newer);
+
+        clock.Now += Grace;
+        Assert.Equal(1, await harness.Executor.SweepDueAsync(harness.RollupRtId, harness.Token));
+
+        Assert.Contains(newer, harness.Crate.Pointers);
+        Assert.DoesNotContain(harness.Crate.Pointers, p => p.Generation == 2); // the older contained entry still goes
+        Assert.Contains(harness.Crate.Pointers, p => p.Generation == 4);
+    }
+
+    [Fact]
     public async Task Grace_ARestartBetweenFlipAndSweep_StillExecutesThePendingSweep()
     {
         var (harness, clock, series) = GraceHarness();
