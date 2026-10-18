@@ -1677,6 +1677,49 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     /// <inheritdoc />
+    public async Task<StagingCopyReadiness> CheckStagingCopyReadinessAsync(CancellationToken cancellationToken = default)
+    {
+        if (_copyClient is null)
+        {
+            return new StagingCopyReadiness(false, false, null,
+                "This stream data repository does not support the native copy to a staging location.");
+        }
+
+        var options = new ArchiveCopyOptions();
+        try
+        {
+            var filterSet = false;
+            string? filter = null;
+            var setting = await _copyClient.ExecuteStatementAsync(_tenantId, JobLogFilterGuard.ReadSetting, options.CommandTimeout, cancellationToken);
+            if (setting.Rows.Count > 0 && setting.Rows[0].TryGetValue("jobs_log_filter", out var value))
+            {
+                filter = value as string;
+                filterSet = JobLogFilterGuard.IsFiltered(filter);
+            }
+
+            string? version = null;
+            try
+            {
+                version = await RequireStagingCopy(null).GetStorageVersionAsync(options, cancellationToken);
+            }
+            catch (Exception ex) when (ex is StreamDataCopyStatementException or StreamDataStatementTimeoutException)
+            {
+                // The version is informational; the filter decides.
+            }
+
+            var reason = filterSet
+                ? null
+                : $"The cluster setting {JobLogFilterGuard.SettingName} does not keep COPY statements out of sys.jobs_log (it is '{filter ?? "(not set)"}'); " +
+                  $"set it, e.g. SET GLOBAL PERSISTENT \"{JobLogFilterGuard.SettingName}\" = '{JobLogFilterGuard.RecommendedFilter.Replace("'", "''", StringComparison.Ordinal)}'.";
+            return new StagingCopyReadiness(true, filterSet, version, reason);
+        }
+        catch (Exception ex) when (ex is StreamDataCopyStatementException or StreamDataStatementTimeoutException)
+        {
+            return new StagingCopyReadiness(true, false, null, $"The storage could not be asked whether the native copy can run: {ex.Message}");
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<ArchiveCopyDumpResult> DumpArchiveToStagingAsync(
         OctoObjectId archiveRtId, ArchiveCopyStagingLocation location, ArchiveCopyOptions? options = null,
         CancellationToken cancellationToken = default)

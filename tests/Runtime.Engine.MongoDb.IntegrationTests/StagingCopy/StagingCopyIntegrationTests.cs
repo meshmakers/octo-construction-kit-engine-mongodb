@@ -105,6 +105,32 @@ public class StagingCopyIntegrationTests(CrateStagingCopyFixture fixture)
     }
 
     [Fact]
+    public async Task Readiness_ReportsTheFilterAndTheVersion_WithoutChangingAnything()
+    {
+        var repo = fixture.NewRepository(CrateStagingCopyFixture.NewTenantId());
+
+        var ready = await repo.CheckStagingCopyReadinessAsync(Ct);
+
+        Assert.True(ready.IsReady);
+        Assert.Equal("5.10.10", ready.StorageVersion);
+        Assert.Null(ready.Reason);
+        try
+        {
+            await fixture.SetJobLogFilterAsync(null);
+            var notReady = await repo.CheckStagingCopyReadinessAsync(Ct);
+            Assert.False(notReady.IsReady);
+            Assert.True(notReady.Supported);
+            Assert.False(notReady.JobLogFilterSet);
+            Assert.Contains("stats.jobs_log_filter", notReady.Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("CANARY", notReady.Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await fixture.SetJobLogFilterAsync(JobLogFilterGuard.RecommendedFilter);
+        }
+    }
+
+    [Fact]
     public async Task Plan_OnARealTable_PartitionsTheRows_AndAnEmptyTableHasNoSlices()
     {
         var tenant = CrateStagingCopyFixture.NewTenantId();
