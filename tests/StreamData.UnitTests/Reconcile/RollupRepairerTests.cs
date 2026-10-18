@@ -157,16 +157,12 @@ public class RollupRepairerTests
     }
 
     [Fact]
-    public async Task MissingMapAndOrphans_AreRepairedInOrder_TheMapFirst_TheOrphansBeforeAnythingElse()
+    public async Task Orphans_AreDeleted_AndThePointedGenerationsAreNotTouched()
     {
-        _genMapExists = false;
         _orphans = 7;
-
-        // the second validation (after the repair) sees the map and no orphans any more
-        var steps = new List<string>();
+        // the second validation (after the repair) sees no orphans any more
         _fail = sql =>
         {
-            steps.Add(sql);
             if (sql.StartsWith("DELETE FROM", StringComparison.Ordinal) && sql.Contains("\"generation\" = 9", StringComparison.Ordinal))
             {
                 _orphans = 0;
@@ -177,20 +173,29 @@ public class RollupRepairerTests
 
         var report = await Repairer(Snapshot()).RepairAsync(null, dryRun: false, Ct);
 
-        Assert.Equal([RollupRepairKind.CreateGenerationMap, RollupRepairKind.DeleteOrphans], report.Actions.Select(a => a.Kind));
+        Assert.Equal([RollupRepairKind.DeleteOrphans], report.Actions.Select(a => a.Kind));
         Assert.All(report.Actions, a => Assert.Equal(RollupRepairStatus.Done, a.Status));
-        var create = _executed.FindIndex(s => s.StartsWith("CREATE TABLE IF NOT EXISTS", StringComparison.Ordinal) && s.Contains("__genmap", StringComparison.Ordinal));
-        var delete = _executed.FindIndex(s => s.StartsWith("DELETE FROM", StringComparison.Ordinal) && s.Contains("\"generation\" = 9", StringComparison.Ordinal));
-        Assert.InRange(create, 0, delete - 1);
-        Assert.Equal(RollupConsistencyCheck.MissingGenerationMap, report.Before.Rollups.Single().Findings[0].Check);
+        Assert.Single(_executed, s => s.StartsWith("DELETE FROM", StringComparison.Ordinal) && s.Contains("\"generation\" = 9", StringComparison.Ordinal));
         Assert.True(report.After!.IsOk);
+        Assert.True(report.IsOk);
+    }
+
+    [Fact]
+    public async Task AMissingMapWithoutRecomputedRows_IsJustCreated()
+    {
+        _genMapExists = false;
+
+        var report = await Repairer(Snapshot()).RepairAsync(null, dryRun: false, Ct);
+
+        Assert.Equal([RollupRepairKind.CreateGenerationMap], report.Actions.Select(a => a.Kind));
+        Assert.Contains(_executed, s => s.StartsWith("CREATE TABLE IF NOT EXISTS", StringComparison.Ordinal) && s.Contains("__genmap", StringComparison.Ordinal));
+        Assert.Equal(RollupConsistencyCheck.MissingGenerationMap, report.Before.Rollups.Single().Findings[0].Check);
         Assert.True(report.IsOk);
     }
 
     [Fact]
     public async Task DryRun_ListsThePlannedSteps_ExecutesNothing_AndKeepsTheMarker()
     {
-        _genMapExists = false;
         _orphans = 7;
         _markerPending = true;
 
@@ -198,7 +203,7 @@ public class RollupRepairerTests
 
         Assert.True(report.DryRun);
         Assert.Null(report.After);
-        Assert.Equal(2, report.Actions.Count);
+        Assert.Single(report.Actions);
         Assert.All(report.Actions, a => Assert.Equal(RollupRepairStatus.Planned, a.Status));
         Assert.Empty(_executed);
         Assert.True(_markerPending);
@@ -208,7 +213,6 @@ public class RollupRepairerTests
     [Fact]
     public async Task AFailingStep_IsNamed_EndsTheRepairOfItsRollup_AndKeepsTheMarker()
     {
-        _genMapExists = false;
         _orphans = 7;
         _markerPending = true;
         _fail = sql => sql.StartsWith("DELETE FROM", StringComparison.Ordinal) && sql.Contains("\"generation\" = 9", StringComparison.Ordinal)
@@ -218,9 +222,8 @@ public class RollupRepairerTests
         var report = await Repairer(Snapshot()).RepairAsync(null, dryRun: false, Ct);
 
         Assert.False(report.IsOk);
-        Assert.Equal(RollupRepairStatus.Done, report.Actions[0].Status); // the map was created
-        Assert.Equal(RollupRepairStatus.Failed, report.Actions[1].Status);
-        Assert.Equal("CrateDB is unavailable", report.Actions[1].Error);
+        Assert.Equal(RollupRepairStatus.Failed, report.Actions[0].Status);
+        Assert.Equal("CrateDB is unavailable", report.Actions[0].Error);
         Assert.Contains(_rollup.ToString(), report.FailedStep, StringComparison.Ordinal);
         Assert.Contains("generation 9", report.FailedStep, StringComparison.Ordinal);
         Assert.Contains("CrateDB is unavailable", report.FailedStep, StringComparison.Ordinal);

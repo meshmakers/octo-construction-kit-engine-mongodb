@@ -19,6 +19,10 @@ internal static class RollupConsistencySql
     public static string BuildMaxWindowEnd(string liveTable) =>
         $"SELECT MAX(\"{Constants.WindowEnd}\") AS max_end FROM {liveTable};";
 
+    /// <summary>First window start and last window end of the table.</summary>
+    public static string BuildExtent(string liveTable) =>
+        $"SELECT MIN(\"{Constants.WindowStart}\") AS lo, MAX(\"{Constants.WindowEnd}\") AS hi FROM {liveTable};";
+
     /// <summary>Rows, first and last window of every recomputed generation (generation 0 is the forward aggregation).</summary>
     public static string BuildGenerationSummary(string liveTable) =>
         $"SELECT \"{Constants.Generation}\" AS g, COUNT(*) AS c, MIN(\"{Constants.WindowStart}\") AS lo, MAX(\"{Constants.WindowStart}\") AS hi " +

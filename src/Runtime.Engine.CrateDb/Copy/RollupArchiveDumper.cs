@@ -53,12 +53,27 @@ internal sealed class RollupArchiveDumper(
 
             var before = await ReadMapAsync(target, options, cancellationToken);
             var mapReadAt = time.Now();
+            if (options.PhaseObserver is { } observer)
+            {
+                await observer(ArchiveCopyPhase.MapRead, attempt, cancellationToken);
+            }
 
             var results = await CopyAsync(target, plan, location, options, cancellationToken);
             var lastDataCopiedAt = results.Count == 0 ? (DateTime?)null : time.Now();
             if (results.Count != plan.Slices.Count || results.Any(r => !r.IsSuccess))
             {
                 // A failed slice ends the dump of this archive; the result says which one.
+                return new ArchiveCopyDumpResult(target.ArchiveRtId, CopiedPlan(plan, results), results, attempt, mapReadAt, lastDataCopiedAt);
+            }
+
+            if (options.PhaseObserver is { } dataObserver)
+            {
+                await dataObserver(ArchiveCopyPhase.DataCopied, attempt, cancellationToken);
+            }
+
+            if (!options.RepeatOnMovedMap)
+            {
+                // Characterisation mode: no second read, no comparison - whatever the recompute did meanwhile is in the files.
                 return new ArchiveCopyDumpResult(target.ArchiveRtId, CopiedPlan(plan, results), results, attempt, mapReadAt, lastDataCopiedAt);
             }
 

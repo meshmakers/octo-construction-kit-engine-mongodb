@@ -379,6 +379,45 @@ public class RollupReconcileIntegrationTests(CrateStagingCopyFixture fixture)
     }
 
     [Fact]
+    public async Task Repair_ALostMapWithRecomputedRows_RecomputesTheWholeRollup_AndEndsOkInOneRun()
+    {
+        var rig = await RepairRig.CreateAsync(fixture);
+        await rig.RecomputeAsync(0, 24);   // generation 1 over day 1 (the sweep removed the generation-0 rows there)
+        await rig.RecomputeAsync(10, 20);  // generation 2
+        var reference = await rig.ActiveViewAsync();
+        await fixture.SqlAsync($"DROP TABLE {rig.GenMap}");
+        await rig.Repository.SetRestoreReconcilePendingAsync(true, Ct);
+
+        var report = await rig.Repository.RepairRollupsAsync(null, false, Ct);
+
+        Assert.True(report.IsOk, report.FailedStep);
+        Assert.Null(report.FailedStep);
+        Assert.True(report.After!.IsOk);
+        Assert.Equal(RollupRepairKind.CreateGenerationMap, report.Actions[0].Kind);
+        Assert.DoesNotContain(report.Actions, a => a.Kind == RollupRepairKind.DeleteOrphans); // nothing is deleted blindly
+        Assert.Equal(reference, await rig.ActiveViewAsync()); // every window is back, with the source's values
+        Assert.False(await rig.Repository.IsRestoreReconcilePendingAsync(Ct));
+    }
+
+    [Fact]
+    public async Task Repair_NeverEndsInconsistentWithoutNamingWhatIsWrong()
+    {
+        var rig = await RepairRig.CreateAsync(fixture);
+        // a defect the repair cannot fix: the watermark is ahead and the source has rows, but the store ignores the rewind
+        await rig.SqlAsync($"DELETE FROM {rig.Live} WHERE \"window_start\" >= 1767225600000 + 24 * 3600000");
+        // the validator still sees the gap after the 'rewind', because the store ignores the write
+        var ignoring = A.Fake<IRollupArchiveRuntimeStore>(o => o.Wrapping(rig.Store));
+        A.CallTo(() => ignoring.AdvanceWatermarkAsync(A<OctoObjectId>._, A<DateTime>._, A<bool>._)).Returns(Task.CompletedTask);
+        var stubborn = fixture.NewReconcileRepository(rig.Tenant, [rig.Snapshot], [rig.Raw], new RecomputeProcessState(), null, ignoring);
+
+        var report = await stubborn.RepairRollupsAsync(null, false, Ct);
+
+        Assert.False(report.IsOk);
+        Assert.False(string.IsNullOrEmpty(report.FailedStep)); // always names the finding that is left
+        Assert.Contains("WatermarkAheadOfRows", report.FailedStep, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Repair_APointerWhoseSourceHoldsNothing_IsRemoved_SoTheValidatorIsOk()
     {
         var rig = await RepairRig.CreateAsync(fixture, rawHours: 24);

@@ -969,7 +969,7 @@ each finding names the rollup and the range:
 
 | Check | Finding | Condition |
 |---|---|---|
-| (a) `PointerWithoutRows` | one per range | the part of a pointer entry that no entry of a higher generation outranks (an unscoped entry is outranked by higher unscoped entries and by higher entries of its own scope) holds no row of the entry's generation |
+| (a) `PointerWithoutRows` | one per range | a pointer entry holds **no row at all** of its generation in its range; reported for the parts no entry of a higher generation outranks (an unscoped entry is outranked by higher unscoped entries and by higher entries of its own scope). An entry with rows somewhere is not reported: its range may reach past the data (quiet source) or leave a tail after a later entry outranked a part of it - measured on a 28.8 million row rollup, a per-range check flagged exactly that tail |
 | (b) `OrphansAbovePointer` | one per generation | rows of a generation that no entry of that or a higher generation covers (range and, for a scoped entry, entity); not checked while `RecomputeInProgress`; without a pointer table every recomputed row is an orphan |
 | (c) `WatermarkAheadOfRows` | one per rollup | the watermark of the metadata is newer than the last rollup row (`MAX(window_end)`) and a source holds rows in between (counted per validity span of the source); a quiet source is no finding |
 | (d) `MissingGenerationMap` | one per rollup | the rollup table exists, its `__genmap` table does not |
@@ -989,7 +989,12 @@ within that time. What the marker blocks: see "Gate" below.
 `RollupRepairReport` (`Before`, the `Actions`, `After`, `FailedStep`). Per rollup, in this order, each step needing the one before:
 
 1. *Create the generation map* when the table is missing (`CreateGenerationMap`).
-2. *Delete the orphans* (`DeleteOrphans`): the rows of a generation that no pointer entry of that or a higher generation covers. The
+2. *Lost map with recomputed rows.* When the map is missing while rows of generation 1 or higher remain, nothing says which generation
+   is authoritative where, and the generation-0 rows of recomputed ranges were swept: deleting the rows as orphans would leave the
+   windows empty, rebuilding pointers from the rows could name an incomplete generation. The repair therefore recomputes the **whole
+   extent of the rollup** from its sources in one step (`RecomputePointerRange`); the recompute's sweep removes every other generation.
+   Without rows of generation 1 or higher the map is simply created.
+2b. *Delete the orphans* (`DeleteOrphans`): the rows of a generation that no pointer entry of that or a higher generation covers. The
    pointed generations are not touched. This runs before any recompute so the generation numbers a recompute is handed are free.
 3. *Recompute the pointer gaps* (`RecomputePointerRange`): only the part of an entry that no higher entry outranks and that holds no row
    of its generation, with the entry's scope, once per source validity span. The recompute runs on its own executor with an immediate

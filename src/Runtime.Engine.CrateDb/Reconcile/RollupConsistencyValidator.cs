@@ -156,17 +156,23 @@ internal sealed class RollupConsistencyValidator(
         var gaps = new List<PointerGap>();
         foreach (var entry in pointers.OrderBy(p => p.StartMs).ThenBy(p => p.Generation))
         {
-            foreach (var (fromMs, toMs) in RollupConsistencySql.GovernedRanges(entry, pointers))
+            var governed = RollupConsistencySql.GovernedRanges(entry, pointers);
+            if (governed.Count == 0)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var rows = await databaseClient.GetCountAsync(tenantId,
-                    RollupRecomputeSqlBuilder.BuildCountGeneration(live, FromMs(fromMs), FromMs(toMs), entry.Generation,
-                        entry.Scope.Length == 0 ? null : entry.Scope),
-                    CrateStatementClass.Maintenance, cancellationToken);
-                if (rows == 0)
-                {
-                    gaps.Add(new PointerGap(entry, fromMs, toMs));
-                }
+                continue; // fully outranked: no reader selects through it
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            // An entry that holds rows of its generation somewhere is not a lost one: its range may reach past the data (the source
+            // was quiet there), and a part that a later entry outranked leaves a tail without rows that is not a defect. Only an
+            // entry without a single row of its generation names rows that are gone.
+            var rows = await databaseClient.GetCountAsync(tenantId,
+                RollupRecomputeSqlBuilder.BuildCountGeneration(live, FromMs(entry.StartMs), FromMs(entry.EndMs), entry.Generation,
+                    entry.Scope.Length == 0 ? null : entry.Scope),
+                CrateStatementClass.Maintenance, cancellationToken);
+            if (rows == 0)
+            {
+                gaps.AddRange(governed.Select(g => new PointerGap(entry, g.FromMs, g.ToMs)));
             }
         }
 
@@ -365,6 +371,20 @@ internal sealed class RollupConsistencyValidator(
                            tenantId, RollupConsistencySql.BuildMaxWindowEnd(live), cancellationToken))
         {
             return row.TryGetValue("max_end", out var value) ? AsUtc(value) : null;
+        }
+
+        return null;
+    }
+
+    /// <summary>First window start and last window end of the rollup table (epoch ms); null for an empty table.</summary>
+    internal async Task<(long FromMs, long ToMs)?> ReadExtentAsync(string live, CancellationToken cancellationToken)
+    {
+        await foreach (var row in databaseClient.StreamRawRowsAsync(tenantId, RollupConsistencySql.BuildExtent(live), cancellationToken))
+        {
+            if (row.TryGetValue("lo", out var lo) && AsUtc(lo) is { } from && row.TryGetValue("hi", out var hi) && AsUtc(hi) is { } to)
+            {
+                return (ToMs(from), ToMs(to));
+            }
         }
 
         return null;

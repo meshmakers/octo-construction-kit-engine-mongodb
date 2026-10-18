@@ -121,7 +121,12 @@ internal sealed class RollupRepairer(
         }
         else if (failedStep is null)
         {
-            logger.LogWarning("The repair of tenant {TenantId} ran without a failing step, but the rollups are still inconsistent; the restore reconcile marker stays.", tenantId);
+            // Never an unexplained failure: name what is still wrong.
+            var remaining = after.Rollups.Where(r => !r.IsOk).ToList();
+            var first = remaining[0].Findings[0];
+            failedStep = $"rollup {remaining[0].RollupRtId}: the repair ran without a failing step, but the final validation still reports " +
+                         $"{remaining.Sum(r => r.Findings.Count)} finding(s) ({first.Check}: {first.Message})";
+            logger.LogWarning("The repair of tenant {TenantId} ended inconsistent: {FailedStep} The restore reconcile marker stays.", tenantId, failedStep);
         }
 
         return new RollupRepairReport(false, before, actions, after, failedStep);
@@ -143,7 +148,22 @@ internal sealed class RollupRepairer(
                 ct => managementClient.ExecuteDdlAsync(tenantId, GenerationMapSqlBuilder.BuildCreateTable(genMap), ct)));
         }
 
-        foreach (var orphan in analysis.Orphans)
+        // A map that is gone while rows of recomputed generations remain: which generation is authoritative where is lost, and
+        // the superseded generation-0 rows of those ranges were swept long ago. Deleting the rows as orphans would leave the
+        // windows empty, and guessing the pointers from the rows could name an incomplete generation. The one safe way back is to
+        // recompute the whole extent of the rollup from its sources (the recompute's sweep then removes every other generation).
+        var mapLost = analysis.MissingGenerationMap && analysis.Orphans.Count > 0;
+        if (mapLost && await validator.ReadExtentAsync(live, cancellationToken) is { } extent)
+        {
+            var wholeRollup = new PointerGap(new GenerationRange(extent.FromMs, extent.ToMs, string.Empty, 0), extent.FromMs, extent.ToMs);
+            steps.Add(new Step(RollupRepairKind.RecomputePointerRange,
+                $"The generation map is lost although rows of generation {string.Join(", ", analysis.Orphans.Select(o => o.Generation))} remain: " +
+                $"recompute the whole rollup [{RollupConsistencyValidator.FromMs(extent.FromMs):O}, {RollupConsistencyValidator.FromMs(extent.ToMs):O}) from its sources.",
+                RollupConsistencyValidator.FromMs(extent.FromMs), RollupConsistencyValidator.FromMs(extent.ToMs), null,
+                ct => RecomputeGapAsync(rollup, wholeRollup, genMap, live, ct)));
+        }
+
+        foreach (var orphan in mapLost ? [] : analysis.Orphans)
         {
             var captured = orphan;
             steps.Add(new Step(RollupRepairKind.DeleteOrphans,

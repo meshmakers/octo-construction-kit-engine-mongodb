@@ -51,6 +51,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     private readonly IArchiveAuditTrail? _archiveAuditTrail;
     private readonly int _recomputeSliceTargetRows;
     private readonly TimeSpan _sweepGracePeriod;
+    private readonly TimeProvider _clock;
     private readonly RecomputeProcessState _recomputeProcessState;
     private readonly ICrateCopyClient? _copyClient;
     private StagingCopyRunner? _stagingCopy;
@@ -68,8 +69,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         IArchiveRecomputeStateStore? recomputeStateStore = null,
         IArchiveAuditTrail? archiveAuditTrail = null,
         IOptions<CrateRecomputeOptions>? recomputeOptions = null,
-        RecomputeProcessState? recomputeProcessState = null)
+        RecomputeProcessState? recomputeProcessState = null,
+        TimeProvider? timeProvider = null)
     {
+        // The clock of the sweep grace period, the restore marker, the repair queue and the dump times; a host can register its
+        // own TimeProvider (tests fake it to make a deferred sweep due).
+        _clock = timeProvider ?? TimeProvider.System;
         _logger = logger;
         _ckCacheService = ckCacheService;
         _databaseClient = databaseClient;
@@ -1678,7 +1683,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     {
         var runner = RequireStagingCopy(archiveRtId);
         var target = await ResolveCopyTargetAsync(archiveRtId);
-        var dumper = new RollupArchiveDumper(_logger, _tenantId, _copyClient!, runner, TimeProvider.System);
+        var dumper = new RollupArchiveDumper(_logger, _tenantId, _copyClient!, runner, _clock);
         return await dumper.DumpAsync(target, location, options ?? new ArchiveCopyOptions(), cancellationToken);
     }
 
@@ -2031,7 +2036,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     // --- Rollup consistency after a restore (AB#6968) --------------------------------------------------
 
     private RestoreReconcileMarker ReconcileMarker => new(
-        _tenantId, _databaseClient, _managementClient, _recomputeProcessState, TimeProvider.System, _logger);
+        _tenantId, _databaseClient, _managementClient, _recomputeProcessState, _clock, _logger);
 
     /// <inheritdoc />
     public Task<bool> IsRestoreReconcilePendingAsync(CancellationToken cancellationToken = default)
@@ -2051,7 +2056,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
 
         return new RollupConsistencyValidator(
-            _tenantId, _databaseClient, _archiveStore, _rollupArchiveStore, _logger, TimeProvider.System)
+            _tenantId, _databaseClient, _archiveStore, _rollupArchiveStore, _logger, _clock)
             .ValidateAsync(rollupRtIds, cancellationToken);
     }
 
@@ -2066,18 +2071,18 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
 
         var validator = new RollupConsistencyValidator(
-            _tenantId, _databaseClient, _archiveStore, _rollupArchiveStore, _logger, TimeProvider.System);
+            _tenantId, _databaseClient, _archiveStore, _rollupArchiveStore, _logger, _clock);
         // The repair's own executor sweeps at once and is not held back by the marker it is there to clear.
         var repairer = new RollupRepairer(
             _tenantId, _databaseClient, _managementClient, _archiveStore, _rollupArchiveStore, this, validator, ReconcileMarker,
             () => new CrateDbArchiveRecomputeExecutor(
                 _tenantId, _databaseClient, _managementClient, _archiveStore, _logger, _rollupArchiveStore,
-                _recomputeSliceTargetRows, _recomputeProcessState, TimeSpan.Zero, TimeProvider.System),
+                _recomputeSliceTargetRows, _recomputeProcessState, TimeSpan.Zero, _clock),
             _logger);
         return repairer.RepairAsync(rollupRtIds, dryRun, cancellationToken);
     }
 
-    private RollupRepairQueue RepairQueue => new(_tenantId, _databaseClient, _managementClient, TimeProvider.System, _logger);
+    private RollupRepairQueue RepairQueue => new(_tenantId, _databaseClient, _managementClient, _clock, _logger);
 
     /// <inheritdoc />
     public async Task<RollupRepairRequest> EnqueueRollupRepairAsync(
@@ -2129,7 +2134,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
     private CrateDbArchiveRecomputeExecutor RecomputeExecutor => _recomputeExecutor ??= new CrateDbArchiveRecomputeExecutor(
         _tenantId, _databaseClient, _managementClient, _archiveStore, _logger,
-        _rollupArchiveStore, _recomputeSliceTargetRows, _recomputeProcessState, _sweepGracePeriod, TimeProvider.System, ReconcileMarker);
+        _rollupArchiveStore, _recomputeSliceTargetRows, _recomputeProcessState, _sweepGracePeriod, _clock, ReconcileMarker);
 
     /// <inheritdoc />
     public async Task<int> SweepSupersededGenerationsAsync(CancellationToken cancellationToken = default)

@@ -217,6 +217,55 @@ public class RollupArchiveDumperTests
     }
 
     [Fact]
+    public async Task Dump_TellsTheObserverTheTwoPhasesOfEveryAttempt_InOrder()
+    {
+        WithRollup();
+        var events = new List<string>();
+        var flipped = false;
+        _crate.Fault = statement =>
+        {
+            if (IsDataCopyTo(statement.Reveal()))
+            {
+                events.Add("data");
+                if (!flipped)
+                {
+                    flipped = true;
+                    _crate.SourceMap[0] = _crate.SourceMap[0] with { Generation = 9 }; // a recompute flips during attempt 1
+                }
+            }
+        };
+        var options = Small with { PhaseObserver = (phase, attempt, _) => { events.Add($"{phase}#{attempt}"); return Task.CompletedTask; } };
+
+        var result = await Dumper().DumpAsync(RollupTarget, Location, options, Ct);
+
+        Assert.Equal(2, result.Attempts);
+        var phases = events.Where(e => e != "data").ToList();
+        Assert.Equal(["MapRead#1", "DataCopied#1", "MapRead#2", "DataCopied#2"], phases);
+        Assert.True(events.IndexOf("MapRead#1") < events.IndexOf("data"));
+        Assert.True(events.IndexOf("data") < events.IndexOf("DataCopied#1"));
+    }
+
+    [Fact]
+    public async Task Dump_WithoutTheRepeatRule_CopiesOnce_DoesNotCompareTheMaps_AndReturnsNormally()
+    {
+        WithRollup();
+        _crate.Fault = statement =>
+        {
+            if (IsDataCopyTo(statement.Reveal()))
+            {
+                _crate.SourceMap[0] = _crate.SourceMap[0] with { Generation = 9 };
+            }
+        };
+
+        var result = await Dumper().DumpAsync(RollupTarget, Location, Small with { RepeatOnMovedMap = false, MaxMapAttempts = 1 }, Ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, result.Attempts);
+        Assert.Equal(1, _crate.MapReads); // only the read before the copy
+        Assert.NotEqual(9, _crate.MapStore.Values.Single()[0].Generation); // the files carry the map as it was copied
+    }
+
+    [Fact]
     public async Task Dump_OfAnArchiveWithoutAMap_NeverReadsOrCopiesOne()
     {
         WithRollup();
