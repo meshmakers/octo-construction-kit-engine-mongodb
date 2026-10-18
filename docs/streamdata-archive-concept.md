@@ -962,6 +962,29 @@ rows occupy the table until the sweep, and reads scan a larger table (measured o
 in the AB#6968 hand-over). An executor or repository built without options (outside the host's DI) keeps the immediate sweep.
 Rule of the concept: `octo-construction-kit-engine/docs/concept-rollup-recompute.md`, "Sweep grace period".
 
+**Rollup consistency validator and the restore reconcile marker (AB#6968).** `ValidateRollupsAsync` (`RollupConsistencyValidator`)
+checks every rollup of the tenant, or the requested ones, with counts and MIN/MAX statements only (plus the small pointer table); no row is
+read and nothing is changed. A rollup that was never activated has no tables and is skipped. Four checks (`RollupConsistencyCheck`),
+each finding names the rollup and the range:
+
+| Check | Finding | Condition |
+|---|---|---|
+| (a) `PointerWithoutRows` | one per range | the part of a pointer entry that no entry of a higher generation outranks (an unscoped entry is outranked by higher unscoped entries and by higher entries of its own scope) holds no row of the entry's generation |
+| (b) `OrphansAbovePointer` | one per generation | rows of a generation that no entry of that or a higher generation covers (range and, for a scoped entry, entity); not checked while `RecomputeInProgress`; without a pointer table every recomputed row is an orphan |
+| (c) `WatermarkAheadOfRows` | one per rollup | the watermark of the metadata is newer than the last rollup row (`MAX(window_end)`) and a source holds rows in between (counted per validity span of the source); a quiet source is no finding |
+| (d) `MissingGenerationMap` | one per rollup | the rollup table exists, its `__genmap` table does not |
+
+A recompute that legitimately produced no rows (the source holds nothing there) looks like (a); the repair resolves it for good
+(it recomputes, and removes an entry that stays empty). The validator logs a warning per finding. The host runs it once per process
+and tenant with the first recompute tick, so an inconsistent rollup is visible in the log at start. Cost: see the measurement in the
+hand-over; the statements on a 28.8 million row rollup are counts of the generation column and one pointer read.
+
+*Marker.* `IsRestoreReconcilePendingAsync` / `SetRestoreReconcilePendingAsync`: a row keyed by the tenant id in the schema's table
+`__restore_reconcile`, created by the first `Set(true)`. **No row, or no table, means not pending**, so tenants and backups from before
+this feature run unchanged. The restore job sets it after the archive tables were loaded and clears it when the validator reports ok
+or the repair has run. A process remembers an answer for five seconds (set and clear update it at once), another process sees a change
+within that time. What the marker blocks: see "Gate" below.
+
 **Dump.** The plan cuts the data table into counted time slices with the planner of the row export (`ExportSlicePlanner`,
 target `ArchiveCopyOptions.TargetSliceRows`). Each slice is one statement,
 `COPY <table> WHERE <time> >= from AND <time> < to TO DIRECTORY '<location>/<rtId>/data/<slice>' WITH (compression = 'gzip', ...)`,

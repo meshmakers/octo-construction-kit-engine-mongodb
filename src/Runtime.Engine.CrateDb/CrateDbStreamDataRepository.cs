@@ -10,6 +10,7 @@ using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Copy;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Reconcile;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 using Microsoft.Extensions.Logging;
@@ -2018,6 +2019,33 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // created it: one request, one orchestrator tick. What a recompute has to remember for the
         // life of the process is in _recomputeProcessState, which the singleton factory hands in.
         return RecomputeExecutor.ExecuteAsync(source, rollup, rangeStart, rangeEnd, rtIdScope, cancellationToken);
+    }
+
+    // --- Rollup consistency after a restore (AB#6968) --------------------------------------------------
+
+    private RestoreReconcileMarker ReconcileMarker => new(
+        _tenantId, _databaseClient, _managementClient, _recomputeProcessState, TimeProvider.System, _logger);
+
+    /// <inheritdoc />
+    public Task<bool> IsRestoreReconcilePendingAsync(CancellationToken cancellationToken = default)
+        => ReconcileMarker.IsPendingAsync(cancellationToken);
+
+    /// <inheritdoc />
+    public Task SetRestoreReconcilePendingAsync(bool pending, CancellationToken cancellationToken = default)
+        => ReconcileMarker.SetAsync(pending, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<RollupConsistencyReport> ValidateRollupsAsync(
+        IReadOnlyCollection<OctoObjectId>? rollupRtIds = null, CancellationToken cancellationToken = default)
+    {
+        if (_rollupArchiveStore is null)
+        {
+            return Task.FromResult(new RollupConsistencyReport([], DateTime.UtcNow));
+        }
+
+        return new RollupConsistencyValidator(
+            _tenantId, _databaseClient, _archiveStore, _rollupArchiveStore, _logger, TimeProvider.System)
+            .ValidateAsync(rollupRtIds, cancellationToken);
     }
 
     private CrateDbArchiveRecomputeExecutor RecomputeExecutor => _recomputeExecutor ??= new CrateDbArchiveRecomputeExecutor(

@@ -253,6 +253,58 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
             A.Fake<ICkCacheService>(), Client, Client, Configuration, tenantId, store, A.Fake<IFormulaEngine>());
     }
 
+    /// <summary>
+    ///     A repository over this CrateDB that also knows the rollups in <paramref name="rollups" /> (for the validator and the
+    ///     repair, which enumerate rollups) and the raw <paramref name="sources" /> they aggregate. Each process of a host has its own
+    ///     <see cref="RecomputeProcessState" />; pass one to share it, none for a "restarted" process.
+    /// </summary>
+    internal CrateDbStreamDataRepository NewReconcileRepository(
+        string tenantId, IReadOnlyList<RollupArchiveSnapshot> rollups, IReadOnlyList<OctoObjectId> sources,
+        RecomputeProcessState? state = null, IOptions<CrateRecomputeOptions>? options = null, IRollupArchiveRuntimeStore? rollupStore = null)
+    {
+        var archives = A.Fake<IArchiveRuntimeStore>();
+        var type = new RtCkId<CkTypeId>("Test", new CkTypeId("Sensor"));
+        foreach (var source in sources)
+        {
+            A.CallTo(() => archives.GetAsync(source)).Returns(new ArchiveSnapshot(source, type, CkArchiveStatus.Activated, "raw",
+                new[] { new CkArchiveColumnSpec("Value", true, false) }));
+        }
+
+        var specs = new[] { new CkRollupAggregationSpec("Value", CkRollupFunction.Sum, null) };
+        foreach (var rollup in rollups)
+        {
+            A.CallTo(() => archives.GetAsync(rollup.RtId)).Returns(new ArchiveSnapshot(rollup.RtId, type, CkArchiveStatus.Activated, "rollup",
+                RollupColumnGenerator.Generate(specs))
+            {
+                RollupAggregations = specs,
+                Period = TimeSpan.FromHours(1)
+            });
+        }
+
+        var store = rollupStore ?? A.Fake<IRollupArchiveRuntimeStore>();
+        if (rollupStore is null)
+        {
+            A.CallTo(() => store.EnumerateAsync()).ReturnsLazily(() => ToAsync(rollups));
+            foreach (var rollup in rollups)
+            {
+                A.CallTo(() => store.GetAsync(rollup.RtId)).Returns(rollup);
+            }
+        }
+
+        return new CrateDbStreamDataRepository(NullLogger<CrateDbStreamDataRepository>.Instance,
+            A.Fake<ICkCacheService>(), Client, Client, Configuration, tenantId, archives, A.Fake<IFormulaEngine>(),
+            store, recomputeStateStore: null, archiveAuditTrail: null, options, state);
+    }
+
+    private static async IAsyncEnumerable<RollupArchiveSnapshot> ToAsync(IReadOnlyList<RollupArchiveSnapshot> rollups)
+    {
+        await Task.CompletedTask;
+        foreach (var rollup in rollups)
+        {
+            yield return rollup;
+        }
+    }
+
     /// <summary>A repository over this CrateDB for <paramref name="archiveRtIds"/> of <paramref name="tenantId"/>.</summary>
     internal CrateDbStreamDataRepository NewRepository(string tenantId, params OctoObjectId[] archiveRtIds)
     {
