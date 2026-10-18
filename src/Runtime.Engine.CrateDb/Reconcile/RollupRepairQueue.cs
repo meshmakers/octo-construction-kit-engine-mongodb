@@ -104,12 +104,20 @@ internal sealed class RollupRepairQueue(
     /// <summary>The requests that can be run now: pending, or running for longer than <see cref="RunningTimeout"/>.</summary>
     public async Task<IReadOnlyList<Row>> ClaimRunnableAsync(CancellationToken cancellationToken)
     {
+        // At most one repair of a tenant runs at a time, whatever rollups the requests name: two repairs would rewind and
+        // recompute the same rollup at once. Requests wait as Pending until the running one has ended or its lease expired.
         var claimed = new List<Row>();
         var nowMs = clock.GetUtcNow().ToUnixTimeMilliseconds();
-        foreach (var row in (await ReadAsync(null, cancellationToken)).OrderBy(r => r.Request.RequestedAtUtc))
+        var rows = (await ReadAsync(null, cancellationToken)).OrderBy(r => r.Request.RequestedAtUtc).ThenBy(r => r.Request.RequestId, StringComparer.Ordinal).ToList();
+        bool LeaseValid(Row r) => r.RawState == "Running" && nowMs - r.StartedAtMs <= (long)RunningTimeout.TotalMilliseconds;
+        if (rows.Any(LeaseValid))
         {
-            var runnable = row.RawState == "Pending" ||
-                           (row.RawState == "Running" && nowMs - row.StartedAtMs > (long)RunningTimeout.TotalMilliseconds);
+            return claimed;
+        }
+
+        foreach (var row in rows)
+        {
+            var runnable = row.RawState == "Pending" || (row.RawState == "Running" && !LeaseValid(row));
             if (!runnable)
             {
                 continue;
@@ -118,15 +126,35 @@ internal sealed class RollupRepairQueue(
             var won = await databaseClient.ExecuteNonQueryAsync(tenantId,
                 BuildClaim(QualifiedTable, tenantId, row.Request.RequestId, row.SeqNo, row.PrimaryTerm, nowMs),
                 CrateStatementClass.Maintenance, cancellationToken);
-            if (won > 0)
+            if (won == 0)
             {
-                await databaseClient.RefreshArchiveTableAsync(tenantId, QualifiedTable, CrateStatementClass.Maintenance, cancellationToken);
-                claimed.Add(row);
+                continue;
             }
+
+            await databaseClient.RefreshArchiveTableAsync(tenantId, QualifiedTable, CrateStatementClass.Maintenance, cancellationToken);
+
+            // Two replicas may have claimed two different requests in the same instant: the one that comes first in the
+            // queue order keeps running, the other puts its request back.
+            var competing = (await ReadAsync(null, cancellationToken))
+                .Where(r => r.Request.RequestId != row.Request.RequestId && LeaseValid(r) && r.StartedAtMs >= nowMs - 1000)
+                .Any(r => string.CompareOrdinal(r.Request.RequestId, row.Request.RequestId) < 0);
+            if (competing)
+            {
+                await databaseClient.ExecuteNonQueryAsync(tenantId, BuildRelease(QualifiedTable, tenantId, row.Request.RequestId),
+                    CrateStatementClass.Maintenance, cancellationToken);
+                await databaseClient.RefreshArchiveTableAsync(tenantId, QualifiedTable, CrateStatementClass.Maintenance, cancellationToken);
+                break;
+            }
+
+            claimed.Add(row);
+            break; // one request per tick and tenant; the next waits
         }
 
         return claimed;
     }
+
+    internal static string BuildRelease(string table, string tenant, string requestId) =>
+        $"UPDATE {table} SET \"state\" = 'Pending', \"started_at_ms\" = 0 WHERE \"tenant_id\" = {Lit(tenant)} AND \"request_id\" = {Lit(requestId)};";
 
     public async Task CompleteAsync(string requestId, RollupRepairReport report, CancellationToken cancellationToken)
     {

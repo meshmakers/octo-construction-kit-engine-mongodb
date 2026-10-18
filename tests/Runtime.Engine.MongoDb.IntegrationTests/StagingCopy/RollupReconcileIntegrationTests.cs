@@ -594,6 +594,28 @@ public class RollupReconcileIntegrationTests(CrateStagingCopyFixture fixture)
     }
 
     [Fact]
+    public async Task Enqueue_OverlappingRequests_NeverRunAtOnce_TheSecondWaitsForTheFirst()
+    {
+        var rig = await BrokenRigAsync(fixture);
+        var all = await rig.Repository.EnqueueRollupRepairAsync(null, Ct);
+        var one = await rig.Repository.EnqueueRollupRepairAsync([rig.Rollup], Ct); // overlaps: the rollup is part of "all"
+        var table = $"\"{TenantSchema.SchemaName(rig.Tenant)}\".\"__rollup_repair\"";
+
+        // while the first is running (lease valid) the second is not claimed, not even by another replica
+        await fixture.SqlAsync($"UPDATE {table} SET \"state\" = 'Running', \"started_at_ms\" = {DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()} WHERE \"request_id\" = '{all.RequestId}'");
+        await fixture.SqlAsync($"REFRESH TABLE {table}");
+        var other = fixture.NewReconcileRepository(rig.Tenant, [rig.Snapshot], [rig.Raw], new RecomputeProcessState(), null, rig.Store);
+        Assert.Equal(0, await other.RunPendingRollupRepairsAsync(Ct));
+        Assert.Equal(RollupRepairRequestState.Pending, (await other.GetRollupRepairRequestAsync(one.RequestId, Ct))!.State);
+
+        // the first ends: the second runs on the next tick, one request per tick
+        await fixture.SqlAsync($"UPDATE {table} SET \"state\" = 'Done', \"finished_at_ms\" = 1 WHERE \"request_id\" = '{all.RequestId}'");
+        await fixture.SqlAsync($"REFRESH TABLE {table}");
+        Assert.Equal(1, await other.RunPendingRollupRepairsAsync(Ct));
+        Assert.Equal(RollupRepairRequestState.Done, (await other.GetRollupRepairRequestAsync(one.RequestId, Ct))!.State);
+    }
+
+    [Fact]
     public async Task Enqueue_TwoReplicasClaimingTheSameRequest_ExactlyOneWins()
     {
         var rig = await BrokenRigAsync(fixture);

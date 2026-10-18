@@ -109,7 +109,7 @@ public class RollupLocalMeasurementTests(LocalKindStagingFixture fixture)
         report.AppendLine($"CrateDB {version}");
 
         var rows = Convert.ToInt64(await fixture.ScalarAsync($"SELECT COUNT(*) FROM {sourceTable}"), CultureInfo.InvariantCulture);
-        var first = Convert.ToInt64(await fixture.ScalarAsync($"SELECT MIN(window_start) FROM {sourceTable}"), CultureInfo.InvariantCulture);
+        var first = Convert.ToInt64(await fixture.ScalarAsync($"SELECT CAST(MIN(window_start) AS BIGINT) FROM {sourceTable}"), CultureInfo.InvariantCulture);
         var maxEnd = (DateTime)(await fixture.ScalarAsync($"SELECT MAX(window_end) FROM {sourceTable}"))!;
         var rig = NewRig(targetTenant, rollup, DateTime.SpecifyKind(maxEnd, DateTimeKind.Utc));
         report.AppendLine($"rollup rows {rows}");
@@ -158,7 +158,7 @@ public class RollupLocalMeasurementTests(LocalKindStagingFixture fixture)
 
             // 4. a full recompute: the second version of every row under the next generation, one pointer entry over the whole range
             var nextGeneration = pointers.Max(p => p.Generation) + 1;
-            var last = Convert.ToInt64(await fixture.ScalarAsync($"SELECT MAX(window_start) FROM {rig.Live}"), CultureInfo.InvariantCulture);
+            var last = Convert.ToInt64(await fixture.ScalarAsync($"SELECT CAST(MAX(window_start) AS BIGINT) FROM {rig.Live}"), CultureInfo.InvariantCulture);
             var copySeconds = await TimedAsync(async () =>
             {
                 for (var from = first; from <= last; from += 30L * 86_400_000)
