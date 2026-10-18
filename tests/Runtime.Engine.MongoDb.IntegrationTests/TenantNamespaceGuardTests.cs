@@ -282,6 +282,65 @@ public class TenantNamespaceGuardTests(TenantNamespaceFixture fixture)
     }
 
     [Fact]
+    public async Task TenantsCreatedAndAttachedBelowANonSystemParent_AreInTheSystemRegistryWithTheirParent()
+    {
+        // AB#6941: ISystemContext.GetAllTenantsAsync is the installation-wide registry that identity's client
+        // mirror provisioning (backfill and tenant setup) iterates. A tenant created or attached below a NON-system
+        // parent must be in it, stamped with that parent — otherwise it never receives the mirrors of the flagged
+        // clients and its CI token carries the wrong tenant_id.
+        var parentId = NewName("nparent");
+        var createdId = NewName("ncreated");
+        var attachedId = NewName("nattached");
+
+        await CreateTenantAsync(SystemContext, parentId, parentId);
+        var parent = await SystemContext.GetChildTenantContextAsync(parentId);
+
+        try
+        {
+            await CreateTenantAsync(parent, createdId, createdId);
+
+            // Attach path: create, detach (keeps the database), attach the existing database again.
+            await CreateTenantAsync(parent, attachedId, attachedId);
+            using (var session = await parent.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await parent.DetachChildTenantAsync(session, attachedId);
+                await session.CommitTransactionAsync();
+            }
+
+            using (var session = await parent.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await parent.AttachChildTenantAsync(session, attachedId, attachedId);
+                await session.CommitTransactionAsync();
+            }
+
+            using var readSession = await SystemContext.GetAdminSessionAsync();
+            var all = (await SystemContext.GetAllTenantsAsync(readSession)).Items.ToArray();
+
+            foreach (var id in new[] { parentId, createdId, attachedId })
+            {
+                Assert.Single(all, t => t.TenantId == id);
+            }
+
+            Assert.Equal(Configuration.SystemTenantId, all.Single(t => t.TenantId == parentId).ParentTenantId,
+                ignoreCase: true);
+            Assert.Equal(parentId, all.Single(t => t.TenantId == createdId).ParentTenantId);
+            Assert.Equal(parentId, all.Single(t => t.TenantId == attachedId).ParentTenantId);
+
+            // The tenants resolve from the system context, which is what the mirror provisioning needs.
+            Assert.NotNull(await SystemContext.TryFindTenantRepositoryAsync(createdId));
+            Assert.NotNull(await SystemContext.TryFindTenantRepositoryAsync(attachedId));
+        }
+        finally
+        {
+            await DropTenantQuietlyAsync(parent, createdId);
+            await DropTenantQuietlyAsync(parent, attachedId);
+            await DropTenantQuietlyAsync(SystemContext, parentId);
+        }
+    }
+
+    [Fact]
     public async Task DetachAndReattachChildTenant_FromSubTenant_Succeeds()
     {
         var parentId = NewName("parent");
