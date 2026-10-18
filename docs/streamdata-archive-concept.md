@@ -924,6 +924,52 @@ Until implemented, breakage manifests as runtime exceptions on the data plane.
 
 ---
 
+## 18a. Native copy to and from a staging location (AB#5967)
+
+`IStreamDataRepository.PlanArchiveCopyAsync`, `CopyToStagingAsync`, `CopyFromStagingAsync`, `DescribeArchiveTableAsync`
+and `GetStorageVersionAsync` (engine contract, `Runtime.Contracts/StreamData`) are implemented by `Copy/StagingCopyRunner`
+with CrateDB's own `COPY TO DIRECTORY` / `COPY FROM`. The concept is
+`octo-construction-kit-engine/docs/concept-tenant-backup-native-archive-dump.md`. `SupportsStagingCopy` is true when the
+database client can run a statement once under a timeout of its own (`ICrateCopyClient`, implemented by `CrateDatabaseClient`).
+The generation map of a rollup is not copied yet (slice 2 of the feature).
+
+**Dump.** The plan cuts the data table into counted time slices with the planner of the row export (`ExportSlicePlanner`,
+target `ArchiveCopyOptions.TargetSliceRows`). Each slice is one statement,
+`COPY <table> WHERE <time> >= from AND <time> < to TO DIRECTORY '<location>/<rtId>/data/<slice>' WITH (compression = 'gzip', ...)`,
+gzip-compressed line-wise JSON, sent as a maintenance statement with `ArchiveCopyOptions.CommandTimeout`. It reports the rows
+copied; a difference to the rows counted is a warning (the tenant stays online), not a failure. A failed slice ends the copy,
+earlier slices stay valid, and a cancelled token stops between two slices.
+
+**Load.** Into a freshly created table: the dumped columns are compared with the table (a missing column stops the load
+before anything is changed), the free disk space per node is checked against nine times the staged size, then
+`number_of_replicas = 0, refresh_interval = 0` are set and the previous values remembered. Each slice is
+`COPY <table> FROM '<location>/<rtId>/data/<slice>/*' WITH (compression = 'gzip', ...) RETURN SUMMARY`; a slice is loaded when
+`success_count` equals the counted rows and `error_count` is 0. The settings are restored when the enumeration ends, also
+after a failed slice, an exception or a cancelled caller. Afterwards the segments are merged (`OPTIMIZE ... max_num_segments = 1`,
+switch off with `OptimizeAfterLoad = false`). A slice loaded again after a failure uses `OverwriteDuplicates = true`. A NULL in a
+column that has a DEFAULT is not preserved: the default applies.
+
+**Credential.** The text of a `COPY` carries the storage credential (S3 key and secret in the URI, `sas_token` or `key` in
+`WITH`). Four things keep it away from logs, exceptions, traces and the server's job log:
+
+- `CopyStatement` keeps the executed text and the redacted text together; only the code that executes it calls `Reveal()`.
+  The rules are `ArchiveCopyRedaction` and `ArchiveCopyStagingLocation` of the engine: the user info of the URI is dropped, every
+  `WITH` option is masked unless it is on a short list of harmless ones.
+- A failing statement raises `StreamDataCopyStatementException` (scrubbed message, redacted statement, no inner exception, no data)
+  or `StreamDataStatementTimeoutException` (redacted statement, no inner exception); a copy statement is never retried by the
+  resilience pipeline. Failed slices carry the same scrubbed message.
+- `COPY` commands and batches are excluded from the Npgsql tracing (`CrateDbConnectionAccess.ConfigureTracing`), so the
+  injected OpenTelemetry instrumentation records no span with their text; other commands are traced as before.
+- `JobLogFilterGuard` reads `stats.jobs_log_filter` before every dump and load and refuses (`ArchiveCopyRefusedException`,
+  `JobLogNotFiltered`) unless the filter excludes `COPY` (`stmt NOT ILIKE 'copy %'`), because CrateDB records the full text of a
+  finished statement in `sys.jobs_log`. Setting it belongs to the infrastructure (`SET GLOBAL PERSISTENT`).
+
+Tests: `StreamData.UnitTests/Copy` (statements and redaction with canary values, the runner against a simulated CrateDB) and
+`Runtime.Engine.MongoDb.IntegrationTests/StagingCopy` (a CrateDB container copying to `file://` in its own file system: round
+trip with the same rows, sums and time bounds per month under another tenant id, failed loads, the guard, the job log,
+tracing). `COPY TO DIRECTORY` does not create directories on a file system, so those tests create the slice folders first;
+an object store needs none.
+
 ## 19. References
 
 - Pain points & current architecture analysis: see ADO Issue (this document is linked).

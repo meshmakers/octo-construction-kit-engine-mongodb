@@ -9,11 +9,13 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// names the one case "the statement was too slow"; a cancellation by the caller surfaces as
 /// <see cref="OperationCanceledException"/>. It is not a connection failure: the same statement
 /// under the same load will exceed the budget again, so callers must not treat it as transient.
+/// For a <c>COPY</c> (AB#5967) the statement text in the message is the redacted one and there is no
+/// inner exception: the driver's exception would carry the storage credential in its own text.
 /// </remarks>
 public sealed class StreamDataStatementTimeoutException : Exception
 {
     internal StreamDataStatementTimeoutException(
-        CrateStatementClass statementClass, TimeSpan budget, TimeSpan elapsed, string statement, Exception innerException)
+        CrateStatementClass statementClass, TimeSpan budget, TimeSpan elapsed, string statement, Exception? innerException)
         : base(
             FormattableString.Invariant(
                 $"A {statementClass} statement was ended after {elapsed.TotalSeconds:0.0} s; its budget is {budget.TotalSeconds:0.0} s. Statement: {statement}"),

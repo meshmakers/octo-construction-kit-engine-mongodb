@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Copy;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -92,7 +93,34 @@ internal class CrateDbConnectionAccess(
 
         var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
         dataSourceBuilder.EnableDynamicJson([typeof(IReadOnlyDictionary<string, object?>)]);
+        ConfigureTracing(dataSourceBuilder);
         return dataSourceBuilder.Build();
+    }
+
+    /// <summary>
+    /// Keeps <c>COPY</c> statements out of the driver's tracing (AB#5967). The OpenTelemetry
+    /// auto-instrumentation of the pods records the command text of every traced command as a span attribute,
+    /// and the text of a <c>COPY</c> carries the storage credential. A command or batch that is filtered here
+    /// gets no span at all; every other command is traced as before.
+    /// </summary>
+    internal static void ConfigureTracing(NpgsqlDataSourceBuilder dataSourceBuilder)
+    {
+        dataSourceBuilder.ConfigureTracing(tracing => tracing
+            .ConfigureCommandFilter(command => !CopyStatement.IsCopyStatement(command.CommandText))
+            .ConfigureBatchFilter(batch => !ContainsCopy(batch)));
+    }
+
+    private static bool ContainsCopy(NpgsqlBatch batch)
+    {
+        foreach (var command in batch.BatchCommands)
+        {
+            if (CopyStatement.IsCopyStatement(command.CommandText))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

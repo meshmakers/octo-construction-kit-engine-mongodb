@@ -9,6 +9,7 @@ using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Copy;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 using Microsoft.Extensions.Logging;
@@ -49,6 +50,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     private readonly IArchiveAuditTrail? _archiveAuditTrail;
     private readonly int _recomputeSliceTargetRows;
     private readonly RecomputeProcessState _recomputeProcessState;
+    private readonly ICrateCopyClient? _copyClient;
+    private StagingCopyRunner? _stagingCopy;
 
     public CrateDbStreamDataRepository(
         ILogger<CrateDbStreamDataRepository> logger,
@@ -68,6 +71,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         _logger = logger;
         _ckCacheService = ckCacheService;
         _databaseClient = databaseClient;
+        // The staging copy needs the client that can run a statement once under a timeout of its own; a
+        // client that cannot (a test double) leaves SupportsStagingCopy false.
+        _copyClient = databaseClient as ICrateCopyClient;
         _managementClient = managementClient;
         _archiveStore = archiveStore;
         _rollupArchiveStore = rollupArchiveStore;
@@ -1578,6 +1584,85 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         DateTimeOffset dto => dto.UtcDateTime,
         _ => null,
     };
+
+    // --- Native copy to and from a staging location (AB#5967) ---------------------------------------
+    // The logic lives in Copy/StagingCopyRunner; this is the delegation of the contract members.
+
+    /// <inheritdoc />
+    public bool SupportsStagingCopy => _copyClient is not null;
+
+    /// <inheritdoc />
+    public async Task<ArchiveCopyPlan> PlanArchiveCopyAsync(
+        OctoObjectId archiveRtId, ArchiveCopyOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        var runner = RequireStagingCopy(archiveRtId);
+        var target = await ResolveCopyTargetAsync(archiveRtId);
+        return await runner.PlanAsync(target, options ?? new ArchiveCopyOptions(), cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<ArchiveCopySliceResult> CopyToStagingAsync(
+        OctoObjectId archiveRtId, ArchiveCopyPlan plan, ArchiveCopyStagingLocation location,
+        ArchiveCopyOptions? options = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var runner = RequireStagingCopy(archiveRtId);
+        var target = await ResolveCopyTargetAsync(archiveRtId);
+        await foreach (var result in runner.CopyToAsync(
+                           target, plan, location, options ?? new ArchiveCopyOptions(), cancellationToken))
+        {
+            yield return result;
+        }
+    }
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<ArchiveCopySliceResult> CopyFromStagingAsync(
+        OctoObjectId archiveRtId, ArchiveCopyPlan plan, ArchiveCopyStagingLocation location,
+        ArchiveCopyOptions? options = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var runner = RequireStagingCopy(archiveRtId);
+        var target = await ResolveCopyTargetAsync(archiveRtId);
+        await foreach (var result in runner.CopyFromAsync(
+                           target, plan, location, options ?? new ArchiveCopyOptions(), cancellationToken))
+        {
+            yield return result;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<ArchiveTableDescription> DescribeArchiveTableAsync(
+        OctoObjectId archiveRtId, ArchiveCopyTable table, CancellationToken cancellationToken = default)
+    {
+        var runner = RequireStagingCopy(archiveRtId);
+        var target = await ResolveCopyTargetAsync(archiveRtId);
+        return await runner.DescribeAsync(target, table, new ArchiveCopyOptions(), cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<string> GetStorageVersionAsync(CancellationToken cancellationToken = default)
+        => RequireStagingCopy(null).GetStorageVersionAsync(new ArchiveCopyOptions(), cancellationToken);
+
+    private StagingCopyRunner RequireStagingCopy(OctoObjectId? archiveRtId)
+    {
+        if (_copyClient is null)
+        {
+            throw new ArchiveCopyNotSupportedException(archiveRtId);
+        }
+
+        return _stagingCopy ??= new StagingCopyRunner(_logger, _tenantId, _copyClient);
+    }
+
+    private async Task<ArchiveCopyTarget> ResolveCopyTargetAsync(OctoObjectId archiveRtId)
+    {
+        // The copy does not require an Activated archive (a Disabled archive keeps its table); the snapshot
+        // only tells the storage shape, which decides the time axis.
+        var snapshot = await _archiveStore.GetAsync(archiveRtId)
+            ?? throw new ArchiveNotFoundException(archiveRtId);
+        return new ArchiveCopyTarget(archiveRtId, TenantSchema.SchemaName(_tenantId),
+            TenantSchema.ArchiveTableName(archiveRtId.ToString()),
+            snapshot.UsesWindowedStorage ? Constants.WindowStart : Constants.Timestamp);
+    }
 
     /// <inheritdoc />
     public async Task ImportRowsAsync(
