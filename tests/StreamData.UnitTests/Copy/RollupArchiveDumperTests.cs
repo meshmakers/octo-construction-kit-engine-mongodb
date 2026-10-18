@@ -186,6 +186,37 @@ public class RollupArchiveDumperTests
     }
 
     [Fact]
+    public async Task Dump_PlanCarriesTheRowsTheCopyReported_SoTheLoadVerifiesWhatIsInTheFiles()
+    {
+        WithRollup();
+        var added = false;
+        _crate.Fault = statement =>
+        {
+            // The tenant stays online: a row lands in the slice between the count and the copy.
+            if (!added && IsDataCopyTo(statement.Reveal()))
+            {
+                added = true;
+                _crate.SourceRows.Add(At(1, 5).AddMinutes(30));
+            }
+        };
+
+        var dump = await Dumper().DumpAsync(RollupTarget, Location, Small, Ct);
+
+        Assert.True(dump.IsSuccess);
+        Assert.Equal(11, dump.Plan.Slices.Where(s => s.Table == ArchiveCopyTable.Data).Sum(s => s.RowCount));
+        Assert.Equal(3, dump.Plan.Slices.Single(s => s.Table == ArchiveCopyTable.GenerationMap).RowCount);
+        // a load of that plan finds exactly the rows in the files
+        var runner = new StagingCopyRunner(NullLogger.Instance, "tenant1", _crate);
+        var results = new List<ArchiveCopySliceResult>();
+        await foreach (var r in runner.CopyFromAsync(RestoreTarget, dump.Plan, Location, Small, Ct))
+        {
+            results.Add(r);
+        }
+
+        Assert.All(results, r => Assert.True(r.IsSuccess, r.Message));
+    }
+
+    [Fact]
     public async Task Dump_OfAnArchiveWithoutAMap_NeverReadsOrCopiesOne()
     {
         WithRollup();

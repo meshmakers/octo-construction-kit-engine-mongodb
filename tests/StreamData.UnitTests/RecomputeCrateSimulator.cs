@@ -43,16 +43,36 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
     private static readonly Regex StagedBucketRegex = new(
         "\"window_start\" = (?<at>-?\\d+);", RegexOptions.CultureInvariant);
 
+    private static readonly Regex SweepValuesRegex = new(
+        "VALUES \\((?<from>-?\\d+), (?<to>-?\\d+), '(?<scope>[^']*)', (?<g>\\d+), (?<at>-?\\d+)\\)", RegexOptions.CultureInvariant);
+
+    private static readonly Regex SweepKeyRegex = new(
+        "\"range_start\" = (?<from>-?\\d+) AND \"range_end\" = (?<to>-?\\d+) AND \"rtid_scope\" = '(?<scope>[^']*)' AND \"generation\" = (?<g>\\d+)",
+        RegexOptions.CultureInvariant);
+
     private readonly string _liveTable;
     private readonly string _stagingTable;
     private readonly string _genMapTable;
+    private readonly string _sweepTable;
+    private readonly string _sweepTableName;
 
     public RecomputeCrateSimulator(string tenantId, string rollupRtId)
     {
         _liveTable = TenantSchema.QualifiedArchiveTable(tenantId, rollupRtId);
         _stagingTable = RollupRecomputeSqlBuilder.StagingTable(tenantId, rollupRtId);
         _genMapTable = GenerationMapSqlBuilder.GenMapTable(tenantId, rollupRtId);
+        _sweepTable = PendingSweepSqlBuilder.SweepTable(tenantId, rollupRtId);
+        _sweepTableName = PendingSweepSqlBuilder.SweepTableName(rollupRtId);
     }
+
+    /// <summary>A pending-sweep record (AB#6968): a flipped pointer entry and the epoch millisecond of the flip.</summary>
+    public sealed record SweepRecord(GenerationRange Entry, long FlippedAtMs);
+
+    /// <summary>The pending-sweep records, as the record table of the rollup holds them.</summary>
+    public List<SweepRecord> Sweeps { get; } = new();
+
+    /// <summary>Whether the record table exists (it is created by the first deferred sweep).</summary>
+    public bool SweepTableExists { get; set; }
 
     /// <summary>A row of the live or the staging table, reduced to what the recompute keys on.</summary>
     public sealed record Row(long WindowStartMs, long Generation, string RtId);
@@ -102,7 +122,12 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
 
         string kind;
         long rows;
-        if (countQuery.Contains($"FROM {_stagingTable}", StringComparison.Ordinal))
+        if (countQuery.Contains("FROM information_schema.tables", StringComparison.Ordinal))
+        {
+            kind = "count:sweep-table-exists";
+            rows = SweepTableExists && countQuery.Contains($"'{_sweepTableName}'", StringComparison.Ordinal) ? 1 : 0;
+        }
+        else if (countQuery.Contains($"FROM {_stagingTable}", StringComparison.Ordinal))
         {
             EnsureStagingExists();
             var ranged = RangeRegex.IsMatch(countQuery);
@@ -173,6 +198,35 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
     {
         cancellationToken.ThrowIfCancellationRequested();
         await Task.CompletedTask;
+        if (query.Contains("FROM information_schema.tables", StringComparison.Ordinal))
+        {
+            Calls.Add(new Call("read:sweep-tables", query));
+            if (SweepTableExists)
+            {
+                yield return new Dictionary<string, object?> { ["table_name"] = _sweepTableName };
+            }
+
+            yield break;
+        }
+
+        if (query.Contains($"FROM {_sweepTable}", StringComparison.Ordinal))
+        {
+            Calls.Add(new Call("read:sweep-records", query));
+            foreach (var record in Sweeps.ToList())
+            {
+                yield return new Dictionary<string, object?>
+                {
+                    ["range_start"] = record.Entry.StartMs,
+                    ["range_end"] = record.Entry.EndMs,
+                    ["rtid_scope"] = record.Entry.Scope,
+                    ["generation"] = record.Entry.Generation,
+                    ["flipped_at_ms"] = record.FlippedAtMs,
+                };
+            }
+
+            yield break;
+        }
+
         if (query.Contains("AS next", StringComparison.Ordinal))
         {
             Calls.Add(new Call("read:next-generation", query));
@@ -244,6 +298,10 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
         {
             kind = "ddl:create-genmap";
         }
+        else if (sql.StartsWith($"CREATE TABLE IF NOT EXISTS {_sweepTable}", StringComparison.Ordinal))
+        {
+            kind = "ddl:create-sweep";
+        }
         else
         {
             throw new NotSupportedException($"Unexpected DDL: {sql}");
@@ -263,6 +321,10 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
             // CREATE TABLE IF NOT EXISTS: an existing table keeps its rows.
             StagingExists = true;
         }
+        else if (kind == "ddl:create-sweep")
+        {
+            SweepTableExists = true;
+        }
 
         return Task.CompletedTask;
     }
@@ -280,6 +342,16 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
 
     private string Classify(string sql)
     {
+        if (sql.StartsWith($"INSERT INTO {_sweepTable}", StringComparison.Ordinal))
+        {
+            return "record-sweep";
+        }
+
+        if (sql.StartsWith($"DELETE FROM {_sweepTable}", StringComparison.Ordinal))
+        {
+            return "delete:sweep-record";
+        }
+
         if (sql.StartsWith($"INSERT INTO {_liveTable}", StringComparison.Ordinal))
         {
             return "copy";
@@ -351,6 +423,33 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
                 Pointers.Add(new GenerationRange(from, to, scope,
                     long.Parse(m.Groups["g"].Value, CultureInfo.InvariantCulture)));
                 return 1;
+            }
+            case "record-sweep":
+            {
+                if (!SweepTableExists)
+                {
+                    throw new InvalidOperationException($"RelationUnknown[Relation '{_sweepTable}' unknown]");
+                }
+
+                var m = SweepValuesRegex.Match(sql);
+                var entry = new GenerationRange(
+                    long.Parse(m.Groups["from"].Value, CultureInfo.InvariantCulture),
+                    long.Parse(m.Groups["to"].Value, CultureInfo.InvariantCulture),
+                    m.Groups["scope"].Value,
+                    long.Parse(m.Groups["g"].Value, CultureInfo.InvariantCulture));
+                Sweeps.RemoveAll(s => s.Entry == entry);
+                Sweeps.Add(new SweepRecord(entry, long.Parse(m.Groups["at"].Value, CultureInfo.InvariantCulture)));
+                return 1;
+            }
+            case "delete:sweep-record":
+            {
+                var m = SweepKeyRegex.Match(sql);
+                var entry = new GenerationRange(
+                    long.Parse(m.Groups["from"].Value, CultureInfo.InvariantCulture),
+                    long.Parse(m.Groups["to"].Value, CultureInfo.InvariantCulture),
+                    m.Groups["scope"].Value,
+                    long.Parse(m.Groups["g"].Value, CultureInfo.InvariantCulture));
+                return Sweeps.RemoveAll(s => s.Entry == entry);
             }
             case "delete:contained-pointers":
             {
@@ -447,6 +546,7 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
         qualifiedTable == _liveTable ? "live"
         : qualifiedTable == _stagingTable ? "staging"
         : qualifiedTable == _genMapTable ? "genmap"
+        : qualifiedTable == _sweepTable ? "sweep"
         : throw new NotSupportedException($"Unexpected table: {qualifiedTable}");
 
     /// <summary>The <c>[from, to)</c> bounds of a recorded statement, in epoch milliseconds.</summary>

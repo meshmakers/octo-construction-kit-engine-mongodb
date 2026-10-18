@@ -42,7 +42,7 @@ internal sealed class RollupArchiveDumper(
         {
             var plan = await runner.PlanAsync(target, options, cancellationToken);
             var results = await CopyAsync(target, plan, location, options, cancellationToken);
-            return new ArchiveCopyDumpResult(target.ArchiveRtId, plan, results, 1, null,
+            return new ArchiveCopyDumpResult(target.ArchiveRtId, CopiedPlan(plan, results), results, 1, null,
                 results.Count == 0 ? null : time.Now());
         }
 
@@ -59,7 +59,7 @@ internal sealed class RollupArchiveDumper(
             if (results.Count != plan.Slices.Count || results.Any(r => !r.IsSuccess))
             {
                 // A failed slice ends the dump of this archive; the result says which one.
-                return new ArchiveCopyDumpResult(target.ArchiveRtId, plan, results, attempt, mapReadAt, lastDataCopiedAt);
+                return new ArchiveCopyDumpResult(target.ArchiveRtId, CopiedPlan(plan, results), results, attempt, mapReadAt, lastDataCopiedAt);
             }
 
             var after = await ReadMapAsync(target, options, cancellationToken);
@@ -69,7 +69,7 @@ internal sealed class RollupArchiveDumper(
                     "Dumped rollup {RollupRtId} of tenant {TenantId} in {Attempts} attempt(s): {Entries} pointer entries, " +
                     "map read at {MapReadAt:O}, last data slice at {LastData:O}.",
                     target.ArchiveRtId, tenantId, attempt, before.Count, mapReadAt, lastDataCopiedAt);
-                return new ArchiveCopyDumpResult(target.ArchiveRtId, plan, results, attempt, mapReadAt, lastDataCopiedAt);
+                return new ArchiveCopyDumpResult(target.ArchiveRtId, CopiedPlan(plan, results), results, attempt, mapReadAt, lastDataCopiedAt);
             }
 
             logger.LogWarning(
@@ -82,6 +82,24 @@ internal sealed class RollupArchiveDumper(
             $"The generation map of rollup '{target.ArchiveRtId}' changed during each of {options.MaxMapAttempts} attempts " +
             "to dump it (a recompute keeps flipping its pointers). The rollup was not dumped consistently; " +
             "dump it again when no recompute runs, or raise the number of attempts.", target.ArchiveRtId);
+    }
+
+    /// <summary>
+    /// The plan as the files stand: each slice carries the rows the copy reported, not the rows counted before it.
+    /// The tenant stays online while it is dumped, so the two can differ; a load verifies a slice against the number
+    /// of rows in its files. Slices that were not copied (a failed dump) keep their counted rows.
+    /// </summary>
+    internal static ArchiveCopyPlan CopiedPlan(ArchiveCopyPlan plan, IReadOnlyList<ArchiveCopySliceResult> results)
+    {
+        var copied = results.Where(r => r.IsSuccess).ToDictionary(r => r.Slice.Key, r => r.CopiedRows, StringComparer.Ordinal);
+        return plan with
+        {
+            Slices = plan.Slices
+                .Select(s => copied.TryGetValue(s.Key, out var rows) && rows != s.RowCount
+                    ? new ArchiveCopySlice(s.Table, s.Key, rows, s.FromUtc, s.ToUtc, s.StagedBytes)
+                    : s)
+                .ToList()
+        };
     }
 
     /// <summary>Reads the whole generation map (after a refresh: a search sees the last refresh only).</summary>

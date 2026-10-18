@@ -2,7 +2,7 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 
 /// <summary>
 /// The one place that knows which CrateDB tables an archive owns: its data table and, for rollups,
-/// the generation-map side-table and the recompute staging table. Shared by the per-archive delete on the repository and the
+/// the generation-map side-table, the recompute staging table and the pending-sweep record table. Shared by the per-archive delete on the repository and the
 /// tenant drop on the factory (AB#4255), so both drop exactly the same set - and never anything
 /// else in the tenant's schema.
 /// </summary>
@@ -39,5 +39,10 @@ internal static class ArchiveTableDrop
         // recomputed, and for raw / time-range archives).
         var stagingTable = RollupRecomputeSqlBuilder.StagingTable(tenantId, archiveRtId);
         await managementClient.ExecuteDdlAsync(tenantId, RollupRecomputeSqlBuilder.BuildDropIfExists(stagingTable));
+
+        // The pending-sweep record table (AB#6968) exists only for a rollup that was recomputed with a sweep
+        // grace period above zero; IF EXISTS makes it a no-op for every other archive.
+        var sweepTable = PendingSweepSqlBuilder.SweepTable(tenantId, archiveRtId);
+        await managementClient.ExecuteDdlAsync(tenantId, PendingSweepSqlBuilder.BuildDropIfExists(sweepTable));
     }
 }

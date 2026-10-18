@@ -953,6 +953,15 @@ validator finds them after the restore as orphans and the repair removes them.
 counted rows and, for a rollup, the map holds the counted pointer entries; false when a slice failed, the counts differ or the
 load stopped early. The restore job treats an unverified archive as failed.
 
+**Sweep grace period (configuration reference).** The sweep of the generations a recompute superseded is deferred so that a dump
+which copied the map before a flip still finds the rows its copy names. Setting `StreamData:Recompute:SweepGracePeriod`
+(env `OCTO_STREAMDATA__RECOMPUTE__SWEEPGRACEPERIOD`, `CrateRecomputeOptions`): time span, default `02:00:00`, `00:00:00` sweeps at
+once (the behaviour before AB#6968), a negative value fails the start (`ValidateOnStart`, message names the key). The pending
+sweeps are rows in `archive_<rtId>__sweep` next to the generation map, dropped with the archive. Cost of the delay: the superseded
+rows occupy the table until the sweep, and reads scan a larger table (measured on a 28.8 million row rollup, see the measurements
+in the AB#6968 hand-over). An executor or repository built without options (outside the host's DI) keeps the immediate sweep.
+Rule of the concept: `octo-construction-kit-engine/docs/concept-rollup-recompute.md`, "Sweep grace period".
+
 **Dump.** The plan cuts the data table into counted time slices with the planner of the row export (`ExportSlicePlanner`,
 target `ArchiveCopyOptions.TargetSliceRows`). Each slice is one statement,
 `COPY <table> WHERE <time> >= from AND <time> < to TO DIRECTORY '<location>/<rtId>/data/<slice>' WITH (compression = 'gzip', ...)`,

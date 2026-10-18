@@ -49,6 +49,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     private readonly IArchiveRecomputeStateStore? _recomputeStateStore;
     private readonly IArchiveAuditTrail? _archiveAuditTrail;
     private readonly int _recomputeSliceTargetRows;
+    private readonly TimeSpan _sweepGracePeriod;
     private readonly RecomputeProcessState _recomputeProcessState;
     private readonly ICrateCopyClient? _copyClient;
     private StagingCopyRunner? _stagingCopy;
@@ -86,6 +87,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // as this repository does.
         _recomputeProcessState = recomputeProcessState ?? new RecomputeProcessState();
         _recomputeSliceTargetRows = recomputeOptions?.Value.SliceTargetRows ?? CrateRecomputeOptions.DefaultSliceTargetRows;
+        // A repository built without options (outside the host's DI) sweeps at once, as it always did; the
+        // host's options default to the two hours of CrateRecomputeOptions.DefaultSweepGracePeriod.
+        _sweepGracePeriod = recomputeOptions?.Value.SweepGracePeriod ?? TimeSpan.Zero;
     }
 
     public Task EnsureDatabaseCreatedAsync()
@@ -2013,11 +2017,48 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // This repository — and with it the executor — lives as long as the tenant context that
         // created it: one request, one orchestrator tick. What a recompute has to remember for the
         // life of the process is in _recomputeProcessState, which the singleton factory hands in.
-        _recomputeExecutor ??= new CrateDbArchiveRecomputeExecutor(
-            _tenantId, _databaseClient, _managementClient, _archiveStore, _logger,
-            _rollupArchiveStore, _recomputeSliceTargetRows, _recomputeProcessState);
+        return RecomputeExecutor.ExecuteAsync(source, rollup, rangeStart, rangeEnd, rtIdScope, cancellationToken);
+    }
 
-        return _recomputeExecutor.ExecuteAsync(source, rollup, rangeStart, rangeEnd, rtIdScope, cancellationToken);
+    private CrateDbArchiveRecomputeExecutor RecomputeExecutor => _recomputeExecutor ??= new CrateDbArchiveRecomputeExecutor(
+        _tenantId, _databaseClient, _managementClient, _archiveStore, _logger,
+        _rollupArchiveStore, _recomputeSliceTargetRows, _recomputeProcessState, _sweepGracePeriod, TimeProvider.System);
+
+    /// <inheritdoc />
+    public async Task<int> SweepSupersededGenerationsAsync(CancellationToken cancellationToken = default)
+    {
+        if (_rollupArchiveStore is null)
+        {
+            return 0;
+        }
+
+        // One catalogue query for the tenant: most rollups never deferred a sweep and cost nothing more.
+        HashSet<string> recordTables;
+        try
+        {
+            recordTables = await RecomputeExecutor.ListSweepTablesAsync(cancellationToken);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "Listing the pending-sweep tables of tenant {TenantId} failed: {Error}.", _tenantId, ex.Message);
+            return 0;
+        }
+
+        if (recordTables.Count == 0)
+        {
+            return 0;
+        }
+
+        var swept = 0;
+        await foreach (var rollup in _rollupArchiveStore.EnumerateAsync().WithCancellation(cancellationToken))
+        {
+            if (recordTables.Contains(PendingSweepSqlBuilder.SweepTableName(rollup.RtId.ToString())))
+            {
+                swept += await RecomputeExecutor.SweepDueAsync(rollup.RtId, cancellationToken, tableKnownToExist: true);
+            }
+        }
+
+        return swept;
     }
 
     /// <summary>

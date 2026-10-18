@@ -131,5 +131,40 @@ internal sealed class RecomputeOrchestratorHostedService : BackgroundService
             _logger.LogInformation(
                 "Recompute tick for tenant '{TenantId}' executed {Count} recompute(s).", tenantId, recomputed);
         }
+
+        await SweepDeferredAsync(tenantId, tenantContext, cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs the sweeps of recomputed ranges whose grace period has passed (AB#6968). Every tick, so a rollup that is not
+    /// recomputed again is still cleaned up, and so a sweep recorded before a restart is found. A failure is logged; the
+    /// records stay and the next tick repeats.
+    /// </summary>
+    private async Task SweepDeferredAsync(string tenantId, ITenantContext tenantContext, CancellationToken cancellationToken)
+    {
+        var repository = tenantContext.GetStreamDataRepository();
+        if (repository is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var swept = await repository.SweepSupersededGenerationsAsync(cancellationToken);
+            if (swept > 0)
+            {
+                _logger.LogInformation(
+                    "Recompute tick for tenant '{TenantId}' ran {Count} deferred sweep(s) of superseded generations.", tenantId, swept);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Deferred sweep of superseded generations for tenant '{TenantId}' failed; the records stay and the next tick repeats.", tenantId);
+        }
     }
 }
