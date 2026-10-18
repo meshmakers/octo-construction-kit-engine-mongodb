@@ -167,6 +167,16 @@ Re-parenting an existing tenant = `Detach` (old parent context; requires tenant 
 disabled) + `Attach` (new parent context). Attach writes both registry rows; routing keeps
 working because the system registry always holds every tenant.
 
+**Registry reconcile (AB#6941):** a tenant can be listed by its parent's own registry (and so by the recursive
+`GET tenants/descendants` / `GetTenants -r`) yet lack its system registry row (`GetTenants -a`) — then client mirror
+provisioning, token cleanup, CORS and health checks never see it. `ISystemContext.ReconcileTenantRegistryAsync(session,
+apply)` walks the tree through the parent-local registries (detached contexts, no CK import or ownership stamp) and
+inserts the missing system rows with the parent set and id/database normalized. Dry run by default (`apply = false`);
+it never deletes or changes a row: a row that disagrees (other database, other parent, database used by another
+tenant) or a parent registry that cannot be read is returned as a conflict. Idempotent. It is an explicit admin
+operation, not run at start-up; `TenantRegistryReconcileResult.Summary` is the one-line report (walked, inserted /
+to insert, already present, conflicts).
+
 ## Resolving a tenant without the registry — the two runtime seams (AB#4924)
 
 A process normally answers "where does tenant X live and how do I open it" from the installation:

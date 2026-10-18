@@ -315,6 +315,128 @@ public class SystemContext : TenantContext, ISystemContext
     }
 
     /// <inheritdoc />
+    public async Task<TenantRegistryReconcileResult> ReconcileTenantRegistryAsync(IOctoAdminSession adminSession,
+        bool apply = false)
+    {
+        var systemId = TenantId;
+        var registry = (await GetAllTenantsAsync(adminSession)).Items.ToList();
+        var byId = new Dictionary<string, OctoTenant>(StringComparer.OrdinalIgnoreCase);
+        var byDatabase = new Dictionary<string, OctoTenant>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tenant in registry)
+        {
+            byId.TryAdd(tenant.TenantId, tenant);
+            byDatabase.TryAdd(NormalizeDatabaseName(tenant.DatabaseName), tenant);
+        }
+
+        var inserted = new List<TenantRegistryReconcileEntry>();
+        var conflicts = new List<TenantRegistryReconcileConflict>();
+        var alreadyPresent = 0;
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { systemId };
+
+        // Start with the tenants the system registry itself names as direct children: rows without a parent id
+        // predate the field and belong to the registry owner.
+        var queue = new Queue<(string TenantId, string DatabaseName)>();
+        foreach (var tenant in registry.Where(t => t.ParentTenantId == null ||
+                                                   string.Equals(t.ParentTenantId, systemId,
+                                                       StringComparison.OrdinalIgnoreCase)))
+        {
+            if (visited.Add(tenant.TenantId))
+            {
+                queue.Enqueue((tenant.TenantId, tenant.DatabaseName));
+            }
+        }
+
+        var walked = 0;
+        while (queue.Count > 0)
+        {
+            var (parentId, parentDatabase) = queue.Dequeue();
+            walked++;
+
+            IReadOnlyList<RtTenant> localRows;
+            try
+            {
+                var context = CreateDetachedTenantContext(parentId, parentDatabase);
+                using var session = await context.GetAdminSessionAsync();
+                session.StartTransaction();
+                localRows = (await context.GetTenantRepositoryAsAdmin()
+                    .GetRtEntitiesByTypeAsync<RtTenant>(session, RtEntityQueryOptions.Create())).Items.ToList();
+                await session.CommitTransactionAsync();
+            }
+            catch (Exception ex)
+            {
+                conflicts.Add(new TenantRegistryReconcileConflict(parentId, parentId,
+                    $"the registry of tenant '{parentId}' could not be read, its children were not checked: {ex.Message}"));
+                continue;
+            }
+
+            foreach (var row in localRows)
+            {
+                var childId = row.TenantId.NormalizeString();
+                var childDatabase = NormalizeDatabaseName(row.DatabaseName);
+
+                if (byId.TryGetValue(childId, out var existing))
+                {
+                    if (!string.Equals(NormalizeDatabaseName(existing.DatabaseName), childDatabase,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        conflicts.Add(new TenantRegistryReconcileConflict(childId, parentId,
+                            $"the system registry names database '{existing.DatabaseName}', the registry of '{parentId}' names '{childDatabase}'"));
+                        continue;
+                    }
+
+                    if (existing.ParentTenantId != null &&
+                        !string.Equals(existing.ParentTenantId, parentId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        conflicts.Add(new TenantRegistryReconcileConflict(childId, parentId,
+                            $"the system registry names parent '{existing.ParentTenantId}'"));
+                        continue;
+                    }
+
+                    // A system row without a parent id (written before the field existed) is left as it is.
+                    alreadyPresent++;
+                }
+                else if (byDatabase.TryGetValue(childDatabase, out var holder))
+                {
+                    conflicts.Add(new TenantRegistryReconcileConflict(childId, parentId,
+                        $"database '{childDatabase}' is registered for tenant '{holder.TenantId}'"));
+                    continue;
+                }
+                else
+                {
+                    var entry = new TenantRegistryReconcileEntry(childId, childDatabase, parentId);
+                    if (apply)
+                    {
+                        await GetSystemTenantRepositoryAsAdmin().InsertOneRtEntityAsync(adminSession,
+                            new RtTenant { TenantId = childId, ParentTenantId = parentId, DatabaseName = childDatabase });
+                    }
+
+                    var created = new OctoTenant(childId, childDatabase, parentId);
+                    byId[childId] = created;
+                    byDatabase[childDatabase] = created;
+                    inserted.Add(entry);
+                }
+
+                if (visited.Add(childId))
+                {
+                    queue.Enqueue((childId, childDatabase));
+                }
+            }
+        }
+
+        var result = new TenantRegistryReconcileResult
+        {
+            Applied = apply,
+            Inserted = inserted,
+            AlreadyPresent = alreadyPresent,
+            Conflicts = conflicts,
+            Visited = walked
+        };
+        _serviceProvider.GetService<ILoggerFactory>()?.CreateLogger<SystemContext>()
+            .LogInformation("Tenant registry reconcile (AB#6941): {Summary}", result.Summary);
+        return result;
+    }
+
+    /// <inheritdoc />
     public async Task<bool> IsSystemDatabaseBootstrappableAsync()
     {
         var normalizedDatabaseName = NormalizeDatabaseName(_systemConfiguration.Value.SystemDatabaseName);
