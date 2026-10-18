@@ -50,6 +50,26 @@ public interface ISystemContext : ITenantContext
         int? take = null);
 
     /// <summary>
+    /// Repairs the system registry (AB#6941): walks the tenant tree through the parent-local registries (the same
+    /// walk as the descendants listing) and inserts every tenant that a parent registers but the system registry
+    /// lacks, with <see cref="OctoTenant.ParentTenantId"/> set to that parent and id and database name normalized.
+    /// </summary>
+    /// <remarks>
+    /// Create and attach below a non-system parent write both rows; a tenant that lost (or never got) its system
+    /// row is invisible to everything that iterates <see cref="GetAllTenantsAsync"/> — client mirror provisioning,
+    /// token cleanup, CORS, health checks. Rows that disagree with the parent-local registry (other parent, other
+    /// database, database name used by another tenant) and registries that cannot be read are reported as
+    /// conflicts and never touched; nothing is ever deleted or changed. Idempotent: a second run inserts nothing.
+    /// The walk reads through detached contexts, so it has none of the resolve-time side effects (CK imports,
+    /// ownership stamps). With <paramref name="apply"/> false (the default) nothing is written.
+    /// </remarks>
+    /// <param name="adminSession">Admin session of the system tenant; with <paramref name="apply"/> the caller
+    /// starts and commits the transaction.</param>
+    /// <param name="apply">True to write the missing rows, false for a dry run.</param>
+    Task<TenantRegistryReconcileResult> ReconcileTenantRegistryAsync(IOctoAdminSession adminSession,
+        bool apply = false);
+
+    /// <summary>
     /// Gets based on the tenant id the tenant context.
     /// </summary>
     /// <param name="tenantId">The tenant id (also supports the system tenant id)</param>

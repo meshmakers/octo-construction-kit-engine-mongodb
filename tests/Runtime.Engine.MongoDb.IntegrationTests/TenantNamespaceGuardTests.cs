@@ -2,6 +2,8 @@ using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
+using Meshmakers.Octo.Runtime.Contracts.Repositories;
+using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
@@ -278,6 +280,195 @@ public class TenantNamespaceGuardTests(TenantNamespaceFixture fixture)
         {
             await DropTenantQuietlyAsync(child, grandchildId);
             await DropTenantQuietlyAsync(SystemContext, childId);
+        }
+    }
+
+    [Fact]
+    public async Task TenantsCreatedAndAttachedBelowANonSystemParent_AreInTheSystemRegistryWithTheirParent()
+    {
+        // AB#6941: ISystemContext.GetAllTenantsAsync is the installation-wide registry that identity's client
+        // mirror provisioning (backfill and tenant setup) iterates. A tenant created or attached below a NON-system
+        // parent must be in it, stamped with that parent — otherwise it never receives the mirrors of the flagged
+        // clients and its CI token carries the wrong tenant_id.
+        var parentId = NewName("nparent");
+        var createdId = NewName("ncreated");
+        var attachedId = NewName("nattached");
+
+        await CreateTenantAsync(SystemContext, parentId, parentId);
+        var parent = await SystemContext.GetChildTenantContextAsync(parentId);
+
+        try
+        {
+            await CreateTenantAsync(parent, createdId, createdId);
+
+            // Attach path: create, detach (keeps the database), attach the existing database again.
+            await CreateTenantAsync(parent, attachedId, attachedId);
+            using (var session = await parent.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await parent.DetachChildTenantAsync(session, attachedId);
+                await session.CommitTransactionAsync();
+            }
+
+            using (var session = await parent.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await parent.AttachChildTenantAsync(session, attachedId, attachedId);
+                await session.CommitTransactionAsync();
+            }
+
+            using var readSession = await SystemContext.GetAdminSessionAsync();
+            var all = (await SystemContext.GetAllTenantsAsync(readSession)).Items.ToArray();
+
+            foreach (var id in new[] { parentId, createdId, attachedId })
+            {
+                Assert.Single(all, t => t.TenantId == id);
+            }
+
+            Assert.Equal(Configuration.SystemTenantId, all.Single(t => t.TenantId == parentId).ParentTenantId,
+                ignoreCase: true);
+            Assert.Equal(parentId, all.Single(t => t.TenantId == createdId).ParentTenantId);
+            Assert.Equal(parentId, all.Single(t => t.TenantId == attachedId).ParentTenantId);
+
+            // The tenants resolve from the system context, which is what the mirror provisioning needs.
+            Assert.NotNull(await SystemContext.TryFindTenantRepositoryAsync(createdId));
+            Assert.NotNull(await SystemContext.TryFindTenantRepositoryAsync(attachedId));
+        }
+        finally
+        {
+            await DropTenantQuietlyAsync(parent, createdId);
+            await DropTenantQuietlyAsync(parent, attachedId);
+            await DropTenantQuietlyAsync(SystemContext, parentId);
+        }
+    }
+
+    private async Task RemoveSystemRegistryRowAsync(string tenantId)
+    {
+        using var session = await SystemContext.GetAdminSessionAsync();
+        session.StartTransaction();
+        await SystemContext.GetTenantRepositoryAsAdmin().DeleteOneRtEntityAsync<RtTenant>(session,
+            FieldFilterCriteria.Create().FieldEquals(nameof(RtTenant.TenantId), tenantId), Meshmakers.Octo.Runtime.Contracts.Repositories.DeleteOptions.Erase);
+        await session.CommitTransactionAsync();
+    }
+
+    private async Task<TenantRegistryReconcileResult> ReconcileAsync(bool apply)
+    {
+        using var session = await SystemContext.GetAdminSessionAsync();
+        session.StartTransaction();
+        var result = await SystemContext.ReconcileTenantRegistryAsync(session, apply);
+        await session.CommitTransactionAsync();
+        return result;
+    }
+
+    private async Task<OctoTenant[]> GetRegistryAsync()
+    {
+        using var session = await SystemContext.GetAdminSessionAsync();
+        return (await SystemContext.GetAllTenantsAsync(session)).Items.ToArray();
+    }
+
+    [Fact]
+    public async Task ReconcileTenantRegistry_RestoresRowsMissingInTheSystemRegistry_AndIsIdempotent()
+    {
+        // AB#6941: ec_subtenant_test-like state — the parent's own registry names the tenants, the system
+        // registry has no row for them (a grandchild below a lost child included).
+        var parentId = NewName("rparent");
+        var lostId = NewName("rlost");
+        var lostChildId = NewName("rlostchild");
+        var healthyId = NewName("rhealthy");
+
+        await CreateTenantAsync(SystemContext, parentId, parentId);
+        var parent = await SystemContext.GetChildTenantContextAsync(parentId);
+
+        try
+        {
+            await CreateTenantAsync(parent, lostId, lostId);
+            await CreateTenantAsync(parent, healthyId, healthyId);
+            var lost = await parent.GetChildTenantContextAsync(lostId);
+            await CreateTenantAsync(lost, lostChildId, lostChildId);
+            await RemoveSystemRegistryRowAsync(lostId);
+            await RemoveSystemRegistryRowAsync(lostChildId);
+            Assert.DoesNotContain(await GetRegistryAsync(), t => t.TenantId == lostId || t.TenantId == lostChildId);
+
+            // Dry run: reports, writes nothing.
+            var dryRun = await ReconcileAsync(apply: false);
+            Assert.False(dryRun.Applied);
+            Assert.Contains(dryRun.Inserted, e => e.TenantId == lostId && e.ParentTenantId == parentId && e.DatabaseName == lostId);
+            Assert.Contains(dryRun.Inserted, e => e.TenantId == lostChildId && e.ParentTenantId == lostId);
+            Assert.DoesNotContain(dryRun.Inserted, e => e.TenantId == healthyId);
+            Assert.DoesNotContain(await GetRegistryAsync(), t => t.TenantId == lostId || t.TenantId == lostChildId);
+
+            // Apply: the rows come back with their parent and the tenants resolve from the system context.
+            var applied = await ReconcileAsync(apply: true);
+            Assert.True(applied.Applied);
+            Assert.Contains(applied.Inserted, e => e.TenantId == lostId);
+            Assert.Contains(applied.Inserted, e => e.TenantId == lostChildId);
+            var registry = await GetRegistryAsync();
+            Assert.Equal(parentId, Assert.Single(registry, t => t.TenantId == lostId).ParentTenantId);
+            Assert.Equal(lostId, Assert.Single(registry, t => t.TenantId == lostChildId).ParentTenantId);
+            Assert.Single(registry, t => t.TenantId == healthyId);
+            Assert.NotNull(await SystemContext.TryFindTenantRepositoryAsync(lostId));
+            Assert.NotNull(await SystemContext.TryFindTenantRepositoryAsync(lostChildId));
+            Assert.Contains("inserted", applied.Summary);
+
+            // Second run: nothing left to do.
+            var again = await ReconcileAsync(apply: true);
+            Assert.DoesNotContain(again.Inserted, e => e.TenantId == lostId || e.TenantId == lostChildId || e.TenantId == healthyId);
+            Assert.True(again.AlreadyPresent >= 3);
+            Assert.Single(await GetRegistryAsync(), t => t.TenantId == lostId);
+        }
+        finally
+        {
+            await DropTenantQuietlyAsync(parent, lostId);
+            await DropTenantQuietlyAsync(parent, healthyId);
+            await DropTenantQuietlyAsync(SystemContext, parentId);
+        }
+    }
+
+    [Fact]
+    public async Task ReconcileTenantRegistry_ReportsDisagreeingRowsAsConflicts_AndTouchesNothing()
+    {
+        var parentId = NewName("cparent");
+        var ownerId = NewName("cowner");
+        var ghostId = NewName("cghost");
+
+        await CreateTenantAsync(SystemContext, parentId, parentId);
+        var parent = await SystemContext.GetChildTenantContextAsync(parentId);
+
+        try
+        {
+            await CreateTenantAsync(parent, ownerId, ownerId);
+
+            // The parent's registry names a tenant on a database that belongs to another tenant.
+            using (var session = await parent.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await parent.GetTenantRepositoryAsAdmin().InsertOneRtEntityAsync(session,
+                    new RtTenant { TenantId = ghostId, DatabaseName = ownerId });
+                await session.CommitTransactionAsync();
+            }
+
+            var before = await GetRegistryAsync();
+            var result = await ReconcileAsync(apply: true);
+
+            var conflict = Assert.Single(result.Conflicts, c => c.TenantId == ghostId);
+            Assert.Equal(parentId, conflict.ParentTenantId);
+            Assert.Contains(ownerId, conflict.Reason);
+            Assert.DoesNotContain(result.Inserted, e => e.TenantId == ghostId);
+            Assert.DoesNotContain(await GetRegistryAsync(), t => t.TenantId == ghostId);
+            Assert.Equal(before.Length, (await GetRegistryAsync()).Length);
+        }
+        finally
+        {
+            using (var session = await parent.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await parent.GetTenantRepositoryAsAdmin().DeleteOneRtEntityAsync<RtTenant>(session,
+                    FieldFilterCriteria.Create().FieldEquals(nameof(RtTenant.TenantId), ghostId), Meshmakers.Octo.Runtime.Contracts.Repositories.DeleteOptions.Erase);
+                await session.CommitTransactionAsync();
+            }
+
+            await DropTenantQuietlyAsync(parent, ownerId);
+            await DropTenantQuietlyAsync(SystemContext, parentId);
         }
     }
 
