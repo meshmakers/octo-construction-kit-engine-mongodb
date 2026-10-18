@@ -1313,6 +1313,10 @@ The full text is `docs/streamdata-archive-concept.md` §18a and, for the sweep, 
   recompute of that rollup and from the host's recompute tick via `SweepSupersededGenerationsAsync`). The sweep deletes rows
   strictly *below* the entry's generation and drops the record of an entry that was replaced. The once-per-process reclaim
   pass skips entries with a record. A repository/executor built without options keeps the immediate sweep.
+- **NotChecked (AB#6968)**: a rollup the validator cannot look at gets `RollupConsistencyEntry.NotChecked` (`NoLiveTable`,
+  `NeverActivated`, `SourceMissing` + reason) and is never ok; `RollupConsistencyReport.IsOk` is false while any entry has one, the
+  repair skips a rollup without a table, and the marker is not cleared (`RollupRepairer`: also not after a repair of some rollups unless the
+  whole tenant validates ok). Tests: `RollupConsistencyValidatorTests`, `RollupRepairerTests`, `RollupReconcileIntegrationTests`.
 - **Validate / repair** (`Reconcile/`): `RollupConsistencyValidator` is read only (counts, MIN/MAX); the checks work on the
   *governed* part of a pointer entry (the entry minus the ranges of higher generations). `RollupRepairer` order: create map,
   delete orphans, recompute gaps (own executor, immediate sweep, no gate), rewind watermark (decided again when it runs).

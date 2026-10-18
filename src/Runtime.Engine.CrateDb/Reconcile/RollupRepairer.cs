@@ -65,6 +65,15 @@ internal sealed class RollupRepairer(
 
             cancellationToken.ThrowIfCancellationRequested();
             var analysis = await validator.AnalyzeAsync(rollup, cancellationToken);
+            if (analysis.HasNoTable)
+            {
+                // A missing table must not be "repaired" into an empty one: the rollup stays not checked (the report says so, with the
+                // reason) and keeps the restore reconcile marker set until it is restored or activated and validates.
+                logger.LogWarning("Rollup {RollupRtId} of tenant {TenantId} is skipped by the repair: {Reason}",
+                    rollup.RtId, tenantId, analysis.NotChecked!.Reason);
+                continue;
+            }
+
             var steps = await PlanAsync(rollup, analysis, cancellationToken);
             if (steps.Count == 0)
             {
@@ -113,8 +122,10 @@ internal sealed class RollupRepairer(
         var after = await validator.ValidateAsync(rollupRtIds, cancellationToken);
         if (failedStep is null && after.IsOk)
         {
-            // Only a repaired (or never broken) tenant leaves the pending state; a failing repair keeps it.
-            if (await marker.IsPendingAsync(cancellationToken))
+            // Only a repaired (or never broken) tenant leaves the pending state; a failing repair keeps it. When the repair was asked
+            // for some rollups only, the rest of the tenant must validate ok as well before the marker goes.
+            var tenantOk = rollupRtIds is null || (await validator.ValidateAsync(null, cancellationToken)).IsOk;
+            if (tenantOk && await marker.IsPendingAsync(cancellationToken))
             {
                 await marker.SetAsync(false, cancellationToken);
             }
@@ -123,10 +134,18 @@ internal sealed class RollupRepairer(
         {
             // Never an unexplained failure: name what is still wrong.
             var remaining = after.Rollups.Where(r => !r.IsOk).ToList();
-            var first = remaining[0].Findings[0];
-            failedStep = $"rollup {remaining[0].RollupRtId}: the repair ran without a failing step, but the final validation still reports " +
-                         $"{remaining.Sum(r => r.Findings.Count)} finding(s) ({first.Check}: {first.Message})";
-            logger.LogWarning("The repair of tenant {TenantId} ended inconsistent: {FailedStep} The restore reconcile marker stays.", tenantId, failedStep);
+            var first = remaining[0];
+            failedStep = first.Findings.Count > 0
+                ? $"rollup {first.RollupRtId}: the repair ran without a failing step, but the final validation still reports " +
+                  $"{remaining.Sum(r => r.Findings.Count)} finding(s) ({first.Findings[0].Check}: {first.Findings[0].Message})"
+                : $"rollup {first.RollupRtId}: could not be checked ({first.NotChecked!.Cause}): {first.NotChecked.Reason}";
+            var notCheckedCount = remaining.Count(r => r.IsNotChecked);
+            if (notCheckedCount > 1)
+            {
+                failedStep += $" ({notCheckedCount} rollup(s) were not checked)";
+            }
+
+            logger.LogWarning("The repair of tenant {TenantId} ended without a clean validation: {FailedStep} The restore reconcile marker stays.", tenantId, failedStep);
         }
 
         return new RollupRepairReport(false, before, actions, after, failedStep);

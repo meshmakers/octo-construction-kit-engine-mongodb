@@ -25,9 +25,14 @@ internal sealed record RollupAnalysis(
     IReadOnlyList<PointerGap> PointerGaps,
     IReadOnlyList<OrphanSet> Orphans,
     WatermarkGap? Watermark,
-    IReadOnlyList<RollupConsistencyFinding> Findings)
+    IReadOnlyList<RollupConsistencyFinding> Findings,
+    RollupNotChecked? NotChecked = null)
 {
-    public static readonly RollupAnalysis None = new(false, [], [], [], null, []);
+    /// <summary>Nothing was inspected; <paramref name="notChecked"/> says why. There is nothing for a repair to work from.</summary>
+    public static RollupAnalysis Unchecked(RollupNotChecked notChecked) => new(false, [], [], [], null, [], notChecked);
+
+    /// <summary>True when there is no table to repair: the repair leaves such a rollup alone.</summary>
+    public bool HasNoTable => NotChecked is { Cause: RollupNotCheckedCause.NoLiveTable or RollupNotCheckedCause.NeverActivated };
 }
 
 /// <summary>
@@ -46,7 +51,9 @@ internal sealed record RollupAnalysis(
 /// a source holds rows in between: the forward aggregation would never fill the gap.</description></item>
 /// <item><description><b>(d) missing generation map</b> - a rollup table without its pointer table.</description></item>
 /// </list>
-/// A rollup that was never activated (no table) is not inspected.
+/// A rollup that cannot be inspected - no table (a restore that failed to load it, or never activated) or a source that is missing -
+/// is never reported as consistent: its entry carries <see cref="RollupConsistencyEntry.NotChecked"/> with the reason, and the report
+/// is not ok while any entry has one (AB#6968).
 /// </remarks>
 internal sealed class RollupConsistencyValidator(
     string tenantId,
@@ -69,17 +76,19 @@ internal sealed class RollupConsistencyValidator(
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            entries.Add(new RollupConsistencyEntry(rollup.RtId, await ValidateRollupAsync(rollup, cancellationToken)));
+            var entry = await ValidateEntryAsync(rollup, cancellationToken);
+            entries.Add(entry);
         }
 
-        logger.LogInformation("Validated {Rollups} rollup(s) of tenant {TenantId} in {Elapsed} ms: {Inconsistent} inconsistent.",
-            entries.Count, tenantId, (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds, entries.Count(e => !e.IsOk));
+        logger.LogInformation(
+            "Validated {Rollups} rollup(s) of tenant {TenantId} in {Elapsed} ms: {Inconsistent} inconsistent, {NotChecked} not checked.",
+            entries.Count, tenantId, (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+            entries.Count(e => e.Findings.Count > 0), entries.Count(e => e.IsNotChecked));
         return new RollupConsistencyReport(entries, clock.GetUtcNow().UtcDateTime);
     }
 
-    /// <summary>The findings for one rollup; empty when it is consistent or has no tables yet. Each one is logged as a warning.</summary>
-    internal async Task<IReadOnlyList<RollupConsistencyFinding>> ValidateRollupAsync(
-        RollupArchiveSnapshot rollup, CancellationToken cancellationToken)
+    /// <summary>The entry of one rollup; each finding and each gap in the check is logged as a warning.</summary>
+    internal async Task<RollupConsistencyEntry> ValidateEntryAsync(RollupArchiveSnapshot rollup, CancellationToken cancellationToken)
     {
         var analysis = await AnalyzeAsync(rollup, cancellationToken);
         foreach (var finding in analysis.Findings)
@@ -88,23 +97,32 @@ internal sealed class RollupConsistencyValidator(
                 rollup.RtId, tenantId, finding.Check, finding.Message);
         }
 
-        return analysis.Findings;
+        if (analysis.NotChecked is { } notChecked)
+        {
+            // A rollup that was never activated is a normal state (it has no table by design): not a warning on every start.
+            logger.Log(notChecked.Cause == RollupNotCheckedCause.NeverActivated ? LogLevel.Information : LogLevel.Warning,
+                "Rollup {RollupRtId} of tenant {TenantId} could not be checked ({Cause}): {Reason}",
+                rollup.RtId, tenantId, notChecked.Cause, notChecked.Reason);
+        }
+
+        return new RollupConsistencyEntry(rollup.RtId, analysis.Findings, analysis.NotChecked);
     }
 
     /// <summary>Runs the four checks of one rollup and keeps what the repair needs next to the findings.</summary>
     internal async Task<RollupAnalysis> AnalyzeAsync(RollupArchiveSnapshot rollup, CancellationToken cancellationToken)
     {
-        if (rollup.Status == CkArchiveStatus.Created)
-        {
-            return RollupAnalysis.None;
-        }
-
         var id = rollup.RtId.ToString();
         var liveName = TenantSchema.ArchiveTableName(id);
         var live = TenantSchema.QualifiedArchiveTable(tenantId, id);
         if (!await TableExistsAsync(liveName, cancellationToken))
         {
-            return RollupAnalysis.None;
+            // Nothing is found in a rollup that has no table because there is nothing to look at, which is not "consistent".
+            return RollupAnalysis.Unchecked(rollup.Status == CkArchiveStatus.Created
+                ? new RollupNotChecked(RollupNotCheckedCause.NeverActivated,
+                    $"Rollup {rollup.RtId} was never activated (status Created) and has no table {liveName}; there is nothing to check.")
+                : new RollupNotChecked(RollupNotCheckedCause.NoLiveTable,
+                    $"Rollup {rollup.RtId} (status {rollup.Status}) has no table {liveName}; nothing could be checked. " +
+                    "A restore that failed to load this rollup leaves this state: restore it again or activate it, then validate."));
         }
 
         var findings = new List<RollupConsistencyFinding>();
@@ -145,7 +163,34 @@ internal sealed class RollupConsistencyValidator(
             findings.Add(WatermarkFinding(rollup, watermark));
         }
 
-        return new RollupAnalysis(missingMap, pointers, gaps, orphans, watermark, findings);
+        var sourceProblem = await FindMissingSourceAsync(rollup, cancellationToken);
+        return new RollupAnalysis(missingMap, pointers, gaps, orphans, watermark, findings,
+            sourceProblem is null ? null : new RollupNotChecked(RollupNotCheckedCause.SourceMissing, sourceProblem));
+    }
+
+    /// <summary>
+    /// A source whose entity is gone, or that is activated and has no table: the watermark check counts rows in the sources and
+    /// would read "none" for it. Null when every source is there. A source that was never activated has no table by design.
+    /// </summary>
+    private async Task<string?> FindMissingSourceAsync(RollupArchiveSnapshot rollup, CancellationToken cancellationToken)
+    {
+        foreach (var reference in rollup.Sources)
+        {
+            var source = await archiveStore.GetAsync(reference.SourceArchiveRtId);
+            if (source is null)
+            {
+                return $"Source archive {reference.SourceArchiveRtId} of rollup {rollup.RtId} does not exist; the watermark of the rollup cannot be checked against it.";
+            }
+
+            var table = TenantSchema.ArchiveTableName(reference.SourceArchiveRtId.ToString());
+            if (source.Status != CkArchiveStatus.Created && !await TableExistsAsync(table, cancellationToken))
+            {
+                return $"Source archive {reference.SourceArchiveRtId} of rollup {rollup.RtId} (status {source.Status}) has no table {table}; " +
+                       "the watermark of the rollup cannot be checked against it.";
+            }
+        }
+
+        return null;
     }
 
     // (a) ------------------------------------------------------------------------------------------------------

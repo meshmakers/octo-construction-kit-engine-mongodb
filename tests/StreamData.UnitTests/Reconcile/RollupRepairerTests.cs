@@ -37,6 +37,7 @@ public class RollupRepairerTests
     private readonly List<string> _executed = [];
 
     private bool _genMapExists = true;
+    private bool _liveExists = true;
     private bool _markerPending;
     private long _orphans;
     private DateTime? _maxWindowEnd;
@@ -91,7 +92,12 @@ public class RollupRepairerTests
 
         if (sql.Contains("information_schema.tables", StringComparison.Ordinal))
         {
-            return sql.Contains("__genmap", StringComparison.Ordinal) ? (_genMapExists ? 1 : 0) : 1;
+            if (sql.Contains("__genmap", StringComparison.Ordinal))
+            {
+                return _genMapExists ? 1 : 0;
+            }
+
+            return !_liveExists && sql.Contains(_rollup.ToString(), StringComparison.Ordinal) ? 0 : 1;
         }
 
         if (sql.Contains("NOT (", StringComparison.Ordinal) || sql.EndsWith("WHERE \"generation\" = 9;", StringComparison.Ordinal))
@@ -154,6 +160,74 @@ public class RollupRepairerTests
         Assert.Empty(report.Actions);
         Assert.False(_markerPending);
         Assert.Contains(_executed, s => s.StartsWith("DELETE FROM \"acmecorp\".\"__restore_reconcile\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ARollupWithoutItsTable_IsSkipped_NotRepairedIntoAnEmptyOne_AndTheMarkerStays()
+    {
+        _liveExists = false;
+        _markerPending = true;
+
+        var report = await Repairer(Snapshot()).RepairAsync(null, dryRun: false, Ct);
+
+        Assert.Empty(report.Actions); // no CREATE TABLE, no recompute, no rewind
+        Assert.DoesNotContain(_executed, s => s.StartsWith("CREATE", StringComparison.Ordinal) || s.Contains("INSERT", StringComparison.Ordinal));
+        Assert.Empty(_executed); // nothing at all was written: no table, no recompute, no rewind, no marker change
+        Assert.Equal(RollupNotCheckedCause.NoLiveTable, report.Before.Rollups.Single().NotChecked!.Cause);
+        Assert.True(report.After!.HasNotChecked);
+        Assert.False(report.After.IsOk);
+        Assert.False(report.IsOk);
+        Assert.Contains("could not be checked", report.FailedStep, StringComparison.Ordinal);
+        Assert.Contains(_rollup.ToString(), report.FailedStep, StringComparison.Ordinal);
+        Assert.True(_markerPending);
+        Assert.DoesNotContain(_executed, s => s.StartsWith("DELETE FROM \"acmecorp\".\"__restore_reconcile\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task DryRun_OfARollupWithoutItsTable_PlansNothing_AndTheBeforeReportNamesIt()
+    {
+        _liveExists = false;
+
+        var report = await Repairer(Snapshot()).RepairAsync(null, dryRun: true, Ct);
+
+        Assert.Empty(report.Actions);
+        Assert.True(report.Before.HasNotChecked);
+        Assert.Contains("no table", report.Before.Rollups.Single().NotChecked!.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ARepairOfSomeRollups_ClearsTheMarkerOnlyWhenTheWholeTenantValidatesOk()
+    {
+        _markerPending = true;
+        var other = OctoObjectId.GenerateNewId();
+        var otherRollup = new RollupArchiveSnapshot(other, Type, CkArchiveStatus.Disabled, "hourly", [new RollupSourceReference(_source)],
+            TimeSpan.FromHours(1), TimeSpan.Zero, null, new[] { new CkRollupAggregationSpec("Value", CkRollupFunction.Sum, null) }, null);
+        var asked = Snapshot();
+        _liveExists = true;
+        A.CallTo(() => _rollups.EnumerateAsync()).ReturnsLazily(() => EnumerateBoth(asked, otherRollup));
+        A.CallTo(() => _rollups.GetAsync(_rollup)).Returns(asked);
+        var oldCount = A.CallTo(() => _db.GetCountAsync(A<string>._, A<string>._, A<CrateStatementClass>._, A<CancellationToken>._));
+        oldCount.ReturnsLazily((string _, string sql, CrateStatementClass _, CancellationToken _) =>
+            Task.FromResult(sql.Contains("information_schema.tables", StringComparison.Ordinal) &&
+                            sql.Contains(other.ToString(), StringComparison.Ordinal) ? 0 : Count(sql)));
+        var validator = new RollupConsistencyValidator(Tenant, _db, _archives, _rollups, NullLogger.Instance, TimeProvider.System);
+        var marker = new RestoreReconcileMarker(Tenant, _db, _mgmt, _state, TimeProvider.System, NullLogger.Instance);
+        var repairer = new RollupRepairer(Tenant, _db, _mgmt, _archives, _rollups, _repository, validator, marker,
+            () => throw new NotSupportedException("no recompute in this test"), NullLogger.Instance);
+
+        var report = await repairer.RepairAsync([_rollup], dryRun: false, Ct);
+
+        Assert.True(report.IsOk); // the rollup that was asked for is fine ...
+        Assert.True(_markerPending); // ... but another rollup of the tenant was not checked
+    }
+
+    private static async IAsyncEnumerable<RollupArchiveSnapshot> EnumerateBoth(params RollupArchiveSnapshot[] snapshots)
+    {
+        await Task.CompletedTask;
+        foreach (var snapshot in snapshots)
+        {
+            yield return snapshot;
+        }
     }
 
     [Fact]

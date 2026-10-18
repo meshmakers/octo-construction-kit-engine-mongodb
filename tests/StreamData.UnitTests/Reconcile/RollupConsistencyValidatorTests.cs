@@ -170,15 +170,114 @@ public class RollupConsistencyValidatorTests
         });
     }
 
+    private async Task<RollupConsistencyEntry> ValidateEntryAsync(RollupArchiveSnapshot rollup)
+    {
+        A.CallTo(() => _rollups.EnumerateAsync()).Returns(Enumerate(rollup));
+        var report = await new RollupConsistencyValidator(
+            Tenant, _db, _archives, _rollups, NullLogger.Instance, TimeProvider.System).ValidateAsync(null, Ct);
+        return report.Rollups.Single();
+    }
+
+    // ---- not checked: nothing found is not "consistent" -----------------------------------------------------------
+
     [Fact]
-    public async Task ARollupThatWasNeverActivated_IsNotInspected()
+    public async Task ARollupThatWasNeverActivated_IsNotChecked_AndIsNotOk()
     {
         _liveExists = false;
 
-        var findings = await ValidateAsync(Rollup(status: CkArchiveStatus.Created));
+        var entry = await ValidateEntryAsync(Rollup(status: CkArchiveStatus.Created));
 
-        Assert.Empty(findings);
-        Assert.Empty(_statements);
+        Assert.Empty(entry.Findings);
+        Assert.False(entry.IsOk);
+        Assert.Equal(RollupNotCheckedCause.NeverActivated, entry.NotChecked!.Cause);
+        Assert.Contains("never activated", entry.NotChecked.Reason, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(CkArchiveStatus.Disabled)]
+    [InlineData(CkArchiveStatus.Failed)]
+    [InlineData(CkArchiveStatus.Activated)]
+    public async Task ARollupWithoutItsTable_IsNotChecked_WhateverItsStatus(CkArchiveStatus status)
+    {
+        _liveExists = false;
+
+        var entry = await ValidateEntryAsync(Rollup(status: status));
+
+        Assert.False(entry.IsOk);
+        Assert.Equal(RollupNotCheckedCause.NoLiveTable, entry.NotChecked!.Cause);
+        Assert.Contains(status.ToString(), entry.NotChecked.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TheReportIsNotOk_WhileAnyRollupWasNotChecked_EvenWhenTheOthersAreConsistent()
+    {
+        _liveExists = true;
+        _pointers.Add(new GenerationRange(T0, T0 + 24 * HourMs, "", 1));
+        _generations[1] = (24, T0, T0 + 23 * HourMs);
+        _maxWindowEnd = At(T0 + 48 * HourMs);
+        _sourceRows = 10;
+        var consistent = Rollup(watermark: At(T0 + 48 * HourMs));
+        var missing = new RollupArchiveSnapshot(OctoObjectId.GenerateNewId(), Type, CkArchiveStatus.Disabled, "hourly",
+            [new RollupSourceReference(_source)], TimeSpan.FromHours(1), TimeSpan.Zero, null,
+            new[] { new CkRollupAggregationSpec("Value", CkRollupFunction.Sum, null) }, null);
+        // The scripted database answers "table exists" for every table, so the missing rollup is told apart by its id.
+        _count = sql => sql.Contains("information_schema.tables", StringComparison.Ordinal) &&
+                        sql.Contains(missing.RtId.ToString(), StringComparison.Ordinal) ? 0 : null;
+        A.CallTo(() => _rollups.EnumerateAsync()).Returns(Enumerate(consistent, missing));
+
+        var report = await new RollupConsistencyValidator(
+            Tenant, _db, _archives, _rollups, NullLogger.Instance, TimeProvider.System).ValidateAsync(null, Ct);
+
+        Assert.Equal(2, report.Rollups.Count);
+        Assert.True(report.Rollups[0].IsOk);
+        Assert.True(report.Rollups[1].IsNotChecked);
+        Assert.False(report.IsOk);
+        Assert.True(report.HasNotChecked);
+    }
+
+    [Fact]
+    public async Task ASourceThatDoesNotExist_MakesTheRollupNotChecked_ButTheOtherChecksStillRun()
+    {
+        A.CallTo(() => _archives.GetAsync(_source)).Returns((ArchiveSnapshot?)null);
+        _genMapExists = false;
+
+        var entry = await ValidateEntryAsync(Rollup());
+
+        Assert.Equal(RollupNotCheckedCause.SourceMissing, entry.NotChecked!.Cause);
+        Assert.Contains(_source.ToString(), entry.NotChecked.Reason, StringComparison.Ordinal);
+        Assert.Contains(entry.Findings, f => f.Check == RollupConsistencyCheck.MissingGenerationMap); // still reported
+        Assert.False(entry.IsOk);
+    }
+
+    [Fact]
+    public async Task AnActivatedSourceWithoutItsTable_MakesTheRollupNotChecked()
+    {
+        _count = sql => sql.Contains("information_schema.tables", StringComparison.Ordinal) &&
+                        sql.Contains(_source.ToString(), StringComparison.Ordinal) ? 0 : null;
+        _pointers.Add(new GenerationRange(T0, T0 + 24 * HourMs, "", 1));
+        _generations[1] = (24, T0, T0 + 23 * HourMs);
+
+        var entry = await ValidateEntryAsync(Rollup());
+
+        Assert.Equal(RollupNotCheckedCause.SourceMissing, entry.NotChecked!.Cause);
+        Assert.Empty(entry.Findings);
+        Assert.False(entry.IsOk);
+    }
+
+    [Fact]
+    public async Task ASourceThatWasNeverActivated_HasNoTableByDesign_AndDoesNotBlock()
+    {
+        A.CallTo(() => _archives.GetAsync(_source)).Returns(new ArchiveSnapshot(_source, Type, CkArchiveStatus.Created, "raw",
+            new List<CkArchiveColumnSpec>()));
+        _count = sql => sql.Contains("information_schema.tables", StringComparison.Ordinal) &&
+                        sql.Contains(_source.ToString(), StringComparison.Ordinal) ? 0 : null;
+        _pointers.Add(new GenerationRange(T0, T0 + 24 * HourMs, "", 1));
+        _generations[1] = (24, T0, T0 + 23 * HourMs);
+
+        var entry = await ValidateEntryAsync(Rollup());
+
+        Assert.Null(entry.NotChecked);
+        Assert.True(entry.IsOk);
     }
 
     // ---- (a) pointer without rows ------------------------------------------------------------------------
@@ -339,7 +438,9 @@ public class RollupConsistencyValidatorTests
         _sourceRows = 99;
 
         Assert.Empty(await ValidateAsync(Rollup(watermark: At(T0 + 16 * HourMs))));
-        Assert.DoesNotContain(_statements, s => s.Contains(_source.ToString(), StringComparison.Ordinal));
+        // no row of the source is counted (only the catalogue is asked whether its table exists)
+        Assert.DoesNotContain(_statements, s =>
+            s.Contains(_source.ToString(), StringComparison.Ordinal) && !s.Contains("information_schema.tables", StringComparison.Ordinal));
     }
 
     [Fact]

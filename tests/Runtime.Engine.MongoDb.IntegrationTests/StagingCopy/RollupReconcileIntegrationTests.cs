@@ -60,6 +60,40 @@ public class RollupReconcileIntegrationTests(CrateStagingCopyFixture fixture)
         return report.Rollups.Single().Findings;
     }
 
+    // ---- a rollup whose table is missing -------------------------------------------------------------------
+
+    [Fact]
+    public async Task ARollupEntityWithoutItsTable_IsNotChecked_TheReportIsNotOk_AndTheMarkerStaysSetAfterARepair()
+    {
+        // The state a restore leaves when the load of a rollup failed: the entity exists (status Disabled), the table does not.
+        var tenant = CrateStagingCopyFixture.NewTenantId();
+        var rollup = OctoObjectId.GenerateNewId();
+        var source = OctoObjectId.GenerateNewId();
+        await fixture.CreateRawArchiveAsync(tenant, source, 24);
+        var snapshot = new RollupArchiveSnapshot(rollup, new RtCkId<CkTypeId>("Test", new CkTypeId("Sensor")), CkArchiveStatus.Disabled,
+            "hourly", [new RollupSourceReference(source)], TimeSpan.FromHours(1), TimeSpan.Zero, null,
+            [new CkRollupAggregationSpec("Value", CkRollupFunction.Sum, null)], null);
+        var repository = fixture.NewReconcileRepository(tenant, [snapshot], [source]);
+        await repository.SetRestoreReconcilePendingAsync(true, Ct);
+
+        var report = await repository.ValidateRollupsAsync(null, Ct);
+
+        var entry = report.Rollups.Single();
+        Assert.Equal(RollupNotCheckedCause.NoLiveTable, entry.NotChecked!.Cause);
+        Assert.False(report.IsOk);
+        Assert.True(report.HasNotChecked);
+
+        var repair = await repository.RepairRollupsAsync(null, dryRun: false, Ct);
+
+        Assert.Empty(repair.Actions);
+        Assert.False(repair.IsOk);
+        Assert.Contains("could not be checked", repair.FailedStep, StringComparison.Ordinal);
+        Assert.True(await repository.IsRestoreReconcilePendingAsync(Ct));
+        // The repair did not turn the missing table into an empty one.
+        Assert.Equal(0, await fixture.CountAsync(
+            $"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '{TenantSchema.ArchiveTableName(rollup.ToString())}'"));
+    }
+
     // ---- validator -----------------------------------------------------------------------------------------
 
     [Fact]

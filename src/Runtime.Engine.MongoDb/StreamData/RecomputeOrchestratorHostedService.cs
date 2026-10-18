@@ -202,8 +202,8 @@ internal sealed class RecomputeOrchestratorHostedService : BackgroundService
             if (!report.IsOk)
             {
                 _logger.LogWarning(
-                    "Tenant '{TenantId}' has {Count} inconsistent rollup(s) at start; validate them (details above) and repair them before relying on their values.",
-                    tenantId, report.Rollups.Count(r => !r.IsOk));
+                    "Tenant '{TenantId}' has {Count} inconsistent and {NotChecked} unchecked rollup(s) at start; validate them (details above) and repair them before relying on their values.",
+                    tenantId, report.Rollups.Count(r => r.Findings.Count > 0), report.Rollups.Count(r => r.IsNotChecked));
             }
         }
         catch (ArchiveCopyNotSupportedException)
