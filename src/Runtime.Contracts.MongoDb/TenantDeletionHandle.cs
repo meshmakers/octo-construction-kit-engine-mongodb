@@ -42,4 +42,23 @@ public sealed record TenantDeletionHandle(
         : this(databaseName, correlationId, [])
     {
     }
+
+    /// <summary>
+    ///     Binary compatibility: the shape before <see cref="StreamDataModelPresent" /> existed. A package compiled against the
+    ///     earlier engine-mongodb keeps working next to this one (pipeline builds float on the main line, so such a mix can be
+    ///     loaded); without this constructor and the matching <c>Deconstruct</c> the call fails with a MissingMethodException.
+    /// </summary>
+    public TenantDeletionHandle(string databaseName, Guid correlationId, IReadOnlyList<OctoObjectId> streamDataArchives)
+        : this(databaseName, correlationId, streamDataArchives, false)
+    {
+    }
+
+    /// <summary>Binary compatibility with consumers compiled before <see cref="StreamDataModelPresent" /> existed.</summary>
+    public void Deconstruct(
+        out string databaseName, out Guid correlationId, out IReadOnlyList<OctoObjectId> streamDataArchives)
+    {
+        databaseName = DatabaseName;
+        correlationId = CorrelationId;
+        streamDataArchives = StreamDataArchives;
+    }
 }
