@@ -1,6 +1,7 @@
 using System.Text;
 
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.Runtime.Contracts.CkModelMigrations;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.Messages;
 using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
@@ -410,6 +411,70 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
     }
 
     /// <summary>
+    ///     AB#6720: a <c>ResolveFailed</c> installed version is a migration origin. A tenant whose Test-1.0.0 went
+    ///     ResolveFailed (its pin was replaced by another service's import - the System.Communication 3.x / System.Bot 3.5.0
+    ///     case) still gets the 1.0.0 to 2.0.0 data migration when Test-2.0.0 is imported, exactly once, and no
+    ///     ResolveFailed model is left behind (the old version is replaced).
+    /// </summary>
+    [Fact]
+    public async Task ResolveFailedInstalledVersion_IsTheMigrationOrigin_OfTheNextImport()
+    {
+        await WithTenantAsync("rforigin", async (tenant, tenantId) =>
+        {
+            var result = new OperationResult();
+            await tenant.ImportCkModelAsync(TestV1ModelId, result);
+            Assert.False(result.HasErrors);
+            var database = GetTenantDatabase(tenantId);
+            await SetModelStateAsync(database, TestV1ModelId, 2); // ResolveFailed, data still at 1.0.0
+            Assert.Equal(2, await StateAsync(tenantId, TestV1ModelId));
+            var runsBefore = TestMigrationRuns();
+
+            await tenant.ImportCkModelAsync(TestV2ModelId, result = new OperationResult());
+            Assert.False(result.HasErrors, result.GetMessages());
+
+            Assert.Equal(TestV2ModelId.FullName, await InstalledAsync(tenantId, "Test"));
+            Assert.Equal(1, await StateAsync(tenantId, TestV2ModelId));
+            Assert.False(await tenant.IsCkModelExistingAsync(TestV1ModelId), "the ResolveFailed origin was replaced");
+            Assert.Equal(1, TestMigrationRuns() - runsBefore);
+            var installed = await fixture.GetService<ICkModelUpgradeService>()
+                .GetInstalledVersionsAsync(tenantId, TestContext.Current.CancellationToken);
+            Assert.Equal(TestV2ModelId.Version.ToString(), installed["Test"]);
+        });
+    }
+
+    /// <summary>
+    ///     AB#6720: idempotent, and a ResolveFailed model that is not part of the import is neither migrated nor changed.
+    /// </summary>
+    [Fact]
+    public async Task ResolveFailedOrigin_IsMigratedOnce_AndAnUnrelatedResolveFailedModelIsNotTouched()
+    {
+        await WithTenantAsync("rfonce", async (tenant, tenantId) =>
+        {
+            var result = new OperationResult();
+            await tenant.ImportCkModelAsync(await ClassicTestV1Async());
+            // Additive System bump: the exact pin of Test-1.0.0 is unmet, so it is really ResolveFailed.
+            var newer = Bump(EmbeddedSystem, minor: 1);
+            await tenant.ImportCkModelAsync(await RenameAsync(EmbeddedSystem, newer));
+            Assert.Equal(2, await StateAsync(tenantId, TestV1ModelId));
+            var runsBefore = TestMigrationRuns();
+
+            // Unrelated import: Test-1.0.0 is not its origin, so it stays ResolveFailed and nothing is migrated.
+            await tenant.ImportCkModelAsync(Unrelated(newer));
+            Assert.Equal(2, await StateAsync(tenantId, TestV1ModelId));
+            Assert.Equal(0, TestMigrationRuns() - runsBefore);
+
+            await tenant.ImportCkModelAsync(TestV2ModelId, result = new OperationResult());
+            Assert.False(result.HasErrors, result.GetMessages());
+            Assert.Equal(1, TestMigrationRuns() - runsBefore);
+
+            // A second import changes and migrates nothing.
+            await tenant.ImportCkModelAsync(TestV2ModelId, new OperationResult());
+            Assert.Equal(1, TestMigrationRuns() - runsBefore);
+            Assert.Equal(1, await StateAsync(tenantId, TestV2ModelId));
+        });
+    }
+
+    /// <summary>
     ///     G-L1: an embedded import whose dependencies are not installed is skipped BEFORE the Pre notification (no
     ///     unpaired Pre, no Post): here Test-1.0.0 (range <c>System-[2.5,3.0)</c> since AB#6675; a minor bump would
     ///     still satisfy it) meets a System of the next major.
@@ -671,6 +736,11 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
     }
 
     /// <summary>Test-1.0.0 as an exact-pinned model (see <see cref="ClassicModelFactory" />).</summary>
+    /// <summary>Number of logged 1.0.0 to 2.0.0 migrations of the Test model (the log has no tenant id, so tests count deltas).</summary>
+    private int TestMigrationRuns() =>
+        fixture.Logs.Find(LogLevel.Information, "Executing CK model migration for Test",
+            TestV1ModelId.Version.ToString(), TestV2ModelId.Version.ToString()).Count;
+
     private Task<CkCompiledModelRoot> ClassicTestV1Async() =>
         ClassicModelFactory.CreateAsync(fixture.GetService<ICatalogService>(), fixture.GetService<ICkJsonSerializer>(),
             TestV1ModelId, EmbeddedSystem);

@@ -535,16 +535,20 @@ public class TenantContext : ITenantContext
             var session = await databaseSourceIdentifier.MongoDbRepositoryDataSource.CreateSessionAsync();
             try
             {
-                // Query all available CK models directly from the database
+                // Query the CK models that can be a migration origin directly from the database: Available ones and
+                // ResolveFailed ones (AB#6720). A ResolveFailed model still holds the data of its version; it only
+                // lost its dependency pins (e.g. a 3.x System.Communication whose exact System.Bot pin was replaced).
                 var ckModels = await databaseSourceIdentifier.MongoDbRepositoryDataSource.CkModels
-                    .FindManyAsync(session, model => model.ModelState == ModelState.Available);
+                    .FindManyAsync(session, model =>
+                        model.ModelState == ModelState.Available || model.ModelState == ModelState.ResolveFailed);
 
-                foreach (var model in ckModels)
+                foreach (var (modelName, version) in MigrationOriginVersions.Select(
+                             ckModels.Select(model => (model.ModelId, model.Id.Version, model.ModelState))))
                 {
-                    versions[model.ModelId] = model.Id.Version.ToString();
+                    versions[modelName] = version.ToString();
                     _logger.LogDebug(
                         "Found schema version {Version} for CK model {ModelName} (direct read)",
-                        model.Id.Version, model.ModelId);
+                        version, modelName);
                 }
             }
             finally
