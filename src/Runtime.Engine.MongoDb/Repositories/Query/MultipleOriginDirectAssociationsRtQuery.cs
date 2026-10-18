@@ -156,6 +156,21 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
             throw OperationFailedException.PagingNeeded();
         }
 
+        // AB#6892: a page size of 0 is the count-only use case (children(first: 0) { totalCount }).
+        // Mongo rejects both "$limit: 0" and "$slice: [array, skip, 0]", so run the normal pipeline
+        // for one item (the totalCount is computed before the limit) and drop the targets afterwards.
+        if (take == 0)
+        {
+            return await ExecuteQueryCore(session, skip, 1, true);
+        }
+
+        return await ExecuteQueryCore(session, skip, take, false);
+    }
+
+    private async Task<IMultipleOriginResultSet<TTargetEntity>> ExecuteQueryCore(IOctoSession session, int? skip,
+        int? take, bool countOnly)
+    {
+
         // Field names for the association lookup
         var innerLocalFieldRtIdName = "targetRtId";
         var innerLocalFieldCkIdName = "targetCkTypeId";
@@ -294,6 +309,11 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
                 {
                     foreach (var reversedResult in reversedResults)
                     {
+                        if (countOnly)
+                        {
+                            reversedResult.Targets = [];
+                        }
+
                         var reversedAggregations = FinalizeResults(reversedResult.Targets);
                         reversedResult.AggregationResult = reversedAggregations.Item1;
                         reversedResult.FieldAggregationResults = reversedAggregations.Item2;
@@ -599,6 +619,11 @@ internal class MultipleOriginDirectAssociationsRtQuery<TTargetEntity> : Query<TT
 
         foreach (var multipleResult in result)
         {
+            if (countOnly)
+            {
+                multipleResult.Targets = [];
+            }
+
             var targetEntities = FinalizeResults(multipleResult.Targets);
             multipleResult.AggregationResult = targetEntities.Item1;
             multipleResult.FieldAggregationResults = targetEntities.Item2;
