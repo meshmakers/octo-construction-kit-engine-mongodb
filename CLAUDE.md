@@ -754,6 +754,16 @@ This works for **any** CK model, not just the System model.
 
 **Embedded migrations:** CK models can carry migration scripts inline via `CkCompiledModelRoot.Migrations`. These are surfaced to `CompiledModelCkMigrationContentProvider` during import, eliminating the need for NuGet package dependencies on source CK models.
 
+**Migration origin includes `ResolveFailed` models (AB#6720):** `GetSchemaVersionsDirectAsync` lists the `Available` **and** the
+`ResolveFailed` stored models, and `MigrationOriginVersions.Select` picks per model name the version the data is at
+(Available wins over ResolveFailed, then the highest version; `Importing` is never an origin). A model goes `ResolveFailed`
+when another service replaces a dependency it pins exactly (the 3.x `System.Communication` pinning `System.Bot-[3.4.0]` after
+`System.Bot` 3.5.0 was imported); its data is still at that version, so the import of the current model must migrate from it,
+independent of the order in which bot-services and the comm-controller start. Only the imported model is migrated; other
+ResolveFailed models are untouched and heal through the existing re-validation. Tests: `MigrationOriginVersionsTests`
+(selection) and `CkModelImportGuardTests.ResolveFailed*Origin*` (against Mongo); the end-to-end 3.x case lives in
+`octo-communication-controller-services` (`SystemCommunication4MigrationTests`, bot-first and comm-first).
+
 **Design note:** `GetSchemaVersionsDirectAsync` queries the database directly (not through `IRuntimeRepositoryProvider`) to avoid recursion, since `TryFindTenantContextAsync` itself calls `UpdateSystemCkModelAsync`.
 
 ### Key Components
