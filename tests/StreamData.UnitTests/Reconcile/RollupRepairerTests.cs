@@ -184,6 +184,24 @@ public class RollupRepairerTests
     }
 
     [Fact]
+    public async Task ARollupThatWasNeverActivated_DoesNotKeepTheMarker_ItHasNoData()
+    {
+        _liveExists = false;
+        _markerPending = true;
+        var created = new RollupArchiveSnapshot(_rollup, Type, CkArchiveStatus.Created, "hourly", [new RollupSourceReference(_source)],
+            TimeSpan.FromHours(1), TimeSpan.Zero, null, new[] { new CkRollupAggregationSpec("Value", CkRollupFunction.Sum, null) }, null);
+
+        var report = await Repairer(created).RepairAsync(null, dryRun: false, Ct);
+
+        Assert.Empty(report.Actions);
+        Assert.True(report.Before.HasNotChecked);
+        Assert.False(report.Before.HasBlockingNotChecked);
+        Assert.True(report.IsOk);
+        Assert.Null(report.FailedStep);
+        Assert.False(_markerPending);
+    }
+
+    [Fact]
     public async Task DryRun_OfARollupWithoutItsTable_PlansNothing_AndTheBeforeReportNamesIt()
     {
         _liveExists = false;

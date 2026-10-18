@@ -971,8 +971,10 @@ checks every rollup of the tenant, or the requested ones, with counts and MIN/MA
 read and nothing is changed. A rollup the validator cannot look at is **never reported as consistent**: its entry carries
 `NotChecked` (`RollupNotChecked`: `Cause` and an English `Reason`) and `IsOk` is false for the entry and for the report, so "nothing found"
 never means "not looked at" (a restore of five rollups whose load failed had been reported as "7 rollups consistent"). Causes:
-`NoLiveTable` (no table, any status other than Created: what a failed load leaves), `NeverActivated` (status Created, no table; logged
-at information level, it is a normal state, but it still keeps the report not ok), `SourceMissing` (a source entity is gone, or an
+`NoLiveTable` (no table, any status other than Created: what a failed load leaves), `NeverActivated` (status Created, no table; listed
+for information only - `RollupNotChecked.IsBlocking` is false, the entry and the report stay ok and the marker is not kept, because a
+rollup without data cannot be inconsistent and blocking the tenant's rollups for it would stop aggregation, recompute and reclaim for
+good; logged at information level), `SourceMissing` (a source entity is gone, or an
 activated source has no table: the watermark check would read "no rows"; the other checks still run and their findings are listed next to
 it). A rollup with a table is validated whatever its status (a deliberately disabled rollup is checked and can be ok). A rollup with a
 table but without its generation map is a finding, not a gap: the repair can create the map. Four checks (`RollupConsistencyCheck`),
@@ -993,7 +995,7 @@ hand-over; the statements on a 28.8 million row rollup are counts of the generat
 *Marker.* `IsRestoreReconcilePendingAsync` / `SetRestoreReconcilePendingAsync`: a row keyed by the tenant id in the schema's table
 `__restore_reconcile`, created by the first `Set(true)`. **No row, or no table, means not pending**, so tenants and backups from before
 this feature run unchanged. The restore job sets it after the archive tables were loaded and clears it when the validator reports ok
-or the repair has run; **never while an entry is `NotChecked`**: the repair skips a rollup without a table (it must not turn a missing table
+or the repair has run; **never while an entry is blocking `NotChecked`** (`NoLiveTable`, `SourceMissing`): the repair skips a rollup without a table (it must not turn a missing table
 into an empty one), says why in the final validation (`failedStep` names the first unchecked rollup) and leaves the marker set until the
 rollup is restored or activated and validates. A repair of some rollups only clears the marker only when the whole tenant validates ok. A process remembers an answer for five seconds (set and clear update it at once), another process sees a change
 within that time. What the marker blocks: see "Gate" below.

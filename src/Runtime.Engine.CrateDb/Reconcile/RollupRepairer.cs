@@ -68,9 +68,11 @@ internal sealed class RollupRepairer(
             if (analysis.HasNoTable)
             {
                 // A missing table must not be "repaired" into an empty one: the rollup stays not checked (the report says so, with the
-                // reason) and keeps the restore reconcile marker set until it is restored or activated and validates.
-                logger.LogWarning("Rollup {RollupRtId} of tenant {TenantId} is skipped by the repair: {Reason}",
-                    rollup.RtId, tenantId, analysis.NotChecked!.Reason);
+                // reason) and, unless it was never activated, keeps the restore reconcile marker set until it is restored or
+                // activated and validates.
+                logger.Log(analysis.NotChecked!.IsBlocking ? LogLevel.Warning : LogLevel.Information,
+                    "Rollup {RollupRtId} of tenant {TenantId} is skipped by the repair: {Reason}",
+                    rollup.RtId, tenantId, analysis.NotChecked.Reason);
                 continue;
             }
 

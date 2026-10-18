@@ -94,6 +94,29 @@ public class RollupReconcileIntegrationTests(CrateStagingCopyFixture fixture)
             $"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '{TenantSchema.ArchiveTableName(rollup.ToString())}'"));
     }
 
+    [Fact]
+    public async Task ARollupThatWasNeverActivated_IsListedAsInformation_AndTheMarkerIsClearedByARepair()
+    {
+        var tenant = CrateStagingCopyFixture.NewTenantId();
+        var rollup = OctoObjectId.GenerateNewId();
+        var source = OctoObjectId.GenerateNewId();
+        await fixture.CreateRawArchiveAsync(tenant, source, 24);
+        var snapshot = new RollupArchiveSnapshot(rollup, new RtCkId<CkTypeId>("Test", new CkTypeId("Sensor")), CkArchiveStatus.Created,
+            "hourly", [new RollupSourceReference(source)], TimeSpan.FromHours(1), TimeSpan.Zero, null,
+            [new CkRollupAggregationSpec("Value", CkRollupFunction.Sum, null)], null);
+        var repository = fixture.NewReconcileRepository(tenant, [snapshot], [source]);
+        await repository.SetRestoreReconcilePendingAsync(true, Ct);
+
+        var report = await repository.ValidateRollupsAsync(null, Ct);
+        var repair = await repository.RepairRollupsAsync(null, dryRun: false, Ct);
+
+        Assert.Equal(RollupNotCheckedCause.NeverActivated, report.Rollups.Single().NotChecked!.Cause);
+        Assert.False(report.Rollups.Single().NotChecked!.IsBlocking);
+        Assert.True(report.IsOk);
+        Assert.True(repair.IsOk);
+        Assert.False(await repository.IsRestoreReconcilePendingAsync(Ct));
+    }
+
     // ---- validator -----------------------------------------------------------------------------------------
 
     [Fact]

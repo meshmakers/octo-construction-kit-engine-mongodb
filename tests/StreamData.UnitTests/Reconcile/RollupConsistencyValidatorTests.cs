@@ -181,15 +181,17 @@ public class RollupConsistencyValidatorTests
     // ---- not checked: nothing found is not "consistent" -----------------------------------------------------------
 
     [Fact]
-    public async Task ARollupThatWasNeverActivated_IsNotChecked_AndIsNotOk()
+    public async Task ARollupThatWasNeverActivated_IsListedAsNotChecked_ButInformationOnly_AndStaysOk()
     {
         _liveExists = false;
 
         var entry = await ValidateEntryAsync(Rollup(status: CkArchiveStatus.Created));
 
         Assert.Empty(entry.Findings);
-        Assert.False(entry.IsOk);
+        Assert.True(entry.IsNotChecked);
         Assert.Equal(RollupNotCheckedCause.NeverActivated, entry.NotChecked!.Cause);
+        Assert.False(entry.NotChecked.IsBlocking);
+        Assert.True(entry.IsOk); // it has no data, so nothing can be inconsistent: the marker must not wait for it
         Assert.Contains("never activated", entry.NotChecked.Reason, StringComparison.Ordinal);
     }
 
@@ -231,8 +233,10 @@ public class RollupConsistencyValidatorTests
         Assert.Equal(2, report.Rollups.Count);
         Assert.True(report.Rollups[0].IsOk);
         Assert.True(report.Rollups[1].IsNotChecked);
+        Assert.True(report.Rollups[1].NotChecked!.IsBlocking);
         Assert.False(report.IsOk);
         Assert.True(report.HasNotChecked);
+        Assert.True(report.HasBlockingNotChecked);
     }
 
     [Fact]
