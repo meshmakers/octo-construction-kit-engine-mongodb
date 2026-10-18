@@ -1007,6 +1007,16 @@ the tenant blocked (see "Gate"). A dry run lists the steps as `Planned` and chan
 a second run on a repaired tenant plans nothing. It should run while the tenant is marked pending (or when no recompute runs): it
 recomputes ranges and rewinds the watermark, which a running orchestrator would race with.
 
+**Queued repair.** `RepairRollupsAsync` runs inline and belongs inside a job of its own (the restore job). The operator surfaces (REST,
+CLI, MCP) use `EnqueueRollupRepairAsync(rollupRtIds)`: it plans (a dry run), records the request in the schema's table
+`__rollup_repair` (key: tenant id and request id, every column explicit, state `Pending`) and returns at once with the planned steps and
+the request id. The host's recompute tick calls `RunPendingRollupRepairsAsync` before it applies the gate - queued repairs are what
+releases a marked tenant - claims the pending requests (`UPDATE … WHERE state = <seen>`; a request left `Running` by a process that died is
+claimed again after 30 minutes, the repair being idempotent), runs `RepairRollupsAsync`, and writes `Done` or `Failed` together with the
+`RollupRepairReport`. `GetRollupRepairRequestAsync(id)` answers the state. The repair clears the marker when its final validation is ok; a
+`Failed` request keeps it and its report names the failing step. The id is the request id of this table, not a `RecomputeJob` id: the
+recomputes of the repair run in the repair's own ungated executor, because the pending-range drain of the orchestrator is held back by the marker.
+
 **Gate.** While the marker is set, nothing writes to the rollups of the tenant except the repair: the host's rollup tick
 (`RollupOrchestratorHostedService`) and recompute tick (`RecomputeOrchestratorHostedService`, which also runs the deferred sweeps)
 skip the tenant and say why once at information level (`RestoreReconcileGate`); a direct call is refused with

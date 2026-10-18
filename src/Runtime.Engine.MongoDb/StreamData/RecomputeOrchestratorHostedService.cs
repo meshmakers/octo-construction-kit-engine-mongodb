@@ -134,6 +134,9 @@ internal sealed class RecomputeOrchestratorHostedService : BackgroundService
         // Once per process and tenant, read only: an inconsistent rollup is named in the log at start (AB#6968).
         await ValidateAtStartAsync(tenantId, tenantContext, cancellationToken);
 
+        // Queued repairs run for a marked tenant too - they are what releases it (AB#6968).
+        await RunQueuedRepairsAsync(tenantId, tenantContext, cancellationToken);
+
         // A tenant that was just restored is left alone until its rollups are reconciled: no recompute, no sweep.
         if (await _gate.IsBlockedAsync(tenantId, tenantContext, "the recompute tick and the sweep of superseded generations", cancellationToken))
         {
@@ -148,6 +151,32 @@ internal sealed class RecomputeOrchestratorHostedService : BackgroundService
         }
 
         await SweepDeferredAsync(tenantId, tenantContext, cancellationToken);
+    }
+
+    private async Task RunQueuedRepairsAsync(string tenantId, ITenantContext tenantContext, CancellationToken cancellationToken)
+    {
+        var repository = tenantContext.GetStreamDataRepository();
+        if (repository is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var ran = await repository.RunPendingRollupRepairsAsync(cancellationToken);
+            if (ran > 0)
+            {
+                _logger.LogInformation("Recompute tick for tenant '{TenantId}' ran {Count} queued rollup repair(s).", tenantId, ran);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Running the queued rollup repairs of tenant '{TenantId}' failed; the next tick tries again.", tenantId);
+        }
     }
 
     /// <summary>

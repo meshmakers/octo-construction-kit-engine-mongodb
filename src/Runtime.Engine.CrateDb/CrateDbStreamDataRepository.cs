@@ -2077,6 +2077,56 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         return repairer.RepairAsync(rollupRtIds, dryRun, cancellationToken);
     }
 
+    private RollupRepairQueue RepairQueue => new(_tenantId, _databaseClient, _managementClient, TimeProvider.System, _logger);
+
+    /// <inheritdoc />
+    public async Task<RollupRepairRequest> EnqueueRollupRepairAsync(
+        IReadOnlyCollection<OctoObjectId>? rollupRtIds = null, CancellationToken cancellationToken = default)
+    {
+        if (_rollupArchiveStore is null)
+        {
+            throw new ArchiveCopyNotSupportedException();
+        }
+
+        var plan = await RepairRollupsAsync(rollupRtIds, dryRun: true, cancellationToken);
+        return await RepairQueue.EnqueueAsync(rollupRtIds, plan.Actions, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<RollupRepairRequest?> GetRollupRepairRequestAsync(string requestId, CancellationToken cancellationToken = default)
+        => RepairQueue.GetAsync(requestId, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<int> RunPendingRollupRepairsAsync(CancellationToken cancellationToken = default)
+    {
+        if (_rollupArchiveStore is null)
+        {
+            return 0;
+        }
+
+        var queue = RepairQueue;
+        var ran = 0;
+        foreach (var row in await queue.ClaimRunnableAsync(cancellationToken))
+        {
+            RollupRepairReport report;
+            try
+            {
+                report = await RepairRollupsAsync(row.Rollups, dryRun: false, cancellationToken);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogError(ex, "The queued rollup repair {RequestId} of tenant {TenantId} failed.", row.Request.RequestId, _tenantId);
+                var none = new RollupConsistencyReport([], DateTime.UtcNow);
+                report = new RollupRepairReport(false, none, [], null, $"the repair could not run: {ex.Message}");
+            }
+
+            await queue.CompleteAsync(row.Request.RequestId, report, cancellationToken);
+            ran++;
+        }
+
+        return ran;
+    }
+
     private CrateDbArchiveRecomputeExecutor RecomputeExecutor => _recomputeExecutor ??= new CrateDbArchiveRecomputeExecutor(
         _tenantId, _databaseClient, _managementClient, _archiveStore, _logger,
         _rollupArchiveStore, _recomputeSliceTargetRows, _recomputeProcessState, _sweepGracePeriod, TimeProvider.System, ReconcileMarker);

@@ -145,6 +145,34 @@ public class RecomputeOrchestratorHostedServiceTests
     }
 
     [Fact]
+    public async Task Tick_RunsQueuedRepairs_EvenForAMarkedTenant_ButNotTheRecompute()
+    {
+        var (orchestrator, repository) = MarkedTenant("restored", () => true);
+
+        var sut = NewSut();
+        await sut.StartAsync(CancellationToken.None);
+        await WaitForTickAsync(() => Calls(repository, "RunPendingRollupRepairsAsync") >= 2);
+        await sut.StopAsync(CancellationToken.None);
+
+        Assert.True(Calls(repository, "RunPendingRollupRepairsAsync") >= 2);
+        A.CallTo(() => orchestrator.TickAsync(A<CancellationToken>._)).MustNotHaveHappened();
+    }
+
+    [Fact]
+    public async Task Tick_AFailingQueuedRepair_DoesNotStopTheTick()
+    {
+        var (orchestrator, repository) = MarkedTenant("flaky", () => false);
+        A.CallTo(() => repository.RunPendingRollupRepairsAsync(A<CancellationToken>._)).Throws(new InvalidOperationException("boom"));
+
+        var sut = NewSut();
+        await sut.StartAsync(CancellationToken.None);
+        await WaitForTickAsync(() => Calls(orchestrator, "TickAsync") >= 2);
+        await sut.StopAsync(CancellationToken.None);
+
+        A.CallTo(() => orchestrator.TickAsync(A<CancellationToken>._)).MustHaveHappened();
+    }
+
+    [Fact]
     public async Task Tick_TenantWithoutTheMarker_RecomputesAndSweeps()
     {
         var (orchestrator, repository) = MarkedTenant("normal", () => false);

@@ -493,6 +493,103 @@ public class RollupReconcileIntegrationTests(CrateStagingCopyFixture fixture)
         Assert.False(await healthy.IsRestoreReconcilePendingAsync(Ct));
     }
 
+    // ---- queued repair -------------------------------------------------------------------------------------
+
+    private static async Task<RepairRig> BrokenRigAsync(CrateStagingCopyFixture fixture, IStreamDataDatabaseClient? db = null)
+    {
+        var rig = await RepairRig.CreateAsync(fixture, databaseClient: db);
+        await rig.RecomputeAsync(0, 48);
+        await rig.RecomputeAsync(10, 20);
+        await rig.SqlAsync($"DELETE FROM {rig.Live} WHERE \"generation\" = 1"); // holes: the repair has recomputes to do
+        return rig;
+    }
+
+    [Fact]
+    public async Task Enqueue_RecordsThePlan_ReturnsAtOnce_AndTheTickRunsItAfterARestart_ClearingTheMarker()
+    {
+        var rig = await BrokenRigAsync(fixture);
+        var reference = new List<string>();
+        await rig.Repository.SetRestoreReconcilePendingAsync(true, Ct);
+        var before = await rig.ActiveViewAsync();
+
+        var request = await rig.Repository.EnqueueRollupRepairAsync(null, Ct);
+
+        Assert.Equal(RollupRepairRequestState.Pending, request.State);
+        Assert.NotEmpty(request.PlannedActions);
+        Assert.All(request.PlannedActions, a => Assert.Equal(RollupRepairStatus.Planned, a.Status));
+        Assert.Null(request.Report);
+        Assert.Equal(before, await rig.ActiveViewAsync()); // nothing was repaired by the call
+        Assert.True(await rig.Repository.IsRestoreReconcilePendingAsync(Ct));
+
+        // a restarted process (empty state) finds the durable request and runs it
+        var restarted = fixture.NewReconcileRepository(rig.Tenant, [rig.Snapshot], [rig.Raw], new RecomputeProcessState(), null, rig.Store);
+        var stored = await restarted.GetRollupRepairRequestAsync(request.RequestId, Ct);
+        Assert.Equal(RollupRepairRequestState.Pending, stored!.State);
+        Assert.Equal(1, await restarted.RunPendingRollupRepairsAsync(Ct));
+
+        var done = await restarted.GetRollupRepairRequestAsync(request.RequestId, Ct);
+        Assert.Equal(RollupRepairRequestState.Done, done!.State);
+        Assert.NotNull(done.FinishedAtUtc);
+        Assert.True(done.Report!.IsOk);
+        Assert.Contains(done.Report.Actions, a => a is { Kind: RollupRepairKind.RecomputePointerRange, Status: RollupRepairStatus.Done });
+        Assert.False(await restarted.IsRestoreReconcilePendingAsync(Ct)); // the repair released the tenant
+        Assert.True((await restarted.ValidateRollupsAsync(null, Ct)).IsOk);
+        Assert.Equal(0, await restarted.RunPendingRollupRepairsAsync(Ct)); // nothing runs twice
+        Assert.Empty(reference);
+    }
+
+    [Fact]
+    public async Task Enqueue_AFailingStep_EndsTheRequestFailed_NamesTheStep_AndKeepsTheMarker()
+    {
+        var broken = A.Fake<IStreamDataDatabaseClient>(o => o.Wrapping(fixture.Client));
+        A.CallTo(() => broken.ExecuteNonQueryAsync(A<string>._, A<string>.That.Contains("\"generation\" = 9"),
+                A<CrateStatementClass>._, A<CancellationToken>._))
+            .Throws(new InvalidOperationException("CrateDB is unavailable"));
+        var rig = await BrokenRigAsync(fixture, broken);
+        await rig.SqlAsync(
+            $"INSERT INTO {rig.Live} (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\", \"was_updated\", \"generation\", \"value_sum\") " +
+            "VALUES (1767225600000, 1767229200000, 'rt7', 'Test/Sensor-1', FALSE, 9, 1.0)");
+        await rig.Repository.SetRestoreReconcilePendingAsync(true, Ct);
+        var request = await rig.Repository.EnqueueRollupRepairAsync(null, Ct);
+
+        await rig.Repository.RunPendingRollupRepairsAsync(Ct);
+
+        var ended = await rig.Repository.GetRollupRepairRequestAsync(request.RequestId, Ct);
+        Assert.Equal(RollupRepairRequestState.Failed, ended!.State);
+        Assert.Contains("generation 9", ended.Report!.FailedStep, StringComparison.Ordinal);
+        Assert.True(await rig.Repository.IsRestoreReconcilePendingAsync(Ct));
+        Assert.Equal(0, await rig.Repository.RunPendingRollupRepairsAsync(Ct)); // a failed request is not run again by itself
+    }
+
+    [Fact]
+    public async Task Enqueue_ARequestLeftRunningByADeadProcess_IsClaimedAgainAfterTheTimeout()
+    {
+        var rig = await BrokenRigAsync(fixture);
+        var request = await rig.Repository.EnqueueRollupRepairAsync(null, Ct);
+        var table = $"\"{TenantSchema.SchemaName(rig.Tenant)}\".\"__rollup_repair\"";
+        await fixture.SqlAsync($"UPDATE {table} SET \"state\" = 'Running', \"started_at_ms\" = {DateTimeOffset.UtcNow.AddHours(-1).ToUnixTimeMilliseconds()} " +
+                               $"WHERE \"request_id\" = '{request.RequestId}'");
+        await fixture.SqlAsync($"REFRESH TABLE {table}");
+
+        Assert.Equal(1, await rig.Repository.RunPendingRollupRepairsAsync(Ct));
+        Assert.Equal(RollupRepairRequestState.Done, (await rig.Repository.GetRollupRepairRequestAsync(request.RequestId, Ct))!.State);
+    }
+
+    [Fact]
+    public async Task Enqueue_ARunningRequest_IsNotClaimedAgain_AndAnUnknownIdIsNull()
+    {
+        var rig = await BrokenRigAsync(fixture);
+        var request = await rig.Repository.EnqueueRollupRepairAsync(null, Ct);
+        var table = $"\"{TenantSchema.SchemaName(rig.Tenant)}\".\"__rollup_repair\"";
+        await fixture.SqlAsync($"UPDATE {table} SET \"state\" = 'Running', \"started_at_ms\" = {DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()} " +
+                               $"WHERE \"request_id\" = '{request.RequestId}'");
+        await fixture.SqlAsync($"REFRESH TABLE {table}");
+
+        Assert.Equal(0, await rig.Repository.RunPendingRollupRepairsAsync(Ct));
+        Assert.Null(await rig.Repository.GetRollupRepairRequestAsync("does-not-exist", Ct));
+        Assert.Null(await fixture.NewReconcileRepository(CrateStagingCopyFixture.NewTenantId(), [], []).GetRollupRepairRequestAsync("x", Ct));
+    }
+
     // ---- gate ----------------------------------------------------------------------------------------------
 
     [Fact]
