@@ -75,12 +75,16 @@ internal sealed class RestoreReconcileMarker(
         bool pending;
         try
         {
-            pending = await databaseClient.GetCountAsync(tenantId, BuildCount(QualifiedTable, tenantId),
-                CrateStatementClass.Maintenance, cancellationToken) > 0;
+            // The catalogue first: a tenant that was never marked has no table, and asking the table itself would be an error
+            // in the CrateDB log every time the answer is not remembered.
+            pending = await databaseClient.GetCountAsync(tenantId, RollupConsistencySql.BuildTableExists(tenantId, TableName),
+                          CrateStatementClass.Maintenance, cancellationToken) > 0
+                      && await databaseClient.GetCountAsync(tenantId, BuildCount(QualifiedTable, tenantId),
+                          CrateStatementClass.Maintenance, cancellationToken) > 0;
         }
         catch (Exception ex) when (CrateDbStreamDataRepository.IsMissingTableError(ex))
         {
-            pending = false; // never marked: the table is created by the first Set
+            pending = false; // dropped between the two statements, or the schema does not exist yet
         }
 
         state.RestoreMarkers[CacheKey] = new RecomputeProcessState.MarkerAnswer(pending, now + CacheTtl);

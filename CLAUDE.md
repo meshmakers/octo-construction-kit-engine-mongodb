@@ -1297,6 +1297,29 @@ Semantics preserved:
   active-generation predicate when `GenerationTracked` — previously the downsampling path missed
   it entirely, so a read during a recompute double-counted the swapped windows.
 
+### Native Copy, Sweep Grace Period, Rollup Validate/Repair, Restore Reconcile Marker (AB#5967)
+
+The full text is `docs/streamdata-archive-concept.md` §18a and, for the sweep, the engine's `concept-rollup-recompute.md`
+("Sweep grace period"); this is what to keep in mind when touching the code.
+
+- **Native copy** (`Runtime.Engine.CrateDb/Copy/`): `COPY … TO DIRECTORY` / `COPY … FROM` per counted time slice
+  (`StagingCopyRunner`), the storage credential only inside `CopyStatement` (never log `Reveal()`). A rollup's generation
+  map is the last slice of a plan: a dump copies it first and the data after it, a load the data first and the map last. The
+  repeat rule is `RollupArchiveDumper` (read map, copy, read map; repeat up to `MaxMapAttempts`, then
+  `GenerationMapKeptMoving`). The plan in a dump result carries the rows the copy *reported*, not the counted rows.
+- **Sweep grace period** (`StreamData:Recompute:SweepGracePeriod`, default 2 h, 0 = at once): a recompute no longer sweeps
+  or removes contained pointer entries at the flip; it writes a row into `archive_<rtId>__sweep`
+  (`PendingSweepSqlBuilder`, every column explicit - AB#6647) and `SweepDueAsync` executes the due ones (at the start of a
+  recompute of that rollup and from the host's recompute tick via `SweepSupersededGenerationsAsync`). The sweep deletes rows
+  strictly *below* the entry's generation and drops the record of an entry that was replaced. The once-per-process reclaim
+  pass skips entries with a record. A repository/executor built without options keeps the immediate sweep.
+- **Validate / repair** (`Reconcile/`): `RollupConsistencyValidator` is read only (counts, MIN/MAX); the checks work on the
+  *governed* part of a pointer entry (the entry minus the ranges of higher generations). `RollupRepairer` order: create map,
+  delete orphans, recompute gaps (own executor, immediate sweep, no gate), rewind watermark (decided again when it runs).
+- **Restore reconcile marker** (`RestoreReconcileMarker`, table `__restore_reconcile`, row keyed by the full tenant id; no
+  row = not pending): the hosted services skip a marked tenant (`RestoreReconcileGate`), `AggregateBucketAsync` and the
+  executor refuse with `RestoreReconcilePendingException`, the sweep returns 0; only the repair runs and clears it.
+
 ### Archive Export — Time Slices, Not Keyset Pages
 
 `CrateDbStreamDataRepository.ExportRowsAsync` is the scan behind a tenant dump with archive data

@@ -493,6 +493,87 @@ public class RollupReconcileIntegrationTests(CrateStagingCopyFixture fixture)
         Assert.False(await healthy.IsRestoreReconcilePendingAsync(Ct));
     }
 
+    // ---- gate ----------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Gate_WhileTheTenantIsMarked_ForwardAggregationRecomputeAndSweepDoNotRun_AndRunAgainWhenItIsReleased()
+    {
+        var rig = await RepairRig.CreateAsync(fixture, rawHours: 24);
+        await rig.Repository.SetRestoreReconcilePendingAsync(true, Ct);
+        var rowsBefore = await rig.CountAsync("1 = 1");
+
+        var aggregate = await Assert.ThrowsAsync<RestoreReconcilePendingException>(() => rig.AggregateForwardAsync(0, 1));
+        var recompute = await Assert.ThrowsAsync<RestoreReconcilePendingException>(() => rig.RecomputeAsync(0, 12));
+
+        Assert.Contains("forward aggregation", aggregate.Message, StringComparison.Ordinal);
+        Assert.Contains("recompute", recompute.Message, StringComparison.Ordinal);
+        Assert.Contains(rig.Rollup.ToString(), recompute.Message, StringComparison.Ordinal);
+        Assert.Equal(0, await rig.Repository.SweepSupersededGenerationsAsync(Ct)); // nothing is swept
+        Assert.Equal(rowsBefore, await rig.CountAsync("1 = 1")); // and nothing was written
+
+        await rig.Repository.SetRestoreReconcilePendingAsync(false, Ct);
+
+        await rig.AggregateForwardAsync(0, 1);
+        await rig.RecomputeAsync(0, 12);
+        Assert.True(await rig.CountAsync("\"generation\" = 1") > 0);
+    }
+
+    [Fact]
+    public async Task Gate_ADeferredSweepStaysRecorded_WhileTheTenantIsMarked_AndRunsAfterTheRelease()
+    {
+        var options = Microsoft.Extensions.Options.Options.Create(new Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration.CrateRecomputeOptions
+        {
+            SweepGracePeriod = TimeSpan.FromMilliseconds(1)
+        });
+        var tenant = CrateStagingCopyFixture.NewTenantId();
+        var raw = OctoObjectId.GenerateNewId();
+        var rollup = OctoObjectId.GenerateNewId();
+        await fixture.CreateRawArchiveAsync(tenant, raw, 24);
+        var type = new RtCkId<CkTypeId>("Test", new CkTypeId("Sensor"));
+        var specs = new[] { new CkRollupAggregationSpec("Value", CkRollupFunction.Sum, null) };
+        var snapshot = new RollupArchiveSnapshot(rollup, type, CkArchiveStatus.Activated, "hourly", [new RollupSourceReference(raw)],
+            TimeSpan.FromHours(1), TimeSpan.Zero, Origin.AddHours(24), specs, null);
+        var store = new InMemoryRollupStore(snapshot);
+        var repo = fixture.NewReconcileRepository(tenant, [snapshot], [raw], new RecomputeProcessState(), options, store);
+        await repo.EnsureArchiveCreatedAsync(new ArchiveSnapshot(rollup, type, CkArchiveStatus.Activated, "hourly",
+            RollupColumnGenerator.Generate(specs)) { RollupAggregations = specs, Period = TimeSpan.FromHours(1) });
+        var source = new ArchiveSnapshot(raw, type, CkArchiveStatus.Activated, "raw", [new CkArchiveColumnSpec("Value", true, false)]);
+        var live = TenantSchema.QualifiedArchiveTable(tenant, rollup.ToString());
+        await repo.ExecuteAsync(source, snapshot, Origin, Origin.AddHours(12), null, Ct); // generation 1, sweep deferred
+        await repo.ExecuteAsync(source, snapshot, Origin, Origin.AddHours(12), null, Ct); // generation 2, its predecessor stays
+        await fixture.SqlAsync($"REFRESH TABLE {live}");
+        Assert.Equal(12, await fixture.CountAsync($"SELECT COUNT(*) FROM {live} WHERE \"generation\" = 1"));
+
+        await repo.SetRestoreReconcilePendingAsync(true, Ct);
+        await Task.Delay(50, Ct); // the grace period of one millisecond is over
+        Assert.Equal(0, await repo.SweepSupersededGenerationsAsync(Ct));
+        await fixture.SqlAsync($"REFRESH TABLE {live}");
+        Assert.Equal(12, await fixture.CountAsync($"SELECT COUNT(*) FROM {live} WHERE \"generation\" = 1")); // not swept
+
+        await repo.SetRestoreReconcilePendingAsync(false, Ct);
+        Assert.True(await repo.SweepSupersededGenerationsAsync(Ct) > 0);
+        await fixture.SqlAsync($"REFRESH TABLE {live}");
+        Assert.Equal(0, await fixture.CountAsync($"SELECT COUNT(*) FROM {live} WHERE \"generation\" = 1"));
+        Assert.Equal(12, await fixture.CountAsync($"SELECT COUNT(*) FROM {live} WHERE \"generation\" = 2"));
+    }
+
+    [Fact]
+    public async Task Repair_RunsWhileTheTenantIsMarked_ItsOwnRecomputeIsNotHeldBack_AndItClearsTheMarker()
+    {
+        var rig = await RepairRig.CreateAsync(fixture);
+        await rig.RecomputeAsync(0, 24); // generation 1
+        var reference = await rig.ActiveViewAsync();
+        await rig.SqlAsync($"DELETE FROM {rig.Live} WHERE \"generation\" = 1");
+        await rig.Repository.SetRestoreReconcilePendingAsync(true, Ct);
+        await Assert.ThrowsAsync<RestoreReconcilePendingException>(() => rig.RecomputeAsync(0, 24)); // the normal path is blocked
+
+        var report = await rig.Repository.RepairRollupsAsync(null, false, Ct);
+
+        Assert.True(report.IsOk);
+        Assert.Equal(reference, await rig.ActiveViewAsync());
+        Assert.False(await rig.Repository.IsRestoreReconcilePendingAsync(Ct));
+    }
+
     // ---- marker --------------------------------------------------------------------------------------------
 
     [Fact]

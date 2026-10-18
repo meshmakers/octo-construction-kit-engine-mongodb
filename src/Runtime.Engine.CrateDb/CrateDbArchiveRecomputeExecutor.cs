@@ -96,6 +96,10 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
     private readonly TimeSpan _sweepGracePeriod;
     private readonly TimeProvider _clock;
 
+    // The restore reconcile marker (AB#6968): a recompute, its reclaim and its sweep do not run on a tenant that is marked.
+    // Null for the repair's own executor, which is there to clear the marker.
+    private readonly Reconcile.RestoreReconcileMarker? _restoreGate;
+
     // Staging memo, pointer-table memo, reclaim memo and remembered failed sweeps. Shared with every
     // other executor of the process when the repository factory hands it in; see the type.
     private readonly RecomputeProcessState _state;
@@ -160,8 +164,10 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         int sliceTargetRows,
         RecomputeProcessState state,
         TimeSpan sweepGracePeriod,
-        TimeProvider clock)
+        TimeProvider clock,
+        Reconcile.RestoreReconcileMarker? restoreGate = null)
     {
+        _restoreGate = restoreGate;
         if (sliceTargetRows <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(sliceTargetRows), "The slice target must be positive.");
@@ -196,6 +202,11 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         OctoObjectId? rtIdScope,
         CancellationToken cancellationToken)
     {
+        if (_restoreGate is not null && await _restoreGate.IsPendingAsync(cancellationToken))
+        {
+            throw new RestoreReconcilePendingException(_tenantId, rollup.RtId, "recompute");
+        }
+
         // Per-rtId scoped recompute (AB#4184): null = the whole range (all entities); otherwise the
         // aggregation, the generation-pointer entry, and the sweep are all restricted to this entity.
         var scope = rtIdScope?.ToString() ?? GenerationMapSqlBuilder.AllRtIdsScope;

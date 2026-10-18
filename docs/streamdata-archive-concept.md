@@ -1007,6 +1007,14 @@ the tenant blocked (see "Gate"). A dry run lists the steps as `Planned` and chan
 a second run on a repaired tenant plans nothing. It should run while the tenant is marked pending (or when no recompute runs): it
 recomputes ranges and rewinds the watermark, which a running orchestrator would race with.
 
+**Gate.** While the marker is set, nothing writes to the rollups of the tenant except the repair: the host's rollup tick
+(`RollupOrchestratorHostedService`) and recompute tick (`RecomputeOrchestratorHostedService`, which also runs the deferred sweeps)
+skip the tenant and say why once at information level (`RestoreReconcileGate`); a direct call is refused with
+`RestoreReconcilePendingException` - `CrateDbArchiveRecomputeExecutor.ExecuteAsync` (and with it the reclaim and the sweep at its start)
+and `AggregateBucketAsync` (forward aggregation); `SweepSupersededGenerationsAsync` returns 0. The repair's own executor has no gate.
+Validate and repair, and everything that reads, are never held back. A tenant without the marker costs one catalogue statement per
+five seconds and process (no statement on the table when it does not exist).
+
 **Dump.** The plan cuts the data table into counted time slices with the planner of the row export (`ExportSlicePlanner`,
 target `ArchiveCopyOptions.TargetSliceRows`). Each slice is one statement,
 `COPY <table> WHERE <time> >= from AND <time> < to TO DIRECTORY '<location>/<rtId>/data/<slice>' WITH (compression = 'gzip', ...)`,

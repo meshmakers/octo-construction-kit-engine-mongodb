@@ -918,6 +918,28 @@ public class CrateDbArchiveRecomputeExecutorTests
     }
 
     [Fact]
+    public async Task RestoreGate_WhileTheTenantIsMarked_NoStatementIsSent_AndTheCallerIsToldWhy()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var markerDb = A.Fake<IStreamDataDatabaseClient>();
+        A.CallTo(() => markerDb.GetCountAsync(A<string>._, A<string>._, A<CrateStatementClass>._, A<CancellationToken>._)).Returns(1L);
+        var gate = new Meshmakers.Octo.Runtime.Engine.CrateDb.Reconcile.RestoreReconcileMarker(
+            Tenant, markerDb, A.Fake<IStreamDataDatabaseManagementClient>(), new RecomputeProcessState(), TimeProvider.System,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        harness.Executor = new CrateDbArchiveRecomputeExecutor(Tenant, harness.Crate, harness.Crate, A.Fake<IArchiveRuntimeStore>(),
+            harness.Logger, rollupArchiveStore: null, 10, new RecomputeProcessState(), TimeSpan.Zero, TimeProvider.System, gate);
+        var series = Series(2);
+        harness.SeedLive(buckets: 3, series, generation: 1);
+
+        var ex = await Assert.ThrowsAsync<RestoreReconcilePendingException>(() => harness.RunAsync(buckets: 3, series));
+
+        Assert.Contains("restore reconcile pending", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(harness.RollupRtId.ToString(), ex.Message, StringComparison.Ordinal);
+        Assert.Empty(harness.Crate.Calls); // not a count, not a refresh, not a statement
+        Assert.Equal(6, harness.Crate.Live.Count);
+    }
+
+    [Fact]
     public void Grace_NegativeValue_IsRefused_ByTheExecutor()
     {
         var harness = new Harness(sliceTargetRows: 10);

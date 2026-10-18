@@ -1884,6 +1884,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         DateTime bucketEnd,
         CancellationToken cancellationToken)
     {
+        // A restored tenant's rollups are not aggregated further until they are reconciled (AB#6968): the watermark of the
+        // metadata may be ahead of the rows, and aggregating on from it would leave the gap for good.
+        if (await ReconcileMarker.IsPendingAsync(cancellationToken))
+        {
+            throw new RestoreReconcilePendingException(_tenantId, rollup.RtId, "forward aggregation");
+        }
+
         var sourceTable = TenantSchema.QualifiedArchiveTable(_tenantId, sourceArchive.RtId.ToString());
         var targetTable = TenantSchema.QualifiedArchiveTable(_tenantId, rollup.RtId.ToString());
 
@@ -2072,13 +2079,21 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
     private CrateDbArchiveRecomputeExecutor RecomputeExecutor => _recomputeExecutor ??= new CrateDbArchiveRecomputeExecutor(
         _tenantId, _databaseClient, _managementClient, _archiveStore, _logger,
-        _rollupArchiveStore, _recomputeSliceTargetRows, _recomputeProcessState, _sweepGracePeriod, TimeProvider.System);
+        _rollupArchiveStore, _recomputeSliceTargetRows, _recomputeProcessState, _sweepGracePeriod, TimeProvider.System, ReconcileMarker);
 
     /// <inheritdoc />
     public async Task<int> SweepSupersededGenerationsAsync(CancellationToken cancellationToken = default)
     {
         if (_rollupArchiveStore is null)
         {
+            return 0;
+        }
+
+        // A restored tenant is left alone until its rollups are reconciled (AB#6968): deleting rows a pointer still names is
+        // what the sweep must not do on an unreconciled rollup.
+        if (await ReconcileMarker.IsPendingAsync(cancellationToken))
+        {
+            _logger.LogDebug("The deferred sweep of tenant {TenantId} is skipped: restore reconcile pending.", _tenantId);
             return 0;
         }
 

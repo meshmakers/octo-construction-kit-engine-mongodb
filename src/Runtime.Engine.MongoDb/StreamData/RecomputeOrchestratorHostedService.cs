@@ -1,7 +1,10 @@
 using System;
+using System.Collections.Concurrent;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -23,6 +26,8 @@ internal sealed class RecomputeOrchestratorHostedService : BackgroundService
     private readonly IRollupTenantSource _tenantSource;
     private readonly IOptionsMonitor<RecomputeOrchestratorOptions> _options;
     private readonly ILogger<RecomputeOrchestratorHostedService> _logger;
+    private readonly RestoreReconcileGate _gate;
+    private readonly ConcurrentDictionary<string, bool> _validated = new(StringComparer.Ordinal);
 
     public RecomputeOrchestratorHostedService(
         ISystemContext systemContext,
@@ -34,6 +39,7 @@ internal sealed class RecomputeOrchestratorHostedService : BackgroundService
         _tenantSource = tenantSource;
         _options = options;
         _logger = logger;
+        _gate = new RestoreReconcileGate(logger);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -125,6 +131,15 @@ internal sealed class RecomputeOrchestratorHostedService : BackgroundService
             return;
         }
 
+        // Once per process and tenant, read only: an inconsistent rollup is named in the log at start (AB#6968).
+        await ValidateAtStartAsync(tenantId, tenantContext, cancellationToken);
+
+        // A tenant that was just restored is left alone until its rollups are reconciled: no recompute, no sweep.
+        if (await _gate.IsBlockedAsync(tenantId, tenantContext, "the recompute tick and the sweep of superseded generations", cancellationToken))
+        {
+            return;
+        }
+
         var recomputed = await orchestrator.TickAsync(cancellationToken);
         if (recomputed > 0)
         {
@@ -133,6 +148,49 @@ internal sealed class RecomputeOrchestratorHostedService : BackgroundService
         }
 
         await SweepDeferredAsync(tenantId, tenantContext, cancellationToken);
+    }
+
+    /// <summary>
+    /// Validates the rollups of a tenant the first time this process ticks it. The validator logs a warning per inconsistent rollup,
+    /// naming rollup and range; this only adds the summary. A failure is logged and tried again with the next tick.
+    /// </summary>
+    private async Task ValidateAtStartAsync(string tenantId, ITenantContext tenantContext, CancellationToken cancellationToken)
+    {
+        if (!_validated.TryAdd(tenantId, true))
+        {
+            return;
+        }
+
+        var repository = tenantContext.GetStreamDataRepository();
+        if (repository is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var report = await repository.ValidateRollupsAsync(null, cancellationToken);
+            if (!report.IsOk)
+            {
+                _logger.LogWarning(
+                    "Tenant '{TenantId}' has {Count} inconsistent rollup(s) at start; validate them (details above) and repair them before relying on their values.",
+                    tenantId, report.Rollups.Count(r => !r.IsOk));
+            }
+        }
+        catch (ArchiveCopyNotSupportedException)
+        {
+            // A repository without the validator has nothing to report.
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _validated.TryRemove(tenantId, out _);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _validated.TryRemove(tenantId, out _);
+            _logger.LogWarning(ex, "Validating the rollups of tenant '{TenantId}' at start failed; it is tried again with the next tick.", tenantId);
+        }
     }
 
     /// <summary>
