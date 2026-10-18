@@ -36,6 +36,7 @@ public class RollupConsistencyValidatorTests
     private bool _liveExists = true;
     private bool _genMapExists = true;
     private readonly List<GenerationRange> _pointers = [];
+    private readonly List<GenerationRange> _sourcePointers = []; // the genmap of a source that is itself a rollup
     private readonly Dictionary<long, (long Rows, long First, long Last)> _generations = new();
     private DateTime? _maxWindowEnd;
     private long _sourceRows;
@@ -101,7 +102,7 @@ public class RollupConsistencyValidatorTests
         await Task.CompletedTask;
         if (sql.Contains("\"range_start\"", StringComparison.Ordinal))
         {
-            foreach (var p in _pointers)
+            foreach (var p in sql.Contains(_source.ToString(), StringComparison.Ordinal) ? _sourcePointers : _pointers)
             {
                 yield return new Dictionary<string, object?>
                 {
@@ -290,6 +291,7 @@ public class RollupConsistencyValidatorTests
     public async Task A_APointerEntryWhoseGenerationHasNoRows_IsReported_WithItsRangeAndGeneration()
     {
         _pointers.Add(new GenerationRange(T0, T0 + 24 * HourMs, "", 5)); // no rows of generation 5
+        _sourceRows = 5; // ... although the source holds rows there: the rows are lost
 
         var finding = Assert.Single(await ValidateAsync(Rollup()));
 
@@ -301,12 +303,88 @@ public class RollupConsistencyValidatorTests
     }
 
     [Fact]
+    public async Task A_APointerEntryWithoutRows_OverARangeTheSourceHoldsNothingIn_IsAnEmptyRecompute_NotAFinding()
+    {
+        // a backfill or recompute over a range the source is empty in leaves such an entry; it is healthy
+        _pointers.Add(new GenerationRange(T0, T0 + 24 * HourMs, "", 2));
+        _sourceRows = 0;
+
+        var entry = await ValidateEntryAsync(Rollup());
+
+        Assert.Empty(entry.Findings);
+        Assert.True(entry.IsOk);
+    }
+
+    [Fact]
+    public async Task A_TheSourceIsCountedInThatRange_ScopedToTheEntity_AndClippedToItsValidity()
+    {
+        _pointers.Add(new GenerationRange(T0, T0 + 24 * HourMs, "rt1", 2));
+        _sourceRows = 1;
+        var span = new RollupSourceReference(_source, At(T0 + 6 * HourMs), At(T0 + 10 * HourMs));
+
+        await ValidateEntryAsync(Rollup(sources: [span]));
+
+        var count = Assert.Single(_statements, s => s.Contains(_source.ToString(), StringComparison.Ordinal) && !s.Contains("information_schema", StringComparison.Ordinal));
+        Assert.Contains($">= {T0 + 6 * HourMs}", count, StringComparison.Ordinal);
+        Assert.Contains($"< {T0 + 10 * HourMs}", count, StringComparison.Ordinal);
+        Assert.Contains("\"rtid\" = 'rt1'", count, StringComparison.Ordinal);
+    }
+
+    // a source that is itself a rollup: only the rows live under ITS pointer count (the sweep grace period leaves dead ones)
+    private void ArrangeRollupOverRollup(long liveGeneration, long rowsOfGeneration2, long rowsOfGeneration3)
+    {
+        A.CallTo(() => _archives.GetAsync(_source)).Returns(new ArchiveSnapshot(_source, Type, CkArchiveStatus.Activated, "hourly",
+            new List<CkArchiveColumnSpec>()) { RollupAggregations = new[] { new CkRollupAggregationSpec("Value", CkRollupFunction.Sum, null) }, Period = TimeSpan.FromHours(1) });
+        if (liveGeneration > 0)
+        {
+            _sourcePointers.Add(new GenerationRange(T0, T0 + 24 * HourMs, "", liveGeneration));
+        }
+
+        _count = sql =>
+        {
+            if (!sql.Contains(_source.ToString(), StringComparison.Ordinal) || sql.Contains("information_schema", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            var then = System.Text.RegularExpressions.Regex.Match(sql, "THEN (\\d+)");
+            var live = then.Success ? long.Parse(then.Groups[1].Value) : 0;
+            return live switch { 2 => rowsOfGeneration2, 3 => rowsOfGeneration3, _ => 0 };
+        };
+    }
+
+    [Fact]
+    public async Task A_WhenTheSourceIsARollup_RowsOnlyInADeadGeneration_DoNotMakeTheEmptyEntryAFinding()
+    {
+        // the source's pointer selects generation 3 for the day, but only the superseded generation 2 still holds rows (grace period)
+        _pointers.Add(new GenerationRange(T0, T0 + 24 * HourMs, "", 4));
+        ArrangeRollupOverRollup(liveGeneration: 3, rowsOfGeneration2: 24, rowsOfGeneration3: 0);
+
+        var entry = await ValidateEntryAsync(Rollup());
+
+        Assert.Empty(entry.Findings);
+        Assert.Contains(_statements, s => s.Contains("THEN 3", StringComparison.Ordinal)); // counted under the live generation
+    }
+
+    [Fact]
+    public async Task A_WhenTheSourceIsARollup_LiveRows_MakeTheEmptyEntryAFinding()
+    {
+        _pointers.Add(new GenerationRange(T0, T0 + 24 * HourMs, "", 4));
+        ArrangeRollupOverRollup(liveGeneration: 3, rowsOfGeneration2: 24, rowsOfGeneration3: 24);
+
+        var entry = await ValidateEntryAsync(Rollup());
+
+        Assert.Equal(RollupConsistencyCheck.PointerWithoutRows, Assert.Single(entry.Findings).Check);
+    }
+
+    [Fact]
     public async Task A_OnlyThePartThatNoHigherEntryOutranks_IsChecked_SoTheHoleInTheMiddleIsFound()
     {
         // entry 3 (no rows) over the whole day, entry 7 with rows over hours 8..12: the hole is hours 0..8 and 12..24
         _pointers.Add(new GenerationRange(T0, T0 + 24 * HourMs, "", 3));
         _pointers.Add(new GenerationRange(T0 + 8 * HourMs, T0 + 12 * HourMs, "", 7));
         _generations[7] = (4, T0 + 8 * HourMs, T0 + 11 * HourMs);
+        _sourceRows = 5;
 
         var findings = await ValidateAsync(Rollup());
 

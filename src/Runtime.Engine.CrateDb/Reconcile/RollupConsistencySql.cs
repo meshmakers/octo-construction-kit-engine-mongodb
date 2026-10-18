@@ -65,8 +65,26 @@ internal static class RollupConsistencySql
         $"DELETE FROM {liveTable} WHERE {OrphanPredicate(generation, coveringEntries)};";
 
     /// <summary>Rows of a source archive in <c>[fromMs, toMs)</c> on its time column.</summary>
-    public static string BuildCountSourceRows(string sourceTable, string timeColumn, long fromMs, long toMs) =>
-        $"SELECT COUNT(*) FROM {sourceTable} WHERE \"{timeColumn}\" >= {Num(fromMs)} AND \"{timeColumn}\" < {Num(toMs)};";
+    /// <remarks>
+    /// With <paramref name="scope"/> only the rows of that entity; with <paramref name="liveGenerationFilter"/> (a rollup source) only the
+    /// rows of the generation the source's own pointer selects (<see cref="QueryBuilder.GenerationFilterSql.Render"/>).
+    /// </remarks>
+    public static string BuildCountSourceRows(
+        string sourceTable, string timeColumn, long fromMs, long toMs, string? scope = null, string? liveGenerationFilter = null)
+    {
+        var sql = $"SELECT COUNT(*) FROM {sourceTable} WHERE \"{timeColumn}\" >= {Num(fromMs)} AND \"{timeColumn}\" < {Num(toMs)}";
+        if (!string.IsNullOrEmpty(scope))
+        {
+            sql += $" AND \"{Constants.RtId}\" = '{scope.Replace("'", "''", StringComparison.Ordinal)}'";
+        }
+
+        if (!string.IsNullOrEmpty(liveGenerationFilter))
+        {
+            sql += $" AND {liveGenerationFilter}";
+        }
+
+        return sql + ";";
+    }
 
     /// <summary>The first row of a source archive on its time column.</summary>
     public static string BuildMinSourceTime(string sourceTable, string timeColumn) =>

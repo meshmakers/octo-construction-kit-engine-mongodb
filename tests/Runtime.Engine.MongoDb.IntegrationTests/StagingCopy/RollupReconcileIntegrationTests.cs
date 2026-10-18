@@ -131,9 +131,9 @@ public class RollupReconcileIntegrationTests(CrateStagingCopyFixture fixture)
     }
 
     [Fact]
-    public async Task Validate_A_ThePointerOfAGenerationWithoutRows_IsFound()
+    public async Task Validate_A_ThePointerOfAGenerationWithoutRows_IsFound_WhenTheSourceHoldsRowsThere()
     {
-        var c = await NewCaseAsync();
+        var c = await NewCaseAsync(rawHours: 720); // the source covers the day the rows are lost from
         await fixture.SqlAsync($"DELETE FROM {c.Live} WHERE \"generation\" = 3");
         await fixture.SqlAsync($"REFRESH TABLE {c.Live}");
 
@@ -475,17 +475,32 @@ public class RollupReconcileIntegrationTests(CrateStagingCopyFixture fixture)
     }
 
     [Fact]
-    public async Task Repair_APointerWhoseSourceHoldsNothing_IsRemoved_SoTheValidatorIsOk()
+    public async Task APointerWhoseSourceHoldsNothing_IsAnEmptyRecompute_TheValidatorIsOk_AndTheRepairLeavesItAlone()
     {
         var rig = await RepairRig.CreateAsync(fixture, rawHours: 24);
-        // a pointer into a range the source does not cover (hours 30..40), with no rows behind it
+        // what a backfill over a range the source is empty in leaves: a pointer into hours 30..40, no rows behind it
         await rig.SqlAsync(GenerationMapSqlBuilder.BuildUpsertPointer(rig.GenMap, Origin.AddHours(30), Origin.AddHours(40), "", 7));
+        await rig.Repository.SetRestoreReconcilePendingAsync(true, Ct);
+
+        Assert.True((await rig.Repository.ValidateRollupsAsync(null, Ct)).IsOk);
+        var report = await rig.Repository.RepairRollupsAsync(null, false, Ct);
+
+        Assert.True(report.IsOk);
+        Assert.Empty(report.Actions);
+        Assert.Contains(await rig.PointersAsync(), p => p.Contains("|7", StringComparison.Ordinal)); // harmless, left in place
+        Assert.False(await rig.Repository.IsRestoreReconcilePendingAsync(Ct));
+    }
+
+    [Fact]
+    public async Task APointerOverRowsTheSourceHolds_ButTheRollupLost_IsStillAFinding_AndTheRepairRecomputesIt()
+    {
+        var rig = await RepairRig.CreateAsync(fixture, rawHours: 48);
+        await rig.SqlAsync(GenerationMapSqlBuilder.BuildUpsertPointer(rig.GenMap, Origin.AddHours(10), Origin.AddHours(20), "", 7));
         Assert.False((await rig.Repository.ValidateRollupsAsync(null, Ct)).IsOk);
 
         var report = await rig.Repository.RepairRollupsAsync(null, false, Ct);
 
         Assert.True(report.IsOk);
-        Assert.DoesNotContain(await rig.PointersAsync(), p => p.Contains("|7", StringComparison.Ordinal));
         Assert.True((await rig.Repository.ValidateRollupsAsync(null, Ct)).IsOk);
     }
 

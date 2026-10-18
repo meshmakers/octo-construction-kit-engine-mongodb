@@ -143,7 +143,7 @@ internal sealed class RollupConsistencyValidator(
 
         await databaseClient.RefreshArchiveTableAsync(tenantId, live, CrateStatementClass.Maintenance, cancellationToken);
 
-        var gaps = await CheckPointersWithoutRowsAsync(live, pointers, cancellationToken);
+        var gaps = await CheckPointersWithoutRowsAsync(rollup, live, pointers, cancellationToken);
         findings.AddRange(gaps.Select(g => PointerGapFinding(rollup, g)));
 
         var orphans = new List<OrphanSet>();
@@ -196,9 +196,10 @@ internal sealed class RollupConsistencyValidator(
     // (a) ------------------------------------------------------------------------------------------------------
 
     private async Task<List<PointerGap>> CheckPointersWithoutRowsAsync(
-        string live, IReadOnlyList<GenerationRange> pointers, CancellationToken cancellationToken)
+        RollupArchiveSnapshot rollup, string live, IReadOnlyList<GenerationRange> pointers, CancellationToken cancellationToken)
     {
         var gaps = new List<PointerGap>();
+        var sourcePointers = new Dictionary<OctoObjectId, IReadOnlyList<GenerationRange>>();
         foreach (var entry in pointers.OrderBy(p => p.StartMs).ThenBy(p => p.Generation))
         {
             var governed = RollupConsistencySql.GovernedRanges(entry, pointers);
@@ -217,11 +218,82 @@ internal sealed class RollupConsistencyValidator(
                 CrateStatementClass.Maintenance, cancellationToken);
             if (rows == 0)
             {
-                gaps.AddRange(governed.Select(g => new PointerGap(entry, g.FromMs, g.ToMs)));
+                // An entry without rows is a defect only where the source has rows to aggregate. A recompute or backfill over a range
+                // the source holds nothing in correctly leaves a pointer entry with no rows (the flip is what makes readers see
+                // "empty" instead of an older generation), and that state exists in a healthy tenant and in its dump.
+                foreach (var part in governed)
+                {
+                    if (await SourceHasRowsAsync(rollup, entry.Scope, part.FromMs, part.ToMs, sourcePointers, cancellationToken))
+                    {
+                        gaps.Add(new PointerGap(entry, part.FromMs, part.ToMs));
+                    }
+                }
             }
         }
 
         return gaps;
+    }
+
+    /// <summary>
+    /// True when a source of the rollup holds rows in <c>[fromMs, toMs)</c> (clipped to the source's validity, and to the entity of a
+    /// scoped entry). A source that is itself a rollup counts the rows that are <b>live under its own pointer</b> (the generation its
+    /// genmap selects for each window, <see cref="GenerationFilterSql"/>): rows of a generation a recent recompute superseded still
+    /// exist during the sweep grace period, and counting them would bring the false alarm back for exactly the tenants that
+    /// recomputed lately. Costs one pointer read per rollup source (cached for the call) and one count per candidate range.
+    /// </summary>
+    private async Task<bool> SourceHasRowsAsync(
+        RollupArchiveSnapshot rollup, string scope, long fromMs, long toMs,
+        Dictionary<OctoObjectId, IReadOnlyList<GenerationRange>> sourcePointers, CancellationToken cancellationToken)
+    {
+        foreach (var reference in rollup.Sources)
+        {
+            if (reference.Clip(FromMs(fromMs), FromMs(toMs)) is not { } clipped)
+            {
+                continue;
+            }
+
+            var source = await archiveStore.GetAsync(reference.SourceArchiveRtId);
+            if (source is null)
+            {
+                continue; // reported as NotChecked (SourceMissing)
+            }
+
+            var sourceId = reference.SourceArchiveRtId.ToString();
+            var table = TenantSchema.QualifiedArchiveTable(tenantId, sourceId);
+            var timeColumn = source.UsesWindowedStorage ? Constants.WindowStart : Constants.Timestamp;
+            string? liveFilter = null;
+            if (source.RollupAggregations is not null)
+            {
+                if (!sourcePointers.TryGetValue(reference.SourceArchiveRtId, out var ranges))
+                {
+                    var genMapName = TenantSchema.ArchiveTableName(sourceId) + "__genmap";
+                    ranges = await TableExistsAsync(genMapName, cancellationToken)
+                        ? await ReadPointersAsync(GenerationMapSqlBuilder.GenMapTable(tenantId, sourceId), cancellationToken)
+                        : [];
+                    sourcePointers[reference.SourceArchiveRtId] = ranges;
+                }
+
+                liveFilter = GenerationFilterSql.Render(GenerationFilterSql.Overlapping(ranges, clipped.From, clipped.To));
+            }
+
+            try
+            {
+                var count = await databaseClient.GetCountAsync(tenantId,
+                    RollupConsistencySql.BuildCountSourceRows(table, timeColumn, ToMs(clipped.From), ToMs(clipped.To),
+                        scope.Length == 0 ? null : scope, liveFilter),
+                    CrateStatementClass.Maintenance, cancellationToken);
+                if (count > 0)
+                {
+                    return true;
+                }
+            }
+            catch (Exception ex) when (CrateDbStreamDataRepository.IsMissingTableError(ex))
+            {
+                // a source without a table holds nothing (an activated one is reported as NotChecked)
+            }
+        }
+
+        return false;
     }
 
     private static RollupConsistencyFinding PointerGapFinding(RollupArchiveSnapshot rollup, PointerGap gap) => new(
