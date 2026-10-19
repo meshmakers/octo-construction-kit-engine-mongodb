@@ -85,8 +85,13 @@ public class CkMetaModelCacheRoundTripTests(CkModelImportMigrationFixture fixtur
                 System.Text.Json.JsonSerializer.Serialize(thing.DefinedMethods.Single(m => m.MethodId == "ChangePassword-2")));
             Assert.Equal(CkMethodExecutionDto.DefaultTimeoutSeconds, thing.AllMethods["Ping-1"].TimeoutSeconds);
             // Handler kind (AB#6878): a pipeline-handled method keeps it through Mongo, an undeclared one is 'service'.
-            Assert.Equal(CkMethodHandlers.Pipeline, thing.AllMethods["ChangePassword-2"].Handler);
-            Assert.Equal("pipeline", thing.AllMethods["ChangePassword-2"].Definition.Execution?.Handler);
+            // AB#7004: ChangePassword-2 has a sensitive parameter, so it declares 'service' explicitly (message 132);
+            // the pipeline method of the kitchen sink is the parameterless static Reindex-1.
+            Assert.Equal(CkMethodHandlers.Service, thing.AllMethods["ChangePassword-2"].Handler);
+            Assert.Equal("service", thing.AllMethods["ChangePassword-2"].Definition.Execution?.Handler);
+            Assert.Equal(CkMethodHandlers.Pipeline, thing.AllMethods["Reindex-1"].Handler);
+            Assert.Equal("pipeline", thing.AllMethods["Reindex-1"].Definition.Execution?.Handler);
+            Assert.Equal(60, thing.AllMethods["Reindex-1"].TimeoutSeconds);
             Assert.Equal(CkMethodHandlers.Service, thing.AllMethods["Ping-1"].Handler);
             Assert.Null(thing.AllMethods["Ping-1"].Definition.Execution?.Handler);
 

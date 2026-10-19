@@ -247,13 +247,18 @@ internal static class CkV2KitchenSinkModel
 /// </summary>
 internal static class RoundTripMethods
 {
-    /// <summary>A static method (the only non-default <see cref="CkMethodKindDto" />).</summary>
+    /// <summary>
+    ///     A static method (the only non-default <see cref="CkMethodKindDto" />) and the pipeline-handled method of the
+    ///     kitchen sink. A method with a <c>sensitive</c> parameter cannot be a pipeline method (compiler message 132,
+    ///     AB#7004), so <see cref="Full" /> uses the service handler and this one carries the pipeline handler.
+    /// </summary>
     internal static CkMethodDto Static() => new()
     {
         MethodId = "Reindex-1", Kind = CkMethodKindDto.Static, Authorization = new CkMethodAuthorizationDto
         {
             Roles = ["UserManagement"]
-        }
+        },
+        Execution = new CkMethodExecutionDto { TimeoutSeconds = 60, Handler = CkMethodHandlers.Pipeline }
     };
 
     /// <summary>A method with every field of <see cref="CkMethodDto" /> and its parts set.</summary>
@@ -290,6 +295,6 @@ internal static class RoundTripMethods
         {
             Roles = ["UserManagement"], AllowSelf = true, Scopes = ["octo_api", "extra"]
         },
-        Execution = new CkMethodExecutionDto { TimeoutSeconds = 30, Idempotent = true, Handler = CkMethodHandlers.Pipeline }
+        Execution = new CkMethodExecutionDto { TimeoutSeconds = 30, Idempotent = true, Handler = CkMethodHandlers.Service }
     };
 }
