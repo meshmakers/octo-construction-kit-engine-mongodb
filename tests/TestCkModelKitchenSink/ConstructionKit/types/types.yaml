@@ -37,6 +37,7 @@ types:
         result:
           valueType: Enum
           valueCkEnumId: ${this}/Mode
+          sensitive: true
         errors:
           - code: PASSWORD_POLICY_VIOLATION
             description: too weak

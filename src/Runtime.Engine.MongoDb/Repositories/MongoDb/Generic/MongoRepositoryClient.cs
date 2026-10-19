@@ -530,6 +530,9 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.ValueType).SetIsRequired(true);
             cm.MapMember(c => c.ValueCkRecordId).SetIgnoreIfNull(true);
             cm.MapMember(c => c.ValueCkEnumId).SetIgnoreIfNull(true);
+            // CK v2 Phase 3 (AB#7006): the whole result is sensitive; absent when false, so documents of models without
+            // the key stay byte-identical and older documents read back as false.
+            cm.MapMember(c => c.Sensitive).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkMethodErrorDto>(cm =>

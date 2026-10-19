@@ -99,6 +99,12 @@ public class CkMetaModelCacheRoundTripTests(CkModelImportMigrationFixture fixtur
             Assert.Null(thing.AllMethods["Ping-1"].Definition.Execution?.Handler);
             // AB#7024: methods that do not set the flag read back as false (Reindex-1 is static, but does not replace it).
             Assert.All(thing.AllMethods.Values, m => Assert.False(m.ReplacesGenericCreate));
+            // AB#7006: the sensitive result of ChangePassword-2 survives the cache rebuilt from Mongo; methods without
+            // the marker (or without a result) read back as not sensitive.
+            Assert.True(thing.AllMethods["ChangePassword-2"].Definition.Result!.Sensitive);
+            Assert.True(thing.AllMethods["ChangePassword-2"].HasSensitiveResult);
+            Assert.False(thing.AllMethods["Ping-1"].HasSensitiveResult);
+            Assert.False(thing.AllMethods["Reindex-1"].HasSensitiveResult);
 
             // Access (AB#5668) at all three assignment read-back sites: type, record, association role
             Assert.Equal(CkAttributeAccessDto.Hidden, thing.AllAttributesByName["Secret"].Access);
