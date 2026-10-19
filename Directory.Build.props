@@ -21,7 +21,7 @@
         <PackageProjectUrl>https://www.meshmakers.io</PackageProjectUrl>
         <PackageTags>Octo data mesh iot</PackageTags>
         <TargetFramework>net10.0</TargetFramework>
-        <MeshmakerVersion>4.2.0</MeshmakerVersion>
+        <MeshmakerVersion>4.3.1</MeshmakerVersion>
         <MeshmakerVersion Condition="'$(Configuration)'=='DebugL'">999.0.0</MeshmakerVersion>
         <!-- OctoVersion is the version range of the upstream Octo packages. It comes ONLY from
              the pipeline (AB#6291): update-build-number.yml sets 0.1.* on main, X.Y.* on
