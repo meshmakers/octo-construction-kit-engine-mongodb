@@ -718,6 +718,36 @@ Implementation in `SingleOriginRtQuery.CreateAssociationCountNavigation`:
 - Triggered when `NavigationPair.AssociationCountFilter` is set
 - Runs pre-pagination in `_associationStageDefinitions`, then enriches post-pagination via `CreateInnerNavigation`
 
+## Re-importing an archived entity (AB#7018)
+
+The default delete (GraphQL `deleteEntities`, `DeleteOptions` default) is `DeleteStrategies.Archive`: the document
+stays in the collection with its `_id` (= rtId), `rtState = Archived`, and its associations are archived too. Only
+`DeleteStrategies.Erase` removes it. What that means for a later write of the same data:
+
+| Write | Archived document with the same rtId | Archived document holding a unique CK-index value (other rtId) |
+|---|---|---|
+| `InsertOnly` import (`octo-cli ImportRt`, default) | **replaced** by the incoming entity, active again (`BulkImportAsync`: `ReplaceOne` with filter `_id` AND `rtState = Archived`, upsert). An **active** document with that rtId still fails, with a message naming the state. | `UniqueNotDeleted`: value is free. Plain `Unique`: still blocked. |
+| `Upsert` import (`-w`, blueprint apply/update) | replaced, active again (unchanged) | same as left |
+| after `Erase` | nothing there, plain insert | nothing there |
+
+Rules:
+
+- The replace is one atomic bulk statement (no read-then-write race). It applies to `RtEntity` documents only;
+  associations get fresh ids and are inserted as before. The archived edges of the old document stay archived;
+  edges the import names are inserted (InsertOnly) or handled by the existing Upsert path.
+- A plain `Unique` index has no state filter, so it keeps blocking the value of an archived entity. That is
+  unchanged on purpose (CK behaviour; changing it needs a product decision). CK authors should declare business keys
+  as `UniqueNotDeleted`. When it blocks, the failure is
+  `Bulk import failed: Cannot write entity of type '...' with rtId '...': the value { ... } violates the unique index
+  '...' of collection '...'. The blocking document 'id' is in state Archived. ... Erase the archived entity ... or let
+  the CK type declare the index as UniqueNotDeleted.` (`MongoDbDataSourceCollection.DescribeBulkDuplicateKeyAsync`;
+  the key text is parsed from the server message by `DuplicateKeyMessageParser`, the lookup runs outside the aborted
+  transaction and falls back to the raw message if it fails).
+- A seed item that an operator deleted (archived) comes back with the next Upsert / blueprint update and with an
+  InsertOnly import of the same rtId (AB#7018). Whether that is wanted is an open product question, tracked there.
+- Tests: `ImportAfterArchiveTests` (rtId, Upsert, Erase, to-one and N:M edges, `Unique` vs `UniqueNotDeleted`),
+  `DuplicateKeyMessageParserTests`.
+
 ## Key Classes
 
 - `TenantRepository` - Main repository for tenant-specific data operations

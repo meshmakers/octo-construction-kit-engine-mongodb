@@ -70,6 +70,15 @@ public class OperationFailedException : PersistenceException
         return new OperationFailedException($"Bulk import failed: {innerException.Message}", innerException);
     }
 
+    /// <summary>
+    ///     A bulk write violated a unique index; <paramref name="message" /> names the entity, the index and the
+    ///     state of the blocking document (AB#7018).
+    /// </summary>
+    public static Exception BulkImportDuplicateKey(string message, Exception innerException)
+    {
+        return new OperationFailedException($"Bulk import failed: {message}", innerException);
+    }
+
     public static Exception CkTypeHasNoDefiningCollectionRoot(CkId<CkTypeId> ckTypeId)
     {
         return new OperationFailedException($"CkType '{ckTypeId}' has no defining collection root.");

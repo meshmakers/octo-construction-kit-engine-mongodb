@@ -839,9 +839,9 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
     public async Task<IBulkImportResult> BulkImportAsync(IOctoSession session, IEnumerable<TDocument> documents,
         BulkOperationOptions options)
     {
+        var listWrites = new List<WriteModel<TDocument>>();
         try
         {
-            var listWrites = new List<WriteModel<TDocument>>();
             List<RtAssociation> existingAssociations = new();
 
             if (options.InsertStrategy == BulkInsertStrategies.Upsert)
@@ -869,7 +869,24 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
                 switch (options.InsertStrategy)
                 {
                     case BulkInsertStrategies.InsertOnly:
-                        listWrites.Add(new InsertOneModel<TDocument>(v));
+                        if (v is RtEntity)
+                        {
+                            // AB#7018: an ARCHIVED document with the same rtId (the default GraphQL delete only
+                            // archives) is free: it is replaced by the incoming entity, which is active again.
+                            // An ACTIVE document with that rtId still fails with a duplicate key on the primary key,
+                            // because the replace filter does not match it and the upsert then tries to insert it.
+                            // One atomic statement per entity, so no read-then-write race.
+                            listWrites.Add(new ReplaceOneModel<TDocument>(
+                                Builders<TDocument>.Filter.And(
+                                    Builders<TDocument>.Filter.BuildIdFilter(_mongoDataSourceMapper.GetId(v)),
+                                    ArchivedStateFilter()),
+                                v) { IsUpsert = true });
+                        }
+                        else
+                        {
+                            listWrites.Add(new InsertOneModel<TDocument>(v));
+                        }
+
                         break;
                     case BulkInsertStrategies.Upsert:
                         if (v is RtAssociation association)
@@ -905,10 +922,123 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
             return new BulkImportResult(result);
         }
+        catch (MongoBulkWriteException<TDocument> e)
+        {
+            if (e.WriteErrors.Any(x => x.Category == ServerErrorCategory.DuplicateKey))
+            {
+                throw await DescribeBulkDuplicateKeyAsync(e, listWrites).ConfigureAwait(false);
+            }
+
+            throw OperationFailedException.BulkImportError(e);
+        }
         catch (MongoBulkWriteException e)
         {
             throw OperationFailedException.BulkImportError(e);
         }
+    }
+
+    private const string RtStateField = "rtState";
+
+    /// <summary>
+    ///     AB#7018: turns the raw E11000 of a bulk write into a message an operator can act on: the entity that
+    ///     was written, the violated index, and the state (Active / Archived) of the document that blocks it.
+    ///     The lookup runs without the transaction session: the failed write has aborted the transaction, and the
+    ///     blocking document was committed before.
+    /// </summary>
+    private async Task<Exception> DescribeBulkDuplicateKeyAsync(MongoBulkWriteException<TDocument> exception,
+        IReadOnlyList<WriteModel<TDocument>> writes)
+    {
+        var error = exception.WriteErrors.First(x => x.Category == ServerErrorCategory.DuplicateKey);
+        try
+        {
+            var written = error.Index >= 0 && error.Index < writes.Count ? GetWrittenDocument(writes[error.Index]) : default;
+            var parsed = DuplicateKeyMessageParser.Parse(error.Message);
+            var entity = written is RtEntity rtEntity
+                ? $"entity of type '{rtEntity.CkTypeId}' with rtId '{rtEntity.RtId}'"
+                : $"document of type '{typeof(TDocument).Name}'";
+
+            string description;
+            if (parsed.IndexName == IdIndexName && written != null)
+            {
+                var state = await FindStateAsync(Builders<TDocument>.Filter.BuildIdFilter(_mongoDataSourceMapper.GetId(written)))
+                    .ConfigureAwait(false);
+                description = $"Cannot insert {entity}: a document with this id already exists in state " +
+                              $"{state ?? "unknown"} (primary key '{IdIndexName}' of collection '{CollectionName}'). " +
+                              "Import with replace (Upsert) to overwrite it.";
+            }
+            else
+            {
+                string? state = null;
+                string? blockerId = null;
+                var keyFilter = DuplicateKeyMessageParser.BuildKeyFilter<TDocument>(parsed.DupKey);
+                if (keyFilter != null)
+                {
+                    var blocker = await FindBlockerAsync(keyFilter).ConfigureAwait(false);
+                    state = blocker.State;
+                    blockerId = blocker.Id;
+                }
+
+                description = $"Cannot write {entity}: the value {parsed.DupKey ?? "(unknown)"} violates the unique index " +
+                              $"'{parsed.IndexName ?? "(unknown)"}' of collection '{CollectionName}'. The blocking document" +
+                              $"{(blockerId != null ? $" '{blockerId}'" : "")} is in state {state ?? "unknown"}.";
+                if (state == nameof(RtState.Archived))
+                {
+                    description += $" Index '{parsed.IndexName}' is a plain Unique index: it also blocks values of " +
+                                   "archived (deleted) entities. Erase the archived entity (delete with strategy Erase) " +
+                                   "or let the CK type declare the index as UniqueNotDeleted.";
+                }
+            }
+
+            return OperationFailedException.BulkImportDuplicateKey(description, exception);
+        }
+        catch (Exception lookupFailure) when (lookupFailure is not OperationCanceledException)
+        {
+            // The diagnosis is a convenience: never hide the original failure behind a failed lookup.
+            _logger.LogWarning(lookupFailure, "Could not determine the state of the document blocking a duplicate key");
+            return OperationFailedException.BulkImportError(exception);
+        }
+    }
+
+    private const string IdIndexName = "_id_";
+
+    private static TDocument? GetWrittenDocument(WriteModel<TDocument> write)
+    {
+        return write switch
+        {
+            InsertOneModel<TDocument> insert => insert.Document,
+            ReplaceOneModel<TDocument> replace => replace.Replacement,
+            _ => default
+        };
+    }
+
+    private async Task<string?> FindStateAsync(FilterDefinition<TDocument> filter)
+    {
+        var found = await _documentCollection.Find(filter)
+            .Project<BsonDocument>(Builders<TDocument>.Projection.Include(RtStateField))
+            .FirstOrDefaultAsync().ConfigureAwait(false);
+        return found == null ? null : DescribeState(found);
+    }
+
+    private async Task<(string? Id, string? State)> FindBlockerAsync(FilterDefinition<TDocument> filter)
+    {
+        var found = await _documentCollection.Find(filter)
+            .Project<BsonDocument>(Builders<TDocument>.Projection.Include(RtStateField))
+            .FirstOrDefaultAsync().ConfigureAwait(false);
+        return found == null
+            ? (null, null)
+            : (found.TryGetValue("_id", out var id) ? id.ToString() : null, DescribeState(found));
+    }
+
+    private static string DescribeState(BsonDocument document)
+    {
+        // A missing rtState is an active document (the partial filter of UniqueNotDeleted reads null/0 as active).
+        var state = document.TryGetValue(RtStateField, out var value) && value.IsInt32 ? value.AsInt32 : 0;
+        return state == (int)RtState.Archived ? nameof(RtState.Archived) : nameof(RtState.Active);
+    }
+
+    private static FilterDefinition<TDocument> ArchivedStateFilter()
+    {
+        return Builders<TDocument>.Filter.Eq(RtStateField, (int)RtState.Archived);
     }
 
 
