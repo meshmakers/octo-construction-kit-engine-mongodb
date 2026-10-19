@@ -1466,6 +1466,29 @@ Consumers in this layer:
   using `Test/Ticket` (`ownerAttributePath: AssigneeId`), `Test/EscalationTicket` and the
   record-path case `Test/ReviewTask` (`ownerAttributePath: Owner.UserId`).
 
+### Deep graph honours the caller's data permissions (AB#6734)
+
+Both `ITenantRepository.GetRtDeepGraphAsync` overloads (ParentChild traversal and the directed
+follow-spec traversal) apply the caller's data-permission filter. The traversals themselves run over
+the association collection and know nodes only as `(rtId, ckTypeId)`, so the filter is applied as a
+post-step (`TenantRepository.PruneDeepGraphAsync`) on the **unpaged** result and paging is applied
+afterwards (`TotalCount` = pruned count):
+
+- A node passes when its type is unprotected or allowed for the caller (decided in memory from
+  `RtDataSecurityQueryFilter`); owned-only types are checked against the stored entities with the
+  very same predicate the other queries use (`DataSecurityFilterRenderer.Build`); everything else is
+  denied.
+- A denied node loses its row **and** every association that points to it (target id and type), so a
+  restricted export reveals neither the entity nor the edge. Nodes only reachable through a denied node
+  stay if the caller may read them (their own data is not hidden by the graph).
+- System sessions and unrestricted tenants (`CreateSecurityFilterAsync` returns null) take the
+  unchanged path: results, paging and aggregations are byte-identical to before. For restricted
+  callers `AggregationResult`/`FieldAggregationResult` are not returned (they cannot be recomputed on
+  the pruned set).
+- Pinned by `DeepGraphDataPermissionTests` (denied type, owned-only, system bypass, unrestricted
+  byte-identical, paging after pruning; both overloads) with the real filter and a restricted policy
+  table. Consumers: the export-by-deep-graph job of octo-bot-services (AB#6734).
+
 ### CkAttribute.isRuntimeState Round-Trip (AB#4589)
 
 The runtime CK cache is rebuilt by reading each model **back out of MongoDB**
