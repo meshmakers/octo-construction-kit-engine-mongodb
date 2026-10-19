@@ -743,8 +743,8 @@ Rules:
   the CK type declare the index as UniqueNotDeleted.` (`MongoDbDataSourceCollection.DescribeBulkDuplicateKeyAsync`;
   the key text is parsed from the server message by `DuplicateKeyMessageParser`, the lookup runs outside the aborted
   transaction and falls back to the raw message if it fails).
-- Open product question (not decided here): a seed item that an operator deleted comes back with the next Upsert /
-  blueprint update, as before; with this change it also comes back with an InsertOnly import of the same rtId.
+- A seed item that an operator deleted (archived) comes back with the next Upsert / blueprint update and with an
+  InsertOnly import of the same rtId (AB#7018). Whether that is wanted is an open product question, tracked there.
 - Tests: `ImportAfterArchiveTests` (rtId, Upsert, Erase, to-one and N:M edges, `Unique` vs `UniqueNotDeleted`),
   `DuplicateKeyMessageParserTests`.
 
