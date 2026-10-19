@@ -13,7 +13,7 @@
 
     <ItemGroup>
         <PackageReference Include="Meshmakers.Octo.Runtime.Engine" Version="$(OctoCoreLibVersion)" />
-        <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.11" />
+        <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.12" />
         <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.11" />
         <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.11" />
         <PackageReference Include="Dapper" Version="2.1.79" />
