@@ -180,6 +180,43 @@ public class CkMetaModelLegacyDocumentTests
     }
 
     [Fact]
+    public void MethodReplacesGenericCreate_RoundTrips_AndUndeclaredIsOmittedAndReadsAsFalse()
+    {
+        // AB#7024: a set flag is persisted ...
+        var methods = new List<CkMethodDto>
+        {
+            new() { MethodId = "Provision-1", Kind = CkMethodKindDto.Static, ReplacesGenericCreate = true },
+            new() { MethodId = "Reindex-1", Kind = CkMethodKindDto.Static }
+        };
+        var document = NewType(methods).ToBsonDocument();
+        Assert.True(document["methods"][0]["replacesGenericCreate"].AsBoolean);
+
+        // ... an undeclared one is left out (documents of models without the key stay byte-identical).
+        Assert.DoesNotContain("replacesGenericCreate", document["methods"][1].AsBsonDocument.Names);
+
+        var readBack = BsonSerializer.Deserialize<CkType>(document);
+        Assert.True(readBack.Methods![0].ReplacesGenericCreate);
+        Assert.False(readBack.Methods[1].ReplacesGenericCreate);
+    }
+
+    [Fact]
+    public void MethodDocument_WrittenBeforeTheReplacesGenericCreateField_ReadsAsFalse()
+    {
+        var legacy = new BsonDocument
+        {
+            ["methodId"] = "Reindex-1",
+            ["kind"] = (int)CkMethodKindDto.Static,
+            ["execution"] = new BsonDocument { ["timeoutSeconds"] = 20 }
+        };
+
+        var method = BsonSerializer.Deserialize<CkMethodDto>(legacy);
+
+        Assert.False(method.ReplacesGenericCreate);
+        Assert.Equal(CkMethodKindDto.Static, method.Kind);
+        Assert.Equal(20, method.Execution!.TimeoutSeconds);
+    }
+
+    [Fact]
     public void CkInterface_RoundTrips()
     {
         var entity = new CkInterface

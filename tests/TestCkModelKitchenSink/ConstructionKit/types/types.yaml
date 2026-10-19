@@ -73,12 +73,16 @@ types:
         targetCkTypeId: ${this}/Widget
         # Phase 1: the target is narrowed to an interface Widget implements.
         targetCkInterfaceId: ${this}/Named-1
-  # Unrelated type implementing Named.
+  # Unrelated type implementing Named; its static Provision-1 replaces the generic create (AB#7024).
   - typeId: Widget
     visibility: Internal
     derivedFromCkTypeId: ${System}/Entity
     implements:
       - ${this}/Named-1
+    methods:
+      - methodId: Provision-1
+        kind: Static
+        replacesGenericCreate: true
     attributes:
       - id: ${this}/Name
         name: Name

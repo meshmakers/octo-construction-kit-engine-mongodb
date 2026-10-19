@@ -235,7 +235,9 @@ internal static class CkV2KitchenSinkModel
                         Assign("Name", null, isOptional: false),
                         Assign("Mode", CkAttributeAccessDto.ReadOnly),
                         Assign("Hint", null)
-                    ]
+                    ],
+                    // AB#7024: the static method that replaces the generic create of the (concrete) type.
+                    Methods = [RoundTripMethods.ReplacesGenericCreate()]
                 }
             ]
         };
@@ -259,6 +261,15 @@ internal static class RoundTripMethods
             Roles = ["UserManagement"]
         },
         Execution = new CkMethodExecutionDto { TimeoutSeconds = 60, Handler = CkMethodHandlers.Pipeline }
+    };
+
+    /// <summary>
+    ///     AB#7024: the static method that replaces the generic create of its type (allowed on a concrete type only,
+    ///     at most one per type).
+    /// </summary>
+    internal static CkMethodDto ReplacesGenericCreate() => new()
+    {
+        MethodId = "Provision-1", Kind = CkMethodKindDto.Static, ReplacesGenericCreate = true
     };
 
     /// <summary>A method with every field of <see cref="CkMethodDto" /> and its parts set.</summary>

@@ -1702,6 +1702,18 @@ the catalog side.
   `TestCkModelKitchenSink` method `ChangePassword-2`) declare `handler: pipeline`; `CkMetaModelReflectionGateTests`,
   `CkMetaModelCacheRoundTripTests` (cache rebuilt from Mongo) and `CkMetaModelLegacyDocumentTests` cover it.
   Do not publish a model with `handler: pipeline` before this persistence is released: an older service drops the value on import.
+**Phase 3 addition (AB#7024, touch-point row 10 of `replacesGenericCreate`, engine AB#7024):**
+- `replacesGenericCreate` (`CkMethodDto.ReplacesGenericCreate`, `bool`) is persisted on the embedded `CkMethodDto` (class map
+  `CkMethodDto` in `MongoRepositoryClient`, `SetIgnoreIfDefault`). A method that does not set the flag has no such key
+  in the document, so models without the key stay byte-identical and documents written before the field read back as
+  `false` (`CkMethodGraph.ReplacesGenericCreate`). There is no separate write or read-back site: the DTO is embedded
+  verbatim. The model's raised `minEngineVersion` (engine `CkEngineVersion.ReplacesGenericCreateMinEngineVersion`) is the
+  existing `CkModel.MinEngineVersion` field. Gates: both kitchen sinks (C# `RoundTripMethods.ReplacesGenericCreate` and the
+  YAML `TestCkModelKitchenSink` method `Widget.Provision-1`) declare the flag on the concrete type `Widget`;
+  `CkMetaModelReflectionGateTests`, `CkMetaModelCacheRoundTripTests` (cache rebuilt from Mongo) and
+  `CkMetaModelLegacyDocumentTests` (`MethodReplacesGenericCreate_*`, `MethodDocument_WrittenBefore*`) cover it.
+  Do not publish a model with `replacesGenericCreate` before this persistence is released: an older service drops the flag on import
+  (the engine's `minEngineVersion` makes a service with an older engine refuse the model, message 126).
 - Hidden is not allowed on association-role assignments (engine rule 108); the kitchen sinks use `ReadOnly` there.
 - Index maintenance: `FetchAttributeMetadataAsync` always binds major-qualified references including `Importing`
   models, while the inheritance chain binding follows `includeModelsInStateImporting`. Intentional: attribute

@@ -61,7 +61,10 @@ public class CkMetaModelCacheRoundTripTests(CkModelImportMigrationFixture fixtur
             Assert.Equal(["Gadget", "Thing", "Widget"],
                 named.ImplementingTypes.Select(t => t.ElementId.Name).Order(StringComparer.Ordinal));
             var widgetGraph = cacheService.GetRtCkType(tenantId, new RtCkId<CkTypeId>("KitchenSink/Widget"));
-            Assert.Empty(widgetGraph.AllMethods);
+            // AB#7024: the only method of Widget replaces the generic create; the cache rebuilt from Mongo keeps the flag.
+            Assert.Equal(["Provision-1"], widgetGraph.AllMethods.Keys);
+            Assert.True(widgetGraph.AllMethods["Provision-1"].ReplacesGenericCreate);
+            Assert.Equal("KitchenSink/Widget.Provision-1", widgetGraph.AllMethods["Provision-1"].QualifiedMethodId);
             Assert.Equal(["Named-1"], widgetGraph.AllImplementedInterfaces.Select(i => i.ElementId.FullName));
 
             // Phase 1 members (F1.3-S2) reach the cache rebuilt from Mongo.
@@ -94,6 +97,8 @@ public class CkMetaModelCacheRoundTripTests(CkModelImportMigrationFixture fixtur
             Assert.Equal(60, thing.AllMethods["Reindex-1"].TimeoutSeconds);
             Assert.Equal(CkMethodHandlers.Service, thing.AllMethods["Ping-1"].Handler);
             Assert.Null(thing.AllMethods["Ping-1"].Definition.Execution?.Handler);
+            // AB#7024: methods that do not set the flag read back as false (Reindex-1 is static, but does not replace it).
+            Assert.All(thing.AllMethods.Values, m => Assert.False(m.ReplacesGenericCreate));
 
             // Access (AB#5668) at all three assignment read-back sites: type, record, association role
             Assert.Equal(CkAttributeAccessDto.Hidden, thing.AllAttributesByName["Secret"].Access);
