@@ -503,6 +503,9 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.Execution).SetIgnoreIfNull(true);
             // CK v2 Phase 1 (F1.1-S4): method visibility, absent when undeclared.
             cm.MapMember(c => c.Visibility).SetIgnoreIfNull(true);
+            // CK v2 Phase 3 (AB#7024): the static method replaces the generic create of its type; absent when false, so
+            // documents of models without the key stay byte-identical and older documents read back as false.
+            cm.MapMember(c => c.ReplacesGenericCreate).SetIgnoreIfDefault(true);
         });
 
         BsonClassMap.RegisterClassMap<CkMethodParameterDto>(cm =>
