@@ -1724,8 +1724,9 @@ the catalog side.
   sinks (C# `RoundTripMethods.Full` and the YAML `TestCkModelKitchenSink` method `Thing.ChangePassword-2`, a service handler)
   carry `sensitive: true` on the result; `CkMetaModelReflectionGateTests`, `CkMetaModelCacheRoundTripTests` (cache rebuilt
   from Mongo) and `CkMetaModelLegacyDocumentTests` (`MethodResultSensitive_*`, `MethodResultDocument_WrittenBefore*`) cover it.
-  Do not publish a model with a sensitive result before this persistence is released: an older service drops the marker on
-  import (the engine's `minEngineVersion` makes a service with an older engine refuse the model, message 126).
+  A service whose persistence predates the marker would drop it on import, so a model with a sensitive result is only
+  imported by a service whose engine knows the key: the model's raised `minEngineVersion` makes an older engine refuse it
+  (message 126) instead of storing the model without the marker.
 - Hidden is not allowed on association-role assignments (engine rule 108); the kitchen sinks use `ReadOnly` there.
 - Index maintenance: `FetchAttributeMetadataAsync` always binds major-qualified references including `Importing`
   models, while the inheritance chain binding follows `includeModelsInStateImporting`. Intentional: attribute
