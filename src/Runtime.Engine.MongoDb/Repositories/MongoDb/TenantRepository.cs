@@ -753,6 +753,11 @@ internal class TenantRepository(
     {
         var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
 
+        // AB#6734: a restricted caller gets the traversal without paging, which is then pruned of every
+        // node it may not read and paged afterwards (a page cut before the pruning would be short).
+        var securityFilter = await CreateSecurityFilterAsync(session, originTypeGraph);
+        var enforce = securityFilter is { HasEnforcement: true };
+
         var hierarchicalDeepRtGraphQuery = new MultipleOriginHierarchicalDeepRtGraphQuery(mongoDbRepositoryDataSource,
             queryOptions.Language, queryOptions.GlobalFilter?.IncludeArchived ?? false, originRtIds,
             originTypeGraph, SystemCkIds.RtCkParentChildRoleId);
@@ -764,7 +769,13 @@ internal class TenantRepository(
         hierarchicalDeepRtGraphQuery.AddResultAggregation(queryOptions.ResultAggregation);
         hierarchicalDeepRtGraphQuery.AddGeospatialFilters(queryOptions.GeospatialFilters);
 
-        return await hierarchicalDeepRtGraphQuery.ExecuteQuery(session, skip, take);
+        if (!enforce)
+        {
+            return await hierarchicalDeepRtGraphQuery.ExecuteQuery(session, skip, take);
+        }
+
+        var unpaged = await hierarchicalDeepRtGraphQuery.ExecuteQuery(session);
+        return await PruneDeepGraphAsync(session, securityFilter!, unpaged.Items, skip, take);
     }
 
     public async Task<IResultSet<RtDeepGraphQueryResult>> GetRtDeepGraphAsync(IOctoSession session,
@@ -782,10 +793,114 @@ internal class TenantRepository(
         }
 
         var originTypeGraph = await GetCkTypeGraphAsync(originCkTypeId);
+        var securityFilter = await CreateSecurityFilterAsync(session, originTypeGraph);
         var directedQuery = new MultipleOriginDirectedRoleDeepRtGraphQuery(mongoDbRepositoryDataSource,
             queryOptions.GlobalFilter?.IncludeArchived ?? false, originRtIds, originTypeGraph, followSpecs);
 
-        return await directedQuery.ExecuteQuery(session, skip, take);
+        if (securityFilter is not { HasEnforcement: true })
+        {
+            return await directedQuery.ExecuteQuery(session, skip, take);
+        }
+
+        // AB#6734: prune first, page afterwards (see the parameterless overload).
+        var unpaged = await directedQuery.ExecuteQuery(session);
+        return await PruneDeepGraphAsync(session, securityFilter, unpaged.Items, skip, take);
+    }
+
+    /// <summary>
+    ///     Removes from a deep-graph result everything the caller may not read (AB#6734): the rows of
+    ///     denied nodes and every association that points to a denied node (target id and type). The
+    ///     decision per node mirrors <see cref="DataSecurityFilterRenderer.Build{TEntity}" />: unprotected
+    ///     or allowed types pass, owned-only types are checked against the stored entity with the very
+    ///     same rendered predicate, everything else is denied. Nodes that are only reachable through a
+    ///     denied node stay if the caller may read them (their own data is not hidden by the graph).
+    ///     Aggregations cannot be recomputed on the pruned set and are therefore not returned.
+    /// </summary>
+    private async Task<IResultSet<RtDeepGraphQueryResult>> PruneDeepGraphAsync(IOctoSession session,
+        RtDataSecurityQueryFilter securityFilter, IEnumerable<RtDeepGraphQueryResult> rows, int? skip, int? take)
+    {
+        var all = rows.ToList();
+
+        var protectedTypes = new HashSet<string>(securityFilter.ProtectedCkTypeIds, StringComparer.Ordinal);
+        var allowedTypes = new HashSet<string>(securityFilter.AllowedCkTypeIds, StringComparer.Ordinal);
+        var ownedOnlyTypes = new HashSet<string>(securityFilter.OwnedOnlyCkTypeIds, StringComparer.Ordinal);
+
+        // Distinct nodes: row ids and association targets.
+        var nodes = new Dictionary<(OctoObjectId RtId, string CkTypeId), bool>();
+        foreach (var row in all)
+        {
+            nodes.TryAdd((row.Id.RtId, row.Id.CkTypeId.SemanticVersionedFullName), false);
+            foreach (var association in row.Associations)
+            {
+                nodes.TryAdd((association.TargetRtId, association.TargetCkTypeId?.SemanticVersionedFullName ?? string.Empty), false);
+            }
+        }
+
+        var ownedCandidates = new Dictionary<string, List<OctoObjectId>>(StringComparer.Ordinal);
+        foreach (var node in nodes.Keys.ToList())
+        {
+            if (!protectedTypes.Contains(node.CkTypeId) || allowedTypes.Contains(node.CkTypeId))
+            {
+                nodes[node] = true;
+            }
+            else if (securityFilter.SubjectId != null && ownedOnlyTypes.Contains(node.CkTypeId))
+            {
+                if (!ownedCandidates.TryGetValue(node.CkTypeId, out var ids))
+                {
+                    ownedCandidates[node.CkTypeId] = ids = [];
+                }
+
+                ids.Add(node.RtId);
+            }
+            // else: protected and neither allowed nor owned-only for this caller: stays denied.
+        }
+
+        foreach (var (ckTypeIdName, ids) in ownedCandidates)
+        {
+            var typeGraph = await GetCkTypeGraphAsync(new RtCkId<CkTypeId>(ckTypeIdName));
+            var predicate = Builders<RtEntity>.Filter.And(
+                DataSecurityFilterRenderer.Build<RtEntity>(securityFilter)!,
+                Builders<RtEntity>.Filter.In(x => x.RtId, ids));
+            var readable = await mongoDbRepositoryDataSource.GetRtDatabaseCollection<RtEntity>(typeGraph)
+                .Aggregate(session).Match(predicate).ToListAsync();
+            foreach (var entity in readable)
+            {
+                nodes[(entity.RtId, ckTypeIdName)] = true;
+            }
+        }
+
+        bool IsReadable(OctoObjectId rtId, string ckTypeId) => nodes[(rtId, ckTypeId)];
+
+        var pruned = new List<RtDeepGraphQueryResult>();
+        foreach (var row in all)
+        {
+            if (!IsReadable(row.Id.RtId, row.Id.CkTypeId.SemanticVersionedFullName))
+            {
+                continue;
+            }
+
+            pruned.Add(new RtDeepGraphQueryResult
+            {
+                Id = row.Id,
+                Associations = row.Associations
+                    .Where(a => IsReadable(a.TargetRtId, a.TargetCkTypeId?.SemanticVersionedFullName ?? string.Empty))
+                    .ToList()
+            });
+        }
+
+        var total = pruned.Count;
+        IEnumerable<RtDeepGraphQueryResult> page = pruned;
+        if (skip.HasValue)
+        {
+            page = page.Skip(skip.Value);
+        }
+
+        if (take.HasValue)
+        {
+            page = page.Take(take.Value);
+        }
+
+        return new ResultSet<RtDeepGraphQueryResult>(page.ToList(), total, null, null);
     }
 
     protected override async Task<IResultSet<TEntity>> GetRtEntitiesByTypeAsync<TEntity>(IOctoSession session,
