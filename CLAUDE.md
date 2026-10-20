@@ -1648,8 +1648,10 @@ above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before a
   `CkModelReflectionComparer.AllowList` with a reason: `CkCompiledModelRoot.Migrations` (executed on import),
   `CkCompiledModelRoot.Compatibility` (AB#6295: the author's `compatibility.acknowledge` entries are build and publish-time
   metadata, the publish gate reads them from the catalog JSON; also listed in `CkModelJsonComparer.RoundTripIgnoredPaths`;
-  the C# kitchen sink carries a value, so removing the entry turns the gate red) and the
-  pre-existing `CkTypeDto.Indexes` gap. `UnpersistedDtoProperty_FailsTheGate` is the automated mutation check (a type
+  the C# kitchen sink carries a value, so removing the entry turns the gate red). `CkTypeDto.Indexes` is NOT on the list any more
+  (AB#7125): it is read back, and dropping the mapping fails the gate for System (`Entity-1` and five more types) and
+  `TypeIndexes_AllMembers_SurviveTheMongoRoundTrip` (Text with language and weights, UniqueNotDeleted, Ascending, order).
+  `UnpersistedDtoProperty_FailsTheGate` is the automated mutation check (a type
   DTO subclass with an unknown member goes through the real import and is reported); removing a read-back mapping
   (e.g. `Visibility = t.Visibility`) fails the gate with the property path (verified).
 
@@ -1659,10 +1661,8 @@ above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before a
   registered via `AddCkModelKitchenSinkV1()` in `CkModelImportMigrationFixture`) and its C#-built twin
   `CkV2KitchenSinkModel` (`KitchenSinkCs-1.0.0`, also used for the next-version replacement test).
   A new DTO property that is not persisted fails here by itself. `RoundTripIgnoredPaths` lists what is
-  legitimately not stored, each with a justification: `$schema`, `migrations` and the **pre-existing** gap
-  `types[*].indexes` (dependencies and dependency ranges are compared since Phase 1; type indexes are
-  persisted on the entity and consumed from there, but have never been read back — found by this gate,
-  reported, not changed in Phase 1 — it would change runtime resolution for every tenant). `defaultValues` / `autoCompleteValues` scalars compare by invariant text
+  legitimately not stored, each with a justification: `$schema`, `migrations` and `compatibility` (dependencies, dependency
+  ranges and, since AB#7125, `types[*].indexes` are compared). `defaultValues` / `autoCompleteValues` scalars compare by invariant text
   because the import converts them to the attribute's value type by design.
 - `CkMetaModelCacheRoundTripTests`: the cache rebuilt from Mongo (YAML kitchen sink) exposes interfaces,
   declared AND inherited implements / methods (`AllImplementedInterfaces`, `AllMethods`, `ImplementingTypes`),
@@ -1749,8 +1749,8 @@ the catalog side.
   (review E-L7).
 - **The backstop does not rely on the engine graph's text-index merge.** Index maintenance merges the text indexes of
   all types of a collection itself (`AnalyseIndex`, from the stored `CkType` documents); `CkTypeGraph.MergeTextIndexes`
-  in the engine (which, on main, never merges a derived text index into a root that has its own) is not involved, and
-  the runtime graph carries no type indexes anyway (pre-existing read-back gap).
+  in the engine (which, on main, never merges a derived text index into a root that has its own) is not involved. Since
+  AB#7125 the read-back DTOs (and so the runtime graph) do carry the type indexes.
 - **Archives never capture Hidden (review G3 E-M2, engine `ArchiveHiddenColumnGuard`).** `TenantContext` passes the CK
   cache into `ArchiveLifecycleService` (activation refuses such columns) and, after every CK model import (explicit,
   embedded, System restore of a child or the system tenant, and a re-validation that recovered models), calls
@@ -2426,6 +2426,18 @@ transient in `AddMongoDbRuntimeRepository`) is the same service for code that al
   (plus the baseline); 100 installed models with 10 updates take milliseconds (unit test: < 2 s, zero loads for exact pins).
 - `availableDependentVersions` (optional, e.g. the catalog versions) only fills `SuggestedDependentUpdate` (newest version above the
   dependent's); it is a suggestion - prove it by evaluating the combined set.
+
+**Installed baseline read-back (AB#7125).** The baseline of every check is the installed model rebuilt from the persisted rows
+(`MongoInstalledCkModelReader` → `TryLookupCkModelAsync`). Until AB#7125 that rebuild never mapped `CkType.Indexes` back (the
+same defect class as AB#4589: persisted, written on import, but missing in the read-back), so the baseline had no indexes, every
+index of the new version looked ADDED and `CkSemVerClassifier` rated an added unique index Major ("existing data may violate the new
+unique index"): a false `ElementChanged` blocker for every model that declares an index (e.g. `Basic.Energy` 1.9.0 to 1.10.0,
+`MeteringPoint-1` UniqueNotDeleted on `MeteringPointNumber`, staging-1 tenant eegroider). `DatabaseCkModelRepository.IndexesOf` maps
+`IndexType`, `Language` and every field (`Weight`, `AttributePaths`) back; an empty list reads back as `null`, like the compiled
+DTO. No persistence format change. Side effect: dependency resolution of an import now sees the indexes of the installed dependency
+types (the runtime graph carries them); the full suite is green with it. Before the fix the guard outputs (LibraryStatus,
+CheckUpgrade, FixAll/Update refusals) could show a false "would break" for any update of a model with an index; a real
+index change is still reported (`InstalledUniqueIndex_IsReadBackAsBaseline_SoOnlyARealNewIndexBlocks`).
 
 **Tests**: `StreamData.UnitTests/UpgradeGuard/TenantUpgradeGuardTests.cs` (the sbeg case, range-retaining Registration, replaced
 dependent in the set, element removed / member removed / internal / changed / floor / range / name collision, additive update, several

@@ -31,13 +31,9 @@ internal static class CkModelJsonComparer
         ["$.migrations"] = "migration scripts are executed on import, not persisted",
         // AB#6295: acknowledgements of the author are build and publish-time metadata (the publish gate reads them
         // from the catalog JSON), a tenant never needs them.
-        ["$.compatibility"] = "compatibility.acknowledge is build and publish-time metadata, not needed in tenants",
-
-        // PRE-EXISTING gap found by this gate (not CK v2): CkType.Indexes is persisted on the entity and consumed
-        // from there (UpdateIndexAsync / AnalyseIndex), but TryLookupCkModelAsync has never mapped it back, so the
-        // runtime graph carries no type indexes (only visible to MCP schema discovery and the text-index merge).
-        // Reading it back changes runtime resolution for every tenant, so it is reported and not changed in Phase 1.
-        ["$.types[*].indexes"] = "pre-existing: type indexes are not read back (reported to the lead)"
+        ["$.compatibility"] = "compatibility.acknowledge is build and publish-time metadata, not needed in tenants"
+        // AB#7125: "$.types[*].indexes" used to be ignored here (type indexes were never read back); they are read back now and
+        // compared like every other member. Do not list the path again: the upgrade guard's installed baseline depends on it.
     };
 
     /// <summary>

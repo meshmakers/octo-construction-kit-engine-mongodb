@@ -149,6 +149,56 @@ public class TenantUpgradeGuardIntegrationTests(CkModelImportMigrationFixture fi
         }
     }
 
+    [Fact]
+    public async Task InstalledUniqueIndex_IsReadBackAsBaseline_SoOnlyARealNewIndexBlocks()
+    {
+        // AB#7125: the installed baseline used to carry no indexes (TryLookupCkModelAsync never mapped them back), so every
+        // index of the update looked ADDED and an added unique index was rated Major ("existing data may violate").
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = $"upgidx{Guid.NewGuid():N}"[..20];
+        try
+        {
+            await CreateChildAsync(tenantId);
+            var tenant = await GetChildAsync(tenantId);
+            var system = await GetInstalledSystemIdAsync(tenant);
+
+            // Installed: IUnique has a unique-not-deleted index on Code since its first version, IPlain has none.
+            await tenant.ImportCkModelAsync(BuildBase("IUnique-1.0.0", system, withExtra: false,
+                uniqueIndexOnCode: IndexTypeDto.UniqueNotDeleted));
+            var uniqueDependent = BuildDependent("IUniqueDep-1.0.0", "IUnique-1.0.0", system, rangeRetaining: true);
+            uniqueDependent.DependencyRanges![0].UsedSurface = ["IUnique@1/Thing-1"];
+            await tenant.ImportCkModelAsync(uniqueDependent);
+            await tenant.ImportCkModelAsync(BuildBase("IPlain-1.0.0", system, withExtra: false));
+            var plainDependent = BuildDependent("IPlainDep-1.0.0", "IPlain-1.0.0", system, rangeRetaining: true);
+            plainDependent.DependencyRanges![0].UsedSurface = ["IPlain@1/Thing-1"];
+            await tenant.ImportCkModelAsync(plainDependent);
+
+            // The same index in the higher version is not a change: no blocker (was: ElementChanged, Major).
+            var same = await tenant.EvaluateCkUpdateAsync(
+                [BuildBase("IUnique-1.1.0", system, withExtra: true, uniqueIndexOnCode: IndexTypeDto.UniqueNotDeleted)], null,
+                TestContext.Current.CancellationToken);
+            Assert.Empty(same.Blockers);
+
+            // A version that really ADDS a unique index to the used type still blocks as before.
+            var added = await tenant.EvaluateCkUpdateAsync(
+                [BuildBase("IPlain-1.1.0", system, withExtra: false, uniqueIndexOnCode: IndexTypeDto.UniqueNotDeleted)], null,
+                TestContext.Current.CancellationToken);
+            var blocker = Assert.Single(added.Blockers);
+            Assert.Equal(CkUpgradeBlockerKind.ElementChanged, blocker.Kind);
+            Assert.Equal("IPlainDep-1.0.0", blocker.Dependent.FullName);
+            Assert.Contains("index", blocker.Message, StringComparison.OrdinalIgnoreCase);
+
+            // Dropping the installed index is not breaking for dependents (it is judged against the baseline, not as "added").
+            var removed = await tenant.EvaluateCkUpdateAsync([BuildBase("IUnique-1.2.0", system, withExtra: false)], null,
+                TestContext.Current.CancellationToken);
+            Assert.Empty(removed.Blockers);
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(systemContext, tenantId);
+        }
+    }
+
     private static async Task<string> SnapshotAsync(IMongoDatabase database)
     {
         var documents = await database.GetCollection<BsonDocument>("CkModel").Find(FilterDefinition<BsonDocument>.Empty)
@@ -166,7 +216,8 @@ public class TenantUpgradeGuardIntegrationTests(CkModelImportMigrationFixture fi
     }
 
     /// <summary>A base model: type Thing (derived from System@N/Entity) with an own attribute Code.</summary>
-    private static CkCompiledModelRoot BuildBase(string modelId, CkModelId system, bool withExtra)
+    private static CkCompiledModelRoot BuildBase(string modelId, CkModelId system, bool withExtra,
+        IndexTypeDto? uniqueIndexOnCode = null)
     {
         var id = new CkModelId(modelId);
         var systemMajor = system.ToMajorQualified();
@@ -196,6 +247,16 @@ public class TenantUpgradeGuardIntegrationTests(CkModelImportMigrationFixture fi
                     TypeId = new CkTypeId("Thing-1"),
                     IsCollectionRoot = true,
                     DerivedFromCkTypeId = new CkId<CkTypeId>(systemMajor, new CkTypeId("Entity-1")),
+                    Indexes = uniqueIndexOnCode is { } indexType
+                        ?
+                        [
+                            new CkTypeIndexDto
+                            {
+                                IndexType = indexType,
+                                Fields = [new CkIndexFieldsDto { AttributePaths = ["Code"] }]
+                            }
+                        ]
+                        : null,
                     Attributes =
                     [
                         new CkTypeAttributeDto

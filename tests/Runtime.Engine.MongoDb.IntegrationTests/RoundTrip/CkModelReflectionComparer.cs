@@ -31,11 +31,9 @@ internal static class CkModelReflectionComparer
             "migration scripts are executed during the import (CompiledModelCkMigrationContentProvider), not stored",
         ["CkCompiledModelRoot.Compatibility"] =
             "AB#6295: the author's compatibility.acknowledge entries are build and publish-time metadata; the publish " +
-            "gate reads them from the catalog JSON of the compiled model, a tenant never needs them",
-        ["CkTypeDto.Indexes"] =
-            "pre-existing: type indexes are stored on the CkType entity and consumed from there (UpdateIndexAsync), " +
-            "but have never been read back; reading them back changes runtime resolution for every tenant (reported " +
-            "by the round-trip gate, decision pending)"
+            "gate reads them from the catalog JSON of the compiled model, a tenant never needs them"
+        // AB#7125: CkTypeDto.Indexes was allow-listed here as a "pre-existing gap" and is read back now. Do not list it again:
+        // the upgrade guard's installed baseline depends on it.
     };
 
     /// <summary>Identity properties of collection elements, in order of preference.</summary>

@@ -358,6 +358,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
                 Derivable = t.Derivable,
                 // CK v2 (AB#5669): the declared methods, embedded verbatim.
                 Methods = t.Methods,
+                // AB#7125: the declared indexes; null when none, matching the compiled DTO. Without them the installed
+                // baseline of the upgrade guard has no indexes and every index of the new version looks ADDED.
+                Indexes = IndexesOf(t.Indexes),
                 // CK v2 (AB#5667): the declared implements entries; null when none, matching the compiled DTO.
                 Implements = ImplementsOf(t.CkTypeId, ckTypeInterfaceImplementations),
                 Attributes = t.Attributes.Select(a => new CkTypeAttributeDto
@@ -1569,6 +1572,27 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
                 Visibility = ckInterfaceDto.Visibility
             });
         }
+    }
+
+    /// <summary>
+    ///     Maps the persisted <see cref="CkTypeIndex" /> rows back to the compiled DTO (inverse of the mapping in
+    ///     <see cref="ProcessCkTypesAndAssociations" />, AB#7125); <c>null</c> when the type declares none.
+    /// </summary>
+    internal static List<CkTypeIndexDto>? IndexesOf(ICollection<CkTypeIndex>? indexes)
+    {
+        if (indexes == null || indexes.Count == 0)
+        {
+            return null;
+        }
+
+        return indexes.Select(i => new CkTypeIndexDto
+        {
+            IndexType = (IndexTypeDto)i.IndexType,
+            Language = i.Language,
+            Fields = (i.Fields ?? [])
+                .Select(f => new CkIndexFieldsDto { Weight = f.Weight, AttributePaths = f.AttributeNames.ToList() })
+                .ToList()
+        }).ToList();
     }
 
     private void ProcessCkTypesAndAssociations(CkCompiledModelRoot compiledModel,
