@@ -1,3 +1,6 @@
+using FakeItEasy;
+using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
@@ -21,6 +24,9 @@ public class CrateDbSingletonWiringTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        // Collaborators the host provides; faked so the factory can be constructed.
+        services.AddSingleton(A.Fake<ICkCacheService>());
+        services.AddSingleton(A.Fake<IFormulaEngine>());
         services.AddStreamDataDatabase<NoOpStreamDataConfiguration>();
 
         Assert.Equal(ServiceLifetime.Singleton, LifetimeOf(services, typeof(CrateDatabaseClient)));
