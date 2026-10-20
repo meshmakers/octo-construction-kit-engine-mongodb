@@ -1714,6 +1714,19 @@ the catalog side.
   `CkMetaModelLegacyDocumentTests` (`MethodReplacesGenericCreate_*`, `MethodDocument_WrittenBefore*`) cover it.
   Do not publish a model with `replacesGenericCreate` before this persistence is released: an older service drops the flag on import
   (the engine's `minEngineVersion` makes a service with an older engine refuse the model, message 126).
+**Phase 3 addition (AB#7006, touch-point row 10 of the method result marker `sensitive`, engine AB#7006):**
+- `sensitive` (`CkMethodResultDto.Sensitive`, `bool`) marks the whole result of a method as never to be logged, audited or
+  traced. It is persisted on the embedded `CkMethodResultDto` (class map `CkMethodResultDto` in `MongoRepositoryClient`,
+  `SetIgnoreIfDefault`): a result without the marker has no such key in the document, so models without the key stay
+  byte-identical and documents written before the field read back as `false` (`CkMethodGraph.HasSensitiveResult`). There is no
+  separate write or read-back site: the DTO is embedded verbatim. The model's raised `minEngineVersion` (engine
+  `CkEngineVersion.SensitiveResultMinEngineVersion`) is the existing `CkModel.MinEngineVersion` field. Gates: both kitchen
+  sinks (C# `RoundTripMethods.Full` and the YAML `TestCkModelKitchenSink` method `Thing.ChangePassword-2`, a service handler)
+  carry `sensitive: true` on the result; `CkMetaModelReflectionGateTests`, `CkMetaModelCacheRoundTripTests` (cache rebuilt
+  from Mongo) and `CkMetaModelLegacyDocumentTests` (`MethodResultSensitive_*`, `MethodResultDocument_WrittenBefore*`) cover it.
+  A service whose persistence predates the marker would drop it on import, so a model with a sensitive result is only
+  imported by a service whose engine knows the key: the model's raised `minEngineVersion` makes an older engine refuse it
+  (message 126) instead of storing the model without the marker.
 - Hidden is not allowed on association-role assignments (engine rule 108); the kitchen sinks use `ReadOnly` there.
 - Index maintenance: `FetchAttributeMetadataAsync` always binds major-qualified references including `Importing`
   models, while the inheritance chain binding follows `includeModelsInStateImporting`. Intentional: attribute

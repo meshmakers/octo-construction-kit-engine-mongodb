@@ -299,7 +299,9 @@ internal static class RoundTripMethods
         Result = new CkMethodResultDto
         {
             ValueType = AttributeValueTypesDto.Enum,
-            ValueCkEnumId = new CkId<CkEnumId>(modelId, new CkEnumId("Mode-1"))
+            ValueCkEnumId = new CkId<CkEnumId>(modelId, new CkEnumId("Mode-1")),
+            // AB#7006: the whole result is sensitive (allowed with the service handler this method uses).
+            Sensitive = true
         },
         Errors = [new CkMethodErrorDto { Code = "PASSWORD_POLICY_VIOLATION", Description = "too weak" }],
         Authorization = new CkMethodAuthorizationDto

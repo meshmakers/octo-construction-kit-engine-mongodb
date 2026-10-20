@@ -217,6 +217,50 @@ public class CkMetaModelLegacyDocumentTests
     }
 
     [Fact]
+    public void MethodResultSensitive_RoundTrips_AndUndeclaredIsOmittedAndReadsAsFalse()
+    {
+        // AB#7006: a set marker is persisted on the embedded result ...
+        var methods = new List<CkMethodDto>
+        {
+            new()
+            {
+                MethodId = "IssueToken-1",
+                Result = new CkMethodResultDto { ValueType = AttributeValueTypesDto.String, Sensitive = true }
+            },
+            new()
+            {
+                MethodId = "Describe-1",
+                Result = new CkMethodResultDto { ValueType = AttributeValueTypesDto.String }
+            }
+        };
+        var document = NewType(methods).ToBsonDocument();
+        Assert.True(document["methods"][0]["result"]["sensitive"].AsBoolean);
+
+        // ... an undeclared one is left out (documents of models without the key stay byte-identical).
+        Assert.DoesNotContain("sensitive", document["methods"][1]["result"].AsBsonDocument.Names);
+
+        var readBack = BsonSerializer.Deserialize<CkType>(document);
+        Assert.True(readBack.Methods![0].Result!.Sensitive);
+        Assert.False(readBack.Methods[1].Result!.Sensitive);
+    }
+
+    [Fact]
+    public void MethodResultDocument_WrittenBeforeTheSensitiveField_ReadsAsFalse()
+    {
+        var legacy = new BsonDocument
+        {
+            ["methodId"] = "IssueToken-1",
+            ["kind"] = (int)CkMethodKindDto.Instance,
+            ["result"] = new BsonDocument { ["valueType"] = (int)AttributeValueTypesDto.String }
+        };
+
+        var method = BsonSerializer.Deserialize<CkMethodDto>(legacy);
+
+        Assert.False(method.Result!.Sensitive);
+        Assert.Equal(AttributeValueTypesDto.String, method.Result.ValueType);
+    }
+
+    [Fact]
     public void CkInterface_RoundTrips()
     {
         var entity = new CkInterface
