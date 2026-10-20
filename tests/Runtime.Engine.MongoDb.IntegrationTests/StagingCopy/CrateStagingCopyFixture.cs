@@ -26,7 +26,9 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.StagingCopy;
 /// </summary>
 public sealed class CrateStagingCopyFixture : IAsyncLifetime
 {
-    private const string Image = "crate:5.10.10";
+    public const string StorageVersion = "6.4.6";
+
+    private const string Image = "crate:" + StorageVersion;
 
     private IContainer? _container;
 

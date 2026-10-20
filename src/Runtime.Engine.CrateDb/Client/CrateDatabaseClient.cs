@@ -895,13 +895,27 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     }
 
     /// <summary>
-    /// True for the specific "CrateDB rejected the reset-time ROLLBACK" error
-    /// (<c>XX000</c> / <c>mismatched input 'ROLLBACK'</c>) so only that benign case is swallowed by
-    /// <see cref="DisposeConnectionSafelyAsync"/> — every other failure still surfaces.
+    /// True for the specific "CrateDB rejected the reset-time ROLLBACK" error so only that benign case is
+    /// swallowed by <see cref="DisposeConnectionSafelyAsync"/> — every other failure still surfaces.
+    /// CrateDB 5.x answers it with <c>XX000</c> / <c>mismatched input 'ROLLBACK'</c>; 6.x with the syntax
+    /// error <c>42601</c> / <c>extraneous input 'ROLLBACK'</c>. A <c>42601</c> is only accepted when the
+    /// message names the rejected <c>ROLLBACK</c> token, not for any other syntax error.
     /// </summary>
     private static bool IsBenignCrateResetRollback(PostgresException ex) =>
-        string.Equals(ex.SqlState, "XX000", StringComparison.Ordinal)
-        && ex.MessageText.Contains("ROLLBACK", StringComparison.OrdinalIgnoreCase);
+        IsBenignCrateResetRollback(ex.SqlState, ex.MessageText);
+
+    internal static bool IsBenignCrateResetRollback(string? sqlState, string? messageText)
+    {
+        if (messageText is null)
+        {
+            return false;
+        }
+
+        return (string.Equals(sqlState, "XX000", StringComparison.Ordinal)
+                && messageText.Contains("ROLLBACK", StringComparison.OrdinalIgnoreCase))
+               || (string.Equals(sqlState, PostgresErrorCodes.SyntaxError, StringComparison.Ordinal)
+                   && messageText.Contains("input 'ROLLBACK'", StringComparison.OrdinalIgnoreCase));
+    }
 
     /// <summary>
     /// An <see cref="IAsyncDisposable"/> lease over a CrateDB <see cref="NpgsqlConnection"/> whose
