@@ -26,9 +26,16 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.StagingCopy;
 /// </summary>
 public sealed class CrateStagingCopyFixture : IAsyncLifetime
 {
-    public const string StorageVersion = "6.4.6";
+    /// <summary>
+    ///     The CrateDB image of the fixture; <c>OCTO_TEST_CRATEDB_IMAGE</c> (for example <c>crate:5.10.10</c>) overrides the
+    ///     default so the same tests can run on the 5.x line that is still in production during a rolling upgrade (AB#7149).
+    /// </summary>
+    private static readonly string Image = Environment.GetEnvironmentVariable("OCTO_TEST_CRATEDB_IMAGE") is { Length: > 0 } image
+        ? image
+        : "crate:6.4.6";
 
-    private const string Image = "crate:" + StorageVersion;
+    /// <summary>The version of the image: the tag after the colon.</summary>
+    public static readonly string StorageVersion = Image[(Image.LastIndexOf(':') + 1)..];
 
     private IContainer? _container;
 
