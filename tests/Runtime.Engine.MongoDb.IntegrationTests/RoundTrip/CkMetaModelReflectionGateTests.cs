@@ -92,6 +92,56 @@ public class CkMetaModelReflectionGateTests(CkModelImportMigrationFixture fixtur
     }
 
     /// <summary>
+    ///     AB#7125: every member of a type's indexes (index type, language, per-field weight, attribute paths, and the
+    ///     order of several indexes) comes back from MongoDB. The upgrade guard's installed baseline is built from this
+    ///     read-back; without the indexes every index of an update looked newly added. Dropping or half-mapping an
+    ///     index member fails here (the System model alone carries Ascending indexes only).
+    /// </summary>
+    [Fact]
+    public async Task TypeIndexes_AllMembers_SurviveTheMongoRoundTrip()
+    {
+        var helper = new CkMetaModelRoundTripTests(fixture);
+        await helper.WithThrowawayTenantAsync("rtgateidx", async (tenant, tenantId) =>
+        {
+            var compiled = CkV2KitchenSinkModel.Build(await helper.GetInstalledSystemIdAsync(tenant));
+            var widget = compiled.Types!.Single(t => t.TypeId.Name == "Widget");
+            widget.Indexes =
+            [
+                new CkTypeIndexDto
+                {
+                    IndexType = IndexTypeDto.Text,
+                    Language = "german",
+                    Fields =
+                    [
+                        new CkIndexFieldsDto { Weight = 5, AttributePaths = ["Name"] },
+                        new CkIndexFieldsDto { Weight = 2, AttributePaths = ["Hint"] }
+                    ]
+                },
+                new CkTypeIndexDto
+                {
+                    IndexType = IndexTypeDto.UniqueNotDeleted,
+                    Fields = [new CkIndexFieldsDto { AttributePaths = ["Name", "Mode"] }]
+                },
+                new CkTypeIndexDto
+                {
+                    IndexType = IndexTypeDto.Ascending,
+                    Fields = [new CkIndexFieldsDto { AttributePaths = ["Hint"] }]
+                }
+            ];
+            await tenant.ImportCkModelAsync(compiled);
+
+            var readBack = await helper.LookupAsync(tenantId, compiled.ModelId);
+            var readWidget = readBack!.Types!.Single(t => t.TypeId.Name == "Widget");
+            Assert.Equal(3, readWidget.Indexes?.Count);
+            Assert.Equal("german", readWidget.Indexes![0].Language);
+            Assert.Equal([5, 2], readWidget.Indexes[0].Fields.Select(f => f.Weight));
+            Assert.Equal(IndexTypeDto.UniqueNotDeleted, readWidget.Indexes[1].IndexType);
+            Assert.Equal(["Name", "Mode"], readWidget.Indexes[1].Fields.Single().AttributePaths);
+            await helper.AssertRoundTripAsync(tenantId, compiled);
+        });
+    }
+
+    /// <summary>
     ///     The mutation check of the acceptance criteria, automated: a type DTO with an extra property (a stand-in for
     ///     a new engine DTO member) survives the import — persistence simply ignores what it does not know — and the
     ///     reflection gate reports it on the read-back.
