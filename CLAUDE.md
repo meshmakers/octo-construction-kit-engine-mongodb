@@ -47,6 +47,23 @@ USE_LOCAL_MONGODB=true dotnet test -c DebugL
 }
 ```
 
+### CrateDB image and the 5.x / 6.x compatibility tests (AB#7149)
+
+The CrateDB tests (`StagingCopy/`, `CrateCompat/`) run on `crate:6.4.6`. `OCTO_TEST_CRATEDB_IMAGE` replaces the image, so the same tests
+also run on the 5.x line that stays in production while the clusters are upgraded one after the other:
+
+```bash
+OCTO_TEST_CRATEDB_IMAGE=crate:5.10.10 dotnet tests/Runtime.Engine.MongoDb.IntegrationTests/bin/DebugL/net10.0/Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.dll \
+  -namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.CrateCompat
+```
+
+The `CrateCompat` tests pin what a CrateDB version answers and accepts, and must pass on both lines: the bind parameter types of the
+archive INSERTs per column type (`CrateInsertTypeCompatibilityTests`; 6.4 checks the VALUES types more strictly than 5.x), the error
+texts the classifiers match on (`CrateErrorContractTests`; `IsMissingTableError`, `IsColumnAlreadyExists`, the reset `ROLLBACK`) and
+the format-1 import of array and record columns (`CrateFormatOneImportArrayTests`). A fix for one line must keep the other working.
+CrateDB 6.2 renumbered its HTTP error codes (4100 to 40910, 5030 to 5005); the platform talks to CrateDB over the PostgreSQL wire
+protocol only and does not read them.
+
 ### The integration suite is silent for most of its run — that is not a hang (AB#5436)
 
 At the default `dotnet test` console verbosity **a passing test prints nothing**: only `[FAIL]` and

@@ -2793,7 +2793,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// True when a failed <c>ALTER TABLE … ADD COLUMN</c> is the benign "column already exists" case
     /// (CrateDB has no <c>ADD COLUMN IF NOT EXISTS</c>), so the add path can treat it as idempotent.
     /// </summary>
-    private static bool IsColumnAlreadyExists(Exception ex) =>
+    internal static bool IsColumnAlreadyExists(Exception ex) =>
         ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
         || ex.Message.Contains("already has a column", StringComparison.OrdinalIgnoreCase);
 
