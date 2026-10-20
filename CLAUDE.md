@@ -50,14 +50,14 @@ USE_LOCAL_MONGODB=true dotnet test -c DebugL
 ### CrateDB image and the 5.x / 6.x compatibility tests (AB#7149)
 
 The CrateDB tests (`StagingCopy/`, `CrateCompat/`) run on `crate:6.4.6`. `OCTO_TEST_CRATEDB_IMAGE` replaces the image, so the same tests
-also run on the 5.x line that stays in production while the clusters are upgraded one after the other:
+run on every supported CrateDB line (for example `crate:5.10.10`):
 
 ```bash
 OCTO_TEST_CRATEDB_IMAGE=crate:5.10.10 dotnet tests/Runtime.Engine.MongoDb.IntegrationTests/bin/DebugL/net10.0/Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.dll \
   -namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.CrateCompat
 ```
 
-The `CrateCompat` tests pin what a CrateDB version answers and accepts, and must pass on both lines: the bind parameter types of the
+The `CrateCompat` tests pin what a CrateDB version answers and accepts, and must pass on every supported line: the bind parameter types of the
 archive INSERTs per column type (`CrateInsertTypeCompatibilityTests`; 6.4 checks the VALUES types more strictly than 5.x), the error
 texts the classifiers match on (`CrateErrorContractTests`; `IsMissingTableError`, `IsColumnAlreadyExists`, the reset `ROLLBACK`) and
 the format-1 import of array and record columns (`CrateFormatOneImportArrayTests`). A fix for one line must keep the other working.
