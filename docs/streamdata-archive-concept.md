@@ -823,7 +823,7 @@ No StreamData-specific retention. Events are kept per the platform-wide event re
 | Integration | Concurrency: parallel Activate idempotent; Disable mid-insert; Delete mid-insert. | same |
 | E2E | GraphQL `streamData` query and `SaveStreamDataInArchive` pipeline node against a configured asset-repo service. | `AssetRepositoryServices.IntegrationTests/` |
 
-Existing fixture (`StreamDataFixture`) is the starting point — adapt to the archive model and split per scope. The fixture already uses `crate:5.10.10` Testcontainers; that stays.
+Existing fixture (`StreamDataFixture`) is the starting point — adapt to the archive model and split per scope. The fixture already uses `crate:6.4.6` Testcontainers.
 
 ---
 

@@ -117,7 +117,7 @@ public class StagingCopyIntegrationTests(CrateStagingCopyFixture fixture)
         var ready = await repo.CheckStagingCopyReadinessAsync(Ct);
 
         Assert.True(ready.IsReady);
-        Assert.Equal("5.10.10", ready.StorageVersion);
+        Assert.Equal(CrateStagingCopyFixture.StorageVersion, ready.StorageVersion);
         Assert.Null(ready.Reason);
         try
         {
@@ -147,7 +147,7 @@ public class StagingCopyIntegrationTests(CrateStagingCopyFixture fixture)
         var ready = await factory.CheckStagingCopyReadinessAsync(Ct);
 
         Assert.True(ready.IsReady);
-        Assert.Equal("5.10.10", ready.StorageVersion);
+        Assert.Equal(CrateStagingCopyFixture.StorageVersion, ready.StorageVersion);
         Assert.Null(ready.Reason);
         Assert.Equal(await repo.CheckStagingCopyReadinessAsync(Ct), ready);
         try
@@ -211,7 +211,7 @@ public class StagingCopyIntegrationTests(CrateStagingCopyFixture fixture)
         Assert.Equal("timestamp with time zone", columns["timestamp"]);
         Assert.Contains("rtid", columns.Keys);
         Assert.Contains("cktypeid", columns.Keys);
-        Assert.Equal("5.10.10", version);
+        Assert.Equal(CrateStagingCopyFixture.StorageVersion, version);
         Assert.Empty((await repo.DescribeArchiveTableAsync(archive, ArchiveCopyTable.GenerationMap, Ct)).Columns);
     }
 
