@@ -2,6 +2,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Messages;
 using Meshmakers.Octo.Runtime.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.DataPermissions;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories.Query;
@@ -19,9 +20,10 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests;
 ///     AB#7035 — differential test: the public <see cref="IRtDataPermissionEvaluator" /> must agree with what a
 ///     repository session bound to the same <see cref="RtSecurityContext" /> actually experiences, against real
 ///     MongoDB. Read: the record is returned by the filtered repository iff the evaluator says visible.
-///     Write/Delete: the change set is accepted by the write guard iff the evaluator says allowed (an invisible
-///     record is the evaluator's NotVisible, which the guard — never asked about records the caller cannot name —
-///     does not model). Covers creator-owned (Continent) and owner-attribute-owned (Ticket) types, full and
+///     Write/Delete: the change set is accepted by the write guard iff the evaluator says allowed — for every
+///     record, the invisible ones included: since AB#7126 the guard applies the read visibility first, so the
+///     evaluator's NotVisible ("write but not visible") is refused by the repository as "not found", with the
+///     exception a missing record raises (<see cref="HiddenRecord_IsRefusedExactlyLikeAMissingOne" />). Covers creator-owned (Continent) and owner-attribute-owned (Ticket) types, full and
 ///     owned-only grants, callers without any grant, a read-only and a write-only role, and the system context.
 /// </summary>
 [Collection(DataPermissionCollection.Name)]
@@ -113,7 +115,7 @@ public class DataPermissionEvaluatorDifferentialTests(DataPermissionTestFixture 
                     {
                         Assert.True(visible == verdict.IsAllowed, because);
                     }
-                    else if (visible)
+                    else
                     {
                         var succeeded = await TryChangeAsync(repository, context, target, action);
                         Assert.True(succeeded == verdict.IsAllowed, $"{because}: verdict {verdict}, write {succeeded}");
@@ -203,6 +205,99 @@ public class DataPermissionEvaluatorDifferentialTests(DataPermissionTestFixture 
         }
     }
 
+    [Theory]
+    [InlineData("update")]
+    [InlineData("archive")]
+    [InlineData("erase")]
+    public async Task HiddenRecord_IsRefusedExactlyLikeAMissingOne(string change)
+    {
+        // AB#7126: a record the caller may not see must not be distinguishable from a record that does not
+        // exist - same exception type and same message once the id is normalised. Callers: owned-only read with
+        // a full write grant (writer), a caller without any grant (outsider), a foreign owner (employee).
+        var (repository, targets) = await SeedAsync();
+        fixture.Resolver.Table = BuildTable(auditOnly: false);
+        try
+        {
+            foreach (var (callerName, context) in Callers.Where(c => c.Name is "writer" or "outsider" or "employee2"))
+            {
+                foreach (var target in targets.Where(t => t.CkTypeId == TestCkIds.RtCkContinentTypeId))
+                {
+                    if (await IsVisibleAsync(repository, context, target))
+                    {
+                        continue;
+                    }
+
+                    var hidden = await CaptureChangeExceptionAsync(repository, context, target.CkTypeId,
+                        target.RtId, change);
+                    // The natural path: a caller who may read everything, on an id that does not exist.
+                    var missingId = OctoObjectId.GenerateNewId();
+                    var missing = await CaptureChangeExceptionAsync(repository, Management, target.CkTypeId,
+                        missingId, change);
+                    // The same missing id asked by the restricted caller must not differ from a hidden one either.
+                    var missingForCaller = await CaptureChangeExceptionAsync(repository, context, target.CkTypeId,
+                        missingId, change);
+
+                    var because = $"{callerName} / {change} / {target.Label}";
+                    Assert.NotNull(hidden);
+                    Assert.NotNull(missing);
+                    Assert.NotNull(missingForCaller);
+                    foreach (var other in new[] { missing, missingForCaller })
+                    {
+                        Assert.True(hidden.GetType() == other.GetType(),
+                            $"{because}: {hidden.GetType().Name} vs {other.GetType().Name}");
+                        Assert.Equal(other.Message.Replace(missingId.ToString(), "<id>"),
+                            hidden.Message.Replace(target.RtId.ToString(), "<id>"));
+                    }
+
+                    // the hidden record is untouched
+                    using var system = await repository.GetSessionAsync();
+                    var stored = await repository.GetRtEntityByRtIdAsync(system,
+                        new RtEntityId(target.CkTypeId, target.RtId));
+                    Assert.NotNull(stored);
+                    Assert.NotEqual(RtState.Archived, stored.RtState);
+                }
+            }
+        }
+        finally
+        {
+            fixture.Resolver.Table = RtDataPolicyTable.Empty;
+        }
+    }
+
+    [Fact]
+    public async Task WriteWithoutRead_CanInsert_ButNotUpdateOrDeleteExistingRecords()
+    {
+        // The repro of AB#7126 in its "no read grant at all" variant: role TestBlind holds Write+Delete only.
+        var (repository, targets) = await SeedAsync();
+        var blind = RtSecurityContext.ForUser("user-b", ["TestBlind"]);
+        var continent = new HashSet<string> { TestCkIds.RtCkContinentTypeId.SemanticVersionedFullName };
+        fixture.Resolver.Table = new RtDataPolicyTable(
+        [
+            new RtDataPolicyRule("c.blind", continent, [RtDataAction.Write, RtDataAction.Delete], false, false,
+                new HashSet<string> { "TestBlind" })
+        ]);
+        try
+        {
+            var inserted = await InsertContinentAsync(repository, blind, "inserted-by-blind");
+            foreach (var target in targets.Where(t => t.CkTypeId == TestCkIds.RtCkContinentTypeId))
+            {
+                Assert.False(await TryChangeAsync(repository, blind, target, RtDataAction.Write), target.Label);
+                Assert.False(await TryChangeAsync(repository, blind, target, RtDataAction.Delete), target.Label);
+            }
+
+            var evaluator = fixture.GetService<IRtDataPermissionEvaluator>();
+            var verdict = await evaluator.EvaluateAsync(repository, blind,
+                new RtEntityId(inserted.CkTypeId, inserted.RtId), RtDataAction.Write,
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(RtDataPermissionDecision.NotVisible, verdict.Decision);
+            Assert.False(await TryChangeAsync(repository, blind, inserted, RtDataAction.Write));
+        }
+        finally
+        {
+            fixture.Resolver.Table = RtDataPolicyTable.Empty;
+        }
+    }
+
     private static async Task<bool> IsVisibleAsync(ITenantRepository repository, RtSecurityContext? context,
         Target target)
     {
@@ -234,9 +329,34 @@ public class DataPermissionEvaluatorDifferentialTests(DataPermissionTestFixture 
             await session.CommitTransactionAsync();
             return true;
         }
-        catch (RuntimeRepositoryException)
+        catch (Exception e) when (e is RuntimeRepositoryException or EntityNotFoundException)
         {
             return false;
+        }
+    }
+
+    private static async Task<Exception?> CaptureChangeExceptionAsync(ITenantRepository repository,
+        RtSecurityContext? context, RtCkId<CkTypeId> ckTypeId, OctoObjectId rtId, string change)
+    {
+        using var session = context == null
+            ? await repository.GetSessionAsync()
+            : await repository.GetSessionAsync(context);
+        session.StartTransaction();
+        var id = new RtEntityId(ckTypeId, rtId);
+        IEntityUpdateInfo<RtEntity> update = change == "update"
+            ? EntityUpdateInfo<RtEntity>.CreateUpdate(id, new RtEntity(ckTypeId, rtId,
+                new Dictionary<string, object?> { { "Name", $"changed-{Guid.NewGuid():N}" } }))
+            : EntityUpdateInfo<RtEntity>.CreateDelete(id);
+        try
+        {
+            await repository.ApplyChangesAsync(session, [update],
+                change == "erase" ? DeleteOptions.Erase : DeleteOptions.Default, new OperationResult());
+            await session.CommitTransactionAsync();
+            return null;
+        }
+        catch (Exception e)
+        {
+            return e;
         }
     }
 
