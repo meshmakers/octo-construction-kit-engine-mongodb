@@ -1483,6 +1483,16 @@ Consumers in this layer:
   using `Test/Ticket` (`ownerAttributePath: AssigneeId`), `Test/EscalationTicket` and the
   record-path case `Test/ReviewTask` (`ownerAttributePath: Owner.UserId`).
 
+### Public data-permission check agrees with the repository (AB#7035)
+
+The engine exposes `IRtDataPermissionEvaluator` (see the engine CLAUDE.md, "Data permissions: one rule set, one
+public check"). `DataPermissionEvaluatorDifferentialTests` pins, against real MongoDB, that its verdict equals
+what a session bound to the same `RtSecurityContext` experiences: a record the filtered repository returns is
+exactly the one the evaluator calls visible (`NotVisible` = not found), and a change set the write guard accepts
+is exactly the one the evaluator allows (creator-owned `Test/Continent`, owner-attribute-owned `Test/Ticket`,
+full / owned-only / read-only / write-only grants, AuditOnly, system context, type-level vs insert). A new
+data-permission rule in the read filter or the guard must keep that test green.
+
 ### Deep graph honours the caller's data permissions (AB#6734)
 
 Both `ITenantRepository.GetRtDeepGraphAsync` overloads (ParentChild traversal and the directed
