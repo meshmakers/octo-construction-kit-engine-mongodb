@@ -51,6 +51,19 @@ internal class TenantRepository(
     /// </summary>
     internal IMongoDbRepositoryDataSource DataSource => mongoDbRepositoryDataSource;
 
+    /// <summary>
+    ///     AB#7126: the write guard refuses a change of an entity the caller may not see with exactly the exception
+    ///     the write path raises for a missing entity (see <c>MongoDbDataSourceCollection</c>, exception helpers):
+    ///     an update, replace or archive reports the missing id, an erase the id filter that matched nothing.
+    /// </summary>
+    protected override Exception CreateEntityNotFoundException(RtCkId<CkTypeId> ckTypeId, OctoObjectId rtId,
+        RtDataAction action, DeleteStrategies deleteStrategy)
+    {
+        return action == RtDataAction.Delete && deleteStrategy != DeleteStrategies.Archive
+            ? EntityNotFoundException.FilterNotMatching<RtEntity>(rtId.ToString())
+            : EntityNotFoundException.IdNotFound(nameof(RtEntity), rtId.ToString());
+    }
+
     #region Transaction Handling
 
     protected override async Task RefreshCkCacheServiceAsync(ICkCacheService ckCacheService)

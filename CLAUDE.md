@@ -1506,6 +1506,14 @@ is exactly the one the evaluator allows (creator-owned `Test/Continent`, owner-a
 full / owned-only / read-only / write-only grants, AuditOnly, system context, type-level vs insert). A new
 data-permission rule in the read filter or the guard must keep that test green.
 
+Since AB#7126 the write guard applies the read visibility first, so the "write but not visible" cell is refused too
+(the evaluator says `NotVisible`, the repository raises "not found"): the differential test compares every record for
+Write and Delete, `HiddenRecord_IsRefusedExactlyLikeAMissingOne` pins that a hidden record raises the very exception
+(type and message) of a missing one for update, archive and erase, and `WriteWithoutRead_CanInsert_ButNotUpdateOrDeleteExistingRecords`
+pins the compatibility change. `TenantRepository.CreateEntityNotFoundException` (override of the engine hook) must mirror
+the "not found" exception of `MongoDbDataSourceCollection` (update/replace/archive: `IdNotFound`, erase:
+`FilterNotMatching`). Needs the engine package that contains the guard change (engine PR of AB#7126).
+
 ### Deep graph honours the caller's data permissions (AB#6734)
 
 Both `ITenantRepository.GetRtDeepGraphAsync` overloads (ParentChild traversal and the directed
