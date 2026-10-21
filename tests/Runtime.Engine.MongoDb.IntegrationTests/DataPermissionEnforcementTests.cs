@@ -1,3 +1,4 @@
+using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
@@ -150,8 +151,8 @@ public class DataPermissionEnforcementTests(DataPermissionTestFixture fixture)
             // Own entity: update succeeds.
             await UpdateNameAsync(repository, Employee1, emp1A, "Updated-Own");
 
-            // Foreign entity: rejected atomically.
-            await Assert.ThrowsAsync<RuntimeRepositoryException>(() =>
+            // Foreign entity: owned-only read hides it, so it is refused as not found (AB#7126), atomically.
+            await Assert.ThrowsAsync<EntityNotFoundException>(() =>
                 UpdateNameAsync(repository, Employee1, emp2C, "Should-Not-Apply"));
 
             // Management may update anything.
@@ -403,9 +404,9 @@ public class DataPermissionEnforcementTests(DataPermissionTestFixture fixture)
             // Writes: the assignee may update; the creator (Employee2) may NOT update a ticket
             // that is assigned to someone else; nobody owns the unassigned ticket.
             await UpdateTicketNameAsync(repository, Employee1, assignedTo1, "Updated-By-Assignee");
-            await Assert.ThrowsAsync<RuntimeRepositoryException>(() =>
+            await Assert.ThrowsAsync<EntityNotFoundException>(() =>
                 UpdateTicketNameAsync(repository, Employee2, assignedTo1, "Creator-Must-Not-Win"));
-            await Assert.ThrowsAsync<RuntimeRepositoryException>(() =>
+            await Assert.ThrowsAsync<EntityNotFoundException>(() =>
                 UpdateTicketNameAsync(repository, Employee1, unassigned, "Nobody-Owns-This"));
 
             // System bypasses as always.
@@ -454,9 +455,9 @@ public class DataPermissionEnforcementTests(DataPermissionTestFixture fixture)
             }
 
             await UpdateReviewTaskNameAsync(repository, Employee1, ownedBy1, "Updated-By-Owner");
-            await Assert.ThrowsAsync<RuntimeRepositoryException>(() =>
+            await Assert.ThrowsAsync<EntityNotFoundException>(() =>
                 UpdateReviewTaskNameAsync(repository, Employee1, ownedBy2, "Foreign-Owner"));
-            await Assert.ThrowsAsync<RuntimeRepositoryException>(() =>
+            await Assert.ThrowsAsync<EntityNotFoundException>(() =>
                 UpdateReviewTaskNameAsync(repository, Employee1, ownerless, "Nobody-Owns-This"));
         }
         finally
