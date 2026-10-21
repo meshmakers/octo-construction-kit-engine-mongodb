@@ -19,11 +19,13 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
 {
     private readonly IGridFSBucket _bucket;
+    private readonly IGridFSBucket _primaryBucket;
 
     public MongoLinkedBinaryDataSource(IRepositoryClient repositoryClient, string databaseName)
     {
         var repository = (IRepositoryInternal)repositoryClient.GetRepository(databaseName);
         _bucket = repository.GetGridFsBucket();
+        _primaryBucket = repository.GetPrimaryGridFsBucket();
     }
 
     public override async Task DeleteAllFileSystemBinariesAsync(IOctoSession session, RtEntityId rtEntityId,
@@ -73,15 +75,26 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
         OctoObjectId largeBinaryId,
         CancellationToken cancellationToken = new())
     {
+        var id = largeBinaryId.ToObjectId();
         try
         {
-            var gridFsDownloadStream =
-                await _bucket.OpenDownloadStreamAsync(largeBinaryId.ToObjectId(), cancellationToken: cancellationToken);
-            return new DownloadStreamHandler(gridFsDownloadStream);
+            return new DownloadStreamHandler(
+                await _bucket.OpenDownloadStreamAsync(id, cancellationToken: cancellationToken));
         }
-        catch (GridFSFileNotFoundException e)
+        catch (GridFSFileNotFoundException)
         {
-            throw EntityNotFoundException.IdNotFound(nameof(IDownloadStreamHandler), largeBinaryId.ToString(), e);
+            // AB#7256: the default bucket reads from a secondary, which can lag behind a write that another process
+            // (e.g. the asset repository caching a CK model for an import job) has just made. Ask the primary before
+            // reporting the file as missing; the primary is only hit on a miss, so regular reads stay on secondaries.
+            try
+            {
+                return new DownloadStreamHandler(
+                    await _primaryBucket.OpenDownloadStreamAsync(id, cancellationToken: cancellationToken));
+            }
+            catch (GridFSFileNotFoundException e)
+            {
+                throw EntityNotFoundException.IdNotFound(nameof(IDownloadStreamHandler), largeBinaryId.ToString(), e);
+            }
         }
     }
 
@@ -101,6 +114,13 @@ public class MongoLinkedBinaryDataSource : LinkedBinaryDataSource
         filter &= Builders<GridFSFileInfo>.Filter.Eq("Metadata." + Constants.BinaryType, (int)BinaryType.Temporary);
         var asyncCursor = await _bucket.FindAsync(filter, cancellationToken: cancellationToken);
         var gridFsFileInfo = await asyncCursor.FirstOrDefaultAsync(cancellationToken);
+        if (gridFsFileInfo == null)
+        {
+            // AB#7256: a cache file written moments ago may not have reached the secondary yet; ask the primary.
+            asyncCursor = await _primaryBucket.FindAsync(filter, cancellationToken: cancellationToken);
+            gridFsFileInfo = await asyncCursor.FirstOrDefaultAsync(cancellationToken);
+        }
+
         return gridFsFileInfo == null ? null : new BinaryInfo(gridFsFileInfo);
     }
 

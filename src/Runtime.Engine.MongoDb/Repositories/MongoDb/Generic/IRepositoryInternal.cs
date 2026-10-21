@@ -9,7 +9,17 @@ internal interface IRepositoryInternal : IRepository
         where TKey : notnull
         where TDocument : class, new();
 
+    /// <summary>
+    ///     GridFS bucket that reads from a secondary when one is available (SecondaryPreferred). A secondary may lag
+    ///     behind a write that was acknowledged by a majority.
+    /// </summary>
     IGridFSBucket GetGridFsBucket();
+
+    /// <summary>
+    ///     GridFS bucket that always reads from the primary (AB#7256). Use it when a file that was just written by
+    ///     another process must be found (read-your-writes), e.g. a cache stream consumed by a background job.
+    /// </summary>
+    IGridFSBucket GetPrimaryGridFsBucket();
 
     /// <summary>
     /// Lists all collection names in the database that match the given prefix.
