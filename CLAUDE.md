@@ -735,6 +735,19 @@ Implementation in `SingleOriginRtQuery.CreateAssociationCountNavigation`:
 - Triggered when `NavigationPair.AssociationCountFilter` is set
 - Runs pre-pagination in `_associationStageDefinitions`, then enriches post-pagination via `CreateInnerNavigation`
 
+## GridFS read preference and read-your-writes (AB#7256)
+
+`MongoRepository.GetGridFsBucket()` reads with `SecondaryPreferred`, writes with `w:majority`. A secondary can lag behind
+a write that was acknowledged by a majority, so a consumer that reads a file right after another process wrote it (the
+asset repository caches a CK model, `octo-bot-services` imports it in the same second) may get
+`GridFSFileNotFoundException`. `GetPrimaryGridFsBucket()` (`IRepositoryInternal`) reads from the primary.
+`MongoLinkedBinaryDataSource` asks the primary **only on a miss**: `DownloadBinaryAsync` (by id) and
+`GetTemporaryBinaryAsync` (cache file by name). Regular reads keep using secondaries; only a miss costs a primary read.
+A file that is missing on the primary too still throws `EntityNotFoundException` (`IDownloadStreamHandler`).
+`GetGridFsBucket()` itself is unchanged (the orphan sweeper and the other binary operations keep using it).
+Tests: `MongoLinkedBinaryDataSourceReadYourWritesTests` (unit), `TemporaryBinaryTests.Cache_UploadThenImmediateDownload_FindsTheFile`
+(integration, replica set).
+
 ## Re-importing an archived entity (AB#7018)
 
 The default delete (GraphQL `deleteEntities`, `DeleteOptions` default) is `DeleteStrategies.Archive`: the document

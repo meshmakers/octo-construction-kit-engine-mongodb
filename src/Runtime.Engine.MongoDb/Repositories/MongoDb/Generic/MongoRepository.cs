@@ -111,10 +111,20 @@ public class MongoRepository(ILoggerFactory loggerFactory, IMongoDatabase mongoD
 
     public IGridFSBucket GetGridFsBucket()
     {
+        return CreateGridFsBucket(ReadPreference.SecondaryPreferred);
+    }
+
+    public IGridFSBucket GetPrimaryGridFsBucket()
+    {
+        return CreateGridFsBucket(ReadPreference.Primary);
+    }
+
+    private GridFSBucket CreateGridFsBucket(ReadPreference readPreference)
+    {
         return new GridFSBucket(mongoDatabase, new GridFSBucketOptions
         {
             WriteConcern = WriteConcern.WMajority,
-            ReadPreference = ReadPreference.SecondaryPreferred
+            ReadPreference = readPreference
         });
     }
 
