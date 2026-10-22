@@ -70,7 +70,10 @@ internal sealed class StagingCopyRunner(
     /// <summary>
     /// Size factor of the disk check: the expected size of a loaded table is its staged gzip size times this number (per copy
     /// of the data, before the segment merge). Measured with the 119 million row raw archive of the sbeg tenant: 10.5 times right
-    /// after the load (AB#7274); the cause of the size of a restored table is under investigation, the constant is the one place to change.
+    /// after the load and about 9 times after the bounded merge (27.5 GiB from 3.1 GiB of staged files, AB#7274). The factor follows from
+    /// the CrateDB version: segments written by CrateDB 6.4 (Lucene 10) take about 200 bytes per row of this table, two to three times
+    /// what CrateDB 5 (Lucene 9) segments took for the same rows; <c>codec = 'best_compression'</c> and <c>INDEX OFF</c> save less than
+    /// 10 %. Re-measure the factor after a CrateDB upgrade; the constant is the one place to change.
     /// </summary>
     internal const int DiskSpaceFactor = 12;
 
