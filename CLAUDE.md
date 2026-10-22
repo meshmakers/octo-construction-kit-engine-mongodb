@@ -1373,9 +1373,7 @@ The full text is `docs/streamdata-archive-concept.md` §18a and, for the sweep, 
   `bulk_size` (5000, 2500) of the attempt before; after a repeat the slice's range is counted and must equal the manifest. Policy constants
   stay in the runner. The disk check (`StagingDiskHeadroomCheck`) works against the room **below the high disk watermark**, with the replicas the
   table gets back (`min(1 + replicas, nodes)` copies) and `DiskSpaceFactor` 12; it runs per archive and, through
-  `IStreamDataRepositoryFactory.CheckStagingDiskHeadroomAsync`, for the whole backup before the MongoDB restore. A restored table takes 2 to 4
-  times the bytes per row of a source that was written meter by meter - the cause is the physical row order, see the engine concept
-  "Size of a restored table". Details: `docs/streamdata-archive-concept.md` §18a.
+  `IStreamDataRepositoryFactory.CheckStagingDiskHeadroomAsync`, for the whole backup before the MongoDB restore. Details: `docs/streamdata-archive-concept.md` §18a.
 - **Sweep grace period** (`StreamData:Recompute:SweepGracePeriod`, default 2 h, 0 = at once): a recompute no longer sweeps
   or removes contained pointer entries at the flip; it writes a row into `archive_<rtId>__sweep`
   (`PendingSweepSqlBuilder`, every column explicit - AB#6647) and `SweepDueAsync` executes the due ones (at the start of a

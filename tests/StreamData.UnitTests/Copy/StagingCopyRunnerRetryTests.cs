@@ -231,6 +231,35 @@ public class StagingCopyRunnerRetryTests
         Assert.Contains("max_num_segments = 3", Assert.Single(_crate.Executed, s => s.StartsWith("OPTIMIZE", StringComparison.Ordinal)));
     }
 
+    [Fact]
+    public async Task AFailedMerge_AndANodeThatNeedsAMomentToComeBack_DoNotFailAnArchiveWhoseRowsAreComplete()
+    {
+        var plan = await Dumped(SourceTarget);
+        var refreshesAfterMerge = 0;
+        var merged = false;
+        _crate.Fault = statement =>
+        {
+            var sql = statement.Reveal();
+            if (sql.StartsWith("OPTIMIZE", StringComparison.Ordinal))
+            {
+                merged = true;
+                throw new StreamDataCopyStatementException(statement.Redacted, null, "Exception while reading from stream");
+            }
+
+            if (merged && sql.StartsWith("REFRESH", StringComparison.Ordinal) && ++refreshesAfterMerge <= 2)
+            {
+                throw new StreamDataCopyStatementException(statement.Redacted, null, "Exception while reading from stream");
+            }
+        };
+
+        var results = await Collect(Runner().CopyFromAsync(RestoreTarget, plan, Location, Small, Ct));
+
+        Assert.All(results, r => Assert.True(r.IsSuccess, r.Message));
+        Assert.Equal(_crate.SourceRows.Order(), _crate.TargetRows.Order());
+        Assert.Equal([TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60)], _time.Delays);
+        Assert.Contains(_log.Lines, l => l.Contains("The segment merge of archive", StringComparison.Ordinal));
+    }
+
     // ---- not retried ------------------------------------------------------------------------------------------
 
     [Theory]

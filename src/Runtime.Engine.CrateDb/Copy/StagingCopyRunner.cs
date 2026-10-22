@@ -68,10 +68,9 @@ internal sealed class StagingCopyRunner(
     private readonly TimeProvider timeProvider = timeProvider ?? TimeProvider.System;
 
     /// <summary>
-    /// A loaded table takes up to twelve times its gzip size right after the load (before the segment merge, per copy of the
-    /// data) and about nine and a half times after the merge: measured with the 119 million row raw archive of the sbeg
-    /// tenant, whose rows are clustered by meter in the source while the load follows time slices (AB#7274, concept §7). A table
-    /// that was written in arrival order needs less. The source table itself takes about four times its gzip size.
+    /// Size factor of the disk check: the expected size of a loaded table is its staged gzip size times this number (per copy
+    /// of the data, before the segment merge). Measured with the 119 million row raw archive of the sbeg tenant: 10.5 times right
+    /// after the load (AB#7274); the cause of the size of a restored table is under investigation, the constant is the one place to change.
     /// </summary>
     internal const int DiskSpaceFactor = 12;
 
@@ -559,6 +558,29 @@ internal sealed class StagingCopyRunner(
         }
     }
 
+    /// <summary>
+    /// Runs <paramref name="action"/> and, when it fails because the storage is not answering (a node that restarted after the merge
+    /// ran it out of memory, a dropped connection), tries again after the retry backoffs. The rows of the archive are in the table by now;
+    /// a refresh or a count that cannot reach it must not fail the archive for as long as the node needs to come back.
+    /// </summary>
+    private async Task<T> RetryWhileStorageRecoversAsync<T>(
+        ArchiveCopyTarget target, string what, Func<Task<T>> action, CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await action();
+            }
+            catch (Exception ex) when (IsStatementFailure(ex) && attempt <= RetryBackoff.Length)
+            {
+                logger.LogWarning("Archive {ArchiveRtId}: the {What} failed, trying again in {Delay}: {Reason}",
+                    target.ArchiveRtId, what, RetryBackoff[attempt - 1], ex.Message);
+                await Task.Delay(RetryBackoff[attempt - 1], timeProvider, cancellationToken);
+            }
+        }
+    }
+
     /// <summary>Segments per shard the merge after a load aims at: one per <paramref name="maxDocsPerSegment"/> rows of a shard, at least one.</summary>
     internal static int SegmentsPerShard(long rows, int shards, long maxDocsPerSegment)
     {
@@ -640,15 +662,18 @@ internal sealed class StagingCopyRunner(
             }
             catch (Exception ex) when (IsStatementFailure(ex))
             {
-                // The merge only saves space and read time; the data is complete without it.
+                // The merge only saves space and read time; the data is complete without it. A merge that runs a node out of
+                // memory takes the node down (AB#7274): the statements below wait for it to come back.
                 logger.LogWarning("The segment merge of archive {ArchiveRtId} failed: {Reason}", target.ArchiveRtId, ex.Message);
             }
 
-            await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain($"REFRESH TABLE {target.QualifiedTable}"),
-                options.CommandTimeout, cancellationToken);
+            await RetryWhileStorageRecoversAsync(target, "refresh after the merge", () => client.ExecuteStatementAsync(
+                tenantId, CopyStatement.Plain($"REFRESH TABLE {target.QualifiedTable}"), options.CommandTimeout, cancellationToken),
+                cancellationToken);
         }
 
-        var rows = await CountAsync($"SELECT COUNT(*) FROM {target.QualifiedTable}", options, cancellationToken);
+        var rows = await RetryWhileStorageRecoversAsync(target, "row count", () =>
+            CountAsync($"SELECT COUNT(*) FROM {target.QualifiedTable}", options, cancellationToken), cancellationToken);
         var expected = plan.Slices.Where(s => s.Table == ArchiveCopyTable.Data).Sum(s => s.RowCount);
         if (rows != expected)
         {
