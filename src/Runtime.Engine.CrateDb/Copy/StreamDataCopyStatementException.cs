@@ -19,7 +19,14 @@ public sealed class StreamDataCopyStatementException : Exception
     {
         Statement = redactedStatement;
         SqlState = sqlState;
+        Reason = scrubbedReason;
     }
+
+    /// <summary>
+    /// CrateDB's reason for the failure, scrubbed, without the statement. Decisions about the failure read this, never
+    /// <see cref="Exception.Message"/>: the message also carries the statement, whose paths and names may contain any word.
+    /// </summary>
+    public string Reason { get; }
 
     /// <summary>The statement with the credential removed.</summary>
     public string Statement { get; }

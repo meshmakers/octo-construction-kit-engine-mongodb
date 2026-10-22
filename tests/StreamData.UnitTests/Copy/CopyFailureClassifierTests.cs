@@ -39,6 +39,19 @@ public class CopyFailureClassifierTests
     }
 
     [Fact]
+    public void OnlyTheReasonIsClassified_NotTheStatementInTheMessage()
+    {
+        // The statement (and so the message) names a staging path with "breaker" in it; the reason is an access error.
+        var failure = new StreamDataCopyStatementException(
+            "COPY t FROM 's3://***@minio/breaker-tests/run1/*' WITH (compression = 'gzip') RETURN SUMMARY", "XX000",
+            "AccessDenied: invalid credentials");
+
+        Assert.Contains("breaker", failure.Message, StringComparison.Ordinal);
+        Assert.Equal(LoadVerdict.Permanent, CopyFailureClassifier.ClassifyFailure(failure));
+        Assert.False(CopyFailureClassifier.IsTransientText("Cannot read file breaker/part-0.json.gz"));
+    }
+
+    [Fact]
     public void ATimeout_IsTransient_AnythingElseIsNot()
     {
         Assert.Equal(LoadVerdict.Transient, CopyFailureClassifier.ClassifyFailure(

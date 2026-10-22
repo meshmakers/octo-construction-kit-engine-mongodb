@@ -392,6 +392,9 @@ internal sealed class StagingCopyRunner(
         throw new InvalidOperationException("Unreachable: the attempt loop returns."); // for the compiler
     }
 
+    private static bool LocationSetsBulkSize(ArchiveCopyStagingLocation location)
+        => location.RedactedOptions.Keys.Any(k => string.Equals(k, "bulk_size", StringComparison.OrdinalIgnoreCase));
+
     private async Task<(ArchiveCopySliceResult Result, LoadVerdict Verdict)> LoadSliceOnceAsync(
         ArchiveCopyTarget target, ArchiveCopySlice slice, ArchiveCopyStagingLocation sliceLocation,
         ArchiveCopyOptions options, int attempt, CancellationToken cancellationToken)
@@ -400,7 +403,8 @@ internal sealed class StagingCopyRunner(
             slice.Table == ArchiveCopyTable.GenerationMap ? target.QualifiedGenerationMap : target.QualifiedTable,
             sliceLocation,
             overwriteDuplicates: attempt > 1 || options.OverwriteDuplicates,
-            bulkSize: attempt > 1 ? DefaultBulkSize >> (attempt - 1) : null);
+            // A location that sets its own bulk_size keeps it on every attempt: the statement may not set it a second time.
+            bulkSize: attempt > 1 && !LocationSetsBulkSize(sliceLocation) ? DefaultBulkSize >> (attempt - 1) : null);
 
         var started = Stopwatch.GetTimestamp();
         try

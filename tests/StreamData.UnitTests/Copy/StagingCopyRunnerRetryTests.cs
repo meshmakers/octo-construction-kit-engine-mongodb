@@ -189,6 +189,27 @@ public class StagingCopyRunnerRetryTests
     }
 
     [Fact]
+    public async Task ALocationThatSetsItsOwnBulkSize_IsRepeatedWithIt_TheStatementDoesNotSetASecondOne()
+    {
+        // Review of AB#7274: the halved bulk_size of a repeat collided with a location option and threw an ArgumentException
+        // out of the load instead of repeating the slice.
+        var plan = await Dumped(SourceTarget);
+        var location = new ArchiveCopyStagingLocation(
+            $"s3://CANARYKEYID1234:{CanarySecret}@minio.octo-infra:9000/octo-artifacts/copy-staging/t1/run1",
+            new Dictionary<string, string> { ["protocol"] = "http", ["bulk_size"] = "1000" });
+        FailDataLoads(1, Breaker);
+
+        var results = await Collect(Runner().CopyFromAsync(RestoreTarget, plan, location, Small, Ct));
+
+        Assert.All(results, r => Assert.True(r.IsSuccess));
+        var loads = DataLoads();
+        Assert.Equal(plan.Slices.Count + 1, loads.Count);
+        Assert.Contains("overwrite_duplicates = true", loads[1]);
+        Assert.All(loads, l => Assert.Single(System.Text.RegularExpressions.Regex.Matches(l, "bulk_size = ")));
+        Assert.All(loads, l => Assert.Contains("bulk_size = 1000", l));
+    }
+
+    [Fact]
     public async Task SecondAttemptFailsToo_ThirdAttemptUsesAQuarterOfTheBatch_AfterTheLongerBackoff()
     {
         var plan = await Dumped(SourceTarget);

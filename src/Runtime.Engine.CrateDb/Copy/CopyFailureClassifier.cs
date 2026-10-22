@@ -29,7 +29,8 @@ internal static class CopyFailureClassifier
 {
     private static readonly string[] TransientMarkers =
     [
-        "CircuitBreakingException", "circuit_breaking_exception", "breaker",
+        // Anchored phrases of the breaker texts, never the bare word: a reason can quote a path or a name.
+        "CircuitBreakingException", "circuit_breaking_exception", "breaker would use", "configured breaker",
         "EsRejectedExecutionException", "rejected execution",
         "NoShardAvailableActionException", "UnavailableShardsException", "no shard available",
         "shard not available", "shards not available", "NodeNotConnectedException", "node not connected",
@@ -44,7 +45,8 @@ internal static class CopyFailureClassifier
     public static LoadVerdict ClassifyFailure(Exception failure) => failure switch
     {
         StreamDataStatementTimeoutException => LoadVerdict.Transient,
-        StreamDataCopyStatementException => IsTransientText(failure.Message) ? LoadVerdict.Transient : LoadVerdict.Permanent,
+        // The reason only: the message also holds the statement, whose staging path or table name may contain a marker.
+        StreamDataCopyStatementException copy => IsTransientText(copy.Reason) ? LoadVerdict.Transient : LoadVerdict.Permanent,
         _ => LoadVerdict.Permanent
     };
 
