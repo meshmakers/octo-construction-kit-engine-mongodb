@@ -60,6 +60,15 @@ internal sealed class SimulatedCrate : ICrateCopyClient
     /// <summary>Every statement as it may be shown.</summary>
     public List<string> Shown { get; } = [];
 
+    /// <summary>
+    /// What the next <c>COPY FROM</c> statements report, in order: only the first <c>Rows</c> rows of the slice are
+    /// loaded and the summary says <c>Errors</c> rejected rows with <c>ErrorText</c> (the way a refused shard request shows).
+    /// </summary>
+    public Queue<(int Rows, int Errors, string? ErrorText)> LoadScript { get; } = new();
+
+    /// <summary>How often the heap of the nodes was read.</summary>
+    public int HeapReads { get; private set; }
+
     /// <summary>The table settings now and the history of changes, as <c>replicas/refresh</c>.</summary>
     public string Replicas { get; set; } = "0-1";
 
@@ -132,14 +141,17 @@ internal sealed class SimulatedCrate : ICrateCopyClient
                 return new CrateStatementResult(0, [Summary(0, 0)]);
             }
 
+            var script = LoadScript.TryDequeue(out var s) ? s : ((int Rows, int Errors, string? ErrorText)?)null;
             var loaded = 0;
-            foreach (var row in rows.Where(row => !TargetMap.Contains(row)))
+            foreach (var row in rows.Where(row => !TargetMap.Contains(row)).Take(script?.Rows ?? int.MaxValue))
             {
                 TargetMap.Add(row);
                 loaded++;
             }
 
-            return new CrateStatementResult(0, [Summary(loaded, 0)]);
+            return script is { } sc
+                ? new CrateStatementResult(0, [Summary(sc.Rows, sc.Errors, sc.ErrorText)])
+                : new CrateStatementResult(0, [Summary(loaded, 0)]);
         }
 
         return CrateStatementResult.Empty; // REFRESH TABLE
@@ -196,6 +208,17 @@ internal sealed class SimulatedCrate : ICrateCopyClient
             }
 
             var overwrite = sql.Contains("overwrite_duplicates = true", StringComparison.Ordinal);
+            var script = LoadScript.TryDequeue(out var s) ? s : ((int Rows, int Errors, string? ErrorText)?)null;
+            if (script is { } sc)
+            {
+                foreach (var row in rows.Take(sc.Rows).Where(row => !TargetRows.Contains(row)))
+                {
+                    TargetRows.Add(row);
+                }
+
+                return new CrateStatementResult(0, [Summary(sc.Rows, sc.Errors, sc.ErrorText)]);
+            }
+
             var errors = 0;
             foreach (var row in rows)
             {
@@ -226,6 +249,12 @@ internal sealed class SimulatedCrate : ICrateCopyClient
             return CrateStatementResult.Empty;
         }
 
+        if (sql.Contains("heap['used']", StringComparison.Ordinal))
+        {
+            HeapReads++;
+            return Row(("name", "node0"), ("heap_used", 900L << 20), ("heap_max", 1024L << 20));
+        }
+
         if (sql.Contains("sys.nodes", StringComparison.Ordinal) && sql.Contains("available", StringComparison.Ordinal))
         {
             return new CrateStatementResult(0, NodeDiskAvailable
@@ -245,13 +274,14 @@ internal sealed class SimulatedCrate : ICrateCopyClient
 
     private long Count(string sql)
     {
+        var isTarget = sql.Contains(TargetTable, StringComparison.Ordinal);
         if (!sql.Contains(" WHERE ", StringComparison.Ordinal))
         {
-            return sql.Contains(TargetTable, StringComparison.Ordinal) ? TargetRows.Count : SourceRows.Count;
+            return isTarget ? TargetRows.Count : SourceRows.Count;
         }
 
         var (from, to) = Bounds(sql);
-        return SourceRows.Count(r => r >= from && r < to);
+        return (isTarget ? TargetRows : SourceRows).Count(r => r >= from && r < to);
     }
 
     private static (DateTime From, DateTime To) Bounds(string sql)
@@ -265,10 +295,12 @@ internal sealed class SimulatedCrate : ICrateCopyClient
 
     private static string Unquote(string value) => value.Replace("''", "'", StringComparison.Ordinal);
 
-    private static IReadOnlyDictionary<string, object?> Summary(long success, long errors) => new Dictionary<string, object?>
-    {
-        ["success_count"] = success, ["error_count"] = errors, ["errors"] = errors == 0 ? null : "{\"parse error\": {\"count\": " + errors + "}}"
-    };
+    private static IReadOnlyDictionary<string, object?> Summary(long success, long errors, string? errorText = null)
+        => new Dictionary<string, object?>
+        {
+            ["success_count"] = success, ["error_count"] = errors,
+            ["errors"] = errors == 0 ? null : errorText ?? "{\"parse error\": {\"count\": " + errors + "}}"
+        };
 
     private static CrateStatementResult Row(params (string Column, object? Value)[] cells)
         => new(0, [cells.ToDictionary(c => c.Column, c => c.Value)]);

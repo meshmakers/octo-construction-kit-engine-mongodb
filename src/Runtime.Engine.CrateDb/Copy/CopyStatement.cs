@@ -111,10 +111,11 @@ internal sealed class CopyStatement
 
     /// <summary>
     /// <c>COPY &lt;table&gt; FROM '&lt;location&gt;/*' WITH (compression = 'gzip', …) RETURN SUMMARY</c> — loads
-    /// every file of a slice folder. The summary has one row per file and node.
+    /// every file of a slice folder. The summary has one row per file and node. A <paramref name="bulkSize"/>
+    /// makes the statement own <c>bulk_size</c> (a retry loads in smaller batches); <c>null</c> leaves CrateDB's default.
     /// </summary>
     public static CopyStatement CopyFrom(
-        string qualifiedTable, ArchiveCopyStagingLocation sliceLocation, bool overwriteDuplicates)
+        string qualifiedTable, ArchiveCopyStagingLocation sliceLocation, bool overwriteDuplicates, int? bulkSize = null)
     {
         string Render(bool redacted)
         {
@@ -122,7 +123,7 @@ internal sealed class CopyStatement
             var sb = new StringBuilder();
             sb.Append("COPY ").Append(qualifiedTable)
                 .Append(" FROM ").Append(Literal(uri))
-                .Append(" WITH (").Append(Options(sliceLocation, redacted, overwriteDuplicates)).Append(')')
+                .Append(" WITH (").Append(Options(sliceLocation, redacted, overwriteDuplicates, bulkSize)).Append(')')
                 .Append(" RETURN SUMMARY");
             return sb.ToString();
         }
@@ -130,12 +131,18 @@ internal sealed class CopyStatement
         return new CopyStatement(Render(false), Render(true), returnsRows: true, sliceLocation.Scrub);
     }
 
-    private static string Options(ArchiveCopyStagingLocation location, bool redacted, bool? overwriteDuplicates)
+    private static string Options(
+        ArchiveCopyStagingLocation location, bool redacted, bool? overwriteDuplicates, int? bulkSize = null)
     {
         var parts = new List<string> { "compression = 'gzip'" };
         if (overwriteDuplicates is { } overwrite)
         {
             parts.Add("overwrite_duplicates = " + (overwrite ? "true" : "false"));
+        }
+
+        if (bulkSize is { } size)
+        {
+            parts.Add("bulk_size = " + size.ToString(CultureInfo.InvariantCulture));
         }
 
         var options = redacted ? location.RedactedOptions : location.RevealOptions();
@@ -148,7 +155,7 @@ internal sealed class CopyStatement
                 throw new ArgumentException($"'{name}' is not a usable COPY option name.", nameof(location));
             }
 
-            if (StatementOwnedOptions.Contains(key))
+            if (StatementOwnedOptions.Contains(key) || (bulkSize is not null && key == "bulk_size"))
             {
                 throw new ArgumentException($"The COPY option '{name}' is set by the statement, not by the location.",
                     nameof(location));
