@@ -1762,6 +1762,19 @@ the catalog side.
   `CkMetaModelLegacyDocumentTests` (`MethodReplacesGenericCreate_*`, `MethodDocument_WrittenBefore*`) cover it.
   Do not publish a model with `replacesGenericCreate` before this persistence is released: an older service drops the flag on import
   (the engine's `minEngineVersion` makes a service with an older engine refuse the model, message 126).
+**Phase 3 addition (AB#7036, touch-point row 10 of `authorization.dataAccess`, engine AB#7036):**
+- `dataAccess` (`CkMethodAuthorizationDto.DataAccess`, nullable enum `CkMethodDataAccessDto` `Read` | `Write`, stored as its integer
+  like `kind`) is persisted on the embedded `CkMethodAuthorizationDto` (class map in `MongoRepositoryClient`,
+  `SetIgnoreIfNull`): a method that does not declare it has no such key in the authorization document, so models without the key
+  stay byte-identical, and documents written before the field read back as `null`, i.e. the effective value `Write`
+  (`CkMethodGraph.DataAccess`, `CkMethodAuthorization.Resolve`). There is no separate write or read-back site: the DTO is embedded
+  verbatim. The model's raised `minEngineVersion` (engine `CkEngineVersion.DataAccessMinEngineVersion`) is the existing
+  `CkModel.MinEngineVersion` field. Gates: both kitchen sinks (C# `RoundTripMethods.Full` and the YAML `TestCkModelKitchenSink`
+  method `Thing.ChangePassword-2`) declare `dataAccess: Read`; `CkMetaModelReflectionGateTests`, `CkMetaModelCacheRoundTripTests`
+  (cache rebuilt from Mongo) and `CkMetaModelLegacyDocumentTests` (`MethodAuthorizationDataAccess_*`,
+  `MethodAuthorization_WrittenBefore*`) cover it. A service whose persistence predates the field would drop it on import and then
+  treat a `Read` method as `Write` (fail-closed, but wrong); the engine's `minEngineVersion` makes a service with an older engine
+  refuse the model (message 126). The gateway that reads the value is AB#7037.
 **Phase 3 addition (AB#7006, touch-point row 10 of the method result marker `sensitive`, engine AB#7006):**
 - `sensitive` (`CkMethodResultDto.Sensitive`, `bool`) marks the whole result of a method as never to be logged, audited or
   traced. It is persisted on the embedded `CkMethodResultDto` (class map `CkMethodResultDto` in `MongoRepositoryClient`,

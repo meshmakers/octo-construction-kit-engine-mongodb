@@ -552,6 +552,8 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.Roles).SetIgnoreIfNull(true);
             cm.MapMember(c => c.AllowSelf).SetIgnoreIfDefault(true);
             cm.MapMember(c => c.Scopes).SetIgnoreIfNull(true);
+            // AB#7036: authorization.dataAccess (Read|Write); omitted = Write, so an undeclared value is not stored.
+            cm.MapMember(c => c.DataAccess).SetIgnoreIfNull(true);
         });
 
         BsonClassMap.RegisterClassMap<CkMethodExecutionDto>(cm =>

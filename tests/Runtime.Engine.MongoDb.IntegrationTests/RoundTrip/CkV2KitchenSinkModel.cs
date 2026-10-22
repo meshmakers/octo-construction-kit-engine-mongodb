@@ -306,7 +306,8 @@ internal static class RoundTripMethods
         Errors = [new CkMethodErrorDto { Code = "PASSWORD_POLICY_VIOLATION", Description = "too weak" }],
         Authorization = new CkMethodAuthorizationDto
         {
-            Roles = ["UserManagement"], AllowSelf = true, Scopes = ["octo_api", "extra"]
+            Roles = ["UserManagement"], AllowSelf = true, Scopes = ["octo_api", "extra"],
+            DataAccess = CkMethodDataAccessDto.Read
         },
         Execution = new CkMethodExecutionDto { TimeoutSeconds = 30, Idempotent = true, Handler = CkMethodHandlers.Service }
     };
