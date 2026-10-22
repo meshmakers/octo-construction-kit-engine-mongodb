@@ -997,7 +997,9 @@ checks every rollup of the tenant, or the requested ones, with counts and MIN/MA
 read and nothing is changed. A rollup the validator cannot look at is **never reported as consistent**: its entry carries
 `NotChecked` (`RollupNotChecked`: `Cause` and an English `Reason`) and `IsOk` is false for the entry and for the report, so "nothing found"
 never means "not looked at" (a restore of five rollups whose load failed had been reported as "7 rollups consistent"). Causes:
-`NoLiveTable` (no table, any status other than Created: what a failed load leaves), `NeverActivated` (status Created, no table; listed
+`NoLiveTable` (no table, status Activated or Failed), `Disabled` (status Disabled, no table: a disabled rollup is neither aggregated nor
+read; informational like `NeverActivated`, AB#7274 - a restore whose load of the rollup failed keeps the marker through its own
+`ArchiveFailed` entry), `NeverActivated` (status Created, no table; listed
 for information only - `RollupNotChecked.IsBlocking` is false, the entry and the report stay ok and the marker is not kept, because a
 rollup without data cannot be inconsistent and blocking the tenant's rollups for it would stop aggregation, recompute and reclaim for
 good; logged at information level), `SourceMissing` (a source entity is gone, or an
