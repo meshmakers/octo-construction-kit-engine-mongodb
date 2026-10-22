@@ -1367,6 +1367,15 @@ The full text is `docs/streamdata-archive-concept.md` §18a and, for the sweep, 
   map is the last slice of a plan: a dump copies it first and the data after it, a load the data first and the map last. The
   repeat rule is `RollupArchiveDumper` (read map, copy, read map; repeat up to `MaxMapAttempts`, then
   `GenerationMapKeptMoving`). The plan in a dump result carries the rows the copy *reported*, not the counted rows.
+- **Slice retry and disk headroom (AB#7274)**: `CopySliceFromAsync` loads a slice up to 3 times; only a transient failure
+  (`CopyFailureClassifier`: circuit breaker, rejected execution, node/shard not available, statement timeout, a `RETURN SUMMARY` that is short with
+  `error_count = 0`, rejected rows that all carry such a text) is repeated, after 30 s and 60 s, with `overwrite_duplicates = true` and half the
+  `bulk_size` (5000, 2500) of the attempt before; after a repeat the slice's range is counted and must equal the manifest. Policy constants
+  stay in the runner. The disk check (`StagingDiskHeadroomCheck`) works against the room **below the high disk watermark**, with the replicas the
+  table gets back (`min(1 + replicas, nodes)` copies) and `DiskSpaceFactor` 12; it runs per archive and, through
+  `IStreamDataRepositoryFactory.CheckStagingDiskHeadroomAsync`, for the whole backup before the MongoDB restore. A restored table takes 2 to 4
+  times the bytes per row of a source that was written meter by meter - the cause is the physical row order, see the engine concept
+  "Size of a restored table". Details: `docs/streamdata-archive-concept.md` §18a.
 - **Sweep grace period** (`StreamData:Recompute:SweepGracePeriod`, default 2 h, 0 = at once): a recompute no longer sweeps
   or removes contained pointer entries at the flip; it writes a row into `archive_<rtId>__sweep`
   (`PendingSweepSqlBuilder`, every column explicit - AB#6647) and `SweepDueAsync` executes the due ones (at the start of a

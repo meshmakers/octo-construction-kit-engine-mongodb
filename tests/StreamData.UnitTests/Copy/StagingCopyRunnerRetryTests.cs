@@ -203,6 +203,34 @@ public class StagingCopyRunnerRetryTests
         Assert.Equal([TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60)], _time.Delays);
     }
 
+    // ---- the merge after the load fits a small heap ---------------------------------------------------------
+
+    [Theory]
+    [InlineData(0, 3, 1)]
+    [InlineData(1_000, 3, 1)]
+    [InlineData(30_000_000, 3, 1)]          // exactly 10 million rows per shard: one segment, as before
+    [InlineData(30_000_001, 3, 2)]
+    [InlineData(119_462_768, 3, 4)]         // the sbeg raw archive: 39.8 million rows per shard, merged to 4 segments of about 10 million
+    [InlineData(150_000_000, 1, 15)]
+    public void TheMergeAimsAtOneSegmentPer10MillionRowsOfAShard(long rows, int shards, int expected)
+        => Assert.Equal(expected, StagingCopyRunner.SegmentsPerShard(rows, shards, StagingCopyRunner.DefaultMaxDocsPerMergedSegment));
+
+    [Fact]
+    public async Task AnArchiveBiggerThanTheSegmentLimit_IsMergedToSeveralSegmentsPerShard_ASmallOneToOne()
+    {
+        var plan = await Dumped(SourceTarget);
+
+        await Collect(Runner().CopyFromAsync(RestoreTarget, plan, Location, Small, Ct));
+        Assert.Contains("max_num_segments = 1", Assert.Single(_crate.Executed, s => s.StartsWith("OPTIMIZE", StringComparison.Ordinal)));
+
+        _crate.Executed.Clear();
+        _crate.TargetRows.Clear();
+        // 14 rows over 3 shards, at most 2 rows in a merged segment: 5 rows per shard, 3 segments
+        var runner = new StagingCopyRunner(_log, "tenant1", _crate, _time, maxDocsPerMergedSegment: 2);
+        await Collect(runner.CopyFromAsync(RestoreTarget, plan, Location, Small, Ct));
+        Assert.Contains("max_num_segments = 3", Assert.Single(_crate.Executed, s => s.StartsWith("OPTIMIZE", StringComparison.Ordinal)));
+    }
+
     // ---- not retried ------------------------------------------------------------------------------------------
 
     [Theory]

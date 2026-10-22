@@ -953,6 +953,32 @@ validator finds them after the restore as orphans and the repair removes them.
 counted rows and, for a rollup, the map holds the counted pointer entries; false when a slice failed, the counts differ or the
 load stopped early. The restore job treats an unverified archive as failed.
 
+**Slice retry (AB#7274).** `StagingCopyRunner.CopySliceFromAsync` loads a slice up to `MaxLoadAttempts` (3) times. The first attempt sends the
+statement as before; a repeat follows a *transient* failure only (`CopyFailureClassifier`: a failing statement whose text names the memory
+circuit breaker, a rejected execution or a node or shard that is not available, a `StreamDataStatementTimeoutException`, a `RETURN SUMMARY`
+with `error_count = 0` and fewer rows than the manifest - CrateDB does not count a shard request the breaker refused on another node as an
+error, so a two-node cluster loses rows silently - and a summary whose rejected rows all carry a transient text). It waits 30 s and 60 s
+(`TimeProvider`, cancellable), logs the heap of the nodes, then sends `COPY FROM ... overwrite_duplicates = true, bulk_size = 5000` (2500
+for the third attempt); `CopyStatement.CopyFrom` owns `bulk_size` only when one is given. A repeat is safe because the target table is
+created fresh before the load and the slice files come from a table with the same primary key: a row an earlier attempt already wrote is
+replaced by the identical row (the superseded document stays as a deleted document until the `OPTIMIZE` after the load). After a repeat that
+reports success the slice's range (`BuildExportSliceCountSql`; for the generation map the whole map) is counted and must equal the manifest.
+Not repeated: any other statement error, rejected rows with a non-transient text, more rows than the manifest, a cancellation. A failed slice
+ends the archive as before; the message then ends with "(after n attempts)". Tests: `StagingCopyRunnerRetryTests`,
+`CopyFailureClassifierTests` (unit, simulated CrateDB) and `SliceRepeatIntegrationTests` (real CrateDB: the statement ran and the error is reported
+afterwards, or part of the slice was in the table before; raw slice, rollup slice and generation map). Heap: a restore of the 150 million
+row sbeg tenant on one node with a 1 GiB heap is the reference run of the change (see the operator page, "Disk and heap headroom").
+
+**Disk headroom (AB#7274).** `StagingDiskHeadroomCheck` compares the expected size with the room each node has **below the high disk
+watermark** (`cluster.routing.allocation.disk.watermark.high`, read from `sys.cluster` together with `threshold_enabled`; percentage and
+ratio = share of the disk that may be used, absolute value = free space that must remain), not with `fs['total']['available']`: CrateDB
+stops allocating shards to a node above the high watermark and the flood stage (95 %) makes the table read-only. Expected size per node =
+staged gzip bytes x `DiskSpaceFactor` (12) x copies / nodes, where copies = `min(1 + replicas, nodes)` for the table's replica setting
+(`0-1` gives 2 on a cluster of two or more nodes: the replicas are switched on again before the merge). Per archive in `EnsureDiskSpaceAsync`
+(before any table setting changes) and for the whole backup through `IStreamDataRepositoryFactory.CheckStagingDiskHeadroomAsync(stagedBytes)`,
+which the restore job asks before the MongoDB phase; both go through `StagingDiskHeadroomCheck.Evaluate`. Tests: `StagingDiskHeadroomTests`
+(unit), `ClusterDiskHeadroom_ReadsTheRealNodesAndWatermark_...` (real CrateDB).
+
 **Sweep grace period (configuration reference).** The sweep of the generations a recompute superseded is deferred so that a dump
 which copied the map before a flip still finds the rows its copy names. Setting `StreamData:Recompute:SweepGracePeriod`
 (env `OCTO_STREAMDATA__RECOMPUTE__SWEEPGRACEPERIOD`, `CrateRecomputeOptions`): time span, default `02:00:00`, `00:00:00` sweeps at

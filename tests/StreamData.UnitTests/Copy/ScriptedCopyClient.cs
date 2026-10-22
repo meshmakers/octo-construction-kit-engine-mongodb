@@ -51,6 +51,14 @@ internal sealed class SimulatedCrate : ICrateCopyClient
     public string Filter { get; set; } = JobLogFilterGuard.RecommendedFilter;
     public long[] NodeDiskAvailable { get; set; } = [100L << 30];
 
+    /// <summary>Bytes in use per node (the size of a node is its available plus its used bytes).</summary>
+    public long[] NodeDiskUsed { get; set; } = [];
+
+    /// <summary>The high disk watermark and whether the allocation threshold is on.</summary>
+    public string HighWatermark { get; set; } = "90%";
+
+    public bool WatermarkEnabled { get; set; } = true;
+
     /// <summary>Runs before a statement is answered; throw to fail it.</summary>
     public Action<CopyStatement>? Fault { get; set; }
 
@@ -73,6 +81,8 @@ internal sealed class SimulatedCrate : ICrateCopyClient
     public string Replicas { get; set; } = "0-1";
 
     public long Refresh { get; set; } = 1000;
+
+    public int Shards { get; set; } = 3;
     public List<string> SettingsHistory { get; } = [];
 
     public Task<CrateStatementResult> ExecuteStatementAsync(
@@ -164,6 +174,11 @@ internal sealed class SimulatedCrate : ICrateCopyClient
             return AnswerMap(sql);
         }
 
+        if (sql.Contains("['watermark']['high']", StringComparison.Ordinal))
+        {
+            return Row(("high", HighWatermark), ("enabled", WatermarkEnabled));
+        }
+
         if (sql.Contains("sys.cluster", StringComparison.Ordinal))
         {
             return Row(("jobs_log_filter", Filter));
@@ -237,7 +252,7 @@ internal sealed class SimulatedCrate : ICrateCopyClient
 
         if (sql.Contains("information_schema.tables", StringComparison.Ordinal))
         {
-            return Row(("number_of_replicas", Replicas), ("refresh_interval", Refresh));
+            return Row(("number_of_replicas", Replicas), ("refresh_interval", Refresh), ("number_of_shards", (long)Shards));
         }
 
         if (sql.StartsWith("ALTER TABLE", StringComparison.Ordinal))
@@ -258,9 +273,13 @@ internal sealed class SimulatedCrate : ICrateCopyClient
         if (sql.Contains("sys.nodes", StringComparison.Ordinal) && sql.Contains("available", StringComparison.Ordinal))
         {
             return new CrateStatementResult(0, NodeDiskAvailable
-                .Select((a, i) => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+                .Select((a, i) =>
                 {
-                    ["name"] = $"node{i}", ["available"] = a
+                    var used = i < NodeDiskUsed.Length ? NodeDiskUsed[i] : 0;
+                    return (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+                    {
+                        ["name"] = $"node{i}", ["available"] = a, ["used"] = used, ["size"] = a + used
+                    };
                 }).ToList());
         }
 

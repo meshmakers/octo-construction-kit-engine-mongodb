@@ -45,8 +45,17 @@ internal sealed record ArchiveCopyTarget(
 /// <see cref="RollupArchiveDumper"/>.</para>
 /// </remarks>
 internal sealed class StagingCopyRunner(
-    ILogger logger, string tenantId, ICrateCopyClient client, TimeProvider? timeProvider = null)
+    ILogger logger, string tenantId, ICrateCopyClient client, TimeProvider? timeProvider = null,
+    long maxDocsPerMergedSegment = StagingCopyRunner.DefaultMaxDocsPerMergedSegment)
 {
+    /// <summary>
+    /// Rows of one shard that the segment merge after a load puts into one segment at most. A merge to a single segment of a shard
+    /// of 40 million rows ran a CrateDB node with a 1 GiB heap out of memory (<c>OutOfMemoryError</c> in the terms writer of the
+    /// merge, the node exits); merged to segments of at most 10 million rows the same table merged within the same heap, and the table
+    /// was not any bigger (203 bytes per row either way). Tables of up to 10 million rows per shard are still merged to one segment.
+    /// </summary>
+    internal const long DefaultMaxDocsPerMergedSegment = 10_000_000;
+
     /// <summary>Attempts to load one slice in total (AB#7274); the policy is internal to the runner.</summary>
     internal const int MaxLoadAttempts = 3;
 
@@ -59,10 +68,12 @@ internal sealed class StagingCopyRunner(
     private readonly TimeProvider timeProvider = timeProvider ?? TimeProvider.System;
 
     /// <summary>
-    /// A loaded table takes about nine times its gzip size right after the load and about six and a half times
-    /// after the segment merge (concept §7, measured with the 115 million row tenant).
+    /// A loaded table takes up to twelve times its gzip size right after the load (before the segment merge, per copy of the
+    /// data) and about nine and a half times after the merge: measured with the 119 million row raw archive of the sbeg
+    /// tenant, whose rows are clustered by meter in the source while the load follows time slices (AB#7274, concept §7). A table
+    /// that was written in arrival order needs less. The source table itself takes about four times its gzip size.
     /// </summary>
-    internal const int DiskSpaceFactor = 9;
+    internal const int DiskSpaceFactor = 12;
 
     private const int MaxErrorTextCharacters = 300;
 
@@ -537,26 +548,32 @@ internal sealed class StagingCopyRunner(
             return;
         }
 
-        var expected = plan.Slices.Sum(s => s.StagedBytes!.Value) * DiskSpaceFactor;
-        var nodes = (await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain(
-            "SELECT name, fs['total']['available'] AS available FROM sys.nodes", returnsRows: true),
-            options.CommandTimeout, cancellationToken)).Rows;
-        if (nodes.Count == 0)
-        {
-            return;
-        }
-
-        var perNode = expected / nodes.Count; // no replicas while loading, the shards spread evenly
-        var tightest = nodes.OrderBy(n => Long(n, "available")).First();
-        var available = Long(tightest, "available");
-        if (available < perNode)
+        var (nodes, watermark) = await StagingDiskHeadroomCheck.ReadAsync(client, tenantId, options.CommandTimeout, cancellationToken);
+        var replicas = (await ReadTableSettingsAsync(target, options, cancellationToken)).NumberOfReplicas;
+        var headroom = StagingDiskHeadroomCheck.Evaluate(plan.Slices.Sum(s => s.StagedBytes!.Value), DiskSpaceFactor, replicas,
+            nodes, watermark, $"Loading archive '{target.ArchiveRtId}'");
+        if (!headroom.IsSufficient)
         {
             throw new ArchiveCopyRefusedException(ArchiveCopyRefusalReason.InsufficientDiskSpace,
-                $"Loading archive '{target.ArchiveRtId}' needs about {FormatBytes(perNode)} per node " +
-                $"({DiskSpaceFactor} times the {FormatBytes(expected / DiskSpaceFactor)} of staged files, spread over {nodes.Count} node(s)), " +
-                $"but node '{Text(tightest, "name")}' has {FormatBytes(available)} available. Nothing was loaded.",
-                target.ArchiveRtId);
+                headroom.Reason + " Nothing was loaded.", target.ArchiveRtId);
         }
+    }
+
+    /// <summary>Segments per shard the merge after a load aims at: one per <paramref name="maxDocsPerSegment"/> rows of a shard, at least one.</summary>
+    internal static int SegmentsPerShard(long rows, int shards, long maxDocsPerSegment)
+    {
+        var perShard = rows / Math.Max(shards, 1) + (rows % Math.Max(shards, 1) == 0 ? 0 : 1);
+        return (int)Math.Clamp((perShard + maxDocsPerSegment - 1) / Math.Max(maxDocsPerSegment, 1), 1, 1000);
+    }
+
+    private async Task<int> ReadShardCountAsync(ArchiveCopyTarget target, ArchiveCopyOptions options, CancellationToken cancellationToken)
+    {
+        var result = await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain(
+            "SELECT number_of_shards FROM information_schema.tables " +
+            $"WHERE table_schema = {CopyStatement.Literal(target.Schema)} AND table_name = {CopyStatement.Literal(target.TableName)}",
+            returnsRows: true), options.CommandTimeout, cancellationToken);
+        var shards = result.Rows.Count == 0 ? 1 : (int)Long(result.Rows[0], "number_of_shards");
+        return Math.Max(shards, 1);
     }
 
     private async Task<TableSettings> ReadTableSettingsAsync(
@@ -614,8 +631,11 @@ internal sealed class StagingCopyRunner(
         {
             try
             {
+                var expectedRows = plan.Slices.Where(s => s.Table == ArchiveCopyTable.Data).Sum(s => s.RowCount);
+                var segments = SegmentsPerShard(expectedRows, await ReadShardCountAsync(target, options, cancellationToken),
+                    maxDocsPerMergedSegment);
                 await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain(
-                    $"OPTIMIZE TABLE {target.QualifiedTable} WITH (max_num_segments = 1)"),
+                    $"OPTIMIZE TABLE {target.QualifiedTable} WITH (max_num_segments = {segments})"),
                     options.OptimizeTimeout, cancellationToken);
             }
             catch (Exception ex) when (IsStatementFailure(ex))

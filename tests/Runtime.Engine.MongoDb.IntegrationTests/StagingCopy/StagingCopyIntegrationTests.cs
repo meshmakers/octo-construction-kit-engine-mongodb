@@ -173,6 +173,29 @@ public class StagingCopyIntegrationTests(CrateStagingCopyFixture fixture)
     }
 
     [Fact]
+    public async Task ClusterDiskHeadroom_ReadsTheRealNodesAndWatermark_AndRefusesWhatCannotFit_WithoutChangingAnything()
+    {
+        // AB#7274: the cluster answers before a restore touches the tenant - needed, available and watermark per node.
+        IStreamDataRepositoryFactory factory = new CrateDbStreamDataRepositoryFactory(
+            NullLoggerFactory.Instance, A.Fake<ICkCacheService>(), fixture.Client, fixture.Client,
+            fixture.Configuration, A.Fake<IFormulaEngine>());
+
+        var fits = await factory.CheckStagingDiskHeadroomAsync(1L << 20, Ct);
+        var node = Assert.Single(fits.Nodes);
+        Assert.True(fits.IsSufficient, fits.Reason);
+        Assert.Equal(12L << 20, node.NeededBytes); // one node holds one copy: 12 times the staged bytes
+        Assert.True(node.AvailableBytes > 0);
+        Assert.Equal("90%", node.Watermark);
+        Assert.True(node.RoomBytes > 0 && node.RoomBytes < node.AvailableBytes); // the room stops short of the free space
+
+        var refused = await factory.CheckStagingDiskHeadroomAsync(1L << 50, Ct); // 1 PiB of staged files
+        Assert.False(refused.IsSufficient);
+        Assert.Contains("per node", refused.Reason, StringComparison.Ordinal);
+        Assert.Contains("high disk watermark (90%)", refused.Reason, StringComparison.Ordinal);
+        Assert.Contains($"node '{node.Node}'", refused.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Plan_OnARealTable_PartitionsTheRows_AndAnEmptyTableHasNoSlices()
     {
         var tenant = CrateStagingCopyFixture.NewTenantId();
