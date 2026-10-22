@@ -44,13 +44,38 @@ internal sealed record ArchiveCopyTarget(
 /// rows are not there (concept §6). The repeat rule around a dump of a rollup lives in
 /// <see cref="RollupArchiveDumper"/>.</para>
 /// </remarks>
-internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateCopyClient client)
+internal sealed class StagingCopyRunner(
+    ILogger logger, string tenantId, ICrateCopyClient client, TimeProvider? timeProvider = null,
+    long maxDocsPerMergedSegment = StagingCopyRunner.DefaultMaxDocsPerMergedSegment)
 {
     /// <summary>
-    /// A loaded table takes about nine times its gzip size right after the load and about six and a half times
-    /// after the segment merge (concept §7, measured with the 115 million row tenant).
+    /// Rows of one shard that the segment merge after a load puts into one segment at most. A merge to a single segment of a shard
+    /// of 40 million rows ran a CrateDB node with a 1 GiB heap out of memory (<c>OutOfMemoryError</c> in the terms writer of the
+    /// merge, the node exits); merged to segments of at most 10 million rows the same table merged within the same heap, and the table
+    /// was not any bigger (203 bytes per row either way). Tables of up to 10 million rows per shard are still merged to one segment.
     /// </summary>
-    internal const int DiskSpaceFactor = 9;
+    internal const long DefaultMaxDocsPerMergedSegment = 10_000_000;
+
+    /// <summary>Attempts to load one slice in total (AB#7274); the policy is internal to the runner.</summary>
+    internal const int MaxLoadAttempts = 3;
+
+    /// <summary>CrateDB's default <c>bulk_size</c> of a <c>COPY FROM</c>; every repeat halves the batch of the attempt before.</summary>
+    internal const int DefaultBulkSize = 10_000;
+
+    /// <summary>The wait before attempt 2 and attempt 3.</summary>
+    internal static readonly TimeSpan[] RetryBackoff = [TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60)];
+
+    private readonly TimeProvider timeProvider = timeProvider ?? TimeProvider.System;
+
+    /// <summary>
+    /// Size factor of the disk check: the expected size of a loaded table is its staged gzip size times this number (per copy
+    /// of the data, before the segment merge). Measured with the 119 million row raw archive of the sbeg tenant: 10.5 times right
+    /// after the load and about 9 times after the bounded merge (27.5 GiB from 3.1 GiB of staged files, AB#7274). The factor follows from
+    /// the CrateDB version: segments written by CrateDB 6.4 (Lucene 10) take about 200 bytes per row of this table, two to three times
+    /// what CrateDB 5 (Lucene 9) segments took for the same rows; <c>codec = 'best_compression'</c> and <c>INDEX OFF</c> save less than
+    /// 10 %. Re-measure the factor after a CrateDB upgrade; the constant is the one place to change.
+    /// </summary>
+    internal const int DiskSpaceFactor = 12;
 
     private const int MaxErrorTextCharacters = 300;
 
@@ -317,14 +342,69 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
         }
     }
 
+    /// <summary>
+    /// Loads one slice, at most <see cref="MaxLoadAttempts"/> times in total. The first attempt sends the statement as
+    /// ever; a repeat (only after a transient failure, see <see cref="CopyFailureClassifier"/>) overwrites duplicates, so
+    /// rows the failed attempt already wrote are replaced by the identical rows, loads in half the batch size of the
+    /// attempt before, and waits <see cref="RetryBackoff"/> first (concept §7 step 4).
+    /// </summary>
     private async Task<ArchiveCopySliceResult> CopySliceFromAsync(
         ArchiveCopyTarget target, ArchiveCopyPlan plan, ArchiveCopySlice slice, ArchiveCopyStagingLocation location,
         ArchiveCopyOptions options, CancellationToken cancellationToken)
     {
         var sliceLocation = location.WithSubPath(slice.GetStagingPath(plan.ArchiveRtId));
+        var started = Stopwatch.GetTimestamp();
+        ArchiveCopySliceResult? result = null;
+        for (var attempt = 1; attempt <= MaxLoadAttempts; attempt++)
+        {
+            if (attempt > 1)
+            {
+                await WaitBeforeRetryAsync(target, slice, attempt, options, cancellationToken);
+            }
+
+            LoadVerdict verdict;
+            (result, verdict) = await LoadSliceOnceAsync(target, slice, sliceLocation, options, attempt, cancellationToken);
+            if (result.IsSuccess && attempt > 1)
+            {
+                (result, verdict) = await VerifyRetriedSliceAsync(target, slice, result, options, attempt, cancellationToken);
+            }
+
+            if (result.IsSuccess)
+            {
+                if (attempt > 1)
+                {
+                    logger.LogInformation("Archive {ArchiveRtId}, slice {Slice} (load): loaded on attempt {Attempt} of {MaxAttempts}.",
+                        target.ArchiveRtId, slice.Key, attempt, MaxLoadAttempts);
+                }
+
+                return result with { Duration = Stopwatch.GetElapsedTime(started) };
+            }
+
+            logger.LogWarning("Archive {ArchiveRtId}, slice {Slice} (load): attempt {Attempt} of {MaxAttempts} failed: {Reason}",
+                target.ArchiveRtId, slice.Key, attempt, MaxLoadAttempts, result.Message);
+            if (verdict != LoadVerdict.Transient || attempt == MaxLoadAttempts)
+            {
+                var attempts = attempt == 1 ? result.Message : $"{result.Message} (after {attempt} attempts)";
+                return result with { Message = attempts, Duration = Stopwatch.GetElapsedTime(started) };
+            }
+        }
+
+        throw new InvalidOperationException("Unreachable: the attempt loop returns."); // for the compiler
+    }
+
+    private static bool LocationSetsBulkSize(ArchiveCopyStagingLocation location)
+        => location.RedactedOptions.Keys.Any(k => string.Equals(k, "bulk_size", StringComparison.OrdinalIgnoreCase));
+
+    private async Task<(ArchiveCopySliceResult Result, LoadVerdict Verdict)> LoadSliceOnceAsync(
+        ArchiveCopyTarget target, ArchiveCopySlice slice, ArchiveCopyStagingLocation sliceLocation,
+        ArchiveCopyOptions options, int attempt, CancellationToken cancellationToken)
+    {
         var statement = CopyStatement.CopyFrom(
             slice.Table == ArchiveCopyTable.GenerationMap ? target.QualifiedGenerationMap : target.QualifiedTable,
-            sliceLocation, options.OverwriteDuplicates);
+            sliceLocation,
+            overwriteDuplicates: attempt > 1 || options.OverwriteDuplicates,
+            // A location that sets its own bulk_size keeps it on every attempt: the statement may not set it a second time.
+            bulkSize: attempt > 1 && !LocationSetsBulkSize(sliceLocation) ? DefaultBulkSize >> (attempt - 1) : null);
 
         var started = Stopwatch.GetTimestamp();
         try
@@ -333,30 +413,115 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
             var elapsed = Stopwatch.GetElapsedTime(started);
 
             long success = 0, errors = 0;
-            string? firstError = null;
+            var errorTexts = new List<string>();
             foreach (var row in outcome.Rows)
             {
+                var rowErrors = Long(row, "error_count");
                 success += Long(row, "success_count");
-                errors += Long(row, "error_count");
-                firstError ??= errors > 0 ? Text(row, "errors") : null;
+                errors += rowErrors;
+                if (rowErrors > 0)
+                {
+                    errorTexts.Add(sliceLocation.Scrub(Text(row, "errors")));
+                }
             }
 
-            if (errors == 0 && success == slice.RowCount)
+            var verdict = CopyFailureClassifier.ClassifySummary(success, errors, slice.RowCount, errorTexts);
+            if (verdict == LoadVerdict.Complete)
             {
-                return new ArchiveCopySliceResult(slice, ArchiveCopySliceStatus.Succeeded, success, 0, elapsed);
+                return (new ArchiveCopySliceResult(slice, ArchiveCopySliceStatus.Succeeded, success, 0, elapsed), verdict);
             }
 
+            var firstError = errorTexts.FirstOrDefault(t => t.Length > 0);
             var reason = errors > 0
                 ? $"{errors} rows were rejected while loading ({success} loaded, {slice.RowCount} expected)." +
-                  (string.IsNullOrEmpty(firstError) ? string.Empty : " First error: " + Abbreviate(sliceLocation.Scrub(firstError)))
+                  (firstError is null ? string.Empty : " First error: " + Abbreviate(firstError))
                 : $"{success} rows were loaded, {slice.RowCount} were expected.";
-            logger.LogWarning("Archive {ArchiveRtId}, slice {Slice} (load): {Reason}", target.ArchiveRtId, slice.Key, reason);
-            return new ArchiveCopySliceResult(slice, ArchiveCopySliceStatus.Failed, success, errors, elapsed, reason);
+            if (outcome.Rows.Count > 0 && verdict == LoadVerdict.Transient)
+            {
+                LogSummaryRows(target, slice, attempt, outcome.Rows);
+            }
+
+            return (new ArchiveCopySliceResult(slice, ArchiveCopySliceStatus.Failed, success, errors, elapsed, reason), verdict);
         }
         catch (Exception ex) when (IsStatementFailure(ex))
         {
-            return Failed(target, slice, "load", sliceLocation.Scrub(ex.Message), Stopwatch.GetElapsedTime(started));
+            var reason = sliceLocation.Scrub(ex.Message);
+            return (new ArchiveCopySliceResult(slice, ArchiveCopySliceStatus.Failed, 0, 0, Stopwatch.GetElapsedTime(started), reason),
+                CopyFailureClassifier.ClassifyFailure(ex));
         }
+    }
+
+    /// <summary>The per-file, per-node rows of a short <c>RETURN SUMMARY</c>: which node counted how many rows.</summary>
+    private void LogSummaryRows(
+        ArchiveCopyTarget target, ArchiveCopySlice slice, int attempt, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
+    {
+        for (var i = 0; i < rows.Count; i++)
+        {
+            logger.LogWarning(
+                "Archive {ArchiveRtId}, slice {Slice} (load), attempt {Attempt}, summary row {Row} of {Rows}: node {Node}, success_count {Success}, error_count {Errors}.",
+                target.ArchiveRtId, slice.Key, attempt, i + 1, rows.Count, Text(rows[i], "node"), Long(rows[i], "success_count"),
+                Long(rows[i], "error_count"));
+        }
+    }
+
+    /// <summary>
+    /// A retried slice that reports success is counted in the table: the summary of an attempt that overwrote rows is
+    /// not proof that the range holds exactly the rows of the dump.
+    /// </summary>
+    private async Task<(ArchiveCopySliceResult Result, LoadVerdict Verdict)> VerifyRetriedSliceAsync(
+        ArchiveCopyTarget target, ArchiveCopySlice slice, ArchiveCopySliceResult loaded, ArchiveCopyOptions options,
+        int attempt, CancellationToken cancellationToken)
+    {
+        long held;
+        try
+        {
+            if (slice.Table == ArchiveCopyTable.GenerationMap)
+            {
+                held = await CountGenerationMapAsync(target, options, cancellationToken);
+            }
+            else
+            {
+                await RefreshAsync(target.QualifiedTable, options, cancellationToken);
+                held = await CountAsync(CrateDbStreamDataRepository.BuildExportSliceCountSql(
+                    target.QualifiedTable, target.TimeColumn, slice.FromUtc!.Value, slice.ToUtc!.Value, toInclusive: false),
+                    options, cancellationToken);
+            }
+        }
+        catch (Exception ex) when (IsStatementFailure(ex))
+        {
+            var reason = $"The rows of the slice could not be counted after attempt {attempt}: {ex.Message}";
+            return (loaded with { Status = ArchiveCopySliceStatus.Failed, Message = reason }, CopyFailureClassifier.ClassifyFailure(ex));
+        }
+
+        if (held == slice.RowCount)
+        {
+            return (loaded, LoadVerdict.Complete);
+        }
+
+        var mismatch = $"{held} rows are in the table for the slice after attempt {attempt}, {slice.RowCount} were expected.";
+        return (loaded with { Status = ArchiveCopySliceStatus.Failed, Message = mismatch }, LoadVerdict.Transient);
+    }
+
+    private async Task WaitBeforeRetryAsync(
+        ArchiveCopyTarget target, ArchiveCopySlice slice, int attempt, ArchiveCopyOptions options, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var heap = await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain(
+                "SELECT name, heap['used'] AS heap_used, heap['max'] AS heap_max FROM sys.nodes", returnsRows: true),
+                options.CommandTimeout, cancellationToken);
+            var nodes = string.Join("; ", heap.Rows.Select(r =>
+                $"{Text(r, "name")} {FormatBytes(Long(r, "heap_used"))} of {FormatBytes(Long(r, "heap_max"))}"));
+            logger.LogWarning("Archive {ArchiveRtId}, slice {Slice} (load): CrateDB heap before attempt {Attempt} of {MaxAttempts}: {Heap}",
+                target.ArchiveRtId, slice.Key, attempt, MaxLoadAttempts, nodes);
+        }
+        catch (Exception ex) when (IsStatementFailure(ex))
+        {
+            logger.LogWarning("Archive {ArchiveRtId}, slice {Slice} (load): the heap of the nodes could not be read: {Reason}",
+                target.ArchiveRtId, slice.Key, ex.Message);
+        }
+
+        await Task.Delay(RetryBackoff[attempt - 2], timeProvider, cancellationToken);
     }
 
     // ---- checks, bulk settings, finish -------------------------------------------------------------------
@@ -389,26 +554,55 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
             return;
         }
 
-        var expected = plan.Slices.Sum(s => s.StagedBytes!.Value) * DiskSpaceFactor;
-        var nodes = (await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain(
-            "SELECT name, fs['total']['available'] AS available FROM sys.nodes", returnsRows: true),
-            options.CommandTimeout, cancellationToken)).Rows;
-        if (nodes.Count == 0)
-        {
-            return;
-        }
-
-        var perNode = expected / nodes.Count; // no replicas while loading, the shards spread evenly
-        var tightest = nodes.OrderBy(n => Long(n, "available")).First();
-        var available = Long(tightest, "available");
-        if (available < perNode)
+        var (nodes, watermark) = await StagingDiskHeadroomCheck.ReadAsync(client, tenantId, options.CommandTimeout, cancellationToken);
+        var replicas = (await ReadTableSettingsAsync(target, options, cancellationToken)).NumberOfReplicas;
+        var headroom = StagingDiskHeadroomCheck.Evaluate(plan.Slices.Sum(s => s.StagedBytes!.Value), DiskSpaceFactor, replicas,
+            nodes, watermark, $"Loading archive '{target.ArchiveRtId}'");
+        if (!headroom.IsSufficient)
         {
             throw new ArchiveCopyRefusedException(ArchiveCopyRefusalReason.InsufficientDiskSpace,
-                $"Loading archive '{target.ArchiveRtId}' needs about {FormatBytes(perNode)} per node " +
-                $"({DiskSpaceFactor} times the {FormatBytes(expected / DiskSpaceFactor)} of staged files, spread over {nodes.Count} node(s)), " +
-                $"but node '{Text(tightest, "name")}' has {FormatBytes(available)} available. Nothing was loaded.",
-                target.ArchiveRtId);
+                headroom.Reason + " Nothing was loaded.", target.ArchiveRtId);
         }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> and, when it fails because the storage is not answering (a node that restarted after the merge
+    /// ran it out of memory, a dropped connection), tries again after the retry backoffs. The rows of the archive are in the table by now;
+    /// a refresh or a count that cannot reach it must not fail the archive for as long as the node needs to come back.
+    /// </summary>
+    private async Task<T> RetryWhileStorageRecoversAsync<T>(
+        ArchiveCopyTarget target, string what, Func<Task<T>> action, CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await action();
+            }
+            catch (Exception ex) when (IsStatementFailure(ex) && attempt <= RetryBackoff.Length)
+            {
+                logger.LogWarning("Archive {ArchiveRtId}: the {What} failed, trying again in {Delay}: {Reason}",
+                    target.ArchiveRtId, what, RetryBackoff[attempt - 1], ex.Message);
+                await Task.Delay(RetryBackoff[attempt - 1], timeProvider, cancellationToken);
+            }
+        }
+    }
+
+    /// <summary>Segments per shard the merge after a load aims at: one per <paramref name="maxDocsPerSegment"/> rows of a shard, at least one.</summary>
+    internal static int SegmentsPerShard(long rows, int shards, long maxDocsPerSegment)
+    {
+        var perShard = rows / Math.Max(shards, 1) + (rows % Math.Max(shards, 1) == 0 ? 0 : 1);
+        return (int)Math.Clamp((perShard + maxDocsPerSegment - 1) / Math.Max(maxDocsPerSegment, 1), 1, 1000);
+    }
+
+    private async Task<int> ReadShardCountAsync(ArchiveCopyTarget target, ArchiveCopyOptions options, CancellationToken cancellationToken)
+    {
+        var result = await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain(
+            "SELECT number_of_shards FROM information_schema.tables " +
+            $"WHERE table_schema = {CopyStatement.Literal(target.Schema)} AND table_name = {CopyStatement.Literal(target.TableName)}",
+            returnsRows: true), options.CommandTimeout, cancellationToken);
+        var shards = result.Rows.Count == 0 ? 1 : (int)Long(result.Rows[0], "number_of_shards");
+        return Math.Max(shards, 1);
     }
 
     private async Task<TableSettings> ReadTableSettingsAsync(
@@ -466,21 +660,27 @@ internal sealed class StagingCopyRunner(ILogger logger, string tenantId, ICrateC
         {
             try
             {
+                var expectedRows = plan.Slices.Where(s => s.Table == ArchiveCopyTable.Data).Sum(s => s.RowCount);
+                var segments = SegmentsPerShard(expectedRows, await ReadShardCountAsync(target, options, cancellationToken),
+                    maxDocsPerMergedSegment);
                 await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain(
-                    $"OPTIMIZE TABLE {target.QualifiedTable} WITH (max_num_segments = 1)"),
+                    $"OPTIMIZE TABLE {target.QualifiedTable} WITH (max_num_segments = {segments})"),
                     options.OptimizeTimeout, cancellationToken);
             }
             catch (Exception ex) when (IsStatementFailure(ex))
             {
-                // The merge only saves space and read time; the data is complete without it.
+                // The merge only saves space and read time; the data is complete without it. A merge that runs a node out of
+                // memory takes the node down (AB#7274): the statements below wait for it to come back.
                 logger.LogWarning("The segment merge of archive {ArchiveRtId} failed: {Reason}", target.ArchiveRtId, ex.Message);
             }
 
-            await client.ExecuteStatementAsync(tenantId, CopyStatement.Plain($"REFRESH TABLE {target.QualifiedTable}"),
-                options.CommandTimeout, cancellationToken);
+            await RetryWhileStorageRecoversAsync(target, "refresh after the merge", () => client.ExecuteStatementAsync(
+                tenantId, CopyStatement.Plain($"REFRESH TABLE {target.QualifiedTable}"), options.CommandTimeout, cancellationToken),
+                cancellationToken);
         }
 
-        var rows = await CountAsync($"SELECT COUNT(*) FROM {target.QualifiedTable}", options, cancellationToken);
+        var rows = await RetryWhileStorageRecoversAsync(target, "row count", () =>
+            CountAsync($"SELECT COUNT(*) FROM {target.QualifiedTable}", options, cancellationToken), cancellationToken);
         var expected = plan.Slices.Where(s => s.Table == ArchiveCopyTable.Data).Sum(s => s.RowCount);
         if (rows != expected)
         {

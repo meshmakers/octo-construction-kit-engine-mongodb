@@ -32,7 +32,10 @@ internal sealed record RollupAnalysis(
     public static RollupAnalysis Unchecked(RollupNotChecked notChecked) => new(false, [], [], [], null, [], notChecked);
 
     /// <summary>True when there is no table to repair: the repair leaves such a rollup alone.</summary>
-    public bool HasNoTable => NotChecked is { Cause: RollupNotCheckedCause.NoLiveTable or RollupNotCheckedCause.NeverActivated };
+    public bool HasNoTable => NotChecked is
+    {
+        Cause: RollupNotCheckedCause.NoLiveTable or RollupNotCheckedCause.NeverActivated or RollupNotCheckedCause.Disabled
+    };
 }
 
 /// <summary>
@@ -51,7 +54,7 @@ internal sealed record RollupAnalysis(
 /// a source holds rows in between: the forward aggregation would never fill the gap.</description></item>
 /// <item><description><b>(d) missing generation map</b> - a rollup table without its pointer table.</description></item>
 /// </list>
-/// A rollup that cannot be inspected - no table (a restore that failed to load it, or never activated) or a source that is missing -
+/// A rollup that cannot be inspected - no table (a restore that failed to load it, never activated, or disabled) or a source that is missing -
 /// is never reported as consistent: its entry carries <see cref="RollupConsistencyEntry.NotChecked"/> with the reason, and the report
 /// is not ok while any entry has one (AB#6968).
 /// </remarks>
@@ -99,8 +102,8 @@ internal sealed class RollupConsistencyValidator(
 
         if (analysis.NotChecked is { } notChecked)
         {
-            // A rollup that was never activated is a normal state (it has no table by design): not a warning on every start.
-            logger.Log(notChecked.Cause == RollupNotCheckedCause.NeverActivated ? LogLevel.Information : LogLevel.Warning,
+            // A rollup that was never activated or is disabled is a normal state without a table: not a warning on every start.
+            logger.Log(notChecked.IsBlocking ? LogLevel.Warning : LogLevel.Information,
                 "Rollup {RollupRtId} of tenant {TenantId} could not be checked ({Cause}): {Reason}",
                 rollup.RtId, tenantId, notChecked.Cause, notChecked.Reason);
         }
@@ -117,12 +120,17 @@ internal sealed class RollupConsistencyValidator(
         if (!await TableExistsAsync(liveName, cancellationToken))
         {
             // Nothing is found in a rollup that has no table because there is nothing to look at, which is not "consistent".
-            return RollupAnalysis.Unchecked(rollup.Status == CkArchiveStatus.Created
-                ? new RollupNotChecked(RollupNotCheckedCause.NeverActivated,
-                    $"Rollup {rollup.RtId} was never activated (status Created) and has no table {liveName}; there is nothing to check.")
-                : new RollupNotChecked(RollupNotCheckedCause.NoLiveTable,
+            return RollupAnalysis.Unchecked(rollup.Status switch
+            {
+                CkArchiveStatus.Created => new RollupNotChecked(RollupNotCheckedCause.NeverActivated,
+                    $"Rollup {rollup.RtId} was never activated (status Created) and has no table {liveName}; there is nothing to check."),
+                CkArchiveStatus.Disabled => new RollupNotChecked(RollupNotCheckedCause.Disabled,
+                    $"Rollup {rollup.RtId} is disabled and has no table {liveName}; there is nothing to check. " +
+                    "To use it, activate it."),
+                _ => new RollupNotChecked(RollupNotCheckedCause.NoLiveTable,
                     $"Rollup {rollup.RtId} (status {rollup.Status}) has no table {liveName}; nothing could be checked. " +
-                    "A restore that failed to load this rollup leaves this state: restore it again or activate it, then validate."));
+                    "A restore that failed to load this rollup leaves this state: restore it again or activate it, then validate.")
+            });
         }
 
         var findings = new List<RollupConsistencyFinding>();

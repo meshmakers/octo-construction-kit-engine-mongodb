@@ -76,4 +76,19 @@ public interface IStreamDataRepositoryFactory
     Task<StagingCopyReadiness> CheckStagingCopyReadinessAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(new StagingCopyReadiness(false, false, null,
             "This stream data backend does not support the native copy to a staging location."));
+
+    /// <summary>
+    /// Asks the storage cluster whether the archive data of a restore fits on its nodes below the disk watermarks
+    /// (<c>cluster.routing.allocation.disk.watermark.high</c>) - before the restore changes anything. The estimate is the
+    /// staged (gzip) bytes times a measured size factor, over the copies the tables will have (replicas are switched on again after
+    /// the load) and the nodes.
+    /// </summary>
+    /// <param name="stagedBytes">Sum of the staged files of all archives of the backup.</param>
+    /// <param name="cancellationToken">Cancels the check.</param>
+    /// <remarks>
+    /// Side-effect free (reads of the node disks and two cluster settings). Space that the restore frees by replacing tables of the
+    /// target tenant is not subtracted. A backend with no disk to ask about does not refuse (<see cref="StagingDiskHeadroom.NotChecked"/>).
+    /// </remarks>
+    Task<StagingDiskHeadroom> CheckStagingDiskHeadroomAsync(long stagedBytes, CancellationToken cancellationToken = default)
+        => Task.FromResult(StagingDiskHeadroom.NotChecked(stagedBytes));
 }

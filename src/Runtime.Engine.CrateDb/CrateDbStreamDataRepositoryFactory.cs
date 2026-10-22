@@ -86,6 +86,30 @@ internal sealed class CrateDbStreamDataRepositoryFactory : IStreamDataRepository
             cancellationToken);
 
     /// <inheritdoc />
+    public async Task<StagingDiskHeadroom> CheckStagingDiskHeadroomAsync(long stagedBytes, CancellationToken cancellationToken = default)
+    {
+        if (_databaseClient is not ICrateCopyClient copyClient)
+        {
+            return StagingDiskHeadroom.NotChecked(stagedBytes);
+        }
+
+        try
+        {
+            var (nodes, watermark) = await StagingDiskHeadroomCheck.ReadAsync(
+                copyClient, StagingCopyReadinessProbe.ClusterConnectionLabel, new ArchiveCopyOptions().CommandTimeout, cancellationToken);
+            return StagingDiskHeadroomCheck.Evaluate(stagedBytes, StagingCopyRunner.DiskSpaceFactor, StagingDiskHeadroomCheck.DefaultReplicas,
+                nodes, watermark, "Loading the archive data of the backup");
+        }
+        catch (Exception ex) when (ex is StreamDataCopyStatementException or StreamDataStatementTimeoutException)
+        {
+            // The per-archive check asks again before every table; a node list that cannot be read does not stop a restore.
+            _loggerFactory.CreateLogger<CrateDbStreamDataRepositoryFactory>().LogWarning(
+                "The disk space of the storage nodes could not be read; the backup as a whole is not checked: {Reason}", ex.Message);
+            return StagingDiskHeadroom.NotChecked(stagedBytes);
+        }
+    }
+
+    /// <inheritdoc />
     public Task DeleteTenantStateAsync(string tenantId, CancellationToken cancellationToken = default)
         => TenantStateTableDrop.DropAsync(_databaseClient, _managementClient, tenantId, _recomputeProcessState, cancellationToken);
 

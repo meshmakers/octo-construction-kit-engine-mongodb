@@ -1367,6 +1367,13 @@ The full text is `docs/streamdata-archive-concept.md` §18a and, for the sweep, 
   map is the last slice of a plan: a dump copies it first and the data after it, a load the data first and the map last. The
   repeat rule is `RollupArchiveDumper` (read map, copy, read map; repeat up to `MaxMapAttempts`, then
   `GenerationMapKeptMoving`). The plan in a dump result carries the rows the copy *reported*, not the counted rows.
+- **Slice retry and disk headroom (AB#7274)**: `CopySliceFromAsync` loads a slice up to 3 times; only a transient failure
+  (`CopyFailureClassifier`: circuit breaker, rejected execution, node/shard not available, statement timeout, a `RETURN SUMMARY` that is short with
+  `error_count = 0`, rejected rows that all carry such a text) is repeated, after 30 s and 60 s, with `overwrite_duplicates = true` and half the
+  `bulk_size` (5000, 2500) of the attempt before; after a repeat the slice's range is counted and must equal the manifest. Policy constants
+  stay in the runner. The disk check (`StagingDiskHeadroomCheck`) works against the room **below the high disk watermark**, with the replicas the
+  table gets back (`min(1 + replicas, nodes)` copies) and `DiskSpaceFactor` 12; it runs per archive and, through
+  `IStreamDataRepositoryFactory.CheckStagingDiskHeadroomAsync`, for the whole backup before the MongoDB restore. Details: `docs/streamdata-archive-concept.md` §18a.
 - **Sweep grace period** (`StreamData:Recompute:SweepGracePeriod`, default 2 h, 0 = at once): a recompute no longer sweeps
   or removes contained pointer entries at the flip; it writes a row into `archive_<rtId>__sweep`
   (`PendingSweepSqlBuilder`, every column explicit - AB#6647) and `SweepDueAsync` executes the due ones (at the start of a
@@ -1374,8 +1381,10 @@ The full text is `docs/streamdata-archive-concept.md` §18a and, for the sweep, 
   strictly *below* the entry's generation and drops the record of an entry that was replaced. The once-per-process reclaim
   pass skips entries with a record. A repository/executor built without options keeps the immediate sweep.
 - **NotChecked (AB#6968)**: a rollup the validator cannot look at gets `RollupConsistencyEntry.NotChecked` (`NoLiveTable`,
-  `NeverActivated`, `SourceMissing` + reason, `IsBlocking`) and is not ok unless it is `NeverActivated` (informational: a rollup without
-  data cannot be inconsistent, and blocking would stop the whole tenant's rollups for good); `RollupConsistencyReport.IsOk` is false
+  `NeverActivated`, `SourceMissing`, `Disabled` + reason, `IsBlocking`) and is not ok unless it is `NeverActivated` or `Disabled` (status
+  Disabled, no table - AB#7274: legacy rollups disabled in the source kept the marker of every restore; informational: a rollup without
+  data cannot be inconsistent, and blocking would stop the whole tenant's rollups for good; a failed restore load keeps the marker through
+  the job's `ArchiveFailed` entry); `RollupConsistencyReport.IsOk` is false
   while any entry blocks, the repair skips a rollup without a table, and the marker is not cleared (`RollupRepairer`: also not after a repair of some rollups unless the
   whole tenant validates ok). Tests: `RollupConsistencyValidatorTests`, `RollupRepairerTests`, `RollupReconcileIntegrationTests`.
 - **Validate / repair** (`Reconcile/`): `RollupConsistencyValidator` is read only (counts, MIN/MAX); the checks work on the

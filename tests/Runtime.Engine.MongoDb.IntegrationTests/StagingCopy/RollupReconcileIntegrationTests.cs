@@ -105,12 +105,13 @@ public class RollupReconcileIntegrationTests(CrateStagingCopyFixture fixture)
     [Fact]
     public async Task ARollupEntityWithoutItsTable_IsNotChecked_TheReportIsNotOk_AndTheMarkerStaysSetAfterARepair()
     {
-        // The state a restore leaves when the load of a rollup failed: the entity exists (status Disabled), the table does not.
+        // An activated rollup whose table is gone: the entity exists, the table does not. (A restore that failed to load a rollup
+        // leaves it Disabled; the restore job reports that archive as failed itself and keeps the marker, AB#7274.)
         var tenant = CrateStagingCopyFixture.NewTenantId();
         var rollup = OctoObjectId.GenerateNewId();
         var source = OctoObjectId.GenerateNewId();
         await fixture.CreateRawArchiveAsync(tenant, source, 24);
-        var snapshot = new RollupArchiveSnapshot(rollup, new RtCkId<CkTypeId>("Test", new CkTypeId("Sensor")), CkArchiveStatus.Disabled,
+        var snapshot = new RollupArchiveSnapshot(rollup, new RtCkId<CkTypeId>("Test", new CkTypeId("Sensor")), CkArchiveStatus.Activated,
             "hourly", [new RollupSourceReference(source)], TimeSpan.FromHours(1), TimeSpan.Zero, null,
             [new CkRollupAggregationSpec("Value", CkRollupFunction.Sum, null)], null);
         var repository = fixture.NewReconcileRepository(tenant, [snapshot], [source]);
@@ -134,14 +135,17 @@ public class RollupReconcileIntegrationTests(CrateStagingCopyFixture fixture)
             $"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '{TenantSchema.ArchiveTableName(rollup.ToString())}'"));
     }
 
-    [Fact]
-    public async Task ARollupThatWasNeverActivated_IsListedAsInformation_AndTheMarkerIsClearedByARepair()
+    [Theory]
+    [InlineData(CkArchiveStatus.Created, RollupNotCheckedCause.NeverActivated)]
+    [InlineData(CkArchiveStatus.Disabled, RollupNotCheckedCause.Disabled)] // AB#7274: legacy rollups disabled in the source tenant
+    public async Task ARollupWithoutDataByDesign_IsListedAsInformation_AndTheMarkerIsClearedByARepair(
+        CkArchiveStatus status, RollupNotCheckedCause cause)
     {
         var tenant = CrateStagingCopyFixture.NewTenantId();
         var rollup = OctoObjectId.GenerateNewId();
         var source = OctoObjectId.GenerateNewId();
         await fixture.CreateRawArchiveAsync(tenant, source, 24);
-        var snapshot = new RollupArchiveSnapshot(rollup, new RtCkId<CkTypeId>("Test", new CkTypeId("Sensor")), CkArchiveStatus.Created,
+        var snapshot = new RollupArchiveSnapshot(rollup, new RtCkId<CkTypeId>("Test", new CkTypeId("Sensor")), status,
             "hourly", [new RollupSourceReference(source)], TimeSpan.FromHours(1), TimeSpan.Zero, null,
             [new CkRollupAggregationSpec("Value", CkRollupFunction.Sum, null)], null);
         var repository = fixture.NewReconcileRepository(tenant, [snapshot], [source]);
@@ -150,7 +154,7 @@ public class RollupReconcileIntegrationTests(CrateStagingCopyFixture fixture)
         var report = await repository.ValidateRollupsAsync(null, Ct);
         var repair = await repository.RepairRollupsAsync(null, dryRun: false, Ct);
 
-        Assert.Equal(RollupNotCheckedCause.NeverActivated, report.Rollups.Single().NotChecked!.Cause);
+        Assert.Equal(cause, report.Rollups.Single().NotChecked!.Cause);
         Assert.False(report.Rollups.Single().NotChecked!.IsBlocking);
         Assert.True(report.IsOk);
         Assert.True(repair.IsOk);

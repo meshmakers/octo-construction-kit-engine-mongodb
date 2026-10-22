@@ -103,6 +103,22 @@ public class CopyStatementTests
     }
 
     [Fact]
+    public void CopyFrom_BulkSize_IsWrittenOnlyWhenSet_AndThenOwnedByTheStatement()
+    {
+        Assert.DoesNotContain("bulk_size", CopyStatement.CopyFrom(Table, S3(), overwriteDuplicates: false).Reveal());
+        var statement = CopyStatement.CopyFrom(Table, S3(), overwriteDuplicates: true, bulkSize: 5000);
+        Assert.Contains("overwrite_duplicates = true, bulk_size = 5000", statement.Reveal());
+        Assert.Contains("bulk_size = 5000", statement.Redacted);
+        AssertNoCanary(statement.Redacted);
+
+        var location = new ArchiveCopyStagingLocation("s3://h/b/p", new Dictionary<string, string> { ["bulk_size"] = "100" });
+        // a location may set it while the statement leaves it alone (today's behaviour) ...
+        Assert.Contains("bulk_size = 100", CopyStatement.CopyFrom(Table, location, false).Reveal());
+        // ... but not when the statement owns it
+        Assert.Throws<ArgumentException>(() => CopyStatement.CopyFrom(Table, location, true, 5000));
+    }
+
+    [Fact]
     public void OptionNames_BecomeIdentifiers_SoOnlyPlainNamesAreAccepted_WithoutEchoingTheValue()
     {
         var location = new ArchiveCopyStagingLocation("s3://h/b/p",
