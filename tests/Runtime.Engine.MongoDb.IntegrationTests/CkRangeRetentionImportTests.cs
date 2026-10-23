@@ -357,7 +357,7 @@ public class CkRangeRetentionImportTests(CkModelImportMigrationFixture fixture)
                 await StatesAsync(database, "ExactBot", "ExactComm", "RrBase", "RangeDep"));
 
             // Import through the CK model repository (ExecuteImport → ValidateDependencies, where D2 threw).
-            // The tenant-level ImportCkModelAsync would afterwards re-import the host's EMBEDDED System 2.5.0
+            // The tenant-level ImportCkModelAsync would afterwards re-import the host's EMBEDDED System
             // (TenantContext.UpdateSystemCkModelAsync has no downgrade guard) — in production every service
             // embeds the new System, in this test host only the old one exists.
             var nextSystem = await NextSystemMinorAsync(system);
@@ -441,9 +441,23 @@ public class CkRangeRetentionImportTests(CkModelImportMigrationFixture fixture)
             record.Attributes?.ForEach(a => a.CkAttributeId = Map(a.CkAttributeId)!);
         }
 
+        // The embedded System declares interfaces since 2.7.0 (AB#6929): their references name the model too.
+        foreach (var ckInterface in model.Interfaces ?? [])
+        {
+            ckInterface.Extends = ckInterface.Extends?.Select(e => Map(e)!).ToList();
+            ckInterface.Attributes.ForEach(a => a.CkAttributeId = Map(a.CkAttributeId)!);
+            foreach (var association in ckInterface.Associations ?? [])
+            {
+                association.CkRoleId = Map(association.CkRoleId)!;
+                association.TargetCkTypeId = Map(association.TargetCkTypeId);
+                association.TargetCkInterfaceId = Map(association.TargetCkInterfaceId);
+            }
+        }
+
         foreach (var type in model.Types ?? [])
         {
             type.DerivedFromCkTypeId = Map(type.DerivedFromCkTypeId);
+            type.Implements = type.Implements?.Select(i => Map(i)!).ToList();
             type.Attributes?.ForEach(a => a.CkAttributeId = Map(a.CkAttributeId)!);
             foreach (var association in type.Associations ?? [])
             {

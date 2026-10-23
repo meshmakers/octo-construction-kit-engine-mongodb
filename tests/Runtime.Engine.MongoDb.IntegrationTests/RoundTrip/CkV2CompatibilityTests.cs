@@ -205,11 +205,24 @@ public class CkV2CompatibilityTests(CkModelImportGuardFixture fixture)
     [Fact]
     public async Task ModelRequiringANewerEngine_IsRefusedBeforeTheInstalledVersionIsTouched()
     {
-        // Pin the running engine: DebugL is 999.0.0, CI 0.1.* (check skipped), release builds 3.x (AB#6274).
-        using var _ = CkEngineVersion.OverrideCurrentForTests(new Version(3, 4, 149));
         await WithTenantAsync("minengine", async (tenant, tenantId) =>
         {
             var systemId = await InstalledSystemAsync(tenantId);
+
+            // Pin the running engine: DebugL is 999.0.0, CI 0.1.* (check skipped), release builds 3.x (AB#6274).
+            // Pinned only after the tenant exists and never below the installed System's own minEngineVersion
+            // (the embedded System is a ckLanguage 2 model since 2.6.0, AB#6928, and every model depending on it
+            // inherits that requirement). The test is about the models it imports, not about System.
+            var systemModel = await GetTenantDatabase(tenantId).GetCollection<BsonDocument>("CkModel")
+                .Find(new BsonDocument("_id", systemId.FullName)).SingleAsync(TestContext.Current.CancellationToken);
+            var pinned = new Version(3, 4, 149);
+            if (systemModel.TryGetValue("minEngineVersion", out var systemMin) && systemMin.IsString
+                && Version.TryParse(systemMin.AsString, out var systemMinVersion) && systemMinVersion > pinned)
+            {
+                pinned = systemMinVersion;
+            }
+
+            using var _ = CkEngineVersion.OverrideCurrentForTests(pinned);
             CkCompiledModelRoot Model(string modelId, string? minEngineVersion) => new()
             {
                 ModelId = new CkModelId(modelId),
@@ -293,15 +306,22 @@ public class CkV2CompatibilityTests(CkModelImportGuardFixture fixture)
 
             var database = GetTenantDatabase(tenantId);
             var models = (await database.GetCollection<BsonDocument>("CkModel").Find(FilterDefinition<BsonDocument>.Empty)
-                .ToListAsync(TestContext.Current.CancellationToken)).Select(d => d["_id"].AsString).ToList();
+                .ToListAsync(TestContext.Current.CancellationToken)).Select(d => d["_id"].AsString)
+                .Where(id => !id.StartsWith("System-", StringComparison.Ordinal)).ToList();
             var actual = await CkDocumentSnapshot.TakeAsync(database, models, TestContext.Current.CancellationToken);
             var golden = await File.ReadAllTextAsync(
                 Path.Combine(AppContext.BaseDirectory, "testData", "ckv2-golden-main-v1-ck-documents.txt"),
                 TestContext.Current.CancellationToken);
 
+            // The documents of the System model follow the embedded System (the golden file was written against
+            // 2.5.0; System 2.6.0/2.7.0 are ckLanguage 2 with interfaces, AB#6928/AB#6929) and are covered by the
+            // System model's own tests. What this test proves is that the classic Test model is written
+            // byte-identically, so the System rows are left out and its references to System compare version-agnostic.
             var expectedLines = golden.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                .Select(CkDocumentSnapshot.NormalizeLine).ToList();
-            var actualLines = actual.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                .Where(l => !CkDocumentSnapshot.IsOwnedBySystem(l))
+                .Select(CkDocumentSnapshot.NormalizeLine).Select(CkDocumentSnapshot.MaskSystemVersion).ToList();
+            var actualLines = actual.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(CkDocumentSnapshot.MaskSystemVersion).ToArray();
             var missing = expectedLines.Except(actualLines).ToList();
             var extra = actualLines.Except(expectedLines).ToList();
             Assert.True(missing.Count == 0 && extra.Count == 0,
