@@ -55,6 +55,29 @@ internal static class CkDocumentSnapshot
     }
 
     /// <summary>
+    ///     True when the snapshot line is a document owned by the System model (the <c>CkModel</c> row itself or a
+    ///     row whose <c>ckModelId</c> is a System version). Those rows follow the embedded System (AB#6929), not the
+    ///     model under test.
+    /// </summary>
+    internal static bool IsOwnedBySystem(string line)
+    {
+        var separator = line.IndexOf(' ');
+        var document = BsonDocument.Parse(line[(separator + 1)..]);
+        var owner = line[..separator] == "CkModel" ? document["_id"] : document.GetValue("ckModelId", BsonNull.Value);
+        return owner.IsString && owner.AsString.StartsWith("System-", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     Replaces every concrete System version (<c>System-2.5.0</c>) by <c>System-*</c>: a golden file written
+    ///     against one embedded System must stay valid for the next (AB#6929).
+    /// </summary>
+    internal static string MaskSystemVersion(string line) =>
+        SystemVersionPattern.Replace(line, "System-*");
+
+    private static readonly System.Text.RegularExpressions.Regex SystemVersionPattern =
+        new(@"System-\d+\.\d+\.\d+", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
     ///     Removes what differs between two imports of the same model by design: generated ObjectId <c>_id</c>s and
     ///     the <c>appliedAt</c> timestamp of index states.
     /// </summary>
