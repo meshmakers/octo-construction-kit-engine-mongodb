@@ -291,6 +291,9 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
             await tenant.ImportCkModelAsync(next);
 
             Assert.Equal(["KitchenSinkCs-1.1.0/Named-1"], await IdsAsync(database, "CkInterface", "_id", "KitchenSinkCs-1.1.0"));
+            // Nothing of 1.0.0 is left behind (the queries are scoped per model, so check the old version explicitly).
+            Assert.Empty(await IdsAsync(database, "CkInterface", "_id", "KitchenSinkCs-1.0.0"));
+            Assert.Empty(await ImplementationsAsync(database, "KitchenSinkCs-1.0.0"));
             Assert.Equal(
             [
                 "KitchenSinkCs-1.1.0/Thing-1 -> KitchenSinkCs-1.1.0/Named-1",
