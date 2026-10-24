@@ -778,6 +778,37 @@ Rules:
 - Tests: `ImportAfterArchiveTests` (rtId, Upsert, Erase, to-one and N:M edges, `Unique` vs `UniqueNotDeleted`),
   `DuplicateKeyMessageParserTests`.
 
+## Atomic update of one RecordArray item (AB#7445)
+
+Engine contract and rules: engine `CLAUDE.md`, "Atomic update of one RecordArray item". This repository executes it:
+`MongoDbDataSourceCollection.UpdateOneWithRecordArrayItemsAsync` (called by `BulkRtMutation` for an update info with
+`RecordArrayItemUpdates`) builds ONE `updateOne` with `RecordArrayItemUpdateStatement`:
+
+```
+filter : { _id, attributes.<arr>: { $type: "array" } ...,
+           (item-only) $or: [ { attributes.<arr>: { $elemMatch: { "attributes.<matchMember>": <value> } } } ... ] }
+update : { $set: { "attributes.<arr>.$[i0].attributes.<member>": <value>, ...,   // + the regular attribute $sets
+                   rtChangedDateTime }, $inc: { rtVersion: 1 } }
+options: arrayFilters: [ { "i0.attributes.<matchMember>": <value> } ... ]
+```
+
+- A stored record is `{ ckRecordId, attributes: { <camelCaseMember>: value } }`, hence the `.attributes.` segment in the item path.
+- **No read, no version check, no retry.** Different items of one entity never interfere; the same item keeps the last write.
+  Two transactions that overlap on one document still fail fast with MongoDB's `TransientTransactionError` (as for any update);
+  the caller runs the transaction again. The write itself no longer depends on a value read earlier.
+- `$[iN]` needs the array path to exist, so the filter requires every referenced attribute to be an array. **Item-only** update:
+  it also requires one matching item - otherwise `matchedCount` is 0, nothing is written (no `rtVersion` bump) and the method
+  returns `false` (engine warning 27). **Mixed** update (regular attributes in the same info): the regular attributes are written
+  even when the array is missing or null (second plain `updateOne` as fallback; a missing entity throws as for any update).
+  An entry that matches no item while others match is a silent no-op for that entry.
+- `rtVersion` is incremented once and `rtChangedDateTime` set by the shared `ApplyUpdate`; the change stream shows a normal
+  `update` event (`updatedFields`: `rtVersion`, `rtChangedDateTime`, `attributes.<arr>.<index>.attributes.<member>`).
+- The AB#5148 `attributes: null` repair runs first when the info carries regular attributes.
+- Tests (real MongoDB): `RecordArrayItemUpdateTests` (60 iterations of two/three parallel updates of different items with and
+  without transaction, same item, no match, mixed, change stream, Secret member refused, invalid updates) and
+  `DataPermissionEnforcementTests.RecordArrayItemUpdate_FollowsTheWritePermissionsOfTheEntity`. The test model
+  (`tests/TestCkModel`) got the record `DataPoint` and the type `ItemUpdateHolder` for it.
+
 ## Key Classes
 
 - `TenantRepository` - Main repository for tenant-specific data operations

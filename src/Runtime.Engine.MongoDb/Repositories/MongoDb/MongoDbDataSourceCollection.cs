@@ -548,6 +548,57 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         return result.MatchedCount > 0;
     }
 
+    public async Task<bool> UpdateOneWithRecordArrayItemsAsync(IOctoSession session, TDocument document,
+        IReadOnlyCollection<RtRecordArrayItemUpdate> itemUpdates, bool requireItemMatch)
+    {
+        // AB#7445: ONE atomic statement - the regular attribute updates (ApplyUpdate: attributes, rtChangedDateTime,
+        // $inc rtVersion) plus $set on attributes.<array>.$[iN].attributes.<member> with arrayFilters on the match
+        // member. The stored document is neither read nor version-checked, so a concurrent update of another item (or
+        // the same item) of the same entity cannot be lost; the same item keeps the last write.
+        var id = _mongoDataSourceMapper.GetId(document);
+        var statement = RecordArrayItemUpdateStatement<TDocument>.Create(itemUpdates);
+        var sessionHandle = ((IOctoSessionInternal)session).SessionHandle;
+        var hasRegularAttributes = RequiresNullAttributesRepair(document);
+
+        if (hasRegularAttributes)
+        {
+            // AB#5148: a stored `attributes: null` would make the subpath $sets fail (see UpdateOneAsync).
+            var repairModel = CreateNullAttributesRepairModel(id);
+            await _documentCollection.UpdateOneAsync(sessionHandle, repairModel.Filter, repairModel.Update);
+        }
+
+        var filter = Builders<TDocument>.Filter.And(Builders<TDocument>.Filter.BuildIdFilter(id),
+            statement.ArraysExistFilter);
+        if (requireItemMatch)
+        {
+            // Nothing else to write: no matching item means no write at all (no rtVersion bump).
+            filter = Builders<TDocument>.Filter.And(filter, statement.AnyItemMatchesFilter);
+        }
+
+        var update = Builders<TDocument>.Update.Combine(
+            new[] { _mongoDataSourceMapper.ApplyUpdate(document) }.Concat(statement.Sets));
+        var result = await _documentCollection.UpdateOneAsync(sessionHandle, filter, update,
+            new UpdateOptions { ArrayFilters = statement.ArrayFilters });
+        ThrowIfNotAcknowledged(result.IsAcknowledged);
+        if (result.MatchedCount > 0)
+        {
+            return true;
+        }
+
+        if (requireItemMatch)
+        {
+            return false;
+        }
+
+        // Regular attributes to write but an array is missing (or null) on the stored entity, so no item can match:
+        // write the regular attributes alone; a missing entity is an error as for any update.
+        var fallback = await _documentCollection.UpdateOneAsync(sessionHandle,
+            Builders<TDocument>.Filter.BuildIdFilter(id), _mongoDataSourceMapper.ApplyUpdate(document));
+        ThrowIfNotAcknowledged(fallback.IsAcknowledged);
+        ThrowIfMatchedCountZero<TDocument>(fallback.MatchedCount, id);
+        return true;
+    }
+
     public async Task UpdateManyAsync(IOctoSession session, Expression<Func<TDocument, bool>> expression,
         TDocument document)
     {

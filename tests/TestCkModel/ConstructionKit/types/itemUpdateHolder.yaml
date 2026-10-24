@@ -1,0 +1,13 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+# AB#7445: collection root with a RecordArray whose items are updated atomically.
+types:
+  - typeId: ItemUpdateHolder
+    description: Entity with a keyed RecordArray of data points.
+    derivedFromCkTypeId: ${System}/Entity
+    attributes:
+    - id: ${this}/Name
+      name: Name
+      isOptional: true
+    - id: ${this}/ItemUpdate.Points
+      name: Points
+      isOptional: true

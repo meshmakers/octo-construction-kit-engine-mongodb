@@ -292,6 +292,9 @@ public class CkV2CompatibilityTests(CkModelImportGuardFixture fixture)
     ///     semantics", no longer "unchanged bytes" for newly compiled models: see
     ///     <see cref="RangeRetainingImport_WritesRangesMinEngineVersionAndMajorQualifiedReferences" /> for the default.
     ///     Regenerate only when the System or Test model itself changes (both lines must change together in that case).
+    ///     AB#7445 added the record DataPoint, its four attributes and the type ItemUpdateHolder to the Test model; their
+    ///     seven lines were appended to the golden file from this writer's output (same serializer path as every other
+    ///     element of the file, a main-engine capture of exactly these elements does not exist).
     /// </summary>
     [Fact]
     public async Task V1Import_WritesTheSameCkDocumentsAsTheMainEngine()

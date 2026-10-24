@@ -1,0 +1,17 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+# AB#7445: atomic update of one RecordArray item (ItemUpdateHolder.Points of DataPoint records, keyed by ExternalId).
+# Asserted by RecordArrayItemUpdateTests (concurrent updates, no match, mixed updates, validation).
+attributes:
+  - id: ItemUpdate.ExternalId
+    description: Key of a data point.
+    valueType: String
+  - id: ItemUpdate.CurrentValue
+    description: Current value of a data point.
+    valueType: Double
+  - id: ItemUpdate.Label
+    description: Label of a data point.
+    valueType: String
+  - id: ItemUpdate.Points
+    description: Data points keyed by ExternalId.
+    valueType: RecordArray
+    valueCkRecordId: ${this}/DataPoint
