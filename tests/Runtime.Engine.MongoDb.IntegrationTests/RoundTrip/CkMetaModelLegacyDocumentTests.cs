@@ -200,6 +200,46 @@ public class CkMetaModelLegacyDocumentTests
     }
 
     [Fact]
+    public void MethodAuthorizationDataAccess_RoundTrips_AndUndeclaredIsOmittedAndReadsAsNull()
+    {
+        // AB#7036: a declared value is persisted (Read and an explicit Write alike) ...
+        var methods = new List<CkMethodDto>
+        {
+            new() { MethodId = "Peek-1", Authorization = new CkMethodAuthorizationDto { Roles = ["Reader"], DataAccess = CkMethodDataAccessDto.Read } },
+            new() { MethodId = "Poke-1", Authorization = new CkMethodAuthorizationDto { Roles = ["Writer"], DataAccess = CkMethodDataAccessDto.Write } },
+            new() { MethodId = "Lock-1", Authorization = new CkMethodAuthorizationDto { Roles = ["Admin"] } }
+        };
+        var document = NewType(methods).ToBsonDocument();
+        Assert.Equal((int)CkMethodDataAccessDto.Read, document["methods"][0]["authorization"]["dataAccess"].AsInt32);
+        Assert.Equal((int)CkMethodDataAccessDto.Write, document["methods"][1]["authorization"]["dataAccess"].AsInt32);
+
+        // ... an undeclared one is left out (documents of models without the key stay byte-identical).
+        Assert.DoesNotContain("dataAccess", document["methods"][2]["authorization"].AsBsonDocument.Names);
+
+        var readBack = BsonSerializer.Deserialize<CkType>(document);
+        Assert.Equal(CkMethodDataAccessDto.Read, readBack.Methods![0].Authorization!.DataAccess);
+        Assert.Equal(CkMethodDataAccessDto.Write, readBack.Methods[1].Authorization!.DataAccess);
+        Assert.Null(readBack.Methods[2].Authorization!.DataAccess);
+        Assert.Equal(CkMethodDataAccessDto.Write, CkMethodAuthorization.Resolve(readBack.Methods[2].Authorization));
+    }
+
+    [Fact]
+    public void MethodAuthorization_WrittenBeforeTheDataAccessField_ReadsAsWrite()
+    {
+        var legacy = new BsonDocument
+        {
+            ["methodId"] = "Lock-1",
+            ["authorization"] = new BsonDocument { ["roles"] = new BsonArray { "Admin" }, ["allowSelf"] = true }
+        };
+
+        var method = BsonSerializer.Deserialize<CkMethodDto>(legacy);
+
+        Assert.Null(method.Authorization!.DataAccess);
+        Assert.Equal(CkMethodDataAccessDto.Write, CkMethodAuthorization.Resolve(method.Authorization));
+        Assert.True(method.Authorization.AllowSelf);
+    }
+
+    [Fact]
     public void MethodDocument_WrittenBeforeTheReplacesGenericCreateField_ReadsAsFalse()
     {
         var legacy = new BsonDocument

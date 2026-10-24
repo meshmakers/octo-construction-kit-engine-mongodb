@@ -45,6 +45,7 @@ types:
           roles: [ UserManagement ]
           allowSelf: true
           scopes: [ octo_api, extra ]
+          dataAccess: Read
         execution:
           timeoutSeconds: 30
           idempotent: true

@@ -92,6 +92,9 @@ public class CkMetaModelCacheRoundTripTests(CkModelImportMigrationFixture fixtur
             // the pipeline method of the kitchen sink is the parameterless static Reindex-1.
             Assert.Equal(CkMethodHandlers.Service, thing.AllMethods["ChangePassword-2"].Handler);
             Assert.Equal("service", thing.AllMethods["ChangePassword-2"].Definition.Execution?.Handler);
+            // AB#7036: the declared data access survives the tenant cache; undeclared methods read as Write.
+            Assert.Equal(CkMethodDataAccessDto.Read, thing.AllMethods["ChangePassword-2"].DataAccess);
+            Assert.Equal(CkMethodDataAccessDto.Write, thing.AllMethods["Ping-1"].DataAccess);
             Assert.Equal(CkMethodHandlers.Pipeline, thing.AllMethods["Reindex-1"].Handler);
             Assert.Equal("pipeline", thing.AllMethods["Reindex-1"].Definition.Execution?.Handler);
             Assert.Equal(60, thing.AllMethods["Reindex-1"].TimeoutSeconds);
