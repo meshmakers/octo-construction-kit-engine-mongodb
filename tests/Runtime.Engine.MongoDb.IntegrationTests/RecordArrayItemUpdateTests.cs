@@ -139,6 +139,26 @@ public class RecordArrayItemUpdateTests(ImportTestCkModelFixture fixture)
     }
 
     [Fact]
+    public async Task TwoEntriesForTheSameItemAndMember_AreMergedBeforeTheStatement_LastWins()
+    {
+        // Two $set on the same path through different array filters would be a MongoDB path conflict; the rule
+        // engine merges entries per attribute + match value first (later value wins).
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var rtId = OctoObjectId.GenerateNewId();
+        await InsertAsync(repository, NewHolder(rtId, ("A", 0.0), ("B", 5.0)));
+
+        var info = EntityUpdateInfo<RtEntity>.CreateRecordArrayItemUpdate(new RtEntityId(HolderTypeId, rtId),
+            new RtEntity(HolderTypeId, rtId, new Dictionary<string, object?>()),
+            [ItemUpdate("A", 1).ToUpdate(), ItemUpdate("A", 2).ToUpdate(), ItemUpdate("B", 9).ToUpdate()]);
+        await ApplyAsync(repository, info, new OperationResult(), useTransaction: true);
+
+        var points = await ReadPointsAsync(rtId);
+        Assert.Equal(2.0, points["A"]);
+        Assert.Equal(9.0, points["B"]);
+    }
+
+    [Fact]
     public async Task ItemUpdate_WritesOnlyTheNamedMember_BumpsVersionOnce_AndLeavesTheRestUntouched()
     {
         await fixture.ClearCollectionAsync();
