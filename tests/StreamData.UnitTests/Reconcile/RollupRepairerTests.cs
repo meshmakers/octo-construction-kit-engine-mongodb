@@ -218,7 +218,7 @@ public class RollupRepairerTests
     {
         _markerPending = true;
         var other = OctoObjectId.GenerateNewId();
-        var otherRollup = new RollupArchiveSnapshot(other, Type, CkArchiveStatus.Disabled, "hourly", [new RollupSourceReference(_source)],
+        var otherRollup = new RollupArchiveSnapshot(other, Type, CkArchiveStatus.Activated, "hourly", [new RollupSourceReference(_source)],
             TimeSpan.FromHours(1), TimeSpan.Zero, null, new[] { new CkRollupAggregationSpec("Value", CkRollupFunction.Sum, null) }, null);
         var asked = Snapshot();
         _liveExists = true;

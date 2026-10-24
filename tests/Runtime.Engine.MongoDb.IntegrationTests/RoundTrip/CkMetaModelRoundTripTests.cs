@@ -246,12 +246,13 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
                 Assert.All(t["attributes"].AsBsonArray, a => Assert.DoesNotContain("access", a.AsBsonDocument.Names));
             });
 
+            // Scoped to the classic model's own rows: the embedded System declares interfaces since 2.7.0 (AB#6929)
+            // and its own CkInterface / CkTypeInterfaceImplementation rows are not what this test is about.
+            var ownRows = new BsonDocument("ckModelId", TestV1ModelId.FullName);
             Assert.Equal(0, await database.GetCollection<BsonDocument>("CkInterface")
-                .CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty,
-                    cancellationToken: TestContext.Current.CancellationToken));
+                .CountDocumentsAsync(ownRows, cancellationToken: TestContext.Current.CancellationToken));
             Assert.Equal(0, await database.GetCollection<BsonDocument>("CkTypeInterfaceImplementation")
-                .CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty,
-                    cancellationToken: TestContext.Current.CancellationToken));
+                .CountDocumentsAsync(ownRows, cancellationToken: TestContext.Current.CancellationToken));
         });
     }
 
@@ -275,13 +276,13 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
 
             Assert.Equal(["KitchenSinkCs-1.0.0/Coded-1", "KitchenSinkCs-1.0.0/Labeled-1", "KitchenSinkCs-1.0.0/Legacy-1",
                     "KitchenSinkCs-1.0.0/Named-1"],
-                await IdsAsync(database, "CkInterface", "_id"));
+                await IdsAsync(database, "CkInterface", "_id", "KitchenSinkCs-1.0.0"));
             Assert.Equal(
             [
                 "KitchenSinkCs-1.0.0/Gadget-1 -> KitchenSinkCs-1.0.0/Coded-1",
                 "KitchenSinkCs-1.0.0/Thing-1 -> KitchenSinkCs-1.0.0/Named-1",
                 "KitchenSinkCs-1.0.0/Widget-1 -> KitchenSinkCs-1.0.0/Named-1"
-            ], await ImplementationsAsync(database));
+            ], await ImplementationsAsync(database, "KitchenSinkCs-1.0.0"));
 
             // The next version drops one implements entry and one interface: nothing of 1.0.0 is left behind.
             var next = CkV2KitchenSinkModel.Build(systemId, new CkModelId("KitchenSinkCs-1.1.0"));
@@ -289,14 +290,17 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
             next.Types!.Single(t => t.TypeId.Name == "Gadget").Implements = null;
             await tenant.ImportCkModelAsync(next);
 
-            Assert.Equal(["KitchenSinkCs-1.1.0/Named-1"], await IdsAsync(database, "CkInterface", "_id"));
+            Assert.Equal(["KitchenSinkCs-1.1.0/Named-1"], await IdsAsync(database, "CkInterface", "_id", "KitchenSinkCs-1.1.0"));
+            // Nothing of 1.0.0 is left behind (the queries are scoped per model, so check the old version explicitly).
+            Assert.Empty(await IdsAsync(database, "CkInterface", "_id", "KitchenSinkCs-1.0.0"));
+            Assert.Empty(await ImplementationsAsync(database, "KitchenSinkCs-1.0.0"));
             Assert.Equal(
             [
                 "KitchenSinkCs-1.1.0/Thing-1 -> KitchenSinkCs-1.1.0/Named-1",
                 "KitchenSinkCs-1.1.0/Widget-1 -> KitchenSinkCs-1.1.0/Named-1"
-            ], await ImplementationsAsync(database));
+            ], await ImplementationsAsync(database, "KitchenSinkCs-1.1.0"));
             Assert.All(await database.GetCollection<BsonDocument>("CkTypeInterfaceImplementation")
-                    .Find(FilterDefinition<BsonDocument>.Empty).ToListAsync(TestContext.Current.CancellationToken),
+                    .Find(new BsonDocument("ckModelId", "KitchenSinkCs-1.1.0")).ToListAsync(TestContext.Current.CancellationToken),
                 d => Assert.Equal(1, d["modelState"].AsInt32));
 
             await AssertRoundTripAsync(tenantId, next);
@@ -485,17 +489,19 @@ public class CkMetaModelRoundTripTests(CkModelImportMigrationFixture fixture)
         throw new InvalidOperationException("No installed System model found in the catalogs.");
     }
 
-    private static async Task<List<string>> IdsAsync(IMongoDatabase database, string collection, string field)
+    /// <summary>The rows of one model only: the embedded System declares interfaces of its own since 2.7.0 (AB#6929).</summary>
+    private static async Task<List<string>> IdsAsync(IMongoDatabase database, string collection, string field,
+        string ckModelId)
     {
         var documents = await database.GetCollection<BsonDocument>(collection)
-            .Find(FilterDefinition<BsonDocument>.Empty).ToListAsync(TestContext.Current.CancellationToken);
+            .Find(new BsonDocument("ckModelId", ckModelId)).ToListAsync(TestContext.Current.CancellationToken);
         return documents.Select(d => d[field].AsString).Order(StringComparer.Ordinal).ToList();
     }
 
-    private static async Task<List<string>> ImplementationsAsync(IMongoDatabase database)
+    private static async Task<List<string>> ImplementationsAsync(IMongoDatabase database, string ckModelId)
     {
         var documents = await database.GetCollection<BsonDocument>("CkTypeInterfaceImplementation")
-            .Find(FilterDefinition<BsonDocument>.Empty).ToListAsync(TestContext.Current.CancellationToken);
+            .Find(new BsonDocument("ckModelId", ckModelId)).ToListAsync(TestContext.Current.CancellationToken);
         return documents.Select(d => $"{d["ckTypeId"].AsString} -> {d["ckInterfaceId"].AsString}")
             .Order(StringComparer.Ordinal).ToList();
     }

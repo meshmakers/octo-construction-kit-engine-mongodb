@@ -336,9 +336,10 @@ public class StagingCopyRunnerTests
             Collect(Runner().CopyFromAsync(RestoreTarget, plan, Location, Small, Ct)));
 
         Assert.Equal(ArchiveCopyRefusalReason.InsufficientDiskSpace, ex.Reason);
-        var expectedPerNode = plan.Slices.Sum(s => s.StagedBytes!.Value) * StagingCopyRunner.DiskSpaceFactor / 2;
+        // two nodes, one replica after the load (0-1): every node holds one copy of the data
+        var expectedPerNode = plan.Slices.Sum(s => s.StagedBytes!.Value) * StagingCopyRunner.DiskSpaceFactor;
         Assert.Contains(FormattableString.Invariant($"{expectedPerNode / (double)(1L << 30):0.0} GiB per node"), ex.Message);
-        Assert.Contains("has 1.0 GiB available", ex.Message);
+        Assert.Contains("node 'node0' has 1.0 GiB available and room for 921.6 MiB below the high disk watermark (90%)", ex.Message);
         Assert.Contains("node0", ex.Message);
         Assert.DoesNotContain(_crate.Executed, s => s.StartsWith("ALTER", StringComparison.Ordinal));
         Assert.Empty(_crate.TargetRows);

@@ -39,6 +39,21 @@ public static class ClassicModelFactory
         var node = JsonNode.Parse(Encoding.UTF8.GetString(stream.ToArray()))!.AsObject();
         node.Remove("dependencyRanges");
         node.Remove("minEngineVersion");
+
+        // The catalog model was compiled against whichever System the test project's build saw (the System CK model
+        // package can lag the engine package CI runs against, AB#6929), so its exact-pinned dependency is set to
+        // the System the tenant actually holds, like the references below.
+        if (node["dependencies"] is JsonArray dependencies)
+        {
+            for (var i = 0; i < dependencies.Count; i++)
+            {
+                if (dependencies[i]?.GetValue<string>().StartsWith($"{system.Name}-", StringComparison.Ordinal) == true)
+                {
+                    dependencies[i] = system.FullName;
+                }
+            }
+        }
+
         var json = node.ToJsonString().Replace($"{system.Name}@{system.Version.Major}/", $"{system.FullName}/");
         var operationResult = new OperationResult();
         var classic = await serializer.DeserializeCompiledModelRootAsync(json, "classic", operationResult);

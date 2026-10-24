@@ -196,11 +196,26 @@ public class RollupConsistencyValidatorTests
         Assert.Contains("never activated", entry.NotChecked.Reason, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ADisabledRollupWithoutItsTable_IsListedAsNotChecked_ButInformationOnly_AndStaysOk()
+    {
+        // AB#7274: sbeg carries legacy rollups that are disabled in the source and have no table; as a blocking gap they kept the
+        // restore reconcile marker of every restore of the tenant set for good (no forward aggregation any more).
+        _liveExists = false;
+
+        var entry = await ValidateEntryAsync(Rollup(status: CkArchiveStatus.Disabled));
+
+        Assert.Empty(entry.Findings);
+        Assert.Equal(RollupNotCheckedCause.Disabled, entry.NotChecked!.Cause);
+        Assert.False(entry.NotChecked.IsBlocking);
+        Assert.True(entry.IsOk);
+        Assert.Contains("disabled", entry.NotChecked.Reason, StringComparison.Ordinal);
+    }
+
     [Theory]
-    [InlineData(CkArchiveStatus.Disabled)]
     [InlineData(CkArchiveStatus.Failed)]
     [InlineData(CkArchiveStatus.Activated)]
-    public async Task ARollupWithoutItsTable_IsNotChecked_WhateverItsStatus(CkArchiveStatus status)
+    public async Task ARollupWithoutItsTable_IsNotChecked_WhenItIsActivatedOrFailed(CkArchiveStatus status)
     {
         _liveExists = false;
 
@@ -220,7 +235,7 @@ public class RollupConsistencyValidatorTests
         _maxWindowEnd = At(T0 + 48 * HourMs);
         _sourceRows = 10;
         var consistent = Rollup(watermark: At(T0 + 48 * HourMs));
-        var missing = new RollupArchiveSnapshot(OctoObjectId.GenerateNewId(), Type, CkArchiveStatus.Disabled, "hourly",
+        var missing = new RollupArchiveSnapshot(OctoObjectId.GenerateNewId(), Type, CkArchiveStatus.Activated, "hourly",
             [new RollupSourceReference(_source)], TimeSpan.FromHours(1), TimeSpan.Zero, null,
             new[] { new CkRollupAggregationSpec("Value", CkRollupFunction.Sum, null) }, null);
         // The scripted database answers "table exists" for every table, so the missing rollup is told apart by its id.
