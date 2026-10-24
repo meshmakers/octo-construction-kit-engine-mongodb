@@ -170,6 +170,97 @@ public class DataPermissionEnforcementTests(DataPermissionTestFixture fixture)
     }
 
     [Fact]
+    public async Task RecordArrayItemUpdate_FollowsTheWritePermissionsOfTheEntity()
+    {
+        // AB#7445: an item update is a write of the entity - same grants, ownership and visibility as an update.
+        const string holderTypeId = "Test/ItemUpdateHolder";
+        var (repository, _, _, _) = await SeedAsync();
+        var ownId = await InsertHolderAsync(repository, Employee1);
+        var foreignId = await InsertHolderAsync(repository, Employee2);
+        fixture.Resolver.Table = new RtDataPolicyTable(
+        [
+            new RtDataPolicyRule("test.holders", new HashSet<string> { holderTypeId },
+                [RtDataAction.Read, RtDataAction.Write, RtDataAction.Delete],
+                OwnedOnly: false, AuditOnly: false, new HashSet<string> { "TestManagement" }),
+            new RtDataPolicyRule("test.holders", new HashSet<string> { holderTypeId },
+                [RtDataAction.Read, RtDataAction.Write],
+                OwnedOnly: true, AuditOnly: false, new HashSet<string> { "TestEmployee" })
+        ]);
+        try
+        {
+            await ItemUpdateAsync(repository, Employee1, ownId, 1);
+            await ItemUpdateAsync(repository, Management, foreignId, 2);
+
+            // not the owner: invisible, answered like a missing entity; no grant at all: refused
+            await Assert.ThrowsAsync<EntityNotFoundException>(() =>
+                ItemUpdateAsync(repository, Employee1, foreignId, 3));
+            await Assert.ThrowsAnyAsync<Exception>(() =>
+                ItemUpdateAsync(repository, Outsider, ownId, 4));
+        }
+        finally
+        {
+            fixture.Resolver.Table = RtDataPolicyTable.Empty;
+        }
+
+        Assert.Equal(1.0, await ReadPointValueAsync(repository, ownId));
+        Assert.Equal(2.0, await ReadPointValueAsync(repository, foreignId));
+    }
+
+    private static async Task<OctoObjectId> InsertHolderAsync(ITenantRepository repository,
+        RtSecurityContext securityContext)
+    {
+        var rtId = OctoObjectId.GenerateNewId();
+        var holder = new RtEntity("Test/ItemUpdateHolder", rtId, new Dictionary<string, object?>
+        {
+            ["Points"] = new List<RtRecord>
+            {
+                new(new RtCkId<CkRecordId>("Test/DataPoint"),
+                    new Dictionary<string, object?> { ["ExternalId"] = "A", ["CurrentValue"] = 0.0 })
+            }
+        });
+        using var session = await repository.GetSessionAsync(securityContext);
+        session.StartTransaction();
+        await repository.InsertOneRtEntityAsync(session, holder);
+        await session.CommitTransactionAsync();
+        return rtId;
+    }
+
+    private static async Task ItemUpdateAsync(ITenantRepository repository, RtSecurityContext securityContext,
+        OctoObjectId rtId, double value)
+    {
+        var typeId = new RtCkId<CkTypeId>("Test/ItemUpdateHolder");
+        using var session = await repository.GetSessionAsync(securityContext);
+        session.StartTransaction();
+        try
+        {
+            await repository.ApplyChangesAsync(session,
+            [
+                EntityUpdateInfo<RtEntity>.CreateRecordArrayItemUpdate(new RtEntityId(typeId, rtId),
+                    new RtEntity(typeId, rtId, new Dictionary<string, object?>()),
+                    [new RtRecordArrayItemUpdate("Points", "ExternalId", "A",
+                        new Dictionary<string, object?> { ["CurrentValue"] = value })])
+            ], new OperationResult());
+            await session.CommitTransactionAsync();
+        }
+        catch
+        {
+            await session.AbortTransactionAsync();
+            throw;
+        }
+    }
+
+    private static async Task<double> ReadPointValueAsync(ITenantRepository repository, OctoObjectId rtId)
+    {
+        using var session = await repository.GetSessionAsync();
+        session.StartTransaction();
+        var result = await repository.GetRtEntitiesByTypeAsync(session, "Test/ItemUpdateHolder",
+            RtEntityQueryOptions.Create().FieldFilter("RtId", FieldFilterOperator.Equals, rtId.ToString()));
+        await session.CommitTransactionAsync();
+        var point = Assert.Single(Assert.Single(result.Items).GetRtRecordAttributeValues<RtRecord>("Points"));
+        return point.GetAttributeValueOrStandard<double>("CurrentValue");
+    }
+
+    [Fact]
     public async Task Delete_ActionGrantIsRequired()
     {
         var (repository, emp1A, _, emp2C) = await SeedAsync();

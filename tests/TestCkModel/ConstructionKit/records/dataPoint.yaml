@@ -1,0 +1,13 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+# AB#7445: item of the RecordArray ItemUpdateHolder.Points.
+records:
+  - recordId: DataPoint
+    attributes:
+      - id: ${this}/ItemUpdate.ExternalId
+        name: ExternalId
+      - id: ${this}/ItemUpdate.CurrentValue
+        name: CurrentValue
+        isOptional: true
+      - id: ${this}/ItemUpdate.Label
+        name: Label
+        isOptional: true
