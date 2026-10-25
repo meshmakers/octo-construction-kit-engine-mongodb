@@ -560,13 +560,10 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         var sessionHandle = ((IOctoSessionInternal)session).SessionHandle;
         var hasRegularAttributes = RequiresNullAttributesRepair(document);
 
-        if (hasRegularAttributes)
-        {
-            // AB#5148: a stored `attributes: null` would make the subpath $sets fail (see UpdateOneAsync).
-            var repairModel = CreateNullAttributesRepairModel(id);
-            await _documentCollection.UpdateOneAsync(sessionHandle, repairModel.Filter, repairModel.Update);
-        }
-
+        // AB#7466: no AB#5148 `attributes: null` repair before the item statement. Its filter requires every
+        // referenced array to be `$type: array`, which a stored `attributes: null` can never satisfy, so the
+        // statement either does not match or runs on a document whose `attributes` is an object: the happy path
+        // costs exactly one command. The repair belongs to the fallback below.
         var filter = Builders<TDocument>.Filter.And(Builders<TDocument>.Filter.BuildIdFilter(id),
             statement.ArraysExistFilter);
         if (requireItemMatch)
@@ -592,8 +589,27 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
         // Regular attributes to write but an array is missing (or null) on the stored entity, so no item can match:
         // write the regular attributes alone; a missing entity is an error as for any update.
-        var fallback = await _documentCollection.UpdateOneAsync(sessionHandle,
-            Builders<TDocument>.Filter.BuildIdFilter(id), _mongoDataSourceMapper.ApplyUpdate(document));
+        var fallbackFilter = Builders<TDocument>.Filter.BuildIdFilter(id);
+        var fallbackUpdate = _mongoDataSourceMapper.ApplyUpdate(document);
+        if (hasRegularAttributes)
+        {
+            // AB#5148 + AB#7466: the stored `attributes` may be `null` (which is why the item statement could not
+            // match), under which the subpath $sets fail with write error 28. One ordered bulk write [repair, update]
+            // exactly like UpdateOneAsync; the repair filter is the id filter narrowed by `attributes: null`, so an
+            // aggregate MatchedCount of 0 still means "entity not found".
+            var bulkResult = await _documentCollection.BulkWriteAsync(sessionHandle,
+                new WriteModel<TDocument>[]
+                {
+                    CreateNullAttributesRepairModel(id),
+                    new UpdateOneModel<TDocument>(fallbackFilter, fallbackUpdate)
+                },
+                new BulkWriteOptions { IsOrdered = true });
+            ThrowIfNotAcknowledged(bulkResult.IsAcknowledged);
+            ThrowIfMatchedCountZero<TDocument>(bulkResult.MatchedCount, id);
+            return true;
+        }
+
+        var fallback = await _documentCollection.UpdateOneAsync(sessionHandle, fallbackFilter, fallbackUpdate);
         ThrowIfNotAcknowledged(fallback.IsAcknowledged);
         ThrowIfMatchedCountZero<TDocument>(fallback.MatchedCount, id);
         return true;
