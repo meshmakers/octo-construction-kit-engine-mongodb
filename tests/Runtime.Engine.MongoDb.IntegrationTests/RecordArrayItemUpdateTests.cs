@@ -5,6 +5,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 
@@ -251,6 +252,119 @@ public class RecordArrayItemUpdateTests(ImportTestCkModelFixture fixture)
     }
 
     [Fact]
+    public async Task MixedUpdate_OnTheHappyPath_CostsOneMongoDbCommand()
+    {
+        // AB#7466: the AB#5148 `attributes: null` repair must not precede the item statement; the statement's own
+        // `$type: array` filter already excludes a null `attributes`. Counted through the per-request command scope
+        // (no transaction, so no commit command); before AB#7466 this was 2 commands.
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var rtId = OctoObjectId.GenerateNewId();
+        await InsertAsync(repository, NewHolder(rtId, ("A", 1.0), ("B", 2.0), name: "old"));
+        var before = (await FindRawEntityAsync(rtId))!;
+
+        int commands;
+        using (MongoRequestScope.Begin(out var stats))
+        {
+            await ApplyAsync(repository, ItemUpdate("B", 9).Build(rtId, new Dictionary<string, object?> { ["Name"] = "new" }),
+                new OperationResult(), useTransaction: false);
+            commands = stats.CommandCount;
+        }
+
+        Assert.Equal(1, commands);
+        var after = (await FindRawEntityAsync(rtId))!;
+        Assert.Equal("new", after["attributes"]["name"].AsString);
+        Assert.Equal(9.0, (await ReadPointsAsync(rtId))["B"]);
+        Assert.Equal(1.0, (await ReadPointsAsync(rtId))["A"]);
+        Assert.Equal(before["rtVersion"].ToInt64() + 1, after["rtVersion"].ToInt64());
+    }
+
+    [Fact]
+    public async Task MixedUpdate_OnAStoredNullAttributes_RepairsInTheFallbackBulkWrite()
+    {
+        // AB#5148 + AB#7466: `attributes: null` -> the item statement cannot match (no array), the fallback is ONE
+        // ordered bulk write [repair, update] (a single `update` command): 2 commands in total (before: 3).
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var rtId = OctoObjectId.GenerateNewId();
+        await InsertAsync(repository, NewHolder(rtId, ("A", 1.0)));
+        await SetRawAsync(rtId, new BsonDocument("$set", new BsonDocument("attributes", BsonNull.Value)));
+        var before = (await FindRawEntityAsync(rtId))!;
+        Assert.True(before["attributes"].IsBsonNull);
+
+        var operationResult = new OperationResult();
+        int commands;
+        using (MongoRequestScope.Begin(out var stats))
+        {
+            await ApplyAsync(repository, ItemUpdate("A", 5).Build(rtId, new Dictionary<string, object?> { ["Name"] = "healed" }),
+                operationResult, useTransaction: false);
+            commands = stats.CommandCount;
+        }
+
+        Assert.Equal(2, commands);
+        Assert.False(operationResult.HasErrors);
+        var after = (await FindRawEntityAsync(rtId))!;
+        Assert.Equal("healed", after["attributes"]["name"].AsString);
+        Assert.Equal(before["rtVersion"].ToInt64() + 1, after["rtVersion"].ToInt64());
+    }
+
+    [Fact]
+    public async Task MixedUpdate_OnAMissingArray_WritesTheRegularAttributes_InTheFallbackBulkWrite()
+    {
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var rtId = OctoObjectId.GenerateNewId();
+        await InsertAsync(repository, new RtEntity(HolderTypeId, rtId, new Dictionary<string, object?> { ["Name"] = "no array" }));
+
+        int commands;
+        using (MongoRequestScope.Begin(out var stats))
+        {
+            await ApplyAsync(repository, ItemUpdate("A", 1).Build(rtId, new Dictionary<string, object?> { ["Name"] = "renamed" }),
+                new OperationResult(), useTransaction: false);
+            commands = stats.CommandCount;
+        }
+
+        Assert.Equal(2, commands);
+        Assert.Equal("renamed", (await FindRawEntityAsync(rtId))!["attributes"]["name"].AsString);
+    }
+
+    [Fact]
+    public async Task MixedUpdate_OnAMissingEntity_StillThrowsNotFound()
+    {
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var rtId = OctoObjectId.GenerateNewId();
+
+        var exception = await Assert.ThrowsAnyAsync<Exception>(() =>
+            ApplyAsync(repository, ItemUpdate("A", 1).Build(rtId, new Dictionary<string, object?> { ["Name"] = "x" }),
+                new OperationResult(), useTransaction: false));
+
+        Assert.Contains(rtId.ToString(), exception.ToString());
+    }
+
+    [Fact]
+    public async Task ItemOnlyUpdate_WithoutMatch_CostsOneCommand_AndNeverRepairs()
+    {
+        await fixture.ClearCollectionAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        var rtId = OctoObjectId.GenerateNewId();
+        await InsertAsync(repository, NewHolder(rtId, ("A", 1.0)));
+        await SetRawAsync(rtId, new BsonDocument("$set", new BsonDocument("attributes", BsonNull.Value)));
+        var before = await FindRawEntityAsync(rtId);
+
+        int commands;
+        using (MongoRequestScope.Begin(out var stats))
+        {
+            await ApplyAsync(repository, ItemUpdate("A", 5).Build(rtId), new OperationResult(), useTransaction: false);
+            commands = stats.CommandCount;
+        }
+
+        Assert.Equal(1, commands);
+        // no repair, no rtVersion bump: the stored null stays as it was
+        Assert.Equal(before, await FindRawEntityAsync(rtId));
+    }
+
+    [Fact]
     public async Task ChangeStream_SeesOneNormalUpdateEvent_WithVersionAndItemPath()
     {
         await fixture.ClearCollectionAsync();
@@ -456,6 +570,12 @@ public class RecordArrayItemUpdateTests(ImportTestCkModelFixture fixture)
         }
 
         return false;
+    }
+
+    private async Task SetRawAsync(OctoObjectId rtId, BsonDocument update)
+    {
+        var collection = (await FindRawCollectionAsync(rtId))!;
+        await collection.UpdateOneAsync(new BsonDocument("_id", new ObjectId(rtId.ToString())), update);
     }
 
     private async Task<Dictionary<string, double>> ReadPointsAsync(OctoObjectId rtId)
