@@ -67,6 +67,9 @@ internal static class ConflictOutcome
     {
         var keyColumns = precedence.Where(k => !k.IsOrigin).Select(k => k.Column).Distinct(StringComparer.Ordinal).ToList();
 
+        // Only a guard that ranks by origin protects a manual value; otherwise the ranking columns decided (AB#7656).
+        var ranksByOrigin = precedence.Any(k => k.IsOrigin);
+
         // Returned rows by key; a batch may name one key twice, so each key holds a list that is consumed.
         var byKey = new Dictionary<string, List<IReadOnlyDictionary<string, object?>>>(StringComparer.Ordinal);
         foreach (var row in returned)
@@ -102,9 +105,9 @@ internal static class ConflictOutcome
                 continue;
             }
 
-            // The stored row stays. When it is manual and the write was automated, that is the permanence of a
-            // manual value, otherwise the ranking columns decided.
-            var storedOrigin = includeOrigin
+            // The stored row stays. When the guard ranks by origin, the stored row is manual and the write was
+            // automated, that is the permanence of a manual value; otherwise the ranking columns decided.
+            var storedOrigin = includeOrigin && ranksByOrigin
                 ? ArchiveRowOriginColumns.FromStoredValue(candidates[0].TryGetValue(Constants.RowOrigin, out var o) ? o : null)
                 : ArchiveRowOrigin.Automated;
             skipped.Add(new SkippedArchiveRow(i,

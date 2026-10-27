@@ -501,14 +501,23 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             {
                 // AB#5356: the origin key ranks manual above automated. LowerWins would mean an automated
                 // delivery displaces a manual value, the opposite of what the key exists for.
+                // AB#7656: Ignore is the opt-out and is removed before the guard is built.
                 if (key.Order != ConflictKeyOrder.HigherWins)
                 {
                     throw new InvalidOperationException(
                         $"Archive conflict precedence key '{ArchiveConflictKey.OriginKey}' must be declared with " +
-                        $"Order {ConflictKeyOrder.HigherWins}: manual ranks above automated.");
+                        $"Order {ConflictKeyOrder.HigherWins} (manual ranks above automated) or " +
+                        $"{ConflictKeyOrder.Ignore} (the archive does not rank by origin).");
                 }
 
                 continue;
+            }
+
+            if (key.Order is not (ConflictKeyOrder.HigherWins or ConflictKeyOrder.LowerWins))
+            {
+                throw new InvalidOperationException(
+                    $"Archive conflict precedence key '{key.Column}' is declared with Order {key.Order}, which only " +
+                    $"'{ArchiveConflictKey.OriginKey}' accepts. Use {ConflictKeyOrder.HigherWins} or {ConflictKeyOrder.LowerWins}.");
             }
 
             if (!userColumnNames.Contains(key.Column, StringComparer.Ordinal))

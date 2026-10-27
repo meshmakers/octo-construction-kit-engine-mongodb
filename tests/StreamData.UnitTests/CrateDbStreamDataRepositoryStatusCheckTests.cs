@@ -51,7 +51,7 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
             () => NewSut().InsertAsync(Archive, NewPoint()));
         Assert.Equal(status, ex.ActualStatus);
         // No DB call leaked through.
-        A.CallTo(() => _db.InsertDataAsync(A<string>._, A<string>._, A<IReadOnlyList<string>>._, A<IEnumerable<Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.DataPointDto>>._)).MustNotHaveHappened();
+        A.CallTo(() => _db.InsertDataAsync(A<string>._, A<string>._, A<IReadOnlyList<string>>._, A<IEnumerable<Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.DataPointDto>>._, A<IReadOnlyList<ArchiveConflictKey>?>._)).MustNotHaveHappened();
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
                 "tenant-x",
                 A<string>.That.Matches(t => t.Contains($"archive_{Archive}")),
                 A<IReadOnlyList<string>>._,
-                A<IEnumerable<Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.DataPointDto>>._))
+                A<IEnumerable<Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.DataPointDto>>._, A<IReadOnlyList<ArchiveConflictKey>?>._))
             .MustHaveHappenedOnceExactly();
     }
 
@@ -88,7 +88,7 @@ public class CrateDbStreamDataRepositoryStatusCheckTests
             () => NewSut().InsertAsync(Archive, new[] { NewPoint() }));
         A.CallTo(() => _db.InsertDataAsync(
                 A<string>._, A<string>._, A<IReadOnlyList<string>>._,
-                A<IEnumerable<Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.DataPointDto>>._))
+                A<IEnumerable<Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos.DataPointDto>>._, A<IReadOnlyList<ArchiveConflictKey>?>._))
             .MustNotHaveHappened();
     }
 

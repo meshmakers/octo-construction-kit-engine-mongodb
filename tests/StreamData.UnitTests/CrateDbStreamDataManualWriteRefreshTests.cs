@@ -42,7 +42,7 @@ public class CrateDbStreamDataManualWriteRefreshTests
     {
         A.CallTo(() => _store.GetAsync(Archive)).Returns(new ArchiveSnapshot(Archive, SomeType, CkArchiveStatus.Activated,
             "energy", [new CkArchiveColumnSpec("activePower", Indexed: true, Required: false)]));
-        A.CallTo(() => _db.InsertDataAsync("tenant-x", A<string>._, A<IReadOnlyList<string>>._, A<IEnumerable<DataPointDto>>._))
+        A.CallTo(() => _db.InsertDataAsync("tenant-x", A<string>._, A<IReadOnlyList<string>>._, A<IEnumerable<DataPointDto>>._, A<IReadOnlyList<ArchiveConflictKey>?>._))
             .Returns(Task.FromResult<IReadOnlyList<SkippedArchiveRow>>([]));
     }
 
@@ -64,7 +64,7 @@ public class CrateDbStreamDataManualWriteRefreshTests
     {
         await NewSut().InsertAsync(Archive, [Point(ArchiveRowOrigin.Automated), Point(ArchiveRowOrigin.Manual)]);
 
-        A.CallTo(() => _db.InsertDataAsync("tenant-x", A<string>._, A<IReadOnlyList<string>>._, A<IEnumerable<DataPointDto>>._))
+        A.CallTo(() => _db.InsertDataAsync("tenant-x", A<string>._, A<IReadOnlyList<string>>._, A<IEnumerable<DataPointDto>>._, A<IReadOnlyList<ArchiveConflictKey>?>._))
             .MustHaveHappenedOnceExactly()
             .Then(A.CallTo(() => _db.RefreshArchiveTableAsync("tenant-x", A<string>.That.Contains(Archive.ToString())))
                 .MustHaveHappenedOnceExactly());

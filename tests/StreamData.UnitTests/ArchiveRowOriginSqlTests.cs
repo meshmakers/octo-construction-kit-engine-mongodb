@@ -123,6 +123,16 @@ public class ArchiveRowOriginSqlTests
         Assert.Contains("HigherWins", ex.Message);
     }
 
+    [Fact]
+    public void IgnoreOnAColumnKeyIsRefused()
+    {
+        // AB#7656: Ignore is the opt-out of the origin ranking and means nothing on a column.
+        var ex = Assert.Throws<InvalidOperationException>(() => CrateDatabaseClient.BuildConflictGuard(
+            [new ArchiveConflictKey(Columns[0], ConflictKeyOrder.Ignore)], Columns));
+
+        Assert.Contains("only '$Origin' accepts", ex.Message);
+    }
+
     [Theory]
     [InlineData(ArchiveRowOrigin.Manual, "manual")]
     [InlineData(ArchiveRowOrigin.Automated, "automated")]

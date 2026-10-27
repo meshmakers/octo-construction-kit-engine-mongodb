@@ -228,13 +228,171 @@ public class ArchiveRowOriginIntegrationTests(CrateStagingCopyFixture fixture)
         Assert.Equal(10d, (await ReadRowAsync(archive))["value"]);
     }
 
+    // AB#7656: the origin ranks first on every raw and time-range archive, whatever the archive configures. The
+    // three cases run against an archive without precedence and against one that ranks by quality only.
+    public static TheoryData<string> PrecedenceWithoutOrigin => ["none", "quality only"];
+
+    private static IReadOnlyList<ArchiveConflictKey> WithoutOrigin(string shape) => shape == "none"
+        ? []
+        : [new ArchiveConflictKey("DataQuality", ConflictKeyOrder.LowerWins)];
+
+    [Theory]
+    [MemberData(nameof(PrecedenceWithoutOrigin))]
+    public async Task WithoutOriginInThePrecedence_AManualWrite_ReplacesAnAutomatedValueOfAnyQuality(string shape)
+    {
+        var archive = await CreateTimeRangeArchiveAsync(WithoutOrigin(shape));
+        await WriteAsync(archive, Point(10, 1, Window));
+
+        await WriteAsync(archive, Point(12, 3, Window, ArchiveRowOrigin.Manual));
+
+        var row = await ReadRowAsync(archive);
+        Assert.Equal(12d, row["value"]);
+        Assert.Equal("manual", row["row_origin"]);
+    }
+
+    [Theory]
+    [MemberData(nameof(PrecedenceWithoutOrigin))]
+    public async Task WithoutOriginInThePrecedence_AnAutomatedWrite_IsSkippedAsManualValueProtected(string shape)
+    {
+        var archive = await CreateTimeRangeArchiveAsync(WithoutOrigin(shape));
+        await WriteAsync(archive, Point(12, 3, Window, ArchiveRowOrigin.Manual));
+
+        var result = await archive.Repository.InsertTimeRangeAsync(archive.RtId, [Point(10, 1, Window.AddDays(1))],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.Stored);
+        Assert.Equal(StreamDataSkipReason.ManualValueProtected, Assert.Single(result.Skipped).Reason);
+        var row = await ReadRowAsync(archive);
+        Assert.Equal(12d, row["value"]);
+        Assert.Equal("manual", row["row_origin"]);
+    }
+
+    [Theory]
+    [MemberData(nameof(PrecedenceWithoutOrigin))]
+    public async Task WithoutOriginInThePrecedence_AManualWrite_ReplacesAManualValue(string shape)
+    {
+        var archive = await CreateTimeRangeArchiveAsync(WithoutOrigin(shape));
+        await WriteAsync(archive, Point(99, 1, Window, ArchiveRowOrigin.Manual));
+
+        await WriteAsync(archive, Point(12, 3, Window, ArchiveRowOrigin.Manual));
+
+        var row = await ReadRowAsync(archive);
+        Assert.Equal(12d, row["value"]);
+        Assert.Equal("manual", row["row_origin"]);
+    }
+
     [Fact]
-    public async Task AnArchiveThatDoesNotRankByOrigin_BehavesAsBefore_TheLastWriteWins()
+    public async Task WithoutAnyPrecedence_BetweenAutomatedDeliveries_TheLastWriteStillWins()
+    {
+        var archive = await CreateTimeRangeArchiveAsync([]);
+        await WriteAsync(archive, Point(10, 1, Window));
+
+        await WriteAsync(archive, Point(11, 3, Window));
+
+        Assert.Equal(11d, (await ReadRowAsync(archive))["value"]);
+    }
+
+    private static readonly ArchiveConflictKey QualityKey = new("DataQuality", ConflictKeyOrder.LowerWins);
+    private static readonly ArchiveConflictKey OriginIgnored = new(ArchiveConflictKey.OriginKey, ConflictKeyOrder.Ignore);
+
+    [Fact]
+    public async Task WithTheOriginAfterAnotherKey_TheEarlierKeyDecidesFirst_AndAManualRowThatLosesFailsTheWrite()
+    {
+        var archive = await CreateTimeRangeArchiveAsync(
+            [QualityKey, new ArchiveConflictKey(ArchiveConflictKey.OriginKey, ConflictKeyOrder.HigherWins)]);
+        await WriteBatchAsync(archive, [WindowPoint(0, 10, 1)]);
+
+        var ex = await Assert.ThrowsAsync<ManualStreamDataNotAppliedException>(() =>
+            WriteBatchAsync(archive, [WindowPoint(0, 12, 3, ArchiveRowOrigin.Manual), WindowPoint(1, 20, 1)]));
+
+        Assert.Equal(1, ex.Result.Stored);
+        Assert.Contains("1 manual row(s) were not stored", ex.Message);
+        Assert.Equal(10d, (await ReadRowAsync(archive, Window))["value"]);
+    }
+
+    [Fact]
+    public async Task WithTheOriginAfterAnotherKey_TheOriginStillDecidesATie()
+    {
+        var archive = await CreateTimeRangeArchiveAsync(
+            [QualityKey, new ArchiveConflictKey(ArchiveConflictKey.OriginKey, ConflictKeyOrder.HigherWins)]);
+        await WriteAsync(archive, Point(12, 2, Window, ArchiveRowOrigin.Manual));
+
+        var result = await archive.Repository.InsertTimeRangeAsync(archive.RtId, [Point(10, 2, Window)],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(StreamDataSkipReason.ManualValueProtected, Assert.Single(result.Skipped).Reason);
+        Assert.Equal(12d, (await ReadRowAsync(archive))["value"]);
+    }
+
+    [Fact]
+    public async Task WithTheOriginIgnored_AndNoOtherKey_TheLastWriteWins_AlsoOverAManualValue()
+    {
+        var archive = await CreateTimeRangeArchiveAsync([OriginIgnored]);
+        await WriteAsync(archive, Point(12, 3, Window, ArchiveRowOrigin.Manual));
+
+        var result = await archive.Repository.InsertTimeRangeAsync(archive.RtId, [Point(10, 3, Window)],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, result.Stored);
+        var row = await ReadRowAsync(archive);
+        Assert.Equal(10d, row["value"]);
+        Assert.Equal("automated", row["row_origin"]);
+    }
+
+    [Fact]
+    public async Task WithTheOriginIgnored_TheOtherKeysDecide_AndAnAutomatedRowThatLosesIsLowerPrecedence()
+    {
+        var archive = await CreateTimeRangeArchiveAsync([OriginIgnored, QualityKey]);
+        await WriteAsync(archive, Point(12, 1, Window, ArchiveRowOrigin.Manual));
+
+        var lost = await archive.Repository.InsertTimeRangeAsync(archive.RtId, [Point(10, 3, Window)],
+            TestContext.Current.CancellationToken);
+        Assert.Equal(StreamDataSkipReason.LowerPrecedence, Assert.Single(lost.Skipped).Reason);
+
+        await WriteAsync(archive, Point(11, 1, Window));            // equal quality: the later write wins
+
+        var row = await ReadRowAsync(archive);
+        Assert.Equal(11d, row["value"]);
+        Assert.Equal("automated", row["row_origin"]);
+    }
+
+    public static TheoryData<string> RefusedPrecedence => ["origin LowerWins", "Ignore on a column", "origin twice"];
+
+    [Theory]
+    [MemberData(nameof(RefusedPrecedence))]
+    public async Task AnInvalidPrecedence_IsRefusedAtActivation(string shape)
+    {
+        IReadOnlyList<ArchiveConflictKey> precedence = shape switch
+        {
+            "origin LowerWins" => [new(ArchiveConflictKey.OriginKey, ConflictKeyOrder.LowerWins)],
+            "Ignore on a column" => [new("DataQuality", ConflictKeyOrder.Ignore)],
+            _ => [OriginIgnored, new(ArchiveConflictKey.OriginKey, ConflictKeyOrder.HigherWins)]
+        };
+        var archive = NewTimeRangeArchive(precedence);
+        var snapshot = new ArchiveSnapshot(archive.RtId, Type, CkArchiveStatus.Activated, "measurements",
+            ColumnDdl.Select(c => new CkArchiveColumnSpec(c.Path, false, false)).ToArray())
+        {
+            IsTimeRange = true,
+            Period = TimeSpan.FromMinutes(15),
+            ConflictPrecedence = precedence
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => archive.Repository.EnsureArchiveCreatedAsync(snapshot));
+    }
+
+    [Fact]
+    public async Task AnImport_StaysUnguarded_AndReplacesAManualValue()
     {
         var archive = await CreateTimeRangeArchiveAsync([]);
         await WriteAsync(archive, Point(12, 3, Window, ArchiveRowOrigin.Manual));
+        IReadOnlyDictionary<string, object?> restored = new Dictionary<string, object?>
+        {
+            ["window_start"] = Window, ["window_end"] = Window.AddMinutes(15), ["rtid"] = Meter.ToString(),
+            ["cktypeid"] = Type.ToString(), ["value"] = 10d, ["dataquality"] = 1, ["row_origin"] = "automated"
+        };
 
-        await WriteAsync(archive, Point(10, 1, Window));
+        await archive.Repository.ImportRowsAsync(archive.RtId, new[] { restored }.ToAsyncEnumerable(), ArchiveImportMode.Upsert,
+            TestContext.Current.CancellationToken);
 
         var row = await ReadRowAsync(archive);
         Assert.Equal(10d, row["value"]);
@@ -324,17 +482,17 @@ public class ArchiveRowOriginIntegrationTests(CrateStagingCopyFixture fixture)
     }
 
     [Fact]
-    public async Task AnAutomatedDeliveryThatWins_ClearsTheManualAuditOfTheRowItReplaces()
+    public async Task AManualWriteThatReplacesAnother_CarriesOnlyItsOwnAudit()
     {
-        // Without $Origin the last write wins; the row then describes that write, not the manual one before it.
+        // The row describes the write that won, not the manual one before it: a reason is not inherited.
         var archive = await CreateTimeRangeArchiveAsync([]);
-        await WriteAsync(archive, Point(12, 3, Window, ArchiveRowOrigin.Manual, reason: "estimate"));
+        await WriteAsync(archive, Point(12, 3, Window, ArchiveRowOrigin.Manual, writtenBy: "user-1", reason: "estimate"));
 
-        await WriteAsync(archive, Point(10, 1, Window));
+        await WriteAsync(archive, Point(10, 1, Window, ArchiveRowOrigin.Manual, writtenBy: "user-2"));
 
         var row = await ReadRowAsync(archive);
-        Assert.Equal("automated", row["row_origin"]);
-        Assert.Null(row["manual_written_by"]);
+        Assert.Equal("manual", row["row_origin"]);
+        Assert.Equal("user-2", row["manual_written_by"]);
         Assert.Null(row["manual_reason"]);
     }
 
@@ -475,25 +633,6 @@ public class ArchiveRowOriginIntegrationTests(CrateStagingCopyFixture fixture)
 
         Assert.Equal(2, result.Stored);
         Assert.Empty(result.Skipped);
-    }
-
-    [Fact]
-    public async Task AManualRowThatCannotBeStored_FailsTheWrite_NeverReportsSuccess()
-    {
-        // An archive that ranks the quality before the origin lets a stored L1 value win against a manual L3 one.
-        var archive = await CreateTimeRangeArchiveAsync(
-        [
-            new ArchiveConflictKey("DataQuality", ConflictKeyOrder.LowerWins),
-            new ArchiveConflictKey(ArchiveConflictKey.OriginKey, ConflictKeyOrder.HigherWins)
-        ]);
-        await WriteBatchAsync(archive, [WindowPoint(0, 10, 1)]);
-
-        var ex = await Assert.ThrowsAsync<ManualStreamDataNotAppliedException>(() =>
-            WriteBatchAsync(archive, [WindowPoint(0, 12, 3, ArchiveRowOrigin.Manual), WindowPoint(1, 20, 1)]));
-
-        Assert.Equal(1, ex.Result.Stored);
-        Assert.Contains("1 manual row(s) were not stored", ex.Message);
-        Assert.Equal(10d, (await ReadRowAsync(archive, Window))["value"]);
     }
 
     [Fact]

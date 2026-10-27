@@ -64,6 +64,17 @@ public class ConflictOutcomeTests
     }
 
     [Fact]
+    public void AnAutomatedRowThatLostAgainstAManualValue_WithoutOriginRanking_IsLowerPrecedence()
+    {
+        // AB#7656: an archive that ignores the origin ranks by its columns only; the stored row being manual is incidental.
+        ArchiveConflictKey[] qualityOnly = [new("dataquality", ConflictKeyOrder.LowerWins)];
+
+        var skipped = ConflictOutcome.FindSkipped([Sent(3)], [Returned(1, "manual")], qualityOnly, true, true);
+
+        Assert.Equal(StreamDataSkipReason.LowerPrecedence, Assert.Single(skipped).Reason);
+    }
+
+    [Fact]
     public void TimestampsCompareAtMillisecondPrecision()
     {
         // CrateDB stores milliseconds; ticks below them are not a different row.

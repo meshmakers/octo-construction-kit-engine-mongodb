@@ -494,15 +494,51 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// snapshot, where "write what I give you" is the intent — silently dropping restored rows for
     /// looking worse than what is already there would be a data-loss trap.
     /// </para>
+    /// <para>
+    /// AB#7656: a manual correction wins and stays protected by default. Raw and time-range archives rank by
+    /// <c>$Origin</c> first when the archive does not name it — also without any configured key, then the guard is
+    /// <c>$Origin</c> alone and automated writes keep last-write-wins between them. An archive that names
+    /// <c>$Origin</c> gets it where the author put it (keys before it decide first), and
+    /// <see cref="ConflictKeyOrder.Ignore" /> on it opts the archive out of ranking by origin: the key is dropped,
+    /// and without other keys the archive has no guard at all. Rollup archives are computed, carry no origin and
+    /// are unchanged.
+    /// </para>
     /// </remarks>
     private static IReadOnlyList<ArchiveConflictKey>? ResolveConflictPrecedence(ArchiveSnapshot snapshot)
-        => snapshot.ConflictPrecedence.Count == 0
-            ? null   // not configured is an absence, not an empty list — the client reads it as "no guard"
-            : snapshot.ConflictPrecedence
-                .Select(k => k.IsOrigin
-                    ? new ArchiveConflictKey(ArchiveConflictKey.OriginKey, k.Order)   // not a column; the guard ranks by row_origin
-                    : new ArchiveConflictKey(ColumnNameMapper.PathToColumnName(k.Column), k.Order))
-                .ToList();
+    {
+        var configured = snapshot.ConflictPrecedence;
+        if (snapshot.RollupAggregations is not null)
+        {
+            return configured.Count == 0
+                ? null   // not configured is an absence, not an empty list — the client reads it as "no guard"
+                : configured.Select(MapConflictKey).ToList();
+        }
+
+        var originKeys = configured.Count(k => k.IsOrigin);
+        if (originKeys > 1)
+        {
+            throw new InvalidOperationException(
+                $"Archive '{snapshot.RtId}': the conflict precedence names '{ArchiveConflictKey.OriginKey}' {originKeys} times. " +
+                "Name it once.");
+        }
+
+        var keys = new List<ArchiveConflictKey>(configured.Count + 1);
+        if (originKeys == 0)
+        {
+            keys.Add(new ArchiveConflictKey(ArchiveConflictKey.OriginKey, ConflictKeyOrder.HigherWins));
+        }
+
+        // Ignore on the origin key is the opt-out: the key takes no part in the guard.
+        keys.AddRange(configured
+            .Where(k => !(k.IsOrigin && k.Order == ConflictKeyOrder.Ignore))
+            .Select(MapConflictKey));
+        return keys.Count == 0 ? null : keys;
+    }
+
+    private static ArchiveConflictKey MapConflictKey(ArchiveConflictKey key)
+        => key.IsOrigin
+            ? new ArchiveConflictKey(ArchiveConflictKey.OriginKey, key.Order)   // not a column; the guard ranks by row_origin
+            : new ArchiveConflictKey(ColumnNameMapper.PathToColumnName(key.Column), key.Order);
 
     /// <summary>
     /// Computes the qualified per-archive table name and the camelCase user-column list from the

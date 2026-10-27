@@ -63,7 +63,7 @@ public class CrateDbStreamDataComputedColumnIngestTests
     {
         DataPointDto? captured = null;
         // The single-point insert goes through the batch path (AB#7598).
-        A.CallTo(() => _db.InsertDataAsync("tenant-x", A<string>._, A<IReadOnlyList<string>>._, A<IEnumerable<DataPointDto>>._))
+        A.CallTo(() => _db.InsertDataAsync("tenant-x", A<string>._, A<IReadOnlyList<string>>._, A<IEnumerable<DataPointDto>>._, A<IReadOnlyList<ArchiveConflictKey>?>._))
             .Invokes(call => captured = call.GetArgument<IEnumerable<DataPointDto>>(3)!.Single())
             .Returns(Task.FromResult<IReadOnlyList<SkippedArchiveRow>>([]));
 
@@ -112,7 +112,7 @@ public class CrateDbStreamDataComputedColumnIngestTests
         StubArchive(Ing("activePower"), Comp("derived", "activepower * 2", FormulaResultType.Double));
 
         IReadOnlyList<string>? columns = null;
-        A.CallTo(() => _db.InsertDataAsync("tenant-x", A<string>._, A<IReadOnlyList<string>>._, A<IEnumerable<DataPointDto>>._))
+        A.CallTo(() => _db.InsertDataAsync("tenant-x", A<string>._, A<IReadOnlyList<string>>._, A<IEnumerable<DataPointDto>>._, A<IReadOnlyList<ArchiveConflictKey>?>._))
             .Invokes(call => columns = call.GetArgument<IReadOnlyList<string>>(2))
             .Returns(Task.FromResult<IReadOnlyList<SkippedArchiveRow>>([]));
 

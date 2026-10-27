@@ -968,7 +968,12 @@ Rules to keep:
 - **`$Origin` precedence key** (`ArchiveConflictKey.OriginKey`, `HigherWins` only): manual beats automated,
   automated never beats manual, manual vs manual = the later write wins (no fall-through), automated vs automated =
   the following keys. It is the one key that is not a user column; `BuildConflictGuard` skips the column check for it.
-- Without `$Origin` nothing changes: the origin follows the write that wins.
+- **Manual wins by default on raw and time-range archives (AB#7656)**: `ResolveConflictPrecedence` prepends `$Origin`
+  when the archive does not name it (also with no precedence at all: the guard is then `$Origin` alone, automated vs
+  automated stays last-write-wins). Named explicitly, `$Origin` applies at the author's position; `Order: Ignore` on it is
+  the opt-out (the key is dropped; with no other key there is no guard). `LowerWins` on `$Origin`, `Ignore` on a column
+  and `$Origin` named twice are refused at activation. `ManualValueProtected` is only reported when the guard ranks by
+  origin. Rollups and the import path are unchanged.
 
 - **Reading the origin (AB#7616)**: `row_origin`, `manual_written_by`, `manual_written_at`, `manual_reason` are
   selectable/filterable/groupable on raw and time-range archives. Every read-path column reference goes through
