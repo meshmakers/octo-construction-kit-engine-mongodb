@@ -274,9 +274,9 @@ The writer declares the origin (`StreamDataPoint.Origin` / `TimeRangeStreamDataP
 
 | Incoming | Stored | Result |
 |---|---|---|
-| manual | automated (or `NULL`) | the incoming write wins, whatever the following keys say |
+| manual | automated (or `NULL`) | the incoming write wins, whatever the following keys say — also against a newer recency key |
 | automated | manual | the stored value stays — **a manual value is permanent** |
-| manual | manual | the incoming write wins: a wrong manual value is fixed with another manual write |
+| manual | manual | the incoming write wins by arrival: a wrong manual value is fixed with another manual write; no quality, recency column or `manual_written_at` is compared |
 | automated | automated | the following keys decide, exactly as without `$Origin` |
 
 Rendered for keys `$Origin, k2 … kn`:

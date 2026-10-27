@@ -158,6 +158,66 @@ public class ArchiveRowOriginIntegrationTests(CrateStagingCopyFixture fixture)
     }
 
     [Fact]
+    public async Task AManualWrite_ReplacesANewerAutomatedValue_TheRecencyKeyIsNotConsulted()
+    {
+        // Rule (Reimar, 2026-10-27): an incoming manual write always replaces the stored value, whatever any
+        // recency key says.
+        var archive = await CreateTimeRangeArchiveAsync(EnergyCommunityPrecedence);
+        await WriteAsync(archive, Point(10, 1, Window.AddDays(5)));                      // automated, newer document
+
+        await WriteAsync(archive, Point(12, 3, Window.AddDays(-5), ArchiveRowOrigin.Manual)); // manual, older document
+
+        var row = await ReadRowAsync(archive);
+        Assert.Equal(12d, row["value"]);
+        Assert.Equal("manual", row["row_origin"]);
+    }
+
+    [Fact]
+    public async Task AManualWrite_ReplacesAStoredManualValueWithANewerRecencyKey_ByArrival()
+    {
+        // Between two manual writes the incoming one wins by arrival; neither the quality nor the document date
+        // nor manual_written_at is compared.
+        var archive = await CreateTimeRangeArchiveAsync(EnergyCommunityPrecedence);
+        await WriteAsync(archive, Point(99, 1, Window.AddDays(5), ArchiveRowOrigin.Manual));  // manual, L1, newer document
+
+        await WriteAsync(archive, Point(12, 3, Window.AddDays(-5), ArchiveRowOrigin.Manual)); // manual, L3, older document
+
+        var row = await ReadRowAsync(archive);
+        Assert.Equal(12d, row["value"]);
+        Assert.Equal(3, row["dataquality"]);
+    }
+
+    [Fact]
+    public async Task TwoProcessesAddingTheOriginColumnsAtOnce_BothWrite_AndTheColumnsExistOnce()
+    {
+        // Two pods starting at once both find a table provisioned before AB#5356 and both add the columns: the
+        // ALTER of the slower one fails with "already has a column", which is treated as done.
+        var tenant = CrateStagingCopyFixture.NewTenantId();
+        var rtId = OctoObjectId.GenerateNewId();
+        var first = NewTimeRangeArchive(EnergyCommunityPrecedence, tenant, rtId);    // each repository has its own process state
+        var second = NewTimeRangeArchive(EnergyCommunityPrecedence, tenant, rtId);
+        await fixture.SqlAsync(
+            $"CREATE TABLE {first.Table} (\"window_start\" TIMESTAMP WITH TIME ZONE NOT NULL, \"window_end\" TIMESTAMP WITH TIME ZONE NOT NULL, " +
+            "\"rtid\" TEXT NOT NULL, \"cktypeid\" TEXT NOT NULL, \"rtcreationdatetime\" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, " +
+            "\"rtchangeddatetime\" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, \"rtwellknownname\" TEXT, \"was_updated\" BOOLEAN NOT NULL DEFAULT FALSE, " +
+            "\"value\" DOUBLE PRECISION, \"dataquality\" INTEGER, \"sourcedocumentdate\" TIMESTAMP WITH TIME ZONE, " +
+            "PRIMARY KEY (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\")) CLUSTERED INTO 1 SHARDS WITH (number_of_replicas = 0)");
+
+        var ct = TestContext.Current.CancellationToken;
+        await Task.WhenAll(
+            first.Repository.InsertTimeRangeAsync(first.RtId, [WindowPoint(0, 1, 1)], ct),
+            second.Repository.InsertTimeRangeAsync(second.RtId, [WindowPoint(1, 2, 1)], ct));
+        await fixture.SqlAsync($"REFRESH TABLE {first.Table}");
+
+        var columns = (await fixture.QueryAsync(
+                $"SELECT column_name FROM information_schema.columns WHERE table_schema = '{TenantSchema.SchemaName(tenant)}' " +
+                $"AND table_name = 'archive_{rtId}' AND column_name IN ('row_origin', 'manual_written_by', 'manual_written_at', 'manual_reason')"))
+            .Select(r => (string)r["column_name"]!).ToList();
+        Assert.Equal(4, columns.Count);
+        Assert.Equal(2L, await fixture.CountAsync($"SELECT count(*) FROM {first.Table} WHERE \"row_origin\" = 'automated'"));
+    }
+
+    [Fact]
     public async Task BetweenAutomatedDeliveries_TheQualityStillDecides()
     {
         var archive = await CreateTimeRangeArchiveAsync(EnergyCommunityPrecedence);
