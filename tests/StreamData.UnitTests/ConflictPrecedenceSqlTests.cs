@@ -59,9 +59,10 @@ public class ConflictPrecedenceSqlTests
         var sql = CrateDatabaseClient.BuildTimeRangeInsertSql(
             "\"t\".\"archive_a\"", Columns, conflictPrecedence: guarded ? QualityThenDate : null, rowCount: 2);
 
+        // Nine parameters per row: window, rtid, cktypeid, rtwellknownname, row_origin (AB#5356), three user columns.
         Assert.Contains("\"sourcedocumentdate\", \"was_updated\") VALUES ", sql);
-        Assert.Contains("$8, FALSE), ($9, ", sql);
-        Assert.Contains("$16, FALSE) ON CONFLICT", sql);
+        Assert.Contains("$9, FALSE), ($10, ", sql);
+        Assert.Contains("$18, FALSE) ON CONFLICT", sql);
     }
 
     [Fact]
@@ -210,9 +211,20 @@ public class ConflictPrecedenceSqlTests
     }
 
     [Fact]
-    public void AnArchiveWithNoUserColumnsProducesNoUpdateList()
+    public void AnArchiveWithNoUserColumnsUpdatesOnlyTheRowOrigin()
     {
         var sql = CrateDatabaseClient.BuildTimeRangeInsertSql("\"t\".\"archive_a\"", []);
+
+        Assert.Contains("DO UPDATE SET", sql);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(sql, "EXCLUDED\\."));
+        Assert.EndsWith("\"row_origin\" = EXCLUDED.\"row_origin\"", sql);
+    }
+
+    [Fact]
+    public void ARollupTableWithNoUserColumnsProducesNoUpdateList()
+    {
+        // Rollup rows are derived and carry no origin columns (AB#5356).
+        var sql = CrateDatabaseClient.BuildTimeRangeInsertSql("\"t\".\"archive_a\"", [], generationTracked: true);
 
         Assert.Contains("DO UPDATE SET", sql);
         Assert.DoesNotContain("EXCLUDED.", sql);

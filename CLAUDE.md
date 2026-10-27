@@ -943,12 +943,32 @@ before.**
   an incoming NULL never displaces a stored value (a write that cannot prove it is better must not
   win); both NULL is a tie and falls through to the next key. The **last** key admits equality, which
   is what makes an identical re-delivery idempotent.
-- **Keys must be user columns of the archive.** The guard reads `EXCLUDED."k"`, so an unknown name
-  would produce SQL that fails on every single write; the builder refuses and names the valid columns.
+- **Keys must be user columns of the archive** (except the reserved `$Origin`, see *Row Origin*). The guard reads
+  `EXCLUDED."k"`, so an unknown name would produce SQL that fails on every single write; the builder refuses and
+  names the valid columns.
 - **Ingest paths only.** `ImportRowsAsync` deliberately does not apply it — an operator restoring a
   snapshot must get back what they gave.
 
 Full write-up incl. the rendered SQL: `docs/streamdata-archive-concept.md` → *Conflict precedence*.
+
+### Row Origin — manual or automated (AB#5356)
+
+Every raw and time-range row records `row_origin` (`manual` / `automated`; `NULL` = written before the origin
+was recorded = automated). Rules to keep:
+
+- **Platform column, not a user column.** `ArchiveRowOriginColumns` owns the name, DDL and SQL fragments. Rollup
+  tables do not carry it; the windowed insert names it only when `generationTracked` is false.
+- **Always written explicitly** (AB#6647), nullable without a DEFAULT, so `ALTER TABLE … ADD COLUMN` can add it to
+  populated tables. `EnsureOriginColumnsAsync` does that at activation and before the first write/import of each
+  table per process (`RecomputeProcessState.EnsuredOriginColumns`). Do not remove that step: every insert names
+  the column, so a table without it would refuse every write.
+- **`$Origin` precedence key** (`ArchiveConflictKey.OriginKey`, `HigherWins` only): manual beats automated,
+  automated never beats manual, manual vs manual = the later write wins (no fall-through), automated vs automated =
+  the following keys. It is the one key that is not a user column; `BuildConflictGuard` skips the column check for it.
+- Without `$Origin` nothing changes: the origin follows the write that wins.
+
+Full write-up: `docs/streamdata-archive-concept.md` → *Row origin*. Tests: `ArchiveRowOriginSqlTests` (unit),
+`StreamDataOrigin/ArchiveRowOriginIntegrationTests` (real CrateDB).
 
 ### Declared-vs-physical Column Reconciliation
 

@@ -241,10 +241,41 @@ The **last** key admits equality, which is what makes re-delivering an identical
 
 Two constraints:
 
-- Every key must be one of the archive's own user columns. The guard reads `EXCLUDED."k"`, so a name that is not in the INSERT column list would produce SQL that fails on every single write; `BuildConflictGuard` refuses to build it and names the valid columns instead.
+- Every key must be one of the archive's own user columns, except the reserved key `$Origin` (see *Row origin* below). The guard reads `EXCLUDED."k"`, so a name that is not in the INSERT column list would produce SQL that fails on every single write; `BuildConflictGuard` refuses to build it and names the valid columns instead.
 - **Ingest paths only.** `ImportRowsAsync` deliberately does not apply the guard: an operator restoring a snapshot must get back what they gave, not a merge against whatever is in the table.
 
 Adopting this on an **already-activated** archive needs the declared/physical column reconciliation described under *Tenant schema lifecycle* — a new precedence key is usually a newly declared column, and until AB#5247 `CREATE TABLE IF NOT EXISTS` meant such a column never reached CrateDB, which turns the guard into SQL that fails on every write.
+
+### Row origin — manual or automated (AB#5356)
+
+Whether a value was entered by a person or delivered by a system is a fact about the **row**, for every archive and independent of the data model. A domain quality code (the metering data quality L1–L3) then only has to say how good a value is, not where it came from — before, `Basic.Energy/DataQuality` carried `Manual` as a "quality", so a correction could not say "estimated, but entered by hand", and with quality as the first precedence key it ranked last and could not replace anything.
+
+Every raw and time-range table carries the platform column `row_origin TEXT`:
+
+| Stored | Meaning |
+|---|---|
+| `automated` | delivered by an adapter, a pipeline, an import — the default; a writer that declares nothing writes this |
+| `manual` | entered or corrected by a person |
+| `NULL` | a row written before the origin was recorded; reads as automated |
+
+The writer declares the origin (`StreamDataPoint.Origin` / `TimeRangeStreamDataPoint.Origin`, enum `ArchiveRowOrigin`). The column is nullable without a DEFAULT and always named in the INSERT (AB#6647). Rollup tables do not carry it: their rows are derived. Tables provisioned before AB#5356 get the column through `ALTER TABLE … ADD COLUMN` — at activation, and on the first write or import of each process (`RecomputeProcessState.EnsuredOriginColumns` remembers the table, so `information_schema` is read once per table and process; a concurrent add by another process is the benign "already has a column" case). Archive export reads the column like every physical column, and the import carries it back (an export taken before AB#5356 imports as automated).
+
+**Ranking by origin — the reserved key `$Origin`.** An archive opts in by naming `$Origin` in its `ConflictPrecedence` (declared with `HigherWins`: manual ranks above automated; `LowerWins` is refused). The `$` cannot occur in an attribute path, so the key never collides with a user column, and it needs no declared column. Unlike a column key it does not fall through to the next key when both writes are manual:
+
+| Incoming | Stored | Result |
+|---|---|---|
+| manual | automated (or `NULL`) | the incoming write wins, whatever the following keys say |
+| automated | manual | the stored value stays — **a manual value is permanent** |
+| manual | manual | the incoming write wins: a wrong manual value is fixed with another manual write |
+| automated | automated | the following keys decide, exactly as without `$Origin` |
+
+Rendered for keys `$Origin, k2 … kn`:
+
+```
+(EXCLUDED."row_origin" = 'manual' OR (NOT COALESCE("row_origin", 'automated') = 'manual' AND <guard of k2 … kn, or TRUE>))
+```
+
+The origin column itself is guarded like every value, so a losing write leaves the stored origin alone. An archive **without** `$Origin` behaves as before: last write wins (or its column keys decide), and the row then carries the origin of the write that won. The replaced value is not kept; rows stay single-valued. The energy community measurements archive ranks `[$Origin, DataQuality LowerWins, SourceDocumentDate HigherWins]`.
 
 ### Time semantics
 

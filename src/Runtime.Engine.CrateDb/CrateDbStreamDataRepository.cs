@@ -171,6 +171,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 qualifiedTable, resolvedColumns.Count, _tenantId, shape);
             await _managementClient.ExecuteDdlAsync(_tenantId, sql);
             await ReconcileDeclaredColumnsAsync(qualifiedTable, snapshot.RtId.ToString(), resolvedColumns, isRollup);
+            if (!isRollup)
+            {
+                await EnsureOriginColumnsAsync(qualifiedTable, snapshot.RtId.ToString());
+            }
 
             if (isRollup)
             {
@@ -189,6 +193,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 qualifiedTable, resolvedColumns.Count, _tenantId);
             await _managementClient.ExecuteDdlAsync(_tenantId, sql);
             await ReconcileDeclaredColumnsAsync(qualifiedTable, snapshot.RtId.ToString(), resolvedColumns, isRollup: false);
+            await EnsureOriginColumnsAsync(qualifiedTable, snapshot.RtId.ToString());
         }
     }
 
@@ -232,6 +237,53 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             await _managementClient.ExecuteDdlAsync(_tenantId,
                 ArchiveDdlGenerator.GenerateAddColumn(qualifiedTable, addition.Column));
         }
+    }
+
+    /// <summary>
+    /// Makes sure the raw or time-range table of <paramref name="archiveRtId" /> carries the row origin columns
+    /// (AB#5356) before a statement names them. Tables provisioned before AB#5356 do not have them, and every
+    /// write names them, so without this step every write to such an archive would fail. Checked once per table
+    /// and process (<see cref="RecomputeProcessState.EnsuredOriginColumns" />); a concurrent add by another
+    /// process is the benign "already has a column" case.
+    /// </summary>
+    private async Task EnsureOriginColumnsAsync(string qualifiedTable, string archiveRtId)
+    {
+        if (_recomputeProcessState.EnsuredOriginColumns.ContainsKey(qualifiedTable))
+        {
+            return;
+        }
+
+        var existing = await ReadPhysicalColumnNamesAsync(archiveRtId);
+        if (existing.Count == 0)
+        {
+            // Table not found or catalogue not readable: let the write report the real problem, and ask again
+            // next time instead of remembering an answer that was never given.
+            return;
+        }
+
+        foreach (var (name, definition) in ArchiveRowOriginColumns.Columns)
+        {
+            if (existing.Contains(name))
+            {
+                continue;
+            }
+
+            _logger.LogInformation(
+                "Archive {Table}: adding row origin column {Column}, which the table does not have yet.",
+                qualifiedTable, name);
+            try
+            {
+                await _managementClient.ExecuteDdlAsync(_tenantId,
+                    $"ALTER TABLE {qualifiedTable} ADD COLUMN \"{name}\" {definition};");
+            }
+            catch (Exception ex) when (IsColumnAlreadyExists(ex))
+            {
+                _logger.LogDebug(ex, "Archive {Table}: row origin column {Column} was added concurrently.",
+                    qualifiedTable, name);
+            }
+        }
+
+        _recomputeProcessState.EnsuredOriginColumns[qualifiedTable] = true;
     }
 
     /// <summary>
@@ -375,6 +427,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         activity?.SetTag("streamdata.archive.rtid", archiveRtId.ToString());
 
         var (qualifiedTable, userColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
+        await EnsureOriginColumnsAsync(qualifiedTable, archiveRtId.ToString());
 
         var sw = Stopwatch.StartNew();
         var computedPlan = BuildComputedPlan(snapshot);
@@ -427,6 +480,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         activity?.SetTag("streamdata.batch_size", filtered.Count);
 
         var (qualifiedTable, userColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
+        await EnsureOriginColumnsAsync(qualifiedTable, archiveRtId.ToString());
 
         var sw = Stopwatch.StartNew();
         var computedPlan = BuildComputedPlan(snapshot);
@@ -469,7 +523,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         => snapshot.ConflictPrecedence.Count == 0
             ? null   // not configured is an absence, not an empty list — the client reads it as "no guard"
             : snapshot.ConflictPrecedence
-                .Select(k => new ArchiveConflictKey(ColumnNameMapper.PathToColumnName(k.Column), k.Order))
+                .Select(k => k.IsOrigin
+                    ? new ArchiveConflictKey(ArchiveConflictKey.OriginKey, k.Order)   // not a column; the guard ranks by row_origin
+                    : new ArchiveConflictKey(ColumnNameMapper.PathToColumnName(k.Column), k.Order))
                 .ToList();
 
     /// <summary>
@@ -559,6 +615,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         activity?.SetTag("streamdata.batch_size", filtered.Count);
 
         var (qualifiedTable, userColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
+        await EnsureOriginColumnsAsync(qualifiedTable, archiveRtId.ToString());
 
         var sw = Stopwatch.StartNew();
         var computedPlan = BuildComputedPlan(snapshot);
@@ -605,6 +662,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             RtWellKnownName = point.RtWellKnownName,
             From = point.From.ToUniversalTime(),
             To = point.To.ToUniversalTime(),
+            Origin = point.Origin,
         };
     }
 
@@ -1744,6 +1802,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // Rollup tables key their PK with `generation` (AB#4184 Phase 6); the windowed insert must
         // name it in the conflict target and write the always-live generation 0 (AB#4773).
         var generationTracked = snapshot.RollupAggregations is not null;
+        if (!generationTracked)
+        {
+            await EnsureOriginColumnsAsync(qualifiedTable, archiveRtId.ToString());
+        }
 
         using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.importRows");
         activity?.SetTag("octo.tenant.id", _tenantId);
@@ -1821,6 +1883,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             RtWellKnownName = row.TryGetValue(Constants.RtWellKnownName, out var wkn) ? wkn as string : null,
             RtCreationDateTime = OptionalUtc(row, Constants.RtCreationDateTime),
             RtChangedDateTime = OptionalUtc(row, Constants.RtChangedDateTime),
+            // An export taken before AB#5356 has no origin column: its rows were all delivered automatically.
+            Origin = ArchiveRowOriginColumns.FromStoredValue(row.TryGetValue(Constants.RowOrigin, out var origin) ? origin : null),
         };
     }
 
@@ -1843,6 +1907,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             RtWellKnownName = row.TryGetValue(Constants.RtWellKnownName, out var wkn) ? wkn as string : null,
             From = RequireUtc(row, Constants.WindowStart, rowIndex),
             To = RequireUtc(row, Constants.WindowEnd, rowIndex),
+            Origin = ArchiveRowOriginColumns.FromStoredValue(row.TryGetValue(Constants.RowOrigin, out var origin) ? origin : null),
         };
     }
 
@@ -3608,7 +3673,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             Timestamp = point.Timestamp,
             RtWellKnownName = point.RtWellKnownName,
             RtCreationDateTime = point.RtCreationDateTime ?? default,
-            RtChangedDateTime = point.RtChangedDateTime ?? default
+            RtChangedDateTime = point.RtChangedDateTime ?? default,
+            Origin = point.Origin
         };
     }
 

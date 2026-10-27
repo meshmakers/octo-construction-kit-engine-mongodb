@@ -46,6 +46,13 @@ public static class Constants
     /// </summary>
     public const string Generation = "generation";
 
+    /// <summary>
+    /// Origin of a raw or time-range row (AB#5356): <c>manual</c> or <c>automated</c>; <c>NULL</c> on rows
+    /// written before the origin was recorded, which read as automated. Not on rollup tables. See
+    /// <see cref="ArchiveRowOriginColumns" />.
+    /// </summary>
+    public const string RowOrigin = "row_origin";
+
     /// <summary>rtWellKnownName column name</summary>
     public const string RtWellKnownName = "rtwellknownname";
 

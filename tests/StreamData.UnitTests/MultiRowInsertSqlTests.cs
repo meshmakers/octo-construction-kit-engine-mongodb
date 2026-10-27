@@ -42,11 +42,11 @@ public class MultiRowInsertSqlTests
     {
         var sql = CrateDatabaseClient.BuildTimeRangeInsertSql("\"t\".\"archive_a\"", Columns, rowCount: 3);
 
-        // 5 standard columns + 3 user columns = 8 parameters per row; was_updated follows as the
-        // literal FALSE (AB#6647) and must not shift the numbering.
-        Assert.Contains("VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE), ($9,", sql);
-        Assert.Contains("$24, FALSE) ON CONFLICT", sql);
-        Assert.DoesNotContain("$25", sql);
+        // 5 standard columns + row_origin (AB#5356) + 3 user columns = 9 parameters per row; was_updated
+        // follows as the literal FALSE (AB#6647) and must not shift the numbering.
+        Assert.Contains("VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, FALSE), ($10,", sql);
+        Assert.Contains("$27, FALSE) ON CONFLICT", sql);
+        Assert.DoesNotContain("$28", sql);
     }
 
     [Fact]
@@ -66,8 +66,8 @@ public class MultiRowInsertSqlTests
     {
         var sql = CrateDatabaseClient.BuildRawInsertSql("\"t\".\"archive_a\"", Columns, rowCount: 2);
 
-        // 4 standard columns + 3 user columns = 7 parameters per row.
-        Assert.Contains("VALUES ($1, $2, $3, $4, $5, $6, $7), ($8, $9, $10, $11, $12, $13, $14) ON CONFLICT", sql);
+        // 4 standard columns + row_origin (AB#5356) + 3 user columns = 8 parameters per row.
+        Assert.Contains("VALUES ($1, $2, $3, $4, $5, $6, $7, $8), ($9, $10, $11, $12, $13, $14, $15, $16) ON CONFLICT", sql);
     }
 
     [Fact]
