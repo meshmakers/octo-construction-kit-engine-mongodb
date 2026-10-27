@@ -1587,6 +1587,64 @@ afterwards (`TotalCount` = pruned count):
   byte-identical, paging after pruning; both overloads) with the real filter and a restricted policy
   table. Consumers: the export-by-deep-graph job of octo-bot-services (AB#6734).
 
+### Interface query: `ITenantRepository.GetRtEntitiesByInterfaceAsync` (AB#7019)
+
+One method returns the entities of **all implementers of a CK interface** (derived types included), filtered, sorted, paged
+and optionally counted over all their collections in one global order (GraphQL interface types AB#6932 and the pipeline node
+AB#6933 call it). Decision of spike AB#6930 (Gerald, 2026-10-19, option A): type list from the CK cache
+(`CkInterfaceGraph.ImplementingTypes`), fan-out over the collections of the implementers, application-side k-way merge of the
+top `skip + take` rows per collection; NOT `$unionWith` (about 1 s at 1M), no denormalized `CkInterfaceIds`, **no migration,
+no index created or changed, no change of the persisted `RtEntity`**. Full design: `docs/interface-query.md`. Code:
+`Repositories/Query/RtInterfaceQueryExecutor.cs` (validation, plans, fetch, merge), `TenantRepository.GetRtEntitiesByInterfaceAsync`,
+contract `ITenantRepository` + `RtInterfaceQueryResult` + `InterfaceQueryException` (`Runtime.Contracts.MongoDb`).
+
+* **Per collection** the same `SingleOriginRtQuery` as the type query (field-filter resolver, rtState pre-filter, security
+  pre-filter) with the `ckTypeId` pre-filter replaced by the implementers of that collection (`RestrictToCkTypeIds`), pipeline
+  `$match` → `$sort` → `$limit(skip + take + 1)`; no `$facet`/`$skip`. The sort keys are exposed by `Query.SortKeys` and read
+  from the raw documents for the merge; the global tie-break is the rtId. A tie that straddles the window end (detected with the
+  extra row) is re-queried once, ordered by rtId, because the rtId cannot be part of the server sort without defeating the
+  `(ckTypeId, attributes.<member>, rtState)` indexes.
+* **Security.** One data-permission filter for the call (audit event as in the type query). Types that are protected and neither
+  allowed nor owned-only for the caller are removed from the `$in` list; a collection left empty is **not queried** (test:
+  `Security_ACollectionThatIsFullyDenied_IsNeverQueried`, command count). `Security_ShowsExactlyWhatTheTypeQueriesShow` compares
+  the interface query with the union of the type queries for system, a role holder, owned-only readers and an outsider.
+* **Count** only on request (`includeTotalCount`), one `countDocuments` per collection (parallel without a transaction); no
+  count query otherwise (`Count_IsIssuedOnlyOnRequest_OneCommandPerCollection`).
+* **Session.** In a transaction session the collections are queried one after the other (MongoDB: one operation at a time in a
+  transaction); without a transaction queries and counts run in parallel (at most 8).
+* **Errors.** `InterfaceQueryException`: message number **7019**, `Reason` token + `Parameters` are the contract
+  (`UnknownInterface`, `TextSearchNotSupported`, `AggregationNotSupported`, `NavigationNotSupported`,
+  `TooManyCollectionRoots` (64 roots), `PageTooLarge` (`skip + take` > 1000), `UnknownMember`); an interface without implementers
+  returns an empty result.
+* **v1 limits.** No text/attribute search, aggregation, navigation, geospatial; filter/sort only on interface members and system
+  fields; untyped `RtEntity` rows; deep pages cost `collections x (skip + take)` documents.
+* **Index guidance.** The method creates no index. A type that implements an interface declares an index on the member clients
+  sort by (`indexes:` in its CK type: `(ckTypeId, attributes.<member>, rtState)`); **index the sort field of heavily used
+  interface members**. Without it the sort of every collection reads all its matching rows (O(matching rows), no latency
+  promise). There is deliberately no default index on `Name` (decision 2026-10-19; re-check on real tenants).
+* **Budget and measured numbers** (`GetRtEntitiesByInterfacePerformanceTests`, trait `Category=Performance`, default 100 000
+  entities over 30 collection roots, `OCTO_TEST_INTERFACE_QUERY_ENTITIES=1000000` for the opt-in 1M run; .NET end to end through
+  `ITenantRepository`, MongoDB 8.0.15 Testcontainer, Mac mini, page size 50, index on Name on every root, 20 runs after 3
+  warm-ups, median / p95 in ms). Budget (decision AB#6930): one collection at most 1.25x of the type query with the same rows;
+  indexed first page over 30 collections p95 at most 100 ms; unindexed: no promise (printed, not asserted).
+
+  | Measure | 100k, transaction | 100k, no transaction | 1M, transaction | 1M, no transaction |
+  |---|---|---|---|---|
+  | indexed first page (Name), no count | 15.0 / 18.1 | 4.5 / 5.8 | 16.2 / 19.4 | 5.4 / 6.5 |
+  | indexed, skip 450 | 86.1 / 95.7 | 45.6 / 55.2 | 94.9 / 100.9 | 49.4 / 63.1 |
+  | indexed first page with count | 33.6 / 37.2 | 9.0 / 10.4 | 137.5 / 143.9 | 21.9 / 23.9 |
+  | **unindexed** sort (Rank), first page | 65 / 65 | 41 / 45 | 585 / 589 | 408 / 411 |
+  | one collection (Name), interface / type query | 1.5 / 3.0 | 0.7 / 2.6 | 5.3 / 30.1 | 3.9 / 29.5 |
+  | one collection (Rank), interface / type query | 3.5 / 3.6 | 2.3 / 3.5 | 24.7 / 31.7 | 20.2 / 31.7 |
+
+  The interface query with count requested is faster than the type query (which always counts in a `$facet`) in the one-collection
+  case; the multi-collection count costs one pass over the matching rows (about 140 ms at 1M sequential, 22 ms parallel).
+* **Tests.** `tests/.../InterfaceQuery/`: `GetRtEntitiesByInterfaceAsyncTests` (Testcontainers MongoDB, test model
+  `InterfaceQueryTestModel`: Asset+Pump share a collection, Sensor+Gauge share one, Valve and Vault have one each; hand-computed
+  windows, ties across and inside collections, security, count observation, every error code with parameters, the 64/65 root cap),
+  `GetRtEntitiesByInterfacePerformanceTests`. The model builders (`InterfaceQueryTestModel`, `InterfaceQueryWideModel`) build
+  `CkCompiledModelRoot` in C#, like `CkV2KitchenSinkModel`.
+
 ### CkAttribute.isRuntimeState Round-Trip (AB#4589)
 
 The runtime CK cache is rebuilt by reading each model **back out of MongoDB**

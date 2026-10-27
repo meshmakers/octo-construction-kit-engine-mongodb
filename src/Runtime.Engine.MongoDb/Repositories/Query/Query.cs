@@ -10,6 +10,7 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
 {
     private readonly List<FilterDefinition<TEntity>> _attributeSearchFilter;
     private readonly List<SortDefinition<TEntity>> _sortDefinitions;
+    private readonly List<(string Path, bool Descending)> _sortKeys = new();
     private FilterDefinition<TEntity>? _textFilter;
 
     protected internal Query(FieldFilterResolver<TEntity> fieldFilterResolver, string language = "en")
@@ -94,6 +95,18 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
         var sortDefinition = Builders<TEntity>.Sort.Combine(_sortDefinitions);
         return [PipelineStageDefinitionBuilder.Sort(sortDefinition)];
     }
+
+    /// <summary>
+    /// The configured sort keys as resolved MongoDB field paths with their direction, in sort order
+    /// (AB#7019: the application-side merge of an interface query compares rows on exactly these keys).
+    /// </summary>
+    internal IReadOnlyList<(string Path, bool Descending)> SortKeys => _sortKeys;
+
+    /// <summary>
+    /// The configured sort definitions combined, or null when no sort order is configured.
+    /// </summary>
+    internal SortDefinition<TEntity>? CombinedSortDefinition =>
+        _sortDefinitions.Any() ? Builders<TEntity>.Sort.Combine(_sortDefinitions) : null;
 
     /// <summary>
     /// Indicates whether sort definitions have been configured.
@@ -224,9 +237,11 @@ internal abstract class Query<TEntity> : Engine<TEntity> where TEntity : class, 
             {
                 case SortOrders.Ascending:
                     _sortDefinitions.Add(Builders<TEntity>.Sort.Ascending(resolvedAttributeName));
+                    _sortKeys.Add((resolvedAttributeName!, false));
                     break;
                 case SortOrders.Descending:
                     _sortDefinitions.Add(Builders<TEntity>.Sort.Descending(resolvedAttributeName));
+                    _sortKeys.Add((resolvedAttributeName!, true));
                     break;
                 default:
                     continue;

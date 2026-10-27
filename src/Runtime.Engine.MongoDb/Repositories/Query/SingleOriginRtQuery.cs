@@ -46,6 +46,16 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
     }
 
     private RtDataSecurityQueryFilter? _securityFilter;
+    private IReadOnlyCollection<RtCkId<CkTypeId>>? _ckTypeIdScope;
+
+    /// <summary>
+    ///     Replaces the ckTypeId pre-filter ("the queried type and all derived types") by an explicit list. The
+    ///     interface query (AB#7019) uses it to query the implementers that live in this query's collection.
+    /// </summary>
+    internal void RestrictToCkTypeIds(IReadOnlyCollection<RtCkId<CkTypeId>> ckTypeIds)
+    {
+        _ckTypeIdScope = ckTypeIds;
+    }
 
     /// <summary>
     ///     Guard against pathological fan-out when an abstract navigation target spans many entity
@@ -773,7 +783,7 @@ internal class SingleOriginRtQuery<TEntity> : SingleOriginQuery<OctoObjectId, TE
         base.AddPreFieldFilters(filters);
 
         // Add filter for ck type and derived ones
-        var ckTypeIds = _ckTypeGraph.GetAllDerivedTypes(true).Select(t => t.ToRtCkId());
+        var ckTypeIds = _ckTypeIdScope ?? _ckTypeGraph.GetAllDerivedTypes(true).Select(t => t.ToRtCkId()).ToList();
         filters.Add(Builders<TEntity>.Filter.In(f => f.CkTypeId, ckTypeIds));
 
         // Ensure that deleted entities are not added to the result if defined.

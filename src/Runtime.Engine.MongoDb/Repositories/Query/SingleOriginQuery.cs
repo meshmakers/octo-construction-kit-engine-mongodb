@@ -27,6 +27,18 @@ internal abstract class SingleOriginQuery<TKey, TEntity> : Query<TEntity>
     }
 
     /// <summary>
+    /// The combined filter of this query (security pre-filter, pre-filters, field filters), or null when the
+    /// query has none. Used by the interface query (AB#7019) to build its own pipelines on the same filter the
+    /// type query would use.
+    /// </summary>
+    internal FilterDefinition<TEntity>? BuildMatchFilter() => CreateFilterDefinitions();
+
+    /// <summary>
+    /// The driver collection this query runs against.
+    /// </summary>
+    internal IMongoCollection<TEntity> GetMongoCollection() => _mongoDbDataSourceCollection.GetMongoCollection();
+
+    /// <summary>
     /// Returns enrichment pipeline stages that should be applied post-pagination.
     /// Override in derived classes to provide navigation lookup stages for Include mode.
     /// </summary>

@@ -345,6 +345,51 @@ public interface ITenantRepository : IRuntimeRepository
     Task<IResultSet<RtDeepGraphQueryResult>> GetRtDeepGraphAsync(IOctoSession session, IEnumerable<OctoObjectId> originRtIds, RtCkId<CkTypeId> originCkTypeId,
         RtEntityQueryOptions queryOptions, IReadOnlyCollection<RtDeepGraphFollowSpec>? followSpecs, int? skip = null, int? take = null);
 
+    /// <summary>
+    ///     Gets the entities of every type that implements a CK interface (CK v2, AB#7019, decision of spike AB#6930):
+    ///     filtered, sorted and paged in one global order over all collections, so that GraphQL, pipeline nodes and
+    ///     other consumers never re-implement the fan-out and the merge.
+    ///     <para>
+    ///         <b>How it works.</b> The implementing types (derived types included) come from the CK cache
+    ///         (<c>CkInterfaceGraph.ImplementingTypes</c>), are grouped by the collection of their collection root,
+    ///         and every collection is queried on its own with the interface-member filter, the data-permission
+    ///         filter, the rtState pre-filter and the sort; each returns its first <c>skip + take</c> rows. The rows
+    ///         are merged in the application (k-way merge on the sort keys, the rtId as final tie-break) and the
+    ///         requested window is returned. No index is created or changed; a sort on an indexed member is served
+    ///         by the index of every collection, a sort on a member without an index costs
+    ///         O(matching rows) per collection.
+    ///     </para>
+    ///     <para>
+    ///         <b>Supported (v1):</b> field filters and sort orders on the members of the interface (and the system
+    ///         fields rtId, ckTypeId, rtCreationDateTime, rtChangedDateTime, rtVersion, rtWellKnownName, rtCreatedBy),
+    ///         paging, optional total count, <c>GlobalFilter.IncludeArchived</c>. Without a sort order the entities
+    ///         come in ascending rtId order. <b>Refused with an <see cref="InterfaceQueryException" /></b> (stable code
+    ///         and parameters, see <see cref="InterfaceQueryReasons" />): unknown interface, text and attribute
+    ///         search, field and result aggregation, navigation paths and geospatial filters, filter or sort on
+    ///         something that is no member of the interface, more than
+    ///         <see cref="RtInterfaceQueryLimits.MaxCollectionRoots" /> collection roots, and
+    ///         <c>skip + take</c> above <see cref="RtInterfaceQueryLimits.MaxSkipPlusTake" />. An interface without
+    ///         implementers (or none the caller may see) returns an empty page with count 0.
+    ///     </para>
+    ///     <para>
+    ///         <b>Session.</b> In a session with an active transaction the collections are queried one after the
+    ///         other (MongoDB runs one operation at a time in a transaction). Without a transaction the queries
+    ///         and the counts run in parallel.
+    ///     </para>
+    /// </summary>
+    /// <param name="session">The session; its security context decides what the caller may see.</param>
+    /// <param name="ckInterfaceId">The runtime id of the interface, e.g. <c>System.Identity/Named-1</c>.</param>
+    /// <param name="queryOptions">Field filters, sort orders and the global filter.</param>
+    /// <param name="skip">Number of entities to skip in the global order, at least 0.</param>
+    /// <param name="take">Number of entities to return, at least 0.</param>
+    /// <param name="includeTotalCount">When true the number of matching entities is counted (one count query per
+    /// collection, in parallel); when false no count query is issued and <see cref="RtInterfaceQueryResult.TotalCount" />
+    /// is null.</param>
+    /// <exception cref="InterfaceQueryException">The request is not supported or exceeds a limit.</exception>
+    Task<RtInterfaceQueryResult> GetRtEntitiesByInterfaceAsync(IOctoSession session,
+        RtCkId<CkInterfaceId> ckInterfaceId, RtEntityQueryOptions queryOptions, int skip, int take,
+        bool includeTotalCount = false);
+
     #endregion Data query
     
     #region Subscriptions / Watch
