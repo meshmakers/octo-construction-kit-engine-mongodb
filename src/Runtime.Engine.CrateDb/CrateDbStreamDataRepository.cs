@@ -558,6 +558,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var materialised = datapoints as IReadOnlyList<TimeRangeStreamDataPoint> ?? datapoints.ToList();
 
+        // A value that does not fit its column refuses the whole batch with the point, the column and the
+        // expected type, before anything is written; CrateDB would otherwise refuse the statement with an
+        // unexplained error. Enum names become their keys, as on the pipeline write path.
+        materialised = ArchiveWriteValueValidator.Normalize(_ckCacheService, _tenantId, snapshot, materialised,
+            FlattenRecordValues);
+
         // Same CkTypeId-binding rule as raw archive inserts: each per-archive table holds one CkType.
         var filtered = materialised.Where(p => p.CkTypeId == snapshot.TargetCkTypeId).ToList();
         var skipped = materialised.Count - filtered.Count;
