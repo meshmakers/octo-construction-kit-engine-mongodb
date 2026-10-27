@@ -315,8 +315,13 @@ internal sealed class RtInterfaceQueryExecutor(
                 LimitStage(windowEnd)
             };
             var tied = ToRows(await AggregateAsync(query, handle, tieStages).ConfigureAwait(false), query.SortKeys);
-            var kept = rows.Where(r => !KeysEqual(r, rows[windowEnd])).ToList();
-            kept.AddRange(tied);
+            // An equality filter on a multi-valued path matches every document whose array CONTAINS the value, also
+            // those whose sort key (the smallest / largest element) is another one and that are already in the page:
+            // only rows whose key really is the tie key replace the tied rows.
+            var tieRow = rows[windowEnd];
+            var kept = rows.Where(r => !KeysEqual(r, tieRow)).ToList();
+            var keptIds = kept.Select(r => r.Id).ToHashSet();
+            kept.AddRange(tied.Where(r => KeysEqual(r, tieRow) && keptIds.Add(r.Id)));
             rows = kept;
         }
 

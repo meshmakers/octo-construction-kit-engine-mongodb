@@ -37,7 +37,7 @@ internal static class InterfaceQueryTestModel
             IsCollectionRoot = true,
             DerivedFromCkTypeId = new CkId<CkTypeId>(systemId, new CkTypeId("Entity-1")),
             Implements = interfaces.Select(Interface).ToList(),
-            Attributes = [Assign("Name", false), Assign("Rank", true)]
+            Attributes = [Assign("Name", false), Assign("Rank", true), Assign("Tags", true)]
         };
 
         CkCompiledTypeDto Derived(string name, string baseName) => new()
@@ -66,11 +66,12 @@ internal static class InterfaceQueryTestModel
             [
                 new CkAttributeDto { AttributeId = new CkAttributeId("Name-1"), ValueType = AttributeValueTypesDto.String },
                 new CkAttributeDto { AttributeId = new CkAttributeId("Rank-1"), ValueType = AttributeValueTypesDto.Integer },
-                new CkAttributeDto { AttributeId = new CkAttributeId("Note-1"), ValueType = AttributeValueTypesDto.String }
+                new CkAttributeDto { AttributeId = new CkAttributeId("Note-1"), ValueType = AttributeValueTypesDto.String },
+                new CkAttributeDto { AttributeId = new CkAttributeId("Tags-1"), ValueType = AttributeValueTypesDto.StringArray }
             ],
             Interfaces =
             [
-                InterfaceOf("Named", ("Name", false), ("Rank", true)),
+                InterfaceOf("Named", ("Name", false), ("Rank", true), ("Tags", true)),
                 InterfaceOf("Titled", ("Name", false)),
                 InterfaceOf("Lonely", ("Name", false))
             ],

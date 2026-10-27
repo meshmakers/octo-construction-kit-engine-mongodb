@@ -228,6 +228,37 @@ public class GetRtEntitiesByInterfaceAsyncTests(InterfaceQueryFixture fixture)
         }
     }
 
+    /// <summary>
+    ///     Sort on a multi-valued member (MongoDB sorts an array by its smallest element ascending). The tie re-query
+    ///     is an equality on the array, which also matches documents that merely CONTAIN the tie value - they must not
+    ///     be returned twice (review finding of PR 194).
+    /// </summary>
+    [Fact]
+    public async Task TiesOnAMultiValuedSortMember_NeverReturnARowTwice()
+    {
+        await fixture.ResetAsync();
+        var repository = fixture.GetSystemContext().GetTenantRepository();
+        // Sort key (smallest element): 20 -> "0", 21..25 -> "a", 26 -> "b". Document 20 CONTAINS "a" as well.
+        await InterfaceQuerySeed.InsertAsync(repository, "Sensor", 20, "x", 1, tags: ["a", "0"]);
+        foreach (var number in new[] { 25, 24, 23, 22, 21 })
+        {
+            await InterfaceQuerySeed.InsertAsync(repository, "Sensor", number, "x", 1, tags: number == 22 ? ["z", "a"] : ["a"]);
+        }
+
+        await InterfaceQuerySeed.InsertAsync(repository, "Valve", 26, "x", 1, tags: ["b"]);
+        int[] expected = [20, 21, 22, 23, 24, 25, 26];
+
+        for (var skip = 0; skip < expected.Length; skip++)
+        {
+            for (var take = 1; take <= 4; take++)
+            {
+                var result = await QueryAsync(repository, Named,
+                    RtEntityQueryOptions.Create().SortOrder("Tags", SortOrders.Ascending), skip, take, false, true);
+                Assert.Equal(expected.Skip(skip).Take(take), InterfaceQuerySeed.Numbers(result.Items));
+            }
+        }
+    }
+
     // ---- Security: exactly like the type query ----------------------------------------------------------------------
 
     private static RtDataPolicyTable VaultAndOwnedAssetsTable() => new(

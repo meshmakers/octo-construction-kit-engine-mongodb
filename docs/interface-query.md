@@ -96,6 +96,7 @@ sort of every collection reads all of its matching rows. (Decision of Gerald 202
 * No text search, no aggregation, no navigation, no geospatial filter (refused, see above).
 * `skip + take <= 1000`: every collection returns its first `skip + take` rows to the merge, so deep pages cost
   `collections x (skip + take)` documents; use filters, not deep paging.
-* Sort on a multi-valued path follows MongoDB's min/max rule for the order; ties on such a path at the window end are resolved
-  by the rtId only among the rows the equality re-query returns.
+* Sort on a multi-valued path follows MongoDB's min/max rule for the order. The tie re-query is an equality on the array, so it
+  also matches documents that merely contain the tie value; only re-queried rows whose sort key really is the tie key replace the
+  tied rows and no row is taken twice (`TiesOnAMultiValuedSortMember_NeverReturnARowTwice`).
 * The result is untyped (`RtEntity`); `RtEntity.CkTypeId` names the concrete type of every row.

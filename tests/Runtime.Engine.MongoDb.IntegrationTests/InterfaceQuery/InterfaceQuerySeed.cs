@@ -14,7 +14,8 @@ internal static class InterfaceQuerySeed
     internal static OctoObjectId Id(int number) => OctoObjectId.Parse(number.ToString("x24"));
 
     internal static async Task InsertAsync(ITenantRepository repository, string type, int number, string name,
-        int? rank, RtSecurityContext? securityContext = null, string modelName = "InterfaceQuery")
+        int? rank, RtSecurityContext? securityContext = null, string modelName = "InterfaceQuery",
+        string[]? tags = null)
     {
         var entity = await repository.CreateTransientRtEntityAsync(
             new CkId<CkTypeId>(new CkModelId($"{modelName}-1.0.0"), new CkTypeId($"{type}-1")));
@@ -23,6 +24,11 @@ internal static class InterfaceQuerySeed
         if (rank.HasValue)
         {
             entity.SetAttributeValue("Rank", AttributeValueTypesDto.Integer, rank.Value);
+        }
+
+        if (tags != null)
+        {
+            entity.SetAttributeValue("Tags", AttributeValueTypesDto.StringArray, tags);
         }
 
         using var session = securityContext == null
