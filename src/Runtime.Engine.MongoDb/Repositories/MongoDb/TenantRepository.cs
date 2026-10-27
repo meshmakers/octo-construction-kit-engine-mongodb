@@ -102,8 +102,21 @@ internal class TenantRepository(
     ///     the pre-permission behavior. Publishes an audit event when the queried type is restricted by
     ///     AuditOnly policies only.
     /// </summary>
-    private async Task<RtDataSecurityQueryFilter?> CreateSecurityFilterAsync(IOctoSession session,
+    private Task<RtDataSecurityQueryFilter?> CreateSecurityFilterAsync(IOctoSession session,
         CkTypeGraph queriedCkTypeGraph)
+    {
+        return CreateSecurityFilterAsync(session,
+            queriedCkTypeGraph.GetAllDerivedTypes(true).Select(t => t.ToRtCkId().SemanticVersionedFullName),
+            queriedCkTypeGraph.CkTypeId.ToRtCkId().SemanticVersionedFullName);
+    }
+
+    /// <summary>
+    ///     Same filter for a query over several types (the implementers of a CK interface, AB#7019): the audit event
+    ///     names <paramref name="queriedName" /> when any of <paramref name="queriedTypeIds" /> is restricted by an
+    ///     AuditOnly policy.
+    /// </summary>
+    private async Task<RtDataSecurityQueryFilter?> CreateSecurityFilterAsync(IOctoSession session,
+        IEnumerable<string> queriedTypeIds, string queriedName)
     {
         if (dataSecurityFilterFactory == null)
         {
@@ -124,13 +137,12 @@ internal class TenantRepository(
 
         if (securityFilter.AuditDeniedCkTypeIds.Count > 0 && AuditEventSink != null)
         {
-            var queriedTypeIds = queriedCkTypeGraph.GetAllDerivedTypes(true).Select(t => t.ToRtCkId().SemanticVersionedFullName);
             if (queriedTypeIds.Any(t => securityFilter.AuditDeniedCkTypeIds.Contains(t)))
             {
                 await AuditEventSink.PublishAsync(new AuditEvent(TenantId, AuditEventLevel.Warning,
                         "DataPermissions.ReadViolation",
                         $"Subject '{securityContext.SubjectId}' read protected type " +
-                        $"'{queriedCkTypeGraph.CkTypeId.ToRtCkId().SemanticVersionedFullName}' without a grant " +
+                        $"'{queriedName}' without a grant " +
                         "(AuditOnly policy — not blocked)."))
                     .ConfigureAwait(false);
             }
@@ -937,6 +949,37 @@ internal class TenantRepository(
         query.AddGeospatialFilters(queryOptions.GeospatialFilters);
 
         return await query.ExecuteQuery(session, skip, take);
+    }
+
+    /// <inheritdoc />
+    public async Task<RtInterfaceQueryResult> GetRtEntitiesByInterfaceAsync(IOctoSession session,
+        RtCkId<CkInterfaceId> ckInterfaceId, RtEntityQueryOptions queryOptions, int skip, int take,
+        bool includeTotalCount = false)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(queryOptions);
+
+        var ckCacheService = await GetCkCacheServiceAsync();
+        CkInterfaceGraph interfaceGraph;
+        try
+        {
+            interfaceGraph = ckCacheService.GetRtCkInterface(TenantId, ckInterfaceId);
+        }
+        catch (CkCacheException)
+        {
+            // The tenant cache exists (GetCkCacheServiceAsync loaded it); only the interface is unknown.
+            throw InterfaceQueryException.UnknownInterface(ckInterfaceId);
+        }
+
+        RtInterfaceQueryExecutor.Validate(ckInterfaceId, interfaceGraph, queryOptions, skip, take);
+
+        var securityFilter = await CreateSecurityFilterAsync(session,
+            interfaceGraph.ImplementingTypes.Select(t => t.ToRtCkId().SemanticVersionedFullName),
+            ckInterfaceId.ToString());
+        var executor = new RtInterfaceQueryExecutor(metricsContext, ckCacheService, TenantId,
+            mongoDbRepositoryDataSource);
+        var plans = executor.BuildPlans(ckInterfaceId, interfaceGraph, queryOptions, securityFilter);
+        return await executor.ExecuteAsync(session, plans, skip, take, includeTotalCount).ConfigureAwait(false);
     }
 
     protected override async Task<IResultSet<TEntity>> GetRtEntitiesByIdAsync<TEntity>(IOctoSession session,
