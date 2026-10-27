@@ -456,6 +456,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var dtos = filtered.Select(p => MapToDataPointDto(p, computedPlan, writtenAt)).ToList();
         var notStored = await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
             ResolveConflictPrecedence(snapshot)) ?? [];
+        await RefreshAfterManualWriteAsync(qualifiedTable, filtered.Select(p => p.Origin));
         sw.Stop();
         var result = BuildWriteResult(filtered.Count, typeMismatches, notStored,
             i => new StreamDataSkippedRow(filtered[i].RtId, filtered[i].Timestamp, null, filtered[i].Origin, default));
@@ -608,6 +609,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var dtos = filtered.Select(p => MapToTimeRangeDataPointDto(p, computedPlan, writtenAt)).ToList();
         var notStored = await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
             conflictPrecedence: ResolveConflictPrecedence(snapshot)) ?? [];
+        await RefreshAfterManualWriteAsync(qualifiedTable, filtered.Select(p => p.Origin));
         sw.Stop();
         var result = BuildWriteResult(filtered.Count, typeMismatches, notStored,
             i => new StreamDataSkippedRow(filtered[i].RtId, filtered[i].From, filtered[i].To, filtered[i].Origin, default));
@@ -628,6 +630,20 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         await DetectAndRecordRetroactiveWriteAsync(
             snapshot, stored.Select(p => (p.From, p.Origin)), RecomputeChangeSource.Pipeline);
         return ThrowIfManualRowsNotStored(archiveRtId, result);
+    }
+
+    /// <summary>
+    /// Makes a write that contains manual rows visible to the next read. CrateDB applies inserts to the search
+    /// path asynchronously (about a second), so a person who saves a correction and reloads would otherwise see
+    /// the old value. Automated batches keep the asynchronous refresh: they are large and frequent, and nobody
+    /// reads them back at once.
+    /// </summary>
+    private async Task RefreshAfterManualWriteAsync(string qualifiedTable, IEnumerable<ArchiveRowOrigin> origins)
+    {
+        if (origins.Any(o => o == ArchiveRowOrigin.Manual))
+        {
+            await _databaseClient.RefreshArchiveTableAsync(_tenantId, qualifiedTable);
+        }
     }
 
     /// <summary>
