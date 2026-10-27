@@ -1,3 +1,4 @@
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -253,15 +254,15 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
         }
     }
 
-    public Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
+    public Task<IReadOnlyList<SkippedArchiveRow>> InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
         DataPointDto datapoint, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
         => throw new NotSupportedException();
 
-    public Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
+    public Task<IReadOnlyList<SkippedArchiveRow>> InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
         IEnumerable<DataPointDto> datapoints, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
         => throw new NotSupportedException();
 
-    public Task InsertTimeRangeDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
+    public Task<IReadOnlyList<SkippedArchiveRow>> InsertTimeRangeDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
         IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false,
         IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
         => throw new NotSupportedException();

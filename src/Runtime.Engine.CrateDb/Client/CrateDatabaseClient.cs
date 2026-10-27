@@ -195,10 +195,16 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         }, cancellationToken);
     }
 
-    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
+    public async Task<IReadOnlyList<SkippedArchiveRow>> InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
     {
         var d = datapoints.ToArray();
-        if (d.Length == 0) return;
+        if (d.Length == 0) return [];
+
+        // AB#7598: a guarded upsert reports which rows it kept the stored values for (RETURNING, see
+        // ConflictOutcome); an unguarded one stores every row and needs no answer from CrateDB.
+        var guarded = conflictPrecedence is { Count: > 0 };
+        var returning = guarded ? ConflictOutcome.ReturningClause(windowed: false, conflictPrecedence!, includeOrigin: true) : "";
+        var skipped = new List<SkippedArchiveRow>();
 
         // Per-archive tables have a typed schema (one CrateDB column per archive column with the
         // CK-derived primitive type), so the legacy `unnest(@arr,...)` bulk path no longer fits:
@@ -211,7 +217,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // statement to several KB: 10,000 rows took 7.4 s as single-row commands and 0.8 s as
         // multi-row statements (local CrateDB 5.10, octogrid EDA replay, 2026-09-24).
         var rowsPerStatement = RowsPerStatement(4 + ArchiveRowOriginColumns.Names.Count + userColumnNames.Count);
-        var fullSql = BuildRawInsertSql(qualifiedTable, userColumnNames, conflictPrecedence, rowsPerStatement);
+        var fullSql = BuildRawInsertSql(qualifiedTable, userColumnNames, conflictPrecedence, rowsPerStatement) + returning;
 
         // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
         // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
@@ -221,8 +227,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             var end = Math.Min(offset + rowsPerStatement, d.Length);
             var sql = end - start == rowsPerStatement
                 ? fullSql
-                : BuildRawInsertSql(qualifiedTable, userColumnNames, conflictPrecedence, end - start);
-            await _resilience.ExecuteAsync(async _ =>
+                : BuildRawInsertSql(qualifiedTable, userColumnNames, conflictPrecedence, end - start) + returning;
+            var outcome = await _resilience.ExecuteAsync(async _ =>
             {
                 await using var lease = await LeaseConnectionAsync(tenantId);
                 await using var cmd = new NpgsqlCommand(sql, lease.Connection);
@@ -231,9 +237,40 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
                     AddInsertParameters(cmd.Parameters, d[i], userColumnNames);
                 }
 
-                await cmd.ExecuteNonQueryAsync();
+                if (!guarded)
+                {
+                    await cmd.ExecuteNonQueryAsync();
+                    return (IReadOnlyList<SkippedArchiveRow>)[];
+                }
+
+                var returned = await ReadReturnedRowsAsync(cmd);
+                var sent = d[start..end].Select(x => new ConflictOutcome.SentRow(x.RtId?.ToString(), x.CkTypeId?.ToString(),
+                    x.Timestamp, null, x.Attributes ?? new Dictionary<string, object?>(), x.Origin)).ToList();
+                return ConflictOutcome.FindSkipped(sent, returned, conflictPrecedence!, includeOrigin: true, windowed: false);
             });
+            skipped.AddRange(outcome.Select(o => o with { Index = o.Index + start }));
         }
+
+        return skipped;
+    }
+
+    /// <summary>Reads the rows a statement returned (its <c>RETURNING</c> clause) as column → value.</summary>
+    private static async Task<IReadOnlyList<IReadOnlyDictionary<string, object?>>> ReadReturnedRowsAsync(NpgsqlCommand cmd)
+    {
+        var rows = new List<IReadOnlyDictionary<string, object?>>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var row = new Dictionary<string, object?>(reader.FieldCount, StringComparer.Ordinal);
+            for (var i = 0; i < reader.FieldCount; i++)
+            {
+                row[reader.GetName(i)] = await reader.IsDBNullAsync(i) ? null : reader.GetValue(i);
+            }
+
+            rows.Add(row);
+        }
+
+        return rows;
     }
 
     /// <summary>
@@ -274,30 +311,28 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         return sb.ToString();
     }
 
-    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
-    {
-        await _resilience.ExecuteAsync(async _ =>
-        {
-            await using var lease = await LeaseConnectionAsync(tenantId);
-            var connection = lease.Connection;
-            var sql = BuildRawInsertSql(qualifiedTable, userColumnNames, conflictPrecedence);
-            await ExecuteSingleInsertAsync(connection, sql, datapoint, userColumnNames);
-        });
-    }
+    public Task<IReadOnlyList<SkippedArchiveRow>> InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
+        => InsertDataAsync(tenantId, qualifiedTable, userColumnNames, [datapoint], conflictPrecedence);
 
-    public async Task InsertTimeRangeDataAsync(
+    public async Task<IReadOnlyList<SkippedArchiveRow>> InsertTimeRangeDataAsync(
         string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
         IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false,
         IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
     {
         var d = datapoints.ToArray();
-        if (d.Length == 0) return;
+        if (d.Length == 0) return [];
+
+        // AB#7598: see InsertDataAsync.
+        var guarded = conflictPrecedence is { Count: > 0 };
+        var includeOrigin = !generationTracked;
+        var returning = guarded ? ConflictOutcome.ReturningClause(windowed: true, conflictPrecedence!, includeOrigin) : "";
+        var skipped = new List<SkippedArchiveRow>();
 
         // Same shape as InsertDataAsync (AB#4773): one bind parameter per value, one multi-row
         // statement per sub-batch.
         var rowsPerStatement = RowsPerStatement(5 + (generationTracked ? 0 : ArchiveRowOriginColumns.Names.Count) + userColumnNames.Count);
         var fullSql = BuildTimeRangeInsertSql(qualifiedTable, userColumnNames, generationTracked, conflictPrecedence,
-            rowsPerStatement);
+            rowsPerStatement) + returning;
 
         // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
         // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
@@ -308,19 +343,31 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             var sql = end - start == rowsPerStatement
                 ? fullSql
                 : BuildTimeRangeInsertSql(qualifiedTable, userColumnNames, generationTracked, conflictPrecedence,
-                    end - start);
-            await _resilience.ExecuteAsync(async _ =>
+                    end - start) + returning;
+            var outcome = await _resilience.ExecuteAsync(async _ =>
             {
                 await using var lease = await LeaseConnectionAsync(tenantId);
                 await using var cmd = new NpgsqlCommand(sql, lease.Connection);
                 for (var i = start; i < end; i++)
                 {
-                    AddTimeRangeInsertParameters(cmd.Parameters, d[i], userColumnNames, includeOrigin: !generationTracked);
+                    AddTimeRangeInsertParameters(cmd.Parameters, d[i], userColumnNames, includeOrigin);
                 }
 
-                await cmd.ExecuteNonQueryAsync();
+                if (!guarded)
+                {
+                    await cmd.ExecuteNonQueryAsync();
+                    return (IReadOnlyList<SkippedArchiveRow>)[];
+                }
+
+                var returned = await ReadReturnedRowsAsync(cmd);
+                var sent = d[start..end].Select(x => new ConflictOutcome.SentRow(x.RtId?.ToString(), x.CkTypeId?.ToString(),
+                    x.From, x.To, x.Attributes ?? new Dictionary<string, object?>(), x.Origin)).ToList();
+                return ConflictOutcome.FindSkipped(sent, returned, conflictPrecedence!, includeOrigin, windowed: true);
             });
+            skipped.AddRange(outcome.Select(o => o with { Index = o.Index + start }));
         }
+
+        return skipped;
     }
 
     /// <summary>
@@ -552,21 +599,6 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             ? string.Empty
             : ", " + string.Join(", ",
                 replacedColumns.Select(c => $"\"{c}\" = {Guarded($"EXCLUDED.\"{c}\"", c, guard)}"));
-
-    /// <summary>
-    /// Executes a single per-archive INSERT using the raw Npgsql command API. We bind parameters
-    /// directly rather than going through Dapper because Dapper's <c>DynamicParameters</c> erases
-    /// the runtime CLR type when it serialises the value, causing CrateDB to receive every
-    /// user-column value as a TEXT literal — fine for strings but corrupts doubles, ints, and
-    /// timestamps the moment a typed CrateDB column is on the receiving end.
-    /// </summary>
-    private static async Task ExecuteSingleInsertAsync(
-        NpgsqlConnection connection, string sql, DataPointDto dto, IReadOnlyList<string> userColumnNames)
-    {
-        await using var cmd = new NpgsqlCommand(sql, connection);
-        AddInsertParameters(cmd.Parameters, dto, userColumnNames);
-        await cmd.ExecuteNonQueryAsync();
-    }
 
     /// <summary>
     /// Binds one raw row as positional parameters, in the column order of

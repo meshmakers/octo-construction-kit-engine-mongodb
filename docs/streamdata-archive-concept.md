@@ -287,6 +287,20 @@ Rendered for keys `$Origin, k2 … kn`:
 
 The origin column itself is guarded like every value, so a losing write leaves the stored origin alone. An archive **without** `$Origin` behaves as before: last write wins (or its column keys decide), and the row then carries the origin of the write that won. The replaced value is not kept; rows stay single-valued. The energy community measurements archive ranks `[$Origin, DataQuality LowerWins, SourceDocumentDate HigherWins]`.
 
+### Write result — stored and skipped rows (AB#7598)
+
+`IStreamDataRepository.InsertAsync` / `InsertTimeRangeAsync` return a `StreamDataWriteResult`: `Stored` (rows the database holds after the write: new, won, or an identical re-delivery) and `Skipped` (one `StreamDataSkippedRow` per row not stored: entity, window, declared origin, reason) plus `SkippedByReason`. Reasons:
+
+| Reason | When |
+|---|---|
+| `CkTypeMismatch` | the row's CK type is not the archive's target (was a silent drop before) |
+| `LowerPrecedence` | the conflict precedence ranks the stored row above it |
+| `ManualValueProtected` | the stored row is manual, the write automated, and the archive ranks by `$Origin` |
+
+**How the count is exact.** A guarded upsert always "updates" the conflicting row (the `CASE` keeps the stored values), so the affected-row count cannot tell a win from a loss. A guarded statement therefore ends with `RETURNING` the row key, the ranking columns and `row_origin`, and `ConflictOutcome.FindSkipped` compares what CrateDB holds afterwards with what was sent: equal in every ranking column (and the origin) ⇔ stored. That is exact because the last key admits equality — a write equal in every key always wins — and a lost write leaves a stored row that differs in the deciding column or in the origin. Timestamps compare at millisecond precision, numbers by value, text ordinally; two rows for one key in one statement are matched one to one. It holds per multi-row statement and across the sub-batches of a large write. An archive **without** precedence sends no `RETURNING` and reports every row of its target type as stored, as before.
+
+Skipped automated rows are a normal outcome and only reported (and not marked dirty for the rollups: they changed nothing). A **manual** row that cannot be stored — only possible when a column key ranks before `$Origin` — throws `ManualStreamDataNotAppliedException` after the rest of the batch was written; its `Result` says what was stored. The import path (`ImportRowsAsync`) is unguarded and ignores the result.
+
 ### Time semantics
 
 - **Canonical timezone is UTC.** Incoming timestamps with offset are normalized to UTC before insert. Naive `DateTime` values (no offset) are interpreted as UTC, never as local time.

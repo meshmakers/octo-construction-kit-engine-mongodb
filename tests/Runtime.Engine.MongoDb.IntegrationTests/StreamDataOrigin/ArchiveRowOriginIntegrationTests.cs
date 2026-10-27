@@ -352,4 +352,122 @@ public class ArchiveRowOriginIntegrationTests(CrateStagingCopyFixture fixture)
 
         Assert.Equal("manual", (await fixture.QueryAsync($"SELECT \"row_origin\" FROM {table}")).Single()["row_origin"]);
     }
+
+    // ---- AB#7598: the writer learns how many rows were not stored and why ------------------------------------
+
+    private static TimeRangeStreamDataPoint WindowPoint(int quarter, double value, int quality,
+        ArchiveRowOrigin origin = ArchiveRowOrigin.Automated) => new()
+    {
+        RtId = Meter,
+        CkTypeId = Type,
+        From = Window.AddMinutes(15 * quarter),
+        To = Window.AddMinutes(15 * (quarter + 1)),
+        Attributes = new Dictionary<string, object?>
+        {
+            ["Value"] = value, ["DataQuality"] = quality, ["SourceDocumentDate"] = Window
+        },
+        Origin = origin,
+        ManualWrittenBy = origin == ArchiveRowOrigin.Manual ? "user-1" : null
+    };
+
+    private async Task<StreamDataWriteResult> WriteBatchAsync(Archive archive, IEnumerable<TimeRangeStreamDataPoint> points)
+    {
+        var result = await archive.Repository.InsertTimeRangeAsync(archive.RtId, points.ToList(), TestContext.Current.CancellationToken);
+        await fixture.SqlAsync($"REFRESH TABLE {archive.Table}");
+        return result;
+    }
+
+    [Fact]
+    public async Task AMixedBatch_ReportsStoredAndSkippedRows_WithTheReason()
+    {
+        var archive = await CreateTimeRangeArchiveAsync(EnergyCommunityPrecedence);
+        await WriteBatchAsync(archive, [WindowPoint(0, 10, 1), WindowPoint(1, 20, 3)]);
+
+        var result = await WriteBatchAsync(archive,
+            [WindowPoint(0, 11, 3), WindowPoint(1, 21, 1), WindowPoint(2, 31, 2)]);
+
+        Assert.Equal(2, result.Stored);
+        var skipped = Assert.Single(result.Skipped);
+        Assert.Equal(StreamDataSkipReason.LowerPrecedence, skipped.Reason);
+        Assert.Equal(Window, skipped.From);
+        Assert.Equal(Window.AddMinutes(15), skipped.To);
+    }
+
+    [Fact]
+    public async Task AnAutomatedDeliveryAgainstAManualValue_IsReportedAsProtected_AndDoesNotFailTheWrite()
+    {
+        var archive = await CreateTimeRangeArchiveAsync(EnergyCommunityPrecedence);
+        await WriteBatchAsync(archive, [WindowPoint(0, 12, 3, ArchiveRowOrigin.Manual)]);
+
+        var result = await WriteBatchAsync(archive, [WindowPoint(0, 10, 1), WindowPoint(1, 20, 1)]);
+
+        Assert.Equal(1, result.Stored);
+        Assert.Equal(StreamDataSkipReason.ManualValueProtected, Assert.Single(result.Skipped).Reason);
+    }
+
+    [Fact]
+    public async Task AnArchiveWithoutPrecedence_StoresEveryRow_AsBefore()
+    {
+        var archive = await CreateTimeRangeArchiveAsync([]);
+        await WriteBatchAsync(archive, [WindowPoint(0, 10, 1)]);
+
+        var result = await WriteBatchAsync(archive, [WindowPoint(0, 11, 3), WindowPoint(1, 21, 3)]);
+
+        Assert.Equal(2, result.Stored);
+        Assert.Empty(result.Skipped);
+    }
+
+    [Fact]
+    public async Task AManualRowThatCannotBeStored_FailsTheWrite_NeverReportsSuccess()
+    {
+        // An archive that ranks the quality before the origin lets a stored L1 value win against a manual L3 one.
+        var archive = await CreateTimeRangeArchiveAsync(
+        [
+            new ArchiveConflictKey("DataQuality", ConflictKeyOrder.LowerWins),
+            new ArchiveConflictKey(ArchiveConflictKey.OriginKey, ConflictKeyOrder.HigherWins)
+        ]);
+        await WriteBatchAsync(archive, [WindowPoint(0, 10, 1)]);
+
+        var ex = await Assert.ThrowsAsync<ManualStreamDataNotAppliedException>(() =>
+            WriteBatchAsync(archive, [WindowPoint(0, 12, 3, ArchiveRowOrigin.Manual), WindowPoint(1, 20, 1)]));
+
+        Assert.Equal(1, ex.Result.Stored);
+        Assert.Contains("1 manual row(s) were not stored", ex.Message);
+        Assert.Equal(10d, (await ReadRowAsync(archive, Window))["value"]);
+    }
+
+    [Fact]
+    public async Task TheCountIsExactAcrossSeveralMultiRowStatements()
+    {
+        // 2,500 rows go out as three multi-row statements (1,000 rows each at most).
+        var archive = await CreateTimeRangeArchiveAsync(EnergyCommunityPrecedence);
+        await WriteBatchAsync(archive, Enumerable.Range(0, 2500).Select(i => WindowPoint(i, i, 1)));
+
+        var result = await WriteBatchAsync(archive, Enumerable.Range(0, 2500).Select(i => WindowPoint(i, -i, i % 2 == 0 ? 3 : 1)));
+
+        Assert.Equal(1250, result.Stored);
+        Assert.Equal(1250, result.SkippedCount);
+        Assert.All(result.Skipped, s => Assert.Equal(StreamDataSkipReason.LowerPrecedence, s.Reason));
+        // The losers (even quarters, L3 against L1) kept their old non-negative value.
+        Assert.Equal(1250L, await fixture.CountAsync($"SELECT count(*) FROM {archive.Table} WHERE \"value\" >= 0"));
+    }
+
+    [Fact]
+    public async Task RowsOfAnotherCkType_AreReportedAsSkipped()
+    {
+        var archive = await CreateTimeRangeArchiveAsync([]);
+        var foreign = new TimeRangeStreamDataPoint
+        {
+            RtId = Meter, CkTypeId = new RtCkId<CkTypeId>("Test", new CkTypeId("Other")), From = Window, To = Window.AddMinutes(15)
+        };
+
+        var result = await WriteBatchAsync(archive, [WindowPoint(0, 10, 1), foreign]);
+
+        Assert.Equal(1, result.Stored);
+        Assert.Equal(StreamDataSkipReason.CkTypeMismatch, Assert.Single(result.Skipped).Reason);
+    }
+
+    private async Task<Dictionary<string, object?>> ReadRowAsync(Archive archive, DateTime from)
+        => (await fixture.QueryAsync(
+            $"SELECT \"value\", \"row_origin\" FROM {archive.Table} WHERE \"window_start\" = '{from:O}'")).Single();
 }

@@ -973,6 +973,17 @@ Rules to keep:
 Full write-up: `docs/streamdata-archive-concept.md` → *Row origin*. Tests: `ArchiveRowOriginSqlTests` (unit),
 `StreamDataOrigin/ArchiveRowOriginIntegrationTests` (real CrateDB).
 
+### Write Result — stored and skipped rows (AB#7598)
+
+The repository inserts return `StreamDataWriteResult` (`Stored`, `Skipped` with reason `CkTypeMismatch` /
+`LowerPrecedence` / `ManualValueProtected`). A guarded statement ends with `RETURNING` key + ranking columns +
+`row_origin`; `ConflictOutcome.FindSkipped` decides stored ⇔ the returned values equal the sent ones (exact because
+the last key admits equality). The client inserts return the skipped rows as `SkippedArchiveRow(Index, Reason)`;
+unguarded statements send no `RETURNING`. Only stored rows feed the retroactive detection. A manual row that is
+not stored throws `ManualStreamDataNotAppliedException`. The single-point `InsertAsync` goes through the batch path.
+Tests: `ConflictOutcomeTests`, `StreamDataOrigin/ArchiveRowOriginIntegrationTests` (multi-statement exactness on
+CrateDB). Write-up: `docs/streamdata-archive-concept.md` → *Write result*.
+
 ### Declared-vs-physical Column Reconciliation
 
 Archive tables are provisioned with `CREATE TABLE IF NOT EXISTS`, so on an **already-activated**

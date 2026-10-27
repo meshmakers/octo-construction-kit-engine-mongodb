@@ -45,7 +45,10 @@ public interface IStreamDataDatabaseClient
     /// lexicographically in key order and the better one survives, so the stored value stops
     /// depending on the order deliveries arrive in.
     /// </param>
-    Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null);
+    /// <returns>
+    /// The rows the conflict guard did not store, with the reason (AB#7598); empty without a conflict precedence.
+    /// </returns>
+    Task<IReadOnlyList<Client.SkippedArchiveRow>> InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null);
 
     /// <summary>
     /// Bulk variant of <see cref="InsertDataAsync(string, string, IReadOnlyList{string}, DataPointDto, IReadOnlyList{ArchiveConflictKey})"/>.
@@ -58,7 +61,11 @@ public interface IStreamDataDatabaseClient
     /// lexicographically in key order and the better one survives, so the stored value stops
     /// depending on the order deliveries arrive in.
     /// </param>
-    Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null);
+    /// <returns>
+    /// The rows the conflict guard did not store (index into <paramref name="datapoints" />, reason; AB#7598); empty
+    /// without a conflict precedence.
+    /// </returns>
+    Task<IReadOnlyList<Client.SkippedArchiveRow>> InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null);
 
     /// <summary>
     /// Inserts time-range data points into a windowed archive table. Schema is the
@@ -81,7 +88,11 @@ public interface IStreamDataDatabaseClient
     /// lexicographically in key order and the better one survives, so the stored value stops
     /// depending on the order deliveries arrive in.
     /// </param>
-    Task InsertTimeRangeDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null);
+    /// <returns>
+    /// The rows the conflict guard did not store (index into <paramref name="datapoints" />, reason; AB#7598); empty
+    /// without a conflict precedence.
+    /// </returns>
+    Task<IReadOnlyList<Client.SkippedArchiveRow>> InsertTimeRangeDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null);
 
     /// <summary>
     /// Get data from the stream data database.

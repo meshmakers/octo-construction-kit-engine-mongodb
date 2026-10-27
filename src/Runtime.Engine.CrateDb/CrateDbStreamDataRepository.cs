@@ -408,47 +408,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         await ArchiveTableDrop.DropAsync(_managementClient, _tenantId, archiveRtId.ToString(), _recomputeProcessState);
     }
 
-    public async Task InsertAsync(OctoObjectId archiveRtId, StreamDataPoint datapoint)
-    {
-        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
+    public Task<StreamDataWriteResult> InsertAsync(OctoObjectId archiveRtId, StreamDataPoint datapoint)
+        => InsertAsync(archiveRtId, [datapoint]);
 
-        // See the bulk overload for the rationale; per-archive tables only accept rows of the
-        // archive's own TargetCkTypeId.
-        if (datapoint.CkTypeId != snapshot.TargetCkTypeId)
-        {
-            _logger.LogDebug(
-                "Archive {ArchiveRtId} (target {TargetCkTypeId}): skipped 1 datapoint with mismatched CkTypeId {ActualCkTypeId}",
-                archiveRtId, snapshot.TargetCkTypeId, datapoint.CkTypeId);
-            return;
-        }
-
-        using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.insert");
-        activity?.SetTag("octo.tenant.id", _tenantId);
-        activity?.SetTag("streamdata.archive.rtid", archiveRtId.ToString());
-
-        var (qualifiedTable, userColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
-        await EnsureOriginColumnsAsync(qualifiedTable, archiveRtId.ToString());
-
-        var sw = Stopwatch.StartNew();
-        var computedPlan = BuildComputedPlan(snapshot);
-        var dto = MapToDataPointDto(datapoint, computedPlan, _clock.GetUtcNow().UtcDateTime);
-        await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dto,
-            ResolveConflictPrecedence(snapshot));
-        sw.Stop();
-
-        CrateDbDiagnostics.InsertDurationMs.Record(sw.Elapsed.TotalMilliseconds,
-            new("octo.tenant.id", _tenantId),
-            new("archive", archiveRtId.ToString()),
-            new("batch_size_bucket", CrateDbDiagnostics.BatchSizeBucket(1)));
-        CrateDbDiagnostics.InsertedPoints.Add(1,
-            new("octo.tenant.id", _tenantId),
-            new("archive", archiveRtId.ToString()));
-
-        await DetectAndRecordRetroactiveWriteAsync(
-            snapshot, [(datapoint.Timestamp, datapoint.Origin)], RecomputeChangeSource.Pipeline);
-    }
-
-    public async Task InsertAsync(OctoObjectId archiveRtId, IEnumerable<StreamDataPoint> datapoints)
+    public async Task<StreamDataWriteResult> InsertAsync(OctoObjectId archiveRtId, IEnumerable<StreamDataPoint> datapoints)
     {
         var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
 
@@ -469,9 +432,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 "Archive {ArchiveRtId} (target {TargetCkTypeId}): skipped {Skipped} of {Total} datapoints with mismatched CkTypeId",
                 archiveRtId, snapshot.TargetCkTypeId, skipped, materialised.Count);
         }
+
+        // AB#7598: the dropped rows are part of the answer, not a silent loss.
+        var typeMismatches = materialised.Where(p => p.CkTypeId != snapshot.TargetCkTypeId)
+            .Select(p => new StreamDataSkippedRow(p.RtId, p.Timestamp, null, p.Origin, StreamDataSkipReason.CkTypeMismatch))
+            .ToList();
         if (filtered.Count == 0)
         {
-            return;
+            return new StreamDataWriteResult(0, typeMismatches);
         }
 
         using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.insert");
@@ -486,21 +454,27 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var computedPlan = BuildComputedPlan(snapshot);
         var writtenAt = _clock.GetUtcNow().UtcDateTime;
         var dtos = filtered.Select(p => MapToDataPointDto(p, computedPlan, writtenAt)).ToList();
-        await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
-            ResolveConflictPrecedence(snapshot));
+        var notStored = await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
+            ResolveConflictPrecedence(snapshot)) ?? [];
         sw.Stop();
+        var result = BuildWriteResult(filtered.Count, typeMismatches, notStored,
+            i => new StreamDataSkippedRow(filtered[i].RtId, filtered[i].Timestamp, null, filtered[i].Origin, default));
+        var notStoredIndexes = notStored.Select(n => n.Index).ToHashSet();
+        var stored = filtered.Where((_, i) => !notStoredIndexes.Contains(i)).ToList();
 
         var bucket = CrateDbDiagnostics.BatchSizeBucket(filtered.Count);
         CrateDbDiagnostics.InsertDurationMs.Record(sw.Elapsed.TotalMilliseconds,
             new("octo.tenant.id", _tenantId),
             new("archive", archiveRtId.ToString()),
             new("batch_size_bucket", bucket));
-        CrateDbDiagnostics.InsertedPoints.Add(filtered.Count,
+        CrateDbDiagnostics.InsertedPoints.Add(result.Stored,
             new("octo.tenant.id", _tenantId),
             new("archive", archiveRtId.ToString()));
 
+        // A row the guard kept the stored values for changed nothing a rollup has to know about.
         await DetectAndRecordRetroactiveWriteAsync(
-            snapshot, filtered.Select(p => (p.Timestamp, p.Origin)), RecomputeChangeSource.Pipeline);
+            snapshot, stored.Select(p => (p.Timestamp, p.Origin)), RecomputeChangeSource.Pipeline);
+        return ThrowIfManualRowsNotStored(archiveRtId, result);
     }
 
     /// <summary>
@@ -565,7 +539,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         return (qualifiedTable, userColumnNames);
     }
 
-    public async Task InsertTimeRangeAsync(
+    public async Task<StreamDataWriteResult> InsertTimeRangeAsync(
         OctoObjectId archiveRtId,
         IEnumerable<TimeRangeStreamDataPoint> datapoints,
         CancellationToken cancellationToken = default)
@@ -593,9 +567,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 "Time-range archive {ArchiveRtId} (target {TargetCkTypeId}): skipped {Skipped} of {Total} datapoints with mismatched CkTypeId",
                 archiveRtId, snapshot.TargetCkTypeId, skipped, materialised.Count);
         }
+
+        var typeMismatches = materialised.Where(p => p.CkTypeId != snapshot.TargetCkTypeId)
+            .Select(p => new StreamDataSkippedRow(p.RtId, p.From, p.To, p.Origin, StreamDataSkipReason.CkTypeMismatch))
+            .ToList();
         if (filtered.Count == 0)
         {
-            return;
+            return new StreamDataWriteResult(0, typeMismatches);
         }
 
         // Validate windows up front so an entire batch is rejected (consistent with raw bulk insert
@@ -622,22 +600,63 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var computedPlan = BuildComputedPlan(snapshot);
         var writtenAt = _clock.GetUtcNow().UtcDateTime;
         var dtos = filtered.Select(p => MapToTimeRangeDataPointDto(p, computedPlan, writtenAt)).ToList();
-        await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
-            conflictPrecedence: ResolveConflictPrecedence(snapshot));
+        var notStored = await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
+            conflictPrecedence: ResolveConflictPrecedence(snapshot)) ?? [];
         sw.Stop();
+        var result = BuildWriteResult(filtered.Count, typeMismatches, notStored,
+            i => new StreamDataSkippedRow(filtered[i].RtId, filtered[i].From, filtered[i].To, filtered[i].Origin, default));
+        var notStoredIndexes = notStored.Select(n => n.Index).ToHashSet();
+        var stored = filtered.Where((_, i) => !notStoredIndexes.Contains(i)).ToList();
 
         var bucket = CrateDbDiagnostics.BatchSizeBucket(filtered.Count);
         CrateDbDiagnostics.InsertDurationMs.Record(sw.Elapsed.TotalMilliseconds,
             new("octo.tenant.id", _tenantId),
             new("archive", archiveRtId.ToString()),
             new("batch_size_bucket", bucket));
-        CrateDbDiagnostics.InsertedPoints.Add(filtered.Count,
+        CrateDbDiagnostics.InsertedPoints.Add(result.Stored,
             new("octo.tenant.id", _tenantId),
             new("archive", archiveRtId.ToString()));
 
-        // Time-range rows are keyed by their window start; a late window correction is retroactive.
+        // Time-range rows are keyed by their window start; a late window correction is retroactive. A row the
+        // guard kept the stored values for changed nothing a rollup has to know about.
         await DetectAndRecordRetroactiveWriteAsync(
-            snapshot, filtered.Select(p => (p.From, p.Origin)), RecomputeChangeSource.Pipeline);
+            snapshot, stored.Select(p => (p.From, p.Origin)), RecomputeChangeSource.Pipeline);
+        return ThrowIfManualRowsNotStored(archiveRtId, result);
+    }
+
+    /// <summary>
+    /// The write result of one insert (AB#7598): the written rows minus those the conflict guard kept the stored
+    /// values for, plus the rows dropped for their CK type. <paramref name="describe" /> turns an index of the
+    /// written rows into its skipped-row record (the reason is taken from the guard's answer).
+    /// </summary>
+    private static StreamDataWriteResult BuildWriteResult(int written, IReadOnlyList<StreamDataSkippedRow> typeMismatches,
+        IReadOnlyList<Client.SkippedArchiveRow> notStored, Func<int, StreamDataSkippedRow> describe)
+    {
+        var skipped = new List<StreamDataSkippedRow>(typeMismatches);
+        skipped.AddRange(notStored.Select(n => describe(n.Index) with { Reason = n.Reason }));
+        return new StreamDataWriteResult(written - notStored.Count, skipped);
+    }
+
+    /// <summary>
+    /// A manual row is a person's correction; a write that could not store it must not look like a success
+    /// (AB#7598). Automated rows that lose are a normal outcome and only reported.
+    /// </summary>
+    private StreamDataWriteResult ThrowIfManualRowsNotStored(OctoObjectId archiveRtId, StreamDataWriteResult result)
+    {
+        if (result.Skipped.Any(s => s.Origin == ArchiveRowOrigin.Manual && s.Reason != StreamDataSkipReason.CkTypeMismatch))
+        {
+            throw new ManualStreamDataNotAppliedException(archiveRtId, result);
+        }
+
+        if (result.SkippedCount > 0)
+        {
+            _logger.LogDebug(
+                "Archive {ArchiveRtId}: stored {Stored} row(s), {Skipped} not stored ({Reasons}).",
+                archiveRtId, result.Stored, result.SkippedCount,
+                string.Join(", ", result.SkippedByReason.Select(kv => $"{kv.Key} {kv.Value}")));
+        }
+
+        return result;
     }
 
     private Dtos.TimeRangeDataPointDto MapToTimeRangeDataPointDto(TimeRangeStreamDataPoint point,
