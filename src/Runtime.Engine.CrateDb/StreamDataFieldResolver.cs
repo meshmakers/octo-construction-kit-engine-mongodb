@@ -170,6 +170,17 @@ public class StreamDataFieldResolver
             resolver.RegisterComputedColumn(name, physical);
         }
 
+        // AB#5356 / AB#7593: raw and time-range rows record their origin and, for a manual row, who wrote
+        // it, when and why. Selectable by their physical names like was_updated, but not part of the
+        // default projection, so existing queries return exactly the columns they did before.
+        if (archiveSnapshot.RollupAggregations is null)
+        {
+            foreach (var name in ArchiveRowOriginColumns.Names)
+            {
+                resolver._fields[name] = new ResolvedField(StreamDataFieldCategory.DataStream, name, name);
+            }
+        }
+
         return resolver;
     }
 

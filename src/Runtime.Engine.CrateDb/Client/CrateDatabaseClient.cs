@@ -338,7 +338,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         parameters.Add(new NpgsqlParameter { Value = (object?)dto.RtWellKnownName ?? DBNull.Value });
         if (includeOrigin)
         {
-            AddOriginParameters(parameters, dto.Origin);
+            AddOriginParameters(parameters, dto.Origin, dto.ManualWrittenBy, dto.ManualWrittenAt, dto.ManualReason);
         }
 
         foreach (var col in userColumnNames)
@@ -579,7 +579,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         parameters.Add(new NpgsqlParameter { Value = (object?)dto.CkTypeId?.ToString() ?? DBNull.Value });
         parameters.Add(new NpgsqlParameter { Value = dto.Timestamp });
         parameters.Add(new NpgsqlParameter { Value = (object?)dto.RtWellKnownName ?? DBNull.Value });
-        AddOriginParameters(parameters, dto.Origin);
+        AddOriginParameters(parameters, dto.Origin, dto.ManualWrittenBy, dto.ManualWrittenAt, dto.ManualReason);
         foreach (var col in userColumnNames)
         {
             var value = dto.Attributes != null && dto.Attributes.TryGetValue(col, out var v) ? v : null;
@@ -591,9 +591,19 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     /// Binds the platform origin columns of one row (<see cref="ArchiveRowOriginColumns" />), in the order
     /// of <see cref="ArchiveRowOriginColumns.Names" />.
     /// </summary>
-    private static void AddOriginParameters(NpgsqlParameterCollection parameters, ArchiveRowOrigin origin)
+    private static void AddOriginParameters(NpgsqlParameterCollection parameters, ArchiveRowOrigin origin,
+        string? writtenBy, DateTime? writtenAt, string? reason)
     {
         parameters.Add(new NpgsqlParameter { Value = ArchiveRowOriginColumns.ToStoredValue(origin) });
+        // AB#7593: an automated row carries no writer, time or reason, whatever the DTO holds.
+        var manual = origin == ArchiveRowOrigin.Manual;
+        parameters.Add(new NpgsqlParameter { Value = manual ? (object?)writtenBy ?? DBNull.Value : DBNull.Value });
+        parameters.Add(new NpgsqlParameter
+        {
+            Value = manual && writtenAt is { } at ? DateTime.SpecifyKind(at, DateTimeKind.Utc) : (object)DBNull.Value,
+            NpgsqlDbType = NpgsqlDbType.TimestampTz
+        });
+        parameters.Add(new NpgsqlParameter { Value = manual ? (object?)reason ?? DBNull.Value : DBNull.Value });
     }
 
     internal static string BuildRawInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames,

@@ -431,7 +431,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var sw = Stopwatch.StartNew();
         var computedPlan = BuildComputedPlan(snapshot);
-        var dto = MapToDataPointDto(datapoint, computedPlan);
+        var dto = MapToDataPointDto(datapoint, computedPlan, _clock.GetUtcNow().UtcDateTime);
         await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dto,
             ResolveConflictPrecedence(snapshot));
         sw.Stop();
@@ -484,7 +484,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var sw = Stopwatch.StartNew();
         var computedPlan = BuildComputedPlan(snapshot);
-        var dtos = filtered.Select(p => MapToDataPointDto(p, computedPlan));
+        var writtenAt = _clock.GetUtcNow().UtcDateTime;
+        var dtos = filtered.Select(p => MapToDataPointDto(p, computedPlan, writtenAt)).ToList();
         await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
             ResolveConflictPrecedence(snapshot));
         sw.Stop();
@@ -619,7 +620,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var sw = Stopwatch.StartNew();
         var computedPlan = BuildComputedPlan(snapshot);
-        var dtos = filtered.Select(p => MapToTimeRangeDataPointDto(p, computedPlan));
+        var writtenAt = _clock.GetUtcNow().UtcDateTime;
+        var dtos = filtered.Select(p => MapToTimeRangeDataPointDto(p, computedPlan, writtenAt)).ToList();
         await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
             conflictPrecedence: ResolveConflictPrecedence(snapshot));
         sw.Stop();
@@ -639,8 +641,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     private Dtos.TimeRangeDataPointDto MapToTimeRangeDataPointDto(TimeRangeStreamDataPoint point,
-        IReadOnlyList<ComputedColumnPlanItem> computedPlan)
+        IReadOnlyList<ComputedColumnPlanItem> computedPlan, DateTime writtenAt)
     {
+        RequireManualWriter(point.Origin, point.ManualWrittenBy, point.RtId);
         // Normalise to UTC: the storage column is TIMESTAMP WITH TIME ZONE so Npgsql writes the
         // offset; downstream queries always read UTC. Matches MapToDataPointDto's behaviour for
         // single-timestamp archives.
@@ -663,7 +666,25 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             From = point.From.ToUniversalTime(),
             To = point.To.ToUniversalTime(),
             Origin = point.Origin,
+            ManualWrittenBy = point.ManualWrittenBy,
+            ManualWrittenAt = writtenAt,
+            ManualReason = point.ManualReason,
         };
+    }
+
+    /// <summary>
+    /// A manual row must name who wrote it (AB#7593). The writer is set by the platform from the
+    /// authenticated caller, so a manual point without one is a programming error of the writer, not a
+    /// user mistake; refusing it keeps an unattributed manual value out of the archive.
+    /// </summary>
+    private static void RequireManualWriter(ArchiveRowOrigin origin, string? writtenBy, OctoObjectId rtId)
+    {
+        if (origin == ArchiveRowOrigin.Manual && string.IsNullOrWhiteSpace(writtenBy))
+        {
+            throw new ArgumentException(
+                $"Manual stream data point for entity '{rtId}' has no writer. A manual write records who wrote it; " +
+                "the writer is set by the platform from the authenticated caller.");
+        }
     }
 
     /// <summary>
@@ -1885,6 +1906,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             RtChangedDateTime = OptionalUtc(row, Constants.RtChangedDateTime),
             // An export taken before AB#5356 has no origin column: its rows were all delivered automatically.
             Origin = ArchiveRowOriginColumns.FromStoredValue(row.TryGetValue(Constants.RowOrigin, out var origin) ? origin : null),
+            ManualWrittenBy = row.TryGetValue(Constants.ManualWrittenBy, out var writtenBy) ? writtenBy as string : null,
+            ManualWrittenAt = AsUtcDateTime(row.TryGetValue(Constants.ManualWrittenAt, out var writtenAt) ? writtenAt : null),
+            ManualReason = row.TryGetValue(Constants.ManualReason, out var reason) ? reason as string : null,
         };
     }
 
@@ -1908,6 +1932,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             From = RequireUtc(row, Constants.WindowStart, rowIndex),
             To = RequireUtc(row, Constants.WindowEnd, rowIndex),
             Origin = ArchiveRowOriginColumns.FromStoredValue(row.TryGetValue(Constants.RowOrigin, out var origin) ? origin : null),
+            ManualWrittenBy = row.TryGetValue(Constants.ManualWrittenBy, out var writtenBy) ? writtenBy as string : null,
+            ManualWrittenAt = AsUtcDateTime(row.TryGetValue(Constants.ManualWrittenAt, out var writtenAt) ? writtenAt : null),
+            ManualReason = row.TryGetValue(Constants.ManualReason, out var reason) ? reason as string : null,
         };
     }
 
@@ -3655,8 +3682,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     private DataPointDto MapToDataPointDto(StreamDataPoint point,
-        IReadOnlyList<ComputedColumnPlanItem> computedPlan)
+        IReadOnlyList<ComputedColumnPlanItem> computedPlan, DateTime writtenAt)
     {
+        RequireManualWriter(point.Origin, point.ManualWrittenBy, point.RtId);
         // Re-key attributes from raw CK paths (e.g. "sensor.reading.value") to the camelCase
         // column names that exist on the per-archive table — the data plane no longer carries a
         // dynamic `data` blob, so the dictionary must align with the table schema directly.
@@ -3674,7 +3702,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             RtWellKnownName = point.RtWellKnownName,
             RtCreationDateTime = point.RtCreationDateTime ?? default,
             RtChangedDateTime = point.RtChangedDateTime ?? default,
-            Origin = point.Origin
+            Origin = point.Origin,
+            ManualWrittenBy = point.ManualWrittenBy,
+            ManualWrittenAt = writtenAt,
+            ManualReason = point.ManualReason
         };
     }
 

@@ -59,10 +59,11 @@ public class ConflictPrecedenceSqlTests
         var sql = CrateDatabaseClient.BuildTimeRangeInsertSql(
             "\"t\".\"archive_a\"", Columns, conflictPrecedence: guarded ? QualityThenDate : null, rowCount: 2);
 
-        // Nine parameters per row: window, rtid, cktypeid, rtwellknownname, row_origin (AB#5356), three user columns.
+        // Twelve parameters per row: window, rtid, cktypeid, rtwellknownname, the four origin columns
+        // (AB#5356, AB#7593), three user columns.
         Assert.Contains("\"sourcedocumentdate\", \"was_updated\") VALUES ", sql);
-        Assert.Contains("$9, FALSE), ($10, ", sql);
-        Assert.Contains("$18, FALSE) ON CONFLICT", sql);
+        Assert.Contains("$12, FALSE), ($13, ", sql);
+        Assert.Contains("$24, FALSE) ON CONFLICT", sql);
     }
 
     [Fact]
@@ -211,13 +212,13 @@ public class ConflictPrecedenceSqlTests
     }
 
     [Fact]
-    public void AnArchiveWithNoUserColumnsUpdatesOnlyTheRowOrigin()
+    public void AnArchiveWithNoUserColumnsUpdatesOnlyTheOriginColumns()
     {
         var sql = CrateDatabaseClient.BuildTimeRangeInsertSql("\"t\".\"archive_a\"", []);
 
         Assert.Contains("DO UPDATE SET", sql);
-        Assert.Single(System.Text.RegularExpressions.Regex.Matches(sql, "EXCLUDED\\."));
-        Assert.EndsWith("\"row_origin\" = EXCLUDED.\"row_origin\"", sql);
+        Assert.Equal(4, System.Text.RegularExpressions.Regex.Matches(sql, "EXCLUDED\\.").Count);
+        Assert.EndsWith("\"manual_reason\" = EXCLUDED.\"manual_reason\"", sql);
     }
 
     [Fact]

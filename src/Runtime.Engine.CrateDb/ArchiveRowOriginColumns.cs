@@ -3,8 +3,9 @@ using Meshmakers.Octo.Runtime.Contracts.StreamData;
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 
 /// <summary>
-/// The platform columns that record a row's <see cref="ArchiveRowOrigin" /> (AB#5356) on every raw and
-/// time-range archive table, and the SQL around them.
+/// The platform columns that record a row's <see cref="ArchiveRowOrigin" /> (AB#5356) and, for a manual
+/// row, who wrote it, when and why (AB#7593) on every raw and time-range archive table, and the SQL around
+/// them. An automated row carries NULL in the three manual columns.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -34,6 +35,9 @@ internal static class ArchiveRowOriginColumns
     public static IReadOnlyList<(string Name, string Definition)> Columns { get; } = new (string, string)[]
     {
         (Constants.RowOrigin, "TEXT"),
+        (Constants.ManualWrittenBy, "TEXT"),
+        (Constants.ManualWrittenAt, "TIMESTAMP WITH TIME ZONE"),
+        (Constants.ManualReason, "TEXT"),
     };
 
     /// <summary>Physical names of <see cref="Columns" />.</summary>

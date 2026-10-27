@@ -39,6 +39,15 @@ public class DataPointDto : RtTypeWithAttributes
     /// </summary>
     public ArchiveRowOrigin Origin { get; set; } = ArchiveRowOrigin.Automated;
 
+    /// <summary>Writer of a manual row (AB#7593); NULL for automated rows.</summary>
+    public string? ManualWrittenBy { get; set; }
+
+    /// <summary>Write time of a manual row (AB#7593); NULL for automated rows.</summary>
+    public DateTime? ManualWrittenAt { get; set; }
+
+    /// <summary>Optional reason of a manual write (AB#7593).</summary>
+    public string? ManualReason { get; set; }
+
     /// <summary>
     /// The timestamp in UTC.
     /// </summary>

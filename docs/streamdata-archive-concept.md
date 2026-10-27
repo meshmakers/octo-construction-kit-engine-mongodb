@@ -258,7 +258,17 @@ Every raw and time-range table carries the platform column `row_origin TEXT`:
 | `manual` | entered or corrected by a person |
 | `NULL` | a row written before the origin was recorded; reads as automated |
 
-The writer declares the origin (`StreamDataPoint.Origin` / `TimeRangeStreamDataPoint.Origin`, enum `ArchiveRowOrigin`). The column is nullable without a DEFAULT and always named in the INSERT (AB#6647). Rollup tables do not carry it: their rows are derived. Tables provisioned before AB#5356 get the column through `ALTER TABLE … ADD COLUMN` — at activation, and on the first write or import of each process (`RecomputeProcessState.EnsuredOriginColumns` remembers the table, so `information_schema` is read once per table and process; a concurrent add by another process is the benign "already has a column" case). Archive export reads the column like every physical column, and the import carries it back (an export taken before AB#5356 imports as automated).
+A manual row also records who wrote it, when and why (AB#7593):
+
+| Column | Type | Set by |
+|---|---|---|
+| `manual_written_by` | `TEXT` | the platform, from the authenticated caller (`ManualWrittenBy` on the data point, filled by the asset repository from the token and by the pipeline from its execution identity — never from the payload). A manual point without a writer is refused. |
+| `manual_written_at` | `TIMESTAMP WITH TIME ZONE` | the platform clock of the writing repository (`TimeProvider`), one value per write call |
+| `manual_reason` | `TEXT` | the writer, optional, stored as given (a solution may require it on top) |
+
+An automated row carries `NULL` in all three, also when the writer sent values, and a write that replaces a manual row with an automated one clears them together with the values. All four columns are guarded together, so the row always describes the write that won.
+
+The writer declares the origin (`StreamDataPoint.Origin` / `TimeRangeStreamDataPoint.Origin`, enum `ArchiveRowOrigin`). The column is nullable without a DEFAULT and always named in the INSERT (AB#6647). Rollup tables do not carry it: their rows are derived. Tables provisioned before AB#5356 get the column through `ALTER TABLE … ADD COLUMN` — at activation, and on the first write or import of each process (`RecomputeProcessState.EnsuredOriginColumns` remembers the table, so `information_schema` is read once per table and process; a concurrent add by another process is the benign "already has a column" case). Archive export reads the columns like every physical column, the import carries them back (an export taken before AB#5356 imports as automated), and the native dump/restore copies the table as it is. The stream data query API selects them by their physical names (`row_origin`, `manual_written_by`, `manual_written_at`, `manual_reason`) on raw and time-range archives; they are not part of the default projection, so existing queries return the same columns as before.
 
 **Ranking by origin — the reserved key `$Origin`.** An archive opts in by naming `$Origin` in its `ConflictPrecedence` (declared with `HigherWins`: manual ranks above automated; `LowerWins` is refused). The `$` cannot occur in an attribute path, so the key never collides with a user column, and it needs no declared column. Unlike a column key it does not fall through to the next key when both writes are manual:
 

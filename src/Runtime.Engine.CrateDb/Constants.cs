@@ -53,6 +53,15 @@ public static class Constants
     /// </summary>
     public const string RowOrigin = "row_origin";
 
+    /// <summary>Writer of a manual row, recorded by the platform (AB#7593); NULL on automated rows.</summary>
+    public const string ManualWrittenBy = "manual_written_by";
+
+    /// <summary>Write time of a manual row, recorded by the platform (AB#7593); NULL on automated rows.</summary>
+    public const string ManualWrittenAt = "manual_written_at";
+
+    /// <summary>Optional reason of a manual write, as given (AB#7593); NULL on automated rows.</summary>
+    public const string ManualReason = "manual_reason";
+
     /// <summary>rtWellKnownName column name</summary>
     public const string RtWellKnownName = "rtwellknownname";
 

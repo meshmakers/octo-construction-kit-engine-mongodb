@@ -954,7 +954,10 @@ Full write-up incl. the rendered SQL: `docs/streamdata-archive-concept.md` → *
 ### Row Origin — manual or automated (AB#5356)
 
 Every raw and time-range row records `row_origin` (`manual` / `automated`; `NULL` = written before the origin
-was recorded = automated). Rules to keep:
+was recorded = automated), and a manual row `manual_written_by` / `manual_written_at` / `manual_reason`
+(AB#7593: writer from the caller, time from the repository clock, reason optional; NULL on automated rows; a
+manual point without a writer is refused). Selectable in queries by these names, not in the default projection.
+Rules to keep:
 
 - **Platform column, not a user column.** `ArchiveRowOriginColumns` owns the name, DDL and SQL fragments. Rollup
   tables do not carry it; the windowed insert names it only when `generationTracked` is false.

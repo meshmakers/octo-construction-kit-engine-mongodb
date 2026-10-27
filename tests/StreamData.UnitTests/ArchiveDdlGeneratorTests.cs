@@ -15,7 +15,10 @@ public class ArchiveDdlGeneratorTests
         "\"rtcreationdatetime\" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, " +
         "\"rtchangeddatetime\" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, " +
         "\"rtwellknownname\" TEXT, " +
-        "\"row_origin\" TEXT,";
+        "\"row_origin\" TEXT, " +
+        "\"manual_written_by\" TEXT, " +
+        "\"manual_written_at\" TIMESTAMP WITH TIME ZONE, " +
+        "\"manual_reason\" TEXT,";
 
     private const string ExpectedTrailingPk = " PRIMARY KEY (\"timestamp\", \"rtid\", \"cktypeid\")";
 

@@ -26,9 +26,10 @@ public class ArchiveRowOriginSqlTests
     {
         var sql = CrateDatabaseClient.BuildRawInsertSql("\"t\".\"archive_a\"", Columns, rowCount: 2);
 
-        // Named in the INSERT list, never left to a DEFAULT (AB#6647): eight parameters per row.
-        Assert.Contains("(\"rtid\", \"cktypeid\", \"timestamp\", \"rtwellknownname\", \"row_origin\", \"amountvalue\"", sql);
-        Assert.Contains("($1, $2, $3, $4, $5, $6, $7, $8), ($9, ", sql);
+        // Named in the INSERT list, never left to a DEFAULT (AB#6647): eleven parameters per row.
+        Assert.Contains("(\"rtid\", \"cktypeid\", \"timestamp\", \"rtwellknownname\", \"row_origin\", " +
+                        "\"manual_written_by\", \"manual_written_at\", \"manual_reason\", \"amountvalue\"", sql);
+        Assert.Contains("($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11), ($12, ", sql);
     }
 
     [Fact]
@@ -39,6 +40,7 @@ public class ArchiveRowOriginSqlTests
         var sql = CrateDatabaseClient.BuildRawInsertSql("\"t\".\"archive_a\"", Columns);
 
         Assert.Contains("\"row_origin\" = EXCLUDED.\"row_origin\"", sql);
+        Assert.Contains("\"manual_written_by\" = EXCLUDED.\"manual_written_by\"", sql);
     }
 
     [Fact]
@@ -147,11 +149,37 @@ public class ArchiveRowOriginSqlTests
         var timeRange = ArchiveDdlGenerator.GenerateCreateWindowedTable("\"t\".\"archive_a\"", [], 1, 0);
         var rollup = ArchiveDdlGenerator.GenerateCreateWindowedTable("\"t\".\"archive_a\"", [], 1, 0, includeGeneration: true);
 
-        Assert.Contains("\"row_origin\" TEXT,", raw);
-        Assert.Contains("\"row_origin\" TEXT,", timeRange);
+        foreach (var ddl in new[] { raw, timeRange })
+        {
+            Assert.Contains("\"row_origin\" TEXT,", ddl);
+            Assert.Contains("\"manual_written_by\" TEXT,", ddl);
+            Assert.Contains("\"manual_written_at\" TIMESTAMP WITH TIME ZONE,", ddl);
+            Assert.Contains("\"manual_reason\" TEXT,", ddl);
+        }
+
         Assert.DoesNotContain("row_origin", rollup);
+        Assert.DoesNotContain("manual_", rollup);
         // Nullable without a DEFAULT: added by ALTER TABLE to populated tables, and always written by the insert.
         Assert.DoesNotContain("\"row_origin\" TEXT NOT NULL", raw);
         Assert.DoesNotContain("\"row_origin\" TEXT DEFAULT", raw);
+    }
+
+    [Fact]
+    public void TheOriginColumnsAreQueryableOnRawAndTimeRangeArchives_NotOnRollups()
+    {
+        // AB#7593: the recorded values are readable through the stream data query API.
+        var type = new Meshmakers.Octo.ConstructionKit.Contracts.RtCkId<Meshmakers.Octo.ConstructionKit.Contracts.CkTypeId>(
+            "Test", new Meshmakers.Octo.ConstructionKit.Contracts.CkTypeId("Meter"));
+        var timeRange = new ArchiveSnapshot(Meshmakers.Octo.ConstructionKit.Contracts.OctoObjectId.GenerateNewId(), type,
+            CkArchiveStatus.Activated, "m", [new CkArchiveColumnSpec("Value", true, false)]) { IsTimeRange = true };
+        var rollup = timeRange with { RollupAggregations = [new CkRollupAggregationSpec("Value", CkRollupFunction.Sum, null)] };
+
+        var resolver = StreamDataFieldResolver.CreateForArchive(timeRange);
+        foreach (var name in new[] { "row_origin", "manual_written_by", "manual_written_at", "manual_reason" })
+        {
+            Assert.Equal(name, resolver.Resolve(name)?.CrateDbName);
+            Assert.Equal(StreamDataFieldCategory.DataStream, resolver.Resolve(name)!.Category); // not in the default projection
+            Assert.Null(StreamDataFieldResolver.CreateForArchive(rollup).Resolve(name));
+        }
     }
 }
