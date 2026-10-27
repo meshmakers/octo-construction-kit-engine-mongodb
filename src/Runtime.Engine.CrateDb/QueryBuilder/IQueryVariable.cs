@@ -25,7 +25,7 @@ internal interface IQueryVariable
     /// Converts the variable to a select string
     /// </summary>
     /// <returns></returns>
-    string ToSelectString();
+    string ToSelectString(string? tableAlias = null);
 
     /// <summary>
     /// Converts the variable to a group by string

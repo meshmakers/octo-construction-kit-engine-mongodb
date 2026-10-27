@@ -43,6 +43,29 @@ internal static class ArchiveRowOriginColumns
     /// <summary>Physical names of <see cref="Columns" />.</summary>
     public static IReadOnlyList<string> Names { get; } = Columns.Select(c => c.Name).ToArray();
 
+    /// <summary>
+    /// The SQL that reads <paramref name="column" /> on the read path (AB#7616). Every column is a plain quoted
+    /// identifier, except <c>row_origin</c>: a row written before the origin was recorded stores <c>NULL</c>
+    /// (an <c>ALTER TABLE … ADD COLUMN</c> does not fill existing rows, not even with a DEFAULT), and it is
+    /// read as automated — in projections, filters, grouping and sorting alike.
+    /// </summary>
+    /// <param name="column">Physical column name.</param>
+    /// <param name="tableAlias">Optional table alias the column is qualified with.</param>
+    public static string ColumnRef(string column, string? tableAlias = null)
+    {
+        var qualified = tableAlias is null ? $"\"{column}\"" : $"{tableAlias}.\"{column}\"";
+        return column == Constants.RowOrigin ? $"COALESCE({qualified}, '{AutomatedValue}')" : qualified;
+    }
+
+    /// <summary>
+    /// <see cref="ColumnRef" /> as a SELECT item that keeps the column name as its output name.
+    /// </summary>
+    public static string SelectRef(string column, string? tableAlias = null)
+    {
+        var reference = ColumnRef(column, tableAlias);
+        return column == Constants.RowOrigin ? $"{reference} AS \"{column}\"" : reference;
+    }
+
     /// <summary>The stored text of an origin.</summary>
     public static string ToStoredValue(ArchiveRowOrigin origin)
         => origin == ArchiveRowOrigin.Manual ? ManualValue : AutomatedValue;

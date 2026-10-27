@@ -970,8 +970,14 @@ Rules to keep:
   the following keys. It is the one key that is not a user column; `BuildConflictGuard` skips the column check for it.
 - Without `$Origin` nothing changes: the origin follows the write that wins.
 
-Full write-up: `docs/streamdata-archive-concept.md` → *Row origin*. Tests: `ArchiveRowOriginSqlTests` (unit),
-`StreamDataOrigin/ArchiveRowOriginIntegrationTests` (real CrateDB).
+- **Reading the origin (AB#7616)**: `row_origin`, `manual_written_by`, `manual_written_at`, `manual_reason` are
+  selectable/filterable/groupable on raw and time-range archives. Every read-path column reference goes through
+  `ArchiveRowOriginColumns.ColumnRef` / `SelectRef`, which reads `row_origin` as `COALESCE(…, 'automated')` (legacy
+  rows hold NULL). A new SQL builder that references a column must use them too.
+
+Full write-up: `docs/streamdata-archive-concept.md` → *Row origin*. Tests: `ArchiveRowOriginSqlTests`,
+`ArchiveRowOriginQuerySqlTests` (unit), `StreamDataOrigin/ArchiveRowOriginIntegrationTests` and
+`ArchiveRowOriginReadIntegrationTests` (real CrateDB).
 
 ### Write Result — stored and skipped rows (AB#7598)
 

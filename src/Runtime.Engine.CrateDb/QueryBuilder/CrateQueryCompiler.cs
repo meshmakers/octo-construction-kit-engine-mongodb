@@ -140,7 +140,7 @@ internal class CrateQueryCompiler
         // GROUP BY / ORDER BY below.
         foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
         {
-            query.Append($", d.\"{groupColumn}\" AS \"{groupColumn}\"");
+            query.Append($", {ArchiveRowOriginColumns.ColumnRef(groupColumn, "d")} AS \"{groupColumn}\"");
         }
 
         foreach (var variable in queryBuilder.QueryVariablesWithoutTimestamp)
@@ -157,7 +157,7 @@ internal class CrateQueryCompiler
             }
             else
             {
-                query.Append($"d.{variable.ToSelectString()}");
+                query.Append(variable.ToSelectString(tableAlias: "d"));
             }
         }
 
@@ -183,13 +183,13 @@ internal class CrateQueryCompiler
         query.Append($" GROUP BY {binExpression}");
         foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
         {
-            query.Append($", d.\"{groupColumn}\"");
+            query.Append($", {ArchiveRowOriginColumns.ColumnRef(groupColumn, "d")}");
         }
 
         query.Append($" ORDER BY {binExpression} ASC");
         foreach (var groupColumn in queryBuilder.DownsamplingGroupByColumns)
         {
-            query.Append($", d.\"{groupColumn}\" ASC");
+            query.Append($", {ArchiveRowOriginColumns.ColumnRef(groupColumn, "d")} ASC");
         }
 
         return query.ToString();
@@ -267,7 +267,7 @@ internal class CrateQueryCompiler
         {
             foreach (var filter in queryBuilder.FieldFilters)
             {
-                query.Append($" AND d.{CompileFieldFilter(filter)}");
+                query.Append($" AND {CompileFieldFilter(filter, tableAlias: "d")}");
             }
         }
 
@@ -377,7 +377,7 @@ internal class CrateQueryCompiler
         if (queryBuilder.HasFieldFilters)
         {
             query.Append(string.Join(" AND ",
-                queryBuilder.FieldFilters.Select(CompileFieldFilter)));
+                queryBuilder.FieldFilters.Select(f => CompileFieldFilter(f))));
         }
 
         // Phase 6 (AB#4184): per-window active-generation filter for rollup archives. Emitted last,
@@ -414,10 +414,11 @@ internal class CrateQueryCompiler
     /// Renders one field-filter predicate (without leading AND / table alias). Internal so the
     /// raw time-weighted query path (AB#4336 §6.2) reuses the exact same operator rendering.
     /// </summary>
-    internal static string CompileFieldFilter(StreamDataFieldFilterDto filter)
+    internal static string CompileFieldFilter(StreamDataFieldFilterDto filter, string? tableAlias = null)
     {
-        // Direct camelCase column reference — the legacy `data['x']` indirection is gone.
-        var fieldRef = $"\"{filter.FieldName}\"";
+        // Direct camelCase column reference — the legacy `data['x']` indirection is gone. row_origin reads
+        // NULL as automated (AB#7616).
+        var fieldRef = ArchiveRowOriginColumns.ColumnRef(filter.FieldName, tableAlias);
 
         switch (filter.Operator)
         {

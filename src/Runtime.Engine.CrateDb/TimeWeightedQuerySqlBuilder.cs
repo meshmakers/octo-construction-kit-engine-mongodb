@@ -105,7 +105,7 @@ internal static class TimeWeightedQuerySqlBuilder
                 carried.Add(c);
             }
         }
-        var carriedList = carried.Count > 0 ? ", " + string.Join(", ", carried.Select(c => $"\"{c}\"")) : string.Empty;
+        var carriedList = carried.Count > 0 ? ", " + string.Join(", ", carried.Select(c => ArchiveRowOriginColumns.SelectRef(c))) : string.Empty;
 
         var predicate = new StringBuilder();
         if (!string.IsNullOrEmpty(ckTypeId))

@@ -172,6 +172,45 @@ public class CrateDbStreamDataQueryColumnValidationTests
     }
 
     [Fact]
+    public async Task TheOrigin_IsSelectableOnATimeRangeArchive()
+    {
+        // AB#7616: row_origin and the manual audit columns are platform columns of every raw and time-range archive.
+        var options = StreamDataQueryOptions.Create()
+            .WithCkTypeId(SomeType)
+            .WithColumns(["Temperature", "row_origin", "manual_written_by", "manual_written_at", "manual_reason"]);
+
+        await NewSut().ExecuteQueryAsync(Archive, options);
+
+        A.CallTo(() => _db.GetDataAsync(A<string>._, A<string>.That.Contains("COALESCE(\"row_origin\", 'automated')")))
+            .MustHaveHappened();
+    }
+
+    [Fact]
+    public async Task TheOrigin_OnARollupArchive_IsRefusedWithTheValidNames()
+    {
+        // AB#7616: rollup rows are derived by the platform and carry no origin; asking for it is an error that
+        // names the valid columns, not an empty column.
+        var rollupRt = OctoObjectId.GenerateNewId();
+        A.CallTo(() => _store.GetAsync(rollupRt)).Returns(
+            new ArchiveSnapshot(rollupRt, SomeType, CkArchiveStatus.Activated, "rollup",
+                [new CkArchiveColumnSpec("temperature_sum", Indexed: false, Required: false)])
+            {
+                IsTimeRange = true,
+                RollupAggregations = [new CkRollupAggregationSpec("Temperature", CkRollupFunction.Sum, null)]
+            });
+        var options = StreamDataGroupedAggregationQueryOptions.Create()
+            .WithCkTypeId(SomeType)
+            .WithGroupByColumns(["row_origin"])
+            .WithAggregationColumns([new AggregationColumn("temperature_sum", AggregationFunction.Sum)]);
+
+        var ex = await Assert.ThrowsAsync<StreamDataException>(
+            () => NewSut().ExecuteGroupedAggregationQueryAsync(rollupRt, options));
+
+        Assert.Contains("row_origin", ex.Message);
+        AssertNoSqlExecuted();
+    }
+
+    [Fact]
     public async Task RollupAggregation_OnALogicalChainPath_IsAccepted()
     {
         // Regression: AB#4765 validated aggregation columns against the archive's own columns, but on
