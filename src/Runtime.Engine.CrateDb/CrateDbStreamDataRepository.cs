@@ -445,7 +445,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             new("archive", archiveRtId.ToString()));
 
         await DetectAndRecordRetroactiveWriteAsync(
-            snapshot, new[] { datapoint.Timestamp }, RecomputeChangeSource.Pipeline);
+            snapshot, [(datapoint.Timestamp, datapoint.Origin)], RecomputeChangeSource.Pipeline);
     }
 
     public async Task InsertAsync(OctoObjectId archiveRtId, IEnumerable<StreamDataPoint> datapoints)
@@ -500,7 +500,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             new("archive", archiveRtId.ToString()));
 
         await DetectAndRecordRetroactiveWriteAsync(
-            snapshot, filtered.Select(p => p.Timestamp), RecomputeChangeSource.Pipeline);
+            snapshot, filtered.Select(p => (p.Timestamp, p.Origin)), RecomputeChangeSource.Pipeline);
     }
 
     /// <summary>
@@ -637,7 +637,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         // Time-range rows are keyed by their window start; a late window correction is retroactive.
         await DetectAndRecordRetroactiveWriteAsync(
-            snapshot, filtered.Select(p => p.From), RecomputeChangeSource.Pipeline);
+            snapshot, filtered.Select(p => (p.From, p.Origin)), RecomputeChangeSource.Pipeline);
     }
 
     private Dtos.TimeRangeDataPointDto MapToTimeRangeDataPointDto(TimeRangeStreamDataPoint point,
@@ -2288,7 +2288,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// enumeration so the common forward-ingest path stays untouched.
     /// </summary>
     private async Task DetectAndRecordRetroactiveWriteAsync(
-        ArchiveSnapshot snapshot, IEnumerable<DateTime> timestamps, RecomputeChangeSource source)
+        ArchiveSnapshot snapshot, IEnumerable<(DateTime Timestamp, ArchiveRowOrigin Origin)> rows,
+        RecomputeChangeSource source)
     {
         if (_recomputeStateStore is null || _rollupArchiveStore is null)
         {
@@ -2297,6 +2298,24 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var archiveRtId = snapshot.RtId;
         var consumedWatermark = await GetConsumedWatermarkAsync(archiveRtId);
+        var materialised = rows as IReadOnlyCollection<(DateTime Timestamp, ArchiveRowOrigin Origin)> ?? rows.ToList();
+
+        // AB#7594: a manual write is a person correcting a known window. Its dependent rollup buckets are
+        // recomputed whatever the automatic reach cap says — a correction a year back must reach the yearly
+        // total — and one window per cluster of corrected windows, so two corrections months apart do not
+        // drag everything in between into the recompute.
+        foreach (var manualWindow in RetroactiveWriteDetector.BuildManualDirtyWindows(
+                     consumedWatermark,
+                     materialised.Where(r => r.Origin == ArchiveRowOrigin.Manual).Select(r => r.Timestamp),
+                     DateTime.UtcNow))
+        {
+            await _recomputeStateStore.AppendDirtyWindowAsync(archiveRtId, manualWindow);
+            _logger.LogInformation(
+                "Archive {ArchiveRtId}: manual write over [{Start:O}, {End:O}); dirty window recorded for recompute.",
+                archiveRtId, manualWindow.WindowStart, manualWindow.WindowEnd);
+        }
+
+        var timestamps = materialised.Where(r => r.Origin != ArchiveRowOrigin.Manual).Select(r => r.Timestamp);
         var effectiveReach = ResolveEffectiveRetroReach(snapshot);
         if (RetroactiveWriteDetector.TryBuildDirtyWindow(
                 consumedWatermark, timestamps, source, DateTime.UtcNow, effectiveReach,

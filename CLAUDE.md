@@ -1320,6 +1320,16 @@ timestamp schedules a recompute of years of history.
   `null` cap — manual/chained recompute stays unbounded, matching `recomputeArchive` /
   `rewindRollupWatermark`.
 
+### Manual Writes Reach the Rollups (AB#7594)
+
+`DetectAndRecordRetroactiveWriteAsync` splits a batch by origin. Automated rows keep the single, reach-capped
+dirty window above. Manual rows go through `RetroactiveWriteDetector.BuildManualDirtyWindows`: **no reach cap**
+(a person corrected a known window; a rollup must not keep the replaced value) and **one window per cluster** of
+corrected windows (`ManualClusterGap` = 1 day), source `RecomputeChangeSource.Manual`, so two corrections months
+apart recompute two small ranges instead of everything in between. The recompute itself is the existing
+bounded, generation-flipped path (AB#5483, AB#6283); a replaced value is recomputed away, never added twice.
+Tests: `RetroactiveWriteDetectorTests` (unit), `RollupManualWriteTests` (asset-repo integration, real CrateDB).
+
 ### Query Time Filter — One-sided Ranges (AB#4617)
 
 `StreamDataQueryOptionsBase.From` / `.To` are independently optional. The three read paths

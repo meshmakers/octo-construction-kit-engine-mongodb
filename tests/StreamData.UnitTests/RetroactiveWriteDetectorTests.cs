@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
@@ -211,5 +212,55 @@ public class RetroactiveWriteDetectorTests
 
         Assert.Null(CrateDbStreamDataRepository.ClipConsumedWatermark(dependent, nativeRt));
         Assert.Null(CrateDbStreamDataRepository.ClipConsumedWatermark(dependent, OctoObjectId.GenerateNewId()));
+    }
+
+    // ---- AB#7594: manual writes -----------------------------------------------------------------------------
+
+    private static readonly DateTime Watermark = new(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public void ManualWrites_IgnoreTheReachCap_AYearOldCorrectionStillDirtiesItsBuckets()
+    {
+        var yearAgo = Watermark.AddYears(-1);
+
+        var windows = RetroactiveWriteDetector.BuildManualDirtyWindows(Watermark, [yearAgo], DetectedAt);
+
+        var window = Assert.Single(windows);
+        Assert.Equal(yearAgo, window.WindowStart);
+        Assert.Equal(yearAgo.AddTicks(1), window.WindowEnd);
+        Assert.Equal(RecomputeChangeSource.Manual, window.Source);
+        Assert.Equal(RecomputeChangeKind.RetroactiveModify, window.ChangeKind);
+    }
+
+    [Fact]
+    public void ManualWrites_MonthsApart_GiveOneSmallWindowEach_NotOneSpanningEverythingBetween()
+    {
+        var march = new DateTime(2026, 3, 5, 10, 0, 0, DateTimeKind.Utc);
+        var august = new DateTime(2026, 8, 20, 10, 0, 0, DateTimeKind.Utc);
+
+        var windows = RetroactiveWriteDetector.BuildManualDirtyWindows(Watermark, [august, march], DetectedAt);
+
+        Assert.Equal(2, windows.Count);
+        Assert.Equal(march, windows[0].WindowStart);
+        Assert.Equal(august, windows[1].WindowStart);
+    }
+
+    [Fact]
+    public void ManualWrites_OfOneDay_ShareOneWindow()
+    {
+        var first = new DateTime(2026, 3, 5, 0, 0, 0, DateTimeKind.Utc);
+        var quarterHours = Enumerable.Range(0, 96).Select(i => first.AddMinutes(15 * i)).ToList();
+
+        var window = Assert.Single(RetroactiveWriteDetector.BuildManualDirtyWindows(Watermark, quarterHours, DetectedAt));
+
+        Assert.Equal(first, window.WindowStart);
+        Assert.Equal(quarterHours[^1].AddTicks(1), window.WindowEnd);
+    }
+
+    [Fact]
+    public void ManualWrites_AtOrAfterTheWatermark_OrWithoutAConsumer_DirtyNothing()
+    {
+        Assert.Empty(RetroactiveWriteDetector.BuildManualDirtyWindows(Watermark, [Watermark, Watermark.AddHours(1)], DetectedAt));
+        Assert.Empty(RetroactiveWriteDetector.BuildManualDirtyWindows(null, [Watermark.AddYears(-1)], DetectedAt));
     }
 }

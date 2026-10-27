@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
@@ -96,5 +97,51 @@ internal static class RetroactiveWriteDetector
             source,
             detectedAt);
         return true;
+    }
+
+    /// <summary>
+    /// The largest gap between two corrected windows that still share one manual dirty window
+    /// (<see cref="BuildManualDirtyWindows" />). A day keeps a batch of corrections of one billing day or
+    /// week in one recompute while two corrections months apart stay two small ones.
+    /// </summary>
+    internal static readonly TimeSpan ManualClusterGap = TimeSpan.FromDays(1);
+
+    /// <summary>
+    /// Dirty windows for the manually written rows of a batch (AB#7594). Unlike <see cref="TryBuildDirtyWindow" />
+    /// the automatic reach cap does not apply — a manual write is a deliberate correction, and a rollup that
+    /// keeps the replaced value would show a stale total — and the retroactive timestamps are split into
+    /// clusters at gaps larger than <see cref="ManualClusterGap" />, one window per cluster, so only the
+    /// buckets around each correction are recomputed. Timestamps at or after the consumed watermark are
+    /// forward writes the orchestrator aggregates anyway; nothing is returned when no dependent has consumed
+    /// anything (<paramref name="consumedWatermark" /> null).
+    /// </summary>
+    public static IReadOnlyList<ArchiveDirtyWindow> BuildManualDirtyWindows(
+        DateTime? consumedWatermark, IEnumerable<DateTime> manualTimestamps, DateTime detectedAt)
+    {
+        if (consumedWatermark is not { } watermark)
+        {
+            return [];
+        }
+
+        var retroactive = manualTimestamps.Where(ts => ts < watermark).Order().ToList();
+        var windows = new List<ArchiveDirtyWindow>();
+        var start = 0;
+        for (var i = 1; i <= retroactive.Count; i++)
+        {
+            if (i < retroactive.Count && retroactive[i] - retroactive[i - 1] <= ManualClusterGap)
+            {
+                continue;
+            }
+
+            if (i > start)
+            {
+                windows.Add(new ArchiveDirtyWindow(retroactive[start], retroactive[i - 1].AddTicks(1),
+                    RecomputeChangeKind.RetroactiveModify, RecomputeChangeSource.Manual, detectedAt));
+            }
+
+            start = i;
+        }
+
+        return windows;
     }
 }
