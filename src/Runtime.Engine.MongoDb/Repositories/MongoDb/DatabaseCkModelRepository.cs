@@ -609,7 +609,9 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         }
 
         // Insert model with Importing state (now safe because we have the lock)
-        await InsertModelWithImportingState(compiledModel, mongoDbRepositoryDataSource);
+        // AB#7381: the installed row(s) of the model name are deleted by the insert; keep them so that a failed
+        // import (system reference validation, dependency resolution, ...) puts the installed version back.
+        var replacedModels = await InsertModelWithImportingState(compiledModel, mongoDbRepositoryDataSource);
 
         // G-L3: once the element rows are committed, a failure of the post-work must not delete the CkModel row
         // (that would orphan the committed rows). The row then stays Importing; the next import of the model name
@@ -830,6 +832,18 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
 
             _logger.LogDebug("Rolling back CK model import transaction");
             await mongoDbRepositoryDataSource.CkModels.DeleteOneAsync(session, compiledModel.ModelId);
+
+            // AB#7381: nothing of the installed version was touched before the element rows were committed (its
+            // elements are replaced only inside the transaction that did not commit), so putting its CkModel row
+            // back restores the tenant exactly as it was: version, state, dependencies, ranges and reason.
+            foreach (var replaced in replacedModels)
+            {
+                _logger.LogWarning(
+                    "Import of CK model {CkModelId} failed; restoring the previously installed '{InstalledModelId}' (state {ModelState})",
+                    compiledModel.ModelId, replaced.Id, replaced.ModelState);
+                await mongoDbRepositoryDataSource.CkModels.TryDeleteOneAsync(session, e => e.Id == replaced.Id);
+                await mongoDbRepositoryDataSource.CkModels.InsertOneAsync(session, replaced);
+            }
 
             await session.CommitTransactionAsync();
 
@@ -1198,13 +1212,17 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
     /// Inserts the model with Importing state into the database.
     /// This method should only be called after acquiring the distributed lock.
     /// </summary>
-    private async Task InsertModelWithImportingState(CkCompiledModelRoot compiledModel,
+    private async Task<IReadOnlyList<CkModel>> InsertModelWithImportingState(CkCompiledModelRoot compiledModel,
         ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
     {
         _logger.LogInformation("Inserting CK model '{ModelId}' with Importing state", compiledModel.ModelId);
 
         using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
         session.StartTransaction();
+
+        // AB#7381: remember what is replaced, so a failed import can restore it.
+        var replacedModels = (await mongoDbRepositoryDataSource.CkModels.FindManyAsync(session,
+            e => e.ModelId == compiledModel.ModelId.Name)).ToList();
 
         // Delete any existing model with the same name (regardless of version)
         await mongoDbRepositoryDataSource.CkModels.TryDeleteOneAsync(session,
@@ -1229,6 +1247,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
 
         await session.CommitTransactionAsync();
         _logger.LogInformation("CK model '{ModelId}' inserted with Importing state", compiledModel.ModelId);
+        return replacedModels;
     }
 
     private void ProcessCkEnums(CkCompiledModelRoot compiledModel, TransientCkModel transientCkModel)

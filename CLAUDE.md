@@ -1789,6 +1789,17 @@ only after that delete and left the installed version without its `CkModel` row
 `999.0.0`, main CI `0.1.*` where `Current` is `null` and the check is skipped, r-tag builds `3.x`), so tests of
 message 126 must never depend on it.
 
+**A failed import keeps the installed version (AB#7381).** `InsertModelWithImportingState` deletes the installed `CkModel` row(s) of the
+model name (any version) before the system-reference pre-validation (`ValidateSystemReferencesAsync`) and the dependency resolution
+(`HardResolveAsync`) run, and returns the deleted rows. When the import then fails *before the element rows were committed* (G-L3 below
+keeps its behaviour afterwards), the failure path deletes the `Importing` row and **puts the previous rows back** in one transaction, still
+under the model import lock: version, state (`Available` or `ResolveFailed`), dependencies, ranges, `resolveFailedReason` and `ckLanguage`
+are as before (field order of the document may differ). The installed elements are untouched at that point (they are replaced only inside the
+import transaction, which did not commit), so LibraryStatus shows the old version and its RT entities are not affected. Before the fix a failed
+import - a forced one whose dependency is `ResolveFailed`, a stale System reference, a concurrent tenant change - left the model uninstalled
+(test-2 meshtest, 2026-10-23: Industry.Energy 3.5.0 vanished after a failed 3.6.0). Tests: `CkRangeRetentionImportTests.FailedImport_*`
+(dependency resolution fails after a forced Basic update; system reference mismatch), red without the restore.
+
 **Import guard (message 91, CkLanguageNotSupported):** `ExecuteImport` refuses a model whose `CkLanguage` is
 above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before anything is written (the engine
 `ElementResolver` raises 91 on resolve too; this guard covers callers that bypass resolution).
