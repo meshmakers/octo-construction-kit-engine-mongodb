@@ -827,7 +827,31 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
                 throw;
             }
 
+            // AB#7381 (review): without the model import lock another importer may already own the model name and its
+            // Importing row; touching the rows now could delete its row or insert the old row next to its version.
+            if (importLock.LockLostToken.IsCancellationRequested)
+            {
+                _logger.LogError(
+                    "The import lock of CK model '{CkModelName}' was lost; the CkModel rows are left to the importer that owns the lock",
+                    compiledModel.ModelId.Name);
+                throw;
+            }
+
             using var session = await mongoDbRepositoryDataSource.CreateSessionAsync();
+
+            // AB#7381 (review): a commit call that threw does not prove the transaction failed. When the new version's
+            // element rows are in the database, the commit went through: restoring the old row would point it at
+            // replaced elements, so keep the Importing row like the committed case above.
+            if (replacedModels.Any(r => r.Id != compiledModel.ModelId) &&
+                await HasElementRowsAsync(mongoDbRepositoryDataSource, session, compiledModel.ModelId))
+            {
+                _logger.LogError(
+                    "The elements of CK model '{CkModelId}' are in the database although the import failed; its CkModel row is kept (state " +
+                    "Importing) and is replaced by the next import of the model",
+                    compiledModel.ModelId);
+                throw;
+            }
+
             session.StartTransaction();
 
             _logger.LogDebug("Rolling back CK model import transaction");
@@ -849,6 +873,18 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
 
             throw;
         }
+    }
+
+    /// <summary>AB#7381: whether any element row (type, attribute, enum, record, role, interface) of the model exists.</summary>
+    private static async Task<bool> HasElementRowsAsync(ICkMongoDbRepositoryDataSource dataSource,
+        IOctoSession session, CkModelId modelId)
+    {
+        return (await dataSource.CkTypes.FindManyAsync(session, e => e.CkModelId == modelId)).Any() ||
+               (await dataSource.CkAttributes.FindManyAsync(session, e => e.CkModelId == modelId)).Any() ||
+               (await dataSource.CkEnums.FindManyAsync(session, e => e.CkModelId == modelId)).Any() ||
+               (await dataSource.CkRecords.FindManyAsync(session, e => e.CkModelId == modelId)).Any() ||
+               (await dataSource.CkAssociationRoles.FindManyAsync(session, e => e.CkModelId == modelId)).Any() ||
+               (await dataSource.CkInterfaces.FindManyAsync(session, e => e.CkModelId == modelId)).Any();
     }
 
     /// <summary>Upper bound of <see cref="CkModel.ResolveFailedReason" /> (names and versions only, a few entries).</summary>
