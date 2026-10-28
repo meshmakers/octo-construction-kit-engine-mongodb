@@ -14,6 +14,8 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// <list type="bullet">
 /// <item><c>COUNT</c> and the <c>_count</c> half of <c>AVG</c> → <c>BIGINT</c> (CrateDB's
 /// <c>count(*)</c> return type).</item>
+/// <item><c>MIN</c> and <c>MAX</c> over the row origin field <c>manual_written_at</c> →
+/// <c>TIMESTAMP WITH TIME ZONE</c> (AB#7727).</item>
 /// <item><c>SUM</c>, <c>MIN</c>, <c>MAX</c>, and the <c>_sum</c> half of <c>AVG</c> → <c>DOUBLE
 /// PRECISION</c>. Rollups operate over numeric source columns; DOUBLE represents both integer and
 /// floating-point sources without truncation. Precision-loss for integer MIN/MAX is accepted as
@@ -41,7 +43,7 @@ internal static class RollupColumnTypeResolver
         {
             foreach (var columnName in RollupColumnGenerator.TargetColumnNamesFor(spec))
             {
-                typeByColumn[columnName] = TypeFor(spec.Function, columnName);
+                typeByColumn[columnName] = TypeFor(spec, columnName);
             }
         }
 
@@ -70,8 +72,16 @@ internal static class RollupColumnTypeResolver
         return resolved;
     }
 
-    private static CrateColumnType TypeFor(CkRollupFunction function, string columnName)
+    private static CrateColumnType TypeFor(CkRollupAggregationSpec spec, string columnName)
     {
+        var function = spec.Function;
+        if (ArchiveRowOriginFields.IsTimestampAggregation(spec.SourcePath, function))
+        {
+            // Min / Max over manual_written_at (AB#7727): the earliest / latest manual entry stays a
+            // timestamp, at every level of a chain (the chained spec names the same logical path).
+            return new CrateColumnType.Primitive("TIMESTAMP WITH TIME ZONE");
+        }
+
         if (function == CkRollupFunction.Count)
         {
             return new CrateColumnType.Primitive("BIGINT");

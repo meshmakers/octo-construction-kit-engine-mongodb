@@ -1,4 +1,6 @@
-﻿namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
+﻿using Meshmakers.Octo.Runtime.Contracts.StreamData;
+
+namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 
 /// <summary>
 /// Constants for the stream data service.
@@ -51,16 +53,16 @@ public static class Constants
     /// written before the origin was recorded, which read as automated. Not on rollup tables. See
     /// <see cref="ArchiveRowOriginColumns" />.
     /// </summary>
-    public const string RowOrigin = "row_origin";
+    public const string RowOrigin = ArchiveRowOriginFields.RowOrigin;
 
     /// <summary>Writer of a manual row, recorded by the platform (AB#7593); NULL on automated rows.</summary>
-    public const string ManualWrittenBy = "manual_written_by";
+    public const string ManualWrittenBy = ArchiveRowOriginFields.ManualWrittenBy;
 
     /// <summary>Write time of a manual row, recorded by the platform (AB#7593); NULL on automated rows.</summary>
-    public const string ManualWrittenAt = "manual_written_at";
+    public const string ManualWrittenAt = ArchiveRowOriginFields.ManualWrittenAt;
 
     /// <summary>Optional reason of a manual write, as given (AB#7593); NULL on automated rows.</summary>
-    public const string ManualReason = "manual_reason";
+    public const string ManualReason = ArchiveRowOriginFields.ManualReason;
 
     /// <summary>rtWellKnownName column name</summary>
     public const string RtWellKnownName = "rtwellknownname";

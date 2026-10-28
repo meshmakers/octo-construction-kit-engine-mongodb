@@ -287,6 +287,15 @@ Rendered for keys `$Origin, k2 … kn`:
 
 The origin column itself is guarded like every value, so a losing write leaves the stored origin alone. Between automated writes an archive without configured keys still behaves as before: the last write wins, and the row carries the origin of the write that won. The replaced value is not kept; rows stay single-valued. The energy community measurements archive ranks `[$Origin, DataQuality LowerWins, SourceDocumentDate HigherWins]`.
 
+**Rollups over the origin (AB#7727).** A rollup over a raw or time-range archive can aggregate the origin fields although the archive does not declare them (`RollupSourceColumnResolver` rule 1b, `RollupSourceColumnResolutionKind.OriginColumn`; a declared column of the same name still wins). Only these aggregations are accepted; everything else is refused at activation with `RollupOriginAggregationNotSupportedException`, which names the supported ones:
+
+| Aggregation | Bucket value | Column type |
+|---|---|---|
+| `Count` over `manual_written_at`, `manual_written_by` or `manual_reason` | number of manual rows (`0` when there are none) | `BIGINT` |
+| `Min` / `Max` over `manual_written_at` | earliest / latest manual entry, `NULL` without one | `TIMESTAMP WITH TIME ZONE` |
+
+`Count` over `row_origin` is refused: the column is set on every row written since AB#5356, so it would count all rows. Automated rows and rows written before origin tracking carry `NULL` in the manual fields and therefore count as delivered. A rollup over such a rollup names the same logical path (`SourcePath: manual_written_at`) and reads the child through rule 2: counts are summed, `Max` stays the maximum, `Min` the minimum, and `Min`/`Max` stay timestamps at every level. Naming the child's stored timestamp column physically (`manual_written_at_max`) is refused (`RollupOriginTimestampChainException`), because the parent would store it in a numeric column; a physical chain over a stored count stays allowed. A row is stored once per window (the upsert key), so a manual correction replaces the delivered row and is counted once, also after a second correction or a later automated delivery; manual writes reach the rollups through the manual dirty windows (AB#7594), and an existing rollup gets the history of a new origin aggregation through the usual backfill. Computed columns still cannot reference the origin fields (`ComputedColumnValidator` accepts declared columns only). Tests: `RollupValidatorTests`, `RollupSourceColumnResolverTests` (engine), `RollupAggregationPerSourceResolutionTests`, `RollupColumnTypeResolverTests`, `StreamDataOrigin/RollupOriginAggregationIntegrationTests` (real CrateDB).
+
 ### Write result — stored and skipped rows (AB#7598)
 
 `IStreamDataRepository.InsertAsync` / `InsertTimeRangeAsync` return a `StreamDataWriteResult`: `Stored` (rows the database holds after the write: new, won, or an identical re-delivery) and `Skipped` (one `StreamDataSkippedRow` per row not stored: entity, window, declared origin, reason) plus `SkippedByReason`. Reasons:

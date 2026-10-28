@@ -979,6 +979,12 @@ Rules to keep:
   selectable/filterable/groupable on raw and time-range archives. Every read-path column reference goes through
   `ArchiveRowOriginColumns.ColumnRef` / `SelectRef`, which reads `row_origin` as `COALESCE(…, 'automated')` (legacy
   rows hold NULL). A new SQL builder that references a column must use them too.
+- **Rollups over the origin (AB#7727)**: a rollup over a raw/time-range archive may name the undeclared origin fields
+  (engine rule 1b, `RollupSourceColumnResolutionKind.OriginColumn`, bound like a declared column): `Count` over
+  `manual_written_at` / `manual_written_by` / `manual_reason` (manual rows per bucket) and `Min`/`Max` over
+  `manual_written_at` (stored as `TIMESTAMP WITH TIME ZONE` by `RollupColumnTypeResolver`, also when chained by the
+  logical path). Everything else, `Count` over `row_origin` included, is refused at activation
+  (`ArchiveRowOriginFields.SupportsRollupAggregation`). Chained rollups read the child by rule 2 (counts SUM, Max MAX).
 
 Full write-up: `docs/streamdata-archive-concept.md` → *Row origin*. Tests: `ArchiveRowOriginSqlTests`,
 `ArchiveRowOriginQuerySqlTests` (unit), `StreamDataOrigin/ArchiveRowOriginIntegrationTests` and
@@ -1056,7 +1062,8 @@ regardless of the current flag value. Read failures propagate — an unreadable 
   function:
   - `COUNT` → `BIGINT`
   - `AVG` → `{base}_sum DOUBLE PRECISION`, `{base}_count BIGINT`
-  - `SUM` / `MIN` / `MAX` → `DOUBLE PRECISION`
+  - `SUM` / `MIN` / `MAX` → `DOUBLE PRECISION`, except `MIN` / `MAX` over the origin field `manual_written_at` →
+    `TIMESTAMP WITH TIME ZONE` (AB#7727)
   - `First` / `Last` (AB#4188) → a single `DOUBLE PRECISION` column holding the value at the
     earliest / latest observation in the bucket. CrateDB has no `arg_min`/`arg_max` and `MIN`/`MAX`
     reject arrays, so `RollupAggregationSqlBuilder` wraps the source in a `ROW_NUMBER()` sub-select

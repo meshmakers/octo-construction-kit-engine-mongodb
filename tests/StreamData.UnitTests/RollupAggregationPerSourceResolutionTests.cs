@@ -486,4 +486,54 @@ public class RollupAggregationPerSourceResolutionTests
         A.CallTo(() => h.Db.ExecuteNonQueryAsync(
             A<string>._, A<string>._, A<CrateStatementClass>._, A<CancellationToken>._)).MustNotHaveHappened();
     }
+
+    // ---- rule 1b: row origin fields of a base archive (AB#7727) ----
+
+    [Fact]
+    public void BaseSource_OriginFields_ReadTheSystemColumnsDirectly()
+    {
+        var specs = new[]
+        {
+            Spec("manual_written_at", CkRollupFunction.Count, "manual_count"),
+            Spec("manual_written_at", CkRollupFunction.Max, "last_manual"),
+            Spec("manual_written_by", CkRollupFunction.Count),
+        };
+
+        var resolved = RollupAggregationColumns.ResolveForSource(specs, ParentId, Base("Amount.Value"), null);
+        Assert.All(resolved, r => Assert.Equal(RollupSourceColumnResolutionKind.OriginColumn, r.Kind));
+
+        var sql = BuildFor(specs, Base("Amount.Value"), null);
+        Assert.Contains("COUNT(\"manual_written_at\") AS \"manual_count\"", sql);
+        Assert.Contains("MAX(\"manual_written_at\") AS \"last_manual\"", sql);
+        Assert.Contains("COUNT(\"manual_written_by\") AS \"manual_written_by_count\"", sql);
+
+        var rawSql = BuildFor(specs, RawBase("Amount.Value"), null);
+        Assert.Contains("COUNT(\"manual_written_at\") AS \"manual_count\"", rawSql);
+    }
+
+    [Fact]
+    public void RollupSource_LogicalOriginCountAndMax_ChainAsSumAndMax()
+    {
+        var childSpecs = new[]
+        {
+            Spec("manual_written_at", CkRollupFunction.Count, "manual_count"),
+            Spec("manual_written_at", CkRollupFunction.Max, "last_manual"),
+        };
+        var (childArchive, childRollup) = ChildRollup(childSpecs);
+
+        var sql = BuildFor(childSpecs, childArchive, childRollup);
+
+        Assert.Contains("SUM(\"manual_count\") AS \"manual_count\"", sql);
+        Assert.Contains("MAX(\"last_manual\") AS \"last_manual\"", sql);
+        Assert.DoesNotContain("COUNT(", sql);
+    }
+
+    [Fact]
+    public void RollupSource_OriginPathItDoesNotStore_DoesNotResolve()
+    {
+        var (childArchive, childRollup) = ChildRollup(Spec("Amount.Value", CkRollupFunction.Sum));
+
+        Assert.Throws<InvalidOperationException>(() => RollupAggregationColumns.ResolveForSource(
+            Spec("manual_written_at", CkRollupFunction.Count), childArchive, childRollup, ParentId));
+    }
 }
