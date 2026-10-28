@@ -386,6 +386,126 @@ public class CkRangeRetentionImportTests(CkModelImportMigrationFixture fixture)
         }
     }
 
+    /// <summary>
+    ///     AB#7381 (observed on test-2 meshtest, AB#7052): a forced import whose dependency resolution fails must not
+    ///     uninstall the previously installed version. Scaled-down meshtest chain: RrBase (Basic) 1.0.0 &lt;- IndBase
+    ///     (Industry.Basic) 2.5.0, exact pin &lt;- IndEnergy (Industry.Energy) 3.5.0, exact pin. RrBase 1.1.0 goes in
+    ///     (force), IndBase and IndEnergy go <c>ResolveFailed</c>; IndEnergy 3.6.0 (range <c>IndBase-[2.5,3.0)</c>)
+    ///     cannot resolve because the tenant holds no <c>Available</c> IndBase. IndEnergy 3.5.0 must stay exactly as it
+    ///     was (the whole <c>CkModel</c> document), and the error must not blame a catalog.
+    /// </summary>
+    [Fact]
+    public async Task FailedImport_BecauseDependencyDoesNotResolve_KeepsTheInstalledVersion()
+    {
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = $"keepdep{Guid.NewGuid():N}"[..20];
+        try
+        {
+            await CreateChildAsync(tenantId);
+            var tenant = await GetChildAsync(tenantId);
+            var system = await GetInstalledSystemIdAsync(tenant);
+            var database = GetTenantDatabase(tenantId);
+
+            await tenant.ImportCkModelAsync(BuildBase("RrBase-1.0.0", system, withExtra: false));
+            await tenant.ImportCkModelAsync(BuildLayer("IndBase-2.5.0", "RrBase-1.0.0", "Thing-1", "Gadget-1", system));
+            await tenant.ImportCkModelAsync(BuildLayer("IndEnergy-3.5.0", "IndBase-2.5.0", "Gadget-1", "Meter-1", system));
+            // The "forced" Basic update: exact pins of the chain break.
+            await tenant.ImportCkModelAsync(BuildBase("RrBase-1.1.0", system, withExtra: true));
+            Assert.Equal("RrBase-1.1.0=1, IndBase-2.5.0=2, IndEnergy-3.5.0=2",
+                await StatesAsync(database, "RrBase", "IndBase", "IndEnergy"));
+            var before = await SingleAsync(database, "CkModel", "_id", "IndEnergy-3.5.0");
+
+            var next = BuildLayer("IndEnergy-3.6.0", "IndBase-2.5.0", "Gadget-1", "Meter-1", system,
+                new CkModelIdVersionRange("IndBase", "[2.5,3.0)"));
+            var failure = await Record.ExceptionAsync(() => tenant.ImportCkModelAsync(next));
+
+            Assert.IsAssignableFrom<ModelValidationException>(failure);
+            // Not a single bit of the installed version changed; the failed candidate left no row behind.
+            AssertSameDocument(before, await SingleAsync(database, "CkModel", "_id", "IndEnergy-3.5.0"));
+            Assert.Equal("IndEnergy-3.5.0=2", await StatesAsync(database, "IndEnergy"));
+            Assert.Equal(1, await database.GetCollection<BsonDocument>("CkType").CountDocumentsAsync(
+                new BsonDocument("ckModelId", "IndEnergy-3.5.0"), cancellationToken: TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(systemContext, tenantId);
+        }
+    }
+
+    /// <summary>
+    ///     AB#7381: the same guarantee when the failure is the system reference pre-validation
+    ///     (<c>ValidateSystemReferencesAsync</c>: compiled against another System version than the one installed).
+    /// </summary>
+    [Fact]
+    public async Task FailedImport_BecauseOfSystemReferenceMismatch_KeepsTheInstalledVersion()
+    {
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = $"keepsys{Guid.NewGuid():N}"[..20];
+        try
+        {
+            await CreateChildAsync(tenantId);
+            var tenant = await GetChildAsync(tenantId);
+            var system = await GetInstalledSystemIdAsync(tenant);
+            var database = GetTenantDatabase(tenantId);
+
+            await tenant.ImportCkModelAsync(ExactOnSystem("StaleSys-1.0.0", system));
+            var before = await SingleAsync(database, "CkModel", "_id", "StaleSys-1.0.0");
+
+            var otherSystem = new CkModelId(system.Name,
+                new CkVersion(system.Version.Major, system.Version.Minor, system.Version.Revision + 1));
+            var failure = await Record.ExceptionAsync(() =>
+                tenant.ImportCkModelAsync(ExactOnSystem("StaleSys-1.1.0", otherSystem)));
+
+            var exception = Assert.IsAssignableFrom<ModelValidationException>(failure);
+            Assert.Contains("needs to be recompiled", exception.Message);
+            AssertSameDocument(before, await SingleAsync(database, "CkModel", "_id", "StaleSys-1.0.0"));
+            Assert.Equal("StaleSys-1.0.0=1", await StatesAsync(database, "StaleSys"));
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(systemContext, tenantId);
+        }
+    }
+
+    /// <summary>Same fields and values; the field order of a restored document may differ (BSON equality is ordered).</summary>
+    private static void AssertSameDocument(BsonDocument expected, BsonDocument actual)
+    {
+        Assert.Equal(expected.Elements.OrderBy(e => e.Name, StringComparer.Ordinal).Select(e => e.ToString()),
+            actual.Elements.OrderBy(e => e.Name, StringComparer.Ordinal).Select(e => e.ToString()));
+    }
+
+    /// <summary>
+    ///     A layer of a model chain: type <paramref name="ownType" /> derived from <paramref name="parentType" /> of the
+    ///     parent model; exact-pinned, or range-retaining when <paramref name="parentRange" /> is given.
+    /// </summary>
+    private static CkCompiledModelRoot BuildLayer(string modelId, string parentModelId, string parentType,
+        string ownType, CkModelId system, CkModelIdVersionRange? parentRange = null)
+    {
+        var parentId = new CkModelId(parentModelId);
+        var parentRef = parentRange != null ? parentId.ToMajorQualified() : parentId;
+        return new CkCompiledModelRoot
+        {
+            ModelId = new CkModelId(modelId),
+            Description = "AB#7381 model chain layer",
+            Dependencies = [parentId, system],
+            DependencyRanges = parentRange == null
+                ? null
+                :
+                [
+                    new CkModelDependencyDto { Range = parentRange, Floor = parentId.Version.ToString() },
+                    SystemRange(system)
+                ],
+            Types =
+            [
+                new CkCompiledTypeDto
+                {
+                    TypeId = new CkTypeId(ownType),
+                    DerivedFromCkTypeId = new CkId<CkTypeId>(parentRef, new CkTypeId(parentType))
+                }
+            ]
+        };
+    }
+
     private static CkCompiledModelRoot ExactOnSystem(string modelId, CkModelId system, params CkModelId[] more)
     {
         var id = new CkModelId(modelId);
