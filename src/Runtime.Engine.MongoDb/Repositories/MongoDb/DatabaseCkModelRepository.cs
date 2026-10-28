@@ -94,7 +94,8 @@ internal readonly struct SessionScope : IAsyncDisposable
 /// <summary>
 ///     Implements a CK model repository that stores the CK model in a (octo) database.
 /// </summary>
-public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepositoryVersionLister
+public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepositoryVersionLister,
+    IRepositoryInstalledVersionLister
 {
     private readonly IRepositoryModelResolver _repositoryModelResolver;
     private readonly ICkModelImportAuditTrail _importAuditTrail;
@@ -164,6 +165,25 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
             e => e.ModelId == ckModelName && (e.ModelState == ModelState.Available ||
                                               (includeResolveFailed && e.ModelState == ModelState.ResolveFailed)));
         return ckModels.Select(m => m.Id).OrderBy(id => id.Version).ToList();
+    }
+
+    /// <summary>
+    ///     AB#7381: every version of <paramref name="ckModelName" /> the tenant holds with its state (<c>Available</c>,
+    ///     <c>ResolveFailed</c>, <c>Importing</c>), ascending. Only used to explain a rejected dependency: the resolver
+    ///     itself still considers <c>Available</c> models (<see cref="ListVersionsAsync" />).
+    /// </summary>
+    public async Task<IReadOnlyList<RepositoryModelVersion>> ListInstalledVersionsAsync(string ckModelName,
+        object? sourceIdentifier = null)
+    {
+        var sourceIdentifierObject =
+            ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
+                sourceIdentifier);
+
+        await using var scope = await SessionScope.CreateAsync(sourceIdentifierObject);
+        var ckModels = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels.FindManyAsync(scope.Session,
+            e => e.ModelId == ckModelName);
+        return ckModels.OrderBy(m => m.Id.Version)
+            .Select(m => new RepositoryModelVersion(m.Id, m.ModelState.ToString())).ToList();
     }
 
     /// <inheritdoc />

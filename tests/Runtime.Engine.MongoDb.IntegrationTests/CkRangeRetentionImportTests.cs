@@ -318,7 +318,7 @@ public class CkRangeRetentionImportTests(CkModelImportMigrationFixture fixture)
             {
                 var message = Assert.IsAssignableFrom<ModelValidationException>(failure).Message;
                 Assert.Contains("RrBase-[", message);
-                Assert.Contains($"visible version of RrBase ({installedBase})", message);
+                Assert.Contains($"the tenant has Available versions of RrBase ({installedBase}), none satisfies the range", message);
                 Assert.Equal("", await StatesAsync(database, "MatrixDep"));
             }
         }
@@ -419,12 +419,17 @@ public class CkRangeRetentionImportTests(CkModelImportMigrationFixture fixture)
                 new CkModelIdVersionRange("IndBase", "[2.5,3.0)"));
             var failure = await Record.ExceptionAsync(() => tenant.ImportCkModelAsync(next));
 
-            Assert.IsAssignableFrom<ModelValidationException>(failure);
+            var exception = Assert.IsAssignableFrom<ModelValidationException>(failure);
             // Not a single bit of the installed version changed; the failed candidate left no row behind.
             AssertSameDocument(before, await SingleAsync(database, "CkModel", "_id", "IndEnergy-3.5.0"));
             Assert.Equal("IndEnergy-3.5.0=2", await StatesAsync(database, "IndEnergy"));
             Assert.Equal(1, await database.GetCollection<BsonDocument>("CkType").CountDocumentsAsync(
                 new BsonDocument("ckModelId", "IndEnergy-3.5.0"), cancellationToken: TestContext.Current.CancellationToken));
+
+            // The message names the unresolved range and the state of the versions the tenant holds (no "catalog").
+            Assert.Contains("IndBase-[2.5,3.0)", exception.Message);
+            Assert.DoesNotContain("no catalog knows", exception.Message);
+            Assert.Contains("installed: 2.5.0 ResolveFailed", exception.Message);
         }
         finally
         {
