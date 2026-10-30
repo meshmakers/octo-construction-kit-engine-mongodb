@@ -109,7 +109,7 @@ ckType:
 - **Failed** — activation DDL failed; retry via `activate` again.
 - **Delete** — orthogonal: drops the table and soft-archives the `CkArchive` RtEntity.
 
-What the table cannot follow is refused while Activated or Disabled, see §10 (AB#7872): the target type, removing a column or changing its type, and the definition of a rollup.
+What the table cannot follow is refused while Activated, see §10 (AB#7872): the target type, removing a column or changing its type, and the definition of a rollup.
 
 ---
 
@@ -721,14 +721,14 @@ The legacy class `SdEntity` is renamed to `StreamDataEntity` to align with the `
 A definition change the table cannot follow is refused before it reaches storage (AB#7872): the definition of an archive is a plain entity, and without this a rollup stops with only a log line telling.
 
 - **Where**: `ArchiveDefinitionGuard` (engine). Two ways in are checked: the public `ApplyChanges` of the repository (GraphQL, pipelines) and the Upsert import (`ImportRt`, blueprint apply and update; a blueprint update then fails, also with `ContinueOnError`). The stream data stores (computed column lifecycle, watermark, status, run failures) write through `UpdateOneRtEntityById` and do not pass here, CK model migrations neither.
-- **What is refused** while `status ∈ { Activated, Disabled }`:
+- **What is refused** while `status = Activated`:
   - on every archive: a change of `targetCkTypeId`;
   - on a raw or time-range archive: removing a column, changing the type of a computed column (`ArchiveSchemaImmutableException`). Adding a column stays allowed, the next activation adds it to the table;
   - on a rollup: `Aggregations`, `BucketSizeMs`, `BucketAlignment`, `ReferenceTimeZone`, the sources (`RollupSchemaImmutableException`).
 - **What stays allowed** in any state: `status` and `rtState` transitions, everything else (`WatermarkLagMs`, `CarryLookbackMs`, `FrozenUntil`, retention, conflict precedence, `Indexed` / `Required` of a column).
 - **Compared is what the write would store** (the comparison of the blueprint preview, `BlueprintEntityComparer`), so a re-apply of an unchanged definition passes in any form: an enum by name or key, an omitted default, a source in the list or the deprecated scalar. `Columns` of a rollup are derived and not compared, and its platform columns are no part of the definition.
 - **Rollout**: `ImportRt` runs in the bot services, a blueprint update in the asset repository; each is guarded once that service runs this engine.
-- **`Failed` and `Created`** stay fully editable: removing an offending column is the way out of `Failed`.
+- **`Created`, `Disabled` and `Failed`** stay editable: removing an offending column is the way out of `Failed`, and seeds import their archives as `Disabled`, so most disabled archives have no table yet. A change to a disabled archive that had a table is not caught; the rollup then shows `LastRunError` when it runs again.
 
 Both exceptions name the archive and the field and say that the change needs a new archive; GraphQL answers `STREAMDATA_SCHEMA_IMMUTABLE`.
 

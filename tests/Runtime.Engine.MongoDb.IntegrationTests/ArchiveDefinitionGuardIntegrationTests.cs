@@ -212,15 +212,15 @@ public class ArchiveDefinitionGuardIntegrationTests(ArchiveDefinitionGuardFixtur
         (await BucketSizeOfAsync(rollup)).Should().Be(3_600_000, "nothing was written");
     }
 
-    // Enabling it again would leave the same mismatch.
+    // Seeds import their archives as Disabled, before any table exists; the seed must stay free to change.
     [Fact]
-    public async Task ImportRt_ADisabledRollup_IsGuardedLikeAnActivatedOne()
+    public async Task ImportRt_ADisabledRollup_StaysEditable()
     {
         var rollup = await CreateAsync(id => Rollup(id), CkArchiveStatus.Disabled);
 
-        var act = () => ImportAsync(Rollup(rollup, bucketMs: 7_200_000), ImportStrategy.Upsert);
+        await ImportAsync(Rollup(rollup, bucketMs: 7_200_000), ImportStrategy.Upsert);
 
-        (await act.Should().ThrowAsync<RollupSchemaImmutableException>()).Which.Message.Should().Contain("is Disabled");
+        (await BucketSizeOfAsync(rollup)).Should().Be(7_200_000);
     }
 
     [Fact]
