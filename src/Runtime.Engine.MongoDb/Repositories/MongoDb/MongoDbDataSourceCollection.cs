@@ -548,6 +548,49 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         return result.MatchedCount > 0;
     }
 
+    public async Task<bool> UpdateOneIfVersionMatchesAsync(IOctoSession session, TDocument document,
+        ulong expectedRtVersion)
+    {
+        // AB#7769: optimistic concurrency. The version check is part of the update filter, so check and write are
+        // one atomic statement; the update itself increments rtVersion like every update.
+        var id = _mongoDataSourceMapper.GetId(document);
+        var sessionHandle = ((IOctoSessionInternal)session).SessionHandle;
+
+        if (RequiresNullAttributesRepair(document))
+        {
+            // AB#5148 defense in depth (see UpdateOneAsync); a separate statement for the same reason as in
+            // UpdateOneIfGuardMatchesAsync: the versioned update's own MatchedCount is this method's result.
+            var repairModel = CreateNullAttributesRepairModel(id);
+            await _documentCollection.UpdateOneAsync(sessionHandle, repairModel.Filter, repairModel.Update)
+                .ConfigureAwait(false);
+        }
+
+        var filter = Builders<TDocument>.Filter.And(Builders<TDocument>.Filter.BuildIdFilter(id),
+            CreateRtVersionFilter(expectedRtVersion));
+        var updateDefinition = _mongoDataSourceMapper.ApplyUpdate(document);
+
+        try
+        {
+            var result = await _documentCollection.UpdateOneAsync(sessionHandle, filter, updateDefinition)
+                .ConfigureAwait(false);
+            ThrowIfNotAcknowledged(result.IsAcknowledged);
+            if (result.MatchedCount > 0)
+            {
+                return true;
+            }
+        }
+        catch (Exception ex) when (IsWriteConflict(ex))
+        {
+            // Inside a transaction a concurrent writer that committed after this transaction's snapshot surfaces as a
+            // write conflict instead of a filter mismatch: the same "someone changed it first" outcome.
+            _logger.LogDebug(ex, "Write conflict while updating document with id {Id}", id);
+            return false;
+        }
+
+        await ThrowIfDocumentMissingAsync(sessionHandle, id).ConfigureAwait(false);
+        return false;
+    }
+
     public async Task<bool> UpdateOneWithRecordArrayItemsAsync(IOctoSession session, TDocument document,
         IReadOnlyCollection<RtRecordArrayItemUpdate> itemUpdates, bool requireItemMatch)
     {
@@ -654,6 +697,40 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
             _logger.LogError(ex, "Error replacing document with id {Id}", id);
             throw CreateWriteException<TDocument>(nameof(ReplaceByIdAsync), ex);
         }
+    }
+
+    public async Task<bool> ReplaceByIdIfVersionMatchesAsync(IOctoSession session, TKey id, TDocument document,
+        ulong expectedRtVersion)
+    {
+        // AB#7769: optimistic concurrency, see UpdateOneIfVersionMatchesAsync. The replacement document carries the
+        // new version (set by the caller); a replace does not increment on its own.
+        var sessionHandle = ((IOctoSessionInternal)session).SessionHandle;
+        var filter = Builders<TDocument>.Filter.And(Builders<TDocument>.Filter.BuildIdFilter(id),
+            CreateRtVersionFilter(expectedRtVersion));
+
+        try
+        {
+            var result = await _documentCollection.ReplaceOneAsync(sessionHandle, filter, document)
+                .ConfigureAwait(false);
+            ThrowIfNotAcknowledged(result.IsAcknowledged);
+            if (result.MatchedCount > 0)
+            {
+                return true;
+            }
+        }
+        catch (Exception ex) when (IsWriteConflict(ex))
+        {
+            _logger.LogDebug(ex, "Write conflict while replacing document with id {Id}", id);
+            return false;
+        }
+        catch (MongoWriteException ex)
+        {
+            _logger.LogError(ex, "Error replacing document with id {Id}", id);
+            throw CreateWriteException<TDocument>(nameof(ReplaceByIdIfVersionMatchesAsync), ex);
+        }
+
+        await ThrowIfDocumentMissingAsync(sessionHandle, id).ConfigureAwait(false);
+        return false;
     }
 
     public async Task ReplaceOneAsync(IOctoSession session, FilterDefinition<TDocument> filterDefinition,
@@ -1233,6 +1310,43 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
         }
 
         return OperationFailedException.DatabaseOperationFailed(operationName, ex);
+    }
+
+    /// <summary>
+    ///     Filter on the stored <c>rtVersion</c> (AB#7769). A document persisted before the field existed has no
+    ///     <c>rtVersion</c> and reads as version 0, so version 0 also matches a missing or null field.
+    /// </summary>
+    private static FilterDefinition<TDocument> CreateRtVersionFilter(ulong expectedRtVersion)
+    {
+        var equalsVersion = Builders<TDocument>.Filter.Eq("rtVersion", checked((long)expectedRtVersion));
+        if (expectedRtVersion != 0)
+        {
+            return equalsVersion;
+        }
+
+        return Builders<TDocument>.Filter.Or(equalsVersion,
+            Builders<TDocument>.Filter.Not(Builders<TDocument>.Filter.Exists("rtVersion")),
+            Builders<TDocument>.Filter.Eq("rtVersion", BsonNull.Value));
+    }
+
+    private static bool IsWriteConflict(Exception ex)
+    {
+        // 112 = WriteConflict
+        return ex is MongoCommandException { Code: 112 } or MongoWriteException { WriteError.Code: 112 };
+    }
+
+    /// <summary>
+    ///     After a versioned write matched nothing: a missing document is the usual not-found error, a present one
+    ///     means the version differed (the caller reports the conflict).
+    /// </summary>
+    private async Task ThrowIfDocumentMissingAsync(IClientSessionHandle sessionHandle, TKey id)
+    {
+        var count = await _documentCollection.CountDocumentsAsync(sessionHandle,
+            Builders<TDocument>.Filter.BuildIdFilter(id), new CountOptions { Limit = 1 }).ConfigureAwait(false);
+        if (count == 0)
+        {
+            throw EntityNotFoundException.IdNotFound(typeof(TDocument).Name, id.ToString() ?? "unknown");
+        }
     }
 
     // ReSharper disable once ParameterOnlyUsedForPreconditionCheck.Local
