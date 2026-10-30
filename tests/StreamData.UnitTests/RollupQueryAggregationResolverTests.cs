@@ -192,4 +192,24 @@ public class RollupQueryAggregationResolverTests
         Assert.Equal("SUM(\"ison_stateduration\")", result!.SqlExpression);
         Assert.Equal("ison_sum", result.SqlAlias);
     }
+
+    // AB#7727: no spec declares the column, and an untouched range sums to 0, not to empty.
+    [Theory]
+    [InlineData(AggregationFunctionDto.Sum, "SUM(COALESCE(\"manual_count\", 0))", "manual_count_sum")]
+    [InlineData(AggregationFunctionDto.Max, "MAX(COALESCE(\"manual_count\", 0))", "manual_count_max")]
+    [InlineData(AggregationFunctionDto.Min, "MIN(COALESCE(\"manual_count\", 0))", "manual_count_min")]
+    public void ResolveManualCount_ReadsEmptyAsZero(AggregationFunctionDto function, string expression, string alias)
+    {
+        var resolved = RollupQueryAggregationResolver.ResolveManualCount("manual_count", function);
+
+        Assert.Equal(expression, resolved!.SqlExpression);
+        Assert.Equal(alias, resolved.SqlAlias);
+    }
+
+    [Fact]
+    public void ResolveManualCount_LeavesEverythingElseToTheStandardPath()
+    {
+        Assert.Null(RollupQueryAggregationResolver.ResolveManualCount("last_manual_at", AggregationFunctionDto.Max));
+        Assert.Null(RollupQueryAggregationResolver.ResolveManualCount("manual_count", AggregationFunctionDto.Avg));
+    }
 }

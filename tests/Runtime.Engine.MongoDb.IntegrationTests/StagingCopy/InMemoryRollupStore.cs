@@ -46,4 +46,8 @@ internal sealed class InMemoryRollupStore(params RollupArchiveSnapshot[] snapsho
     public Task<bool> TryPersistDerivedColumnsAsync(OctoObjectId rollupRtId) => throw new NotSupportedException();
 
     public Task<int> CountActiveRollupsForSourceAsync(OctoObjectId sourceArchiveRtId) => throw new NotSupportedException();
+
+    public Task RecordRunFailureAsync(OctoObjectId rollupRtId, string reason, DateTime failedAt) => Task.CompletedTask;
+
+    public Task ClearRunFailureAsync(OctoObjectId rollupRtId) => Task.CompletedTask;
 }

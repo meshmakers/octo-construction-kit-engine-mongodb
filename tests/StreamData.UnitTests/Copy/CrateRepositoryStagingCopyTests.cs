@@ -127,14 +127,14 @@ public class CrateRepositoryStagingCopyTests
         public Task<CrateStatementResult> ExecuteStatementAsync(string tenantId, CopyStatement statement,
             TimeSpan commandTimeout, CancellationToken cancellationToken) => Task.FromResult(CrateStatementResult.Empty);
 
-        public Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
+        public Task<IReadOnlyList<Meshmakers.Octo.Runtime.Engine.CrateDb.Client.SkippedArchiveRow>> InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
             DataPointDto datapoint, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null) => throw new NotSupportedException();
 
-        public Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
+        public Task<IReadOnlyList<Meshmakers.Octo.Runtime.Engine.CrateDb.Client.SkippedArchiveRow>> InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
             IEnumerable<DataPointDto> datapoints, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null) =>
             throw new NotSupportedException();
 
-        public Task InsertTimeRangeDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
+        public Task<IReadOnlyList<Meshmakers.Octo.Runtime.Engine.CrateDb.Client.SkippedArchiveRow>> InsertTimeRangeDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
             IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false,
             IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null) => throw new NotSupportedException();
 

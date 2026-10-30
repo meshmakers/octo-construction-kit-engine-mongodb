@@ -90,7 +90,7 @@ internal record QueryVariable : IQueryVariable
 
     /// <inheritdoc />
 
-    public string ToSelectString()
+    public string ToSelectString(string? tableAlias = null)
     {
         if (IsRawExpression)
         {
@@ -100,7 +100,11 @@ internal record QueryVariable : IQueryVariable
         }
         if (AggregationFunction == null)
         {
-            return Alias == Name ? $"\"{Name}\"" : $"\"{Name}\" AS \"{Alias}\"";
+            // AB#7616 / AB#7727: row_origin and manual_count read NULL as a value, so the column is an expression
+            // with its name as alias.
+            var reference = ArchiveRowOriginColumns.ColumnRef(Name, tableAlias);
+            var output = Alias ?? Name;
+            return output == Name && !ArchiveRowOriginColumns.IsReadAsExpression(Name) ? reference : $"{reference} AS \"{output}\"";
         }
         return Alias == Name ? Name : $"{Name} AS \"{Alias}\"";
     }
@@ -108,7 +112,11 @@ internal record QueryVariable : IQueryVariable
     /// <inheritdoc />
     public string ToGroupByString()
     {
-        return $"\"{Alias}\"";
+        // GROUP BY on a name that is also a physical column groups by the column, so row_origin groups by
+        // the same expression it is selected as (AB#7616).
+        return AggregationFunction == null && !IsRawExpression && ArchiveRowOriginColumns.IsReadAsExpression(Name)
+            ? ArchiveRowOriginColumns.ColumnRef(Name)
+            : $"\"{Alias}\"";
     }
     
     public string ToOrderByString()

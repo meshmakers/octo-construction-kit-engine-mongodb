@@ -196,6 +196,32 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
     }
 
     /// <inheritdoc />
+    public async Task RecordRunFailureAsync(OctoObjectId rollupRtId, string reason, DateTime failedAt)
+    {
+        var session = await _tenantRepository.GetSessionAsync();
+        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtRollupArchive>(session, rollupRtId)
+            ?? throw new ArchiveNotFoundException(rollupRtId);
+
+        entity.LastRunError = reason;
+        entity.LastRunErrorAt = failedAt;
+        entity.ConsecutiveRunFailures = (entity.ConsecutiveRunFailures ?? 0) + 1;
+        await _tenantRepository.UpdateOneRtEntityByIdAsync<RtRollupArchive>(session, rollupRtId, entity);
+    }
+
+    /// <inheritdoc />
+    public async Task ClearRunFailureAsync(OctoObjectId rollupRtId)
+    {
+        var session = await _tenantRepository.GetSessionAsync();
+        var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtRollupArchive>(session, rollupRtId)
+            ?? throw new ArchiveNotFoundException(rollupRtId);
+
+        entity.LastRunError = null;
+        entity.LastRunErrorAt = null;
+        entity.ConsecutiveRunFailures = null;
+        await _tenantRepository.UpdateOneRtEntityByIdAsync<RtRollupArchive>(session, rollupRtId, entity);
+    }
+
+    /// <inheritdoc />
     public async IAsyncEnumerable<RollupArchiveSnapshot> EnumerateAsync()
     {
         var session = await _tenantRepository.GetSessionAsync();
@@ -423,6 +449,7 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             // AB#5157: set only when both storage forms disagree — Sources stays authoritative so
             // enumeration never throws; activation rejects the flagged entity.
             ConflictingSourceArchiveRtId = conflictingSourceArchiveRtId,
+            ConsecutiveRunFailures = entity.ConsecutiveRunFailures ?? 0,
             BucketAlignment = bucketAlignment,
             // AB#4772: flags entities lacking the dehydrated aggregate-column cache (ImportRt
             // seeds) so the orchestrator tick / lifecycle can heal via

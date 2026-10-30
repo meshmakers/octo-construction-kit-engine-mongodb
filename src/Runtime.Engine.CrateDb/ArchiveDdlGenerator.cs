@@ -80,7 +80,7 @@ internal static class ArchiveDdlGenerator
         }
 
         var seenColumnNames = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (name, _) in StandardColumns)
+        foreach (var (name, _) in StandardColumns.Concat(ArchiveRowOriginColumns.Columns))
         {
             seenColumnNames.Add(name);
         }
@@ -88,7 +88,8 @@ internal static class ArchiveDdlGenerator
         var sb = new StringBuilder();
         sb.Append("CREATE TABLE IF NOT EXISTS ").Append(qualifiedTableName).Append(" (");
 
-        foreach (var (name, definition) in StandardColumns)
+        // AB#5356: every raw row records its origin.
+        foreach (var (name, definition) in StandardColumns.Concat(ArchiveRowOriginColumns.Columns))
         {
             sb.Append(' ').Append('"').Append(name).Append("\" ").Append(definition).Append(',');
         }
@@ -171,6 +172,15 @@ internal static class ArchiveDdlGenerator
             sb.Append(" \"").Append(Constants.Generation).Append("\" BIGINT NOT NULL DEFAULT 0,");
             seenColumnNames.Add(Constants.Generation);
         }
+        else
+        {
+            // AB#5356: a time-range row records its origin; a rollup row is derived and has none.
+            foreach (var (name, definition) in ArchiveRowOriginColumns.Columns)
+            {
+                sb.Append(" \"").Append(name).Append("\" ").Append(definition).Append(',');
+                seenColumnNames.Add(name);
+            }
+        }
 
         foreach (var col in columns)
         {
@@ -184,6 +194,19 @@ internal static class ArchiveDdlGenerator
 
             AppendColumn(sb, columnName, col);
             sb.Append(',');
+        }
+
+        if (includeGeneration)
+        {
+            // AB#7727: every rollup row reports its manual values. After the user columns, because a rollup
+            // from before the reservation may hold a column of that name, which then stays what it is.
+            foreach (var (name, definition) in ArchiveRowOriginColumns.RollupColumns)
+            {
+                if (seenColumnNames.Add(name))
+                {
+                    sb.Append(" \"").Append(name).Append("\" ").Append(definition).Append(',');
+                }
+            }
         }
 
         var generationPkSuffix = includeGeneration ? $", \"{Constants.Generation}\"" : string.Empty;

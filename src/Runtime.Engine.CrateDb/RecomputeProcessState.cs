@@ -48,6 +48,13 @@ internal sealed class RecomputeProcessState
     /// <summary>Rollups whose pending-sweep record table this process has ensured (AB#6968).</summary>
     public ConcurrentDictionary<string, bool> EnsuredSweepTables { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Tables this process has found or made to carry their platform columns: the row origin columns of a raw
+    /// or time-range table (AB#5356), the manual columns of a rollup table (AB#7727). So the callers check
+    /// <c>information_schema</c> once per table and process, not per write or bucket.
+    /// </summary>
+    public ConcurrentDictionary<string, bool> EnsuredOriginColumns { get; } = new(StringComparer.Ordinal);
+
     /// <summary>Rollups whose pointer entries were all checked for dead rows by this process.</summary>
     public ConcurrentDictionary<string, bool> ReclaimPassDone { get; } = new(StringComparer.Ordinal);
 
@@ -63,6 +70,7 @@ internal sealed class RecomputeProcessState
         StagingTables.TryRemove(qualifiedLiveTable, out _);
         EnsuredGenMaps.TryRemove(qualifiedLiveTable, out _);
         EnsuredSweepTables.TryRemove(qualifiedLiveTable, out _);
+        EnsuredOriginColumns.TryRemove(qualifiedLiveTable, out _);
         ReclaimPassDone.TryRemove(qualifiedLiveTable, out _);
         PendingReclaims.TryRemove(qualifiedLiveTable, out _);
     }

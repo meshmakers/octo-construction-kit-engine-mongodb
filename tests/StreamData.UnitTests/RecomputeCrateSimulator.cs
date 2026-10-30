@@ -1,3 +1,4 @@
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -201,6 +202,17 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
     {
         cancellationToken.ThrowIfCancellationRequested();
         await Task.CompletedTask;
+        if (query.Contains("FROM information_schema.columns", StringComparison.Ordinal))
+        {
+            // The tables of the simulation carry their platform columns.
+            foreach (var name in ArchiveRowOriginColumns.Names.Concat(ArchiveRowOriginFields.RollupFields))
+            {
+                yield return new Dictionary<string, object?> { ["column_name"] = name };
+            }
+
+            yield break;
+        }
+
         if (query.Contains("FROM information_schema.tables", StringComparison.Ordinal))
         {
             Calls.Add(new Call("read:sweep-tables", query));
@@ -253,15 +265,15 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
         }
     }
 
-    public Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
+    public Task<IReadOnlyList<SkippedArchiveRow>> InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
         DataPointDto datapoint, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
         => throw new NotSupportedException();
 
-    public Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
+    public Task<IReadOnlyList<SkippedArchiveRow>> InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
         IEnumerable<DataPointDto> datapoints, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
         => throw new NotSupportedException();
 
-    public Task InsertTimeRangeDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
+    public Task<IReadOnlyList<SkippedArchiveRow>> InsertTimeRangeDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
         IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false,
         IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
         => throw new NotSupportedException();

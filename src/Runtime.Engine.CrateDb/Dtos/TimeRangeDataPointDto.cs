@@ -1,3 +1,4 @@
+using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 
@@ -25,6 +26,21 @@ public class TimeRangeDataPointDto : RtTypeWithAttributes
 
     /// <summary>Optional human-readable name.</summary>
     public string? RtWellKnownName { get; set; }
+
+    /// <summary>
+    /// Whether the row was entered manually or delivered automatically (AB#5356). Written to the
+    /// <c>row_origin</c> column of raw and time-range tables; ignored for rollup tables.
+    /// </summary>
+    public ArchiveRowOrigin Origin { get; set; } = ArchiveRowOrigin.Automated;
+
+    /// <summary>Writer of a manual row (AB#7593); NULL for automated rows.</summary>
+    public string? ManualWrittenBy { get; set; }
+
+    /// <summary>Write time of a manual row (AB#7593); NULL for automated rows.</summary>
+    public DateTime? ManualWrittenAt { get; set; }
+
+    /// <summary>Optional reason of a manual write (AB#7593).</summary>
+    public string? ManualReason { get; set; }
 
     /// <summary>Inclusive window start (UTC).</summary>
     public DateTime From { get; set; }

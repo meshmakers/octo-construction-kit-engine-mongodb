@@ -53,6 +53,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     private readonly TimeSpan _sweepGracePeriod;
     private readonly TimeProvider _clock;
     private readonly RecomputeProcessState _recomputeProcessState;
+    private readonly ArchivePlatformColumnGuard _platformColumns;
     private readonly ICrateCopyClient? _copyClient;
     private StagingCopyRunner? _stagingCopy;
 
@@ -92,6 +93,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // Without a state handed in (a repository built outside the factory) the memos live as long
         // as this repository does.
         _recomputeProcessState = recomputeProcessState ?? new RecomputeProcessState();
+        _platformColumns = new ArchivePlatformColumnGuard(tenantId, databaseClient, managementClient, _recomputeProcessState, logger);
         _recomputeSliceTargetRows = recomputeOptions?.Value.SliceTargetRows ?? CrateRecomputeOptions.DefaultSliceTargetRows;
         // A repository built without options (outside the host's DI) sweeps at once, as it always did; the
         // host's options default to the two hours of CrateRecomputeOptions.DefaultSweepGracePeriod.
@@ -171,9 +173,15 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 qualifiedTable, resolvedColumns.Count, _tenantId, shape);
             await _managementClient.ExecuteDdlAsync(_tenantId, sql);
             await ReconcileDeclaredColumnsAsync(qualifiedTable, snapshot.RtId.ToString(), resolvedColumns, isRollup);
+            if (!isRollup)
+            {
+                await _platformColumns.EnsureOriginColumnsAsync(snapshot.RtId.ToString(), CancellationToken.None);
+            }
 
             if (isRollup)
             {
+                await _platformColumns.EnsureRollupColumnsAsync(snapshot.RtId.ToString(), CancellationToken.None);
+
                 // Created empty at activation so the read path can always issue a plain SELECT against
                 // it (no rows ⇒ no generation predicate ⇒ all steady-state generation-0 rows returned).
                 var genMapTable = GenerationMapSqlBuilder.GenMapTable(_tenantId, snapshot.RtId.ToString());
@@ -189,6 +197,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 qualifiedTable, resolvedColumns.Count, _tenantId);
             await _managementClient.ExecuteDdlAsync(_tenantId, sql);
             await ReconcileDeclaredColumnsAsync(qualifiedTable, snapshot.RtId.ToString(), resolvedColumns, isRollup: false);
+            await _platformColumns.EnsureOriginColumnsAsync(snapshot.RtId.ToString(), CancellationToken.None);
         }
     }
 
@@ -206,7 +215,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             return;
         }
 
-        var existing = await ReadPhysicalColumnNamesAsync(archiveRtId);
+        var existing = await _platformColumns.ReadPhysicalColumnNamesAsync(archiveRtId);
         if (existing.Count == 0)
         {
             // Either the table was just created (then it already has every declared column and the
@@ -234,29 +243,16 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
     }
 
-    /// <summary>
-    /// Reads the physical column names of an archive table from <c>information_schema</c>. An empty
-    /// result means "table not found or not readable" and is treated as "do not reconcile".
-    /// </summary>
-    private async Task<IReadOnlySet<string>> ReadPhysicalColumnNamesAsync(string archiveRtId)
+    /// <inheritdoc />
+    public async Task EnsureRollupPlatformColumnsAsync(OctoObjectId rollupRtId, CancellationToken cancellationToken)
     {
-        var schemaName = TenantSchema.SchemaName(_tenantId);
-        var tableName = "archive_" + archiveRtId;
-        var query =
-            "SELECT column_name FROM information_schema.columns " +
-            $"WHERE table_schema = '{schemaName.Replace("'", "''")}' " +
-            $"AND table_name = '{tableName.Replace("'", "''")}'";
-
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, query))
+        // A restored tenant's tables are being loaded and repaired; the columns follow once it is reconciled.
+        if (await ReconcileMarker.IsPendingAsync(cancellationToken))
         {
-            if (row.TryGetValue("column_name", out var value) && value is string name)
-            {
-                names.Add(name);
-            }
+            return;
         }
 
-        return names;
+        await _platformColumns.EnsureRollupColumnsAsync(rollupRtId.ToString(), cancellationToken);
     }
 
     /// <summary>
@@ -356,46 +352,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         await ArchiveTableDrop.DropAsync(_managementClient, _tenantId, archiveRtId.ToString(), _recomputeProcessState);
     }
 
-    public async Task InsertAsync(OctoObjectId archiveRtId, StreamDataPoint datapoint)
-    {
-        var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
+    public Task<StreamDataWriteResult> InsertAsync(OctoObjectId archiveRtId, StreamDataPoint datapoint)
+        => InsertAsync(archiveRtId, [datapoint]);
 
-        // See the bulk overload for the rationale; per-archive tables only accept rows of the
-        // archive's own TargetCkTypeId.
-        if (datapoint.CkTypeId != snapshot.TargetCkTypeId)
-        {
-            _logger.LogDebug(
-                "Archive {ArchiveRtId} (target {TargetCkTypeId}): skipped 1 datapoint with mismatched CkTypeId {ActualCkTypeId}",
-                archiveRtId, snapshot.TargetCkTypeId, datapoint.CkTypeId);
-            return;
-        }
-
-        using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.insert");
-        activity?.SetTag("octo.tenant.id", _tenantId);
-        activity?.SetTag("streamdata.archive.rtid", archiveRtId.ToString());
-
-        var (qualifiedTable, userColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
-
-        var sw = Stopwatch.StartNew();
-        var computedPlan = BuildComputedPlan(snapshot);
-        var dto = MapToDataPointDto(datapoint, computedPlan);
-        await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dto,
-            ResolveConflictPrecedence(snapshot));
-        sw.Stop();
-
-        CrateDbDiagnostics.InsertDurationMs.Record(sw.Elapsed.TotalMilliseconds,
-            new("octo.tenant.id", _tenantId),
-            new("archive", archiveRtId.ToString()),
-            new("batch_size_bucket", CrateDbDiagnostics.BatchSizeBucket(1)));
-        CrateDbDiagnostics.InsertedPoints.Add(1,
-            new("octo.tenant.id", _tenantId),
-            new("archive", archiveRtId.ToString()));
-
-        await DetectAndRecordRetroactiveWriteAsync(
-            snapshot, new[] { datapoint.Timestamp }, RecomputeChangeSource.Pipeline);
-    }
-
-    public async Task InsertAsync(OctoObjectId archiveRtId, IEnumerable<StreamDataPoint> datapoints)
+    public async Task<StreamDataWriteResult> InsertAsync(OctoObjectId archiveRtId, IEnumerable<StreamDataPoint> datapoints)
     {
         var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
 
@@ -416,9 +376,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 "Archive {ArchiveRtId} (target {TargetCkTypeId}): skipped {Skipped} of {Total} datapoints with mismatched CkTypeId",
                 archiveRtId, snapshot.TargetCkTypeId, skipped, materialised.Count);
         }
+
+        // AB#7598: the dropped rows are part of the answer, not a silent loss.
+        var typeMismatches = materialised.Where(p => p.CkTypeId != snapshot.TargetCkTypeId)
+            .Select(p => new StreamDataSkippedRow(p.RtId, p.Timestamp, null, p.Origin, StreamDataSkipReason.CkTypeMismatch))
+            .ToList();
         if (filtered.Count == 0)
         {
-            return;
+            return new StreamDataWriteResult(0, typeMismatches);
         }
 
         using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.insert");
@@ -427,25 +392,34 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         activity?.SetTag("streamdata.batch_size", filtered.Count);
 
         var (qualifiedTable, userColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
+        await _platformColumns.EnsureOriginColumnsAsync(archiveRtId.ToString(), CancellationToken.None);
 
         var sw = Stopwatch.StartNew();
         var computedPlan = BuildComputedPlan(snapshot);
-        var dtos = filtered.Select(p => MapToDataPointDto(p, computedPlan));
-        await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
-            ResolveConflictPrecedence(snapshot));
+        var writtenAt = _clock.GetUtcNow().UtcDateTime;
+        var dtos = filtered.Select(p => MapToDataPointDto(p, computedPlan, writtenAt)).ToList();
+        var notStored = await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
+            ResolveConflictPrecedence(snapshot)) ?? [];
+        await RefreshAfterManualWriteAsync(qualifiedTable, filtered.Select(p => p.Origin));
         sw.Stop();
+        var result = BuildWriteResult(filtered.Count, typeMismatches, notStored,
+            i => new StreamDataSkippedRow(filtered[i].RtId, filtered[i].Timestamp, null, filtered[i].Origin, default));
+        var notStoredIndexes = notStored.Select(n => n.Index).ToHashSet();
+        var stored = filtered.Where((_, i) => !notStoredIndexes.Contains(i)).ToList();
 
         var bucket = CrateDbDiagnostics.BatchSizeBucket(filtered.Count);
         CrateDbDiagnostics.InsertDurationMs.Record(sw.Elapsed.TotalMilliseconds,
             new("octo.tenant.id", _tenantId),
             new("archive", archiveRtId.ToString()),
             new("batch_size_bucket", bucket));
-        CrateDbDiagnostics.InsertedPoints.Add(filtered.Count,
+        CrateDbDiagnostics.InsertedPoints.Add(result.Stored,
             new("octo.tenant.id", _tenantId),
             new("archive", archiveRtId.ToString()));
 
+        // A row the guard kept the stored values for changed nothing a rollup has to know about.
         await DetectAndRecordRetroactiveWriteAsync(
-            snapshot, filtered.Select(p => p.Timestamp), RecomputeChangeSource.Pipeline);
+            snapshot, stored.Select(p => (p.Timestamp, p.Origin)), RecomputeChangeSource.Pipeline);
+        return ThrowIfManualRowsNotStored(archiveRtId, result);
     }
 
     /// <summary>
@@ -464,13 +438,51 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// snapshot, where "write what I give you" is the intent — silently dropping restored rows for
     /// looking worse than what is already there would be a data-loss trap.
     /// </para>
+    /// <para>
+    /// AB#7656: a manual correction wins and stays protected by default. Raw and time-range archives rank by
+    /// <c>$Origin</c> first when the archive does not name it — also without any configured key, then the guard is
+    /// <c>$Origin</c> alone and automated writes keep last-write-wins between them. An archive that names
+    /// <c>$Origin</c> gets it where the author put it (keys before it decide first), and
+    /// <see cref="ConflictKeyOrder.Ignore" /> on it opts the archive out of ranking by origin: the key is dropped,
+    /// and without other keys the archive has no guard at all. Rollup archives are computed, carry no origin and
+    /// are unchanged.
+    /// </para>
     /// </remarks>
     private static IReadOnlyList<ArchiveConflictKey>? ResolveConflictPrecedence(ArchiveSnapshot snapshot)
-        => snapshot.ConflictPrecedence.Count == 0
-            ? null   // not configured is an absence, not an empty list — the client reads it as "no guard"
-            : snapshot.ConflictPrecedence
-                .Select(k => new ArchiveConflictKey(ColumnNameMapper.PathToColumnName(k.Column), k.Order))
-                .ToList();
+    {
+        var configured = snapshot.ConflictPrecedence;
+        if (snapshot.RollupAggregations is not null)
+        {
+            return configured.Count == 0
+                ? null   // not configured is an absence, not an empty list — the client reads it as "no guard"
+                : configured.Select(MapConflictKey).ToList();
+        }
+
+        var originKeys = configured.Count(k => k.IsOrigin);
+        if (originKeys > 1)
+        {
+            throw new InvalidOperationException(
+                $"Archive '{snapshot.RtId}': the conflict precedence names '{ArchiveConflictKey.OriginKey}' {originKeys} times. " +
+                "Name it once.");
+        }
+
+        var keys = new List<ArchiveConflictKey>(configured.Count + 1);
+        if (originKeys == 0)
+        {
+            keys.Add(new ArchiveConflictKey(ArchiveConflictKey.OriginKey, ConflictKeyOrder.HigherWins));
+        }
+
+        // Ignore on the origin key is the opt-out: the key takes no part in the guard.
+        keys.AddRange(configured
+            .Where(k => !(k.IsOrigin && k.Order == ConflictKeyOrder.Ignore))
+            .Select(MapConflictKey));
+        return keys.Count == 0 ? null : keys;
+    }
+
+    private static ArchiveConflictKey MapConflictKey(ArchiveConflictKey key)
+        => key.IsOrigin
+            ? new ArchiveConflictKey(ArchiveConflictKey.OriginKey, key.Order)   // not a column; the guard ranks by row_origin
+            : new ArchiveConflictKey(ColumnNameMapper.PathToColumnName(key.Column), key.Order);
 
     /// <summary>
     /// Computes the qualified per-archive table name and the camelCase user-column list from the
@@ -508,7 +520,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         return (qualifiedTable, userColumnNames);
     }
 
-    public async Task InsertTimeRangeAsync(
+    public async Task<StreamDataWriteResult> InsertTimeRangeAsync(
         OctoObjectId archiveRtId,
         IEnumerable<TimeRangeStreamDataPoint> datapoints,
         CancellationToken cancellationToken = default)
@@ -527,6 +539,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var materialised = datapoints as IReadOnlyList<TimeRangeStreamDataPoint> ?? datapoints.ToList();
 
+        // A value that does not fit its column refuses the whole batch with the point, the column and the
+        // expected type, before anything is written; CrateDB would otherwise refuse the statement with an
+        // unexplained error. Enum names become their keys, as on the pipeline write path.
+        materialised = ArchiveWriteValueValidator.Normalize(_ckCacheService, _tenantId, snapshot, materialised,
+            FlattenRecordValues);
+
         // Same CkTypeId-binding rule as raw archive inserts: each per-archive table holds one CkType.
         var filtered = materialised.Where(p => p.CkTypeId == snapshot.TargetCkTypeId).ToList();
         var skipped = materialised.Count - filtered.Count;
@@ -536,9 +554,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 "Time-range archive {ArchiveRtId} (target {TargetCkTypeId}): skipped {Skipped} of {Total} datapoints with mismatched CkTypeId",
                 archiveRtId, snapshot.TargetCkTypeId, skipped, materialised.Count);
         }
+
+        var typeMismatches = materialised.Where(p => p.CkTypeId != snapshot.TargetCkTypeId)
+            .Select(p => new StreamDataSkippedRow(p.RtId, p.From, p.To, p.Origin, StreamDataSkipReason.CkTypeMismatch))
+            .ToList();
         if (filtered.Count == 0)
         {
-            return;
+            return new StreamDataWriteResult(0, typeMismatches);
         }
 
         // Validate windows up front so an entire batch is rejected (consistent with raw bulk insert
@@ -559,31 +581,90 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         activity?.SetTag("streamdata.batch_size", filtered.Count);
 
         var (qualifiedTable, userColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
+        await _platformColumns.EnsureOriginColumnsAsync(archiveRtId.ToString(), CancellationToken.None);
 
         var sw = Stopwatch.StartNew();
         var computedPlan = BuildComputedPlan(snapshot);
-        var dtos = filtered.Select(p => MapToTimeRangeDataPointDto(p, computedPlan));
-        await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
-            conflictPrecedence: ResolveConflictPrecedence(snapshot));
+        var writtenAt = _clock.GetUtcNow().UtcDateTime;
+        var dtos = filtered.Select(p => MapToTimeRangeDataPointDto(p, computedPlan, writtenAt)).ToList();
+        var notStored = await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
+            conflictPrecedence: ResolveConflictPrecedence(snapshot)) ?? [];
+        await RefreshAfterManualWriteAsync(qualifiedTable, filtered.Select(p => p.Origin));
         sw.Stop();
+        var result = BuildWriteResult(filtered.Count, typeMismatches, notStored,
+            i => new StreamDataSkippedRow(filtered[i].RtId, filtered[i].From, filtered[i].To, filtered[i].Origin, default));
+        var notStoredIndexes = notStored.Select(n => n.Index).ToHashSet();
+        var stored = filtered.Where((_, i) => !notStoredIndexes.Contains(i)).ToList();
 
         var bucket = CrateDbDiagnostics.BatchSizeBucket(filtered.Count);
         CrateDbDiagnostics.InsertDurationMs.Record(sw.Elapsed.TotalMilliseconds,
             new("octo.tenant.id", _tenantId),
             new("archive", archiveRtId.ToString()),
             new("batch_size_bucket", bucket));
-        CrateDbDiagnostics.InsertedPoints.Add(filtered.Count,
+        CrateDbDiagnostics.InsertedPoints.Add(result.Stored,
             new("octo.tenant.id", _tenantId),
             new("archive", archiveRtId.ToString()));
 
-        // Time-range rows are keyed by their window start; a late window correction is retroactive.
+        // Time-range rows are keyed by their window start; a late window correction is retroactive. A row the
+        // guard kept the stored values for changed nothing a rollup has to know about.
         await DetectAndRecordRetroactiveWriteAsync(
-            snapshot, filtered.Select(p => p.From), RecomputeChangeSource.Pipeline);
+            snapshot, stored.Select(p => (p.From, p.Origin)), RecomputeChangeSource.Pipeline);
+        return ThrowIfManualRowsNotStored(archiveRtId, result);
+    }
+
+    /// <summary>
+    /// Makes a write that contains manual rows visible to the next read. CrateDB applies inserts to the search
+    /// path asynchronously (about a second), so a person who saves a correction and reloads would otherwise see
+    /// the old value. Automated batches keep the asynchronous refresh: they are large and frequent, and nobody
+    /// reads them back at once.
+    /// </summary>
+    private async Task RefreshAfterManualWriteAsync(string qualifiedTable, IEnumerable<ArchiveRowOrigin> origins)
+    {
+        if (origins.Any(o => o == ArchiveRowOrigin.Manual))
+        {
+            await _databaseClient.RefreshArchiveTableAsync(_tenantId, qualifiedTable);
+        }
+    }
+
+    /// <summary>
+    /// The write result of one insert (AB#7598): the written rows minus those the conflict guard kept the stored
+    /// values for, plus the rows dropped for their CK type. <paramref name="describe" /> turns an index of the
+    /// written rows into its skipped-row record (the reason is taken from the guard's answer).
+    /// </summary>
+    private static StreamDataWriteResult BuildWriteResult(int written, IReadOnlyList<StreamDataSkippedRow> typeMismatches,
+        IReadOnlyList<Client.SkippedArchiveRow> notStored, Func<int, StreamDataSkippedRow> describe)
+    {
+        var skipped = new List<StreamDataSkippedRow>(typeMismatches);
+        skipped.AddRange(notStored.Select(n => describe(n.Index) with { Reason = n.Reason }));
+        return new StreamDataWriteResult(written - notStored.Count, skipped);
+    }
+
+    /// <summary>
+    /// A manual row is a person's correction; a write that could not store it must not look like a success
+    /// (AB#7598). Automated rows that lose are a normal outcome and only reported.
+    /// </summary>
+    private StreamDataWriteResult ThrowIfManualRowsNotStored(OctoObjectId archiveRtId, StreamDataWriteResult result)
+    {
+        if (result.Skipped.Any(s => s.Origin == ArchiveRowOrigin.Manual && s.Reason != StreamDataSkipReason.CkTypeMismatch))
+        {
+            throw new ManualStreamDataNotAppliedException(archiveRtId, result);
+        }
+
+        if (result.SkippedCount > 0)
+        {
+            _logger.LogDebug(
+                "Archive {ArchiveRtId}: stored {Stored} row(s), {Skipped} not stored ({Reasons}).",
+                archiveRtId, result.Stored, result.SkippedCount,
+                string.Join(", ", result.SkippedByReason.Select(kv => $"{kv.Key} {kv.Value}")));
+        }
+
+        return result;
     }
 
     private Dtos.TimeRangeDataPointDto MapToTimeRangeDataPointDto(TimeRangeStreamDataPoint point,
-        IReadOnlyList<ComputedColumnPlanItem> computedPlan)
+        IReadOnlyList<ComputedColumnPlanItem> computedPlan, DateTime writtenAt)
     {
+        RequireManualWriter(point.Origin, point.ManualWrittenBy, point.RtId);
         // Normalise to UTC: the storage column is TIMESTAMP WITH TIME ZONE so Npgsql writes the
         // offset; downstream queries always read UTC. Matches MapToDataPointDto's behaviour for
         // single-timestamp archives.
@@ -605,7 +686,26 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             RtWellKnownName = point.RtWellKnownName,
             From = point.From.ToUniversalTime(),
             To = point.To.ToUniversalTime(),
+            Origin = point.Origin,
+            ManualWrittenBy = point.ManualWrittenBy,
+            ManualWrittenAt = writtenAt,
+            ManualReason = point.ManualReason,
         };
+    }
+
+    /// <summary>
+    /// A manual row must name who wrote it (AB#7593). The writer is set by the platform from the
+    /// authenticated caller, so a manual point without one is a programming error of the writer, not a
+    /// user mistake; refusing it keeps an unattributed manual value out of the archive.
+    /// </summary>
+    private static void RequireManualWriter(ArchiveRowOrigin origin, string? writtenBy, OctoObjectId rtId)
+    {
+        if (origin == ArchiveRowOrigin.Manual && string.IsNullOrWhiteSpace(writtenBy))
+        {
+            throw new ArgumentException(
+                $"Manual stream data point for entity '{rtId}' has no writer. A manual write records who wrote it; " +
+                "the writer is set by the platform from the authenticated caller.");
+        }
     }
 
     /// <summary>
@@ -1744,6 +1844,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // Rollup tables key their PK with `generation` (AB#4184 Phase 6); the windowed insert must
         // name it in the conflict target and write the always-live generation 0 (AB#4773).
         var generationTracked = snapshot.RollupAggregations is not null;
+        await _platformColumns.EnsureAsync(snapshot, CancellationToken.None);
+        if (generationTracked)
+        {
+            // The platform columns of a rollup row are data of the export like its aggregates (AB#7727); a dump
+            // from before they existed imports with NULL, which reads as "no manual values". They travel with
+            // the user columns of the insert.
+            userColumnNames.AddRange(ArchiveRowOriginFields.RollupFields.Except(userColumnNames));
+        }
 
         using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.importRows");
         activity?.SetTag("octo.tenant.id", _tenantId);
@@ -1821,6 +1929,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             RtWellKnownName = row.TryGetValue(Constants.RtWellKnownName, out var wkn) ? wkn as string : null,
             RtCreationDateTime = OptionalUtc(row, Constants.RtCreationDateTime),
             RtChangedDateTime = OptionalUtc(row, Constants.RtChangedDateTime),
+            // An export taken before AB#5356 has no origin column: its rows were all delivered automatically.
+            Origin = ArchiveRowOriginColumns.FromStoredValue(row.TryGetValue(Constants.RowOrigin, out var origin) ? origin : null),
+            ManualWrittenBy = row.TryGetValue(Constants.ManualWrittenBy, out var writtenBy) ? writtenBy as string : null,
+            ManualWrittenAt = AsUtcDateTime(row.TryGetValue(Constants.ManualWrittenAt, out var writtenAt) ? writtenAt : null),
+            ManualReason = row.TryGetValue(Constants.ManualReason, out var reason) ? reason as string : null,
         };
     }
 
@@ -1833,7 +1946,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var attributes = new Dictionary<string, object?>(userColumnNames.Count, StringComparer.Ordinal);
         foreach (var col in userColumnNames)
         {
-            attributes[col] = row.TryGetValue(col, out var v) ? v : null;
+            var value = row.TryGetValue(col, out var v) ? v : null;
+            attributes[col] = col == Constants.LastManualAt ? AsUtcDateTime(value) : value;
         }
 
         return new Dtos.TimeRangeDataPointDto(attributes)
@@ -1843,6 +1957,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             RtWellKnownName = row.TryGetValue(Constants.RtWellKnownName, out var wkn) ? wkn as string : null,
             From = RequireUtc(row, Constants.WindowStart, rowIndex),
             To = RequireUtc(row, Constants.WindowEnd, rowIndex),
+            Origin = ArchiveRowOriginColumns.FromStoredValue(row.TryGetValue(Constants.RowOrigin, out var origin) ? origin : null),
+            ManualWrittenBy = row.TryGetValue(Constants.ManualWrittenBy, out var writtenBy) ? writtenBy as string : null,
+            ManualWrittenAt = AsUtcDateTime(row.TryGetValue(Constants.ManualWrittenAt, out var writtenAt) ? writtenAt : null),
+            ManualReason = row.TryGetValue(Constants.ManualReason, out var reason) ? reason as string : null,
         };
     }
 
@@ -1903,6 +2021,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var sourceTable = TenantSchema.QualifiedArchiveTable(_tenantId, sourceArchive.RtId.ToString());
         var targetTable = TenantSchema.QualifiedArchiveTable(_tenantId, rollup.RtId.ToString());
 
+        // The statement below names the origin of the source rows and the manual columns of both tables
+        // (AB#7727). A source archive that was neither activated nor written since the platform update has
+        // not got them yet; without this the rollup would fail on it.
+        await _platformColumns.EnsureAsync(sourceArchive, cancellationToken);
+        await _platformColumns.EnsureRollupColumnsAsync(rollup.RtId.ToString(), cancellationToken);
+
         // Per-source resolution (AB#5157 §3): the orchestrator picks the source for this bucket;
         // bind the rollup's logical specs to THAT source's physical columns (a rollup source needs
         // its own rollup snapshot for the child-aggregation rule).
@@ -1924,7 +2048,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 bucketEnd,
                 sourceArchive.UsesWindowedStorage,
                 carryLookback: rollup.CarryLookback,
-                sourceGenerationRanges: sourceGenerationRanges);
+                sourceGenerationRanges: sourceGenerationRanges,
+                sourceIsRollup: sourceArchive.RollupAggregations is not null);
 
             _logger.LogDebug(
                 "Rollup aggregation SQL for {RollupRtId} bucket [{BucketStart:O}, {BucketEnd:O}): {Sql}",
@@ -2196,7 +2321,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// enumeration so the common forward-ingest path stays untouched.
     /// </summary>
     private async Task DetectAndRecordRetroactiveWriteAsync(
-        ArchiveSnapshot snapshot, IEnumerable<DateTime> timestamps, RecomputeChangeSource source)
+        ArchiveSnapshot snapshot, IEnumerable<(DateTime Timestamp, ArchiveRowOrigin Origin)> rows,
+        RecomputeChangeSource source)
     {
         if (_recomputeStateStore is null || _rollupArchiveStore is null)
         {
@@ -2205,6 +2331,24 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var archiveRtId = snapshot.RtId;
         var consumedWatermark = await GetConsumedWatermarkAsync(archiveRtId);
+        var materialised = rows as IReadOnlyCollection<(DateTime Timestamp, ArchiveRowOrigin Origin)> ?? rows.ToList();
+
+        // AB#7594: a manual write is a person correcting a known window. Its dependent rollup buckets are
+        // recomputed whatever the automatic reach cap says — a correction a year back must reach the yearly
+        // total — and one window per cluster of corrected windows, so two corrections months apart do not
+        // drag everything in between into the recompute.
+        foreach (var manualWindow in RetroactiveWriteDetector.BuildManualDirtyWindows(
+                     consumedWatermark,
+                     materialised.Where(r => r.Origin == ArchiveRowOrigin.Manual).Select(r => r.Timestamp),
+                     DateTime.UtcNow))
+        {
+            await _recomputeStateStore.AppendDirtyWindowAsync(archiveRtId, manualWindow);
+            _logger.LogInformation(
+                "Archive {ArchiveRtId}: manual write over [{Start:O}, {End:O}); dirty window recorded for recompute.",
+                archiveRtId, manualWindow.WindowStart, manualWindow.WindowEnd);
+        }
+
+        var timestamps = materialised.Where(r => r.Origin != ArchiveRowOrigin.Manual).Select(r => r.Timestamp);
         var effectiveReach = ResolveEffectiveRetroReach(snapshot);
         if (RetroactiveWriteDetector.TryBuildDirtyWindow(
                 consumedWatermark, timestamps, source, DateTime.UtcNow, effectiveReach,
@@ -2998,6 +3142,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         AggregationFunctionDto targetFunc,
         CancellationToken cancellationToken)
     {
+        // A platform column of the rollup itself: no spec declares it, there is no chain to walk (AB#7727).
+        if (RollupQueryAggregationResolver.ResolveManualCount(attributePath, targetFunc) is { } manualCount)
+        {
+            return manualCount;
+        }
+
         // Always try the cascade walker first when we have access to the rollup store — it
         // also handles the 1-level case correctly.
         if (_rollupArchiveStore is not null)
@@ -3590,8 +3740,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     private DataPointDto MapToDataPointDto(StreamDataPoint point,
-        IReadOnlyList<ComputedColumnPlanItem> computedPlan)
+        IReadOnlyList<ComputedColumnPlanItem> computedPlan, DateTime writtenAt)
     {
+        RequireManualWriter(point.Origin, point.ManualWrittenBy, point.RtId);
         // Re-key attributes from raw CK paths (e.g. "sensor.reading.value") to the camelCase
         // column names that exist on the per-archive table — the data plane no longer carries a
         // dynamic `data` blob, so the dictionary must align with the table schema directly.
@@ -3608,7 +3759,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             Timestamp = point.Timestamp,
             RtWellKnownName = point.RtWellKnownName,
             RtCreationDateTime = point.RtCreationDateTime ?? default,
-            RtChangedDateTime = point.RtChangedDateTime ?? default
+            RtChangedDateTime = point.RtChangedDateTime ?? default,
+            Origin = point.Origin,
+            ManualWrittenBy = point.ManualWrittenBy,
+            ManualWrittenAt = writtenAt,
+            ManualReason = point.ManualReason
         };
     }
 

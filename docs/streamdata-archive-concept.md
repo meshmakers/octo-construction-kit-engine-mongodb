@@ -109,7 +109,7 @@ ckType:
 - **Failed** — activation DDL failed; retry via `activate` again.
 - **Delete** — orthogonal: drops the table and soft-archives the `CkArchive` RtEntity.
 
-Schema is immutable while in Activated/Disabled/Failed (after first successful activation). Updating `targetCkTypeId` or `columns` after activation must be rejected by validation hook on `CkArchive` updates.
+What the table cannot follow is refused while Activated, see §10 (AB#7872): the target type, removing a column or changing its type, and the definition of a rollup.
 
 ---
 
@@ -241,10 +241,96 @@ The **last** key admits equality, which is what makes re-delivering an identical
 
 Two constraints:
 
-- Every key must be one of the archive's own user columns. The guard reads `EXCLUDED."k"`, so a name that is not in the INSERT column list would produce SQL that fails on every single write; `BuildConflictGuard` refuses to build it and names the valid columns instead.
+- Every key must be one of the archive's own user columns, except the reserved key `$Origin` (see *Row origin* below). The guard reads `EXCLUDED."k"`, so a name that is not in the INSERT column list would produce SQL that fails on every single write; `BuildConflictGuard` refuses to build it and names the valid columns instead.
 - **Ingest paths only.** `ImportRowsAsync` deliberately does not apply the guard: an operator restoring a snapshot must get back what they gave, not a merge against whatever is in the table.
 
 Adopting this on an **already-activated** archive needs the declared/physical column reconciliation described under *Tenant schema lifecycle* — a new precedence key is usually a newly declared column, and until AB#5247 `CREATE TABLE IF NOT EXISTS` meant such a column never reached CrateDB, which turns the guard into SQL that fails on every write.
+
+### Row origin — manual or automated (AB#5356)
+
+Whether a value was entered by a person or delivered by a system is a fact about the **row**, for every archive and independent of the data model. A domain quality code (the metering data quality L1–L3) then only has to say how good a value is, not where it came from — before, `Basic.Energy/DataQuality` carried `Manual` as a "quality", so a correction could not say "estimated, but entered by hand", and with quality as the first precedence key it ranked last and could not replace anything.
+
+Every raw and time-range table carries the platform column `row_origin TEXT`:
+
+| Stored | Meaning |
+|---|---|
+| `automated` | delivered by an adapter, a pipeline, an import — the default; a writer that declares nothing writes this |
+| `manual` | entered or corrected by a person |
+| `NULL` | a row written before the origin was recorded; reads as automated |
+
+A manual row also records who wrote it, when and why (AB#7593):
+
+| Column | Type | Set by |
+|---|---|---|
+| `manual_written_by` | `TEXT` | the platform, from the authenticated caller (`ManualWrittenBy` on the data point, filled by the asset repository from the token and by the pipeline from its execution identity — never from the payload). A manual point without a writer is refused. |
+| `manual_written_at` | `TIMESTAMP WITH TIME ZONE` | the platform clock of the writing repository (`TimeProvider`), one value per write call |
+| `manual_reason` | `TEXT` | the writer, optional, stored as given (a solution may require it on top) |
+
+An automated row carries `NULL` in all three, also when the writer sent values, and a write that replaces a manual row with an automated one clears them together with the values. All four columns are guarded together, so the row always describes the write that won.
+
+The writer declares the origin (`StreamDataPoint.Origin` / `TimeRangeStreamDataPoint.Origin`, enum `ArchiveRowOrigin`). The column is nullable without a DEFAULT and always named in the INSERT (AB#6647). Rollup tables do not carry it: their rows are derived. Tables provisioned before AB#5356 get the column through `ALTER TABLE … ADD COLUMN` — at activation, and on the first write or import of each process (`RecomputeProcessState.EnsuredOriginColumns` remembers the table, so `information_schema` is read once per table and process; a concurrent add by another process is the benign "already has a column" case). Archive export reads the columns like every physical column, the import carries them back (an export taken before AB#5356 imports as automated), and the native dump/restore copies the table as it is. The stream data query API selects them by their physical names (`row_origin`, `manual_written_by`, `manual_written_at`, `manual_reason`) on raw and time-range archives; they are not part of the default projection, so existing queries return the same columns as before. They can be filtered, grouped and sorted on like any column (AB#7616); a stored `NULL` origin reads as `automated` on every read path — projection, field filters, grouping, downsampling and time-weighted aggregation all read `row_origin` as `COALESCE("row_origin", 'automated')` (`ArchiveRowOriginColumns.ColumnRef`), because `ALTER TABLE … ADD COLUMN` does not fill existing rows, not even with a DEFAULT. A consumer counts manual and automated intervals per series in one grouped aggregation, e.g. groupBy `[rtId, DataQuality, row_origin]` with `Sum` and `Count`. Rollup archives have no origin: naming `row_origin` on a rollup is refused with the list of valid columns; a rollup reports its manual values in its own columns (below).
+
+**Ranking by origin — the reserved key `$Origin`.** A manual correction wins and stays protected by default (AB#7656): a raw or time-range archive whose `ConflictPrecedence` does not name `$Origin` ranks by it first — with no precedence at all the guard is `$Origin` alone, so automated writes keep last-write-wins between them. Named explicitly, `$Origin` applies at the position the author gave it (keys before it decide first) with `HigherWins` (manual ranks above automated); `Ignore` is the opt-out — the key takes no part, and an archive with no other key has no guard; `LowerWins`, `Ignore` on a column key and naming `$Origin` twice are refused at activation. The `$` cannot occur in an attribute path, so the key never collides with a user column, and it needs no declared column. Rollup archives are derived, carry no origin and use their precedence as configured. Unlike a column key it does not fall through to the next key when both writes are manual:
+
+| Incoming | Stored | Result |
+|---|---|---|
+| manual | automated (or `NULL`) | the incoming write wins, whatever the following keys say — also against a newer recency key |
+| automated | manual | the stored value stays — **a manual value is permanent** |
+| manual | manual | the incoming write wins by arrival: a wrong manual value is fixed with another manual write; no quality, recency column or `manual_written_at` is compared |
+| automated | automated | the following keys decide, exactly as without `$Origin` |
+
+Rendered for keys `$Origin, k2 … kn`:
+
+```
+(EXCLUDED."row_origin" = 'manual' OR (NOT COALESCE("row_origin", 'automated') = 'manual' AND <guard of k2 … kn, or TRUE>))
+```
+
+The origin column itself is guarded like every value, so a losing write leaves the stored origin alone. Between automated writes an archive without configured keys still behaves as before: the last write wins, and the row carries the origin of the write that won. The replaced value is not kept; rows stay single-valued. The energy community measurements archive ranks `[$Origin, DataQuality LowerWins, SourceDocumentDate HigherWins]`.
+
+### Rollups report their manual values (AB#7727)
+
+A rollup row has no origin of its own: it is derived. Whether a value is manual still belongs to every aggregated value, so every rollup reports it as platform columns, without a change to its definition or a blueprint (this revises the statement of AB#7616 that rollups carry no origin information):
+
+| Column | Type | Value in a bucket |
+|---|---|---|
+| `manual_count` | `BIGINT` | number of manually entered source values; `NULL` reads as 0 |
+| `last_manual_at` | `TIMESTAMP WITH TIME ZONE` | write time of the latest manual entry; `NULL` without one |
+
+They are selectable by these names, also in filters and aggregations, not part of the default projection, and no user column can take them (`ArchiveReservedColumnNameException`, generated aggregation names included: `Count` over an attribute `Manual` would be `manual_count`). `row_origin` and the other origin fields stay refused on a rollup.
+
+**Aggregation.** Over a raw or time-range source a bucket counts its rows with `row_origin = 'manual'` and takes the maximum of `manual_written_at`; a row written before origin tracking holds `NULL` and counts as delivered. A rollup source chains: `SUM("manual_count")` and `MAX("last_manual_at")`. A window is one row (upsert key), so a correction replaces the delivered row and counts once, also after a second correction or a protected redelivery. `SUM` and `MAX` ignore `NULL`, so a parent bucket over filled and empty source rows is right, and stays right when one source window is recomputed. A multi-source rollup reads each bucket the way its source has it.
+
+**Rollout.** The columns are nullable without a DEFAULT and always named by the statement (AB#6647). `ArchivePlatformColumnGuard` adds them with `ALTER TABLE … ADD COLUMN`, once per table and process, from the orchestrator tick (so a rollup with no due bucket offers them too), at activation and before an aggregation, recompute or import names them; a source table that lacks the origin columns gets those in the same step. Several replicas may race: the loser's "already has a column" is benign. A statement of the previous version keeps running, it does not name the columns, and its rows read as 0. A restored tenant is skipped until it is reconciled.
+
+**Backfill.** A tenant without manual rows needs none: empty reads as 0. A tenant with manual rows gets the values of older buckets from a normal recompute of the affected range. `scripts/rollup-manual-rows-check.sh <cratedb-http-url> <tenant-schema>` (read only) tells which case a tenant is and prints the affected tables and ranges.
+
+**After a correction.** Manual writes reach the rollups through the manual dirty windows (AB#7594), also beyond `MaxRetroactiveReachMs`: the cap applies to automatic windows only, at detection and at propagation. An automated delivery beyond the cap on an archive that opted out with `$Origin Ignore` can replace a manual row without a recompute, like any other value beyond the cap; `manual_count` then stays behind until a manual recompute. `FrozenUntil` stops the forward aggregation only: the bucket of a frozen range keeps what it has (read as 0 if it was never recomputed), but a correction in that range is recomputed like any other, the columns included.
+
+**Cost.** The aggregation adds one `COUNT` and one `MAX` over two more source columns. Measured with `RollupManualColumnsCostMeasurement` (`OCTO_ROLLUP_COST_DAYS=20`) on a single-node test container: 1.92 million source rows of 1000 meters, 0.1 % of them manual, 20 daily buckets: 181 ms without, 290 ms with the two expressions (median of five). That is the aggregation SELECT alone, about 57 ns per source row; the copy, the flip and the sweep of a recompute are unchanged by them apart from two more columns. On the largest local rollup (hourly over 119 million raw rows, 2026-10-30, the SELECT pair below, 168 hourly buckets with 2.27 million source rows, five alternating rounds): 5319 ms without, 5634 ms with the expressions, +5.9 %, about 139 ns per source row; the daily level over 568,338 hourly rows: 58 ms against 60 ms. A local single-node figure, on a tenant whose `row_origin` is entirely `NULL`. To measure on another rollup without writing anything, run the aggregation SELECT of a bucket with and without the two expressions against its source, alternating, and compare the medians:
+
+```sql
+SELECT "rtid", SUM("value") FROM <source> WHERE "window_start" >= <from> AND "window_end" <= <to> GROUP BY "rtid";
+SELECT "rtid", SUM("value"), COUNT(CASE WHEN "row_origin" = 'manual' THEN 1 END), MAX("manual_written_at")
+FROM <source> WHERE "window_start" >= <from> AND "window_end" <= <to> GROUP BY "rtid";
+```
+
+The ladder levels above the first read `SUM`/`MAX` over two numeric columns of a much smaller table. Rollup rows grow by two values; `NULL` columns cost nothing per row.
+
+Tests: `StreamDataOrigin/RollupManualColumnsIntegrationTests` (real CrateDB), `ArchivePlatformColumnGuardTests`, `RollupAggregationPerSourceResolutionTests`, `RollupValidatorTests`, `RecomputeOrchestratorTests`.
+
+### Write result — stored and skipped rows (AB#7598)
+
+`IStreamDataRepository.InsertAsync` / `InsertTimeRangeAsync` return a `StreamDataWriteResult`: `Stored` (rows the database holds after the write: new, won, or an identical re-delivery) and `Skipped` (one `StreamDataSkippedRow` per row not stored: entity, window, declared origin, reason) plus `SkippedByReason`. Reasons:
+
+| Reason | When |
+|---|---|
+| `CkTypeMismatch` | the row's CK type is not the archive's target (was a silent drop before) |
+| `LowerPrecedence` | the conflict precedence ranks the stored row above it |
+| `ManualValueProtected` | the stored row is manual, the write automated, and the guard ranks by `$Origin` (the default) |
+
+**How the count is exact.** A guarded upsert always "updates" the conflicting row (the `CASE` keeps the stored values), so the affected-row count cannot tell a win from a loss. A guarded statement therefore ends with `RETURNING` the row key, the ranking columns and `row_origin`, and `ConflictOutcome.FindSkipped` compares what CrateDB holds afterwards with what was sent: equal in every ranking column (and the origin) ⇔ stored. That is exact because the last key admits equality — a write equal in every key always wins — and a lost write leaves a stored row that differs in the deciding column or in the origin. Timestamps compare at millisecond precision, numbers by value, text ordinally; two rows for one key in one statement are matched one to one. It holds per multi-row statement and across the sub-batches of a large write. An archive **without** precedence sends no `RETURNING` and reports every row of its target type as stored, as before.
+
+Skipped automated rows are a normal outcome and only reported (and not marked dirty for the rollups: they changed nothing). A **manual** row that cannot be stored — possible only when a column key ranks before `$Origin` or the archive ignores the origin — throws `ManualStreamDataNotAppliedException` after the rest of the batch was written; its `Result` says what was stored. The import path (`ImportRowsAsync`) is unguarded and ignores the result.
 
 ### Time semantics
 
@@ -401,7 +487,7 @@ Future extension (not in this iteration): `BulkInsertOptions { ContinueOnError: 
 
 **Time-series queries** — both `StreamDataQuery` and `StreamDataTransientQuery` gain a required `archiveRtId: ID!` argument.
 
-**CkArchive CRUD** — auto-generated from the CkArchive CK type (entity API). No custom resolvers needed. The validation hook (§10) enforces immutability on `update`. `delete` is a soft-delete that triggers `IArchiveLifecycleService.DeleteAsync` (drops the table).
+**CkArchive CRUD** — auto-generated from the CkArchive CK type (entity API). No custom resolvers needed. `ArchiveDefinitionGuard` (§10) refuses what an activated archive cannot apply. `delete` is a soft-delete that triggers `IArchiveLifecycleService.DeleteAsync` (drops the table).
 
 **State transitions** — custom mutations (CRUD cannot express these cleanly):
 
@@ -553,7 +639,7 @@ Tasks are ordered for sequential execution. Each task is self-contained with acc
 #### [x] T6. Archive lifecycle service
 - Implement state machine in `IArchiveLifecycleService` (DB-neutral) with hooks into `IArchiveBackend`.
 - Transitions: Created→Activated (DDL), Activated↔Disabled (status only), *→Failed on activation error, Failed→Activated (retry DDL), Delete (DROP + rtState=Archived).
-- Validation hook on `CkArchive` updates: reject schema changes after activation.
+- `ArchiveDefinitionGuard`: refuse what an activated archive cannot apply (§10).
 - **Acceptance**: unit tests cover all transitions + immutability rejection; integration test full happy-path.
 
 #### [x] T7. Update `IStreamDataRepository` signatures
@@ -632,18 +718,22 @@ The legacy class `SdEntity` is renamed to `StreamDataEntity` to align with the `
 
 ## 10. Validation Hooks (CkArchive immutability)
 
-Schema mutation on an activated archive must be rejected before it reaches storage.
+A definition change the table cannot follow is refused before it reaches storage (AB#7872): the definition of an archive is a plain entity, and without this a rollup stops with only a log line telling.
 
-- **Where**: validation hook on the `CkArchive` RtEntity update path. Implementation choice deferred to the standard CK entity validation pipeline (verify in T6 implementation whether a per-type pre-update hook exists; if not, add one in the lifecycle service via the repository's update path).
-- **What is rejected** when `status ∈ { Activated, Disabled, Failed }`:
-  - any change to `targetCkTypeId`
-  - any change to `columns` (count, order, path, required flag)
-- **What is allowed** in any state:
-  - `status` transitions per the state machine
-  - `rtState` transitions (including soft-delete)
-- **Bootstrapping**: while `status = Created`, the archive is fully editable.
+- **Where**: `ArchiveDefinitionGuard` (engine). Two ways in are checked: the public `ApplyChanges` of the repository (GraphQL, pipelines) and the Upsert import (`ImportRt`, blueprint apply and update; a blueprint update then fails, also with `ContinueOnError`). The stream data stores (computed column lifecycle, watermark, status, run failures) write through `UpdateOneRtEntityById` and do not pass here, CK model migrations neither.
+- **What is refused** while `status = Activated`:
+  - on every archive: a change of `targetCkTypeId`;
+  - on a raw or time-range archive: removing a column, changing the type of a computed column (`ArchiveSchemaImmutableException`). Adding a column stays allowed, the next activation adds it to the table;
+  - on a rollup: `Aggregations`, `BucketSizeMs`, `BucketAlignment`, `ReferenceTimeZone`, the sources (`RollupSchemaImmutableException`).
+- **What stays allowed** in any state: `status` and `rtState` transitions, everything else (`WatermarkLagMs`, `CarryLookbackMs`, `FrozenUntil`, retention, conflict precedence, `Indexed` / `Required` of a column).
+- **Compared is what the write would store** (the comparison of the blueprint preview, `BlueprintEntityComparer`), so a re-apply of an unchanged definition passes in any form: an enum by name or key, an omitted default, a source in the list or the deprecated scalar. `Columns` of a rollup are derived and not compared, and its platform columns are no part of the definition.
+- **Rollout**: `ImportRt` runs in the bot services, a blueprint update in the asset repository; each is guarded once that service runs this engine.
+- **A `Disabled` archive that was activated before is guarded like an `Activated` one**: enabling it again meets the same table, so disable, change, enable would be a way around. `FirstActivatedAt` (runtime state, System.StreamData 1.21.0), written when the archive is activated, tells it from an archive a seed imported as `Disabled`, which has no table and stays editable. An archive activated before that attribute existed gets it at its next status change; until then a disabled rollup is recognised by its watermark, a disabled raw or time-range archive is not.
+- **`Created` and `Failed`** stay editable: removing an offending column is the way out of `Failed`.
 
-Validation errors throw `ArchiveSchemaImmutableException` (see §11) and are surfaced via the standard entity-update error path (GraphQL/REST).
+Both exceptions name the archive and the field and say that the change needs a new archive; GraphQL answers `STREAMDATA_SCHEMA_IMMUTABLE`.
+
+**A rollup that keeps failing** does not change its status: `Failed` would stop its reads over what is a passing problem more often than not, and the next tick retries anyway. The orchestrator writes `LastRunError`, `LastRunErrorAt` and `ConsecutiveRunFailures` (runtime state, System.StreamData 1.20.0) on the entity from the first failed run, an event `Archive.RollupRunFailing` to the event log at the third failed run in a row, and clears the error with the next run that succeeds. A rollup that waits for a disabled source does not fail: it stalls by design.
 
 ### Path validation at activation
 

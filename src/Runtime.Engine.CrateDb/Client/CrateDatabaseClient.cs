@@ -195,10 +195,16 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         }, cancellationToken);
     }
 
-    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
+    public async Task<IReadOnlyList<SkippedArchiveRow>> InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<DataPointDto> datapoints, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
     {
         var d = datapoints.ToArray();
-        if (d.Length == 0) return;
+        if (d.Length == 0) return [];
+
+        // AB#7598: a guarded upsert reports which rows it kept the stored values for (RETURNING, see
+        // ConflictOutcome); an unguarded one stores every row and needs no answer from CrateDB.
+        var guarded = conflictPrecedence is { Count: > 0 };
+        var returning = guarded ? ConflictOutcome.ReturningClause(windowed: false, conflictPrecedence!, includeOrigin: true) : "";
+        var skipped = new List<SkippedArchiveRow>();
 
         // Per-archive tables have a typed schema (one CrateDB column per archive column with the
         // CK-derived primitive type), so the legacy `unnest(@arr,...)` bulk path no longer fits:
@@ -210,8 +216,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // per row — which became the dominant cost when the ConflictPrecedence guard grew every
         // statement to several KB: 10,000 rows took 7.4 s as single-row commands and 0.8 s as
         // multi-row statements (local CrateDB 5.10, octogrid EDA replay, 2026-09-24).
-        var rowsPerStatement = RowsPerStatement(4 + userColumnNames.Count);
-        var fullSql = BuildRawInsertSql(qualifiedTable, userColumnNames, conflictPrecedence, rowsPerStatement);
+        var rowsPerStatement = RowsPerStatement(4 + ArchiveRowOriginColumns.Names.Count + userColumnNames.Count);
+        var fullSql = BuildRawInsertSql(qualifiedTable, userColumnNames, conflictPrecedence, rowsPerStatement) + returning;
 
         // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
         // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
@@ -221,8 +227,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             var end = Math.Min(offset + rowsPerStatement, d.Length);
             var sql = end - start == rowsPerStatement
                 ? fullSql
-                : BuildRawInsertSql(qualifiedTable, userColumnNames, conflictPrecedence, end - start);
-            await _resilience.ExecuteAsync(async _ =>
+                : BuildRawInsertSql(qualifiedTable, userColumnNames, conflictPrecedence, end - start) + returning;
+            var outcome = await _resilience.ExecuteAsync(async _ =>
             {
                 await using var lease = await LeaseConnectionAsync(tenantId);
                 await using var cmd = new NpgsqlCommand(sql, lease.Connection);
@@ -231,9 +237,40 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
                     AddInsertParameters(cmd.Parameters, d[i], userColumnNames);
                 }
 
-                await cmd.ExecuteNonQueryAsync();
+                if (!guarded)
+                {
+                    await cmd.ExecuteNonQueryAsync();
+                    return (IReadOnlyList<SkippedArchiveRow>)[];
+                }
+
+                var returned = await ReadReturnedRowsAsync(cmd);
+                var sent = d[start..end].Select(x => new ConflictOutcome.SentRow(x.RtId?.ToString(), x.CkTypeId?.ToString(),
+                    x.Timestamp, null, x.Attributes ?? new Dictionary<string, object?>(), x.Origin)).ToList();
+                return ConflictOutcome.FindSkipped(sent, returned, conflictPrecedence!, includeOrigin: true, windowed: false);
             });
+            skipped.AddRange(outcome.Select(o => o with { Index = o.Index + start }));
         }
+
+        return skipped;
+    }
+
+    /// <summary>Reads the rows a statement returned (its <c>RETURNING</c> clause) as column → value.</summary>
+    private static async Task<IReadOnlyList<IReadOnlyDictionary<string, object?>>> ReadReturnedRowsAsync(NpgsqlCommand cmd)
+    {
+        var rows = new List<IReadOnlyDictionary<string, object?>>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var row = new Dictionary<string, object?>(reader.FieldCount, StringComparer.Ordinal);
+            for (var i = 0; i < reader.FieldCount; i++)
+            {
+                row[reader.GetName(i)] = await reader.IsDBNullAsync(i) ? null : reader.GetValue(i);
+            }
+
+            rows.Add(row);
+        }
+
+        return rows;
     }
 
     /// <summary>
@@ -274,30 +311,28 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         return sb.ToString();
     }
 
-    public async Task InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
-    {
-        await _resilience.ExecuteAsync(async _ =>
-        {
-            await using var lease = await LeaseConnectionAsync(tenantId);
-            var connection = lease.Connection;
-            var sql = BuildRawInsertSql(qualifiedTable, userColumnNames, conflictPrecedence);
-            await ExecuteSingleInsertAsync(connection, sql, datapoint, userColumnNames);
-        });
-    }
+    public Task<IReadOnlyList<SkippedArchiveRow>> InsertDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, DataPointDto datapoint, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
+        => InsertDataAsync(tenantId, qualifiedTable, userColumnNames, [datapoint], conflictPrecedence);
 
-    public async Task InsertTimeRangeDataAsync(
+    public async Task<IReadOnlyList<SkippedArchiveRow>> InsertTimeRangeDataAsync(
         string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames,
         IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false,
         IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null)
     {
         var d = datapoints.ToArray();
-        if (d.Length == 0) return;
+        if (d.Length == 0) return [];
+
+        // AB#7598: see InsertDataAsync.
+        var guarded = conflictPrecedence is { Count: > 0 };
+        var includeOrigin = !generationTracked;
+        var returning = guarded ? ConflictOutcome.ReturningClause(windowed: true, conflictPrecedence!, includeOrigin) : "";
+        var skipped = new List<SkippedArchiveRow>();
 
         // Same shape as InsertDataAsync (AB#4773): one bind parameter per value, one multi-row
         // statement per sub-batch.
-        var rowsPerStatement = RowsPerStatement(5 + userColumnNames.Count);
+        var rowsPerStatement = RowsPerStatement(5 + (generationTracked ? 0 : ArchiveRowOriginColumns.Names.Count) + userColumnNames.Count);
         var fullSql = BuildTimeRangeInsertSql(qualifiedTable, userColumnNames, generationTracked, conflictPrecedence,
-            rowsPerStatement);
+            rowsPerStatement) + returning;
 
         // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
         // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
@@ -308,19 +343,31 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             var sql = end - start == rowsPerStatement
                 ? fullSql
                 : BuildTimeRangeInsertSql(qualifiedTable, userColumnNames, generationTracked, conflictPrecedence,
-                    end - start);
-            await _resilience.ExecuteAsync(async _ =>
+                    end - start) + returning;
+            var outcome = await _resilience.ExecuteAsync(async _ =>
             {
                 await using var lease = await LeaseConnectionAsync(tenantId);
                 await using var cmd = new NpgsqlCommand(sql, lease.Connection);
                 for (var i = start; i < end; i++)
                 {
-                    AddTimeRangeInsertParameters(cmd.Parameters, d[i], userColumnNames);
+                    AddTimeRangeInsertParameters(cmd.Parameters, d[i], userColumnNames, includeOrigin);
                 }
 
-                await cmd.ExecuteNonQueryAsync();
+                if (!guarded)
+                {
+                    await cmd.ExecuteNonQueryAsync();
+                    return (IReadOnlyList<SkippedArchiveRow>)[];
+                }
+
+                var returned = await ReadReturnedRowsAsync(cmd);
+                var sent = d[start..end].Select(x => new ConflictOutcome.SentRow(x.RtId?.ToString(), x.CkTypeId?.ToString(),
+                    x.From, x.To, x.Attributes ?? new Dictionary<string, object?>(), x.Origin)).ToList();
+                return ConflictOutcome.FindSkipped(sent, returned, conflictPrecedence!, includeOrigin, windowed: true);
             });
+            skipped.AddRange(outcome.Select(o => o with { Index = o.Index + start }));
         }
+
+        return skipped;
     }
 
     /// <summary>
@@ -328,13 +375,19 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     /// <see cref="BuildTimeRangeInsertSql"/>.
     /// </summary>
     private static void AddTimeRangeInsertParameters(
-        NpgsqlParameterCollection parameters, TimeRangeDataPointDto dto, IReadOnlyList<string> userColumnNames)
+        NpgsqlParameterCollection parameters, TimeRangeDataPointDto dto, IReadOnlyList<string> userColumnNames,
+        bool includeOrigin)
     {
         parameters.Add(new NpgsqlParameter { Value = dto.From });
         parameters.Add(new NpgsqlParameter { Value = dto.To });
         parameters.Add(new NpgsqlParameter { Value = (object?)dto.RtId?.ToString() ?? DBNull.Value });
         parameters.Add(new NpgsqlParameter { Value = (object?)dto.CkTypeId?.ToString() ?? DBNull.Value });
         parameters.Add(new NpgsqlParameter { Value = (object?)dto.RtWellKnownName ?? DBNull.Value });
+        if (includeOrigin)
+        {
+            AddOriginParameters(parameters, dto.Origin, dto.ManualWrittenBy, dto.ManualWrittenAt, dto.ManualReason);
+        }
+
         foreach (var col in userColumnNames)
         {
             var value = dto.Attributes != null && dto.Attributes.TryGetValue(col, out var v) ? v : null;
@@ -370,10 +423,17 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // NOT NULL, and a rollup over it loses the row. A column named in the INSERT list is not
         // affected. No column of this statement may rely on a deterministic DEFAULT
         // (CURRENT_TIMESTAMP defaults are shipped from the primary and are safe).
-        var allColumns = new List<string>(6 + userColumnNames.Count)
+        var allColumns = new List<string>(6 + ArchiveRowOriginColumns.Names.Count + userColumnNames.Count)
         {
             Constants.WindowStart, Constants.WindowEnd, Constants.RtId, Constants.CkTypeId, Constants.RtWellKnownName
         };
+        // AB#5356: a time-range row records its origin; a rollup row is derived and has no origin columns.
+        var includeOrigin = !generationTracked;
+        if (includeOrigin)
+        {
+            allColumns.AddRange(ArchiveRowOriginColumns.Names);
+        }
+
         allColumns.AddRange(userColumnNames);
 
         var columnList = string.Join(", ", allColumns.Select(c => $"\"{c}\"")) + $", \"{Constants.WasUpdated}\"";
@@ -385,7 +445,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         var values = BuildValuesList(allColumns.Count, rowCount, generationTracked ? ", FALSE, 0" : ", FALSE");
         var conflictGenerationSuffix = generationTracked ? $", \"{Constants.Generation}\"" : string.Empty;
         var guard = BuildConflictGuard(conflictPrecedence ?? [], userColumnNames);
-        var conflictUpdates = BuildConflictUpdates(userColumnNames, guard);
+        var conflictUpdates = BuildConflictUpdates(includeOrigin ? WithOriginColumns(userColumnNames) : userColumnNames, guard);
 
         // The rejected branch reads the stored flag through COALESCE: a row stored without the flag
         // (see above) must come out of a losing write as FALSE, not keep its NULL.
@@ -437,6 +497,29 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // every single write; refuse to build it instead.
         foreach (var key in precedence)
         {
+            if (key.IsOrigin)
+            {
+                // AB#5356: the origin key ranks manual above automated. LowerWins would mean an automated
+                // delivery displaces a manual value, the opposite of what the key exists for.
+                // AB#7656: Ignore is the opt-out and is removed before the guard is built.
+                if (key.Order != ConflictKeyOrder.HigherWins)
+                {
+                    throw new InvalidOperationException(
+                        $"Archive conflict precedence key '{ArchiveConflictKey.OriginKey}' must be declared with " +
+                        $"Order {ConflictKeyOrder.HigherWins} (manual ranks above automated) or " +
+                        $"{ConflictKeyOrder.Ignore} (the archive does not rank by origin).");
+                }
+
+                continue;
+            }
+
+            if (key.Order is not (ConflictKeyOrder.HigherWins or ConflictKeyOrder.LowerWins))
+            {
+                throw new InvalidOperationException(
+                    $"Archive conflict precedence key '{key.Column}' is declared with Order {key.Order}, which only " +
+                    $"'{ArchiveConflictKey.OriginKey}' accepts. Use {ConflictKeyOrder.HigherWins} or {ConflictKeyOrder.LowerWins}.");
+            }
+
             if (!userColumnNames.Contains(key.Column, StringComparer.Ordinal))
             {
                 throw new InvalidOperationException(
@@ -455,11 +538,21 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     private static string BuildPrecedenceLevel(IReadOnlyList<ArchiveConflictKey> keys, int index)
     {
         var key = keys[index];
+        var isLast = index == keys.Count - 1;
+        if (key.IsOrigin)
+        {
+            // AB#5356: a manual write always wins and is never displaced by an automated one; two manual
+            // writes do not fall through to the following keys (the later one wins, so a wrong manual value
+            // is fixed with another manual write); two automated writes are ranked by the following keys.
+            var bothAutomated = isLast ? "TRUE" : BuildPrecedenceLevel(keys, index + 1);
+            return $"({ArchiveRowOriginColumns.IncomingIsManual} OR (NOT {ArchiveRowOriginColumns.StoredIsManual} AND {bothAutomated}))";
+        }
+
         var better = BuildKeyBetter(key);
         var equal = BuildKeyEqual(key.Column);
 
         // Last key: equality is accepted, which is what makes an identical re-delivery idempotent.
-        return index == keys.Count - 1
+        return isLast
             ? $"({better} OR {equal})"
             : $"({better} OR ({equal} AND {BuildPrecedenceLevel(keys, index + 1)}))";
     }
@@ -499,29 +592,22 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     }
 
     /// <summary>
-    /// Renders the user-column part of the <c>DO UPDATE SET</c> list (leading comma included), or
-    /// an empty string when the archive has no user columns.
+    /// The columns a winning write replaces: the origin columns first, then the user columns. The origin is
+    /// guarded like every value, so a losing write leaves the stored origin alone and an unguarded archive
+    /// takes the origin of the last write together with its values.
     /// </summary>
-    private static string BuildConflictUpdates(IReadOnlyList<string> userColumnNames, string? guard)
-        => userColumnNames.Count == 0
-            ? string.Empty
-            : ", " + string.Join(", ",
-                userColumnNames.Select(c => $"\"{c}\" = {Guarded($"EXCLUDED.\"{c}\"", c, guard)}"));
+    private static IReadOnlyList<string> WithOriginColumns(IReadOnlyList<string> userColumnNames)
+        => [.. ArchiveRowOriginColumns.Names, .. userColumnNames];
 
     /// <summary>
-    /// Executes a single per-archive INSERT using the raw Npgsql command API. We bind parameters
-    /// directly rather than going through Dapper because Dapper's <c>DynamicParameters</c> erases
-    /// the runtime CLR type when it serialises the value, causing CrateDB to receive every
-    /// user-column value as a TEXT literal — fine for strings but corrupts doubles, ints, and
-    /// timestamps the moment a typed CrateDB column is on the receiving end.
+    /// Renders the replaced-column part of the <c>DO UPDATE SET</c> list (leading comma included), or
+    /// an empty string when there are no such columns.
     /// </summary>
-    private static async Task ExecuteSingleInsertAsync(
-        NpgsqlConnection connection, string sql, DataPointDto dto, IReadOnlyList<string> userColumnNames)
-    {
-        await using var cmd = new NpgsqlCommand(sql, connection);
-        AddInsertParameters(cmd.Parameters, dto, userColumnNames);
-        await cmd.ExecuteNonQueryAsync();
-    }
+    private static string BuildConflictUpdates(IReadOnlyList<string> replacedColumns, string? guard)
+        => replacedColumns.Count == 0
+            ? string.Empty
+            : ", " + string.Join(", ",
+                replacedColumns.Select(c => $"\"{c}\" = {Guarded($"EXCLUDED.\"{c}\"", c, guard)}"));
 
     /// <summary>
     /// Binds one raw row as positional parameters, in the column order of
@@ -534,11 +620,31 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         parameters.Add(new NpgsqlParameter { Value = (object?)dto.CkTypeId?.ToString() ?? DBNull.Value });
         parameters.Add(new NpgsqlParameter { Value = dto.Timestamp });
         parameters.Add(new NpgsqlParameter { Value = (object?)dto.RtWellKnownName ?? DBNull.Value });
+        AddOriginParameters(parameters, dto.Origin, dto.ManualWrittenBy, dto.ManualWrittenAt, dto.ManualReason);
         foreach (var col in userColumnNames)
         {
             var value = dto.Attributes != null && dto.Attributes.TryGetValue(col, out var v) ? v : null;
             parameters.Add(new NpgsqlParameter { Value = value ?? DBNull.Value });
         }
+    }
+
+    /// <summary>
+    /// Binds the platform origin columns of one row (<see cref="ArchiveRowOriginColumns" />), in the order
+    /// of <see cref="ArchiveRowOriginColumns.Names" />.
+    /// </summary>
+    private static void AddOriginParameters(NpgsqlParameterCollection parameters, ArchiveRowOrigin origin,
+        string? writtenBy, DateTime? writtenAt, string? reason)
+    {
+        parameters.Add(new NpgsqlParameter { Value = ArchiveRowOriginColumns.ToStoredValue(origin) });
+        // AB#7593: an automated row carries no writer, time or reason, whatever the DTO holds.
+        var manual = origin == ArchiveRowOrigin.Manual;
+        parameters.Add(new NpgsqlParameter { Value = manual ? (object?)writtenBy ?? DBNull.Value : DBNull.Value });
+        parameters.Add(new NpgsqlParameter
+        {
+            Value = manual && writtenAt is { } at ? DateTime.SpecifyKind(at, DateTimeKind.Utc) : (object)DBNull.Value,
+            NpgsqlDbType = NpgsqlDbType.TimestampTz
+        });
+        parameters.Add(new NpgsqlParameter { Value = manual ? (object?)reason ?? DBNull.Value : DBNull.Value });
     }
 
     internal static string BuildRawInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames,
@@ -548,16 +654,17 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // (rtId, ckTypeId, timestamp, rtWellKnownName) plus the user-defined columns. Unknown
         // attributes on the data point are dropped: DDL would have rejected them at activation, so
         // the data plane stays permissive against outdated callers.
-        var allColumns = new List<string>(4 + userColumnNames.Count)
+        var allColumns = new List<string>(4 + ArchiveRowOriginColumns.Names.Count + userColumnNames.Count)
         {
             Constants.RtId, Constants.CkTypeId, Constants.Timestamp, Constants.RtWellKnownName
         };
+        allColumns.AddRange(ArchiveRowOriginColumns.Names);
         allColumns.AddRange(userColumnNames);
 
         var columnList = string.Join(", ", allColumns.Select(c => $"\"{c}\""));
         var values = BuildValuesList(allColumns.Count, rowCount);
         var guard = BuildConflictGuard(conflictPrecedence ?? [], userColumnNames);
-        var conflictUpdates = BuildConflictUpdates(userColumnNames, guard);
+        var conflictUpdates = BuildConflictUpdates(WithOriginColumns(userColumnNames), guard);
 
         return $"INSERT INTO {qualifiedTable} ({columnList}) VALUES {values} "
              + $"ON CONFLICT (\"{Constants.Timestamp}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\") "

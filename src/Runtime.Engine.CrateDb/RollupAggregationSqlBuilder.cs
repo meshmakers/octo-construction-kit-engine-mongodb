@@ -80,6 +80,7 @@ internal static class RollupAggregationSqlBuilder
     /// <param name="rtIdScope">See the per-source overload.</param>
     /// <param name="carryLookback">See the per-source overload.</param>
     /// <param name="sourceGenerationRanges">See the per-source overload.</param>
+    /// <param name="sourceIsRollup">See the per-source overload.</param>
     public static string Build(
         string sourceTable,
         string targetTable,
@@ -90,7 +91,8 @@ internal static class RollupAggregationSqlBuilder
         bool sourceUsesWindowedStorage,
         string? rtIdScope = null,
         TimeSpan? carryLookback = null,
-        IReadOnlyList<GenerationRange>? sourceGenerationRanges = null)
+        IReadOnlyList<GenerationRange>? sourceGenerationRanges = null,
+        bool sourceIsRollup = false)
     {
         if (aggregations is null || aggregations.Count == 0) throw new ArgumentException("At least one aggregation is required.", nameof(aggregations));
 
@@ -101,7 +103,7 @@ internal static class RollupAggregationSqlBuilder
         }
 
         return Build(sourceTable, targetTable, rollupCkTypeId, resolved, bucketStart, bucketEnd,
-            sourceUsesWindowedStorage, rtIdScope, carryLookback, sourceGenerationRanges);
+            sourceUsesWindowedStorage, rtIdScope, carryLookback, sourceGenerationRanges, sourceIsRollup);
     }
 
     /// <summary>
@@ -143,6 +145,11 @@ internal static class RollupAggregationSqlBuilder
     /// (an empty list included) restricts the source scan to the active generation of each window:
     /// the entries overlapping the bucket decide, and with none the scan reads generation 0.
     /// </param>
+    /// <param name="sourceIsRollup">
+    /// True when the source is a rollup: the platform columns (AB#7727) then chain from its
+    /// <c>manual_count</c> / <c>last_manual_at</c> instead of being derived from the origin of its rows. Must
+    /// be false for a raw or time-range source, whose table has no such columns.
+    /// </param>
     public static string Build(
         string sourceTable,
         string targetTable,
@@ -153,7 +160,8 @@ internal static class RollupAggregationSqlBuilder
         bool sourceUsesWindowedStorage,
         string? rtIdScope = null,
         TimeSpan? carryLookback = null,
-        IReadOnlyList<GenerationRange>? sourceGenerationRanges = null)
+        IReadOnlyList<GenerationRange>? sourceGenerationRanges = null,
+        bool sourceIsRollup = false)
     {
         if (string.IsNullOrWhiteSpace(sourceTable)) throw new ArgumentException("sourceTable must not be empty.", nameof(sourceTable));
         if (string.IsNullOrWhiteSpace(targetTable)) throw new ArgumentException("targetTable must not be empty.", nameof(targetTable));
@@ -196,19 +204,74 @@ internal static class RollupAggregationSqlBuilder
             }
         }
 
+        var platform = PlatformColumnsFor(resolved, sourceIsRollup);
+
         // Both time-weighted functions need the LOCF carry over a raw source. AB#4336.
         var hasTimeWeighted = resolved.Any(a =>
             a.Spec.Function is CkRollupFunction.TimeWeightedAvg or CkRollupFunction.StateDuration);
         if (hasTimeWeighted && !sourceUsesWindowedStorage)
         {
             return BuildWithLocfCarry(
-                sourceTable, targetTable, rollupCkTypeId, resolved, bucketStart, bucketEnd,
+                sourceTable, targetTable, rollupCkTypeId, resolved, platform, bucketStart, bucketEnd,
                 rtIdScope, carryLookback ?? DefaultCarryLookback);
         }
 
         return BuildStandard(
-            sourceTable, targetTable, rollupCkTypeId, resolved, bucketStart, bucketEnd,
+            sourceTable, targetTable, rollupCkTypeId, resolved, platform, bucketStart, bucketEnd,
             sourceUsesWindowedStorage, rtIdScope, generationFilter);
+    }
+
+    /// <summary>
+    /// One platform column of a rollup row (AB#7727) and how a bucket computes it from its source.
+    /// </summary>
+    /// <param name="ColumnName">The rollup column.</param>
+    /// <param name="SourceColumn">The source column it reads.</param>
+    /// <param name="Function">SQL aggregate keyword.</param>
+    /// <param name="Condition">Only the source rows matching this SQL predicate count; null for all.</param>
+    private sealed record PlatformColumn(string ColumnName, string SourceColumn, string Function, string? Condition = null)
+    {
+        /// <summary>The aggregate, for the source rows that pass <paramref name="guard" /> as well.</summary>
+        public string Expression(string? guard = null)
+        {
+            var condition = (guard, Condition) switch
+            {
+                (null, null) => null,
+                (not null, null) => guard,
+                (null, not null) => Condition,
+                _ => $"{guard} AND {Condition}",
+            };
+            var argument = Function == "COUNT" ? "1" : $"\"{SourceColumn}\"";
+            return condition is null
+                ? $"{Function}({argument})"
+                : $"{Function}(CASE WHEN {condition} THEN {argument} END)";
+        }
+    }
+
+    /// <summary>
+    /// The platform columns of a bucket: from a base archive the count of its manual rows and the latest
+    /// manual write time (a row written before origin tracking stores <c>NULL</c> in both source columns, so
+    /// it counts as delivered); from a rollup source the sum of its counts and the latest of its times, which
+    /// ignore the <c>NULL</c> of a source row not recomputed yet and therefore stay right in a bucket that
+    /// mixes both kinds. A rollup from before the names were reserved that stores a column of its own under
+    /// such a name keeps it, and the platform value is left out.
+    /// </summary>
+    private static List<PlatformColumn> PlatformColumnsFor(IReadOnlyList<RollupSourceAggregation> resolved, bool sourceIsRollup)
+    {
+        PlatformColumn[] columns = sourceIsRollup
+            ?
+            [
+                new(Constants.ManualCount, Constants.ManualCount, "SUM"),
+                new(Constants.LastManualAt, Constants.LastManualAt, "MAX"),
+            ]
+            :
+            [
+                new(Constants.ManualCount, Constants.RowOrigin, "COUNT",
+                    $"\"{Constants.RowOrigin}\" = '{ArchiveRowOriginColumns.ManualValue}'"),
+                new(Constants.LastManualAt, Constants.ManualWrittenAt, "MAX"),
+            ];
+
+        var taken = resolved.SelectMany(r => r.Columns).Select(c => c.ColumnName).ToHashSet(StringComparer.Ordinal);
+        return columns.Where(c => !taken.Contains(c.ColumnName)).ToList();
     }
 
     /// <summary>
@@ -223,6 +286,7 @@ internal static class RollupAggregationSqlBuilder
         string targetTable,
         string rollupCkTypeId,
         IReadOnlyList<RollupSourceAggregation> resolved,
+        IReadOnlyList<PlatformColumn> platform,
         DateTime bucketStart,
         DateTime bucketEnd,
         bool sourceUsesWindowedStorage,
@@ -238,7 +302,7 @@ internal static class RollupAggregationSqlBuilder
         // shared with TimeRangeArchive. The source side now also branches (Phase 8 / concept §7):
         // raw archive ⇒ single `timestamp` column, windowed source ⇒ (window_start, window_end)
         // with `was_updated` propagation.
-        AppendInsertColumnList(sb, targetTable, resolved);
+        AppendInsertColumnList(sb, targetTable, resolved, platform);
 
         // ---- SELECT ... FROM source WHERE <time-predicate> GROUP BY rtId ----
         sb.Append("SELECT '").Append(bucketStartLiteral).Append("'::timestamp AS \"").Append(Constants.WindowStart).Append("\", ")
@@ -309,12 +373,16 @@ internal static class RollupAggregationSqlBuilder
                 sb.Append(" AS \"").Append(c.ColumnName).Append('"');
             }
         }
+        foreach (var column in platform)
+        {
+            sb.Append(", ").Append(column.Expression()).Append(" AS \"").Append(column.ColumnName).Append('"');
+        }
         sb.Append(", 0 AS \"").Append(Constants.Generation).Append('"');
         sb.AppendLine();
         if (hasArg)
         {
             AppendArgSourceSubquery(
-                sb, sourceTable, resolved, bucketStartLiteral, bucketEndLiteral,
+                sb, sourceTable, resolved, platform, bucketStartLiteral, bucketEndLiteral,
                 sourceUsesWindowedStorage, rtIdScope, generationFilter);
         }
         else
@@ -324,7 +392,7 @@ internal static class RollupAggregationSqlBuilder
         }
         sb.Append("GROUP BY \"").Append(Constants.RtId).AppendLine("\"");
 
-        AppendConflictClause(sb, resolved);
+        AppendConflictClause(sb, resolved, platform);
         return sb.ToString();
     }
 
@@ -343,7 +411,8 @@ internal static class RollupAggregationSqlBuilder
     /// Distinct physical source columns referenced by any binding, in order of first appearance —
     /// the sub-selects must project every column the outer aggregates read by name.
     /// </summary>
-    private static List<string> DistinctSourceColumns(IReadOnlyList<RollupSourceAggregation> resolved)
+    private static List<string> DistinctSourceColumns(
+        IReadOnlyList<RollupSourceAggregation> resolved, IReadOnlyList<PlatformColumn> platform)
     {
         var sourceColumns = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -355,6 +424,14 @@ internal static class RollupAggregationSqlBuilder
                 {
                     sourceColumns.Add(c.SourceColumn);
                 }
+            }
+        }
+
+        foreach (var column in platform)
+        {
+            if (seen.Add(column.SourceColumn))
+            {
+                sourceColumns.Add(column.SourceColumn);
             }
         }
 
@@ -375,6 +452,7 @@ internal static class RollupAggregationSqlBuilder
         StringBuilder sb,
         string sourceTable,
         IReadOnlyList<RollupSourceAggregation> resolved,
+        IReadOnlyList<PlatformColumn> platform,
         string bucketStartLiteral,
         string bucketEndLiteral,
         bool sourceUsesWindowedStorage,
@@ -384,7 +462,7 @@ internal static class RollupAggregationSqlBuilder
         var orderColumn = sourceUsesWindowedStorage ? Constants.WindowEnd : Constants.Timestamp;
 
         // Distinct source columns referenced by any spec — the outer aggregates read them by name.
-        var sourceColumns = DistinctSourceColumns(resolved);
+        var sourceColumns = DistinctSourceColumns(resolved, platform);
 
         sb.AppendLine("FROM (");
         sb.Append("    SELECT \"").Append(Constants.RtId).Append("\", \"").Append(Constants.RtWellKnownName).Append('"');
@@ -462,6 +540,7 @@ internal static class RollupAggregationSqlBuilder
         string targetTable,
         string rollupCkTypeId,
         IReadOnlyList<RollupSourceAggregation> resolved,
+        IReadOnlyList<PlatformColumn> platform,
         DateTime bucketStart,
         DateTime bucketEnd,
         string? rtIdScope,
@@ -473,7 +552,7 @@ internal static class RollupAggregationSqlBuilder
         var carryFromLiteral = (bucketStart.ToUniversalTime() - carryLookback).ToString("O", CultureInfo.InvariantCulture);
 
         // Distinct source columns referenced by any spec — the event rows must carry all of them.
-        var sourceColumns = DistinctSourceColumns(resolved);
+        var sourceColumns = DistinctSourceColumns(resolved, platform);
         var sourceColumnList = string.Join(", ", sourceColumns.Select(c => $"\"{c}\""));
 
         // First / Last co-occurring with a time-weighted aggregation (AB#4188): the weighted
@@ -485,7 +564,7 @@ internal static class RollupAggregationSqlBuilder
             ? string.Empty
             : $" AND \"{Constants.RtId}\" = '{EscapeLiteral(rtIdScope)}'";
 
-        AppendInsertColumnList(sb, targetTable, resolved);
+        AppendInsertColumnList(sb, targetTable, resolved, platform);
 
         sb.Append("SELECT '").Append(bucketStartLiteral).Append("'::timestamp AS \"").Append(Constants.WindowStart).Append("\", ")
           .Append('\'').Append(bucketEndLiteral).Append("'::timestamp AS \"").Append(Constants.WindowEnd).Append("\", ")
@@ -540,6 +619,11 @@ internal static class RollupAggregationSqlBuilder
                 }
                 sb.Append(" AS \"").Append(c.ColumnName).Append('"');
             }
+        }
+        foreach (var column in platform)
+        {
+            // The carry-in virtual row lies outside the bucket, as for the plain aggregations above.
+            sb.Append(", ").Append(column.Expression("NOT \"is_carry\"")).Append(" AS \"").Append(column.ColumnName).Append('"');
         }
         sb.Append(", 0 AS \"").Append(Constants.Generation).Append('"');
 
@@ -606,7 +690,7 @@ internal static class RollupAggregationSqlBuilder
           .AppendLine(") \"weighted\"")
           .Append("GROUP BY \"").Append(Constants.RtId).AppendLine("\"");
 
-        AppendConflictClause(sb, resolved);
+        AppendConflictClause(sb, resolved, platform);
         return sb.ToString();
     }
 
@@ -623,7 +707,8 @@ internal static class RollupAggregationSqlBuilder
     private static void AppendInsertColumnList(
         StringBuilder sb,
         string targetTable,
-        IReadOnlyList<RollupSourceAggregation> resolved)
+        IReadOnlyList<RollupSourceAggregation> resolved,
+        IReadOnlyList<PlatformColumn> platform)
     {
         sb.Append("INSERT INTO ").Append(targetTable).Append(" (")
           .Append('"').Append(Constants.WindowStart).Append("\", ")
@@ -639,6 +724,10 @@ internal static class RollupAggregationSqlBuilder
                 sb.Append(", \"").Append(c.ColumnName).Append('"');
             }
         }
+        foreach (var column in platform)
+        {
+            sb.Append(", \"").Append(column.ColumnName).Append('"');
+        }
         // Phase 6: forward aggregation always writes generation 0 (the steady-state generation);
         // only the recompute executor stamps higher generations when copying staging into live.
         sb.Append(", \"").Append(Constants.Generation).Append('"');
@@ -647,7 +736,8 @@ internal static class RollupAggregationSqlBuilder
 
     private static void AppendConflictClause(
         StringBuilder sb,
-        IReadOnlyList<RollupSourceAggregation> resolved)
+        IReadOnlyList<RollupSourceAggregation> resolved,
+        IReadOnlyList<PlatformColumn> platform)
     {
         // ---- ON CONFLICT (window_start, window_end, rtId, ckTypeId) DO UPDATE SET ... ----
         // Same conflict key as TimeRangeArchive — same was_updated semantics: the orchestrator
@@ -664,6 +754,10 @@ internal static class RollupAggregationSqlBuilder
             {
                 sb.Append(",\n    \"").Append(c.ColumnName).Append("\" = EXCLUDED.\"").Append(c.ColumnName).Append('"');
             }
+        }
+        foreach (var column in platform)
+        {
+            sb.Append(",\n    \"").Append(column.ColumnName).Append("\" = EXCLUDED.\"").Append(column.ColumnName).Append('"');
         }
         sb.Append(",\n    \"").Append(Constants.WasUpdated).Append("\" = TRUE");
         sb.Append(",\n    \"").Append(Constants.RtChangedDateTime).Append("\" = CURRENT_TIMESTAMP;");

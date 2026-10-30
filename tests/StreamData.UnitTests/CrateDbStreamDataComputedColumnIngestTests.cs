@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using FakeItEasy;
 using Meshmakers.Octo.ConstructionKit.Contracts;
@@ -7,6 +8,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.Formulas;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
 using Microsoft.Extensions.DependencyInjection;
@@ -60,9 +62,10 @@ public class CrateDbStreamDataComputedColumnIngestTests
     private async Task<DataPointDto> CaptureInsertAsync(StreamDataPoint point)
     {
         DataPointDto? captured = null;
-        A.CallTo(() => _db.InsertDataAsync("tenant-x", A<string>._, A<IReadOnlyList<string>>._, A<DataPointDto>._))
-            .Invokes(call => captured = call.GetArgument<DataPointDto>(3))
-            .Returns(Task.CompletedTask);
+        // The single-point insert goes through the batch path (AB#7598).
+        A.CallTo(() => _db.InsertDataAsync("tenant-x", A<string>._, A<IReadOnlyList<string>>._, A<IEnumerable<DataPointDto>>._, A<IReadOnlyList<ArchiveConflictKey>?>._))
+            .Invokes(call => captured = call.GetArgument<IEnumerable<DataPointDto>>(3)!.Single())
+            .Returns(Task.FromResult<IReadOnlyList<SkippedArchiveRow>>([]));
 
         await NewSut().InsertAsync(Archive, point);
         Assert.NotNull(captured);
@@ -109,9 +112,9 @@ public class CrateDbStreamDataComputedColumnIngestTests
         StubArchive(Ing("activePower"), Comp("derived", "activepower * 2", FormulaResultType.Double));
 
         IReadOnlyList<string>? columns = null;
-        A.CallTo(() => _db.InsertDataAsync("tenant-x", A<string>._, A<IReadOnlyList<string>>._, A<DataPointDto>._))
+        A.CallTo(() => _db.InsertDataAsync("tenant-x", A<string>._, A<IReadOnlyList<string>>._, A<IEnumerable<DataPointDto>>._, A<IReadOnlyList<ArchiveConflictKey>?>._))
             .Invokes(call => columns = call.GetArgument<IReadOnlyList<string>>(2))
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult<IReadOnlyList<SkippedArchiveRow>>([]));
 
         await NewSut().InsertAsync(Archive, Point(new() { ["activePower"] = 5.0 }));
 

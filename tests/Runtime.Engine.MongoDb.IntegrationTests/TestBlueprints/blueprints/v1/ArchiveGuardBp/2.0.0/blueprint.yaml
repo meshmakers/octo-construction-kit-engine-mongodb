@@ -1,0 +1,7 @@
+$schema: https://schemas.meshmakers.cloud/blueprint-meta.schema.json
+blueprintId: ArchiveGuardBp-2.0.0
+description: AB#7872 guard test - a rollup, 1.1.0 changes what may change, 2.0.0 its bucket size
+ckModelDependencies:
+  - System-[2.0,3.0)
+  - System.StreamData-[1.8,2.0)
+seedDataPath: seed-data/entities.yaml

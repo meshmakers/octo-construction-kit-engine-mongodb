@@ -1,4 +1,6 @@
-﻿namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
+﻿using Meshmakers.Octo.Runtime.Contracts.StreamData;
+
+namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 
 /// <summary>
 /// Constants for the stream data service.
@@ -45,6 +47,31 @@ public static class Constants
     /// executor writes higher generations. Time-range and raw archive tables do not carry this column.
     /// </summary>
     public const string Generation = "generation";
+
+    /// <summary>
+    /// Origin of a raw or time-range row (AB#5356): <c>manual</c> or <c>automated</c>; <c>NULL</c> on rows
+    /// written before the origin was recorded, which read as automated. Not on rollup tables. See
+    /// <see cref="ArchiveRowOriginColumns" />.
+    /// </summary>
+    public const string RowOrigin = ArchiveRowOriginFields.RowOrigin;
+
+    /// <summary>Writer of a manual row, recorded by the platform (AB#7593); NULL on automated rows.</summary>
+    public const string ManualWrittenBy = ArchiveRowOriginFields.ManualWrittenBy;
+
+    /// <summary>Write time of a manual row, recorded by the platform (AB#7593); NULL on automated rows.</summary>
+    public const string ManualWrittenAt = ArchiveRowOriginFields.ManualWrittenAt;
+
+    /// <summary>Optional reason of a manual write, as given (AB#7593); NULL on automated rows.</summary>
+    public const string ManualReason = ArchiveRowOriginFields.ManualReason;
+
+    /// <summary>
+    /// Number of manually entered source values of a rollup row (AB#7727); <c>NULL</c> in a row aggregated
+    /// before the column existed, which reads as 0. Only on rollup tables. See <see cref="ArchiveRowOriginColumns" />.
+    /// </summary>
+    public const string ManualCount = ArchiveRowOriginFields.ManualCount;
+
+    /// <summary>Write time of the latest manual entry of a rollup row (AB#7727). Only on rollup tables.</summary>
+    public const string LastManualAt = ArchiveRowOriginFields.LastManualAt;
 
     /// <summary>rtWellKnownName column name</summary>
     public const string RtWellKnownName = "rtwellknownname";

@@ -170,6 +170,19 @@ public class StreamDataFieldResolver
             resolver.RegisterComputedColumn(name, physical);
         }
 
+        // AB#5356 / AB#7593: raw and time-range rows record their origin and, for a manual row, who wrote
+        // it, when and why. Selectable by their physical names like was_updated, but not part of the
+        // default projection, so existing queries return exactly the columns they did before. A rollup row has
+        // no origin of its own; it reports how many of its values were entered manually (AB#7727), selectable
+        // the same way.
+        var platformFields = archiveSnapshot.RollupAggregations is null
+            ? ArchiveRowOriginColumns.Names
+            : ArchiveRowOriginFields.RollupFields;
+        foreach (var name in platformFields)
+        {
+            resolver._fields[name] = new ResolvedField(StreamDataFieldCategory.DataStream, name, name);
+        }
+
         return resolver;
     }
 

@@ -973,12 +973,95 @@ before.**
   an incoming NULL never displaces a stored value (a write that cannot prove it is better must not
   win); both NULL is a tie and falls through to the next key. The **last** key admits equality, which
   is what makes an identical re-delivery idempotent.
-- **Keys must be user columns of the archive.** The guard reads `EXCLUDED."k"`, so an unknown name
-  would produce SQL that fails on every single write; the builder refuses and names the valid columns.
+- **Keys must be user columns of the archive** (except the reserved `$Origin`, see *Row Origin*). The guard reads
+  `EXCLUDED."k"`, so an unknown name would produce SQL that fails on every single write; the builder refuses and
+  names the valid columns.
 - **Ingest paths only.** `ImportRowsAsync` deliberately does not apply it — an operator restoring a
   snapshot must get back what they gave.
 
 Full write-up incl. the rendered SQL: `docs/streamdata-archive-concept.md` → *Conflict precedence*.
+
+### Row Origin — manual or automated (AB#5356)
+
+Every raw and time-range row records `row_origin` (`manual` / `automated`; `NULL` = written before the origin
+was recorded = automated), and a manual row `manual_written_by` / `manual_written_at` / `manual_reason`
+(AB#7593: writer from the caller, time from the repository clock, reason optional; NULL on automated rows; a
+manual point without a writer is refused). Selectable in queries by these names, not in the default projection.
+Rules to keep:
+
+- **Platform column, not a user column.** `ArchiveRowOriginColumns` owns the name, DDL and SQL fragments. Rollup
+  tables do not carry it; the windowed insert names it only when `generationTracked` is false. A rollup reports its
+  manual values in its own platform columns instead (next section).
+- **Always written explicitly** (AB#6647), nullable without a DEFAULT, so `ALTER TABLE … ADD COLUMN` can add it to
+  populated tables. `EnsureOriginColumnsAsync` does that at activation and before the first write/import of each
+  table per process (`RecomputeProcessState.EnsuredOriginColumns`). Do not remove that step: every insert names
+  the column, so a table without it would refuse every write.
+- **`$Origin` precedence key** (`ArchiveConflictKey.OriginKey`, `HigherWins` only): manual beats automated,
+  automated never beats manual, manual vs manual = the later write wins (no fall-through), automated vs automated =
+  the following keys. It is the one key that is not a user column; `BuildConflictGuard` skips the column check for it.
+- **Manual wins by default on raw and time-range archives (AB#7656)**: `ResolveConflictPrecedence` prepends `$Origin`
+  when the archive does not name it (also with no precedence at all: the guard is then `$Origin` alone, automated vs
+  automated stays last-write-wins). Named explicitly, `$Origin` applies at the author's position; `Order: Ignore` on it is
+  the opt-out (the key is dropped; with no other key there is no guard). `LowerWins` on `$Origin`, `Ignore` on a column
+  and `$Origin` named twice are refused at activation. `ManualValueProtected` is only reported when the guard ranks by
+  origin. Rollups and the import path are unchanged.
+
+- **Reading the origin (AB#7616)**: `row_origin`, `manual_written_by`, `manual_written_at`, `manual_reason` are
+  selectable/filterable/groupable on raw and time-range archives. Every read-path column reference goes through
+  `ArchiveRowOriginColumns.ColumnRef` / `SelectRef`, which reads `row_origin` as `COALESCE(…, 'automated')` (legacy
+  rows hold NULL). A new SQL builder that references a column must use them too.
+
+Full write-up: `docs/streamdata-archive-concept.md` → *Row origin*. Tests: `ArchiveRowOriginSqlTests`,
+`ArchiveRowOriginQuerySqlTests` (unit), `StreamDataOrigin/ArchiveRowOriginIntegrationTests` and
+`ArchiveRowOriginReadIntegrationTests` (real CrateDB).
+
+### Changes an activated archive cannot apply (AB#7872)
+
+`ArchiveDefinitionGuard` (engine) refuses them, also on a disabled archive with `FirstActivatedAt` (`SetStatusAsync` stamps it), on the ways an operator or a blueprint writes: the repository's public
+`ApplyChanges` and the Upsert import. The stream data stores of this repository write through `UpdateOneRtEntityById`
+and are not checked; keep their writes on that path, or a lifecycle step (computed columns, watermark) is refused. Rules and
+scope: `docs/streamdata-archive-concept.md` §10. `RollupOrchestrator` records a failed run on the entity
+(`MongoRollupArchiveRuntimeStore.RecordRunFailureAsync`, `ClearRunFailureAsync`). Tests: `ArchiveDefinitionGuardIntegrationTests`
+(real MongoDB, blueprint `TestBlueprints/.../ArchiveGuardBp`).
+
+### Rollups report their manual values (AB#7727)
+
+Every rollup table carries `manual_count` (`BIGINT`) and `last_manual_at` (`TIMESTAMP WITH TIME ZONE`), platform columns
+like `row_origin` on raw rows: not in `Aggregations[]`, not in `Columns`, no definition or blueprint changes. Rules to keep:
+
+- **Computed in the aggregation statement** (`RollupAggregationSqlBuilder`, `PlatformColumnsFor`): from a base archive
+  `COUNT(CASE WHEN "row_origin" = 'manual' THEN 1 END)` and `MAX("manual_written_at")`, from a rollup source
+  `SUM("manual_count")` and `MAX("last_manual_at")` (`sourceIsRollup`). `SUM`/`MAX` skip the `NULL` of a source row
+  aggregated before the column existed, so a bucket over a mix is right. The carry row of the LOCF statement is excluded.
+- **Nullable without a DEFAULT, always named** (AB#6647). `NULL` means "no manual values" and reads as 0
+  (`ArchiveRowOriginColumns.ColumnRef`, also in filters and `RollupQueryAggregationResolver.ResolveManualCount`). A new read
+  path must use `ColumnRef` too.
+- **`ArchivePlatformColumnGuard` adds what a table lacks**, once per table and process (memo `EnsuredOriginColumns`, shared by
+  the two kinds; a table has one kind): before a statement names them (`AggregateBucketAsync` and the recompute executor, for the source
+  **and** the target — a raw or time-range source may not have the origin columns yet), at activation, on import, and from the orchestrator
+  tick (`EnsureRollupPlatformColumnsAsync`, before anything can skip the rollup), so readers get the columns without
+  a due bucket. The reconciliation for declared columns stays as it is: `ArchiveColumnReconciliation` still skips rollups.
+- **The staging table has the shape of `GenerateCreateWindowedTable(includeGeneration: true)`**, the copy names the columns
+  (`columnNames`), so they survive the generation flip.
+- **Reserved names**: `RollupValidator` (generated target names too, `Count` over `Manual` is `manual_count`) and
+  `ComputedColumnValidator` (every column of every archive) throw `ArchiveReservedColumnNameException`. A rollup from before the reservation
+  that stores such a column keeps it, the statement leaves the platform value out (`PlatformColumnsFor`) instead of failing.
+- **Dump/restore**: the row path carries them with the user columns (`ImportRowsAsync`), the native copy copies the table; a dump
+  from before they existed loads with `NULL`.
+
+Tests: `StreamDataOrigin/RollupManualColumnsIntegrationTests` (real CrateDB), `ArchivePlatformColumnGuardTests`. Check whether a tenant
+needs a backfill: `scripts/rollup-manual-rows-check.sh`. Write-up: `docs/streamdata-archive-concept.md`, *Rollups report their manual values*.
+
+### Write Result — stored and skipped rows (AB#7598)
+
+The repository inserts return `StreamDataWriteResult` (`Stored`, `Skipped` with reason `CkTypeMismatch` /
+`LowerPrecedence` / `ManualValueProtected`). A guarded statement ends with `RETURNING` key + ranking columns +
+`row_origin`; `ConflictOutcome.FindSkipped` decides stored ⇔ the returned values equal the sent ones (exact because
+the last key admits equality). The client inserts return the skipped rows as `SkippedArchiveRow(Index, Reason)`;
+unguarded statements send no `RETURNING`. Only stored rows feed the retroactive detection. A manual row that is
+not stored throws `ManualStreamDataNotAppliedException`. The single-point `InsertAsync` goes through the batch path.
+Tests: `ConflictOutcomeTests`, `StreamDataOrigin/ArchiveRowOriginIntegrationTests` (multi-statement exactness on
+CrateDB). Write-up: `docs/streamdata-archive-concept.md` → *Write result*.
 
 ### Declared-vs-physical Column Reconciliation
 
@@ -1326,6 +1409,16 @@ timestamp schedules a recompute of years of history.
   window recorded before the cap existed. Chain propagation after a committed recompute passes a
   `null` cap — manual/chained recompute stays unbounded, matching `recomputeArchive` /
   `rewindRollupWatermark`.
+
+### Manual Writes Reach the Rollups (AB#7594)
+
+`DetectAndRecordRetroactiveWriteAsync` splits a batch by origin. Automated rows keep the single, reach-capped
+dirty window above. Manual rows go through `RetroactiveWriteDetector.BuildManualDirtyWindows`: **no reach cap**
+(a person corrected a known window; a rollup must not keep the replaced value) and **one window per cluster** of
+corrected windows (`ManualClusterGap` = 1 day), source `RecomputeChangeSource.Manual`, so two corrections months
+apart recompute two small ranges instead of everything in between. The recompute itself is the existing
+bounded, generation-flipped path (AB#5483, AB#6283); a replaced value is recomputed away, never added twice.
+Tests: `RetroactiveWriteDetectorTests` (unit), `RollupManualWriteTests` (asset-repo integration, real CrateDB).
 
 ### Query Time Filter — One-sided Ranges (AB#4617)
 

@@ -25,6 +25,13 @@ internal static class ComputedColumnValidator
         List<(CkArchiveColumnSpec Spec, string PhysicalName)>? computed = null;
         foreach (var c in columns)
         {
+            // AB#7727: reserved on every archive, a rollup table carries them and the read path treats the names
+            // specially. An archive reaching this with such a column was set up before the reservation.
+            if (ArchiveRowOriginFields.IsRollupField(c.IsComputed ? c.Name : c.Path))
+            {
+                throw new ArchiveReservedColumnNameException(archiveRtId, (c.IsComputed ? c.Name : c.Path)!);
+            }
+
             if (!c.IsComputed)
             {
                 continue;

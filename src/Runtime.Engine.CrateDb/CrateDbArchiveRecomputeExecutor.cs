@@ -90,6 +90,7 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
     private readonly ILogger _logger;
     private readonly IRollupArchiveRuntimeStore? _rollupArchiveStore;
     private readonly RollupSourceBucketAggregator _bucketAggregator;
+    private readonly ArchivePlatformColumnGuard _platformColumns;
     private readonly int _sliceTargetRows;
 
     // How long the rows a recompute superseded stay before the sweep (AB#6968); zero = sweep at once.
@@ -191,6 +192,7 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         _rollupArchiveStore = rollupArchiveStore;
         _sliceTargetRows = sliceTargetRows;
         _bucketAggregator = new RollupSourceBucketAggregator(tenantId, databaseClient, managementClient, logger);
+        _platformColumns = new ArchivePlatformColumnGuard(tenantId, databaseClient, managementClient, state, logger);
     }
 
     /// <inheritdoc />
@@ -224,7 +226,14 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         var resolvedColumns = RollupColumnTypeResolver.Resolve(rollupSnapshot.Columns, aggregations);
         var columnNames = Constants.DefaultWindowedStreamDataFields
             .Concat(resolvedColumns.Select(ArchiveDdlGenerator.ResolveColumnName))
+            .Concat(ArchiveRowOriginFields.RollupFields)
+            .Distinct(StringComparer.Ordinal)
             .ToList();
+
+        // The aggregation names the origin of the source rows, the copy the manual columns of the live table
+        // (AB#7727); either may predate them.
+        await _platformColumns.EnsureAsync(source, cancellationToken);
+        await _platformColumns.EnsureRollupColumnsAsync(rollup.RtId.ToString(), cancellationToken);
 
         var sourceTable = TenantSchema.QualifiedArchiveTable(_tenantId, source.RtId.ToString());
         var liveTable = TenantSchema.QualifiedArchiveTable(_tenantId, rollup.RtId.ToString());
@@ -298,7 +307,8 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
                     // TWA carry is derived from source data with the same bounded lookback the forward
                     // aggregation uses — identical inputs ⇒ identical staged rows (AB#4336 D1).
                     carryLookback: rollup.CarryLookback,
-                    sourceGenerationRanges: sourceGenerationRanges);
+                    sourceGenerationRanges: sourceGenerationRanges,
+                    sourceIsRollup: source.RollupAggregations is not null);
 
             // A discarded attempt may have staged a row for an entity the repeated attempt no longer
             // produces; clear the bucket from staging so it cannot be copied into the live table. The
