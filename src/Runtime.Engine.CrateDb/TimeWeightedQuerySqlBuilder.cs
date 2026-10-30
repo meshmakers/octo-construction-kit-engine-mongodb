@@ -21,7 +21,9 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// SELECT aggregates — grouped by the requested group columns, or into a single row when none
 /// are given. Plain aggregations in the same query exclude the carry row via <c>is_carry</c>,
 /// keeping their semantics identical to the standard single-scan statement. TWA values are
-/// computed directly as <c>integral / NULLIF(covered, 0)</c> — nothing is materialised.
+/// computed directly as <c>integral / NULLIF(covered, 0)</c> — nothing is materialised. The
+/// <see cref="IntegralColumn"/> kind (AB#7918) returns the integral itself, converted from
+/// value·ms to value·hours.
 /// </remarks>
 internal static class TimeWeightedQuerySqlBuilder
 {
@@ -42,6 +44,15 @@ internal static class TimeWeightedQuerySqlBuilder
     public sealed record StateColumn(string SourceColumn, string ComparisonValue, string OutputAlias);
 
     /// <summary>
+    /// One Integral output column: the step integral ∫v dt over the window in value unit × hours
+    /// (kW → kWh), LOCF-weighted per <c>rtId</c> and summed over all rtIds of a group. AB#7918.
+    /// </summary>
+    public sealed record IntegralColumn(string SourceColumn, string OutputAlias);
+
+    /// <summary>Milliseconds per hour: the integral is weighted in ms and returned in value × hours.</summary>
+    internal const double MillisecondsPerHour = 3_600_000d;
+
+    /// <summary>
     /// Builds the SELECT statement. The caller supplies the already-quoted, schema-qualified
     /// source table (see <see cref="TenantSchema.QualifiedArchiveTable"/>) and pre-resolved
     /// physical column names; output aliases become the result-row keys.
@@ -53,7 +64,10 @@ internal static class TimeWeightedQuerySqlBuilder
     /// </param>
     /// <param name="from">Inclusive window start — also the carry-in virtual event timestamp.</param>
     /// <param name="to">Exclusive window end — caps the last observation's interval.</param>
-    /// <param name="twaColumns">Time-weighted output columns. Must contain at least one entry.</param>
+    /// <param name="twaColumns">
+    /// Time-weighted output columns. Together with <paramref name="stateColumns"/> and
+    /// <paramref name="integralColumns"/> at least one LOCF column is required.
+    /// </param>
     /// <param name="plainColumns">Plain aggregations sharing the statement. May be empty.</param>
     /// <param name="groupByColumns">
     /// Physical group columns for the outer GROUP BY. Empty ⇒ one result row over all entities
@@ -66,6 +80,8 @@ internal static class TimeWeightedQuerySqlBuilder
     /// over — applied to both the carry and the in-window scan, so the opening state is the last
     /// observation that itself satisfies the filters.
     /// </param>
+    /// <param name="stateColumns">StateDuration output columns (AB#4341). May be null or empty.</param>
+    /// <param name="integralColumns">Integral output columns (AB#7918). May be null or empty.</param>
     public static string Build(
         string sourceTable,
         string? ckTypeId,
@@ -77,12 +93,14 @@ internal static class TimeWeightedQuerySqlBuilder
         IReadOnlyList<string>? rtIds,
         TimeSpan carryLookback,
         IReadOnlyList<StreamDataFieldFilterDto>? fieldFilters = null,
-        IReadOnlyList<StateColumn>? stateColumns = null)
+        IReadOnlyList<StateColumn>? stateColumns = null,
+        IReadOnlyList<IntegralColumn>? integralColumns = null)
     {
         stateColumns ??= Array.Empty<StateColumn>();
+        integralColumns ??= Array.Empty<IntegralColumn>();
         if (string.IsNullOrWhiteSpace(sourceTable)) throw new ArgumentException("sourceTable must not be empty.", nameof(sourceTable));
-        if ((twaColumns is null || twaColumns.Count == 0) && stateColumns.Count == 0)
-            throw new ArgumentException("At least one time-weighted or state-duration column is required.", nameof(twaColumns));
+        if ((twaColumns is null || twaColumns.Count == 0) && stateColumns.Count == 0 && integralColumns.Count == 0)
+            throw new ArgumentException("At least one time-weighted, state-duration or integral column is required.", nameof(twaColumns));
         twaColumns ??= Array.Empty<TwaColumn>();
         if (to <= from) throw new ArgumentException("to must be greater than from.", nameof(to));
         if (carryLookback <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(carryLookback));
@@ -97,6 +115,7 @@ internal static class TimeWeightedQuerySqlBuilder
         var seen = new HashSet<string>(StringComparer.Ordinal) { Constants.RtId, Constants.RtWellKnownName };
         foreach (var c in twaColumns.Select(t => t.SourceColumn)
                      .Concat(stateColumns.Select(sc => sc.SourceColumn))
+                     .Concat(integralColumns.Select(ic => ic.SourceColumn))
                      .Concat(plainColumns.Select(p => p.SourceColumn))
                      .Concat(groupByColumns))
         {
@@ -163,6 +182,18 @@ internal static class TimeWeightedQuerySqlBuilder
             sb.Append("SUM(CASE WHEN \"").Append(sc.SourceColumn).Append("\" = ")
               .Append(CrateSqlLiteral.StateLiteral(sc.ComparisonValue))
               .Append(" THEN \"dt_ms\" END) AS \"").Append(sc.OutputAlias).Append('"');
+            first = false;
+        }
+        foreach (var ic in integralColumns)
+        {
+            if (!first) sb.Append(", ");
+            // Step integral in value × hours: the carry row participates (it opens the window),
+            // NULL observations contribute 0 for their interval, and SUM over no rows is NULL, so
+            // an empty window without a carry row yields null rather than 0 (AB#7918).
+            sb.Append("SUM(CASE WHEN \"").Append(ic.SourceColumn).Append("\" IS NOT NULL THEN \"")
+              .Append(ic.SourceColumn).Append("\" * \"dt_ms\" END) / ")
+              .Append(MillisecondsPerHour.ToString("0.0", CultureInfo.InvariantCulture))
+              .Append(" AS \"").Append(ic.OutputAlias).Append('"');
             first = false;
         }
 

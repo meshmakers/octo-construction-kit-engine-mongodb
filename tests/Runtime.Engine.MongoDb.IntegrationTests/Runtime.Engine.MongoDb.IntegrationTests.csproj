@@ -55,6 +55,11 @@
         <None Update="testData\largeBinaries\Products.pdf">
           <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </None>
+        <!-- AB#7918: recorded grid rows for the Integral meter check (timestamp + ActivePower only). -->
+        <Content Include="testData\integral\*.csv">
+          <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+          <Pack>false</Pack>
+        </Content>
         <Content Include="testData\rollupSources\*.yaml">
           <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
           <Pack>false</Pack>

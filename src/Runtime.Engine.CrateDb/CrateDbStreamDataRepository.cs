@@ -853,12 +853,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             fieldFilters: options.FieldFilters,
             aggregationColumns: options.AggregationColumns);
 
-        // AB#4336 §6.2: TimeWeightedAvg over a raw (event-based) archive needs the LOCF statement —
-        // the standard single-scan builder cannot express the carry / interval weighting. Routed
-        // before the query builder is assembled; plain columns ride along in the same statement.
+        // AB#4336 §6.2: TimeWeightedAvg, StateDuration and Integral (AB#7918) over a raw (event-based)
+        // archive need the LOCF statement — the standard single-scan builder cannot express the
+        // carry / interval weighting. Routed before the query builder is assembled; plain columns
+        // ride along in the same statement.
+        RejectIntegralOnWindowedStorage(snapshot, options.AggregationColumns);
         if (!snapshot.UsesWindowedStorage
-            && options.AggregationColumns.Any(c =>
-                c.Function is AggregationFunction.TimeWeightedAverage or AggregationFunction.StateDuration))
+            && options.AggregationColumns.Any(c => IsLocfFunction(c.Function)))
         {
             return await ExecuteRawTimeWeightedAggregationAsync(
                 archiveRtId, fieldResolver, options, options.AggregationColumns, Array.Empty<string>());
@@ -991,9 +992,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         // AB#4336 §6.2: TWA over a raw archive — LOCF statement, grouped variant. See
         // ExecuteAggregationQueryAsync for the same routing rationale.
+        RejectIntegralOnWindowedStorage(snapshot, options.AggregationColumns);
         if (!snapshot.UsesWindowedStorage
-            && options.AggregationColumns.Any(c =>
-                c.Function is AggregationFunction.TimeWeightedAverage or AggregationFunction.StateDuration))
+            && options.AggregationColumns.Any(c => IsLocfFunction(c.Function)))
         {
             return await ExecuteRawTimeWeightedAggregationAsync(
                 archiveRtId, fieldResolver, options, options.AggregationColumns, options.GroupByColumns);
@@ -3425,12 +3426,56 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             AggregationFunction.Sum     => AggregationFunctionDto.Sum,
             AggregationFunction.TimeWeightedAverage => AggregationFunctionDto.TimeWeightedAvg,
             AggregationFunction.StateDuration => AggregationFunctionDto.StateDuration,
+            AggregationFunction.Integral => AggregationFunctionDto.Integral,
             _ => throw new ArgumentOutOfRangeException(nameof(func))
         };
     }
 
     /// <summary>
-    /// TWA over a raw (event-based) archive — the query-time LOCF path (AB#4336 §6.2). Builds the
+    /// The aggregation functions a raw (event-based) archive serves with the query-time LOCF
+    /// statement (<see cref="TimeWeightedQuerySqlBuilder"/>): AB#4336 (TWA, StateDuration) and
+    /// AB#7918 (Integral).
+    /// </summary>
+    private static bool IsLocfFunction(AggregationFunction function) =>
+        function is AggregationFunction.TimeWeightedAverage
+            or AggregationFunction.StateDuration
+            or AggregationFunction.Integral;
+
+    /// <summary>
+    /// A query of the LOCF path that cannot be answered as asked (missing window, missing comparison
+    /// value, unsupported archive kind). Thrown as the contracts
+    /// <see cref="Meshmakers.Octo.Runtime.Contracts.StreamData.StreamDataException"/> — the type the
+    /// REST controller turns into a 400 and the GraphQL layer into a coded error — rather than the
+    /// connection-level exception of this namespace, which surfaced as an uncoded failure (AB#7918).
+    /// </summary>
+    private static Meshmakers.Octo.Runtime.Contracts.StreamData.StreamDataException InvalidLocfQuery(
+        OctoObjectId archiveRtId, string message) =>
+        new(message, archiveRtId);
+
+    /// <summary>
+    /// Integral is served over raw event archives only (AB#7918). Rollup and time-range archives
+    /// store aggregates, not observations — reading them needs the materialised TWA pair
+    /// (AB#7920). Refused with a structured error instead of a silently wrong or empty result.
+    /// </summary>
+    private static void RejectIntegralOnWindowedStorage(
+        ArchiveSnapshot snapshot, IReadOnlyList<AggregationColumn> aggregationColumns)
+    {
+        if (!snapshot.UsesWindowedStorage)
+        {
+            return;
+        }
+
+        var integral = aggregationColumns.FirstOrDefault(c => c.Function == AggregationFunction.Integral);
+        if (integral is not null)
+        {
+            throw InvalidLocfQuery(snapshot.RtId,
+                $"Integral on '{integral.AttributePath}' is supported over raw (event-based) archives only; rollup and time-range archives are not supported yet.");
+        }
+    }
+
+    /// <summary>
+    /// TWA, StateDuration and Integral (AB#7918) over a raw (event-based) archive — the query-time
+    /// LOCF path (AB#4336 §6.2). Builds the
     /// carry-in + LEAD-weighted statement via <see cref="TimeWeightedQuerySqlBuilder"/> with the
     /// query window as the bucket; plain aggregation columns ride along carry-guarded. Grouped
     /// variant groups the outer SELECT; LOCF weighting stays per <c>rtId</c> either way. The carry
@@ -3445,8 +3490,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     {
         if (options.From is null || options.To is null)
         {
-            throw StreamDataException.InvalidQueryParameters(
-                "TimeWeightedAverage over a raw archive requires From and To — the carry-in state is derived relative to the window.");
+            throw InvalidLocfQuery(archiveRtId,
+                "TimeWeightedAverage, StateDuration and Integral over a raw archive require From and To — the carry-in state is derived relative to the window.");
         }
 
         // Field filters select the EVENT SET the LOCF weighting runs over — they apply to both
@@ -3470,6 +3515,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var twaColumns = new List<TimeWeightedQuerySqlBuilder.TwaColumn>();
         var stateColumns = new List<TimeWeightedQuerySqlBuilder.StateColumn>();
+        var integralColumns = new List<TimeWeightedQuerySqlBuilder.IntegralColumn>();
         var plainColumns = new List<TimeWeightedQuerySqlBuilder.PlainColumn>();
         foreach (var col in aggregationColumns)
         {
@@ -3491,7 +3537,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             {
                 if (string.IsNullOrWhiteSpace(col.ComparisonValue))
                 {
-                    throw StreamDataException.InvalidQueryParameters(
+                    throw InvalidLocfQuery(archiveRtId,
                         $"StateDuration on '{col.AttributePath}' requires a comparisonValue — the state literal to measure the duration of.");
                 }
 
@@ -3500,6 +3546,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                     resolved.CrateDbName, col.ComparisonValue!, stateAlias));
                 outputColumnNames.Add(stateAlias);
                 outputNameBySqlAlias[stateAlias] = stateAlias;
+            }
+            else if (col.Function == AggregationFunction.Integral)
+            {
+                // value × hours (kW → kWh), wire suffix "_integral" (AB#7918).
+                var integralAlias = $"{resolved.CrateDbName}_integral";
+                integralColumns.Add(new TimeWeightedQuerySqlBuilder.IntegralColumn(resolved.CrateDbName, integralAlias));
+                outputColumnNames.Add(integralAlias);
+                outputNameBySqlAlias[integralAlias] = integralAlias;
             }
             else
             {
@@ -3523,7 +3577,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             options.RtIds?.Select(id => id.ToString()).ToList(),
             RollupAggregationSqlBuilder.DefaultCarryLookback,
             filterDtos,
-            stateColumns);
+            stateColumns,
+            integralColumns);
 
         _logger.LogDebug("Executing raw time-weighted aggregation SQL: {Sql}", sql);
 

@@ -1444,8 +1444,23 @@ identically to the page.
 
 **Still closed-range-only:** downsampling (needs both to derive the bin width — validated in
 `ExecuteDownsamplingQueryAsync`, so `AppendDownsamplingSourceFilters` never sees a one-sided range)
-and `TimeWeightedAverage` / `StateDuration` over a raw archive (the LOCF carry-in is defined
-relative to the window — explicit `InvalidQueryParameters` guard).
+and `TimeWeightedAverage` / `StateDuration` / `Integral` over a raw archive (the LOCF carry-in is defined
+relative to the window — explicit guard that throws the contracts `StreamDataException` with the archive id,
+a structured 400 / coded GraphQL error since AB#7918; it used to be the uncoded connection-level exception).
+
+### Integral over raw archives (AB#7918)
+
+`AggregationFunction.Integral` is the third LOCF column kind of `TimeWeightedQuerySqlBuilder` (`IntegralColumn`, next to
+`TwaColumn` / `StateColumn`): `SUM(CASE WHEN v IS NOT NULL THEN v * dt_ms END) / 3600000.0`, alias `{column}_integral`, value
+unit × hours (kW → kWh). Step only (the last row holds until the next row of the same rtId or the window end), carry-in from
+the last row before `from` (engine default lookback), rtIds summed (grouped: per group), NULL rows contribute 0, an empty
+window without carry is `null`. Routed by `IsLocfFunction` in both aggregation entry points; a windowed archive (rollup,
+time-range) is refused up front (`RejectIntegralOnWindowedStorage`, rollup support is AB#7920). Never split a signed power with a
+field filter (it selects the LOCF event set and would carry the last positive value across export periods); use a computed
+column. Semantics: engine `docs/concept-time-weighted-aggregation.md` §6.5. Tests: `TimeWeightedQuerySqlBuilderTests`,
+`CrateDbStreamDataIntegralRoutingTests` (unit), `StreamDataIntegral/StreamDataIntegralIntegrationTests` (real CrateDB: cadence,
+on-change rows, gap, carry, empty, NULL, several rtIds, grouped, missing window, and the 1 % meter check from recorded grid rows
+in `testData/integral/grid-5s-meter-check-ab7692.csv`).
 
 ### Downsampling Query — Single Grouped Scan, Bin Axis Built Caller-Side (AB#4713)
 

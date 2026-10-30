@@ -116,4 +116,70 @@ public class TimeWeightedQuerySqlBuilderTests
         var occurrences = sql.Split("AND \"ison\" = 'true'").Length - 1;
         Assert.Equal(2, occurrences);
     }
+
+    // ---- Integral (AB#7918) ----
+
+    private static readonly TimeWeightedQuerySqlBuilder.IntegralColumn Integral =
+        new("activepower", "activepower_integral");
+
+    private const string IntegralExpression =
+        "SUM(CASE WHEN \"activepower\" IS NOT NULL THEN \"activepower\" * \"dt_ms\" END) / 3600000.0 AS \"activepower_integral\"";
+
+    [Fact]
+    public void Build_IntegralOnly_EmitsValueTimesHours_OverTheLocfShape()
+    {
+        var sql = TimeWeightedQuerySqlBuilder.Build(
+            SourceTable, CkTypeId, From, To,
+            Array.Empty<TimeWeightedQuerySqlBuilder.TwaColumn>(),
+            Array.Empty<TimeWeightedQuerySqlBuilder.PlainColumn>(),
+            Array.Empty<string>(),
+            rtIds: null,
+            carryLookback: TimeSpan.FromDays(35),
+            integralColumns: new[] { Integral });
+
+        // value·ms → value·hours; NULL observations contribute nothing; no division by the covered time.
+        Assert.Contains("SELECT " + IntegralExpression, sql);
+        Assert.DoesNotContain("NULLIF", sql);
+        // The integral is weighted by the same carry-in + LEAD statement as TWA.
+        Assert.Contains("TRUE AS \"is_carry\", \"activepower\"", sql);
+        Assert.Contains("LEAD(\"ts\") OVER (PARTITION BY \"rtid\" ORDER BY \"ts\", \"is_carry\" DESC)", sql);
+        Assert.Contains("'2026-07-04T14:00:00.0000000Z'::timestamp)::bigint - \"ts\"::bigint AS \"dt_ms\"", sql);
+        // Ungrouped: one row over all rtIds — per-rtId integrals are summed.
+        Assert.DoesNotContain("GROUP BY", sql);
+    }
+
+    [Fact]
+    public void Build_IntegralMixedWithTwaStateAndPlain_EmitsEveryColumn_AndPlainStillExcludesTheCarryRow()
+    {
+        var sql = TimeWeightedQuerySqlBuilder.Build(
+            SourceTable, CkTypeId, From, To,
+            new[] { new TimeWeightedQuerySqlBuilder.TwaColumn("activepower", "activepower_twavg") },
+            new[] { new TimeWeightedQuerySqlBuilder.PlainColumn("SUM", "activepower", "activepower_sum") },
+            new[] { "rtwellknownname" },
+            rtIds: null,
+            carryLookback: TimeSpan.FromDays(35),
+            stateColumns: new[] { new TimeWeightedQuerySqlBuilder.StateColumn("state", "2", "state_stateduration") },
+            integralColumns: new[] { Integral });
+
+        Assert.Contains("SUM(CASE WHEN NOT \"is_carry\" THEN \"activepower\" END) AS \"activepower_sum\"", sql);
+        Assert.Contains("/ NULLIF(SUM(CASE WHEN \"activepower\" IS NOT NULL THEN \"dt_ms\" END), 0) AS \"activepower_twavg\"", sql);
+        Assert.Contains("THEN \"dt_ms\" END) AS \"state_stateduration\"", sql);
+        Assert.Contains(IntegralExpression, sql);
+        // Source columns are carried once each, even when several column kinds share one.
+        Assert.Contains("TRUE AS \"is_carry\", \"activepower\", \"state\"", sql);
+        Assert.DoesNotContain("\"activepower\", \"activepower\"", sql);
+        Assert.Contains("GROUP BY \"rtwellknownname\"", sql);
+    }
+
+    [Fact]
+    public void Build_WithoutAnyLocfColumn_Throws()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => TimeWeightedQuerySqlBuilder.Build(
+            SourceTable, CkTypeId, From, To,
+            Array.Empty<TimeWeightedQuerySqlBuilder.TwaColumn>(),
+            new[] { new TimeWeightedQuerySqlBuilder.PlainColumn("SUM", "activepower", "activepower_sum") },
+            Array.Empty<string>(), null, TimeSpan.FromDays(35),
+            integralColumns: Array.Empty<TimeWeightedQuerySqlBuilder.IntegralColumn>()));
+        Assert.Contains("integral", ex.Message, StringComparison.Ordinal);
+    }
 }
