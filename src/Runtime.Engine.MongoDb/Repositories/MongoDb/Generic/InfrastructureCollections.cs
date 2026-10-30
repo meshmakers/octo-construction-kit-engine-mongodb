@@ -14,6 +14,7 @@ internal static class InfrastructureCollections
     public const string TenantLifecycle = "tenant_lifecycle";
     public const string TenantSetupRetry = "tenant_setup_retry";
     public const string DisplayRuleSweep = "display_rule_sweep";
+    public const string CkMethodHandlerSnapshot = "ck_method_handler_snapshot";
     public const string SysLock = "SysLock";
 
     private static readonly IReadOnlySet<string> Names = new HashSet<string>(StringComparer.Ordinal)
@@ -21,6 +22,7 @@ internal static class InfrastructureCollections
         TenantLifecycle,
         TenantSetupRetry,
         DisplayRuleSweep,
+        CkMethodHandlerSnapshot,
         SysLock,
     };
 
