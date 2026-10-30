@@ -2157,7 +2157,9 @@ Basic.Accounting stayed `ResolveFailed` after System went back to the version it
   MongoDB: an import against an unsatisfiable range throws, nothing is installed, and the message names the range and
   the installed version). `DatabaseCkModelRepository` implements the engine's optional `IRepositoryVersionLister`
   (`ListVersionsAsync`: the versions `IsExistingAsync(range)` considers, ascending) so that the engine's
-  `RepositoryDependencyResolver` can name them in the rejection.
+  `RepositoryDependencyResolver` can name them in the rejection. Since AB#7381 the repository also implements
+  `IRepositoryInstalledVersionLister` (`ListInstalledVersionsAsync`: every held version of the name with its state, `Importing` included), and the
+  rejection reads `X-[2.5,3.0): the tenant has no Available version of X (installed: 2.5.0 ResolveFailed)` instead of a catalog wording.
 
 Pinned by `CkModelImportGuard/CkModelImportGuardTests` (real MongoDB, throwaway tenants: same-major and major skip,
 explicit downgrade + upgrade back, same-version short-circuit, embedded vs explicit service-model overloads,
