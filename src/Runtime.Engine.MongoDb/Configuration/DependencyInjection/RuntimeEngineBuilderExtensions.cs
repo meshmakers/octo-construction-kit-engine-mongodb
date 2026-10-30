@@ -98,6 +98,12 @@ public static class RuntimeEngineBuilderExtensions
             .AddSingleton<Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle.ITenantSetupRetryStore,
                 Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantLifecycle.TenantSetupRetryStore>();
 
+        // AB#5671 persisted CK method handler registry snapshot (F3.2): lets a restarted dispatcher host answer
+        // without waiting for the next heartbeat round. Consumed optionally by octo-common-services.
+        builder.Services
+            .AddSingleton<Meshmakers.Octo.Runtime.Contracts.MongoDb.Methods.ICkMethodHandlerSnapshotStore,
+                Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.Methods.CkMethodHandlerSnapshotStore>();
+
         // AB#4945 tenant-database ownership marker (Epic AB#4944). Engine-internal: TenantContext
         // stamps it on create/attach/resolve and the namespace gate consults it on attach so a
         // second OctoMesh instance on the same MongoDB server cannot adopt a database this

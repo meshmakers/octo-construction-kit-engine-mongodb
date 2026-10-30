@@ -2494,10 +2494,30 @@ recreate under the same name (Mongo `errorCode 13`) therefore stayed half-provis
 restarted; for Identity, which owns the roles/groups seed, that meant no administrator could be
 provisioned for that tenant at all.
 
+### CK Method Handler Snapshot Store (AB#5671, F3.2)
+
+`CkMethodHandlerSnapshotStore` (`Repositories/Methods/`, port `ICkMethodHandlerSnapshotStore` in
+`Runtime.Contracts.MongoDb/Methods`, non-CK collection `ck_method_handler_snapshot` in the SYSTEM database) persists the
+CK method handler registry of `octo-common-services` (`CkMethodHandlerRegistry`) so a restarted dispatcher host can answer a
+call without waiting for the next heartbeat round. One document per (`methodKey`, `instanceId`).
+
+- **Plain collection, not a System CK entity.** It is service bookkeeping with a TTL, not tenant data; a System CK
+  element would be a System model change (compatibility statement, downgrade guard) for no gain.
+- **Service data only.** The document holds ids, service name, version, contract version, times, the served tenant ids and the
+  withdrawal flag, never a parameter value, token or user data (integration test over the stored document with an allow-list).
+- **A row is "last seen", not "live".** A reader treats it as live only while `expiresUtc` (receipt time + heartbeat TTL) has not
+  passed and `withdrawn` is `false`. `retainUntilUtc` has a MongoDB TTL index (`expireAfterSeconds: 0`), so stale rows leave
+  by themselves.
+- `LoadAsync` is a read (never materializes the system database). `UpsertAsync` returns `false` and writes nothing while the
+  system tenant does not exist (AB#4854) and only replaces a row with a strictly newer `lastSeenUtc` (replicas share the
+  collection; the duplicate-key outcome of the unique index is the "keep the newer row" case and is ignored).
+- Registered by `AddMongoDbRuntimeRepository` (`RuntimeEngineBuilderExtensions`); a host that does not resolve the
+  port keeps the registry in memory only.
+
 ### Infrastructure-Only Shell of the System Database (AB#4854)
 
 The engine's own plumbing writes non-CK bookkeeping into the SYSTEM database — `tenant_lifecycle`,
-`tenant_setup_retry`, `display_rule_sweep`, `SysLock` (registry: `InfrastructureCollections`). On a
+`tenant_setup_retry`, `display_rule_sweep`, `ck_method_handler_snapshot`, `SysLock` (registry: `InfrastructureCollections`). On a
 virgin server such a write may materialize the system database BEFORE the system-tenant bootstrap
 runs; in r3.4.93 the bootstrap then refused over the "existing" database and the datasource user was
 never created — every fresh install wedged permanently on a MongoDB authentication error.
