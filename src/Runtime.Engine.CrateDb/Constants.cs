@@ -64,6 +64,15 @@ public static class Constants
     /// <summary>Optional reason of a manual write, as given (AB#7593); NULL on automated rows.</summary>
     public const string ManualReason = ArchiveRowOriginFields.ManualReason;
 
+    /// <summary>
+    /// Number of manually entered source values of a rollup row (AB#7727); <c>NULL</c> in a row aggregated
+    /// before the column existed, which reads as 0. Only on rollup tables. See <see cref="ArchiveRowOriginColumns" />.
+    /// </summary>
+    public const string ManualCount = ArchiveRowOriginFields.ManualCount;
+
+    /// <summary>Write time of the latest manual entry of a rollup row (AB#7727). Only on rollup tables.</summary>
+    public const string LastManualAt = ArchiveRowOriginFields.LastManualAt;
+
     /// <summary>rtWellKnownName column name</summary>
     public const string RtWellKnownName = "rtwellknownname";
 

@@ -169,7 +169,7 @@ public class RollupComputedColumnEvalTests
         await NewSut().AggregateBucketAsync(source, rollup, BucketStart, BucketEnd, CancellationToken.None);
 
         // No read-back happened (only the aggregate INSERT ran).
-        A.CallTo(() => _db.StreamRawRowsAsync(A<string>._, A<string>._, A<CancellationToken>._))
+        A.CallTo(() => _db.StreamRawRowsAsync(A<string>._, A<string>.That.Not.Contains("information_schema"), A<CancellationToken>._))
             .MustNotHaveHappened();
     }
 }

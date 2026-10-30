@@ -196,6 +196,19 @@ internal static class ArchiveDdlGenerator
             sb.Append(',');
         }
 
+        if (includeGeneration)
+        {
+            // AB#7727: every rollup row reports its manual values. After the user columns, because a rollup
+            // from before the reservation may hold a column of that name, which then stays what it is.
+            foreach (var (name, definition) in ArchiveRowOriginColumns.RollupColumns)
+            {
+                if (seenColumnNames.Add(name))
+                {
+                    sb.Append(" \"").Append(name).Append("\" ").Append(definition).Append(',');
+                }
+            }
+        }
+
         var generationPkSuffix = includeGeneration ? $", \"{Constants.Generation}\"" : string.Empty;
         sb.Append($" PRIMARY KEY (\"{Constants.WindowStart}\", \"{Constants.WindowEnd}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\"{generationPkSuffix})");
         sb.Append(") CLUSTERED INTO ")

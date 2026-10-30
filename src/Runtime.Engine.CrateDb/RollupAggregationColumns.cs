@@ -220,16 +220,9 @@ internal static class RollupAggregationColumns
                 "result under the same column name).");
         }
 
-        return resolution.Kind switch
-        {
-            RollupSourceColumnResolutionKind.ChildAggregation =>
-                BindChildAggregation(spec, resolution.ChildAggregation!, source.RtId, rollupRtId),
-            // Rule 1b (AB#7727): a row origin field of a base archive is a physical column of its
-            // table like a declared one, read the same way.
-            RollupSourceColumnResolutionKind.OriginColumn =>
-                BindDeclared(spec) with { Kind = RollupSourceColumnResolutionKind.OriginColumn },
-            _ => BindDeclared(spec),
-        };
+        return resolution.Kind == RollupSourceColumnResolutionKind.DeclaredColumn
+            ? BindDeclared(spec)
+            : BindChildAggregation(spec, resolution.ChildAggregation!, source.RtId, rollupRtId);
     }
 
     /// <summary>

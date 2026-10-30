@@ -9,7 +9,9 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Rollup tables do not carry them: their rows are derived by the platform, never written by a person.
+/// Rollup tables do not carry them: their rows are derived by the platform, never written by a person. A
+/// rollup row reports the origin of what it aggregates in its own platform columns instead,
+/// <see cref="RollupColumns" /> (AB#7727).
 /// </para>
 /// <para>
 /// Every column is nullable without a DEFAULT, for two reasons. Tables provisioned before AB#5356 get the
@@ -44,18 +46,39 @@ internal static class ArchiveRowOriginColumns
     public static IReadOnlyList<string> Names { get; } = Columns.Select(c => c.Name).ToArray();
 
     /// <summary>
+    /// The platform columns of every rollup table with their DDL type (AB#7727): how many manually entered
+    /// source values a bucket holds and when the latest of them was written. Nullable without a DEFAULT and
+    /// always named in the aggregation INSERT, for the reasons above. Existing rollup rows hold <c>NULL</c>
+    /// after the <c>ALTER TABLE … ADD COLUMN</c>, which means "no manual values".
+    /// </summary>
+    public static IReadOnlyList<(string Name, string Definition)> RollupColumns { get; } = new (string, string)[]
+    {
+        (Constants.ManualCount, "BIGINT"),
+        (Constants.LastManualAt, "TIMESTAMP WITH TIME ZONE"),
+    };
+
+    /// <summary>
     /// The SQL that reads <paramref name="column" /> on the read path (AB#7616). Every column is a plain quoted
-    /// identifier, except <c>row_origin</c>: a row written before the origin was recorded stores <c>NULL</c>
-    /// (an <c>ALTER TABLE … ADD COLUMN</c> does not fill existing rows, not even with a DEFAULT), and it is
-    /// read as automated — in projections, filters, grouping and sorting alike.
+    /// identifier, except the two whose stored <c>NULL</c> means something (an <c>ALTER TABLE … ADD COLUMN</c>
+    /// does not fill existing rows, not even with a DEFAULT): <c>row_origin</c> of a row written before the
+    /// origin was recorded reads as automated, <c>manual_count</c> of a rollup row aggregated before the
+    /// column existed reads as 0 (AB#7727) — in projections, filters, grouping and sorting alike.
     /// </summary>
     /// <param name="column">Physical column name.</param>
     /// <param name="tableAlias">Optional table alias the column is qualified with.</param>
     public static string ColumnRef(string column, string? tableAlias = null)
     {
         var qualified = tableAlias is null ? $"\"{column}\"" : $"{tableAlias}.\"{column}\"";
-        return column == Constants.RowOrigin ? $"COALESCE({qualified}, '{AutomatedValue}')" : qualified;
+        return column switch
+        {
+            Constants.RowOrigin => $"COALESCE({qualified}, '{AutomatedValue}')",
+            Constants.ManualCount => $"COALESCE({qualified}, 0)",
+            _ => qualified
+        };
     }
+
+    /// <summary>True when <see cref="ColumnRef" /> reads the column through an expression, which needs an alias.</summary>
+    public static bool IsReadAsExpression(string column) => column is Constants.RowOrigin or Constants.ManualCount;
 
     /// <summary>
     /// <see cref="ColumnRef" /> as a SELECT item that keeps the column name as its output name.
@@ -63,7 +86,7 @@ internal static class ArchiveRowOriginColumns
     public static string SelectRef(string column, string? tableAlias = null)
     {
         var reference = ColumnRef(column, tableAlias);
-        return column == Constants.RowOrigin ? $"{reference} AS \"{column}\"" : reference;
+        return IsReadAsExpression(column) ? $"{reference} AS \"{column}\"" : reference;
     }
 
     /// <summary>The stored text of an origin.</summary>

@@ -106,4 +106,15 @@ public class ComputedColumnValidatorTests
         // is still accepted — it is syntactically valid and its references resolve.
         Validate(Ing("a"), Ing("b"), Comp("x", "a / (b - b)"));
     }
+
+    // AB#7727: these names belong to the platform, whatever kind the column is.
+    [Theory]
+    [InlineData("manual_count")]
+    [InlineData("last_manual_at")]
+    [InlineData("Manual_Count")]
+    public void AColumnWithAReservedName_IsRefused(string name)
+    {
+        Assert.Throws<ArchiveReservedColumnNameException>(() => Validate(Ing("activePower"), Comp(name, "activepower")));
+        Assert.Throws<ArchiveReservedColumnNameException>(() => Validate(Ing(name)));
+    }
 }

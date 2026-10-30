@@ -202,6 +202,17 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
     {
         cancellationToken.ThrowIfCancellationRequested();
         await Task.CompletedTask;
+        if (query.Contains("FROM information_schema.columns", StringComparison.Ordinal))
+        {
+            // The tables of the simulation carry their platform columns.
+            foreach (var name in ArchiveRowOriginColumns.Names.Concat(ArchiveRowOriginFields.RollupFields))
+            {
+                yield return new Dictionary<string, object?> { ["column_name"] = name };
+            }
+
+            yield break;
+        }
+
         if (query.Contains("FROM information_schema.tables", StringComparison.Ordinal))
         {
             Calls.Add(new Call("read:sweep-tables", query));

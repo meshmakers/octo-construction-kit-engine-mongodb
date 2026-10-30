@@ -141,31 +141,4 @@ public class RollupColumnTypeResolverTests
         Assert.Equal("dimminglevel_twavg_duration", resolved[1].Path);
         Assert.Equal("BIGINT", duration.CrateTypeName);
     }
-
-    // AB#7727: the earliest / latest manual entry stays a timestamp, also when chained (same logical path).
-    [Theory]
-    [InlineData(CkRollupFunction.Min, "manual_written_at_min")]
-    [InlineData(CkRollupFunction.Max, "manual_written_at_max")]
-    public void Resolve_MinMaxOverManualWrittenAt_EmitsTimestamp(CkRollupFunction function, string expectedName)
-    {
-        var aggregations = new[] { new CkRollupAggregationSpec("manual_written_at", function, null) };
-
-        var resolved = RollupColumnTypeResolver.Resolve(RollupColumnGenerator.Generate(aggregations), aggregations);
-
-        Assert.Equal(expectedName, Assert.Single(resolved).Path);
-        Assert.Equal("TIMESTAMP WITH TIME ZONE", Assert.IsType<CrateColumnType.Primitive>(resolved[0].Type).CrateTypeName);
-    }
-
-    [Theory]
-    [InlineData("manual_written_at")]
-    [InlineData("manual_written_by")]
-    [InlineData("manual_reason")]
-    public void Resolve_CountOverAnOriginField_EmitsBigint(string path)
-    {
-        var aggregations = new[] { new CkRollupAggregationSpec(path, CkRollupFunction.Count, "manual_count") };
-
-        var resolved = RollupColumnTypeResolver.Resolve(RollupColumnGenerator.Generate(aggregations), aggregations);
-
-        Assert.Equal("BIGINT", Assert.IsType<CrateColumnType.Primitive>(Assert.Single(resolved).Type).CrateTypeName);
-    }
 }

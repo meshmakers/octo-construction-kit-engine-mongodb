@@ -80,12 +80,12 @@ public class RollupAggregationPerSourceResolutionTests
         var resolved = RollupAggregationColumns.ResolveForSource(parentSpecs, ParentId, source, sourceRollup);
         return RollupAggregationSqlBuilder.Build(
             SourceTable, TargetTable, RollupCkTypeId, resolved, BucketStart, BucketEnd,
-            source.UsesWindowedStorage);
+            source.UsesWindowedStorage, sourceIsRollup: source.RollupAggregations is not null);
     }
 
-    private static string BuildLegacy(IReadOnlyList<CkRollupAggregationSpec> specs, bool windowed) =>
+    private static string BuildLegacy(IReadOnlyList<CkRollupAggregationSpec> specs, bool windowed, bool sourceIsRollup = false) =>
         RollupAggregationSqlBuilder.Build(
-            SourceTable, TargetTable, RollupCkTypeId, specs, BucketStart, BucketEnd, windowed);
+            SourceTable, TargetTable, RollupCkTypeId, specs, BucketStart, BucketEnd, windowed, sourceIsRollup: sourceIsRollup);
 
     private static CkRollupAggregationSpec Spec(string path, CkRollupFunction fn, string? target = null, string? comparison = null) =>
         new(path, fn, target, comparison);
@@ -142,7 +142,7 @@ public class RollupAggregationPerSourceResolutionTests
 
         var sql = BuildFor(specs, childArchive, childRollup);
         Assert.Contains("SUM(\"amountvalue_sum\") AS \"amountvalue_sum_sum\"", sql);
-        Assert.Equal(BuildLegacy(specs, windowed: true), sql);
+        Assert.Equal(BuildLegacy(specs, windowed: true, sourceIsRollup: true), sql);
     }
 
     // ---- rule 2: rollup source, function-preserving ----
@@ -487,53 +487,64 @@ public class RollupAggregationPerSourceResolutionTests
             A<string>._, A<string>._, A<CrateStatementClass>._, A<CancellationToken>._)).MustNotHaveHappened();
     }
 
-    // ---- rule 1b: row origin fields of a base archive (AB#7727) ----
+    // ---- the platform columns of every rollup (AB#7727) ----
 
     [Fact]
-    public void BaseSource_OriginFields_ReadTheSystemColumnsDirectly()
+    public void BaseSource_CountsTheManualRows_AndKeepsTheLatestManualEntry()
     {
-        var specs = new[]
+        var specs = new[] { Spec("Amount.Value", CkRollupFunction.Sum) };
+
+        foreach (var sql in new[] { BuildFor(specs, Base("Amount.Value"), null), BuildFor(specs, RawBase("Amount.Value"), null) })
         {
-            Spec("manual_written_at", CkRollupFunction.Count, "manual_count"),
-            Spec("manual_written_at", CkRollupFunction.Max, "last_manual"),
-            Spec("manual_written_by", CkRollupFunction.Count),
-        };
-
-        var resolved = RollupAggregationColumns.ResolveForSource(specs, ParentId, Base("Amount.Value"), null);
-        Assert.All(resolved, r => Assert.Equal(RollupSourceColumnResolutionKind.OriginColumn, r.Kind));
-
-        var sql = BuildFor(specs, Base("Amount.Value"), null);
-        Assert.Contains("COUNT(\"manual_written_at\") AS \"manual_count\"", sql);
-        Assert.Contains("MAX(\"manual_written_at\") AS \"last_manual\"", sql);
-        Assert.Contains("COUNT(\"manual_written_by\") AS \"manual_written_by_count\"", sql);
-
-        var rawSql = BuildFor(specs, RawBase("Amount.Value"), null);
-        Assert.Contains("COUNT(\"manual_written_at\") AS \"manual_count\"", rawSql);
+            Assert.Contains("COUNT(CASE WHEN \"row_origin\" = 'manual' THEN 1 END) AS \"manual_count\"", sql);
+            Assert.Contains("MAX(\"manual_written_at\") AS \"last_manual_at\"", sql);
+            Assert.Contains("\"manual_count\" = EXCLUDED.\"manual_count\"", sql);
+            Assert.Contains("\"last_manual_at\" = EXCLUDED.\"last_manual_at\"", sql);
+        }
     }
 
     [Fact]
-    public void RollupSource_LogicalOriginCountAndMax_ChainAsSumAndMax()
-    {
-        var childSpecs = new[]
-        {
-            Spec("manual_written_at", CkRollupFunction.Count, "manual_count"),
-            Spec("manual_written_at", CkRollupFunction.Max, "last_manual"),
-        };
-        var (childArchive, childRollup) = ChildRollup(childSpecs);
-
-        var sql = BuildFor(childSpecs, childArchive, childRollup);
-
-        Assert.Contains("SUM(\"manual_count\") AS \"manual_count\"", sql);
-        Assert.Contains("MAX(\"last_manual\") AS \"last_manual\"", sql);
-        Assert.DoesNotContain("COUNT(", sql);
-    }
-
-    [Fact]
-    public void RollupSource_OriginPathItDoesNotStore_DoesNotResolve()
+    public void RollupSource_ChainsTheCountBySumAndTheTimeByMax()
     {
         var (childArchive, childRollup) = ChildRollup(Spec("Amount.Value", CkRollupFunction.Sum));
 
-        Assert.Throws<InvalidOperationException>(() => RollupAggregationColumns.ResolveForSource(
-            Spec("manual_written_at", CkRollupFunction.Count), childArchive, childRollup, ParentId));
+        var sql = BuildFor([Spec("Amount.Value", CkRollupFunction.Sum)], childArchive, childRollup);
+
+        Assert.Contains("SUM(\"manual_count\") AS \"manual_count\"", sql);
+        Assert.Contains("MAX(\"last_manual_at\") AS \"last_manual_at\"", sql);
+        Assert.DoesNotContain("row_origin", sql);
+    }
+
+    [Fact]
+    public void RawSource_TimeWeighted_LeavesTheCarryRowOutOfThePlatformColumns_AndCarriesTheirSourceColumnsThroughTheSubSelects()
+    {
+        var specs = new[] { Spec("Amount.Value", CkRollupFunction.TimeWeightedAvg) };
+
+        var sql = BuildFor(specs, RawBase("Amount.Value"), null);
+
+        Assert.Contains("COUNT(CASE WHEN NOT \"is_carry\" AND \"row_origin\" = 'manual' THEN 1 END) AS \"manual_count\"", sql);
+        Assert.Contains("MAX(CASE WHEN NOT \"is_carry\" THEN \"manual_written_at\" END) AS \"last_manual_at\"", sql);
+        Assert.Contains("\"amountvalue\", \"row_origin\", \"manual_written_at\"", sql);
+    }
+
+    [Fact]
+    public void BaseSource_FirstAndLast_ProjectThePlatformSourceColumnsInTheRankSubSelect()
+    {
+        var sql = BuildFor([Spec("Amount.Value", CkRollupFunction.First)], Base("Amount.Value"), null);
+
+        Assert.Contains("\"amountvalue\", \"row_origin\", \"manual_written_at\"", sql);
+    }
+
+    // A rollup from before the names were reserved keeps its own column; the bucket must not name it twice, or the
+    // rollup would stop with a duplicate column.
+    [Fact]
+    public void ARollupThatStoresItsOwnColumnOfThatName_KeepsItAndTheStatementStaysValid()
+    {
+        var specs = new[] { Spec("Manual", CkRollupFunction.Count) }; // stored as manual_count
+
+        var sql = BuildFor(specs, Base("Manual"), null);
+
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(sql, "AS \"manual_count\""));
+        Assert.Contains("MAX(\"manual_written_at\") AS \"last_manual_at\"", sql);
     }
 }

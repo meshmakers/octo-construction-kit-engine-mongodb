@@ -101,6 +101,34 @@ public static class RollupQueryAggregationResolver
         return null;
     }
 
+    /// <summary>
+    /// Resolves an aggregation over the platform column <c>manual_count</c> of a rollup, which no spec declares
+    /// (AB#7727): a row that was aggregated before the column existed holds <c>NULL</c> and counts as 0, so the
+    /// total of an untouched range is 0, not empty. Returns null for any other column or function; those go the
+    /// standard way (<c>last_manual_at</c> has no such <c>NULL</c> rule).
+    /// </summary>
+    public static RollupQueryAggregation? ResolveManualCount(string attributePath, AggregationFunctionDto targetFunction)
+    {
+        if (!string.Equals(attributePath, Constants.ManualCount, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var function = targetFunction switch
+        {
+            AggregationFunctionDto.Sum => "SUM",
+            AggregationFunctionDto.Max => "MAX",
+            AggregationFunctionDto.Min => "MIN",
+            _ => null,
+        };
+        return function is null
+            ? null
+            : new RollupQueryAggregation(
+                SqlExpression: $"{function}({ArchiveRowOriginColumns.ColumnRef(Constants.ManualCount)})",
+                SqlAlias: $"{Constants.ManualCount}_{function.ToLowerInvariant()}",
+                OutputColumnName: attributePath);
+    }
+
     private static RollupQueryAggregation? TryResolveSingleSpec(
         CkRollupAggregationSpec spec,
         AggregationFunctionDto target,

@@ -96,4 +96,20 @@ public class ArchiveRowOriginQuerySqlTests
         Assert.Equal("\"value\"", ArchiveRowOriginColumns.SelectRef("value"));
         Assert.Equal(ArchiveRowOrigin.Automated, ArchiveRowOriginColumns.FromStoredValue(null));
     }
+
+    // AB#7727: the rows of a rollup aggregated before the column existed hold NULL, which means no manual values.
+    [Fact]
+    public void ManualCount_ReadsEmptyAsZero_InProjectionAndFilter_TheLatestTimeStaysEmpty()
+    {
+        var q = new CrateQueryBuilder(Table).IncludeDefaultVariables();
+        q.AddVariable(Constants.ManualCount, Constants.ManualCount);
+        q.AddVariable(Constants.LastManualAt, Constants.LastManualAt);
+        q.AddFieldFilter(Constants.ManualCount, StreamDataFieldFilterOperator.GreaterThan, "0");
+
+        var sql = new CrateQueryCompiler().CompileQuery(q);
+
+        Assert.Contains("COALESCE(\"manual_count\", 0) AS \"manual_count\"", sql);
+        Assert.Contains("COALESCE(\"manual_count\", 0) > ", sql);
+        Assert.DoesNotContain("COALESCE(\"last_manual_at\"", sql);
+    }
 }

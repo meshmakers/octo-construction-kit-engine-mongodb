@@ -53,6 +53,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     private readonly TimeSpan _sweepGracePeriod;
     private readonly TimeProvider _clock;
     private readonly RecomputeProcessState _recomputeProcessState;
+    private readonly ArchivePlatformColumnGuard _platformColumns;
     private readonly ICrateCopyClient? _copyClient;
     private StagingCopyRunner? _stagingCopy;
 
@@ -92,6 +93,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // Without a state handed in (a repository built outside the factory) the memos live as long
         // as this repository does.
         _recomputeProcessState = recomputeProcessState ?? new RecomputeProcessState();
+        _platformColumns = new ArchivePlatformColumnGuard(tenantId, databaseClient, managementClient, _recomputeProcessState, logger);
         _recomputeSliceTargetRows = recomputeOptions?.Value.SliceTargetRows ?? CrateRecomputeOptions.DefaultSliceTargetRows;
         // A repository built without options (outside the host's DI) sweeps at once, as it always did; the
         // host's options default to the two hours of CrateRecomputeOptions.DefaultSweepGracePeriod.
@@ -173,11 +175,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             await ReconcileDeclaredColumnsAsync(qualifiedTable, snapshot.RtId.ToString(), resolvedColumns, isRollup);
             if (!isRollup)
             {
-                await EnsureOriginColumnsAsync(qualifiedTable, snapshot.RtId.ToString());
+                await _platformColumns.EnsureOriginColumnsAsync(snapshot.RtId.ToString(), CancellationToken.None);
             }
 
             if (isRollup)
             {
+                await _platformColumns.EnsureRollupColumnsAsync(snapshot.RtId.ToString(), CancellationToken.None);
+
                 // Created empty at activation so the read path can always issue a plain SELECT against
                 // it (no rows ⇒ no generation predicate ⇒ all steady-state generation-0 rows returned).
                 var genMapTable = GenerationMapSqlBuilder.GenMapTable(_tenantId, snapshot.RtId.ToString());
@@ -193,7 +197,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 qualifiedTable, resolvedColumns.Count, _tenantId);
             await _managementClient.ExecuteDdlAsync(_tenantId, sql);
             await ReconcileDeclaredColumnsAsync(qualifiedTable, snapshot.RtId.ToString(), resolvedColumns, isRollup: false);
-            await EnsureOriginColumnsAsync(qualifiedTable, snapshot.RtId.ToString());
+            await _platformColumns.EnsureOriginColumnsAsync(snapshot.RtId.ToString(), CancellationToken.None);
         }
     }
 
@@ -211,7 +215,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             return;
         }
 
-        var existing = await ReadPhysicalColumnNamesAsync(archiveRtId);
+        var existing = await _platformColumns.ReadPhysicalColumnNamesAsync(archiveRtId);
         if (existing.Count == 0)
         {
             // Either the table was just created (then it already has every declared column and the
@@ -239,76 +243,16 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
     }
 
-    /// <summary>
-    /// Makes sure the raw or time-range table of <paramref name="archiveRtId" /> carries the row origin columns
-    /// (AB#5356) before a statement names them. Tables provisioned before AB#5356 do not have them, and every
-    /// write names them, so without this step every write to such an archive would fail. Checked once per table
-    /// and process (<see cref="RecomputeProcessState.EnsuredOriginColumns" />); a concurrent add by another
-    /// process is the benign "already has a column" case.
-    /// </summary>
-    private async Task EnsureOriginColumnsAsync(string qualifiedTable, string archiveRtId)
+    /// <inheritdoc />
+    public async Task EnsureRollupPlatformColumnsAsync(OctoObjectId rollupRtId, CancellationToken cancellationToken)
     {
-        if (_recomputeProcessState.EnsuredOriginColumns.ContainsKey(qualifiedTable))
+        // A restored tenant's tables are being loaded and repaired; the columns follow once it is reconciled.
+        if (await ReconcileMarker.IsPendingAsync(cancellationToken))
         {
             return;
         }
 
-        var existing = await ReadPhysicalColumnNamesAsync(archiveRtId);
-        if (existing.Count == 0)
-        {
-            // Table not found or catalogue not readable: let the write report the real problem, and ask again
-            // next time instead of remembering an answer that was never given.
-            return;
-        }
-
-        foreach (var (name, definition) in ArchiveRowOriginColumns.Columns)
-        {
-            if (existing.Contains(name))
-            {
-                continue;
-            }
-
-            _logger.LogInformation(
-                "Archive {Table}: adding row origin column {Column}, which the table does not have yet.",
-                qualifiedTable, name);
-            try
-            {
-                await _managementClient.ExecuteDdlAsync(_tenantId,
-                    $"ALTER TABLE {qualifiedTable} ADD COLUMN \"{name}\" {definition};");
-            }
-            catch (Exception ex) when (IsColumnAlreadyExists(ex))
-            {
-                _logger.LogDebug(ex, "Archive {Table}: row origin column {Column} was added concurrently.",
-                    qualifiedTable, name);
-            }
-        }
-
-        _recomputeProcessState.EnsuredOriginColumns[qualifiedTable] = true;
-    }
-
-    /// <summary>
-    /// Reads the physical column names of an archive table from <c>information_schema</c>. An empty
-    /// result means "table not found or not readable" and is treated as "do not reconcile".
-    /// </summary>
-    private async Task<IReadOnlySet<string>> ReadPhysicalColumnNamesAsync(string archiveRtId)
-    {
-        var schemaName = TenantSchema.SchemaName(_tenantId);
-        var tableName = "archive_" + archiveRtId;
-        var query =
-            "SELECT column_name FROM information_schema.columns " +
-            $"WHERE table_schema = '{schemaName.Replace("'", "''")}' " +
-            $"AND table_name = '{tableName.Replace("'", "''")}'";
-
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, query))
-        {
-            if (row.TryGetValue("column_name", out var value) && value is string name)
-            {
-                names.Add(name);
-            }
-        }
-
-        return names;
+        await _platformColumns.EnsureRollupColumnsAsync(rollupRtId.ToString(), cancellationToken);
     }
 
     /// <summary>
@@ -448,7 +392,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         activity?.SetTag("streamdata.batch_size", filtered.Count);
 
         var (qualifiedTable, userColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
-        await EnsureOriginColumnsAsync(qualifiedTable, archiveRtId.ToString());
+        await _platformColumns.EnsureOriginColumnsAsync(archiveRtId.ToString(), CancellationToken.None);
 
         var sw = Stopwatch.StartNew();
         var computedPlan = BuildComputedPlan(snapshot);
@@ -637,7 +581,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         activity?.SetTag("streamdata.batch_size", filtered.Count);
 
         var (qualifiedTable, userColumnNames) = ResolveTableAndColumns(snapshot, archiveRtId);
-        await EnsureOriginColumnsAsync(qualifiedTable, archiveRtId.ToString());
+        await _platformColumns.EnsureOriginColumnsAsync(archiveRtId.ToString(), CancellationToken.None);
 
         var sw = Stopwatch.StartNew();
         var computedPlan = BuildComputedPlan(snapshot);
@@ -1900,9 +1844,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // Rollup tables key their PK with `generation` (AB#4184 Phase 6); the windowed insert must
         // name it in the conflict target and write the always-live generation 0 (AB#4773).
         var generationTracked = snapshot.RollupAggregations is not null;
-        if (!generationTracked)
+        await _platformColumns.EnsureAsync(snapshot, CancellationToken.None);
+        if (generationTracked)
         {
-            await EnsureOriginColumnsAsync(qualifiedTable, archiveRtId.ToString());
+            // The platform columns of a rollup row are data of the export like its aggregates (AB#7727); a dump
+            // from before they existed imports with NULL, which reads as "no manual values". They travel with
+            // the user columns of the insert.
+            userColumnNames.AddRange(ArchiveRowOriginFields.RollupFields.Except(userColumnNames));
         }
 
         using var activity = CrateDbDiagnostics.ActivitySource.StartActivity("crate.importRows");
@@ -1998,7 +1946,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var attributes = new Dictionary<string, object?>(userColumnNames.Count, StringComparer.Ordinal);
         foreach (var col in userColumnNames)
         {
-            attributes[col] = row.TryGetValue(col, out var v) ? v : null;
+            var value = row.TryGetValue(col, out var v) ? v : null;
+            attributes[col] = col == Constants.LastManualAt ? AsUtcDateTime(value) : value;
         }
 
         return new Dtos.TimeRangeDataPointDto(attributes)
@@ -2072,6 +2021,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var sourceTable = TenantSchema.QualifiedArchiveTable(_tenantId, sourceArchive.RtId.ToString());
         var targetTable = TenantSchema.QualifiedArchiveTable(_tenantId, rollup.RtId.ToString());
 
+        // The statement below names the origin of the source rows and the manual columns of both tables
+        // (AB#7727). A source archive that was neither activated nor written since the platform update has
+        // not got them yet; without this the rollup would fail on it.
+        await _platformColumns.EnsureAsync(sourceArchive, cancellationToken);
+        await _platformColumns.EnsureRollupColumnsAsync(rollup.RtId.ToString(), cancellationToken);
+
         // Per-source resolution (AB#5157 §3): the orchestrator picks the source for this bucket;
         // bind the rollup's logical specs to THAT source's physical columns (a rollup source needs
         // its own rollup snapshot for the child-aggregation rule).
@@ -2093,7 +2048,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 bucketEnd,
                 sourceArchive.UsesWindowedStorage,
                 carryLookback: rollup.CarryLookback,
-                sourceGenerationRanges: sourceGenerationRanges);
+                sourceGenerationRanges: sourceGenerationRanges,
+                sourceIsRollup: sourceArchive.RollupAggregations is not null);
 
             _logger.LogDebug(
                 "Rollup aggregation SQL for {RollupRtId} bucket [{BucketStart:O}, {BucketEnd:O}): {Sql}",
@@ -3186,6 +3142,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         AggregationFunctionDto targetFunc,
         CancellationToken cancellationToken)
     {
+        // A platform column of the rollup itself: no spec declares it, there is no chain to walk (AB#7727).
+        if (RollupQueryAggregationResolver.ResolveManualCount(attributePath, targetFunc) is { } manualCount)
+        {
+            return manualCount;
+        }
+
         // Always try the cascade walker first when we have access to the rollup store — it
         // also handles the 1-level case correctly.
         if (_rollupArchiveStore is not null)

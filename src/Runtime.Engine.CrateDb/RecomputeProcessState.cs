@@ -49,8 +49,9 @@ internal sealed class RecomputeProcessState
     public ConcurrentDictionary<string, bool> EnsuredSweepTables { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Raw and time-range tables this process has found or made to carry the row origin columns (AB#5356),
-    /// so the write path checks <c>information_schema</c> once per table and process, not per write.
+    /// Tables this process has found or made to carry their platform columns: the row origin columns of a raw
+    /// or time-range table (AB#5356), the manual columns of a rollup table (AB#7727). So the callers check
+    /// <c>information_schema</c> once per table and process, not per write or bucket.
     /// </summary>
     public ConcurrentDictionary<string, bool> EnsuredOriginColumns { get; } = new(StringComparer.Ordinal);
 

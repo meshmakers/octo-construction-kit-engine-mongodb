@@ -248,4 +248,24 @@ public class StreamDataFieldResolverTests
 
         Assert.Null(resolver.Resolve("pending"));
     }
+
+    // AB#7727: a rollup has no row origin; it reports its manual values, and only a rollup does.
+    [Fact]
+    public void CreateForArchive_ARollupOffersItsManualColumns_NotTheOriginFields()
+    {
+        var specs = new[] { new CkRollupAggregationSpec("Value", CkRollupFunction.Sum, null) };
+        var rollup = new ArchiveSnapshot(OctoObjectId.GenerateNewId(), new RtCkId<CkTypeId>("Test", new CkTypeId("Meter")),
+            CkArchiveStatus.Activated, null, RollupColumnGenerator.Generate(specs)) { RollupAggregations = specs };
+        var raw = rollup with { RollupAggregations = null };
+
+        var rollupFields = StreamDataFieldResolver.CreateForArchive(rollup);
+        var rawFields = StreamDataFieldResolver.CreateForArchive(raw);
+
+        Assert.Equal("manual_count", rollupFields.Resolve("manual_count")!.CrateDbName);
+        Assert.Equal("last_manual_at", rollupFields.Resolve("LAST_MANUAL_AT")!.CrateDbName);
+        Assert.Null(rollupFields.Resolve("row_origin"));
+        Assert.Null(rollupFields.Resolve("manual_written_at"));
+        Assert.Null(rawFields.Resolve("manual_count"));
+        Assert.NotNull(rawFields.Resolve("row_origin"));
+    }
 }

@@ -168,7 +168,9 @@ public class ArchiveRowOriginSqlTests
         }
 
         Assert.DoesNotContain("row_origin", rollup);
-        Assert.DoesNotContain("manual_", rollup);
+        Assert.Contains("\"manual_count\" BIGINT,", rollup);
+        Assert.Contains("\"last_manual_at\" TIMESTAMP WITH TIME ZONE,", rollup);
+        Assert.DoesNotContain("manual_written", rollup);
         // Nullable without a DEFAULT: added by ALTER TABLE to populated tables, and always written by the insert.
         Assert.DoesNotContain("\"row_origin\" TEXT NOT NULL", raw);
         Assert.DoesNotContain("\"row_origin\" TEXT DEFAULT", raw);

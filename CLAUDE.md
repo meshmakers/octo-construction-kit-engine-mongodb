@@ -960,7 +960,8 @@ manual point without a writer is refused). Selectable in queries by these names,
 Rules to keep:
 
 - **Platform column, not a user column.** `ArchiveRowOriginColumns` owns the name, DDL and SQL fragments. Rollup
-  tables do not carry it; the windowed insert names it only when `generationTracked` is false.
+  tables do not carry it; the windowed insert names it only when `generationTracked` is false. A rollup reports its
+  manual values in its own platform columns instead (next section).
 - **Always written explicitly** (AB#6647), nullable without a DEFAULT, so `ALTER TABLE … ADD COLUMN` can add it to
   populated tables. `EnsureOriginColumnsAsync` does that at activation and before the first write/import of each
   table per process (`RecomputeProcessState.EnsuredOriginColumns`). Do not remove that step: every insert names
@@ -979,16 +980,38 @@ Rules to keep:
   selectable/filterable/groupable on raw and time-range archives. Every read-path column reference goes through
   `ArchiveRowOriginColumns.ColumnRef` / `SelectRef`, which reads `row_origin` as `COALESCE(…, 'automated')` (legacy
   rows hold NULL). A new SQL builder that references a column must use them too.
-- **Rollups over the origin (AB#7727)**: a rollup over a raw/time-range archive may name the undeclared origin fields
-  (engine rule 1b, `RollupSourceColumnResolutionKind.OriginColumn`, bound like a declared column): `Count` over
-  `manual_written_at` / `manual_written_by` / `manual_reason` (manual rows per bucket) and `Min`/`Max` over
-  `manual_written_at` (stored as `TIMESTAMP WITH TIME ZONE` by `RollupColumnTypeResolver`, also when chained by the
-  logical path). Everything else, `Count` over `row_origin` included, is refused at activation
-  (`ArchiveRowOriginFields.SupportsRollupAggregation`). Chained rollups read the child by rule 2 (counts SUM, Max MAX).
 
 Full write-up: `docs/streamdata-archive-concept.md` → *Row origin*. Tests: `ArchiveRowOriginSqlTests`,
 `ArchiveRowOriginQuerySqlTests` (unit), `StreamDataOrigin/ArchiveRowOriginIntegrationTests` and
 `ArchiveRowOriginReadIntegrationTests` (real CrateDB).
+
+### Rollups report their manual values (AB#7727)
+
+Every rollup table carries `manual_count` (`BIGINT`) and `last_manual_at` (`TIMESTAMP WITH TIME ZONE`), platform columns
+like `row_origin` on raw rows: not in `Aggregations[]`, not in `Columns`, no definition or blueprint changes. Rules to keep:
+
+- **Computed in the aggregation statement** (`RollupAggregationSqlBuilder`, `PlatformColumnsFor`): from a base archive
+  `COUNT(CASE WHEN "row_origin" = 'manual' THEN 1 END)` and `MAX("manual_written_at")`, from a rollup source
+  `SUM("manual_count")` and `MAX("last_manual_at")` (`sourceIsRollup`). `SUM`/`MAX` skip the `NULL` of a source row
+  aggregated before the column existed, so a bucket over a mix is right. The carry row of the LOCF statement is excluded.
+- **Nullable without a DEFAULT, always named** (AB#6647). `NULL` means "no manual values" and reads as 0
+  (`ArchiveRowOriginColumns.ColumnRef`, also in filters and `RollupQueryAggregationResolver.ResolveManualCount`). A new read
+  path must use `ColumnRef` too.
+- **`ArchivePlatformColumnGuard` adds what a table lacks**, once per table and process (memo `EnsuredOriginColumns`, shared by
+  the two kinds; a table has one kind): before a statement names them (`AggregateBucketAsync` and the recompute executor, for the source
+  **and** the target — a raw or time-range source may not have the origin columns yet), at activation, on import, and from the orchestrator
+  tick (`EnsureRollupPlatformColumnsAsync`, before anything can skip the rollup), so readers get the columns without
+  a due bucket. The reconciliation for declared columns stays as it is: `ArchiveColumnReconciliation` still skips rollups.
+- **The staging table has the shape of `GenerateCreateWindowedTable(includeGeneration: true)`**, the copy names the columns
+  (`columnNames`), so they survive the generation flip.
+- **Reserved names**: `RollupValidator` (generated target names too, `Count` over `Manual` is `manual_count`) and
+  `ComputedColumnValidator` (every column of every archive) throw `ArchiveReservedColumnNameException`. A rollup from before the reservation
+  that stores such a column keeps it, the statement leaves the platform value out (`PlatformColumnsFor`) instead of failing.
+- **Dump/restore**: the row path carries them with the user columns (`ImportRowsAsync`), the native copy copies the table; a dump
+  from before they existed loads with `NULL`.
+
+Tests: `StreamDataOrigin/RollupManualColumnsIntegrationTests` (real CrateDB), `ArchivePlatformColumnGuardTests`. Check whether a tenant
+needs a backfill: `scripts/rollup-manual-rows-check.sh`. Write-up: `docs/streamdata-archive-concept.md`, *Rollups report their manual values*.
 
 ### Write Result — stored and skipped rows (AB#7598)
 
@@ -1062,8 +1085,7 @@ regardless of the current flag value. Read failures propagate — an unreadable 
   function:
   - `COUNT` → `BIGINT`
   - `AVG` → `{base}_sum DOUBLE PRECISION`, `{base}_count BIGINT`
-  - `SUM` / `MIN` / `MAX` → `DOUBLE PRECISION`, except `MIN` / `MAX` over the origin field `manual_written_at` →
-    `TIMESTAMP WITH TIME ZONE` (AB#7727)
+  - `SUM` / `MIN` / `MAX` → `DOUBLE PRECISION`
   - `First` / `Last` (AB#4188) → a single `DOUBLE PRECISION` column holding the value at the
     earliest / latest observation in the bucket. CrateDB has no `arg_min`/`arg_max` and `MIN`/`MAX`
     reject arrays, so `RollupAggregationSqlBuilder` wraps the source in a `ROW_NUMBER()` sub-select
