@@ -111,4 +111,31 @@ public class ConflictOutcomeTests
     {
         Assert.Equal(equal, ConflictOutcome.ValuesEqual(stored, sent));
     }
+
+    [Theory]
+    [InlineData("2026-10-21T10:00:00Z", true)]
+    [InlineData("2026-10-21T12:00:00+02:00", true)]
+    [InlineData("2026-10-21T10:00:00", true)]
+    [InlineData("2026-10-21T10:15:00Z", false)]
+    [InlineData("no date", false)]
+    public void ValuesEqual_ATimeSentAsString_ComparesWithTheStoredTime(string sent, bool equal)
+    {
+        var stored = new DateTime(2026, 10, 21, 10, 0, 0, DateTimeKind.Utc);
+
+        Assert.Equal(equal, ConflictOutcome.ValuesEqual(stored, sent));
+        Assert.Equal(equal, ConflictOutcome.ValuesEqual(new DateTimeOffset(stored), sent));
+        Assert.Equal(equal, ConflictOutcome.ValuesEqual(new DateTimeOffset(stored).ToUnixTimeMilliseconds(), sent));
+    }
+
+    [Theory]
+    [InlineData("3", true)]
+    [InlineData("3.0", true)]
+    [InlineData("3.5", false)]
+    [InlineData("three", false)]
+    public void ValuesEqual_ANumberSentAsString_ComparesWithTheStoredNumber(string sent, bool equal)
+    {
+        Assert.Equal(equal, ConflictOutcome.ValuesEqual(3, sent));
+        Assert.Equal(equal, ConflictOutcome.ValuesEqual(3L, sent));
+        Assert.Equal(equal, ConflictOutcome.ValuesEqual(3.0, sent));
+    }
 }

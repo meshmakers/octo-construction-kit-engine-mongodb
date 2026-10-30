@@ -26,7 +26,12 @@ sql() {
   local body
   body="$(python3 -c 'import json,sys; print(json.dumps({"stmt": sys.argv[1]}))' "$1")"
   if [ -n "${CRATE_USER:-}" ]; then
-    curl -sS --fail-with-body -u "$CRATE_USER:${CRATE_PASSWORD:-}" -H 'Content-Type: application/json' -d "$body" "$url"
+    # Through a curl config on stdin: on the command line ps would show the password.
+    local credentials="$CRATE_USER:${CRATE_PASSWORD:-}"
+    credentials="${credentials//\\/\\\\}"
+    credentials="${credentials//\"/\\\"}"
+    printf 'user = "%s"\n' "$credentials" \
+      | curl -K - -sS --fail-with-body -H 'Content-Type: application/json' -d "$body" "$url"
   else
     curl -sS --fail-with-body -H 'Content-Type: application/json' -d "$body" "$url"
   fi

@@ -154,6 +154,21 @@ internal static class ConflictOutcome
             return false;
         }
 
+        // The raw insert path passes values on as the writer sent them: a time or a number can arrive as a string.
+        if (sent is string text)
+        {
+            if (IsNumber(stored) && decimal.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
+            {
+                return ValuesEqual(stored, number);
+            }
+
+            if ((IsTime(stored) || stored is long)
+                && DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var time))
+            {
+                return AsUtcMilliseconds(stored) == time.ToUnixTimeMilliseconds();
+            }
+        }
+
         if (AsUtcMilliseconds(stored) is { } storedMs && AsUtcMilliseconds(sent) is { } sentMs && IsTime(stored) && IsTime(sent))
         {
             return storedMs == sentMs;
