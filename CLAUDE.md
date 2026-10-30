@@ -1460,7 +1460,7 @@ field filter (it selects the LOCF event set and would carry the last positive va
 column. Semantics: engine `docs/concept-time-weighted-aggregation.md` §6.5. Tests: `TimeWeightedQuerySqlBuilderTests`,
 `CrateDbStreamDataIntegralRoutingTests` (unit), `StreamDataIntegral/StreamDataIntegralIntegrationTests` (real CrateDB: cadence,
 on-change rows, gap, carry, empty, NULL, several rtIds, grouped, missing window, and the 1 % meter check from recorded grid rows
-in `testData/integral/grid-5s-meter-check-ab7692.csv`).
+in `testData/integral/grid-5s-meter-check-*.csv`: the AB#7692 window and a fresh window bounded by two register reads).
 
 ### Downsampling Query — Single Grouped Scan, Bin Axis Built Caller-Side (AB#4713)
 

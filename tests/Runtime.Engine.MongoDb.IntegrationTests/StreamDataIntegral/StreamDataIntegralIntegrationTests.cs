@@ -279,30 +279,36 @@ public class StreamDataIntegralIntegrationTests(CrateStagingCopyFixture fixture)
     }
 
     /// <summary>
-    ///     The 1 % meter check of AB#7692 from the recorded rows (<c>testData/integral/grid-5s-meter-check-ab7692.csv</c>:
-    ///     timestamps and signed ActivePower only, one row about every 5 s). Window 2026-10-30 10:30:10.7Z to 11:15:45.8Z
-    ///     (45.6 min); the meter register <c>ImportedEnergy</c> rose by 0.924 kWh in it. The import is the integral of
-    ///     the positive part, which the archive keeps in its own column (on a real archive a computed column
-    ///     <c>if(ActivePower &gt; 0, ActivePower, 0)</c>; a field filter <c>ActivePower &gt; 0</c> would carry the last
-    ///     positive value across export periods instead). Result 0.9297 kWh = +0.6 %. For contrast, the board formula
-    ///     used until now, SUM(kW) × 10/3600 over the same rows, gives 1.862 kWh = +101 %, because the rows come every
-    ///     5 s and not every 10 s.
+    ///     The 1 % meter check from recorded grid rows of one site (timestamps and signed ActivePower only, one row about
+    ///     every 5 s), against the delta of the meter register <c>ImportedEnergy</c> over the same window:
+    ///     <list type="bullet">
+    ///         <item><c>grid-5s-meter-check-ab7692.csv</c>: the AB#7692 window 2026-10-30 10:30:10.7Z to 11:15:45.8Z
+    ///         (45.6 min, 548 rows), register delta 0.924 kWh; integral 0.9297 kWh = +0.6 %, SUM × 10/3600 = 1.862 kWh = +101 %.</item>
+    ///         <item><c>grid-5s-meter-check-20261030-evening.csv</c>: a fresh window 18:44:01.391Z to 19:31:39.715Z (47.6 min,
+    ///         571 rows) bounded by two register reads (14267.023 → 14267.220 kWh, delta 0.197 kWh, register resolution
+    ///         0.001 kWh); integral 0.1976 kWh = +0.3 %, SUM × 10/3600 = 0.394 kWh = +100 %.</item>
+    ///     </list>
+    ///     The import is the integral of the positive part, which the archive keeps in its own column (on a real archive a
+    ///     computed column <c>if(ActivePower &gt; 0, ActivePower, 0)</c>; a field filter <c>ActivePower &gt; 0</c> would carry
+    ///     the last positive value across export periods instead). The board formula used until now, SUM(kW) × 10/3600,
+    ///     is about twice the register delta because the rows come every 5 s and not every 10 s.
     /// </summary>
-    [Fact]
-    public async Task RecordedGridRows_IntegrateToTheMeterRegisterDelta_Within1Percent()
+    [Theory]
+    [InlineData("grid-5s-meter-check-ab7692.csv", "2026-10-30T10:30:10.700Z", "2026-10-30T11:15:45.800Z", 548, 0.924, 0.9297)]
+    [InlineData("grid-5s-meter-check-20261030-evening.csv", "2026-10-30T18:44:01.391Z", "2026-10-30T19:31:39.715Z", 571, 0.197, 0.1976)]
+    public async Task RecordedGridRows_IntegrateToTheMeterRegisterDelta_Within1Percent(
+        string fixtureFile, string windowFrom, string windowTo, int rowsInWindow, double registerDeltaKWh, double expectedKWh)
     {
         var rt = NewRtId();
-        var rows = File.ReadLines(Path.Combine(AppContext.BaseDirectory, "testData", "integral", "grid-5s-meter-check-ab7692.csv"))
+        var rows = File.ReadLines(Path.Combine(AppContext.BaseDirectory, "testData", "integral", fixtureFile))
             .Where(l => l.Length > 0 && !l.StartsWith('#') && !l.StartsWith("timestamp", StringComparison.Ordinal))
             .Select(l => l.Split(','))
-            .Select(p => new Row(rt,
-                DateTime.Parse(p[0], CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal),
-                double.Parse(p[1], CultureInfo.InvariantCulture)))
+            .Select(p => new Row(rt, ParseUtc(p[0]), double.Parse(p[1], CultureInfo.InvariantCulture)))
             .ToList();
-        var from = new DateTime(2026, 10, 30, 10, 30, 10, 700, DateTimeKind.Utc);
-        var to = new DateTime(2026, 10, 30, 11, 15, 45, 800, DateTimeKind.Utc);
-        const double registerDeltaKWh = 0.924;
-        Assert.Equal(548, rows.Count(r => r.Timestamp >= from && r.Timestamp < to));
+        var from = ParseUtc(windowFrom);
+        var to = ParseUtc(windowTo);
+        Assert.Equal(rowsInWindow, rows.Count(r => r.Timestamp >= from && r.Timestamp < to));
+        Assert.Contains(rows, r => r.Timestamp < from); // the carry-in row is part of the fixture
         var archive = await CreateArchiveAsync(rows);
 
         var row = await AggregateAsync(archive, from, to, null,
@@ -313,10 +319,13 @@ public class StreamDataIntegralIntegrationTests(CrateStagingCopyFixture fixture)
         var deviation = (integral - registerDeltaKWh) / registerDeltaKWh;
         Assert.True(Math.Abs(deviation) <= 0.01,
             $"Integral {integral:F4} kWh deviates {deviation:P2} from the register delta {registerDeltaKWh} kWh (limit 1 %).");
-        Assert.Equal(0.9297, integral, 0.0001);
+        Assert.Equal(expectedKWh, integral, 0.0001);
 
         var tenSecondFormula = Value(row, "importpower_sum")!.Value * 10 / 3600;
         Assert.True(tenSecondFormula / registerDeltaKWh > 1.9,
             $"SUM × 10/3600 = {tenSecondFormula:F3} kWh is expected to be about twice the register delta on 5-s rows.");
     }
+
+    private static DateTime ParseUtc(string value) =>
+        DateTime.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal);
 }
