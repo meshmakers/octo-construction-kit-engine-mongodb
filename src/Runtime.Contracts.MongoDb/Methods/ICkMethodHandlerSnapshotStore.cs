@@ -20,7 +20,8 @@ public interface ICkMethodHandlerSnapshotStore
     /// <summary>
     ///     Upserts rows by (<c>MethodKey</c>, <c>InstanceId</c>); a row whose stored <c>LastSeenUtc</c> is newer or equal
     ///     is kept. Does nothing and returns <c>false</c> while the system tenant does not exist yet (the write must not
-    ///     materialize the system database before its bootstrap, AB#4854); the caller retries later.
+    ///     materialize the system database before its bootstrap, AB#4854) or while the unique-key / TTL indexes cannot be
+    ///     ensured; the caller retries later.
     /// </summary>
     /// <returns><c>true</c> when the rows were written, <c>false</c> when they were deferred.</returns>
     Task<bool> UpsertAsync(IReadOnlyCollection<CkMethodHandlerSnapshotRecord> records,

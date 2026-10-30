@@ -20,8 +20,6 @@ internal sealed class CkMethodHandlerSnapshotStore : ICkMethodHandlerSnapshotSto
     private readonly ISystemContext _systemContext;
     private readonly IAdminRepositoryAccess _adminRepositoryAccess;
     private readonly ILogger<CkMethodHandlerSnapshotStore> _logger;
-    private readonly SemaphoreSlim _indexGate = new(1, 1);
-    private volatile bool _indexEnsured;
 
     private static readonly object ClassMapLock = new();
     private static bool _classMapRegistered;
@@ -58,7 +56,12 @@ internal sealed class CkMethodHandlerSnapshotStore : ICkMethodHandlerSnapshotSto
         }
 
         var collection = GetCollection();
-        await EnsureIndexesAsync(collection, cancellationToken).ConfigureAwait(false);
+        if (!await EnsureIndexesAsync(collection, cancellationToken).ConfigureAwait(false))
+        {
+            // Without the unique key an upsert could add a second row for a key, without the TTL index rows never
+            // expire: defer the write, the next flush retries.
+            return false;
+        }
 
         // Replace only a row that is older: a replica that saw less must not overwrite a newer view. The filter
         // misses on a newer-or-equal row, the upsert then collides with the unique index (duplicate key), which is
@@ -124,22 +127,16 @@ internal sealed class CkMethodHandlerSnapshotStore : ICkMethodHandlerSnapshotSto
         }
     }
 
-    private async Task EnsureIndexesAsync(IMongoCollection<CkMethodHandlerSnapshotRecord> collection,
+    /// <summary>
+    ///     Creates the unique-key and TTL indexes. Deliberately not cached for the process lifetime: the system database
+    ///     can be dropped and recreated while the singleton lives (<c>DeleteSystemTenantAsync</c>), and createIndexes is
+    ///     an idempotent no-op when they exist (one call per flush, every few seconds at most).
+    /// </summary>
+    private async Task<bool> EnsureIndexesAsync(IMongoCollection<CkMethodHandlerSnapshotRecord> collection,
         CancellationToken cancellationToken)
     {
-        if (_indexEnsured)
-        {
-            return;
-        }
-
-        await _indexGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_indexEnsured)
-            {
-                return;
-            }
-
             await collection.Indexes.CreateManyAsync(
             [
                 new CreateIndexModel<CkMethodHandlerSnapshotRecord>(
@@ -154,17 +151,13 @@ internal sealed class CkMethodHandlerSnapshotStore : ICkMethodHandlerSnapshotSto
                         Name = "ck_method_handler_snapshot_ttl", ExpireAfter = TimeSpan.Zero, Background = true
                     })
             ], cancellationToken).ConfigureAwait(false);
-            _indexEnsured = true;
+            return true;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // The unique key is what keeps two replicas from duplicating a row; without it the store still works
-            // (a duplicate row only costs one more entry, the reader merges by key).
-            _logger.LogWarning(ex, "Failed to ensure the ck_method_handler_snapshot indexes; continuing without them.");
-        }
-        finally
-        {
-            _indexGate.Release();
+            _logger.LogWarning(ex,
+                "Failed to ensure the ck_method_handler_snapshot indexes; the snapshot write is deferred.");
+            return false;
         }
     }
 }

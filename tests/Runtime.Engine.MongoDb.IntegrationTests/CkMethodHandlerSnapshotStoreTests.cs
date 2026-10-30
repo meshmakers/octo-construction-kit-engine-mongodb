@@ -129,4 +129,24 @@ public class CkMethodHandlerSnapshotStoreTests(SystemFixture fixture)
         Assert.Contains(indexes, i => i["name"] == "ck_method_handler_snapshot_ttl" && i["expireAfterSeconds"] == 0);
         Assert.Contains(indexes, i => i["name"] == "ck_method_handler_snapshot_key_unique" && i["unique"] == true);
     }
+
+    [Fact]
+    public async Task Indexes_are_recreated_after_the_collection_was_dropped_with_the_system_database()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Store.UpsertAsync([Row($"k-{Guid.NewGuid():N}", "a", Now)], ct);
+
+        var systemContext = fixture.GetService<ISystemContext>();
+        var access = fixture.GetService<IAdminRepositoryAccess>();
+        var repository = (MongoRepository)access.GetRepositoryClient(systemContext.DatabaseName)
+            .GetRepository(systemContext.DatabaseName);
+        await repository.Database.DropCollectionAsync("ck_method_handler_snapshot", ct);
+
+        await Store.UpsertAsync([Row($"k-{Guid.NewGuid():N}", "a", Now)], ct);
+
+        var indexes = await (await repository.Database.GetCollection<BsonDocument>("ck_method_handler_snapshot")
+            .Indexes.ListAsync(ct)).ToListAsync(ct);
+        Assert.Contains(indexes, i => i["name"] == "ck_method_handler_snapshot_ttl");
+        Assert.Contains(indexes, i => i["name"] == "ck_method_handler_snapshot_key_unique");
+    }
 }
