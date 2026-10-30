@@ -987,7 +987,7 @@ Full write-up: `docs/streamdata-archive-concept.md` → *Row origin*. Tests: `Ar
 
 ### Changes an activated archive cannot apply (AB#7872)
 
-`ArchiveDefinitionGuard` (engine) refuses them on the ways an operator or a blueprint writes: the repository's public
+`ArchiveDefinitionGuard` (engine) refuses them, also on a disabled archive with `FirstActivatedAt` (`SetStatusAsync` stamps it), on the ways an operator or a blueprint writes: the repository's public
 `ApplyChanges` and the Upsert import. The stream data stores of this repository write through `UpdateOneRtEntityById`
 and are not checked; keep their writes on that path, or a lifecycle step (computed columns, watermark) is refused. Rules and
 scope: `docs/streamdata-archive-concept.md` §10. `RollupOrchestrator` records a failed run on the entity

@@ -181,6 +181,9 @@ public sealed class MongoArchiveRuntimeStore : IArchiveRuntimeStore
         var entity = await _tenantRepository.GetRtEntityByRtIdAsync<RtArchive>(session, archiveRtId)
             ?? throw new ArchiveNotFoundException(archiveRtId);
 
+        // The status an archive leaves counts too: one activated before FirstActivatedAt existed is stamped when it stops.
+        var activated = newStatus == CkArchiveStatus.Activated || entity.Status == RtCkArchiveStatusEnum.Activated;
+        entity.FirstActivatedAt ??= activated ? DateTime.UtcNow : null;
         entity.Status = (RtCkArchiveStatusEnum)(int)newStatus;
         // Update via the entity's *concrete* CkTypeId (TimeRangeArchive / RollupArchive / RawArchive).
         // Going through the <RtArchive> generic would pass the abstract base CkTypeId to the rule

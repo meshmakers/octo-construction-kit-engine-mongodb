@@ -157,6 +157,13 @@ public class ArchiveDefinitionGuardIntegrationTests(ArchiveDefinitionGuardFixtur
         return rtId;
     }
 
+    private async Task<object?> FirstActivatedAtOfAsync(OctoObjectId rtId)
+    {
+        var session = await Repository.GetSessionAsync();
+        var entity = await Repository.GetRtEntityByRtIdAsync(session, new RtEntityId(RollupType, rtId));
+        return entity!.Attributes.GetValueOrDefault("FirstActivatedAt");
+    }
+
     private async Task<long?> BucketSizeOfAsync(OctoObjectId rtId)
     {
         var session = await Repository.GetSessionAsync();
@@ -214,13 +221,77 @@ public class ArchiveDefinitionGuardIntegrationTests(ArchiveDefinitionGuardFixtur
 
     // Seeds import their archives as Disabled, before any table exists; the seed must stay free to change.
     [Fact]
-    public async Task ImportRt_ADisabledRollup_StaysEditable()
+    public async Task ImportRt_ADisabledRollupThatWasNeverActivated_StaysEditable()
     {
         var rollup = await CreateAsync(id => Rollup(id), CkArchiveStatus.Disabled);
 
         await ImportAsync(Rollup(rollup, bucketMs: 7_200_000), ImportStrategy.Upsert);
 
         (await BucketSizeOfAsync(rollup)).Should().Be(7_200_000);
+    }
+
+    // Disable, change, enable must not be a way around the guard: enabling meets the same table.
+    [Fact]
+    public async Task ImportRt_ADisabledRollupThatWasActivated_IsRefused()
+    {
+        var rollup = await CreateAsync(id => Rollup(id));
+        await fixture.TenantContext.GetArchiveRuntimeStore().SetStatusAsync(rollup, CkArchiveStatus.Disabled);
+
+        var act = () => ImportAsync(Rollup(rollup, bucketMs: 7_200_000), ImportStrategy.Upsert);
+
+        (await act.Should().ThrowAsync<RollupSchemaImmutableException>()).Which.Field.Should().Be("BucketSizeMs");
+        (await BucketSizeOfAsync(rollup)).Should().Be(3_600_000, "nothing was written");
+    }
+
+    [Fact]
+    public async Task ImportRt_ADisabledRawArchiveThatWasActivated_RefusesRemovingAColumn()
+    {
+        var raw = await CreateAsync(id => Raw(id, Column("amountvalue_sum"), Computed("doubled", "Double")));
+        await fixture.TenantContext.GetArchiveRuntimeStore().SetStatusAsync(raw, CkArchiveStatus.Disabled);
+
+        var act = () => ImportAsync(Raw(raw, Column("amountvalue_sum")), ImportStrategy.Upsert);
+
+        await act.Should().ThrowAsync<ArchiveSchemaImmutableException>();
+    }
+
+    // A rollup disabled before FirstActivatedAt existed carries no stamp, but activation left its watermark.
+    [Fact]
+    public async Task ImportRt_ADisabledRollupWithAWatermarkButNoStamp_IsRefused()
+    {
+        var rollup = await CreateAsync(id => Rollup(id,
+            extra: "      - id: System.StreamData/RollupArchive.LastAggregatedBucketEnd\n        value: 2026-01-01T00:00:00Z"), CkArchiveStatus.Disabled);
+
+        var act = () => ImportAsync(Rollup(rollup, bucketMs: 7_200_000), ImportStrategy.Upsert);
+
+        (await act.Should().ThrowAsync<RollupSchemaImmutableException>()).Which.Field.Should().Be("BucketSizeMs");
+    }
+
+    [Fact]
+    public async Task SetStatus_StampsTheFirstActivation_AndKeepsIt()
+    {
+        var rollup = await CreateAsync(id => Rollup(id), CkArchiveStatus.Disabled);
+        var store = fixture.TenantContext.GetArchiveRuntimeStore();
+        (await FirstActivatedAtOfAsync(rollup)).Should().BeNull("a seed import is no activation");
+
+        await store.SetStatusAsync(rollup, CkArchiveStatus.Activated);
+        var first = await FirstActivatedAtOfAsync(rollup);
+        await store.SetStatusAsync(rollup, CkArchiveStatus.Disabled);
+        await store.SetStatusAsync(rollup, CkArchiveStatus.Activated);
+
+        first.Should().NotBeNull();
+        (await FirstActivatedAtOfAsync(rollup)).Should().Be(first);
+    }
+
+    // The stamp is runtime state: a re-import of the seed, which never declares it, must not reset it.
+    [Fact]
+    public async Task ImportRt_KeepsTheFirstActivation()
+    {
+        var rollup = await CreateAsync(id => Rollup(id));
+        var first = await FirstActivatedAtOfAsync(rollup);
+
+        await ImportAsync(Rollup(rollup), ImportStrategy.Upsert);
+
+        (await FirstActivatedAtOfAsync(rollup)).Should().Be(first);
     }
 
     [Fact]

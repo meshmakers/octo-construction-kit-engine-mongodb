@@ -728,7 +728,8 @@ A definition change the table cannot follow is refused before it reaches storage
 - **What stays allowed** in any state: `status` and `rtState` transitions, everything else (`WatermarkLagMs`, `CarryLookbackMs`, `FrozenUntil`, retention, conflict precedence, `Indexed` / `Required` of a column).
 - **Compared is what the write would store** (the comparison of the blueprint preview, `BlueprintEntityComparer`), so a re-apply of an unchanged definition passes in any form: an enum by name or key, an omitted default, a source in the list or the deprecated scalar. `Columns` of a rollup are derived and not compared, and its platform columns are no part of the definition.
 - **Rollout**: `ImportRt` runs in the bot services, a blueprint update in the asset repository; each is guarded once that service runs this engine.
-- **`Created`, `Disabled` and `Failed`** stay editable: removing an offending column is the way out of `Failed`, and seeds import their archives as `Disabled`, so most disabled archives have no table yet. A change to a disabled archive that had a table is not caught; the rollup then shows `LastRunError` when it runs again.
+- **A `Disabled` archive that was activated before is guarded like an `Activated` one**: enabling it again meets the same table, so disable, change, enable would be a way around. `FirstActivatedAt` (runtime state, System.StreamData 1.21.0), written when the archive is activated, tells it from an archive a seed imported as `Disabled`, which has no table and stays editable. An archive activated before that attribute existed gets it at its next status change; until then a disabled rollup is recognised by its watermark, a disabled raw or time-range archive is not.
+- **`Created` and `Failed`** stay editable: removing an offending column is the way out of `Failed`.
 
 Both exceptions name the archive and the field and say that the change needs a new archive; GraphQL answers `STREAMDATA_SCHEMA_IMMUTABLE`.
 
