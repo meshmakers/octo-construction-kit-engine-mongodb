@@ -226,6 +226,30 @@ public class StreamDataIntegralIntegrationTests(CrateStagingCopyFixture fixture)
     }
 
     [Fact]
+    public async Task OnlyNullValues_AreNull_NotZero()
+    {
+        // Rows exist (carry and in-window) but none carries a value: no measured energy is not zero energy.
+        var rt = NewRtId();
+        var archive = await CreateArchiveAsync(
+        [
+            new Row(rt, From.AddMinutes(-5), null),
+            new Row(rt, From.AddMinutes(20), null)
+        ]);
+
+        Assert.Null(Value(await IntegralAsync(archive), "activepower_integral"));
+    }
+
+    [Fact]
+    public async Task ACarryRowOlderThanTheLookback_IsNotCarried()
+    {
+        // The carry-in is looked up at most 35 days back (engine default): a row 40 days old does not open the window.
+        var rt = NewRtId();
+        var archive = await CreateArchiveAsync([new Row(rt, From.AddDays(-40), 3.0)]);
+
+        Assert.Null(Value(await IntegralAsync(archive), "activepower_integral"));
+    }
+
+    [Fact]
     public async Task SeveralEntities_AreIntegratedEachOnItsOwn_AndSummed()
     {
         // rt1: 2 kW every 5 s; rt2: 1 kW every 10 s, opened by a carry row 2 s before the window.

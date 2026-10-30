@@ -1454,7 +1454,7 @@ a structured 400 / coded GraphQL error since AB#7918; it used to be the uncoded 
 `TwaColumn` / `StateColumn`): `SUM(CASE WHEN v IS NOT NULL THEN v * dt_ms END) / 3600000.0`, alias `{column}_integral`, value
 unit × hours (kW → kWh). Step only (the last row holds until the next row of the same rtId or the window end), carry-in from
 the last row before `from` (engine default lookback), rtIds summed (grouped: per group), NULL rows contribute 0, an empty
-window without carry is `null`. Routed by `IsLocfFunction` in both aggregation entry points; a windowed archive (rollup,
+window without carry and a window with only NULL values are `null`; the carry row is looked up at most 35 days back. Routed by `IsLocfFunction` in both aggregation entry points; a windowed archive (rollup,
 time-range) is refused up front (`RejectIntegralOnWindowedStorage`, rollup support is AB#7920). Never split a signed power with a
 field filter (it selects the LOCF event set and would carry the last positive value across export periods); use a computed
 column. Semantics: engine `docs/concept-time-weighted-aggregation.md` §6.5. Tests: `TimeWeightedQuerySqlBuilderTests`,
