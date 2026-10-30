@@ -844,8 +844,9 @@ replace : replaceOne { _id, rtVersion: <n> }  <document with rtVersion = n + 1> 
   version in the same batch are written one by one (the bulk upsert cannot compare a version).
 - Tests (real MongoDB): `ExpectedRtVersionTests` - match (version n -> n+1), stale version for update and replace (distinct
   `RtVersionConflictException`, nothing written), missing entity (not-found, not a conflict), bulk `ApplyChangesAsync` with one stale
-  entity (transaction writes nothing), unversioned replace unchanged, and two parallel read-modify-write increments with one retry,
-  repeated 50 times for update and for replace (counter always exactly +2). The counter is `GuardCount` of the test model's
+  entity (transaction writes nothing), unversioned replace unchanged, and two parallel read-modify-write increments (each writer retries until
+  success, generous cap, so the test asserts correctness and not timing), repeated 50 times for update and for replace (counter always
+  exactly +2, version +2, at least one `RtVersionConflictException` surfaced). The counter is `GuardCount` of the test model's
   `SeedGuardEntity` (the CK round-trip gate compares the whole test model, so no type was added). `ConditionalUpdateTests` (`AttributeNewerThanGuard`) is unchanged.
 
 ## Key Classes
