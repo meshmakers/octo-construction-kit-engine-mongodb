@@ -157,10 +157,10 @@ public class ArchiveDefinitionGuardIntegrationTests(ArchiveDefinitionGuardFixtur
         return rtId;
     }
 
-    private async Task<object?> FirstActivatedAtOfAsync(OctoObjectId rtId)
+    private async Task<object?> FirstActivatedAtOfAsync(OctoObjectId rtId, RtCkId<CkTypeId>? type = null)
     {
         var session = await Repository.GetSessionAsync();
-        var entity = await Repository.GetRtEntityByRtIdAsync(session, new RtEntityId(RollupType, rtId));
+        var entity = await Repository.GetRtEntityByRtIdAsync(session, new RtEntityId(type ?? RollupType, rtId));
         return entity!.Attributes.GetValueOrDefault("FirstActivatedAt");
     }
 
@@ -264,6 +264,22 @@ public class ArchiveDefinitionGuardIntegrationTests(ArchiveDefinitionGuardFixtur
         var act = () => ImportAsync(Rollup(rollup, bucketMs: 7_200_000), ImportStrategy.Upsert);
 
         (await act.Should().ThrowAsync<RollupSchemaImmutableException>()).Which.Field.Should().Be("BucketSizeMs");
+    }
+
+    // Activated before FirstActivatedAt existed and still Activated today: the marker is set when it stops, so it stays guarded.
+    [Fact]
+    public async Task SetStatus_StampsAnArchiveLeavingActivatedWithoutAStamp_AndItStaysGuarded()
+    {
+        var raw = OctoObjectId.GenerateNewId();
+        await ImportAsync(Raw(raw, Column("amountvalue_sum"), Computed("doubled", "Double")).Replace("attributes:\n      - id: System.StreamData/Archive.TargetCkTypeId",
+            "attributes:\n      - id: System.StreamData/Archive.Status\n        value: 1\n      - id: System.StreamData/Archive.TargetCkTypeId"), ImportStrategy.Insert);
+        (await FirstActivatedAtOfAsync(raw, RawType)).Should().BeNull();
+
+        await fixture.TenantContext.GetArchiveRuntimeStore().SetStatusAsync(raw, CkArchiveStatus.Disabled);
+
+        (await FirstActivatedAtOfAsync(raw, RawType)).Should().NotBeNull();
+        var act = () => ImportAsync(Raw(raw, Column("amountvalue_sum")), ImportStrategy.Upsert);
+        await act.Should().ThrowAsync<ArchiveSchemaImmutableException>();
     }
 
     [Fact]
