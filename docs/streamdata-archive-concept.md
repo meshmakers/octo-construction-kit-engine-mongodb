@@ -109,7 +109,7 @@ ckType:
 - **Failed** — activation DDL failed; retry via `activate` again.
 - **Delete** — orthogonal: drops the table and soft-archives the `CkArchive` RtEntity.
 
-Schema is immutable while in Activated/Disabled/Failed (after first successful activation). Updating `targetCkTypeId` or `columns` after activation must be rejected by validation hook on `CkArchive` updates.
+What the table cannot follow is refused while Activated or Disabled, see §10 (AB#7872): the target type, removing a column or changing its type, and the definition of a rollup.
 
 ---
 
@@ -487,7 +487,7 @@ Future extension (not in this iteration): `BulkInsertOptions { ContinueOnError: 
 
 **Time-series queries** — both `StreamDataQuery` and `StreamDataTransientQuery` gain a required `archiveRtId: ID!` argument.
 
-**CkArchive CRUD** — auto-generated from the CkArchive CK type (entity API). No custom resolvers needed. The validation hook (§10) enforces immutability on `update`. `delete` is a soft-delete that triggers `IArchiveLifecycleService.DeleteAsync` (drops the table).
+**CkArchive CRUD** — auto-generated from the CkArchive CK type (entity API). No custom resolvers needed. `ArchiveDefinitionGuard` (§10) refuses what an activated archive cannot apply. `delete` is a soft-delete that triggers `IArchiveLifecycleService.DeleteAsync` (drops the table).
 
 **State transitions** — custom mutations (CRUD cannot express these cleanly):
 
@@ -639,7 +639,7 @@ Tasks are ordered for sequential execution. Each task is self-contained with acc
 #### [x] T6. Archive lifecycle service
 - Implement state machine in `IArchiveLifecycleService` (DB-neutral) with hooks into `IArchiveBackend`.
 - Transitions: Created→Activated (DDL), Activated↔Disabled (status only), *→Failed on activation error, Failed→Activated (retry DDL), Delete (DROP + rtState=Archived).
-- Validation hook on `CkArchive` updates: reject schema changes after activation.
+- `ArchiveDefinitionGuard`: refuse what an activated archive cannot apply (§10).
 - **Acceptance**: unit tests cover all transitions + immutability rejection; integration test full happy-path.
 
 #### [x] T7. Update `IStreamDataRepository` signatures
@@ -718,18 +718,20 @@ The legacy class `SdEntity` is renamed to `StreamDataEntity` to align with the `
 
 ## 10. Validation Hooks (CkArchive immutability)
 
-Schema mutation on an activated archive must be rejected before it reaches storage.
+A definition change the table cannot follow is refused before it reaches storage (AB#7872): the definition of an archive is a plain entity, and without this a rollup stops with only a log line telling.
 
-- **Where**: validation hook on the `CkArchive` RtEntity update path. Implementation choice deferred to the standard CK entity validation pipeline (verify in T6 implementation whether a per-type pre-update hook exists; if not, add one in the lifecycle service via the repository's update path).
-- **What is rejected** when `status ∈ { Activated, Disabled, Failed }`:
-  - any change to `targetCkTypeId`
-  - any change to `columns` (count, order, path, required flag)
-- **What is allowed** in any state:
-  - `status` transitions per the state machine
-  - `rtState` transitions (including soft-delete)
-- **Bootstrapping**: while `status = Created`, the archive is fully editable.
+- **Where**: `ArchiveDefinitionGuard` (engine). Two ways in are checked: the public `ApplyChanges` of the repository (GraphQL, pipelines) and the Upsert import (`ImportRt`, blueprint apply and update; a blueprint update then fails, also with `ContinueOnError`). The stream data stores (computed column lifecycle, watermark, status, run failures) write through `UpdateOneRtEntityById` and do not pass here, CK model migrations neither.
+- **What is refused** while `status ∈ { Activated, Disabled }`:
+  - on every archive: a change of `targetCkTypeId`;
+  - on a raw or time-range archive: removing a column, changing the type of a computed column (`ArchiveSchemaImmutableException`). Adding a column stays allowed, the next activation adds it to the table;
+  - on a rollup: `Aggregations`, `BucketSizeMs`, `BucketAlignment`, `ReferenceTimeZone`, the sources (`RollupSchemaImmutableException`).
+- **What stays allowed** in any state: `status` and `rtState` transitions, everything else (`WatermarkLagMs`, `CarryLookbackMs`, `FrozenUntil`, retention, conflict precedence, `Indexed` / `Required` of a column).
+- **Compared is what the write would store** (the comparison of the blueprint preview, `BlueprintEntityComparer`), so a re-apply of an unchanged definition passes in any form: an enum by name or key, an omitted default, a source in the list or the deprecated scalar. `Columns` of a rollup are derived and not compared, and its platform columns are no part of the definition.
+- **`Failed` and `Created`** stay fully editable: removing an offending column is the way out of `Failed`.
 
-Validation errors throw `ArchiveSchemaImmutableException` (see §11) and are surfaced via the standard entity-update error path (GraphQL/REST).
+Both exceptions name the archive and the field and say that the change needs a new archive; GraphQL answers `STREAMDATA_SCHEMA_IMMUTABLE`.
+
+**A rollup that keeps failing** does not change its status: `Failed` would stop its reads over what is a passing problem more often than not, and the next tick retries anyway. The orchestrator writes `LastRunError`, `LastRunErrorAt` and `ConsecutiveRunFailures` (runtime state, System.StreamData 1.19.0) on the entity from the first failed run, an event `Archive.RollupRunFailing` to the event log at the third failed run in a row, and clears the error with the next run that succeeds. A rollup that waits for a disabled source does not fail: it stalls by design.
 
 ### Path validation at activation
 

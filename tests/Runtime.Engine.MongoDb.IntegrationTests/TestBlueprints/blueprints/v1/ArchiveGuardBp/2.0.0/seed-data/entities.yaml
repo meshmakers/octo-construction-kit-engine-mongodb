@@ -1,0 +1,39 @@
+$schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+dependencies:
+  - System.StreamData-[1.8,2.0)
+entities:
+  - rtId: 6a7000000000000000007872
+    ckTypeId: System.StreamData/RollupArchive
+    rtWellKnownName: guarded-rollup
+    associations: []
+    attributes:
+      - id: System.StreamData/Archive.TargetCkTypeId
+        value: Basic.Energy/EnergyMeasurement
+      - id: System.StreamData/Archive.Columns
+        value:
+          - ckRecordId: System.StreamData/CkArchiveColumn
+            attributes:
+              - id: System.StreamData/CkArchiveColumn.Path
+                value: amountvalue_sum
+              - id: System.StreamData/CkArchiveColumn.Required
+                value: false
+              - id: System.StreamData/CkArchiveColumn.Indexed
+                value: true
+      - id: System.StreamData/RollupArchive.Sources
+        value:
+          - ckRecordId: System.StreamData/CkRollupSourceReference
+            attributes:
+              - id: System.StreamData/CkRollupSourceReference.SourceArchiveRtId
+                value: 6a7000000000000000007871
+      - id: System.StreamData/RollupArchive.BucketSizeMs
+        value: 7200000
+      - id: System.StreamData/RollupArchive.WatermarkLagMs
+        value: 300000
+      - id: System.StreamData/RollupArchive.Aggregations
+        value:
+          - ckRecordId: System.StreamData/CkRollupAggregation
+            attributes:
+              - id: System.StreamData/CkRollupAggregation.SourcePath
+                value: Amount.Value
+              - id: System.StreamData/CkRollupAggregation.Function
+                value: Sum

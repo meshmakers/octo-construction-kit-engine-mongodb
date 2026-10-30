@@ -985,6 +985,15 @@ Full write-up: `docs/streamdata-archive-concept.md` → *Row origin*. Tests: `Ar
 `ArchiveRowOriginQuerySqlTests` (unit), `StreamDataOrigin/ArchiveRowOriginIntegrationTests` and
 `ArchiveRowOriginReadIntegrationTests` (real CrateDB).
 
+### Changes an activated archive cannot apply (AB#7872)
+
+`ArchiveDefinitionGuard` (engine) refuses them on the ways an operator or a blueprint writes: the repository's public
+`ApplyChanges` and the Upsert import. The stream data stores of this repository write through `UpdateOneRtEntityById`
+and are not checked; keep their writes on that path, or a lifecycle step (computed columns, watermark) is refused. Rules and
+scope: `docs/streamdata-archive-concept.md` §10. `RollupOrchestrator` records a failed run on the entity
+(`MongoRollupArchiveRuntimeStore.RecordRunFailureAsync`, `ClearRunFailureAsync`). Tests: `ArchiveDefinitionGuardIntegrationTests`
+(real MongoDB, blueprint `TestBlueprints/.../ArchiveGuardBp`).
+
 ### Rollups report their manual values (AB#7727)
 
 Every rollup table carries `manual_count` (`BIGINT`) and `last_manual_at` (`TIMESTAMP WITH TIME ZONE`), platform columns
