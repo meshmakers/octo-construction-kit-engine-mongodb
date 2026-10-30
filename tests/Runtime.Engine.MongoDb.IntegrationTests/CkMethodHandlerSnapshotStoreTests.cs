@@ -39,7 +39,8 @@ public class CkMethodHandlerSnapshotStoreTests(SystemFixture fixture)
     {
         var ct = TestContext.Current.CancellationToken;
         var key = $"k-{Guid.NewGuid():N}";
-        var seen = new DateTime(Now.Ticks - Now.Ticks % TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);
+        var now = Now;
+        var seen = new DateTime(now.Ticks - now.Ticks % TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);
 
         Assert.True(await Store.UpsertAsync([Row(key, "a", seen), Row(key, "b", seen)], ct));
 
