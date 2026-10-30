@@ -819,6 +819,35 @@ options: arrayFilters: [ { "i0.attributes.<matchMember>": <value> } ... ]
   `ItemOnlyUpdate_WithoutMatch_CostsOneCommand_AndNeverRepairs`). The test model
   (`tests/TestCkModel`) got the record `DataPoint` and the type `ItemUpdateHolder` for it.
 
+## Expected rtVersion (AB#7769)
+
+Engine contract and rules: engine `CLAUDE.md`, "Expected rtVersion - optimistic concurrency for update and replace". This
+repository executes it in `MongoDbDataSourceCollection` (called by `BulkRtMutation` for an update or replace info with
+`ExpectedRtVersion`):
+
+```
+update  : updateOne  { _id, rtVersion: <n> }  { $set ..., $inc: { rtVersion: 1 } }          (UpdateOneIfVersionMatchesAsync)
+replace : replaceOne { _id, rtVersion: <n> }  <document with rtVersion = n + 1>              (ReplaceByIdIfVersionMatchesAsync)
+```
+
+- The version is part of the filter, so check and write are **one atomic statement**; `MatchedCount == 0` means "not applied". One more
+  `countDocuments` (limit 1) then tells a missing document (`EntityNotFoundException`, as for any update) from a version mismatch
+  (`false`, which the engine turns into `RtVersionConflictException`).
+- Version 0 also matches a document without an `rtVersion` field (persisted before the field existed reads as 0).
+- **Inside a transaction** a writer that overlaps another transaction on the same document does not see a filter mismatch but fails
+  with MongoDB's `WriteConflict` (code 112, `TransientTransactionError`); both methods report that as the same conflict (`false`), and
+  the transaction is already aborted, so the retry must start a new session / transaction. If the other writer committed before this
+  transaction started, the filter mismatch path applies.
+- `UpdateOneIfVersionMatchesAsync` applies the AB#5148 `attributes: null` repair first (separate statement, as
+  `UpdateOneIfGuardMatchesAsync`).
+- A replace without an expected version still goes through `ReplaceManyAsync` / `BulkImportAsync` unchanged; entities with an expected
+  version in the same batch are written one by one (the bulk upsert cannot compare a version).
+- Tests (real MongoDB): `ExpectedRtVersionTests` - match (version n -> n+1), stale version for update and replace (distinct
+  `RtVersionConflictException`, nothing written), missing entity (not-found, not a conflict), bulk `ApplyChangesAsync` with one stale
+  entity (transaction writes nothing), unversioned replace unchanged, and two parallel read-modify-write increments with one retry,
+  repeated 50 times for update and for replace (counter always exactly +2). The counter is `GuardCount` of the test model's
+  `SeedGuardEntity` (the CK round-trip gate compares the whole test model, so no type was added). `ConditionalUpdateTests` (`AttributeNewerThanGuard`) is unchanged.
+
 ## Key Classes
 
 - `TenantRepository` - Main repository for tenant-specific data operations
