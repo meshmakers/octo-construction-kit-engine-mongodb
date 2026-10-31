@@ -42,12 +42,20 @@ public sealed record RollupQueryAggregation(
 /// <item><c>MAX</c> over source MAX: <c>MAX(_max)</c></item>
 /// <item><c>TimeWeightedAvg</c> over source TimeWeightedAvg (materialised <c>_integral</c> +
 /// <c>_duration</c>): <c>SUM(_integral) / NULLIF(SUM(_duration), 0)</c> — AB#4336</item>
+/// <item><c>Integral</c> over source TimeWeightedAvg: <c>SUM(_integral) / 3600000.0</c> — the stored
+/// integral is value·ms, the result is value × hours (kW → kWh); AB#7920</item>
 /// </list>
 /// All other combinations are unresolvable — the rollup's materialisation discarded the
 /// information required (e.g. a rollup that only stored AVG can't reconstruct MIN/MAX).
 /// </remarks>
 public static class RollupQueryAggregationResolver
 {
+    /// <summary>
+    /// Divisor that turns a materialised TWA integral (value·ms) into value × hours, the unit of the
+    /// Integral aggregation (AB#7920). A double literal so CrateDB divides in floating point.
+    /// </summary>
+    internal const string MsPerHour = "3600000.0";
+
     /// <summary>
     /// Resolves a target aggregation against the rollup's source specs. Returns null when no
     /// chain mapping applies — callers should surface that to the operator as "unsupported
@@ -182,6 +190,15 @@ public static class RollupQueryAggregationResolver
                 => new RollupQueryAggregation(
                     SqlExpression: $"SUM(\"{targetColumns[0].ColumnName}\") / NULLIF(SUM(\"{targetColumns[1].ColumnName}\"), 0)",
                     SqlAlias: $"{outputColumnName.ToLowerInvariant()}_twavg",
+                    OutputColumnName: outputColumnName),
+
+            // Integral over source TWA: the materialised integral itself, converted from value·ms to
+            // value × hours — the same unit the raw-archive Integral returns (AB#7918 / AB#7920). An
+            // empty window sums no rows and reads null, as on the raw archive.
+            (CkRollupFunction.TimeWeightedAvg, AggregationFunctionDto.Integral) when targetColumns.Count == 2
+                => new RollupQueryAggregation(
+                    SqlExpression: $"SUM(\"{targetColumns[0].ColumnName}\") / {MsPerHour}",
+                    SqlAlias: $"{outputColumnName.ToLowerInvariant()}_integral",
                     OutputColumnName: outputColumnName),
 
             // Single-column source aggregations: only same-function chaining is well-defined.

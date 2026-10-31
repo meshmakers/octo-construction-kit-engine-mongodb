@@ -180,6 +180,34 @@ public class RollupQueryAggregationResolverTests
         Assert.Null(result);
     }
 
+    // ---- Integral (AB#7920) ----
+
+    [Fact]
+    public void TimeWeightedAvgSpec_TargetIntegral_ResolvesToIntegralInValueHours()
+    {
+        // The materialised integral is value·ms; Integral answers in value × hours (kW → kWh).
+        var specs = new[] { new CkRollupAggregationSpec("ActivePower", CkRollupFunction.TimeWeightedAvg, null) };
+
+        var result = RollupQueryAggregationResolver.Resolve(specs, "ActivePower", AggregationFunctionDto.Integral);
+
+        Assert.NotNull(result);
+        Assert.Equal("SUM(\"activepower_twavg_integral\") / 3600000.0", result!.SqlExpression);
+        Assert.Equal("activepower_integral", result.SqlAlias);
+        Assert.Equal("ActivePower", result.OutputColumnName);
+    }
+
+    [Theory]
+    [InlineData(CkRollupFunction.Avg)]
+    [InlineData(CkRollupFunction.Sum)]
+    [InlineData(CkRollupFunction.Max)]
+    public void NonTimeWeightedSpec_TargetIntegral_IsUnresolvable(CkRollupFunction function)
+    {
+        // A sample sum or mean has no time weighting — it cannot be turned into energy.
+        var specs = new[] { new CkRollupAggregationSpec("ActivePower", function, null) };
+
+        Assert.Null(RollupQueryAggregationResolver.Resolve(specs, "ActivePower", AggregationFunctionDto.Integral));
+    }
+
     [Fact]
     public void StateDurationSpec_TargetSum_ResolvesToSumOfDurations()
     {

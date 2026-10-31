@@ -1454,13 +1454,26 @@ a structured 400 / coded GraphQL error since AB#7918; it used to be the uncoded 
 `TwaColumn` / `StateColumn`): `SUM(CASE WHEN v IS NOT NULL THEN v * dt_ms END) / 3600000.0`, alias `{column}_integral`, value
 unit × hours (kW → kWh). Step only (the last row holds until the next row of the same rtId or the window end), carry-in from
 the last row before `from` (engine default lookback), rtIds summed (grouped: per group), NULL rows contribute 0, an empty
-window without carry and a window with only NULL values are `null`; the carry row is looked up at most 35 days back. Routed by `IsLocfFunction` in both aggregation entry points; a windowed archive (rollup,
-time-range) is refused up front (`RejectIntegralOnWindowedStorage`, rollup support is AB#7920). Never split a signed power with a
+window without carry and a window with only NULL values are `null`; the carry row is looked up at most 35 days back. Routed by `IsLocfFunction` in both aggregation entry points; a time-range archive is
+refused up front (`RejectIntegralOnTimeRangeArchive`). Never split a signed power with a
 field filter (it selects the LOCF event set and would carry the last positive value across export periods); use a computed
 column. Semantics: engine `docs/concept-time-weighted-aggregation.md` §6.5. Tests: `TimeWeightedQuerySqlBuilderTests`,
 `CrateDbStreamDataIntegralRoutingTests` (unit), `StreamDataIntegral/StreamDataIntegralIntegrationTests` (real CrateDB: cadence,
 on-change rows, gap, carry, empty, NULL, several rtIds, grouped, missing window, and the 1 % meter check from recorded grid rows
 in `testData/integral/grid-5s-meter-check-*.csv`: the AB#7692 window and a fresh window bounded by two register reads).
+
+### Integral over rollups (AB#7920)
+
+A rollup with a `TimeWeightedAvg` aggregation on the column answers `Integral` from its stored integral: `SUM("{base}_integral") /
+3600000.0` (value·ms → value × hours), alias `{path}_integral`, in aggregation, grouped and downsampling queries; a cascade reads the
+SUM-chained integral column (`RollupQueryAggregationResolver`, `RollupChainAggregationResolver`; only the TWA numerator qualifies, never
+an AVG numerator). A rollup without it is refused after the chain resolver found nothing (`RejectUnresolvedRollupIntegral`, structured
+`StreamDataException` naming the missing TimeWeightedAvg) - the single-column fallback would emit `INTEGRAL("col")`. Downsampling with
+Integral over a raw or time-range archive is refused too (`RejectIntegralDownsamplingWithoutRollup`). Edge buckets follow the rollup read
+rule (overlap, whole buckets): only bucket-aligned windows equal the raw Integral. Tests: `CrateDbStreamDataIntegralRoutingTests`,
+`RollupQueryAggregationResolverTests`, `RollupChainAggregationResolverTests` (unit), `StreamDataIntegral/StreamDataRollupIntegralIntegrationTests`
+(real CrateDB: 5-minute TWA rollup and an hourly SUM-chained rollup over it, aligned, rtId scope, grouped, downsampling per hour,
+unaligned window, empty window, AVG-only column, the recorded meter rows). Semantics: engine `docs/concept-time-weighted-aggregation.md` §6.5.
 
 ### Downsampling Query — Single Grouped Scan, Bin Axis Built Caller-Side (AB#4713)
 

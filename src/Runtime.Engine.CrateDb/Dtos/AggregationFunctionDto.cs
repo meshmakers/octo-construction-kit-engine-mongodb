@@ -37,8 +37,9 @@ public enum AggregationFunctionDto
     StateDuration,
     /// <summary>
     /// Step integral ∫v dt over the query window in value unit × hours (LOCF, carry-in from the
-    /// last row before the window, rtIds summed). Raw event archives only for now (rollups:
-    /// AB#7920). AB#7918.
+    /// last row before the window, rtIds summed). Served over raw event archives (AB#7918) and over
+    /// rollups that materialise a TimeWeightedAvg aggregation on the column, read from the stored
+    /// integral (AB#7920).
     /// </summary>
     Integral,
 }

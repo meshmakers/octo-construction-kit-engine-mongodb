@@ -857,7 +857,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // archive need the LOCF statement — the standard single-scan builder cannot express the
         // carry / interval weighting. Routed before the query builder is assembled; plain columns
         // ride along in the same statement.
-        RejectIntegralOnWindowedStorage(snapshot, options.AggregationColumns);
+        RejectIntegralOnTimeRangeArchive(snapshot, options.AggregationColumns);
         if (!snapshot.UsesWindowedStorage
             && options.AggregationColumns.Any(c => IsLocfFunction(c.Function)))
         {
@@ -917,6 +917,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                     outputNameBySqlAlias[chained.SqlAlias] = outputName;
                     continue;
                 }
+
+                RejectUnresolvedRollupIntegral(snapshot, col);
             }
 
             // TWA over a windowed non-rollup source (TimeRangeArchive): each row's weight is its
@@ -992,7 +994,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         // AB#4336 §6.2: TWA over a raw archive — LOCF statement, grouped variant. See
         // ExecuteAggregationQueryAsync for the same routing rationale.
-        RejectIntegralOnWindowedStorage(snapshot, options.AggregationColumns);
+        RejectIntegralOnTimeRangeArchive(snapshot, options.AggregationColumns);
         if (!snapshot.UsesWindowedStorage
             && options.AggregationColumns.Any(c => IsLocfFunction(c.Function)))
         {
@@ -1060,6 +1062,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                     outputNameBySqlAlias[chained.SqlAlias] = outputName;
                     continue;
                 }
+
+                RejectUnresolvedRollupIntegral(snapshot, col);
             }
 
             // TWA over a windowed non-rollup source (TimeRangeArchive): each row's weight is its
@@ -1179,6 +1183,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             fieldFilters: options.FieldFilters,
             groupByColumns: options.GroupByColumnPaths,
             aggregationColumns: options.AggregationColumns);
+        RejectIntegralDownsamplingWithoutRollup(snapshot, options.AggregationColumns);
 
         var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
         // Windowed-storage downsampling: the aggregate-then-join subquery (AB#4713) bins on
@@ -1298,6 +1303,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                     outputNameBySqlAlias[chained.SqlAlias] = outputName;
                     continue;
                 }
+
+                RejectUnresolvedRollupIntegral(snapshot, col);
             }
 
             var resolved = fieldResolver.Resolve(col.AttributePath);
@@ -3453,14 +3460,16 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         new(message, archiveRtId);
 
     /// <summary>
-    /// Integral is served over raw event archives only (AB#7918). Rollup and time-range archives
-    /// store aggregates, not observations — reading them needs the materialised TWA pair
-    /// (AB#7920). Refused with a structured error instead of a silently wrong or empty result.
+    /// Integral is served over raw event archives (AB#7918) and over rollups that materialise a
+    /// TimeWeightedAvg aggregation on the column (AB#7920, see
+    /// <see cref="RejectUnresolvedRollupIntegral"/>). A time-range archive stores one value per window,
+    /// not observations, and has no materialised integral — refused with a structured error instead of
+    /// a silently wrong or empty result.
     /// </summary>
-    private static void RejectIntegralOnWindowedStorage(
+    private static void RejectIntegralOnTimeRangeArchive(
         ArchiveSnapshot snapshot, IReadOnlyList<AggregationColumn> aggregationColumns)
     {
-        if (!snapshot.UsesWindowedStorage)
+        if (!snapshot.UsesWindowedStorage || snapshot.RollupAggregations is not null)
         {
             return;
         }
@@ -3469,7 +3478,45 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         if (integral is not null)
         {
             throw InvalidLocfQuery(snapshot.RtId,
-                $"Integral on '{integral.AttributePath}' is supported over raw (event-based) archives only; rollup and time-range archives are not supported yet.");
+                $"Integral on '{integral.AttributePath}' is supported over raw (event-based) archives and over rollups that materialise a TimeWeightedAvg aggregation; time-range archives are not supported.");
+        }
+    }
+
+    /// <summary>
+    /// An Integral column the rollup chain resolver could not map (AB#7920): the rollup stores no
+    /// TimeWeightedAvg aggregation of the path, so there is no integral to read — a sample AVG or SUM
+    /// has no time weighting. Refused with a structured error that names the missing aggregation; the
+    /// standard single-column path below would emit invalid SQL.
+    /// </summary>
+    private static void RejectUnresolvedRollupIntegral(ArchiveSnapshot snapshot, AggregationColumn column)
+    {
+        if (column.Function == AggregationFunction.Integral)
+        {
+            throw InvalidLocfQuery(snapshot.RtId,
+                $"Integral on '{column.AttributePath}' needs a TimeWeightedAvg aggregation of '{column.AttributePath}' in rollup archive {snapshot.RtId}, " +
+                "which this rollup does not materialise. Query the raw archive, or a rollup with a TimeWeightedAvg aggregation on the column.");
+        }
+    }
+
+    /// <summary>
+    /// Integral per downsampling bin is read from a rollup's materialised integral (AB#7920). Over a
+    /// raw or time-range archive the downsampling statement has no LOCF weighting, so the request is
+    /// refused with a structured error rather than run as invalid SQL.
+    /// </summary>
+    private static void RejectIntegralDownsamplingWithoutRollup(
+        ArchiveSnapshot snapshot, IReadOnlyList<AggregationColumn> aggregationColumns)
+    {
+        if (snapshot.RollupAggregations is not null)
+        {
+            return;
+        }
+
+        var integral = aggregationColumns.FirstOrDefault(c => c.Function == AggregationFunction.Integral);
+        if (integral is not null)
+        {
+            throw InvalidLocfQuery(snapshot.RtId,
+                $"Integral on '{integral.AttributePath}' per downsampling bin is served from rollups that materialise a TimeWeightedAvg aggregation; " +
+                "over a raw archive use an aggregation query per window.");
         }
     }
 
