@@ -282,6 +282,60 @@ public class RollupChainAggregationResolverTests
         Assert.Null(result);
     }
 
+    // ---- Integral (AB#7920) ----
+
+    [Fact]
+    public async Task DirectRollup_Integral_ReadsTheMaterialisedIntegralInValueHours()
+    {
+        var hourly = MakeRollup(HourlyRtId, RawRtId,
+            new CkRollupAggregationSpec("active.power", CkRollupFunction.TimeWeightedAvg, null));
+
+        var (getArchive, getRollup) = Stores(MakeRawArchive(RawRtId), hourly);
+
+        var result = await RollupChainAggregationResolver.ResolveAsync(
+            hourly, "active.power", AggregationFunctionDto.Integral,
+            getArchive, getRollup, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+        Assert.Equal("SUM(\"activepower_twavg_integral\") / 3600000.0", result!.SqlExpression);
+        Assert.Equal("active.power_integral", result.SqlAlias);
+    }
+
+    [Fact]
+    public async Task Cascade_Integral_ChainsThroughTheSummedIntegralColumn()
+    {
+        var hourly = MakeRollup(HourlyRtId, RawRtId,
+            new CkRollupAggregationSpec("active.power", CkRollupFunction.TimeWeightedAvg, null));
+        var daily = MakeRollup(DailyRtId, HourlyRtId,
+            new CkRollupAggregationSpec("activepower_twavg_integral", CkRollupFunction.Sum, "activepower_twavg_integral"),
+            new CkRollupAggregationSpec("activepower_twavg_duration", CkRollupFunction.Sum, "activepower_twavg_duration"));
+
+        var (getArchive, getRollup) = Stores(MakeRawArchive(RawRtId), hourly, daily);
+
+        var result = await RollupChainAggregationResolver.ResolveAsync(
+            daily, "active.power", AggregationFunctionDto.Integral,
+            getArchive, getRollup, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+        Assert.Equal("SUM(\"activepower_twavg_integral\") / 3600000.0", result!.SqlExpression);
+    }
+
+    [Fact]
+    public async Task DirectRollup_AvgPair_DoesNotSatisfyIntegralTarget()
+    {
+        // The AVG numerator is a sample sum, not value·ms — it must never be read as energy.
+        var hourly = MakeRollup(HourlyRtId, RawRtId,
+            new CkRollupAggregationSpec("active.power", CkRollupFunction.Avg, null));
+
+        var (getArchive, getRollup) = Stores(MakeRawArchive(RawRtId), hourly);
+
+        var result = await RollupChainAggregationResolver.ResolveAsync(
+            hourly, "active.power", AggregationFunctionDto.Integral,
+            getArchive, getRollup, TestContext.Current.CancellationToken);
+
+        Assert.Null(result);
+    }
+
     // ---- Multi-source rollups (AB#5157) ----
 
     private static readonly OctoObjectId LegacyRawRtId = new("aa00000000000000000001e0");

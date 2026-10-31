@@ -401,6 +401,18 @@ public static class RollupChainAggregationResolver
                     SqlAlias: $"{alias}_twavg",
                     OutputColumnName: outputColumnName);
             }
+            case AggregationFunctionDto.Integral:
+            {
+                // Energy over the window = Σ of the per-bucket TWA integrals (value·ms), in value ×
+                // hours (AB#7920). Only the TWA numerator qualifies — an AVG numerator is a sample
+                // sum without time weighting. The duration slot is not needed for the integral.
+                var integralOrigin = FindPairRole(matching, CkRollupFunction.TimeWeightedAvg, LogicalAvgRole.Numerator);
+                if (integralOrigin is null) return null;
+                return new RollupQueryAggregation(
+                    SqlExpression: $"SUM(\"{integralOrigin.PhysicalColumnName}\") / {RollupQueryAggregationResolver.MsPerHour}",
+                    SqlAlias: $"{alias}_integral",
+                    OutputColumnName: outputColumnName);
+            }
             default:
                 return null;
         }
