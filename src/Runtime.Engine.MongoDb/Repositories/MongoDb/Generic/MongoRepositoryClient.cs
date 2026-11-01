@@ -75,6 +75,40 @@ public abstract class MongoRepositoryClient : IRepositoryClient
     }
 
     /// <summary>
+    ///     The write concern of every repository client: majority, with a 30 s wtimeout. Journaling
+    ///     follows the replica set's <c>writeConcernMajorityJournalDefault</c> (MongoDB default <c>true</c>).
+    ///     CK method handlers rely on it (methodConsistency R3/R6, OD-7): a success envelope is only sent
+    ///     for a write that a majority of the replica set acknowledged. Pinned by
+    ///     <c>MongoRepositoryClientConsistencySettingsTests</c> — do not weaken it.
+    /// </summary>
+    internal static readonly WriteConcern RepositoryWriteConcern =
+        new(WriteConcern.WMode.Majority, TimeSpan.FromSeconds(30));
+
+    /// <summary>
+    ///     Builds the driver settings of a repository client from its connection URL. The consistency
+    ///     settings are applied <b>after</b> <see cref="MongoClientSettings.FromUrl" />, so a URL option
+    ///     (<c>w</c>, <c>wtimeoutMS</c>, <c>readConcernLevel</c>) can never weaken them.
+    /// </summary>
+    internal static MongoClientSettings CreateClientSettings(MongoUrl mongoUrl)
+    {
+        var settings = MongoClientSettings.FromUrl(mongoUrl);
+        settings.ReadConcern = ReadConcern.Majority;
+        settings.WriteConcern = RepositoryWriteConcern;
+
+        // Retry always writes to prevent
+        // Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction.
+        settings.RetryWrites = true;
+        return settings;
+    }
+
+    /// <summary>
+    ///     The settings of the live driver client (frozen by the driver). Test seam for the consistency
+    ///     guard. Reading it creates the driver client (no command is sent; server monitoring starts in
+    ///     the background and ends with <see cref="Dispose" />).
+    /// </summary>
+    internal MongoClientSettings ClientSettings => Client.Settings;
+
+    /// <summary>
     ///     Returns the mongodb client
     /// </summary>
     protected MongoClient Client
@@ -83,14 +117,7 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         {
             if (_client == null)
             {
-                var mongoUrl = CreateConnectionUri();
-                var settings = MongoClientSettings.FromUrl(mongoUrl);
-                settings.ReadConcern = ReadConcern.Majority;
-                settings.WriteConcern = new WriteConcern(WriteConcern.WMode.Majority, TimeSpan.FromSeconds(30));
-
-                // Retry always writes to prevent
-                // Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction. 
-                settings.RetryWrites = true;
+                var settings = CreateClientSettings(CreateConnectionUri());
                 var observability = new MongoCommandObservability(
                     _serviceProvider.GetRequiredService<ILogger<MongoCommandObservability>>(),
                     _serviceProvider.GetRequiredService<IOptionsMonitor<OctoSystemConfiguration>>(),
