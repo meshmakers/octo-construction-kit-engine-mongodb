@@ -62,6 +62,9 @@ trigger:
       - '*.md'
       - '.claude/'
       - 'docs/'
+      # The nightly perf pipeline and its script are not consumed by this build (AB#8004).
+      - 'azure-pipelines-performance.yml'
+      - 'pipelines/'
   tags:
     exclude:
       - '*'
@@ -165,12 +168,17 @@ stages:
           #    slowest single test so far: 210 s on a heavily loaded agent, build 50546)
           #    aborts the test host and names the hanging test in the log. No dump
           #    (dump type none) - a full dump of the test host is GBs and not needed.
+          #  - --filter "Category!=Performance" (AB#8004): wall-clock budget tests (trait
+          #    Category=Performance, e.g. GetRtEntitiesByInterfacePerformanceTests, p95 budget of
+          #    AB#6930) failed main CI runs 62273/62285/62304 on agent load alone and a red main
+          #    CI blocks the engine cascade and the train. They run in the separate, non-gating
+          #    nightly pipeline azure-pipelines-performance.yml instead.
           - task: DotNetCoreCLI@2
             displayName: 'Test'
             timeoutInMinutes: 50
             inputs:
               command: 'test'
-              arguments: '--configuration $(buildConfiguration) --no-build /p:OctoNugetPrivateServer=$(nugetPrivateServer) --blame-hang --blame-hang-timeout 15m --blame-hang-dump-type none'
+              arguments: '--configuration $(buildConfiguration) --no-build /p:OctoNugetPrivateServer=$(nugetPrivateServer) --filter "Category!=Performance" --blame-hang --blame-hang-timeout 15m --blame-hang-dump-type none'
               projects: |
                 **/*Tests.csproj
               testRunTitle: 'CI'
