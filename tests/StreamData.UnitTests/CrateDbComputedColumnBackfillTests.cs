@@ -346,4 +346,45 @@ public class CrateDbComputedColumnBackfillTests
     {
         public void Report(long value) => report(value);
     }
+
+    [Fact]
+    public async Task ResumedBackfill_StartsAtTheCheckpoint_AndReportsACheckpointAfterEverySlice()
+    {
+        var snapshot = RawSnapshot(Ing("ActivePower"), Comp("doubled", "activepower * 2", ComputedColumnState.Backfilling));
+        var queries = ServeSliced(Row(Ts, "a"), Row(Ts.AddDays(1), "b"), Row(Ts.AddDays(2), "c"));
+        var bulk = CaptureBulk();
+        var reported = new List<ComputedColumnBackfillProgress>();
+
+        // An earlier run finished the first day; resume at its end.
+        await NewSut().BackfillComputedColumnAsync(snapshot, "doubled", Ts.AddDays(1),
+            new SyncCheckpointProgress(reported.Add), TestContext.Current.CancellationToken);
+
+        var pages = queries.Where(q => q.Contains("ORDER BY", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, pages.Count);
+        Assert.Equal(Ts.AddDays(1), ParseFrom(pages[0]));
+        Assert.Equal(2, bulk.Count);
+        Assert.DoesNotContain(bulk, b => (string?)b.Args[0][2] == "a");
+        // After each slice: the start of the next one is the checkpoint, never moving backwards.
+        var checkpoints = reported.Where(r => r.CompletedThrough is not null).Select(r => r.CompletedThrough!.Value).ToList();
+        Assert.Contains(Ts.AddDays(2), checkpoints);
+        Assert.Equal(checkpoints.OrderBy(c => c), checkpoints);
+        Assert.Equal(2, reported[^1].Rows);
+    }
+
+    [Fact]
+    public async Task ResumePastTheLastRow_WritesNothing()
+    {
+        var snapshot = RawSnapshot(Ing("ActivePower"), Comp("doubled", "activepower * 2", ComputedColumnState.Backfilling));
+        ServeSliced(Row(Ts, "a"));
+        var bulk = CaptureBulk();
+
+        await NewSut().BackfillComputedColumnAsync(snapshot, "doubled", Ts.AddDays(5), null, TestContext.Current.CancellationToken);
+
+        Assert.Empty(bulk);
+    }
+
+    private sealed class SyncCheckpointProgress(Action<ComputedColumnBackfillProgress> report) : IProgress<ComputedColumnBackfillProgress>
+    {
+        public void Report(ComputedColumnBackfillProgress value) => report(value);
+    }
 }

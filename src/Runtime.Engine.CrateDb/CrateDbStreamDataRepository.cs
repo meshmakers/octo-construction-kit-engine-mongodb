@@ -2755,8 +2755,20 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// After every committed page the running row count is reported to <paramref name="progress"/>.
     /// </para>
     /// </remarks>
+    public Task BackfillComputedColumnAsync(
+        ArchiveSnapshot snapshot, string columnName, IProgress<long>? progress, CancellationToken cancellationToken) =>
+        BackfillComputedColumnAsync(snapshot, columnName, resumeFrom: null,
+            progress is null ? null : new RowsProgress(progress), cancellationToken);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Resumable form (AB#8002): the slice walk starts at <paramref name="resumeFrom"/> when it is after
+    /// the archive's first row, and after every completed slice (and every gap jump) the checkpoint is
+    /// reported — every row before it is written. The unsliced fallback reports rows only.
+    /// </remarks>
     public async Task BackfillComputedColumnAsync(
-        ArchiveSnapshot snapshot, string columnName, IProgress<long>? progress, CancellationToken cancellationToken)
+        ArchiveSnapshot snapshot, string columnName, DateTime? resumeFrom,
+        IProgress<ComputedColumnBackfillProgress>? progress, CancellationToken cancellationToken)
     {
         var target = snapshot.Columns.FirstOrDefault(
             c => c.IsComputed && string.Equals(c.Name, columnName, StringComparison.Ordinal));
@@ -2790,16 +2802,19 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             : TimeSpan.FromDays(1);
 
         long rows = 0;
+        var reporter = new CheckpointReporter(progress);
         var (readable, span) = await ReadBackfillTimeBoundsAsync(table, timeColumn, cancellationToken);
         if (!readable)
         {
-            // The span could not be read: walk the whole table with the keyset cursor.
+            // The span could not be read: walk the whole table with the keyset cursor (no checkpoint, so a
+            // resumed run walks it all again — correct, only slower).
             await BackfillSliceAsync(
-                table, keyColumns, valueColumns, updateSql, plan, targetPhysical, null, rows, progress, cancellationToken);
+                table, keyColumns, valueColumns, updateSql, plan, targetPhysical, null, rows, reporter, cancellationToken);
         }
         else if (span is { } bounds)
         {
-            var from = bounds.Lo;
+            // Resume (AB#8002): rows before the checkpoint were written by an earlier run of this job.
+            var from = resumeFrom is { } resume && resume > bounds.Lo ? resume : bounds.Lo;
             while (from <= bounds.Hi)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -2807,7 +2822,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 var before = rows;
                 rows = await BackfillSliceAsync(
                     table, keyColumns, valueColumns, updateSql, plan, targetPhysical,
-                    new ComputedColumnBackfillSqlBuilder.TimeSlice(timeColumn, from, to), rows, progress, cancellationToken);
+                    new ComputedColumnBackfillSqlBuilder.TimeSlice(timeColumn, from, to), rows, reporter, cancellationToken);
 
                 if (rows == before)
                 {
@@ -2815,6 +2830,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                     var next = await ReadFirstTimeAtOrAfterAsync(table, timeColumn, to, cancellationToken);
                     if (next is null)
                     {
+                        reporter.Checkpoint(rows, to);
                         break;
                     }
 
@@ -2824,12 +2840,48 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 {
                     from = to;
                 }
+
+                // Everything before the next slice start is written.
+                reporter.Checkpoint(rows, from);
             }
         }
 
         // Make the backfilled cells visible to subsequent reads (CrateDB applies writes to the read
         // path asynchronously), mirroring the rollup recompute executor's refresh discipline.
         await _databaseClient.RefreshArchiveTableAsync(_tenantId, table, CrateStatementClass.Maintenance, cancellationToken);
+    }
+
+    /// <summary>Maps the resumable progress to a plain row count (the IProgress&lt;long&gt; overload).</summary>
+    private sealed class RowsProgress(IProgress<long> inner) : IProgress<ComputedColumnBackfillProgress>
+    {
+        private long _last = -1;
+
+        // A checkpoint report repeats the row count of the page before it; a row counter reports changes only.
+        public void Report(ComputedColumnBackfillProgress value)
+        {
+            if (value.Rows != _last)
+            {
+                _last = value.Rows;
+                inner.Report(value.Rows);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reports rows after every page with the last checkpoint, and a new checkpoint after every completed
+    /// slice (AB#8002).
+    /// </summary>
+    private sealed class CheckpointReporter(IProgress<ComputedColumnBackfillProgress>? inner) : IProgress<long>
+    {
+        private DateTime? _checkpoint;
+
+        public void Report(long rows) => inner?.Report(new ComputedColumnBackfillProgress(rows, _checkpoint));
+
+        public void Checkpoint(long rows, DateTime completedThrough)
+        {
+            _checkpoint = completedThrough;
+            inner?.Report(new ComputedColumnBackfillProgress(rows, completedThrough));
+        }
     }
 
     /// <summary>
