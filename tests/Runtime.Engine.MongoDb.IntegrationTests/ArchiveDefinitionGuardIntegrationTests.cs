@@ -428,6 +428,20 @@ public class ArchiveDefinitionGuardIntegrationTests(ArchiveDefinitionGuardFixtur
         (await ColumnsOfAsync(raw)).Should().Contain(c => c.Path == "late");
     }
 
+    // AB#7997 (review): a seed naming the same new column twice adds it once; the duplicate does not reach the definition.
+    [Fact]
+    public async Task ImportRt_TheSameNewColumnTwice_IsAddedOnce()
+    {
+        var raw = await CreateAsync(id => Raw(id, Column("amountvalue_sum")));
+
+        var command = await ImportCommandAsync(Raw(raw, Column("amountvalue_sum"), Column("twice"), Column("Twice")));
+
+        (await ColumnsOfAsync(raw)).Count(c => string.Equals(c.Path, "twice", StringComparison.OrdinalIgnoreCase)).Should().Be(1);
+        command.ArchiveColumnAdditions.Should().ContainSingle(a => a.Column == "twice" && a.Succeeded);
+        A.CallTo(() => fixture.StreamDataRepository.AddIngestedColumnStorageAsync(
+            A<ArchiveSnapshot>.That.Matches(s => s.RtId == raw), A<string>._, A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+    }
+
     // AB#7997: a disabled archive keeps its table, but the lifecycle adds columns to an activated one only.
     [Fact]
     public async Task ImportRt_AColumnAddedToADisabledArchiveThatWasActivated_IsRefused_AndNothingIsWritten()
