@@ -87,7 +87,11 @@ public sealed class MongoRecomputeJobStore : IRecomputeJobStore
         string archiveId, Func<RtCkRecomputeJobStateEnum, bool> statePredicate)
     {
         var session = await _tenantRepository.GetSessionAsync();
-        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtRecomputeJob>(session, RtEntityQueryOptions.Create());
+        // Filter by archive in the database (AB#8002): the computed-column backfill drain reads a column's jobs
+        // every tick while it is queued, and the job history of a tenant only grows.
+        var options = RtEntityQueryOptions.Create()
+            .FieldFilter(nameof(RtRecomputeJob.ArchiveRtId), FieldFilterOperator.Equals, archiveId);
+        var result = await _tenantRepository.GetRtEntitiesByTypeAsync<RtRecomputeJob>(session, options);
 
         return result.Items
             .Where(e => e.RtState != RtState.Archived

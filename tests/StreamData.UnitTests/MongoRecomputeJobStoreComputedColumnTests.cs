@@ -33,13 +33,16 @@ public class MongoRecomputeJobStoreComputedColumnTests
         StagingTableName = staging ?? string.Empty,
     };
 
-    private static MongoRecomputeJobStore StoreOver(params RtRecomputeJob[] jobs)
+    private RtEntityQueryOptions? _lastOptions;
+
+    private MongoRecomputeJobStore StoreOver(params RtRecomputeJob[] jobs)
     {
         var repository = A.Fake<ITenantRepository>();
         A.CallTo(() => repository.GetSessionAsync()).Returns(A.Fake<IOctoSession>());
         var result = A.Fake<IResultSet<RtRecomputeJob>>();
         A.CallTo(() => result.Items).Returns(jobs);
         A.CallTo(() => repository.GetRtEntitiesByTypeAsync<RtRecomputeJob>(A<IOctoSession>._, A<RtEntityQueryOptions>._))
+            .Invokes(call => _lastOptions = call.GetArgument<RtEntityQueryOptions>(1))
             .Returns(result);
         return new MongoRecomputeJobStore(repository);
     }
@@ -67,5 +70,16 @@ public class MongoRecomputeJobStoreComputedColumnTests
         Assert.Null(await store.GetActiveForArchiveAsync(Archive));
         var history = await store.GetForArchiveAsync(Archive, 10);
         Assert.Equal("ImportPower", Assert.Single(history).ComputedColumnName);
+    }
+
+    [Fact]
+    public async Task ArchiveLookup_FiltersByArchiveInTheQuery_NotAfterLoadingTheWholeHistory()
+    {
+        await StoreOver().GetForArchiveAsync(Archive, 10);
+
+        var filter = Assert.Single(_lastOptions!.FieldFilters!);
+        Assert.Equal(nameof(RtRecomputeJob.ArchiveRtId), filter.AttributePath);
+        Assert.Equal(FieldFilterOperator.Equals, filter.Operator);
+        Assert.Equal(Archive.ToString(), filter.ComparisonValue);
     }
 }
