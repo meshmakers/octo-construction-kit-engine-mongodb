@@ -698,6 +698,92 @@ public sealed class MongoCommandObservabilityTests : IDisposable
         Assert.Contains("OctoSecret", warn.Message);
     }
 
+    // ---- AB#8009: credential values of Hidden / sensitive attributes never reach the buffer or the logs ----
+
+    public static TheoryData<string> CredentialWrites => ["user", "clientSecret"];
+
+    private static (string CommandName, BsonDocument Command) CredentialWrite(string kind) => kind == "user"
+        ? ("insert", MongoCommandSensitiveAttributeRedactionTests.UserInsert())
+        : ("findAndModify", MongoCommandSensitiveAttributeRedactionTests.ClientSecretUpdate());
+
+    [Theory]
+    [MemberData(nameof(CredentialWrites))]
+    public void SlowCredentialWrite_BufferPreviewAndWarnLine_CarryNoCredential(string kind)
+    {
+        var buffer = new SlowQueriesBuffer(capacity: 100);
+        var sut = new MongoCommandObservability(_logger, _config, buffer);
+        _config.Current.SlowQueryThresholdMs = 50;
+        _config.Current.SlowQueryFullCommandLogMs = 100;
+        var (commandName, command) = CredentialWrite(kind);
+        // A plain BsonDocument (not raw) keeps the documents of the insert, so the preview really renders them.
+        var (started, succeeded) = BuildPair(commandName, command, "tenant_a", durationMs: 250);
+
+        sut.OnStarted(started);
+        sut.OnSucceeded(succeeded);
+
+        var entry = Assert.Single(buffer.GetSnapshot());
+        MongoCommandSensitiveAttributeRedactionTests.AssertNoDummy(entry.CommandBsonPreview);
+        Assert.Contains("\"***\"", entry.CommandBsonPreview);
+        var warn = Assert.Single(_logger.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("command=", warn.Message);
+        MongoCommandSensitiveAttributeRedactionTests.AssertNoDummy(warn.Message);
+    }
+
+    [Theory]
+    [MemberData(nameof(CredentialWrites))]
+    public void CredentialWrite_DebugCommandLogRendering_CarriesNoCredential(string kind)
+    {
+        var (commandName, command) = CredentialWrite(kind);
+        var (started, _) = BuildPair(commandName, command, "tenant_a", durationMs: 1);
+
+        var rendered = _sut.RenderCommandForLog(started);
+
+        MongoCommandSensitiveAttributeRedactionTests.AssertNoDummy(rendered);
+        Assert.Contains("\"***\"", rendered);
+    }
+
+    [Fact]
+    public void ModelSensitiveAttribute_IsMaskedInTheDebugLogAndTheBuffer_ForThatTenantsCommands()
+    {
+        const string dummyPin = "DUMMY-DEVICE-PIN-8009";
+        var buffer = new SlowQueriesBuffer(capacity: 100);
+        var names = new MongoCommandSensitiveAttributeNames(
+            db => db == "tenant_a" ? ["DevicePin"] : null, TimeProvider.System);
+        var sut = new MongoCommandObservability(_logger, _config, buffer, explainCache: null, names);
+        _config.Current.SlowQueryThresholdMs = 50;
+        var command = new BsonDocument
+        {
+            { "findAndModify", "Demo_Device" },
+            { "query", new BsonDocument("_id", 1) },
+            { "update", new BsonDocument("$set", new BsonDocument("attributes.devicePin", dummyPin)) }
+        };
+        var (started, succeeded) = BuildPair("findAndModify", command, "tenant_a", durationMs: 250);
+
+        var rendered = sut.RenderCommandForLog(started);
+        sut.OnStarted(started);
+        sut.OnSucceeded(succeeded);
+
+        Assert.DoesNotContain(dummyPin, rendered);
+        Assert.Contains("\"attributes.devicePin\" : \"***\"", rendered);
+        Assert.DoesNotContain(dummyPin, Assert.Single(buffer.GetSnapshot()).CommandBsonPreview);
+    }
+
+    [Fact]
+    public void ExplainPreview_ParsedFilterOfASensitiveAttribute_IsMasked()
+    {
+        var explain = new BsonDocument("queryPlanner", new BsonDocument
+        {
+            { "parsedQuery", new BsonDocument("attributes.securityStamp",
+                new BsonDocument("$eq", MongoCommandSensitiveAttributeRedactionTests.DummySecurityStamp)) },
+            { "winningPlan", new BsonDocument("stage", "COLLSCAN") }
+        });
+
+        var parsed = SlowQueryExplainParser.Parse(explain, DateTimeOffset.UtcNow, rawPreviewBytes: 4096);
+
+        MongoCommandSensitiveAttributeRedactionTests.AssertNoDummy(parsed.RawExplainPreview);
+        Assert.Contains("\"$eq\" : \"***\"", parsed.RawExplainPreview);
+    }
+
     private static RawBsonDocument BuildRawAggregateCommand()
     {
         var command = new BsonDocument

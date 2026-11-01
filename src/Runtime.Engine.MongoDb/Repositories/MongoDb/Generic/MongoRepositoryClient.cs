@@ -135,11 +135,12 @@ public abstract class MongoRepositoryClient : IRepositoryClient
                     {
                         observability.OnStarted(e);
                         // Guarded: the JSON rendering is expensive and must not run per command
-                        // when Debug is off. Secret envelopes are redacted (AB#5533).
+                        // when Debug is off. Secret envelopes (AB#5533) and the values of sensitive
+                        // attributes (AB#8009) are redacted like in the slow-query paths.
                         if (_logger.IsEnabled(LogLevel.Debug))
                         {
                             _logger.LogDebug("{ObjCommandName} - {Json}", e.CommandName,
-                                MongoCommandSecretRedactor.ToRedactedJsonOrPlaceholder(e.Command));
+                                observability.RenderCommandForLog(e));
                         }
                     });
                     cb.Subscribe<CommandSucceededEvent>(observability.OnSucceeded);

@@ -326,7 +326,7 @@ Two thresholds on `OctoSystemConfiguration`:
 | Property | Default | Behaviour |
 |----------|---------|-----------|
 | `SlowQueryThresholdMs` | `100` | Above this, the command is logged at **WARN** as: `Slow MongoDB command: <name> <target> on <db> took <ms>ms (requestId=<id>)`. `0` disables slow-query logging (metrics still emitted). |
-| `SlowQueryFullCommandLogMs` | `1000` | Above this **additional** threshold, the truncated BSON command body is included in the log line — useful to capture the exact filter/pipeline for very slow operations. |
+| `SlowQueryFullCommandLogMs` | `1000` | Above this **additional** threshold, the truncated BSON command body (credentials redacted, see *Credential redaction in every rendered command*) is included in the log line — useful to capture the exact filter/pipeline for very slow operations. |
 | `SlowQueryCommandPreviewBytes` | `2048` | Truncation limit for the BSON preview. |
 
 The `<target>` is extracted from the first BSON element value of the command (e.g.
@@ -334,6 +334,44 @@ The `<target>` is extracted from the first BSON element value of the command (e.
 without dumping the full pipeline.
 
 Env-var override example: `OCTO_System__SlowQueryThresholdMs=50`.
+
+### Credential redaction in every rendered command (AB#5533, AB#8009)
+
+Every place that turns a command into text goes through ONE step, `MongoCommandSecretRedactor.ToRedactedJson`: the
+driver-level Debug command log of `MongoRepositoryClient` (`MongoCommandObservability.RenderCommandForLog`), the slow-query
+WARN line with the command body, the slow-query buffer behind `GET {tenantId}/v1/Diagnostics/slow-mongo-queries` (Studio
+Diagnostics) and the explain preview (`SlowQueryExplainParser`, the parsed filter carries values). It masks:
+
+| What | Recognised by | Becomes |
+|---|---|---|
+| Stored secret envelope `{ _t: "OctoSecret", e: "enc:v2:..." }` | shape (no CK knowledge) | `{ _t: "OctoSecret", e: "***" }` |
+| Envelope string `enc:v1:` / `enc:v2:` | prefix | `"***"` |
+| Value of a **sensitive attribute** | name, in the attribute context | every leaf below it `"***"`, field names and array lengths stay |
+
+Sensitive attributes (`MongoCommandSensitiveAttributeNames`):
+
+- **Known credential fields, without CK knowledge** (`KnownCredentialNames`): `passwordHash`, `securityStamp`, `userTokens`
+  (System.Identity User), `clientSecrets`, `apiSecrets` (hashed client / API resource secrets), `xmlData` (Data Protection key
+  ring). They apply everywhere, also in hosts without a CK cache and for tenants whose cache is not loaded.
+- **From the CK cache of the tenant** (`CollectFromCkCache`, database name = tenant id): type and record attributes with
+  `access: Hidden`, a `securitySensitive` definition or value type `Secret`; on types also effective ownership `Secret`
+  (record members with ownership `Secret`, e.g. `UserToken.Value`, are covered by their owning attribute and their name is too
+  generic). Read at most once per 60 s per database, retried with the next command while the cache is not loaded; the set only
+  grows (a name found for one tenant is masked in every database the client renders - costs detail, never a leak).
+- **Attribute context only**: an element of a document that is the value of an `attributes` element (entity, record, a `$set`
+  of the whole map), or a dotted path segment after an `attributes` segment (`attributes.passwordHash`,
+  `attributes.userTokens.$[i0].attributes.value`, `attributes.clientSecrets.attributes.value` in a filter). A CK attribute
+  called `filter` therefore never masks the command's `filter`.
+
+Rules: the walk is copy-on-write (the driver's live command is never mutated) and runs only when the JSON contains a
+secret marker, or `attributes` and one of the names; a failed redaction drops the preview (`DroppedPreview`) instead of
+rendering it unredacted; truncation happens after redaction. A new place that renders command text must use
+`ToRedactedJson` / `TruncateBson` with `GetFor(database)`. Not covered: the exception text of `MongoDB command failed`
+(server error message; Hidden attributes are never indexed, so no duplicate-key text can carry one) and attributes of
+association roles (Hidden is not allowed there). Tests: `MongoCommandSensitiveAttributeRedactionTests`,
+`MongoCommandSensitiveAttributeNamesTests`, the AB#8009 cases in `MongoCommandObservabilityTests` (a User insert and a client
+secret write leave no dummy value in the Debug rendering, the WARN line and the buffer) and
+`RoundTrip/MongoCommandRedactionCkCacheTests` (names from the kitchen sink's cache rebuilt from MongoDB).
 
 ### Suppressed Commands
 
@@ -419,7 +457,7 @@ also captures every slow command (above `SlowQueryThresholdMs`) into a process-w
 without scraping logs:
 
 - `SlowQueryEntry` POCO — Timestamp, CommandName, Target, Database, DurationMs, RequestId,
-  CommandBsonPreview, Success, ErrorCode
+  CommandBsonPreview (redacted before it is stored, AB#8009), Success, ErrorCode
 - `SlowQueriesBuffer` public class — thread-safe FIFO ring backed by `ConcurrentQueue<T>`;
   default capacity 1000 (~3 MB resident at ~3 KB per entry), configurable via
   `OctoSystemConfiguration.SlowQueryBufferSize` (0 disables)
