@@ -110,6 +110,18 @@ public interface IStreamDataDatabaseClient
         string tenantId, string query, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Same as <see cref="StreamRawRowsAsync(string, string, CancellationToken)"/>, with the command
+    /// timeout of <paramref name="statementClass"/> set explicitly (AB#8002). The overload without a
+    /// class leaves the driver's default (the connection string's <c>CommandTimeout</c>, 30 s), which
+    /// made the driver cancel a long backfill page — CrateDB reports that as
+    /// <c>XX000: Job killed. Cancellation request by: &lt;user&gt;</c>. Background work passes
+    /// <see cref="CrateStatementClass.Maintenance"/>. The default implementation ignores the class.
+    /// </summary>
+    IAsyncEnumerable<IReadOnlyDictionary<string, object?>> StreamRawRowsAsync(
+        string tenantId, string query, CrateStatementClass statementClass, CancellationToken cancellationToken) =>
+        StreamRawRowsAsync(tenantId, query, cancellationToken);
+
+    /// <summary>
     /// Executes a COUNT query and returns the total number of matching rows.
     /// </summary>
     Task<long> GetCountAsync(string tenantId, string countQuery);
@@ -156,6 +168,16 @@ public interface IStreamDataDatabaseClient
     /// </summary>
     Task ExecuteBulkAsync(string tenantId, string parameterizedSql,
         IReadOnlyList<IReadOnlyList<object?>> argumentSets, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Same as <see cref="ExecuteBulkAsync(string, string, IReadOnlyList{IReadOnlyList{object}}, CancellationToken)"/>,
+    /// with the command timeout of <paramref name="statementClass"/> set on the batch (AB#8002) instead
+    /// of the driver's 30 s default. The default implementation ignores the class.
+    /// </summary>
+    Task ExecuteBulkAsync(string tenantId, string parameterizedSql,
+        IReadOnlyList<IReadOnlyList<object?>> argumentSets, CrateStatementClass statementClass,
+        CancellationToken cancellationToken) =>
+        ExecuteBulkAsync(tenantId, parameterizedSql, argumentSets, cancellationToken);
 
     /// <summary>
     /// Forces CrateDB to apply pending inserts to the read path immediately for the given archive

@@ -68,7 +68,7 @@ public class CrateDbComputedColumnBackfillTests
     {
         var executed = new List<(string, IReadOnlyList<IReadOnlyList<object?>>)>();
         A.CallTo(() => _db.ExecuteBulkAsync("tenant-x", A<string>._,
-                A<IReadOnlyList<IReadOnlyList<object?>>>._, A<CancellationToken>._))
+                A<IReadOnlyList<IReadOnlyList<object?>>>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
             .Invokes(call => executed.Add((
                 call.GetArgument<string>(1)!,
                 call.GetArgument<IReadOnlyList<IReadOnlyList<object?>>>(2)!)))
@@ -90,7 +90,7 @@ public class CrateDbComputedColumnBackfillTests
             Ing("ApparentPower"),
             Comp("powerFactor", "activepower / apparentpower", ComputedColumnState.Backfilling));
 
-        A.CallTo(() => _db.StreamRawRowsAsync("tenant-x", A<string>._, A<CancellationToken>._))
+        A.CallTo(() => _db.StreamRawRowsAsync("tenant-x", A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
             .Returns(Rows(
                 new Dictionary<string, object?>
                 {
@@ -117,7 +117,8 @@ public class CrateDbComputedColumnBackfillTests
         Assert.Contains(args, a => DoubleEq(0.5, a[0]) && (string?)a[2] == "rt-2");
         Assert.All(args, a => Assert.Equal(Ts, (DateTime)a[1]!));
         // Reads must complete before writes; the backfill refreshes the table so writes become visible.
-        A.CallTo(() => _db.RefreshArchiveTableAsync("tenant-x", A<string>._)).MustHaveHappenedOnceExactly();
+        A.CallTo(() => _db.RefreshArchiveTableAsync("tenant-x", A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
+            .MustHaveHappenedOnceExactly();
     }
 
     [Fact]
@@ -128,7 +129,7 @@ public class CrateDbComputedColumnBackfillTests
             Ing("ApparentPower"),
             Comp("powerFactor", "activepower / apparentpower", ComputedColumnState.Backfilling));
 
-        A.CallTo(() => _db.StreamRawRowsAsync("tenant-x", A<string>._, A<CancellationToken>._))
+        A.CallTo(() => _db.StreamRawRowsAsync("tenant-x", A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
             .Returns(Rows(new Dictionary<string, object?>
             {
                 ["timestamp"] = Ts, ["rtid"] = "rt-1", ["cktypeid"] = "EnergyMeter",
@@ -152,7 +153,7 @@ public class CrateDbComputedColumnBackfillTests
             Comp("doubled", "energy * 2", ComputedColumnState.Backfilling));
         snapshot = snapshot with { IsTimeRange = true };
 
-        A.CallTo(() => _db.StreamRawRowsAsync("tenant-x", A<string>._, A<CancellationToken>._))
+        A.CallTo(() => _db.StreamRawRowsAsync("tenant-x", A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
             .Returns(Rows(new Dictionary<string, object?>
             {
                 ["window_start"] = Ts, ["window_end"] = Ts.AddHours(1),
@@ -192,7 +193,7 @@ public class CrateDbComputedColumnBackfillTests
                 PendingFormula = "activepower / 200",
             });
 
-        A.CallTo(() => _db.StreamRawRowsAsync("tenant-x", A<string>._, A<CancellationToken>._))
+        A.CallTo(() => _db.StreamRawRowsAsync("tenant-x", A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
             .Returns(Rows(new Dictionary<string, object?>
             {
                 ["timestamp"] = Ts, ["rtid"] = "rt-1", ["cktypeid"] = "EnergyMeter", ["activepower"] = 400.0,
@@ -217,7 +218,132 @@ public class CrateDbComputedColumnBackfillTests
         await NewSut().BackfillComputedColumnAsync(snapshot, "doesNotExist", CancellationToken.None);
 
         Assert.Empty(bulk);
-        A.CallTo(() => _db.StreamRawRowsAsync(A<string>._, A<string>._, A<CancellationToken>._))
+        A.CallTo(() => _db.StreamRawRowsAsync(A<string>._, A<string>._, A<CrateStatementClass>._, A<CancellationToken>._))
             .MustNotHaveHappened();
+    }
+
+    // ---------------------------------------------------------------- AB#8002: sliced backfill
+
+    private static Dictionary<string, object?> Row(DateTime ts, string rtId) => new()
+    {
+        ["timestamp"] = ts, ["rtid"] = rtId, ["cktypeid"] = "EnergyMeter", ["activepower"] = 4.0,
+    };
+
+    /// <summary>
+    /// Fakes CrateDB for a sliced backfill: answers the bounds query, the next-row lookup and every
+    /// page query from <paramref name="rows"/>, honouring the slice predicate, and records the SQL.
+    /// </summary>
+    private List<string> ServeSliced(params Dictionary<string, object?>[] rows)
+    {
+        var queries = new List<string>();
+        A.CallTo(() => _db.StreamRawRowsAsync("tenant-x", A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
+            .ReturnsLazily((string _, string sql, CrateStatementClass _, CancellationToken _) =>
+            {
+                queries.Add(sql);
+                var times = rows.Select(r => (DateTime)r["timestamp"]!).ToList();
+                if (sql.StartsWith("SELECT min(\"timestamp\") AS \"lo\", max(", StringComparison.Ordinal))
+                {
+                    return Rows(new Dictionary<string, object?>
+                    {
+                        ["lo"] = times.Count == 0 ? null : times.Min(), ["hi"] = times.Count == 0 ? null : times.Max(),
+                    });
+                }
+
+                if (sql.StartsWith("SELECT min(\"timestamp\") AS \"lo\" FROM", StringComparison.Ordinal))
+                {
+                    var from = ParseFrom(sql);
+                    var next = times.Where(t => t >= from).DefaultIfEmpty().Min();
+                    return Rows(new Dictionary<string, object?> { ["lo"] = next == default ? null : next });
+                }
+
+                var sliceFrom = ParseFrom(sql);
+                return Rows(rows.Where(r => (DateTime)r["timestamp"]! >= sliceFrom
+                                            && (DateTime)r["timestamp"]! < sliceFrom.AddDays(1))
+                    .Select(r => (IReadOnlyDictionary<string, object?>)r).ToArray());
+            });
+        return queries;
+    }
+
+    /// <summary>The first <c>"timestamp" &gt;= '…'</c> literal of a query.</summary>
+    private static DateTime ParseFrom(string sql)
+    {
+        const string marker = "\"timestamp\" >= '";
+        var start = sql.IndexOf(marker, StringComparison.Ordinal) + marker.Length;
+        var end = sql.IndexOf('\'', start);
+        return DateTime.Parse(sql[start..end], System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal);
+    }
+
+    [Fact]
+    public async Task SlicedBackfill_BoundsEveryPageQueryToOneDay_AndReportsProgress()
+    {
+        var snapshot = RawSnapshot(Ing("ActivePower"), Comp("doubled", "activepower * 2", ComputedColumnState.Backfilling));
+        var queries = ServeSliced(Row(Ts, "a"), Row(Ts.AddDays(1), "b"), Row(Ts.AddDays(2), "c"));
+        var bulk = CaptureBulk();
+        var reported = new List<long>();
+
+        await NewSut().BackfillComputedColumnAsync(snapshot, "doubled", new SyncProgress(reported.Add), TestContext.Current.CancellationToken);
+
+        var pages = queries.Where(q => q.Contains("ORDER BY", StringComparison.Ordinal)).ToList();
+        Assert.Equal(3, pages.Count);
+        Assert.All(pages, q =>
+        {
+            Assert.Contains("\"timestamp\" >= ", q);
+            Assert.Contains("\"timestamp\" < ", q);
+        });
+        Assert.Equal(3, bulk.Count);
+        Assert.Equal(new long[] { 1, 2, 3 }, reported);
+    }
+
+    [Fact]
+    public async Task SlicedBackfill_JumpsOverAGap_WithOneLookup()
+    {
+        var snapshot = RawSnapshot(Ing("ActivePower"), Comp("doubled", "activepower * 2", ComputedColumnState.Backfilling));
+        // Two rows 100 days apart: without the jump that would be ~100 empty page queries.
+        var queries = ServeSliced(Row(Ts, "a"), Row(Ts.AddDays(100), "b"));
+        var bulk = CaptureBulk();
+
+        await NewSut().BackfillComputedColumnAsync(snapshot, "doubled", null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, bulk.Count);
+        Assert.True(queries.Count(q => q.Contains("ORDER BY", StringComparison.Ordinal)) <= 3);
+        Assert.Single(queries, q => q.StartsWith("SELECT min(\"timestamp\") AS \"lo\" FROM", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SlicedBackfill_EmptyArchive_RunsNoPageQuery()
+    {
+        var snapshot = RawSnapshot(Ing("ActivePower"), Comp("doubled", "activepower * 2", ComputedColumnState.Backfilling));
+        var queries = ServeSliced();
+        var bulk = CaptureBulk();
+
+        await NewSut().BackfillComputedColumnAsync(snapshot, "doubled", null, TestContext.Current.CancellationToken);
+
+        Assert.Single(queries);
+        Assert.Empty(bulk);
+    }
+
+    [Fact]
+    public async Task SlicedBackfill_HonoursCancellation_BetweenSlices()
+    {
+        var snapshot = RawSnapshot(Ing("ActivePower"), Comp("doubled", "activepower * 2", ComputedColumnState.Backfilling));
+        ServeSliced(Row(Ts, "a"), Row(Ts.AddDays(1), "b"));
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        A.CallTo(() => _db.ExecuteBulkAsync("tenant-x", A<string>._, A<IReadOnlyList<IReadOnlyList<object?>>>._,
+                CrateStatementClass.Maintenance, A<CancellationToken>._))
+            .Invokes(() => cts.Cancel());
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            NewSut().BackfillComputedColumnAsync(snapshot, "doubled", null, cts.Token));
+
+        A.CallTo(() => _db.ExecuteBulkAsync("tenant-x", A<string>._, A<IReadOnlyList<IReadOnlyList<object?>>>._,
+                CrateStatementClass.Maintenance, A<CancellationToken>._))
+            .MustHaveHappenedOnceExactly();
+    }
+
+    /// <summary>Synchronous <see cref="IProgress{T}"/> (Progress&lt;T&gt; posts asynchronously).</summary>
+    private sealed class SyncProgress(Action<long> report) : IProgress<long>
+    {
+        public void Report(long value) => report(value);
     }
 }

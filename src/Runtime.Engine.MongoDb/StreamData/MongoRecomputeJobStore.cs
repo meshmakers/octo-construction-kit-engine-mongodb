@@ -75,8 +75,12 @@ public sealed class MongoRecomputeJobStore : IRecomputeJobStore
     {
         var archiveId = archiveRtId.ToString();
         var jobs = await LoadActiveJobsForArchiveAsync(archiveId, IsActive);
-        var active = jobs.OrderByDescending(e => e.RtId).FirstOrDefault();
-        return active is null ? null : ToSnapshot(active);
+        // AB#8002: computed-column backfill jobs share the RecomputeJob history but are not rollup
+        // recomputes; the orchestrator must never adopt, coalesce into or fail them.
+        return jobs
+            .OrderByDescending(e => e.RtId)
+            .Select(ToSnapshot)
+            .FirstOrDefault(j => !j.IsComputedColumnBackfill);
     }
 
     private async Task<List<RtRecomputeJob>> LoadActiveJobsForArchiveAsync(

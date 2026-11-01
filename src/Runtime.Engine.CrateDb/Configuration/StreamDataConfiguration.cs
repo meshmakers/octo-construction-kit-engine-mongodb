@@ -86,6 +86,16 @@ public class StreamDataConfiguration
     public long? MaxRetroactiveReachHardLimitMs { get; set; }
 
     /// <summary>
+    /// Width of the time slices a computed-column backfill walks the archive in (AB#8002). Every
+    /// page query of the backfill is bounded to one slice of the archive's time key (raw:
+    /// <c>timestamp</c>, windowed: <c>window_start</c>), so CrateDB filters and sorts only the rows of
+    /// that slice instead of the whole remaining table, and the memory of a statement stays bounded
+    /// on archives with a long history. Empty slices are skipped with one lookup. Default: 1 day.
+    /// Bound to <c>StreamData:ComputedColumnBackfillSlice</c>. Must be positive.
+    /// </summary>
+    public TimeSpan ComputedColumnBackfillSlice { get; set; } = TimeSpan.FromDays(1);
+
+    /// <summary>
     /// Helper method to build a connection string from individual settings. Omits the
     /// <c>Password</c> token entirely when no password is supplied so callers don't end up with a
     /// stray <c>Password=;</c> on the wire.
