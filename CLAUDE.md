@@ -350,10 +350,17 @@ Diagnostics) and the explain preview (`SlowQueryExplainParser`, the parsed filte
 
 Sensitive attributes (`MongoCommandSensitiveAttributeNames`):
 
-- **Known credential fields, without CK knowledge** (`KnownCredentialNames`): `passwordHash`, `securityStamp`, `userTokens`
-  (System.Identity User), `clientSecrets`, `apiSecrets` (hashed client / API resource secrets), `xmlData` (Data Protection key
-  ring). They apply everywhere, also in hosts without a CK cache and for tenants whose cache is not loaded.
-- **From the CK cache of the tenant** (`CollectFromCkCache`, database name = tenant id): type and record attributes with
+- **Known credential and token fields, without CK knowledge** (`KnownCredentialNames`): `passwordHash`, `securityStamp`,
+  `userTokens` (System.Identity User: authenticator key, recovery codes, OTP challenges), `clientSecrets`, `apiSecrets`
+  (hashed client / API resource secrets), `xmlData` (Data Protection key ring), `payload` and `referenceId` (OpenIddict token:
+  protected payload, hashed reference id), `ticket` and `sessionKey` (server-side session: data-protected ticket, cookie key),
+  `data` and `grantKey` (persisted grant: serialized grant, hashed handle). They apply everywhere, also in hosts without a CK
+  cache and for tenants whose cache is not loaded. `data`, `payload` and `ticket` are generic: a same-named attribute of any
+  model is masked too (accepted, AB#8009).
+- **From the CK cache of the tenant** (`CollectFromCkCache`): the cache is keyed by tenant id and looked up with the
+  command's database name, so this applies to tenants whose **database name equals the tenant id** (the platform default,
+  the same rule the diagnostics endpoint filters by; decided for AB#8009). Other databases get the known names and the names
+  already found. Type and record attributes with
   `access: Hidden`, a `securitySensitive` definition or value type `Secret`; on types also effective ownership `Secret`
   (record members with ownership `Secret`, e.g. `UserToken.Value`, are covered by their owning attribute and their name is too
   generic). Read at most once per 60 s per database, retried with the next command while the cache is not loaded; the set only

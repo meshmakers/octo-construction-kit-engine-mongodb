@@ -32,13 +32,30 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 ///         the path segment after <c>attributes.</c>), so a CK attribute called <c>filter</c> does not mask a
 ///         command's <c>filter</c>.
 ///     </para>
+///     <para>
+///         The CK cache is keyed by tenant id and the lookup uses the database name of the command, so the
+///         model-derived names apply to tenants whose database name equals the tenant id (the platform default;
+///         the diagnostics endpoint filters the slow-query list by the same rule). For any other database the
+///         known credential names and the names already found apply.
+///     </para>
 /// </remarks>
 internal sealed class MongoCommandSensitiveAttributeNames
 {
     /// <summary>
-    ///     Credential fields masked regardless of model knowledge: the password hash, security stamp and
-    ///     two-factor tokens of <c>System.Identity/User</c>, the hashed secrets of clients and API resources and
-    ///     the Data Protection key ring XML of the identity service.
+    ///     Credential and token fields of the identity stores, masked regardless of model knowledge:
+    ///     <list type="bullet">
+    ///         <item><c>System.Identity/User</c>: <c>passwordHash</c>, <c>securityStamp</c>, <c>userTokens</c>
+    ///         (authenticator key, recovery codes, OTP challenges).</item>
+    ///         <item>Client / API resource: <c>clientSecrets</c>, <c>apiSecrets</c> (secret hashes).</item>
+    ///         <item>Data Protection key ring: <c>xmlData</c>.</item>
+    ///         <item>OpenIddict token: <c>payload</c> (protected token payload), <c>referenceId</c> (hashed
+    ///         reference token id).</item>
+    ///         <item>Server-side session: <c>ticket</c> (data-protected authentication ticket), <c>sessionKey</c>
+    ///         (the key the session cookie carries).</item>
+    ///         <item>Persisted grant: <c>data</c> (serialized grant), <c>grantKey</c> (hashed grant handle).</item>
+    ///     </list>
+    ///     <c>data</c>, <c>payload</c> and <c>ticket</c> are generic names: an attribute of the same name in any
+    ///     other model is masked too (diagnostic detail lost, decided for AB#8009).
     /// </summary>
     public static readonly FrozenSet<string> KnownCredentialNames = new[]
     {
@@ -47,7 +64,13 @@ internal sealed class MongoCommandSensitiveAttributeNames
         "userTokens",
         "clientSecrets",
         "apiSecrets",
-        "xmlData"
+        "xmlData",
+        "payload",
+        "referenceId",
+        "ticket",
+        "sessionKey",
+        "data",
+        "grantKey"
     }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>

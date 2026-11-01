@@ -700,11 +700,16 @@ public sealed class MongoCommandObservabilityTests : IDisposable
 
     // ---- AB#8009: credential values of Hidden / sensitive attributes never reach the buffer or the logs ----
 
-    public static TheoryData<string> CredentialWrites => ["user", "clientSecret"];
+    public static TheoryData<string> CredentialWrites =>
+        ["user", "clientSecret", "oauthToken", "serverSideSession", "persistedGrant", "dataProtectionKey"];
 
-    private static (string CommandName, BsonDocument Command) CredentialWrite(string kind) => kind == "user"
-        ? ("insert", MongoCommandSensitiveAttributeRedactionTests.UserInsert())
-        : ("findAndModify", MongoCommandSensitiveAttributeRedactionTests.ClientSecretUpdate());
+    private static (string CommandName, BsonDocument Command) CredentialWrite(string kind) => kind switch
+    {
+        "user" => ("insert", MongoCommandSensitiveAttributeRedactionTests.UserInsert()),
+        "clientSecret" => ("findAndModify", MongoCommandSensitiveAttributeRedactionTests.ClientSecretUpdate()),
+        _ => (kind == "serverSideSession" ? "findAndModify" : "insert",
+            MongoCommandSensitiveAttributeRedactionTests.TokenStoreWrite(kind))
+    };
 
     [Theory]
     [MemberData(nameof(CredentialWrites))]

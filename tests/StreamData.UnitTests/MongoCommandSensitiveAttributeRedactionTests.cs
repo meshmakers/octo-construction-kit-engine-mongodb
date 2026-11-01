@@ -12,11 +12,19 @@ public sealed class MongoCommandSensitiveAttributeRedactionTests
     internal const string DummySecurityStamp = "DUMMY-SECURITY-STAMP-8009";
     internal const string DummyAuthenticatorKey = "DUMMY-AUTHENTICATOR-KEY-8009";
     internal const string DummyClientSecretHash = "DUMMY-CLIENT-SECRET-HASH-8009";
+    internal const string DummyTokenPayload = "DUMMY-TOKEN-PAYLOAD-8009";
+    internal const string DummyReferenceId = "DUMMY-REFERENCE-ID-8009";
+    internal const string DummySessionTicket = "DUMMY-SESSION-TICKET-8009";
+    internal const string DummySessionKey = "DUMMY-SESSION-KEY-8009";
+    internal const string DummyGrantData = "DUMMY-GRANT-DATA-8009";
+    internal const string DummyGrantKey = "DUMMY-GRANT-KEY-8009";
+    internal const string DummyKeyRingXml = "<key id=\"DUMMY-KEY-RING-XML-8009\" />";
     private const string DummyPin = "DUMMY-PIN-8009";
     private const string FakeEnvelope = "enc:v2:testkid:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
     private static readonly string[] AllDummies =
-        [DummyPasswordHash, DummySecurityStamp, DummyAuthenticatorKey, DummyClientSecretHash];
+        [DummyPasswordHash, DummySecurityStamp, DummyAuthenticatorKey, DummyClientSecretHash, DummyTokenPayload,
+            DummyReferenceId, DummySessionTicket, DummySessionKey, DummyGrantData, DummyGrantKey, "DUMMY-KEY-RING-XML-8009"];
 
     /// <summary>The insert of a System.Identity user as the engine writes it (bulk payload).</summary>
     internal static BsonDocument UserInsert() => new()
@@ -96,6 +104,86 @@ public sealed class MongoCommandSensitiveAttributeRedactionTests
             })
         }
     };
+
+    /// <summary>The token stores of the identity service: OpenIddict token, server-side session, persisted grant,
+    /// Data Protection key ring.</summary>
+    internal static BsonDocument TokenStoreWrite(string kind) => kind switch
+    {
+        "oauthToken" => new BsonDocument
+        {
+            { "insert", "System_Identity_OAuthToken" },
+            {
+                "documents", new BsonArray
+                {
+                    new BsonDocument("attributes", new BsonDocument
+                    {
+                        { "tokenType", "device_code" },
+                        { "referenceId", DummyReferenceId },
+                        { "payload", DummyTokenPayload },
+                        { "properties", "{}" }
+                    })
+                }
+            }
+        },
+        "serverSideSession" => new BsonDocument
+        {
+            { "findAndModify", "System_Identity_ServerSideSession" },
+            { "query", new BsonDocument("attributes.sessionKey", DummySessionKey) },
+            {
+                "update", new BsonDocument("$set", new BsonDocument
+                {
+                    { "attributes.ticket", DummySessionTicket },
+                    { "attributes.scheme", "Cookies" }
+                })
+            }
+        },
+        "persistedGrant" => new BsonDocument
+        {
+            { "insert", "System_Identity_PersistedGrant" },
+            {
+                "documents", new BsonArray
+                {
+                    new BsonDocument("attributes", new BsonDocument
+                    {
+                        { "grantKey", DummyGrantKey },
+                        { "grantType", "refresh_token" },
+                        { "data", DummyGrantData }
+                    })
+                }
+            }
+        },
+        "dataProtectionKey" => new BsonDocument
+        {
+            { "insert", "System_Identity_DataProtectionKey" },
+            {
+                "documents", new BsonArray
+                {
+                    new BsonDocument("attributes", new BsonDocument
+                    {
+                        { "friendlyName", "key-dummy" },
+                        { "xmlData", DummyKeyRingXml }
+                    })
+                }
+            }
+        },
+        _ => throw new ArgumentOutOfRangeException(nameof(kind))
+    };
+
+    public static TheoryData<string> TokenStoreKinds => ["oauthToken", "serverSideSession", "persistedGrant", "dataProtectionKey"];
+
+    [Theory]
+    [MemberData(nameof(TokenStoreKinds))]
+    public void TokenStoreWrite_TokenMaterial_IsMasked_OtherFieldsStay(string kind)
+    {
+        var json = MongoCommandSecretRedactor.ToRedactedJson(TokenStoreWrite(kind));
+
+        AssertNoDummy(json);
+        Assert.Contains("\"***\"", json);
+        Assert.True(json.Contains("device_code", StringComparison.Ordinal)
+                    || json.Contains("Cookies", StringComparison.Ordinal)
+                    || json.Contains("refresh_token", StringComparison.Ordinal)
+                    || json.Contains("key-dummy", StringComparison.Ordinal), json);
+    }
 
     [Fact]
     public void UserInsert_KnownCredentialFields_AreMasked_FieldNamesAndOtherValuesStay()
@@ -298,6 +386,10 @@ public sealed class MongoCommandSensitiveAttributeRedactionTests
     [InlineData("passwordHash.attributes", false, false)]
     [InlineData("attributes.normalizedEmail", false, false)]
     [InlineData("filter", true, false)]
+    [InlineData("attributes.ticket", false, true)]
+    [InlineData("attributes.sessionKey", false, true)]
+    [InlineData("data", true, true)]
+    [InlineData("data", false, false)]
     public void IsSensitiveElementName_FollowsTheAttributeContext(string name, bool inAttributes, bool expected)
     {
         Assert.Equal(expected, MongoCommandSecretRedactor.IsSensitiveElementName(name, inAttributes,
@@ -315,5 +407,7 @@ public sealed class MongoCommandSensitiveAttributeRedactionTests
         // A truncation cut must not leave a recognisable prefix behind either.
         Assert.DoesNotContain("DUMMY-PASSWORD", text);
         Assert.DoesNotContain("DUMMY-CLIENT-SECRET", text);
+        Assert.DoesNotContain("DUMMY-TOKEN-PAYLOAD", text);
+        Assert.DoesNotContain("DUMMY-SESSION-TICKET", text);
     }
 }
