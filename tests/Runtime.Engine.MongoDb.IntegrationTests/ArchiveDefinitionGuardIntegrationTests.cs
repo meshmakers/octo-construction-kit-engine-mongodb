@@ -1,3 +1,4 @@
+using FakeItEasy;
 using FluentAssertions;
 
 using Meshmakers.Octo.ConstructionKit.Contracts;
@@ -346,6 +347,11 @@ public class ArchiveDefinitionGuardIntegrationTests(ArchiveDefinitionGuardFixtur
 
         await ImportAsync(Raw(raw, Column("amountvalue_sum"), Column("otherPath"), Computed("doubled", "Double")), ImportStrategy.Upsert);
 
+        // AB#7997: added through the lifecycle, storage first.
+        A.CallTo(() => fixture.StreamDataRepository.AddIngestedColumnStorageAsync(
+            A<ArchiveSnapshot>.That.Matches(s => s.RtId == raw), "otherPath", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+        (await ColumnsOfAsync(raw)).Should().Contain(c => c.Path == "otherPath");
+
         var removed = () => ImportAsync(Raw(raw, Column("amountvalue_sum"), Computed("doubled", "Double")), ImportStrategy.Upsert);
         var removal = (await removed.Should().ThrowAsync<ArchiveSchemaImmutableException>()).Which;
         removal.Field.Should().Be("Columns");
@@ -353,6 +359,98 @@ public class ArchiveDefinitionGuardIntegrationTests(ArchiveDefinitionGuardFixtur
 
         var retyped = () => ImportAsync(Raw(raw, Column("amountvalue_sum"), Column("otherPath"), Computed("doubled", "Int")), ImportStrategy.Upsert);
         (await retyped.Should().ThrowAsync<ArchiveSchemaImmutableException>()).Which.Message.Should().Contain("type of column 'doubled'");
+    }
+
+    private async Task<IReadOnlyList<CkArchiveColumnSpec>> ColumnsOfAsync(OctoObjectId archive)
+        => (await fixture.TenantContext.GetArchiveRuntimeStore().GetAsync(archive))!.Columns;
+
+    private async Task<IImportRtModelCommand> ImportCommandAsync(string yaml)
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"ab7997-{Guid.NewGuid():N}.yaml");
+        await File.WriteAllTextAsync(file, yaml, TestContext.Current.CancellationToken);
+        var command = fixture.GetService<IImportRtModelCommand>();
+        try
+        {
+            await command.ImportAsync(Repository, file, ExchangeMimeTypes.MimeTypeYaml, ImportStrategy.Upsert);
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+
+        return command;
+    }
+
+    // AB#7997: a seed that adds a computed column to an activated archive goes through the computed-column add: the column is
+    // persisted Pending, its storage added, a backfill job queued, and it waits in Backfilling for the background drain.
+    [Fact]
+    public async Task ImportRt_AComputedColumnAddedToAnActivatedArchive_QueuesItsBackfill_AndTheResultReportsIt()
+    {
+        var raw = await CreateAsync(id => Raw(id, Column("amountvalue_sum")));
+
+        var command = await ImportCommandAsync(Raw(raw, Column("amountvalue_sum"), Computed("tripled", "Double")));
+
+        var column = (await ColumnsOfAsync(raw)).Single(c => c.Name == "tripled");
+        column.ComputedState.Should().Be(ComputedColumnState.Backfilling);
+        column.Formula.Should().Be("amountvalue * 2");
+        A.CallTo(() => fixture.StreamDataRepository.AddComputedColumnStorageAsync(
+            A<ArchiveSnapshot>.That.Matches(s => s.RtId == raw), "tripled", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+        var job = (await fixture.TenantContext.GetRecomputeJobStore().GetForArchiveAsync(raw, 10)).Single();
+        job.IsComputedColumnBackfill.Should().BeTrue();
+        var addition = command.ArchiveColumnAdditions.Should().ContainSingle().Which;
+        addition.Should().BeEquivalentTo(new RtImportArchiveColumnAddition(raw, Name, "tripled", true, job.RtId, null));
+
+        // A second apply of the same seed finds the column in place and changes nothing.
+        var again = await ImportCommandAsync(Raw(raw, Column("amountvalue_sum"), Computed("tripled", "Double")));
+        again.ArchiveColumnAdditions.Should().BeEmpty();
+        (await fixture.TenantContext.GetRecomputeJobStore().GetForArchiveAsync(raw, 10)).Should().ContainSingle();
+    }
+
+    // AB#7997: the definition never names a column its table lacks. A failed ADD COLUMN leaves the column out, the import
+    // reports it, and the next run of the same import adds it.
+    [Fact]
+    public async Task ImportRt_WhenTheStorageOfANewColumnFails_TheDefinitionStaysWithoutIt_AndARerunAddsIt()
+    {
+        var raw = await CreateAsync(id => Raw(id, Column("amountvalue_sum")));
+        A.CallTo(() => fixture.StreamDataRepository.AddIngestedColumnStorageAsync(
+                A<ArchiveSnapshot>.That.Matches(s => s.RtId == raw), "late", A<CancellationToken>._))
+            .Throws(new ArchiveActivationFailedException(raw, new InvalidOperationException("CrateDB is away"))).Once();
+
+        var act = () => ImportCommandAsync(Raw(raw, Column("amountvalue_sum"), Column("late")));
+
+        var failure = (await act.Should().ThrowAsync<ArchiveColumnAdditionFailedException>()).Which;
+        failure.Message.Should().Contain("late").And.Contain("CrateDB is away").And.Contain("run the import again");
+        failure.Additions.Should().ContainSingle(a => a.Column == "late" && !a.Succeeded);
+        (await ColumnsOfAsync(raw)).Should().NotContain(c => c.Path == "late");
+
+        await ImportAsync(Raw(raw, Column("amountvalue_sum"), Column("late")), ImportStrategy.Upsert);
+
+        (await ColumnsOfAsync(raw)).Should().Contain(c => c.Path == "late");
+    }
+
+    // AB#7997: a disabled archive keeps its table, but the lifecycle adds columns to an activated one only.
+    [Fact]
+    public async Task ImportRt_AColumnAddedToADisabledArchiveThatWasActivated_IsRefused_AndNothingIsWritten()
+    {
+        var raw = await CreateAsync(id => Raw(id, Column("amountvalue_sum")));
+        await fixture.TenantContext.GetArchiveRuntimeStore().SetStatusAsync(raw, CkArchiveStatus.Disabled);
+
+        var act = () => ImportAsync(Raw(raw, Column("amountvalue_sum"), Column("otherPath")), ImportStrategy.Upsert);
+
+        (await act.Should().ThrowAsync<ArchiveSchemaImmutableException>()).Which.Message.Should().Contain("enable it first");
+        (await ColumnsOfAsync(raw)).Should().ContainSingle();
+    }
+
+    // A seed of an archive that was never activated has no table: the column is written with the definition, as before.
+    [Fact]
+    public async Task ImportRt_AColumnAddedToAnArchiveNotYetActivated_IsWrittenWithTheDefinition()
+    {
+        var raw = await CreateAsync(id => Raw(id, Column("amountvalue_sum")), CkArchiveStatus.Created);
+
+        var command = await ImportCommandAsync(Raw(raw, Column("amountvalue_sum"), Column("otherPath")));
+
+        (await ColumnsOfAsync(raw)).Should().Contain(c => c.Path == "otherPath");
+        command.ArchiveColumnAdditions.Should().BeEmpty();
     }
 
     private static EntityUpdateInfo<RtEntity> UpdateOf(OctoObjectId rtId, RtCkId<CkTypeId> type, string attribute, object? value)
@@ -452,6 +550,38 @@ public class ArchiveDefinitionGuardIntegrationTests(ArchiveDefinitionGuardFixtur
                 refused.Success.Should().BeFalse();
                 refused.Errors.Should().Contain(e => e.Contains("BucketSizeMs") && e.Contains("needs a new archive"));
             }
+        }
+        finally
+        {
+            await fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    // AB#7997: a blueprint update whose seed adds columns to an activated archive adds them through the lifecycle and reports
+    // them in the result.
+    [Fact]
+    public async Task ABlueprintUpdate_ThatAddsColumnsToAnActivatedArchive_AddsAndReportsThem()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var service = fixture.GetBlueprintService();
+        var tenantId = await fixture.CreateTestTenantAsync("archcols");
+        try
+        {
+            var tenant = await fixture.EnableStreamDataAsync(tenantId);
+            (await service.ApplyBlueprintAsync(tenantId, new BlueprintId("ArchiveGuardBp", "1.0.0"), force: false, ct)).IsSuccess.Should().BeTrue();
+            (await service.ApplyUpdateAsync(tenantId, new BlueprintId("ArchiveGuardBp", "1.2.0"), BlueprintUpdateMode.Full, null, ct))
+                .Success.Should().BeTrue();
+            var raw = new OctoObjectId("6a7000000000000000007997");
+            await tenant.GetArchiveRuntimeStore().SetStatusAsync(raw, CkArchiveStatus.Activated);
+
+            var updated = await service.ApplyUpdateAsync(tenantId, new BlueprintId("ArchiveGuardBp", "1.3.0"), BlueprintUpdateMode.Full, null, ct);
+
+            updated.Success.Should().BeTrue(string.Join("; ", updated.Errors));
+            updated.ArchiveColumnsAdded.Select(a => (a.Column, a.IsComputed, a.Succeeded))
+                .Should().Equal(("dischargingPower", false, true), ("dischargeKw", true, true));
+            var columns = (await tenant.GetArchiveRuntimeStore().GetAsync(raw))!.Columns;
+            columns.Should().Contain(c => c.Path == "dischargingPower");
+            columns.Single(c => c.Name == "dischargeKw").ComputedState.Should().Be(ComputedColumnState.Backfilling);
         }
         finally
         {

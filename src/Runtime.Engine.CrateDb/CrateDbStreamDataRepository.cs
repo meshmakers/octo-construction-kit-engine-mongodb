@@ -3021,6 +3021,50 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// AB#7997. Resolves only the one column against the CK model (an unknown or Hidden path throws
+    /// <see cref="ArchivePathInvalidException" /> before any DDL) and adds it nullable: CrateDB cannot add a NOT NULL
+    /// column to a table that may hold rows, and every existing row has no value for it. Unlike the reconciliation of
+    /// <see cref="EnsureArchiveCreatedAsync" />, which skips when the catalogue cannot be read, this always issues the
+    /// ALTER and treats "already exists" as done, so the caller may write the definition only after this returned.
+    /// </remarks>
+    public async Task AddIngestedColumnStorageAsync(
+        ArchiveSnapshot snapshot, string path, CancellationToken cancellationToken = default)
+    {
+        if (snapshot.RollupAggregations is not null)
+        {
+            throw new ArchivePathInvalidException(snapshot.RtId, path,
+                "the columns of a rollup archive are derived from its aggregations.");
+        }
+
+        ArchiveColumnDdl column;
+        try
+        {
+            column = ArchivePathTypeResolver.Resolve(_ckCacheService, _tenantId, snapshot.TargetCkTypeId,
+                [new CkArchiveColumnSpec(path, Indexed: snapshot.Columns.FirstOrDefault(c => c.Path == path)?.Indexed ?? false, Required: false)])
+                .Single();
+        }
+        catch (UnresolvableArchivePathException ex)
+        {
+            throw new ArchivePathInvalidException(snapshot.RtId, path, ex.Reason);
+        }
+
+        var table = TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString());
+        try
+        {
+            await _databaseClient.ExecuteNonQueryAsync(_tenantId,
+                ArchiveDdlGenerator.GenerateAddColumn(table, column with { Required = false }), cancellationToken);
+            _logger.LogInformation("Archive {Table}: added column {Column} (nullable) to the activated archive.",
+                table, ArchiveDdlGenerator.ResolveColumnName(column));
+        }
+        catch (Exception ex) when (IsColumnAlreadyExists(ex))
+        {
+            _logger.LogDebug(ex, "Archive {Table}: column {Column} already exists; reusing it.",
+                table, ArchiveDdlGenerator.ResolveColumnName(column));
+        }
+    }
+
+    /// <inheritdoc />
     public async Task AddPendingComputedColumnStorageAsync(
         ArchiveSnapshot snapshot, string columnName, CancellationToken cancellationToken = default)
     {

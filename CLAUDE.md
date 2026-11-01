@@ -1071,6 +1071,8 @@ scope: `docs/streamdata-archive-concept.md` §10. `RollupOrchestrator` records a
 (`MongoRollupArchiveRuntimeStore.RecordRunFailureAsync`, `ClearRunFailureAsync`). Tests: `ArchiveDefinitionGuardIntegrationTests`
 (real MongoDB, blueprint `TestBlueprints/.../ArchiveGuardBp`).
 
+Adding a column to an activated archive (AB#7997): never write it into `Columns` without the storage change. The direct path is `ArchiveLifecycleService.AddArchiveColumnAsync` (storage via `CrateDbStreamDataRepository.AddIngestedColumnStorageAsync`, then the definition); a seed's additions are taken out of the import and applied after the commit through `IArchiveLifecycleServiceProvider` (`TenantArchiveLifecycleServiceProvider`, resolves `ISystemContext` lazily to avoid a DI cycle). Rules: `docs/streamdata-archive-concept.md` §10, *Adding a column to an active archive*.
+
 ### Rollups report their manual values (AB#7727)
 
 Every rollup table carries `manual_count` (`BIGINT`) and `last_manual_at` (`TIMESTAMP WITH TIME ZONE`), platform columns
