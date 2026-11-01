@@ -266,6 +266,30 @@ Clamping a diagnostic label is strictly better than refusing to serve the tenant
 this back into a validation rule on the database name — MongoDB's own 63-byte limit is the only one
 callers should have to satisfy.
 
+## Write and read concern of the repository clients (AB#8026)
+
+`MongoRepositoryClient.CreateClientSettings` sets the consistency of **every** repository client (admin and user,
+system and tenant databases) in code, after `MongoClientSettings.FromUrl`:
+
+| Setting | Value |
+|---|---|
+| Write concern | `w: majority`, `wtimeout` 30 s (`MongoRepositoryClient.RepositoryWriteConcern`) |
+| Journal (`j`) | not set: follows the replica set's `writeConcernMajorityJournalDefault` (MongoDB default `true`), so a majority ack means journaled on a majority |
+| Read concern | `majority` |
+| `RetryWrites` | `true` |
+
+No configuration can weaken it: the clients build their URL from `OctoSystemConfiguration` (there is no connection
+string), and a `w` / `wtimeoutMS` / `readConcernLevel` option in a URL would be overwritten anyway. Transactions
+(the handler session of a CK method, methodConsistency R3) inherit the client write concern. CK method handlers rely
+on it: a success envelope is sent only for a write a majority acknowledged (methodConsistency OD-7, decided
+2026-11-01: keep the defaults, document them, pin them with a test). A `MongoWriteConcernException` (majority not
+reached within 30 s) does not undo the write on the primary; a method handler must report it as an unknown outcome (R3), not as "nothing happened".
+
+Pinned by `MongoRepositoryClientConsistencySettingsTests` (no database): the live driver settings of a real
+`AdminMongoRepositoryClient` and `UserMongoRepositoryClient` (`ClientSettings`, internal test seam over
+`MongoClient.Settings`) and `CreateClientSettings` with a URL that asks for `w=1`, a 1 s wtimeout and read concern
+`local`. Changing a value turns the test red on purpose; such a change needs a new decision on OD-7 first.
+
 ## Observability — MongoDB Command Profiling
 
 `MongoCommandObservability` (in `Repositories/MongoDb/Generic/`) subscribes to
@@ -879,7 +903,7 @@ replace : replaceOne { _id, rtVersion: <n> }  <document with rtVersion = n + 1> 
 - `MultipleOriginHierarchicalDeepRtGraphQuery` - Deep graph queries following parent-child hierarchy
 - `RtPathEvaluator` - Tokenizes and evaluates attribute paths including navigation properties
 - `NavigationEnd` - Represents the end of a navigation (association target)
-- `MongoRepositoryClient` - Base class that registers BSON conventions and class maps
+- `MongoRepositoryClient` - Base class that registers BSON conventions and class maps and builds the driver client (write concern majority / 30 s, read concern majority, see *Write and read concern of the repository clients*)
 - `MongoRuntimeRepositoryProvider` - Provides tenant repositories for CK model migrations
 - `TenantContext` - Per-tenant context managing CK model imports and migration triggers
 
