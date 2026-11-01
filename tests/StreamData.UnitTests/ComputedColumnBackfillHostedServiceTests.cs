@@ -39,6 +39,7 @@ public class ComputedColumnBackfillHostedServiceTests
         var context = A.Fake<ITenantContext>();
         var lifecycle = A.Fake<IArchiveLifecycleService>();
         A.CallTo(() => context.GetArchiveLifecycleService()).Returns(lifecycle);
+        A.CallTo(() => context.GetRecomputeOrchestrator()).Returns(A.Fake<IRecomputeOrchestrator>());
         A.CallTo(() => _systemContext.TryFindTenantContextAsync(tenantId)).Returns(context);
         return lifecycle;
     }
@@ -103,6 +104,23 @@ public class ComputedColumnBackfillHostedServiceTests
         A.CallTo(() => _systemContext.TryFindTenantContextAsync("unknown")).Returns((ITenantContext?)null);
 
         await NewSut().DrainAllTenantsAsync(Ct);
+    }
+
+    [Fact]
+    public async Task Drain_TenantWithoutTheStreamDataModel_IsSkipped_InsteadOfThrowingEveryTick()
+    {
+        // test-2, 2026-11-01: tenants with stream data on but System.StreamData not imported threw
+        // CkCacheException from the archive store on every tick. GetRecomputeOrchestrator is null exactly then.
+        A.CallTo(() => _tenantSource.GetTenantIdsAsync(A<CancellationToken>._)).Returns(new[] { "nomodel" });
+        var context = A.Fake<ITenantContext>();
+        var lifecycle = A.Fake<IArchiveLifecycleService>();
+        A.CallTo(() => context.GetArchiveLifecycleService()).Returns(lifecycle);
+        A.CallTo(() => context.GetRecomputeOrchestrator()).Returns((IRecomputeOrchestrator?)null);
+        A.CallTo(() => _systemContext.TryFindTenantContextAsync("nomodel")).Returns(context);
+
+        await NewSut().DrainAllTenantsAsync(Ct);
+
+        A.CallTo(() => lifecycle.RunPendingComputedColumnBackfillsAsync(A<CancellationToken>._)).MustNotHaveHappened();
     }
 
     [Fact]
