@@ -109,6 +109,15 @@ internal sealed class ComputedColumnBackfillHostedService : BackgroundService
             return;
         }
 
+        // Same gate as the recompute tick: the tenant source returns every tenant, and on a tenant that has
+        // stream data switched on but has not imported System.StreamData yet the archive store throws
+        // CkCacheException on every tick (test-2, 2026-11-01: one ERROR per such tenant every 15 s).
+        // GetRecomputeOrchestrator answers null exactly then.
+        if (tenantContext!.GetRecomputeOrchestrator() is null)
+        {
+            return;
+        }
+
         var completed = await lifecycle.RunPendingComputedColumnBackfillsAsync(cancellationToken);
         if (completed > 0)
         {
