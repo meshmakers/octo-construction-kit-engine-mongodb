@@ -7,6 +7,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
 using Meshmakers.Octo.Runtime.Contracts.Repositories;
 using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
+using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.Blueprints;
 using Meshmakers.Octo.Runtime.Engine.Configuration.DependencyInjection;
 using Meshmakers.Octo.Runtime.Engine.MongoDb;
@@ -157,6 +158,10 @@ public static class RuntimeEngineBuilderExtensions
         // Register MongoDB-specific CK model migration support by default
         // This enables automatic migration detection when CK models are updated
         builder.Services.AddSingleton<IRuntimeRepositoryProvider, MongoRuntimeRepositoryProvider>();
+
+        // AB#7997: the runtime import adds a column a seed declares for an activated archive through the archive
+        // lifecycle of the tenant instead of writing the definition without its storage.
+        builder.Services.TryAddSingleton<IArchiveLifecycleServiceProvider, Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.TenantArchiveLifecycleServiceProvider>();
 
         MongoRepositoryClient.RegisterSerializers();
 
