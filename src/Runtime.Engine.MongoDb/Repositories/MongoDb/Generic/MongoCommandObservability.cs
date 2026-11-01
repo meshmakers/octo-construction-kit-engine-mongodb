@@ -93,6 +93,7 @@ internal sealed class MongoCommandObservability
     private readonly SlowQueriesBuffer? _slowQueries;
     private readonly SlowQueryExplainCache? _explainCache;
     private readonly Meshmakers.Octo.ConstructionKit.Contracts.Services.ICkCacheService? _ckCacheService;
+    private readonly MongoCommandSensitiveAttributeNames _sensitiveAttributeNames;
     private readonly ConcurrentDictionary<int, PendingCommand> _pending = new();
 
     /// <summary>
@@ -116,6 +117,34 @@ internal sealed class MongoCommandObservability
         _slowQueries = slowQueries;
         _explainCache = explainCache;
         _ckCacheService = ckCacheService;
+        _sensitiveAttributeNames = new MongoCommandSensitiveAttributeNames(ckCacheService);
+    }
+
+    /// <summary>
+    /// Test seam (AB#8009): uses <paramref name="sensitiveAttributeNames"/> instead of a set built from
+    /// the CK cache.
+    /// </summary>
+    internal MongoCommandObservability(
+        ILogger logger,
+        IOptionsMonitor<OctoSystemConfiguration> config,
+        SlowQueriesBuffer? slowQueries,
+        SlowQueryExplainCache? explainCache,
+        MongoCommandSensitiveAttributeNames sensitiveAttributeNames)
+        : this(logger, config, slowQueries, explainCache)
+    {
+        _sensitiveAttributeNames = sensitiveAttributeNames;
+    }
+
+    /// <summary>
+    /// Renders <paramref name="e"/>'s command for the driver-level debug command log of
+    /// <see cref="MongoRepositoryClient"/> with the same redaction as the slow-query paths (secret
+    /// envelopes and sensitive attribute values, AB#5533 / AB#8009). Never throws.
+    /// </summary>
+    internal string RenderCommandForLog(CommandStartedEvent e)
+    {
+        // GetFor never throws (a failing CK cache leaves the known credential names).
+        return MongoCommandSecretRedactor.ToRedactedJsonOrPlaceholder(e.Command,
+            _sensitiveAttributeNames.GetFor(e.DatabaseNamespace?.DatabaseName));
     }
 
     /// <summary>
@@ -310,7 +339,8 @@ internal sealed class MongoCommandObservability
         string? fingerprint = null;
         if (_slowQueries is not null)
         {
-            preview = TruncateBson(ctx.Command, cfg.SlowQueryCommandPreviewBytes);
+            preview = TruncateBson(ctx.Command, cfg.SlowQueryCommandPreviewBytes,
+                _sensitiveAttributeNames.GetFor(ctx.Database));
             fingerprint = SlowQueryFingerprinter.Fingerprint(ctx.Command);
             _slowQueries.Add(new SlowQueryEntry(
                 Timestamp: DateTimeOffset.UtcNow,
@@ -357,7 +387,8 @@ internal sealed class MongoCommandObservability
         // Very slow → include truncated BSON body so the exact filter / pipeline is captured.
         // Reuses the preview computed for the buffer when one is registered, otherwise
         // computes it now.
-        preview ??= TruncateBson(ctx.Command, cfg.SlowQueryCommandPreviewBytes);
+        preview ??= TruncateBson(ctx.Command, cfg.SlowQueryCommandPreviewBytes,
+            _sensitiveAttributeNames.GetFor(ctx.Database));
         _logger.LogWarning(
             "Slow MongoDB command: {CommandName} {Target} on {Database} took {DurationMs}ms (requestId={RequestId}) command={Command}",
             commandName, ctx.Target, ctx.Database, ms, requestId, preview);
@@ -385,6 +416,8 @@ internal sealed class MongoCommandObservability
         // races; it just keeps the Task.Run closure self-contained without capturing
         // `this`. Null when no cache is wired (host without CK engine attached).
         var ckCacheService = _ckCacheService;
+        // AB#8009: the explain preview shows the parsed filter with its values.
+        var sensitiveAttributeNames = _sensitiveAttributeNames.GetFor(database);
         var target = ctx.Target;
         BsonDocument commandClone;
         try
@@ -450,7 +483,8 @@ internal sealed class MongoCommandObservability
                 var parsed = SlowQueryExplainParser.Parse(
                     result, DateTimeOffset.UtcNow, previewBytes,
                     originalCommand: commandClone, commandName: commandName, target: target,
-                    tenantId: database, ckCacheService: ckCacheService);
+                    tenantId: database, ckCacheService: ckCacheService,
+                    sensitiveAttributeNames: sensitiveAttributeNames);
                 cache.Set(key, parsed);
             }
             catch (OperationCanceledException)
@@ -626,13 +660,15 @@ internal sealed class MongoCommandObservability
     }
 
     /// <summary>
-    /// Truncates the BSON-as-JSON representation (secret envelopes redacted, see
-    /// <see cref="MongoCommandSecretRedactor"/>) so it fits within <paramref name="maxBytes"/>
+    /// Truncates the BSON-as-JSON representation (secret envelopes and the values of
+    /// <paramref name="sensitiveAttributeNames"/> redacted, see <see cref="MongoCommandSecretRedactor"/>;
+    /// without names the known credential fields apply) so it fits within <paramref name="maxBytes"/>
     /// bytes when UTF-8 encoded — i.e. the same byte budget the log sink will spend. Naïve
     /// char-based truncation under-counts non-ASCII content (each German umlaut is 2 UTF-8 bytes,
     /// emoji are 4) and can also split a UTF-16 surrogate pair, producing an invalid string.
     /// </summary>
-    internal static string TruncateBson(BsonDocument? command, int maxBytes)
+    internal static string TruncateBson(BsonDocument? command, int maxBytes,
+        IReadOnlySet<string>? sensitiveAttributeNames = null)
     {
         if (command is null)
         {
@@ -651,7 +687,9 @@ internal sealed class MongoCommandObservability
             // reach the slow-query buffer (served to tenant admins), the WARN log or the explain
             // preview. Redaction runs before truncation and only walks the document when the
             // serialized JSON mentions a secret; a failed redaction drops the preview.
-            json = MongoCommandSecretRedactor.ToRedactedJson(command);
+            // AB#8009: the values of Hidden / securitySensitive / Secret attributes and of the known
+            // credential fields are masked by the same step.
+            json = MongoCommandSecretRedactor.ToRedactedJson(command, sensitiveAttributeNames);
         }
         catch (ObjectDisposedException)
         {
