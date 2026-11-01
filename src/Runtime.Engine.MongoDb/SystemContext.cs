@@ -314,6 +314,11 @@ public class SystemContext : TenantContext, ISystemContext
             result.TotalCount, null, null);
     }
 
+    /// <summary>
+    ///     Start of the conflict reason for a stale parent-local row (AB#6759); a dry run lists them under this marker.
+    /// </summary>
+    public const string StaleEntryReasonPrefix = "stale entry";
+
     /// <inheritdoc />
     public async Task<TenantRegistryReconcileResult> ReconcileTenantRegistryAsync(IOctoAdminSession adminSession,
         bool apply = false)
@@ -399,6 +404,16 @@ public class SystemContext : TenantContext, ISystemContext
                 {
                     conflicts.Add(new TenantRegistryReconcileConflict(childId, parentId,
                         $"database '{childDatabase}' is registered for tenant '{holder.TenantId}'"));
+                    continue;
+                }
+                else if (!await IsDatabaseExistingAsync(childDatabase))
+                {
+                    // AB#6759: a parent-local row whose database is gone is the leftover of a deleted tenant (a
+                    // delete from the system tenant used to leave it behind). Inserting it would resurrect the
+                    // tenant as registered without data. Reported, never inserted, and not walked into.
+                    conflicts.Add(new TenantRegistryReconcileConflict(childId, parentId,
+                        $"{StaleEntryReasonPrefix}: database '{childDatabase}' does not exist; the row is the " +
+                        "leftover of a deleted tenant and is not inserted"));
                     continue;
                 }
                 else
