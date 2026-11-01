@@ -759,6 +759,18 @@ A file that is missing on the primary too still throws `EntityNotFoundException`
 Tests: `MongoLinkedBinaryDataSourceReadYourWritesTests` (unit), `TemporaryBinaryTests.Cache_UploadThenImmediateDownload_FindsTheFile`
 (integration, replica set).
 
+## Write-concern-only failures keep their cause (AB#8020)
+
+`MongoDbDataSourceCollection.CreateWriteException` maps a `MongoWriteException` of a single-document write. When only the write
+concern failed (the `wtimeout` of the hard-coded `w:majority`, see `MongoRepositoryClient`; any other write-concern error),
+`MongoWriteException.WriteError` is `null` and `WriteConcernError` is set: the write is applied on the primary but not confirmed by
+a majority. The mapping used to dereference the missing write error and threw a `NullReferenceException` from inside the `catch`,
+so the cause was lost. It now returns `OperationFailedException.DatabaseOperationFailed` with the driver exception as the inner
+exception (duplicate key and other write errors unchanged), and the CK method host of `octo-common-services` (`CkMethodWriteOutcome`)
+answers such a call `METHOD_OUTCOME_UNKNOWN` instead of `METHOD_HANDLER_FAILED` (rule R3). Bulk writes (`MongoBulkWriteException`,
+wrapped by `OperationFailedException.BulkImportError`) and commands/commits (`MongoWriteConcernException`, not wrapped) kept their
+cause already. Test: `StreamData.UnitTests/MongoDbWriteExceptionMappingTests`.
+
 ## Re-importing an archived entity (AB#7018)
 
 The default delete (GraphQL `deleteEntities`, `DeleteOptions` default) is `DeleteStrategies.Archive`: the document

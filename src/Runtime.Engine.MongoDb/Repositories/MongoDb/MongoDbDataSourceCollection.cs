@@ -1302,9 +1302,16 @@ internal class MongoDbDataSourceCollection<TKey, TDocument> : IMongoDbDataSource
 
     #region Exception helpers
 
-    private Exception CreateWriteException<T>(string operationName, MongoWriteException ex)
+    /// <summary>
+    ///     Maps a failed single-document write. <see cref="MongoWriteException.WriteError" /> is <c>null</c> when only the
+    ///     write concern failed (e.g. the <c>wtimeout</c> of <c>w:majority</c>): the write is applied on the primary but not
+    ///     confirmed. The driver exception stays the inner exception, so the method host can answer
+    ///     <c>METHOD_OUTCOME_UNKNOWN</c> for it (AB#8020); before, the <c>null</c> write error threw a
+    ///     <see cref="NullReferenceException" /> here and the cause was lost.
+    /// </summary>
+    internal static Exception CreateWriteException<T>(string operationName, MongoWriteException ex)
     {
-        if (ex.WriteError.Category == ServerErrorCategory.DuplicateKey)
+        if (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
         {
             return DuplicateKeyException.DuplicateKeyError(typeof(T), ex);
         }
