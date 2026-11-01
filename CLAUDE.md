@@ -2885,6 +2885,12 @@ concept `docs/concept-computed-columns.md` §8.3a in the engine repository). Thi
   driver default of 30 s, which is what killed the test-2 backfills (`XX000: Job killed. Cancellation request by: octo-system`).
   Tests: `CrateDbComputedColumnBackfillTests` (unit, sliced cases) and `ComputedColumnBackfillJobIntegrationTests` (real CrateDB:
   queued add survives the request's cancellation, two queued backfills, failure + retry).
+- **Checkpoint / resume (AB#8002 follow-up).** The resumable overload `BackfillComputedColumnAsync(snapshot, column, resumeFrom,
+  IProgress<ComputedColumnBackfillProgress>, ct)` starts the slice walk at `resumeFrom` (when it is after the first row) and reports
+  `CompletedThrough` = the start of the next slice after every completed slice and gap jump; the engine's runner stores it in the job's
+  `RangeStart`, so a backfill cut short by a rollout resumes there. The unsliced fallback reports no checkpoint (a resumed run walks it
+  all again). Tests: `ResumedBackfill_StartsAtTheCheckpoint_…`, `ResumePastTheLastRow_WritesNothing` (unit) and
+  `ARolloutMidRun_HandsTheJobBack_AndTheNextRunResumesFromTheCheckpoint` (real CrateDB).
 - **`MongoRecomputeJobStore.GetActiveForArchiveAsync`** skips computed-column jobs (`RecomputeJobSnapshot.IsComputedColumnBackfill`),
   so the rollup orchestrator never adopts, coalesces into or fails one.
 

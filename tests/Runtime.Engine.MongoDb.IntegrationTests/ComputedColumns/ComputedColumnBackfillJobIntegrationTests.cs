@@ -96,6 +96,52 @@ public class ComputedColumnBackfillJobIntegrationTests(CrateStagingCopyFixture f
     }
 
     [Fact]
+    public async Task ARolloutMidRun_HandsTheJobBack_AndTheNextRunResumesFromTheCheckpoint()
+    {
+        // The real client; a "rollout" (shutdown) is triggered after the 20th committed page.
+        var client = A.Fake<IStreamDataDatabaseClient>(o => o.Wrapping(fixture.Client));
+        var lane = await NewLaneAsync(hourlyRows: 1500, client);
+        using var rollout = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var pages = 0;
+        A.CallTo(() => client.ExecuteBulkAsync(A<string>._, A<string>._, A<IReadOnlyList<IReadOnlyList<object?>>>._,
+                A<CrateStatementClass>._, A<CancellationToken>._))
+            .Invokes(() =>
+            {
+                if (Interlocked.Increment(ref pages) == 20)
+                {
+                    rollout.Cancel();
+                }
+            })
+            .CallsWrappedMethod();
+
+        var job = await lane.Lifecycle.EnqueueAddComputedColumnAsync(
+            lane.Archive, "doubled", "value * 2", FormulaResultType.Double, indexed: false, Ct);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => lane.Lifecycle.RunPendingComputedColumnBackfillsAsync(rollout.Token));
+
+        var handedBack = await lane.Jobs.GetAsync(job!.RtId);
+        Assert.Equal(RecomputeJobState.Pending, handedBack!.State);
+        Assert.True(handedBack.RangeStart > DateTime.UnixEpoch, "the hand-back keeps the checkpoint");
+        var rowsBefore = handedBack.RowsProcessed ?? 0;
+        Assert.InRange(rowsBefore, 1, 1499);
+        var pagesBefore = pages;
+
+        // "New pod": resumes at the checkpoint and finishes the column.
+        Assert.Equal(1, await lane.Lifecycle.RunPendingComputedColumnBackfillsAsync(Ct));
+
+        var done = await lane.Jobs.GetAsync(job.RtId);
+        Assert.Equal(RecomputeJobState.Completed, done!.State);
+        Assert.Equal(ComputedColumnState.Active, lane.Store.Column(lane.Archive, "doubled")!.ComputedState);
+        var (rows, written, wrong) = await CheckAsync(lane.Table, "doubled", 2);
+        Assert.Equal(1500, rows);
+        Assert.Equal(1500, written);
+        Assert.Equal(0, wrong);
+        // The second run did not start over: it wrote only what was left (one-day slices of 24 rows).
+        Assert.True(pages - pagesBefore < 63 - 15, $"resumed run wrote {pages - pagesBefore} pages");
+        Assert.Equal(1500, done.RowsProcessed);
+    }
+
+    [Fact]
     public async Task TwoBackfills_Queue_AndBothEndActive()
     {
         var lane = await NewLaneAsync(hourlyRows: 1500);
