@@ -153,9 +153,26 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         return dataPointDtos;
     }
 
-    public async IAsyncEnumerable<IReadOnlyDictionary<string, object?>> StreamRawRowsAsync(
-        string tenantId, string query,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public IAsyncEnumerable<IReadOnlyDictionary<string, object?>> StreamRawRowsAsync(
+        string tenantId, string query, CancellationToken cancellationToken = default)
+        => StreamRawRowsCoreAsync(tenantId, query, commandTimeoutSeconds: null, cancellationToken);
+
+    /// <inheritdoc />
+    public IAsyncEnumerable<IReadOnlyDictionary<string, object?>> StreamRawRowsAsync(
+        string tenantId, string query, CrateStatementClass statementClass, CancellationToken cancellationToken)
+        => StreamRawRowsCoreAsync(tenantId, query, CommandTimeoutSeconds(statementClass), cancellationToken);
+
+    private int CommandTimeoutSeconds(CrateStatementClass statementClass)
+    {
+        var budget = statementClass == CrateStatementClass.Maintenance
+            ? _maintenanceStatementTimeout
+            : _interactiveStatementTimeout;
+        return Math.Max(1, (int)Math.Ceiling(budget.TotalSeconds));
+    }
+
+    private async IAsyncEnumerable<IReadOnlyDictionary<string, object?>> StreamRawRowsCoreAsync(
+        string tenantId, string query, int? commandTimeoutSeconds,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         // Unbuffered enumeration: Dapper hands back rows one at a time off the open data reader so a
         // multi-GB archive export never materialises the whole table. The connection stays open for
@@ -163,7 +180,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // statement per time slice rather than one giant cursor — a slice is bounded.
         await using var lease = await LeaseConnectionAsync(tenantId, cancellationToken);
         var connection = lease.Connection;
-        var rows = connection.QueryUnbufferedAsync(query);
+        var rows = connection.QueryUnbufferedAsync(query, commandTimeout: commandTimeoutSeconds);
         await foreach (var row in rows.WithCancellation(cancellationToken))
         {
             if (row is not IDictionary<string, object?> dict)
@@ -916,8 +933,18 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         }
     }
 
-    public async Task ExecuteBulkAsync(string tenantId, string parameterizedSql,
+    public Task ExecuteBulkAsync(string tenantId, string parameterizedSql,
         IReadOnlyList<IReadOnlyList<object?>> argumentSets, CancellationToken cancellationToken = default)
+        => ExecuteBulkCoreAsync(tenantId, parameterizedSql, argumentSets, commandTimeoutSeconds: null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task ExecuteBulkAsync(string tenantId, string parameterizedSql,
+        IReadOnlyList<IReadOnlyList<object?>> argumentSets, CrateStatementClass statementClass,
+        CancellationToken cancellationToken)
+        => ExecuteBulkCoreAsync(tenantId, parameterizedSql, argumentSets, CommandTimeoutSeconds(statementClass), cancellationToken);
+
+    private async Task ExecuteBulkCoreAsync(string tenantId, string parameterizedSql,
+        IReadOnlyList<IReadOnlyList<object?>> argumentSets, int? commandTimeoutSeconds, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(parameterizedSql))
         {
@@ -933,6 +960,11 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         {
             await using var lease = await LeaseConnectionAsync(tenantId, cancellationToken);
             await using var batch = new NpgsqlBatch(lease.Connection);
+            if (commandTimeoutSeconds is { } seconds)
+            {
+                batch.Timeout = seconds;
+            }
+
             foreach (var set in argumentSets)
             {
                 var command = new NpgsqlBatchCommand(parameterizedSql);

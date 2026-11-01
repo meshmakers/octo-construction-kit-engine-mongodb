@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
 
@@ -35,15 +36,30 @@ internal static class ComputedColumnBackfillSqlBuilder
         IReadOnlyList<string> keyColumns,
         IReadOnlyList<string> valueColumns,
         int? limit = null,
-        IReadOnlyList<(string Column, object? Value)>? cursor = null)
+        IReadOnlyList<(string Column, object? Value)>? cursor = null,
+        TimeSlice? slice = null)
     {
         var sb = new StringBuilder("SELECT ");
         AppendColumnList(sb, keyColumns, valueColumns);
         sb.Append(" FROM ").Append(qualifiedTable);
 
+        var predicates = new List<string>(2);
+        if (slice is { } s)
+        {
+            // AB#8002: bound the page to one time slice, so CrateDB filters and sorts only the rows
+            // of that slice — not every row after the cursor in the whole table.
+            predicates.Add(
+                $"\"{s.Column}\" >= {CrateSqlLiteral.Value(s.From)} AND \"{s.Column}\" < {CrateSqlLiteral.Value(s.To)}");
+        }
+
         if (cursor is { Count: > 0 })
         {
-            sb.Append(" WHERE ").Append(BuildKeysetPredicate(cursor));
+            predicates.Add(BuildKeysetPredicate(cursor));
+        }
+
+        if (predicates.Count > 0)
+        {
+            sb.Append(" WHERE ").Append(string.Join(" AND ", predicates));
         }
 
         if (keyColumns.Count > 0)
@@ -60,6 +76,21 @@ internal static class ComputedColumnBackfillSqlBuilder
         sb.Append(';');
         return sb.ToString();
     }
+
+    /// <summary>
+    /// <c>SELECT min("{time}") AS "lo", max("{time}") AS "hi" FROM {table};</c> — the time span a
+    /// sliced backfill walks (AB#8002). Both are NULL for an empty table.
+    /// </summary>
+    public static string BuildTimeBounds(string qualifiedTable, string timeColumn) =>
+        $"SELECT min(\"{timeColumn}\") AS \"lo\", max(\"{timeColumn}\") AS \"hi\" FROM {qualifiedTable};";
+
+    /// <summary>
+    /// <c>SELECT min("{time}") AS "lo" FROM {table} WHERE "{time}" &gt;= {from};</c> — the first time
+    /// key at or after <paramref name="from"/>, so a sliced backfill jumps over a gap in the data with
+    /// one lookup instead of one query per empty slice (AB#8002). NULL when nothing follows.
+    /// </summary>
+    public static string BuildNextTimeAtOrAfter(string qualifiedTable, string timeColumn, DateTime from) =>
+        $"SELECT min(\"{timeColumn}\") AS \"lo\" FROM {qualifiedTable} WHERE \"{timeColumn}\" >= {CrateSqlLiteral.Value(from)};";
 
     /// <summary>
     /// A row-value greater-than over the ordered key columns, expanded into the portable OR-of-AND
@@ -158,4 +189,7 @@ internal static class ComputedColumnBackfillSqlBuilder
             first = false;
         }
     }
+
+    /// <summary>A half-open slice <c>[From, To)</c> of an archive's time key (AB#8002).</summary>
+    public readonly record struct TimeSlice(string Column, DateTime From, DateTime To);
 }

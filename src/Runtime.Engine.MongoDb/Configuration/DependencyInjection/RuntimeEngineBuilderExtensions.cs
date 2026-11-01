@@ -264,6 +264,26 @@ public static class RuntimeEngineBuilderExtensions
     }
 
     /// <summary>
+    /// Registers the computed-column backfill background service (AB#8002). Adding a computed column
+    /// or changing its formula only queues the backfill; this service runs the queued backfills one
+    /// after the other, outside any request. Reuses the
+    /// <see cref="Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.IRollupTenantSource"/> of the rollup
+    /// orchestrator for the tenant set; bind options from <c>StreamData:ComputedColumnBackfill</c> or rely
+    /// on the defaults (15 s tick, 30 s startup delay). Every host that serves the computed-column
+    /// mutations must call it, or queued backfills never run.
+    /// </summary>
+    public static IRuntimeEngineBuilder AddComputedColumnBackfillBackgroundService(this IRuntimeEngineBuilder builder)
+    {
+        builder.Services.AddOptions<Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.ComputedColumnBackfillOptions>();
+        builder.Services.TryAddSingleton<
+            Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.IRollupTenantSource,
+            Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.ConfigBasedRollupTenantSource>();
+        builder.Services.AddHostedService<Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.ComputedColumnBackfillHostedService>();
+
+        return builder;
+    }
+
+    /// <summary>
     /// Registers the display-rule backfill sweep background service (AB#4812). It drains the
     /// durable sweep tasks that CK model imports enqueue when a type's display rules change and
     /// recomputes rtDisplayName/rtDisplayDescription for the affected entities. Bind options from

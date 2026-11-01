@@ -2735,8 +2735,28 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// <see cref="EvaluateRollupComputedColumnsAsync"/> works around).
     /// </para>
     /// </summary>
+    public Task BackfillComputedColumnAsync(
+        ArchiveSnapshot snapshot, string columnName, CancellationToken cancellationToken = default) =>
+        BackfillComputedColumnAsync(snapshot, columnName, progress: null, cancellationToken);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// <b>Sliced (AB#8002).</b> The rows are walked in slices of the archive's time key
+    /// (<see cref="StreamDataConfiguration.ComputedColumnBackfillSlice"/>, default one day), and every
+    /// page query is bounded to its slice. Keyset paging alone kept memory per page bounded, but each
+    /// page still made CrateDB filter and top-N-sort every row after the cursor in the whole table —
+    /// on an archive with ~750k rows that is hundreds of millions of row visits per backfill, and
+    /// four backfills at once tipped the cluster over. Within a slice the keyset cursor still pages;
+    /// an empty slice is skipped with one <c>min(time) &gt;= …</c> lookup. When the time span cannot be
+    /// read the backfill falls back to the unsliced walk.
+    /// </para>
+    /// <para>
+    /// After every committed page the running row count is reported to <paramref name="progress"/>.
+    /// </para>
+    /// </remarks>
     public async Task BackfillComputedColumnAsync(
-        ArchiveSnapshot snapshot, string columnName, CancellationToken cancellationToken = default)
+        ArchiveSnapshot snapshot, string columnName, IProgress<long>? progress, CancellationToken cancellationToken)
     {
         var target = snapshot.Columns.FirstOrDefault(
             c => c.IsComputed && string.Equals(c.Name, columnName, StringComparison.Ordinal));
@@ -2763,29 +2783,97 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             .Where(p => !string.Equals(p, targetPhysical, StringComparison.Ordinal)
                         && !string.Equals(p, activeTargetPhysical, StringComparison.Ordinal))
             .ToList();
+        var updateSql = ComputedColumnBackfillSqlBuilder.BuildBulkUpdate(table, targetPhysical, keyColumns);
+        var timeColumn = keyColumns[0];
+        var sliceWidth = _configuration.ComputedColumnBackfillSlice > TimeSpan.Zero
+            ? _configuration.ComputedColumnBackfillSlice
+            : TimeSpan.FromDays(1);
 
+        long rows = 0;
+        var (readable, span) = await ReadBackfillTimeBoundsAsync(table, timeColumn, cancellationToken);
+        if (!readable)
+        {
+            // The span could not be read: walk the whole table with the keyset cursor.
+            await BackfillSliceAsync(
+                table, keyColumns, valueColumns, updateSql, plan, targetPhysical, null, rows, progress, cancellationToken);
+        }
+        else if (span is { } bounds)
+        {
+            var from = bounds.Lo;
+            while (from <= bounds.Hi)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var to = from + sliceWidth;
+                var before = rows;
+                rows = await BackfillSliceAsync(
+                    table, keyColumns, valueColumns, updateSql, plan, targetPhysical,
+                    new ComputedColumnBackfillSqlBuilder.TimeSlice(timeColumn, from, to), rows, progress, cancellationToken);
+
+                if (rows == before)
+                {
+                    // A gap in the data: jump to the next row instead of querying every empty slice.
+                    var next = await ReadFirstTimeAtOrAfterAsync(table, timeColumn, to, cancellationToken);
+                    if (next is null)
+                    {
+                        break;
+                    }
+
+                    from = next.Value;
+                }
+                else
+                {
+                    from = to;
+                }
+            }
+        }
+
+        // Make the backfilled cells visible to subsequent reads (CrateDB applies writes to the read
+        // path asynchronously), mirroring the rollup recompute executor's refresh discipline.
+        await _databaseClient.RefreshArchiveTableAsync(_tenantId, table, CrateStatementClass.Maintenance, cancellationToken);
+    }
+
+    /// <summary>
+    /// Backfills the rows of one time slice (or, with <paramref name="slice"/> null, of the whole
+    /// table) page by page with the keyset cursor; returns the running row count.
+    /// </summary>
+    private async Task<long> BackfillSliceAsync(
+        string table,
+        IReadOnlyList<string> keyColumns,
+        IReadOnlyList<string> valueColumns,
+        string updateSql,
+        IReadOnlyList<ComputedColumnPlanItem> plan,
+        string targetPhysical,
+        ComputedColumnBackfillSqlBuilder.TimeSlice? slice,
+        long rows,
+        IProgress<long>? progress,
+        CancellationToken cancellationToken)
+    {
         // Keyset (cursor) paging over the primary key, NOT OFFSET: each page seeks straight past the
-        // previous page's last row via the key index, so memory stays O(BackfillPageSize) regardless
-        // of archive size. OFFSET made CrateDB collect + sort the whole table up to the offset on
-        // every page, tripping the query circuit breaker on the final pages of a large archive (AB#4189).
+        // previous page's last row, so memory stays O(BackfillPageSize) regardless of archive size.
+        // OFFSET made CrateDB collect + sort the whole table up to the offset on every page, tripping
+        // the query circuit breaker on the final pages of a large archive (AB#4189).
         IReadOnlyList<(string Column, object? Value)>? cursor = null;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             var selectSql = ComputedColumnBackfillSqlBuilder.BuildSelect(
-                table, keyColumns, valueColumns, BackfillPageSize, cursor);
+                table, keyColumns, valueColumns, BackfillPageSize, cursor, slice);
 
             var page = new List<Dictionary<string, object?>>(BackfillPageSize);
-            await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, selectSql, cancellationToken))
+            await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, selectSql, CrateStatementClass.Maintenance, cancellationToken))
             {
                 page.Add(new Dictionary<string, object?>(row, StringComparer.Ordinal));
+            }
+
+            if (page.Count == 0)
+            {
+                return rows;
             }
 
             // Write the whole page in ONE CrateDB bulk (one prepared UPDATE, one round-trip) instead
             // of N individual UPDATE statements — the per-statement cost dominated the backfill
             // (~500x on 4k rows measured). Each computed value is still evaluated per row in .NET.
-            var updateSql = ComputedColumnBackfillSqlBuilder.BuildBulkUpdate(table, targetPhysical, keyColumns);
             var argumentSets = new List<IReadOnlyList<object?>>(page.Count);
             foreach (var row in page)
             {
@@ -2804,11 +2892,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 argumentSets.Add(args);
             }
 
-            await _databaseClient.ExecuteBulkAsync(_tenantId, updateSql, argumentSets, cancellationToken);
+            await _databaseClient.ExecuteBulkAsync(_tenantId, updateSql, argumentSets, CrateStatementClass.Maintenance, cancellationToken);
+            rows += page.Count;
+            progress?.Report(rows);
 
             if (page.Count < BackfillPageSize)
             {
-                break;
+                return rows;
             }
 
             // Advance the cursor to the last row's key so the next page starts strictly after it.
@@ -2822,10 +2912,48 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
             cursor = nextCursor;
         }
+    }
 
-        // Make the backfilled cells visible to subsequent reads (CrateDB applies writes to the read
-        // path asynchronously), mirroring the rollup recompute executor's refresh discipline.
-        await _databaseClient.RefreshArchiveTableAsync(_tenantId, table);
+    /// <summary>
+    /// The time span of an archive for a sliced backfill. <c>Readable</c> is false when the bounds
+    /// row has an unexpected shape (the caller then walks the table unsliced); a readable result
+    /// without a span is an empty table.
+    /// </summary>
+    private async Task<(bool Readable, (DateTime Lo, DateTime Hi)? Span)> ReadBackfillTimeBoundsAsync(
+        string table, string timeColumn, CancellationToken cancellationToken)
+    {
+        var sql = ComputedColumnBackfillSqlBuilder.BuildTimeBounds(table, timeColumn);
+        await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, sql, CrateStatementClass.Maintenance, cancellationToken))
+        {
+            if (!row.TryGetValue("lo", out var lo) || !row.TryGetValue("hi", out var hi))
+            {
+                return (false, null);
+            }
+
+            if (lo is null && hi is null)
+            {
+                return (true, null); // empty table
+            }
+
+            var from = AsUtcDateTimeFlexible(lo);
+            var to = AsUtcDateTimeFlexible(hi);
+            return from is { } f && to is { } t ? (true, (f, t)) : (false, null);
+        }
+
+        return (false, null);
+    }
+
+    private async Task<DateTime?> ReadFirstTimeAtOrAfterAsync(
+        string table, string timeColumn, DateTime from, CancellationToken cancellationToken)
+    {
+        var sql = ComputedColumnBackfillSqlBuilder.BuildNextTimeAtOrAfter(table, timeColumn, from);
+        await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, sql, CrateStatementClass.Maintenance, cancellationToken))
+        {
+            row.TryGetValue("lo", out var lo);
+            return AsUtcDateTimeFlexible(lo);
+        }
+
+        return null;
     }
 
     /// <summary>

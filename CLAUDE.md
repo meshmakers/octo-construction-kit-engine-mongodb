@@ -2829,3 +2829,26 @@ internal record `Memo` keep every visibility kind covered (C# twin `CkV2KitchenS
 - Migration metadata (`migration-meta.yaml`)
 
 Used by `CkModelImportMigrationTests` to verify automatic migration on import.
+
+## Computed-column backfill as a background job (AB#8002)
+
+Adding a computed column or changing its formula only queues the backfill (engine `ArchiveLifecycleService.Enqueue…`,
+concept `docs/concept-computed-columns.md` §8.3a in the engine repository). This repository runs and executes it:
+
+- **`ComputedColumnBackfillHostedService`** (`Runtime.Engine.MongoDb/StreamData`, registered by
+  `AddComputedColumnBackfillBackgroundService()`, options `ComputedColumnBackfillOptions` = `StreamData:ComputedColumnBackfill`,
+  15 s tick, 30 s startup delay) drains every tenant of the shared `IRollupTenantSource` one after the other through
+  `IArchiveLifecycleService.RunPendingComputedColumnBackfillsAsync(stoppingToken)`. A host that serves the computed-column
+  mutations must register it, or queued backfills never run. Tests: `ComputedColumnBackfillHostedServiceTests`.
+- **`CrateDbStreamDataRepository.BackfillComputedColumnAsync`** walks the archive in time slices of
+  `StreamDataConfiguration.ComputedColumnBackfillSlice` (default 1 day) on the time key (`timestamp` / `window_start`): one
+  `min/max` query, then every keyset page is bounded to its slice, an empty slice is skipped with one `min(time) >= …` lookup, and a
+  bounds row of unexpected shape falls back to the unsliced keyset walk. It reports the running row count after every bulk
+  (`IProgress<long>` overload). Every statement uses `CrateStatementClass.Maintenance` (the `StreamRawRowsAsync` /
+  `ExecuteBulkAsync` overloads with a statement class set the command timeout explicitly) — the overloads without a class keep the
+  driver default of 30 s, which is what killed the test-2 backfills (`XX000: Job killed. Cancellation request by: octo-system`).
+  Tests: `CrateDbComputedColumnBackfillTests` (unit, sliced cases) and `ComputedColumnBackfillJobIntegrationTests` (real CrateDB:
+  queued add survives the request's cancellation, two queued backfills, failure + retry).
+- **`MongoRecomputeJobStore.GetActiveForArchiveAsync`** skips computed-column jobs (`RecomputeJobSnapshot.IsComputedColumnBackfill`),
+  so the rollup orchestrator never adopts, coalesces into or fails one.
+
