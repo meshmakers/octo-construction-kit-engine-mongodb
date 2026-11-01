@@ -2784,7 +2784,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var (formula, targetPhysical) = target.HasPendingFormula
             ? (target.PendingFormula!, ComputedColumnNaming.Pending(target))
             : (target.Formula!, ComputedColumnNaming.Active(target));
-        var plan = new[] { new ComputedColumnPlanItem(targetPhysical, formula, target.ResultType.Value) };
+        var plan = new[]
+        {
+            new ComputedColumnPlanItem(targetPhysical, formula, target.ResultType.Value,
+                ReadableOperandPhysicalColumns(snapshot).ToArray())
+        };
 
         var table = TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString());
         var keyColumns = BackfillKeyColumns(snapshot);
@@ -3860,10 +3864,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
     /// <summary>
     /// A single computed column resolved for ingest: the physical column name, its formula, and the
-    /// declared result type the double result is cast back to (concept §5).
+    /// declared result type the double result is cast back to (concept §5). <c>Operands</c> are the
+    /// physical column names a formula may reference; one a row does not carry (or carries as NULL)
+    /// is bound as NaN, so a formula can handle it with <c>coalesce</c> / <c>isnull</c> or an
+    /// <c>if</c> branch instead of failing as a whole (AB#8060).
     /// </summary>
     private readonly record struct ComputedColumnPlanItem(
-        string ColumnName, string Formula, FormulaResultType ResultType);
+        string ColumnName, string Formula, FormulaResultType ResultType, IReadOnlyList<string> Operands);
 
     /// <summary>
     /// Builds the per-archive computed-column evaluation plan in dependency order: a computed column
@@ -3875,6 +3882,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     private static IReadOnlyList<ComputedColumnPlanItem> BuildComputedPlan(ArchiveSnapshot snapshot)
     {
         List<ComputedColumnPlanItem>? items = null;
+        string[]? operands = null;
         foreach (var c in snapshot.Columns)
         {
             if (!c.IsComputed || string.IsNullOrWhiteSpace(c.Name) || c.ResultType is null)
@@ -3883,10 +3891,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             }
 
             items ??= new List<ComputedColumnPlanItem>();
+            operands ??= ReadableOperandPhysicalColumns(snapshot).ToArray();
             // The active formula into the active (versioned) physical column — keeps current readers
             // correct on every ingest.
             items.Add(new ComputedColumnPlanItem(
-                ComputedColumnNaming.Active(c), c.Formula!, c.ResultType.Value));
+                ComputedColumnNaming.Active(c), c.Formula!, c.ResultType.Value, operands));
 
             // During a formula change, also evaluate the pending formula into the pending versioned
             // column so rows ingested mid-backfill are already consistent at swap time (dual-write,
@@ -3894,7 +3903,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             if (c.HasPendingFormula)
             {
                 items.Add(new ComputedColumnPlanItem(
-                    ComputedColumnNaming.Pending(c), c.PendingFormula!, c.ResultType.Value));
+                    ComputedColumnNaming.Pending(c), c.PendingFormula!, c.ResultType.Value, operands));
             }
         }
 
@@ -3993,7 +4002,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// values and writes the result back into <paramref name="attributes"/> under the column's
     /// physical name. The result also feeds any dependent computed column later in the plan. A
     /// formula that throws (or yields NaN / null) stores NULL — ingest never fails on a computed
-    /// column (concept §5).
+    /// column (concept §5). An operand without a value is bound as NaN (AB#8060): an unhandled NULL
+    /// in arithmetic yields NULL, <c>coalesce(x, default)</c> / <c>isnull(x)</c> handle it.
     /// </summary>
     private void ApplyComputedColumns(Dictionary<string, object?> attributes,
         IReadOnlyList<ComputedColumnPlanItem> plan)
@@ -4008,7 +4018,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             object? result;
             try
             {
-                var args = BuildFormulaArguments(attributes);
+                var args = BuildFormulaArguments(attributes, item.Operands);
                 result = _formulaEngine.Evaluate(item.Formula, args, item.ResultType);
             }
             catch (Exception ex)
@@ -4025,20 +4035,28 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
     /// <summary>
     /// Projects the row's column values onto the numeric argument map the formula engine binds.
-    /// Columns that have no numeric reading (strings without a number, records, arrays, null) are
-    /// simply not bound — a formula referencing them then fails its syntax check and the cell
-    /// becomes NULL.
+    /// Every operand column of the archive is bound: a column the row does not carry, carries as
+    /// NULL, or carries without a numeric reading (strings without a number, records, arrays) is
+    /// bound as <see cref="double.NaN"/> — the formula engine's NULL (AB#8060). Before, such an
+    /// operand stayed unbound, the formula failed its syntax check and the whole cell became NULL,
+    /// even when the formula never needed that operand for the row (an <c>if</c> branch not taken,
+    /// a <c>coalesce</c>).
     /// </summary>
-    private static IReadOnlyDictionary<string, double> BuildFormulaArguments(
-        IReadOnlyDictionary<string, object?> attributes)
+    internal static IReadOnlyDictionary<string, double> BuildFormulaArguments(
+        IReadOnlyDictionary<string, object?> attributes, IReadOnlyList<string> operands)
     {
-        var args = new Dictionary<string, double>(attributes.Count, StringComparer.Ordinal);
+        var args = new Dictionary<string, double>(attributes.Count + operands.Count, StringComparer.Ordinal);
         foreach (var kv in attributes)
         {
             if (TryToDouble(kv.Value, out var d))
             {
                 args[kv.Key] = d;
             }
+        }
+
+        foreach (var operand in operands)
+        {
+            args.TryAdd(operand, double.NaN);
         }
 
         return args;

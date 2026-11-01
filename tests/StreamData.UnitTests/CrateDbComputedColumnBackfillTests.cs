@@ -146,6 +146,46 @@ public class CrateDbComputedColumnBackfillTests
     }
 
     [Fact]
+    public async Task Backfill_RowsCarryingOnlyOneOperand_CoalescedFormulaComputesEveryRow()
+    {
+        // AB#8060: historical rows of an on-change source carry chargingpower or dischargingpower or both;
+        // before, every row with a NULL operand got a NULL cell even when the formula did not need it.
+        var snapshot = RawSnapshot(
+            Ing("ChargingPower"),
+            Ing("DischargingPower"),
+            Comp("dischargePower",
+                "if(chargingpower<0,-chargingpower,if(coalesce(dischargingpower,0)>0,dischargingpower,0))",
+                ComputedColumnState.Backfilling));
+
+        A.CallTo(() => _db.StreamRawRowsAsync("tenant-x", A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
+            .Returns(Rows(
+                new Dictionary<string, object?>
+                {
+                    ["timestamp"] = Ts, ["rtid"] = "only-charging", ["cktypeid"] = "EnergyMeter",
+                    ["chargingpower"] = -4.0, ["dischargingpower"] = null,
+                },
+                new Dictionary<string, object?>
+                {
+                    ["timestamp"] = Ts, ["rtid"] = "both", ["cktypeid"] = "EnergyMeter",
+                    ["chargingpower"] = 0.0, ["dischargingpower"] = 6.0,
+                },
+                new Dictionary<string, object?>
+                {
+                    ["timestamp"] = Ts, ["rtid"] = "charging", ["cktypeid"] = "EnergyMeter",
+                    ["chargingpower"] = 2.0, ["dischargingpower"] = null,
+                }));
+
+        var bulk = CaptureBulk();
+
+        await NewSut().BackfillComputedColumnAsync(snapshot, "dischargePower", CancellationToken.None);
+
+        var (_, args) = Assert.Single(bulk);
+        Assert.Contains(args, a => DoubleEq(4.0, a[0]) && (string?)a[2] == "only-charging");
+        Assert.Contains(args, a => DoubleEq(6.0, a[0]) && (string?)a[2] == "both");
+        Assert.Contains(args, a => DoubleEq(0.0, a[0]) && (string?)a[2] == "charging");
+    }
+
+    [Fact]
     public async Task Backfill_TimeRangeArchive_KeysOnWindowColumns()
     {
         var snapshot = RawSnapshot(
