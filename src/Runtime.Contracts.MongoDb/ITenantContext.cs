@@ -264,6 +264,12 @@ public interface ITenantContext
     ///     before the record deletion is committed leaves a window in which a concurrent
     ///     tenant-resolve re-creates the database via CK-model auto-import (the resolve still finds
     ///     the committed tenant record), resurrecting the just-dropped database.
+    ///     <para>
+    ///     Deleting from the system tenant also removes the row the logical parent keeps in its own registry
+    ///     (AB#6759). A stale row of this tenant's registry — the tenant is not registered as its child any more —
+    ///     is refused with "tenant does not exist" before any event or write, so the database or events of a tenant
+    ///     that now uses the id are never touched; remove such a row with <see cref="RemoveStaleChildTenantEntryAsync" />.
+    ///     </para>
     /// </remarks>
     /// <param name="adminSession">Admin session whose transaction the record deletion joins.</param>
     /// <param name="tenantId">The tenant to delete.</param>
@@ -296,6 +302,23 @@ public interface ITenantContext
     /// <param name="handle">The handle returned by <see cref="DeleteChildTenantMetadataAsync" />.</param>
     /// <param name="tenantId">The tenant whose database is dropped (used for the notification).</param>
     Task DropTenantDatabaseAsync(TenantDeletionHandle handle, string tenantId);
+
+    /// <summary>
+    ///     Removes a stale entry from this tenant's own child registry (AB#6759): a row naming a tenant that is not
+    ///     registered as this tenant's child any more — deleted elsewhere (e.g. from the system tenant), or its id
+    ///     now used by a tenant under another parent or in another database.
+    /// </summary>
+    /// <remarks>
+    ///     Removes only that one row: no tenant events, no change to the platform registry, no database drop, so a
+    ///     tenant that reuses the id or the database name is never touched. Returns false — and changes nothing —
+    ///     when the row is missing or names a live child (delete that with
+    ///     <see cref="DeleteChildTenantMetadataAsync" />, which refuses stale rows). Always false in the system
+    ///     tenant, whose registry is the platform registry itself.
+    /// </remarks>
+    /// <param name="adminSession">Admin session; the caller starts and commits the transaction.</param>
+    /// <param name="tenantId">The child tenant id as listed by this tenant.</param>
+    /// <returns>True when a stale row was removed.</returns>
+    Task<bool> RemoveStaleChildTenantEntryAsync(IOctoAdminSession adminSession, string tenantId);
 
     /// <summary>
     ///     Returns true if a child tenant with the given name exists.

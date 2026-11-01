@@ -1,0 +1,131 @@
+# Nightly performance budget run of octo-construction-kit-engine-mongodb (AB#8004).
+#
+# Why a separate pipeline: the timing budget tests (xUnit trait Category=Performance, e.g.
+# GetRtEntitiesByInterfacePerformanceTests with the first-page p95 <= 100 ms budget of AB#6930) measure
+# wall clock. On a loaded CI agent they failed main CI runs 62273, 62285 and 62304 (2026-10-30) without a
+# regression, and a red main CI here blocks the engine cascade and the release train. Decision Gerald
+# 2026-11-01: the normal CI (azure-pipelines.yml) excludes the category, this pipeline runs ONLY that
+# category, nightly and on demand. A breach is a signal, never a gate.
+#
+# NOT A GATE - keep it that way:
+#   - trigger: none / pr: none, no CI or PR trigger, and it must never be added as a branch policy;
+#   - no resources.pipelines: it is not part of the engine cascade (azure-pipelines.yml holds the chain link);
+#   - it publishes nothing (no NuGet push, no artifacts), so no downstream pipeline can trigger on it, and it
+#     is not in the release train (octo-mesh-deployment/pipelines) or the Orchestrator CI.
+#
+# Quiet agent: there is no dedicated perf pool. The tests need Docker (Testcontainers MongoDB), which the
+# CI agents (pool meshmakers-ci-agents) have. "Quiet" is the time slot: daily 03:30 UTC, after the auto-train
+# start (Mon/Wed/Fri 01:00 UTC, auto-train-scheduler.yml), before the docs collect (Mon/Wed/Fri 04:00 UTC),
+# the CI guard health (05:30 UTC) and the working day. A breach on an otherwise quiet night is worth a look; a
+# breach while trains or many agent builds ran is most likely load - the run log prints every measured
+# median / p95 (octo-progress lines) to judge it.
+#
+# Breach signal: the run turns red (visible in the pipeline list and its Tests tab) and, unless
+# fileBugOnBreach is false, the last step files a Bug under the Core Platform Sustain Feature (tag
+# perf-budget-breach) or adds a comment to the open one, so the Core maintainers see it on their board.
+# The Bug step needs the project Build Service to be allowed to create/edit work items in the Core
+# Platform area; if it is not, the step warns and the red run remains the signal.
+#
+# Manual run: Run pipeline, pick the branch, optionally set the entity count (1 000 000 = the opt-in 1M run).
+# Local run: tests/Runtime.Engine.MongoDb.IntegrationTests/README.md.
+
+# Four-segment build number like every other pipeline, perf marker as suffix.
+name: $(Date:yyyy).$(Date:MM).$(Date:dd)$(Rev:.r)-perf
+
+trigger: none
+pr: none
+
+schedules:
+  - cron: '30 3 * * *'
+    displayName: 'Performance budget tests (daily 03:30 UTC)'
+    branches:
+      include:
+        - main
+    always: true   # the measurement is the point, also without new commits
+
+parameters:
+  - name: entityCount
+    displayName: 'Entities of the interface-query perf test (OCTO_TEST_INTERFACE_QUERY_ENTITIES); 100000 = default, 1000000 = opt-in 1M run'
+    type: number
+    default: 100000
+  - name: fileBugOnBreach
+    displayName: 'File / update a Bug under the Core Sustain Feature when the budget is breached'
+    type: boolean
+    default: true
+  - name: bugParentId
+    displayName: 'Parent Feature of the breach Bug (Core Platform Sustain Feature)'
+    type: number
+    default: 5953
+
+resources:
+  repositories:
+    - repository: pipelineTemplates
+      type: github
+      name: meshmakers/octo-pipeline-templates
+      endpoint: meshmakers-access-token
+      ref: refs/tags/tpl-v1.7.0
+
+variables:
+  - group: ApiKeys-mm-cloud
+  - group: OctoDefault
+  - name: solutionFile
+    value: 'Octo.ConstructionKit.Engine.MongoDb.sln'
+  - name: buildConfiguration
+    value: 'Release'
+  - name: perfTestProject
+    value: 'tests/Runtime.Engine.MongoDb.IntegrationTests/Runtime.Engine.MongoDb.IntegrationTests.csproj'
+
+jobs:
+  - job: performanceTests
+    displayName: 'Performance budget tests (Category=Performance)'
+    timeoutInMinutes: 60
+    pool:
+      name: meshmakers-ci-agents
+    steps:
+      - checkout: self
+        clean: true
+        submodules: true
+      - template: templates/steps/purge-private-nuget-http-cache.yml@pipelineTemplates
+      - task: DotNetCoreCLI@2
+        retryCountOnTaskFailure: 2
+        displayName: 'Restore NuGet packages'
+        inputs:
+          command: 'restore'
+          projects: '$(solutionFile)'
+          restoreArguments: '/p:OctoNugetPrivateServer=$(nugetPrivateServer)'
+      - task: DotNetCoreCLI@2
+        retryCountOnTaskFailure: 2
+        displayName: 'Build'
+        inputs:
+          command: 'build'
+          projects: '$(solutionFile)'
+          arguments: '--configuration $(buildConfiguration) --no-restore /p:OctoNugetPrivateServer=$(nugetPrivateServer) /p:OctoPrivateGitHubApiKey=$(GitHubPAT) /p:OctoPublicGitHubApiKey=$(GitHubPAT)'
+      # Marks that restore and build succeeded, so the Bug step below reports only a failure of the
+      # Performance tests step itself, never a restore/build failure.
+      - pwsh: Write-Host "##vso[task.setvariable variable=perfTestsStarted]true"
+        displayName: 'Mark: performance tests start'
+      # No retryCountOnTaskFailure: a retry would hide a breach (the whole point of this run).
+      # Only the integration test project holds Category=Performance tests; naming it avoids a
+      # "no test matches the filter" pass over the unit test project. performance.runsettings sets
+      # TreatNoTestsAsError: a removed or renamed trait must turn the run red, not green.
+      - task: DotNetCoreCLI@2
+        displayName: 'Performance tests'
+        timeoutInMinutes: 45
+        env:
+          OCTO_TEST_INTERFACE_QUERY_ENTITIES: ${{ parameters.entityCount }}
+        inputs:
+          command: 'test'
+          projects: '$(perfTestProject)'
+          arguments: '--configuration $(buildConfiguration) --no-build /p:OctoNugetPrivateServer=$(nugetPrivateServer) --filter "Category=Performance" --settings pipelines/performance.runsettings --logger "console;verbosity=normal" --blame-hang --blame-hang-timeout 15m --blame-hang-dump-type none'
+          testRunTitle: 'Performance'
+      - ${{ if eq(parameters.fileBugOnBreach, true) }}:
+          - task: PowerShell@2
+            displayName: 'Report the budget breach as a Bug'
+            condition: and(failed(), eq(variables['perfTestsStarted'], 'true'))
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+              PERF_BUG_PARENT_ID: ${{ parameters.bugParentId }}
+            inputs:
+              targetType: 'filePath'
+              filePath: 'pipelines/report-perf-breach.ps1'
+              pwsh: true

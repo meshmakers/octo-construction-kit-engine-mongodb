@@ -59,7 +59,9 @@ public interface ISystemContext : ITenantContext
     /// row is invisible to everything that iterates <see cref="GetAllTenantsAsync"/> — client mirror provisioning,
     /// token cleanup, CORS, health checks. Rows that disagree with the parent-local registry (other parent, other
     /// database, database name used by another tenant) and registries that cannot be read are reported as
-    /// conflicts and never touched; nothing is ever deleted or changed. Idempotent: a second run inserts nothing.
+    /// conflicts and never touched; nothing is ever deleted or changed. A row whose database does not exist is the
+    /// leftover of a deleted tenant (AB#6759): it is reported as a conflict whose reason starts with "stale entry" and
+    /// is never inserted, so the dry run doubles as the read-only detector for stale child entries. Idempotent: a second run inserts nothing.
     /// The walk reads through detached contexts, so it has none of the resolve-time side effects (CK imports,
     /// ownership stamps). With <paramref name="apply"/> false (the default) nothing is written.
     /// </remarks>

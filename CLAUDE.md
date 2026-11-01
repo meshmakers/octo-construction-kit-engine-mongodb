@@ -165,6 +165,17 @@ red suite three times into the job timeout, 51009/51014, and hid a mass failure,
 (no dump) so a single hung test aborts the run and is named in the log. Flaky tests are fixed or
 handled per test, never by retrying the step.
 
+**Performance budget tests are not in the CI (AB#8004).** The Test step runs with
+`--filter "Category!=Performance"`. Tests that assert a wall-clock budget carry
+`[Trait("Category", "Performance")]` (today `GetRtEntitiesByInterfacePerformanceTests`, budget AB#6930) and run only in the
+separate pipeline `octo-construction-kit-engine-mongodb-Performance` (`azure-pipelines-performance.yml`: daily 03:30 UTC on
+`main` + manual, pool `meshmakers-ci-agents`, a breach turns the run red and files/updates a Bug tagged `perf-budget-breach`
+under the Core Sustain Feature via `pipelines/report-perf-breach.ps1`). It is not a gate: no trigger, no branch policy, no
+pipeline resource, publishes nothing. Main CI runs 62273/62285/62304 (2026-10-30) failed on agent load alone, which blocked the
+cascade. Correctness timeouts with a wide margin (`RepositoryDistributedLockServiceTests` 5 s / 3 s,
+`StagingCopyIntegrationTests` 30 s, the orchestrator tick waits, `TenantUpgradeGuardTests` 2 s for 100 in-memory models) stay in
+the CI. Local run, triage and the classification rule: `tests/Runtime.Engine.MongoDb.IntegrationTests/README.md`.
+
 ## Tenant Registry vs. Tenant Hierarchy (AB#5025)
 
 The system tenant's database doubles as the **platform-wide routing registry**: every tenant of
@@ -1774,7 +1785,8 @@ contract `ITenantRepository` + `RtInterfaceQueryResult` + `InterfaceQueryExcepti
   interface members**. Without it the sort of every collection reads all its matching rows (O(matching rows), no latency
   promise). There is deliberately no default index on `Name` (decision 2026-10-19; re-check on real tenants).
 * **Budget and measured numbers** (`GetRtEntitiesByInterfacePerformanceTests`, trait `Category=Performance`, default 100 000
-  entities over 30 collection roots, `OCTO_TEST_INTERFACE_QUERY_ENTITIES=1000000` for the opt-in 1M run; .NET end to end through
+  entities over 30 collection roots, `OCTO_TEST_INTERFACE_QUERY_ENTITIES=1000000` for the opt-in 1M run; not in the PR/main CI,
+  nightly in `azure-pipelines-performance.yml` (AB#8004); .NET end to end through
   `ITenantRepository`, MongoDB 8.0.15 Testcontainer, Mac mini, page size 50, index on Name on every root, 20 runs after 3
   warm-ups, median / p95 in ms). Budget (decision AB#6930): one collection at most 1.25x of the type query with the same rows;
   indexed first page over 30 collections p95 at most 100 ms; unindexed: no promise (printed, not asserted).

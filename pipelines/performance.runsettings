@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings of the nightly perf run (azure-pipelines-performance.yml, AB#8004).
+     TreatNoTestsAsError: if the Category=Performance trait or the test is removed or renamed, the
+     filter selects nothing and VSTest would report success; the run must go red instead. -->
+<RunSettings>
+  <RunConfiguration>
+    <TreatNoTestsAsError>true</TreatNoTestsAsError>
+  </RunConfiguration>
+</RunSettings>

@@ -159,6 +159,11 @@ public class TenantContext : ITenantContext
         await EnsureTenantNamespaceAvailableAsync(adminSession, normalizedTenantId, normalizedDatabaseName,
             TenantNamespaceMode.CreateNewDatabase, correlationId);
 
+        // AB#6759: the gate above proved the id is not registered, so any parent-local row still naming it is a
+        // leftover of a deleted tenant. Remove those rows before the new tenant takes the name, or the old parent
+        // would list (and resolve) the new tenant as its own child. Own short sessions, see the method.
+        await PurgeStaleChildRowsAsync(normalizedTenantId, normalizedDatabaseName, correlationId);
+
         // Guards the destructive rollback below: it stays false until we have provably created the
         // database ourselves. Nothing that runs before it is set may ever reach the drop.
         var databaseCreated = false;
@@ -708,6 +713,9 @@ public class TenantContext : ITenantContext
         await EnsureTenantNamespaceAvailableAsync(adminSession, normalizedTenantId, normalizedDatabaseName,
             TenantNamespaceMode.AttachExistingDatabase, correlationId);
 
+        // AB#6759: same as create — stale parent-local rows of a deleted tenant with this id go first.
+        await PurgeStaleChildRowsAsync(normalizedTenantId, normalizedDatabaseName, correlationId);
+
         // Tracked for the rollback below: a marker we created on a failed attach must be removed
         // again, or the database would stay locked for every other instance even though it was
         // never attached. A marker that predates this call (an earlier failed attach of this
@@ -856,6 +864,11 @@ public class TenantContext : ITenantContext
             throw TenantException.TenantDoesNotExist(tenantId);
         }
 
+        // AB#6759: a stale row names a tenant that is gone — or, worse, whose id now belongs to another
+        // parent's tenant. Detaching it would fire delete events for, unregister and release the ownership
+        // marker of that other tenant. Refuse before any side effect; RemoveStaleChildTenantEntryAsync cleans it.
+        await EnsureLiveChildRowAsync(adminSession, octoTenant, "detach");
+
         Guid correlationId = Guid.NewGuid();
 
         try
@@ -875,10 +888,13 @@ public class TenantContext : ITenantContext
             // which must match the record's stored (possibly legacy raw-cased) value.
             if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
             {
-                var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
-                await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
-                    TenantRegistryFilter(tenantId, NormalizeDatabaseName(octoTenant.DatabaseName)),
-                    DeleteOptions.Erase);
+                await DeleteSystemRegistryRowIfPresentAsync(adminSession, tenantId, octoTenant.DatabaseName);
+            }
+            else
+            {
+                // AB#6759: issued from the system tenant, the row above was the registry row; the logical
+                // parent's own row has to go as well, or the parent keeps listing a tenant that is gone.
+                await RemoveRowFromRegisteredParentAsync(adminSession, octoTenant);
             }
 
             // AB#4945: detach is the one sanctioned ownership handover (the attach guard is strict,
@@ -1065,6 +1081,12 @@ public class TenantContext : ITenantContext
             throw TenantException.TenantDoesNotExist(tenantId);
         }
 
+        // AB#6759: never delete through a stale row. It names a tenant that no longer exists — or one whose id
+        // (and possibly database name) a tenant under another parent now uses. Going on would fire delete events
+        // for that other tenant, remove its registry row and drop its database. Refuse before any side effect;
+        // RemoveStaleChildTenantEntryAsync removes just the stale row.
+        await EnsureLiveChildRowAsync(adminSession, octoTenant, "delete");
+
         // Collected BEFORE the record deletion: this is the last moment the child resolves, and the
         // archive entities are gone with its database. Only when the caller drops the tenant for good;
         // a database swap (restore over an existing tenant) keeps the archives and their tables.
@@ -1087,10 +1109,14 @@ public class TenantContext : ITenantContext
         // tenant too. That registry has always been written normalized, so it filters normalized.
         if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
         {
-            var systemTenantRepository = GetSystemTenantRepositoryAsAdmin();
-            await systemTenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
-                TenantRegistryFilter(tenantId, NormalizeDatabaseName(octoTenant.DatabaseName)),
-                DeleteOptions.Erase);
+            await DeleteSystemRegistryRowIfPresentAsync(adminSession, tenantId, octoTenant.DatabaseName);
+        }
+        else
+        {
+            // AB#6759: deleted from the system tenant, the row above was the platform registry row. The logical
+            // parent keeps its own row in its database; without this it went on listing the deleted tenant, and a
+            // later tenant of the same name anywhere would have counted as that parent's descendant.
+            await RemoveRowFromRegisteredParentAsync(adminSession, octoTenant);
         }
 
         return new TenantDeletionHandle(octoTenant.DatabaseName, correlationId, streamDataArchives, streamDataModelPresent);
@@ -1153,6 +1179,243 @@ public class TenantContext : ITenantContext
 
             await _tenantNotifications.NotifyPosTenantDeleteAsync(tenantId, handle.CorrelationId);
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> RemoveStaleChildTenantEntryAsync(IOctoAdminSession adminSession, string tenantId)
+    {
+        ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
+
+        var localRow = await GetRtTenantAsync(adminSession, tenantId);
+        if (localRow == null || await IsLiveChildRowAsync(adminSession, localRow))
+        {
+            return false;
+        }
+
+        // Only the row in THIS tenant's registry goes: no events, no system registry change, no database drop —
+        // whatever the id or database name points to today belongs to somebody else or to nobody.
+        var tenantRepository = GetTenantRepositoryAsAdmin();
+        await tenantRepository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
+            TenantRegistryFilter(localRow.TenantId, localRow.DatabaseName), DeleteOptions.Erase);
+
+        _logger.LogWarning(
+            "Removed stale child entry '{TenantId}' (database '{DatabaseName}') from the registry of tenant " +
+            "'{ParentTenantId}': the tenant is not registered as its child any more (AB#6759)",
+            localRow.TenantId, localRow.DatabaseName, TenantId);
+        return true;
+    }
+
+    /// <summary>
+    ///     Whether a row of THIS tenant's registry names a live child (AB#6759): the platform registry holds the same
+    ///     tenant id with the same database and names this tenant as the parent (or no parent, for rows written
+    ///     before the field existed) — or holds no row for the id while the database exists and is registered to
+    ///     nobody (a lost registry row, AB#6941). In the system tenant the row IS the platform registry row.
+    /// </summary>
+    private async Task<bool> IsLiveChildRowAsync(IOctoAdminSession adminSession, RtTenant localRow)
+    {
+        if (TenantId == _systemConfiguration.Value.SystemTenantId.NormalizeString())
+        {
+            return true;
+        }
+
+        var systemRow = await GetRtSystemTenantAsync(adminSession, localRow.TenantId);
+        if (systemRow == null)
+        {
+            // A tenant that only lost its platform registry row (AB#6941; ReconcileTenantRegistryAsync restores it)
+            // is still live: its database exists and no other tenant is registered on it. Without the database, or
+            // with the database registered to somebody else, the row is a leftover.
+            var databaseName = NormalizeDatabaseName(localRow.DatabaseName);
+            return await GetRtSystemTenantByDatabaseNameAsync(adminSession, databaseName) == null
+                   && await IsDatabaseExistingAsync(databaseName);
+        }
+
+        return string.Equals(NormalizeDatabaseName(systemRow.DatabaseName),
+                   NormalizeDatabaseName(localRow.DatabaseName), StringComparison.Ordinal)
+               && (systemRow.ParentTenantId == null ||
+                   string.Equals(systemRow.ParentTenantId, TenantId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    ///     Removes the platform registry row of a child (id and database). A live child that lost that row (AB#6941)
+    ///     has none, and deleting it must still work: a missing row is not an error here (it used to throw "not
+    ///     exactly one entity", which surfaced as HTTP 500).
+    /// </summary>
+    private async Task DeleteSystemRegistryRowIfPresentAsync(IOctoAdminSession adminSession, string tenantId,
+        string databaseName)
+    {
+        // The system registry has always been written normalized, so its filter takes the normalized name.
+        var normalizedDatabaseName = NormalizeDatabaseName(databaseName);
+        var systemRow = await GetRtSystemTenantAsync(adminSession, tenantId);
+        if (systemRow == null || NormalizeDatabaseName(systemRow.DatabaseName) != normalizedDatabaseName)
+        {
+            return;
+        }
+
+        await GetSystemTenantRepositoryAsAdmin().DeleteOneRtEntityAsync<RtTenant>(adminSession,
+            TenantRegistryFilter(tenantId, normalizedDatabaseName), DeleteOptions.Erase);
+    }
+
+    /// <summary>Throws "tenant does not exist" for a stale row, before anything with a side effect (AB#6759).</summary>
+    private async Task EnsureLiveChildRowAsync(IOctoAdminSession adminSession, RtTenant localRow, string operation)
+    {
+        if (await IsLiveChildRowAsync(adminSession, localRow))
+        {
+            return;
+        }
+
+        _logger.LogWarning(
+            "Refused to {Operation} tenant '{TenantId}' from '{ParentTenantId}': the registry row (database " +
+            "'{DatabaseName}') is stale, the tenant is not registered as its child (AB#6759)",
+            operation, localRow.TenantId, TenantId, localRow.DatabaseName);
+        throw TenantException.TenantDoesNotExist(localRow.TenantId);
+    }
+
+    /// <summary>
+    ///     Removes the row the logical parent keeps in its own registry for <paramref name="registryRow" /> (a row of
+    ///     the platform registry). Only rows with the same database go, so a different tenant of the same id is
+    ///     never touched. Nothing to do for children of the system tenant and for legacy rows without a parent id.
+    /// </summary>
+    private async Task RemoveRowFromRegisteredParentAsync(IOctoAdminSession adminSession, RtTenant registryRow)
+    {
+        var parentId = registryRow.ParentTenantId;
+        var systemTenantId = _systemConfiguration.Value.SystemTenantId.NormalizeString();
+        if (string.IsNullOrWhiteSpace(parentId) || parentId.NormalizeString() == systemTenantId)
+        {
+            return;
+        }
+
+        var parentRow = await GetRtSystemTenantAsync(adminSession, parentId);
+        if (parentRow == null)
+        {
+            _logger.LogWarning(
+                "Tenant '{TenantId}' names parent '{ParentTenantId}', which is not registered; no parent row to remove " +
+                "(AB#6759)", registryRow.TenantId, parentId);
+            return;
+        }
+
+        var childDatabase = NormalizeDatabaseName(registryRow.DatabaseName);
+        await DeleteRegistryRowsAsync(adminSession, parentRow.TenantId, parentRow.DatabaseName, registryRow.TenantId,
+            row => NormalizeDatabaseName(row.DatabaseName) == childDatabase);
+    }
+
+    /// <summary>
+    ///     Removes the stale rows naming <paramref name="normalizedTenantId" /> from the registries of all registered
+    ///     tenants (AB#6759), each logged as a warning with the stale parent and the new one. Precondition: the id is
+    ///     NOT in the platform registry (the namespace gate ran). A row is stale when its database is gone or is
+    ///     registered to another tenant. A row whose database exists and is registered to nobody is a live tenant that
+    ///     only lost its platform registry row (AB#6941): its id is taken, so the create is refused with the generic
+    ///     conflict instead of orphaning that tenant. A registry that cannot be read is logged and skipped. Runs before
+    ///     the create's own transaction, in one short transaction per registry.
+    /// </summary>
+    private async Task PurgeStaleChildRowsAsync(string normalizedTenantId, string requestedDatabaseName,
+        Guid correlationId)
+    {
+        // Deliberately NOT in the caller's create transaction: reading every tenant's registry inside it would keep
+        // one transaction open across all tenant databases, and any concurrent DDL there (another tenant being
+        // created or dropped) aborts it. Each registry is checked in its own short transaction instead. Removing a
+        // stale row is correct whether or not the create that follows succeeds, so nothing needs rolling back.
+        var systemTenantId = _systemConfiguration.Value.SystemTenantId.NormalizeString();
+        List<RtTenant> owners;
+        using (var registrySession = await GetAdminSessionAsync())
+        {
+            registrySession.StartTransaction();
+            var registered = await GetSystemTenantRepositoryAsAdmin()
+                .GetRtEntitiesByTypeAsync<RtTenant>(registrySession, RtEntityQueryOptions.Create());
+            await registrySession.CommitTransactionAsync();
+            owners = registered.Items
+                .Where(t => t.TenantId.NormalizeString() != systemTenantId)
+                .GroupBy(t => t.TenantId.NormalizeString())
+                .Select(g => g.First())
+                .ToList();
+        }
+
+        foreach (var owner in owners)
+        {
+            using var session = await GetAdminSessionAsync();
+            session.StartTransaction();
+
+            ITenantRepository repository;
+            IReadOnlyList<RtTenant> rows;
+            try
+            {
+                repository = GetTenantRepositoryAsAdmin(owner.TenantId.NormalizeString(),
+                    NormalizeDatabaseName(owner.DatabaseName));
+                rows = await GetRegistryRowsAsync(session, repository, normalizedTenantId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Could not check the registry of tenant '{OwnerTenantId}' for stale entries of '{TenantId}' (AB#6759)",
+                    owner.TenantId, normalizedTenantId);
+                await AbortQuietlyAsync(session);
+                continue;
+            }
+
+            foreach (var row in rows)
+            {
+                var rowDatabase = NormalizeDatabaseName(row.DatabaseName);
+                if (await GetRtSystemTenantByDatabaseNameAsync(session, rowDatabase) == null
+                    && await IsDatabaseExistingAsync(rowDatabase))
+                {
+                    await AbortQuietlyAsync(session);
+                    throw RejectTenantId(normalizedTenantId, requestedDatabaseName, correlationId,
+                        $"the tenant id exists below another parent ('{owner.TenantId}') with a live database " +
+                        $"('{rowDatabase}') that lost its platform registry row (AB#6941); reconcile the registry " +
+                        "first (ReconcileTenantRegistry) - the stale-entry purge (AB#6759) never removes a live tenant");
+                }
+
+                await repository.DeleteOneRtEntityAsync<RtTenant>(session,
+                    TenantRegistryFilter(row.TenantId, row.DatabaseName), DeleteOptions.Erase);
+                _logger.LogWarning(
+                    "Purged stale child entry '{TenantId}' (database '{StaleDatabaseName}') from the registry of " +
+                    "'{StaleParentTenantId}' before registering the tenant under '{ParentTenantId}' (AB#6759)",
+                    normalizedTenantId, row.DatabaseName, owner.TenantId, TenantId);
+            }
+
+            await session.CommitTransactionAsync();
+        }
+    }
+
+    private static async Task AbortQuietlyAsync(IOctoAdminSession session)
+    {
+        try
+        {
+            await session.AbortTransactionAsync();
+        }
+        catch
+        {
+            // The driver may have aborted it already.
+        }
+    }
+
+    private static async Task<IReadOnlyList<RtTenant>> GetRegistryRowsAsync(IOctoAdminSession adminSession,
+        ITenantRepository repository, string childTenantId)
+    {
+        var queryOptions = RtEntityQueryOptions.Create()
+            .FieldFilter(nameof(RtTenant.TenantId), FieldFilterOperator.Equals, childTenantId.NormalizeString());
+        var rows = await repository.GetRtEntitiesByTypeAsync<RtTenant>(adminSession, queryOptions);
+        return rows.Items.ToList();
+    }
+
+    /// <summary>Deletes the matching rows naming <paramref name="childTenantId" /> from one tenant's registry.</summary>
+    private async Task<int> DeleteRegistryRowsAsync(IOctoAdminSession adminSession, string ownerTenantId,
+        string ownerDatabaseName, string childTenantId, Func<RtTenant, bool> predicate)
+    {
+        // Same admin client as this context, so the caller's session (and transaction) applies to it.
+        var repository = GetTenantRepositoryAsAdmin(ownerTenantId.NormalizeString(),
+            NormalizeDatabaseName(ownerDatabaseName));
+        var rows = await GetRegistryRowsAsync(adminSession, repository, childTenantId);
+
+        var removed = 0;
+        foreach (var row in rows.Where(predicate))
+        {
+            // The stored value verbatim (see TenantRegistryFilter).
+            await repository.DeleteOneRtEntityAsync<RtTenant>(adminSession,
+                TenantRegistryFilter(row.TenantId, row.DatabaseName), DeleteOptions.Erase);
+            removed++;
+        }
+
+        return removed;
     }
 
     // ReSharper disable once MemberCanBePrivate.Global
