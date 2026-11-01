@@ -96,6 +96,49 @@ public class ComputedColumnBackfillJobIntegrationTests(CrateStagingCopyFixture f
     }
 
     [Fact]
+    public async Task AShutdownThatKillsTheRunningStatement_HandsTheJobBack_InsteadOfFailingTheColumn()
+    {
+        // test-2, 2026-11-01: a rollout cancelled the host token while a statement ran; CrateDB answered
+        // "XX000: Job killed" as a PostgresException and the column ended Failed (fixed in engine #329).
+        var client = A.Fake<IStreamDataDatabaseClient>(o => o.Wrapping(fixture.Client));
+        var lane = await NewLaneAsync(hourlyRows: 1500, client);
+        using var rollout = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var pages = 0;
+        A.CallTo(() => client.ExecuteBulkAsync(A<string>._, A<string>._, A<IReadOnlyList<IReadOnlyList<object?>>>._,
+                A<CrateStatementClass>._, A<CancellationToken>._))
+            .ReturnsLazily(call =>
+            {
+                if (Interlocked.Increment(ref pages) == 20)
+                {
+                    rollout.Cancel();
+                    throw new Npgsql.PostgresException(
+                        "Job killed. Cancellation request by: octo-system", "ERROR", "ERROR", "XX000");
+                }
+
+                return fixture.Client.ExecuteBulkAsync(call.GetArgument<string>(0)!, call.GetArgument<string>(1)!,
+                    call.GetArgument<IReadOnlyList<IReadOnlyList<object?>>>(2)!, call.GetArgument<CrateStatementClass>(3),
+                    call.GetArgument<CancellationToken>(4));
+            });
+
+        var job = await lane.Lifecycle.EnqueueAddComputedColumnAsync(
+            lane.Archive, "doubled", "value * 2", FormulaResultType.Double, indexed: false, Ct);
+        var thrown = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => lane.Lifecycle.RunPendingComputedColumnBackfillsAsync(rollout.Token));
+
+        Assert.IsType<Npgsql.PostgresException>(thrown.InnerException);
+        Assert.Equal(ComputedColumnState.Backfilling, lane.Store.Column(lane.Archive, "doubled")!.ComputedState);
+        var handedBack = await lane.Jobs.GetAsync(job!.RtId);
+        Assert.Equal(RecomputeJobState.Pending, handedBack!.State);
+        Assert.True(handedBack.RangeStart > DateTime.UnixEpoch, "the hand-back keeps the checkpoint");
+
+        Assert.Equal(1, await lane.Lifecycle.RunPendingComputedColumnBackfillsAsync(Ct));
+        Assert.Equal(ComputedColumnState.Active, lane.Store.Column(lane.Archive, "doubled")!.ComputedState);
+        var (_, written, wrong) = await CheckAsync(lane.Table, "doubled", 2);
+        Assert.Equal(1500, written);
+        Assert.Equal(0, wrong);
+    }
+
+    [Fact]
     public async Task ARolloutMidRun_HandsTheJobBack_AndTheNextRunResumesFromTheCheckpoint()
     {
         // The real client; a "rollout" (shutdown) is triggered after the 20th committed page.
