@@ -29,7 +29,8 @@
 # Manual run: Run pipeline, pick the branch, optionally set the entity count (1 000 000 = the opt-in 1M run).
 # Local run: tests/Runtime.Engine.MongoDb.IntegrationTests/README.md.
 
-name: 'perf-$(Date:yyyyMMdd)$(Rev:.r)'
+# Four-segment build number like every other pipeline, perf marker as suffix.
+name: $(Date:yyyy).$(Date:MM).$(Date:dd)$(Rev:.r)-perf
 
 trigger: none
 pr: none
@@ -99,9 +100,14 @@ jobs:
           command: 'build'
           projects: '$(solutionFile)'
           arguments: '--configuration $(buildConfiguration) --no-restore /p:OctoNugetPrivateServer=$(nugetPrivateServer) /p:OctoPrivateGitHubApiKey=$(GitHubPAT) /p:OctoPublicGitHubApiKey=$(GitHubPAT)'
+      # Marks that restore and build succeeded, so the Bug step below reports only a failure of the
+      # Performance tests step itself, never a restore/build failure.
+      - pwsh: Write-Host "##vso[task.setvariable variable=perfTestsStarted]true"
+        displayName: 'Mark: performance tests start'
       # No retryCountOnTaskFailure: a retry would hide a breach (the whole point of this run).
       # Only the integration test project holds Category=Performance tests; naming it avoids a
-      # "no test matches the filter" pass over the unit test project.
+      # "no test matches the filter" pass over the unit test project. performance.runsettings sets
+      # TreatNoTestsAsError: a removed or renamed trait must turn the run red, not green.
       - task: DotNetCoreCLI@2
         displayName: 'Performance tests'
         timeoutInMinutes: 45
@@ -110,12 +116,12 @@ jobs:
         inputs:
           command: 'test'
           projects: '$(perfTestProject)'
-          arguments: '--configuration $(buildConfiguration) --no-build /p:OctoNugetPrivateServer=$(nugetPrivateServer) --filter "Category=Performance" --logger "console;verbosity=normal" --blame-hang --blame-hang-timeout 15m --blame-hang-dump-type none'
+          arguments: '--configuration $(buildConfiguration) --no-build /p:OctoNugetPrivateServer=$(nugetPrivateServer) --filter "Category=Performance" --settings pipelines/performance.runsettings --logger "console;verbosity=normal" --blame-hang --blame-hang-timeout 15m --blame-hang-dump-type none'
           testRunTitle: 'Performance'
       - ${{ if eq(parameters.fileBugOnBreach, true) }}:
           - task: PowerShell@2
             displayName: 'Report the budget breach as a Bug'
-            condition: failed()
+            condition: and(failed(), eq(variables['perfTestsStarted'], 'true'))
             env:
               SYSTEM_ACCESSTOKEN: $(System.AccessToken)
               PERF_BUG_PARENT_ID: ${{ parameters.bugParentId }}

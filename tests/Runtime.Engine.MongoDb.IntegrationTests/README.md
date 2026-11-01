@@ -27,9 +27,11 @@ category runs in its own pipeline, nightly and on demand. A breach is a signal, 
   and *Run pipeline* for a manual run on any branch (parameter `entityCount`: 100 000 by default, 1 000 000 for the opt-in 1M run).
 - Pool `meshmakers-ci-agents` (the tests need Docker). There is no dedicated perf agent; the quiet part is the time slot, between
   the auto-train start (Mon/Wed/Fri 01:00 UTC) and the morning jobs (docs collect 04:00, CI guard health 05:30 UTC).
+- The run uses `pipelines/performance.runsettings` (`TreatNoTestsAsError`): if the trait or the test disappears, the filter
+  selects nothing and the run goes red instead of reporting a silent green.
 - The run's **Tests** tab shows pass/fail; the log of the step *Performance tests* shows every measured median / p95
   (`octo-progress` lines), also on a green run.
-- **On a breach** the run is red and its last step files a Bug under the Core Platform Sustain Feature (tags
+- **On a breach** (the *Performance tests* step failed; a restore/build failure files nothing) the run is red and its last step files a Bug under the Core Platform Sustain Feature (tags
   `perf-budget-breach`, `engine-mongodb`), or comments on the one that is still open (`pipelines/report-perf-breach.ps1`). The
   Bug step needs the project Build Service to be allowed to create and edit work items in the Core Platform area; without it,
   the step warns and the red run remains the signal.
