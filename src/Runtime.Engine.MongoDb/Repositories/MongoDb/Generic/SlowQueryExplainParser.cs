@@ -48,7 +48,9 @@ public static class SlowQueryExplainParser
     /// triple is omitted (legacy callers, unit tests of pure parsing), the suggestion is
     /// always <c>null</c>. <paramref name="tenantId"/> + <paramref name="ckCacheService"/>
     /// (Stage 2D) are forwarded to the suggester for opportunistic CK-YAML emission; both
-    /// null produces a pure MongoDB suggestion (Stage 2C shape).
+    /// null produces a pure MongoDB suggestion (Stage 2C shape). <paramref name="sensitiveAttributeNames"/>
+    /// (AB#8009) are masked in the raw plan preview, which shows the parsed filter with its values;
+    /// <c>null</c> masks the known credential fields.
     /// </remarks>
     public static SlowQueryExplain Parse(
         BsonDocument? explainResult,
@@ -58,7 +60,8 @@ public static class SlowQueryExplainParser
         string? commandName = null,
         string? target = null,
         string? tenantId = null,
-        ICkCacheService? ckCacheService = null)
+        ICkCacheService? ckCacheService = null,
+        IReadOnlySet<string>? sensitiveAttributeNames = null)
     {
         if (explainResult is null)
         {
@@ -92,7 +95,7 @@ public static class SlowQueryExplainParser
             // serverInfo, command echo, etc., which would consume the preview budget without
             // adding signal.
             var preview = rawPreviewBytes > 0
-                ? MongoCommandObservability.TruncateBson(planner, rawPreviewBytes)
+                ? MongoCommandObservability.TruncateBson(planner, rawPreviewBytes, sensitiveAttributeNames)
                 : null;
 
             // Stage 2C — when the plan reports a COLLSCAN and the dispatcher passed through
