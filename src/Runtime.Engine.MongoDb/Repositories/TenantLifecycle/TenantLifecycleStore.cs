@@ -164,7 +164,13 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
             },
             { Fields.LeaseOwner, Cond(keepsReconcileState, $"${Fields.LeaseOwner}", BsonNull.Value) },
             { Fields.LeaseUntil, Cond(keepsReconcileState, $"${Fields.LeaseUntil}", BsonNull.Value) },
-            { Fields.CreatedUtc, new BsonDocument("$ifNull", new BsonArray { $"${Fields.CreatedUtc}", now }) },
+            {
+                // A new creation cycle (missing / Failed record) restarts the age the reconciler's minimum-age
+                // filter measures (AB#8117); Active / Creating / Deleting keep their original creation time.
+                Fields.CreatedUtc,
+                Cond(keepsReconcileState,
+                    new BsonDocument("$ifNull", new BsonArray { $"${Fields.CreatedUtc}", now }), now)
+            },
             {
                 Fields.LastTransitionUtc,
                 Cond(isDeleting,
@@ -336,8 +342,12 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
         await collection.DeleteOneAsync(Eq(tenantId), cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<TenantLifecycleRecord?> TryClaimForReconcileAsync(string leaseOwner, TimeSpan leaseDuration,
+    public Task<TenantLifecycleRecord?> TryClaimForReconcileAsync(string leaseOwner, TimeSpan leaseDuration,
         CancellationToken cancellationToken = default)
+        => TryClaimForReconcileAsync(leaseOwner, leaseDuration, null, cancellationToken);
+
+    public async Task<TenantLifecycleRecord?> TryClaimForReconcileAsync(string leaseOwner, TimeSpan leaseDuration,
+        TimeSpan? minimumAge, CancellationToken cancellationToken = default)
     {
         var collection = await GetCollectionAsync(ensureIndexes: false, cancellationToken).ConfigureAwait(false);
         var now = DateTime.UtcNow;
@@ -349,6 +359,17 @@ internal sealed class TenantLifecycleStore : ITenantLifecycleStore
             Builders<TenantLifecycleRecord>.Filter.Or(
                 Builders<TenantLifecycleRecord>.Filter.Eq(r => r.LeaseUntil, null),
                 Builders<TenantLifecycleRecord>.Filter.Lt(r => r.LeaseUntil, now)));
+
+        // AB#8117: a brand-new tenant is still being driven by the normal setup path. Claiming it right away
+        // raced that path, failed on "not seeded yet" and parked the tenant behind the lease. Only tenants whose
+        // creation cycle is older than the minimum age are claimable.
+        if (minimumAge is { } age && age > TimeSpan.Zero)
+        {
+            filter = Builders<TenantLifecycleRecord>.Filter.And(filter,
+                Builders<TenantLifecycleRecord>.Filter.Or(
+                    Builders<TenantLifecycleRecord>.Filter.Eq(r => r.CreatedUtc, default(DateTime)),
+                    Builders<TenantLifecycleRecord>.Filter.Lte(r => r.CreatedUtc, now - age)));
+        }
 
         var update = Builders<TenantLifecycleRecord>.Update
             .Set(r => r.LeaseOwner, leaseOwner)

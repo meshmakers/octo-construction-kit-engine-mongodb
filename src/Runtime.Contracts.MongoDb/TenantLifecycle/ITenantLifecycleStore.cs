@@ -72,9 +72,20 @@ public interface ITenantLifecycleStore
     /// bumping its attempt count. Returns the claimed record (with the incremented attempt count), or
     /// <c>null</c> when nothing needs reconciling. The claim is a single MongoDB find-and-update, so at
     /// most one service instance can own a given tenant at a time (Phase 2 single-flight — AB#4348).
+    /// Equivalent to the overload with <c>minimumAge: null</c> (no age filter).
     /// </summary>
     Task<TenantLifecycleRecord?> TryClaimForReconcileAsync(string leaseOwner, TimeSpan leaseDuration,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Like <see cref="TryClaimForReconcileAsync(string, TimeSpan, CancellationToken)"/>, but only claims tenants
+    /// old enough. When <paramref name="minimumAge"/> is given, only tenants whose creation cycle started at least that
+    /// long ago are claimable (AB#8117): a brand-new tenant is still being driven by the normal setup path
+    /// and must not be raced by the reconciler. <c>null</c> or a non-positive value disables the filter.
+    /// A record without a <see cref="TenantLifecycleRecord.CreatedUtc"/> (legacy) counts as old enough.
+    /// </summary>
+    Task<TenantLifecycleRecord?> TryClaimForReconcileAsync(string leaseOwner, TimeSpan leaseDuration,
+        TimeSpan? minimumAge, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Releases a reconcile lease held by <paramref name="leaseOwner"/> so the tenant becomes immediately
