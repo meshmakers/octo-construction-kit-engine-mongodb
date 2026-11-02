@@ -123,6 +123,31 @@ public class StreamDataStateDurationAliasTests
         Assert.Equal("stateduration_100", StreamDataAggregationOutputNaming.StateDurationFunctionSuffix(cols, cols[1]));
     }
 
+    [Theory]
+    [InlineData("0", "0.0", true)]
+    [InlineData(" 0 ", "0", true)]
+    [InlineData("true", "TRUE", true)]
+    [InlineData("ON", "ON", true)]
+    [InlineData(" ON ", "ON", false)]
+    [InlineData("on", "ON", false)]
+    [InlineData("0", "100", false)]
+    public void SameState_FollowsTheLiteralTheSqlUses(string a, string b, bool expected) =>
+        Assert.Equal(expected, RollupChainAggregationResolver.SameState(a, b));
+
+    [Fact]
+    public void ValidateDistinct_ComparesTheEmittedKey_NotTheRequestedPath()
+    {
+        // "foo" + StateDuration x2 would emit foo_stateduration_0 / _1; a column literally named
+        // foo_stateduration averaged emits foo_stateduration_avg - no clash. Two paths that map to the same
+        // physical column ("a.b" and "ab") do clash.
+        StreamDataAggregationOutputNaming.ValidateDistinct(
+            [new AggregationColumn("foo_stateduration", AggregationFunction.Average), new AggregationColumn("foo", AggregationFunction.StateDuration, "0"), new AggregationColumn("foo", AggregationFunction.StateDuration, "1")],
+            RawArchive);
+        Assert.Throws<StreamDataException>(() => StreamDataAggregationOutputNaming.ValidateDistinct(
+            [new AggregationColumn("a.b", AggregationFunction.Sum), new AggregationColumn("ab", AggregationFunction.Sum)],
+            RawArchive));
+    }
+
     // ---- raw archive ----
 
     [Fact]

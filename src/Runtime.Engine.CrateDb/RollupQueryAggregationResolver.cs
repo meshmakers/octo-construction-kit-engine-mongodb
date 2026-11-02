@@ -151,7 +151,7 @@ public static class RollupQueryAggregationResolver
         if (spec.Function == CkRollupFunction.StateDuration
             && target == AggregationFunctionDto.StateDuration
             && !string.IsNullOrWhiteSpace(comparisonValue)
-            && !string.Equals(spec.ComparisonValue?.Trim(), comparisonValue.Trim(), StringComparison.Ordinal))
+            && !RollupChainAggregationResolver.SameState(spec.ComparisonValue, comparisonValue))
         {
             return null;
         }

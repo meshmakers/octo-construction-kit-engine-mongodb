@@ -437,8 +437,17 @@ public static class RollupChainAggregationResolver
         => origins.FirstOrDefault(o => o.LogicalFunction == function && o.AvgRole is null);
 
     /// <summary>
-    /// The StateDuration origin of the path for <paramref name="comparisonValue"/> (trimmed, ordinal
-    /// compare - the rule <c>RollupAggregationColumns</c> applies to cascades). A blank value keeps the
+    /// Two comparison values name the same state when the materialisation SQL treats them alike: they render
+    /// to the same literal (<see cref="CrateSqlLiteral.StateLiteral"/>: <c>0</c> equals <c>0.0</c> and <c> 0 </c>,
+    /// <c>true</c> equals <c>TRUE</c>, a string state is compared exactly, whitespace included).
+    /// </summary>
+    internal static bool SameState(string? a, string? b) =>
+        a is not null && b is not null
+        && string.Equals(CrateSqlLiteral.StateLiteral(a), CrateSqlLiteral.StateLiteral(b), StringComparison.Ordinal);
+
+    /// <summary>
+    /// The StateDuration origin of the path for <paramref name="comparisonValue"/> (same-literal compare,
+    /// see <see cref="SameState"/>). A blank value keeps the
     /// first StateDuration origin; a value no origin materialises resolves to null (AB#8168) instead of
     /// silently reading another state's duration.
     /// </summary>
@@ -448,7 +457,7 @@ public static class RollupChainAggregationResolver
             o.LogicalFunction == CkRollupFunction.StateDuration
             && o.AvgRole is null
             && (string.IsNullOrWhiteSpace(comparisonValue)
-                || string.Equals(o.ComparisonValue?.Trim(), comparisonValue.Trim(), StringComparison.Ordinal)));
+                || SameState(o.ComparisonValue, comparisonValue)));
 
     private static LogicalOriginColumn? FindAvgRole(IReadOnlyList<LogicalOriginColumn> origins, LogicalAvgRole role)
         => FindPairRole(origins, CkRollupFunction.Avg, role);
