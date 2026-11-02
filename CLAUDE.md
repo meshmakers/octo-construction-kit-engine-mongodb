@@ -2948,3 +2948,18 @@ concept `docs/concept-computed-columns.md` §8.3a in the engine repository). Thi
 - **`MongoRecomputeJobStore.GetActiveForArchiveAsync`** skips computed-column jobs (`RecomputeJobSnapshot.IsComputedColumnBackfill`),
   so the rollup orchestrator never adopts, coalesces into or fails one.
 
+
+## Re-ensuring a tenant's MongoDB user (AB#8177)
+
+The tenant database user (`OctoSystemConfiguration.DatabaseUser`, e.g. `octo-system-ds-user-<db>`) is created only by
+`CreateTenantInternalAsync` and the attach path. If it disappears later (restored or re-created MongoDB, manual
+cleanup), every access to that tenant's database fails with `MongoAuthenticationException` (SCRAM) and nothing
+re-created the user: a local stack retried the setup of one tenant 617 times in 7 days.
+
+`ISystemContext.EnsureTenantDatabaseUserAsync(tenantId)` closes that gap. It reads the database name from the registry
+(no tenant-database access, no CK import — the tenant cannot be opened with its own user, that is the reason it runs),
+calls `IAdminRepositoryClient.EnsureUserAsync` (idempotent `CreateUser` that reports whether it created the user) and,
+when it had to create it, logs an error naming user, tenant and database and invalidates the cached repository clients
+of the tenant. Result: `TenantNotRegistered`, `AlreadyPresent` or `Created`. It needs the admin connection and throws
+without it, so callers (the setup retry loop in octo-common-services) call it best-effort.
+Test: `EnsureTenantDatabaseUserTests` (drops the user, asserts the authentication failure, ensures, reads again).

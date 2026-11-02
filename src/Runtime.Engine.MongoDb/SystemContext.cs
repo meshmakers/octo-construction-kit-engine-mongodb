@@ -255,6 +255,54 @@ public class SystemContext : TenantContext, ISystemContext
         return CreateDetachedTenantContext(tenant.TenantId, tenant.DatabaseName).GetTenantRepository();
     }
 
+    /// <inheritdoc />
+    public async Task<TenantDatabaseUserEnsureResult> EnsureTenantDatabaseUserAsync(string tenantId)
+    {
+        ArgumentValidation.ValidateString(nameof(tenantId), tenantId);
+
+        var normalizedTenantId = tenantId.NormalizeString();
+        string databaseName;
+        if (normalizedTenantId == TenantId)
+        {
+            databaseName = DatabaseName;
+        }
+        else
+        {
+            // Pure registry read, no CK import and no tenant-database access: this runs precisely because
+            // the tenant database cannot be opened with its own user.
+            using var session = await GetAdminSessionAsync();
+            session.StartTransaction();
+            var tenant = await TryGetChildTenantAsync(session, normalizedTenantId);
+            await session.CommitTransactionAsync();
+            if (tenant == null)
+            {
+                return TenantDatabaseUserEnsureResult.TenantNotRegistered;
+            }
+
+            databaseName = tenant.DatabaseName;
+        }
+
+        var normalizedDatabaseName = NormalizeDatabaseName(databaseName);
+        var user = string.Format(_systemConfiguration.Value.DatabaseUser, normalizedDatabaseName);
+        var created = await _adminRepositoryClient.EnsureUserAsync(
+            _systemConfiguration.Value.AuthenticationDatabaseName, normalizedDatabaseName, user,
+            _systemConfiguration.Value.DatabaseUserPassword);
+        if (!created)
+        {
+            return TenantDatabaseUserEnsureResult.AlreadyPresent;
+        }
+
+        // Error level on purpose: the user of a registered tenant vanished, which should not happen.
+        _serviceProvider.GetRequiredService<ILogger<SystemContext>>().LogError(
+            "The MongoDB user '{DatabaseUser}' of tenant '{TenantId}' (database '{DatabaseName}') was missing and " +
+            "has been re-created; tenant access failed with authentication errors until now",
+            user, normalizedTenantId, normalizedDatabaseName);
+        // Connections opened while the user was missing never authenticated; do not let a cached client hand them out.
+        await InvalidateTenantRepositoryClientsAsync(normalizedTenantId, normalizedDatabaseName)
+            .ConfigureAwait(false);
+        return TenantDatabaseUserEnsureResult.Created;
+    }
+
     public async Task<ITenantRepository?> TryFindTenantRepositoryAsync(string tenantId)
     {
         var tenantContext = await TryFindTenantContextAsync(tenantId);
