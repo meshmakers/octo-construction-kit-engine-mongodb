@@ -1118,6 +1118,13 @@ scope: `docs/streamdata-archive-concept.md` §10. `RollupOrchestrator` records a
 
 Adding a column to an activated archive (AB#7997): never write it into `Columns` without the storage change. The direct path is `ArchiveLifecycleService.AddArchiveColumnAsync` (storage via `CrateDbStreamDataRepository.AddIngestedColumnStorageAsync`, then the definition); a seed's additions are taken out of the import and applied after the commit through `IArchiveLifecycleServiceProvider` (`TenantArchiveLifecycleServiceProvider`, resolves `ISystemContext` lazily to avoid a DI cycle). Rules: `docs/streamdata-archive-concept.md` §10, *Adding a column to an active archive*.
 
+Archives a blueprint seed creates (AB#7991): the blueprint engine activates them after the import and queues the backfill of new rollups
+through `IStreamDataTenantServicesProvider`, implemented here by `TenantStreamDataServicesProvider` (registered next to the lifecycle provider,
+resolves `ISystemContext` lazily for the same DI-cycle reason; returns `null` without a stream-data backend, `IsStreamDataEnabled` from the tenant
+flag). Rules: engine `docs/blueprints.md`, "Archives and rollups in a blueprint". Test: `BlueprintArchiveActivationIntegrationTests` (fixture
+`BlueprintArchiveActivationFixture`: MongoDB plus a real CrateDB container wired into the tenant context; test blueprints `ArchiveActivationBp`,
+`ArchiveBackfillBp`; drives the backfill with `IRecomputeOrchestrator.TickAsync` and checks the rollup of a rollup converges).
+
 ### Rollups report their manual values (AB#7727)
 
 Every rollup table carries `manual_count` (`BIGINT`) and `last_manual_at` (`TIMESTAMP WITH TIME ZONE`), platform columns

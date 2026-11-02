@@ -1,0 +1,11 @@
+$schema: https://schemas.meshmakers.cloud/blueprint-meta.schema.json
+blueprintId: ArchiveActivationBp-1.1.0
+description: AB#7991 - 1.0.0 plus one raw archive
+ckModelDependencies:
+  - System-[2.0,3.0)
+  - System.StreamData-[1.8,2.0)
+  - Test-[1.0,2.0)
+seedDataPath: seed-data/entities.yaml
+archiveActivation:
+  exclude:
+    - activation-raw-excluded

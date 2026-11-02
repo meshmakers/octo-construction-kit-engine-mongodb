@@ -1,0 +1,23 @@
+$schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+dependencies:
+  - System.StreamData-[1.8,2.0)
+  - Test-[1.0,2.0)
+entities:
+  - rtId: 6a7991000000000000000c01
+    ckTypeId: System.StreamData/RawArchive
+    rtWellKnownName: backfill-raw
+    attributes:
+      - id: System.StreamData/Archive.TargetCkTypeId
+        value: Test/MeasuringPoint
+      - id: System.StreamData/Archive.Status
+        value: 0
+      - id: System.StreamData/Archive.Columns
+        value:
+          - ckRecordId: System.StreamData/CkArchiveColumn
+            attributes:
+              - id: System.StreamData/CkArchiveColumn.Path
+                value: CounterReading
+              - id: System.StreamData/CkArchiveColumn.Required
+                value: false
+              - id: System.StreamData/CkArchiveColumn.Indexed
+                value: false

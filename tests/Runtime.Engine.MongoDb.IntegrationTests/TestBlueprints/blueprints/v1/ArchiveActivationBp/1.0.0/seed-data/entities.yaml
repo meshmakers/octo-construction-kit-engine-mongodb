@@ -1,0 +1,173 @@
+$schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+dependencies:
+  - System.StreamData-[1.8,2.0)
+  - Test-[1.0,2.0)
+entities:
+  - rtId: 6a7991000000000000000a01
+    ckTypeId: System.StreamData/RawArchive
+    rtWellKnownName: activation-raw
+    attributes:
+      - id: System.StreamData/Archive.TargetCkTypeId
+        value: Test/MeasuringPoint
+      - id: System.StreamData/Archive.Status
+        value: 0
+      - id: System.StreamData/Archive.Columns
+        value:
+          - ckRecordId: System.StreamData/CkArchiveColumn
+            attributes:
+              - id: System.StreamData/CkArchiveColumn.Path
+                value: CounterReading
+              - id: System.StreamData/CkArchiveColumn.Required
+                value: false
+              - id: System.StreamData/CkArchiveColumn.Indexed
+                value: false
+  - rtId: 6a7991000000000000000a02
+    ckTypeId: System.StreamData/RawArchive
+    rtWellKnownName: activation-raw-excluded
+    attributes:
+      - id: System.StreamData/Archive.TargetCkTypeId
+        value: Test/MeasuringPoint
+      - id: System.StreamData/Archive.Status
+        value: 0
+      - id: System.StreamData/Archive.Columns
+        value:
+          - ckRecordId: System.StreamData/CkArchiveColumn
+            attributes:
+              - id: System.StreamData/CkArchiveColumn.Path
+                value: CounterReading
+              - id: System.StreamData/CkArchiveColumn.Required
+                value: false
+              - id: System.StreamData/CkArchiveColumn.Indexed
+                value: false
+  - rtId: 6a7991000000000000000b01
+    ckTypeId: System.StreamData/RollupArchive
+    rtWellKnownName: activation-rollup-5m
+    attributes:
+      - id: System.StreamData/Archive.TargetCkTypeId
+        value: Test/MeasuringPoint
+      - id: System.StreamData/Archive.Status
+        value: 0
+      - id: System.StreamData/Archive.Columns
+        value:
+          - ckRecordId: System.StreamData/CkArchiveColumn
+            attributes:
+              - id: System.StreamData/CkArchiveColumn.Path
+                value: counterreading_avg_sum
+              - id: System.StreamData/CkArchiveColumn.Required
+                value: false
+              - id: System.StreamData/CkArchiveColumn.Indexed
+                value: false
+          - ckRecordId: System.StreamData/CkArchiveColumn
+            attributes:
+              - id: System.StreamData/CkArchiveColumn.Path
+                value: counterreading_avg_count
+              - id: System.StreamData/CkArchiveColumn.Required
+                value: false
+              - id: System.StreamData/CkArchiveColumn.Indexed
+                value: false
+      - id: System.StreamData/RollupArchive.Sources
+        value:
+          - ckRecordId: System.StreamData/CkRollupSourceReference
+            attributes:
+              - id: System.StreamData/CkRollupSourceReference.SourceArchiveRtId
+                value: '6a7991000000000000000a01'
+      - id: System.StreamData/RollupArchive.BucketSizeMs
+        value: 300000
+      - id: System.StreamData/RollupArchive.WatermarkLagMs
+        value: 60000
+      - id: System.StreamData/RollupArchive.Aggregations
+        value:
+          - ckRecordId: System.StreamData/CkRollupAggregation
+            attributes:
+              - id: System.StreamData/CkRollupAggregation.SourcePath
+                value: CounterReading
+              - id: System.StreamData/CkRollupAggregation.Function
+                value: 0
+  - rtId: 6a7991000000000000000b02
+    ckTypeId: System.StreamData/RollupArchive
+    rtWellKnownName: activation-rollup-1h
+    attributes:
+      - id: System.StreamData/Archive.TargetCkTypeId
+        value: Test/MeasuringPoint
+      - id: System.StreamData/Archive.Status
+        value: 0
+      - id: System.StreamData/Archive.Columns
+        value:
+          - ckRecordId: System.StreamData/CkArchiveColumn
+            attributes:
+              - id: System.StreamData/CkArchiveColumn.Path
+                value: counterreading_avg_sum
+              - id: System.StreamData/CkArchiveColumn.Required
+                value: false
+              - id: System.StreamData/CkArchiveColumn.Indexed
+                value: false
+          - ckRecordId: System.StreamData/CkArchiveColumn
+            attributes:
+              - id: System.StreamData/CkArchiveColumn.Path
+                value: counterreading_avg_count
+              - id: System.StreamData/CkArchiveColumn.Required
+                value: false
+              - id: System.StreamData/CkArchiveColumn.Indexed
+                value: false
+      - id: System.StreamData/RollupArchive.Sources
+        value:
+          - ckRecordId: System.StreamData/CkRollupSourceReference
+            attributes:
+              - id: System.StreamData/CkRollupSourceReference.SourceArchiveRtId
+                value: '6a7991000000000000000b01'
+      - id: System.StreamData/RollupArchive.BucketSizeMs
+        value: 3600000
+      - id: System.StreamData/RollupArchive.WatermarkLagMs
+        value: 60000
+      - id: System.StreamData/RollupArchive.Aggregations
+        value:
+          - ckRecordId: System.StreamData/CkRollupAggregation
+            attributes:
+              - id: System.StreamData/CkRollupAggregation.SourcePath
+                value: CounterReading
+              - id: System.StreamData/CkRollupAggregation.Function
+                value: 0
+  - rtId: 6a7991000000000000000b03
+    ckTypeId: System.StreamData/RollupArchive
+    rtWellKnownName: activation-rollup-twa
+    attributes:
+      - id: System.StreamData/Archive.TargetCkTypeId
+        value: Test/MeasuringPoint
+      - id: System.StreamData/Archive.Status
+        value: 0
+      - id: System.StreamData/Archive.Columns
+        value:
+          - ckRecordId: System.StreamData/CkArchiveColumn
+            attributes:
+              - id: System.StreamData/CkArchiveColumn.Path
+                value: counterreading_twavg_integral
+              - id: System.StreamData/CkArchiveColumn.Required
+                value: false
+              - id: System.StreamData/CkArchiveColumn.Indexed
+                value: false
+          - ckRecordId: System.StreamData/CkArchiveColumn
+            attributes:
+              - id: System.StreamData/CkArchiveColumn.Path
+                value: counterreading_twavg_duration
+              - id: System.StreamData/CkArchiveColumn.Required
+                value: false
+              - id: System.StreamData/CkArchiveColumn.Indexed
+                value: false
+      - id: System.StreamData/RollupArchive.Sources
+        value:
+          - ckRecordId: System.StreamData/CkRollupSourceReference
+            attributes:
+              - id: System.StreamData/CkRollupSourceReference.SourceArchiveRtId
+                value: '6a7991000000000000000a01'
+      - id: System.StreamData/RollupArchive.BucketSizeMs
+        value: 3600000
+      - id: System.StreamData/RollupArchive.WatermarkLagMs
+        value: 60000
+      - id: System.StreamData/RollupArchive.Aggregations
+        value:
+          - ckRecordId: System.StreamData/CkRollupAggregation
+            attributes:
+              - id: System.StreamData/CkRollupAggregation.SourcePath
+                value: CounterReading
+              - id: System.StreamData/CkRollupAggregation.Function
+                value: 5
