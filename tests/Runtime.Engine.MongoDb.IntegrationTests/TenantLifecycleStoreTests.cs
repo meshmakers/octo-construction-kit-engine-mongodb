@@ -343,6 +343,108 @@ public class TenantLifecycleStoreTests(SystemFixture fixture)
     }
 
     /// <summary>
+    /// AB#8117. A brand-new tenant is still driven by the normal setup path; the reconciler must not claim it
+    /// before the minimum age has passed — and must claim it afterwards.
+    /// </summary>
+    [Fact]
+    public async Task Reconcile_claim_respects_minimum_age()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var store = Store;
+        var tenantId = $"ma-{Guid.NewGuid():N}"[..20];
+        await store.EnsureCreatingAsync(tenantId, null, Guid.NewGuid(), ct);
+
+        // Too young: the (shared) collection may hold foreign Creating records, which are released again.
+        for (var i = 0; i < 20; i++)
+        {
+            var foreign = await store.TryClaimForReconcileAsync("owner-young", TimeSpan.FromMinutes(5),
+                TimeSpan.FromHours(1), ct);
+            if (foreign is null)
+            {
+                break;
+            }
+
+            Assert.NotEqual(tenantId, foreign.TenantId);
+            await store.ReleaseLeaseAsync(foreign.TenantId, "owner-young", ct);
+        }
+
+        var untouched = await store.GetAsync(tenantId, ct);
+        Assert.Null(untouched!.LeaseOwner);
+        Assert.Equal(0, untouched.AttemptCount);
+
+        // Old enough: claimable.
+        await Task.Delay(TimeSpan.FromMilliseconds(400), ct);
+        for (var i = 0; i < 20; i++)
+        {
+            var claimed = await store.TryClaimForReconcileAsync("owner-old", TimeSpan.FromMinutes(5),
+                TimeSpan.FromMilliseconds(200), ct);
+            Assert.NotNull(claimed);
+            if (claimed!.TenantId == tenantId)
+            {
+                Assert.Equal(1, claimed.AttemptCount);
+                break;
+            }
+
+            await store.ReleaseLeaseAsync(claimed.TenantId, "owner-old", ct);
+        }
+
+        await store.RemoveAsync(tenantId, ct);
+    }
+
+    /// <summary>
+    /// AB#8117. The normal setup path completes a tenant to Active even while the reconciler holds a live
+    /// lease on it (a failed reconcile attempt keeps the lease until it expires).
+    /// </summary>
+    [Fact]
+    public async Task MarkActive_completes_tenant_while_reconcile_lease_is_held()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var store = Store;
+        var tenantId = $"mh-{Guid.NewGuid():N}"[..20];
+        await store.EnsureCreatingAsync(tenantId, null, Guid.NewGuid(), ct);
+        await ClaimAsync(store, tenantId, "owner-held", ct);
+
+        var leased = await store.GetAsync(tenantId, ct);
+        Assert.Equal("owner-held", leased!.LeaseOwner);
+        Assert.True(leased.LeaseUntil > DateTime.UtcNow);
+
+        await store.MarkActiveAsync(tenantId, cancellationToken: ct);
+
+        var active = await store.GetAsync(tenantId, ct);
+        Assert.Equal(TenantLifecycleState.Active, active!.State);
+        Assert.Null(active.LeaseOwner);
+        Assert.Null(active.LeaseUntil);
+
+        await store.RemoveAsync(tenantId, ct);
+    }
+
+    /// <summary>
+    /// AB#8117. A new creation cycle over a stale Failed record restarts the age measured by the minimum-age
+    /// filter; an in-flight (Creating) cycle keeps its original creation time.
+    /// </summary>
+    [Fact]
+    public async Task EnsureCreating_restarts_created_time_only_for_new_cycle()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var store = Store;
+        var tenantId = $"mc-{Guid.NewGuid():N}"[..20];
+
+        await store.EnsureCreatingAsync(tenantId, null, Guid.NewGuid(), ct);
+        var first = (await store.GetAsync(tenantId, ct))!.CreatedUtc;
+
+        await Task.Delay(TimeSpan.FromMilliseconds(50), ct);
+        await store.EnsureCreatingAsync(tenantId, null, Guid.NewGuid(), ct);
+        Assert.Equal(first, (await store.GetAsync(tenantId, ct))!.CreatedUtc);
+
+        await store.MarkFailedAsync(tenantId, "boom", ct);
+        await Task.Delay(TimeSpan.FromMilliseconds(50), ct);
+        await store.EnsureCreatingAsync(tenantId, null, Guid.NewGuid(), ct);
+        Assert.True((await store.GetAsync(tenantId, ct))!.CreatedUtc > first);
+
+        await store.RemoveAsync(tenantId, ct);
+    }
+
+    /// <summary>
     /// Claims until the expected tenant is the one handed out. The store deliberately claims the
     /// longest-waiting Creating tenant of the whole system database, so a leftover record from an
     /// earlier run must not make the test flaky. Foreign claims are released again immediately.
