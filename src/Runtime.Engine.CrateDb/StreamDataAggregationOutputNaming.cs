@@ -80,6 +80,16 @@ public static class StreamDataAggregationOutputNaming
         return result.Length == 0 ? "x" : result;
     }
 
+    /// <summary>Function suffix of the output key for the functions other than StateDuration.</summary>
+    private static string OutputFunctionSuffix(AggregationFunction function) => function switch
+    {
+        AggregationFunction.Average => "avg",
+        AggregationFunction.Minimum => "min",
+        AggregationFunction.Maximum => "max",
+        AggregationFunction.TimeWeightedAverage => "twavg",
+        _ => function.ToString().ToLowerInvariant()
+    };
+
     /// <summary>
     /// Rejects aggregation columns whose output keys would collide: the same attribute and function
     /// twice, or StateDuration columns on one attribute whose comparison values reduce to the same
@@ -91,10 +101,12 @@ public static class StreamDataAggregationOutputNaming
         var seen = new Dictionary<string, AggregationColumn>(StringComparer.OrdinalIgnoreCase);
         foreach (var col in columns)
         {
+            // The key the query builders emit: physical column name + function suffix (so `a.b` and `ab`, or a
+            // column literally named `foo_stateduration`, are compared as they will appear in the result).
             var suffix = col.Function == AggregationFunction.StateDuration
                 ? StateDurationFunctionSuffix(columns, col)
-                : col.Function.ToString();
-            var key = $"{col.AttributePath}|{suffix}";
+                : OutputFunctionSuffix(col.Function);
+            var key = $"{ColumnNameMapper.PathToColumnName(col.AttributePath)}_{suffix}";
             if (!seen.TryGetValue(key, out var first))
             {
                 seen[key] = col;
