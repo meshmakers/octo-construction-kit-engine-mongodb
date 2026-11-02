@@ -1,0 +1,8 @@
+$schema: https://schemas.meshmakers.cloud/blueprint-meta.schema.json
+blueprintId: ArchiveBackfillBp-1.1.0
+description: AB#7991 - adds a 5-minute rollup on the filled raw archive and a 1-hour rollup on it
+ckModelDependencies:
+  - System-[2.0,3.0)
+  - System.StreamData-[1.8,2.0)
+  - Test-[1.0,2.0)
+seedDataPath: seed-data/entities.yaml

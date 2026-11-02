@@ -163,6 +163,9 @@ public static class RuntimeEngineBuilderExtensions
         // lifecycle of the tenant instead of writing the definition without its storage.
         builder.Services.TryAddSingleton<IArchiveLifecycleServiceProvider, Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.TenantArchiveLifecycleServiceProvider>();
 
+        // AB#7991: blueprint install and update activate the archives a seed creates and queue the backfill of new rollups.
+        builder.Services.TryAddSingleton<IStreamDataTenantServicesProvider, Meshmakers.Octo.Runtime.Engine.MongoDb.StreamData.TenantStreamDataServicesProvider>();
+
         MongoRepositoryClient.RegisterSerializers();
 
         return builder;
