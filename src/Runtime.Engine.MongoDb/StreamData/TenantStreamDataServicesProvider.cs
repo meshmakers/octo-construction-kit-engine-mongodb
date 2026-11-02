@@ -19,6 +19,8 @@ internal sealed class TenantStreamDataServicesProvider(IServiceProvider serviceP
     /// <inheritdoc />
     public async Task<StreamDataTenantServices?> GetAsync(string tenantId, CancellationToken cancellationToken = default)
     {
+        // The tenant lookups take no token; check it at their boundaries so a cancelled apply never reads a result.
+        cancellationToken.ThrowIfCancellationRequested();
         var systemContext = serviceProvider.GetService<ISystemContext>();
         if (systemContext == null)
         {
@@ -26,6 +28,7 @@ internal sealed class TenantStreamDataServicesProvider(IServiceProvider serviceP
         }
 
         var tenantContext = await systemContext.TryFindTenantContextAsync(tenantId);
+        cancellationToken.ThrowIfCancellationRequested();
         if (tenantContext == null)
         {
             return null;
@@ -39,6 +42,7 @@ internal sealed class TenantStreamDataServicesProvider(IServiceProvider serviceP
         }
 
         var enabled = await tenantContext.IsStreamDataEnabledAsync();
+        cancellationToken.ThrowIfCancellationRequested();
         return new StreamDataTenantServices(
             enabled,
             lifecycle,
