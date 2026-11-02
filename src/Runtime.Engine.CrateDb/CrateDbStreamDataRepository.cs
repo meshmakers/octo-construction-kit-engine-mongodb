@@ -859,6 +859,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // ride along in the same statement.
         StreamDataAggregationOutputNaming.ValidateDistinct(options.AggregationColumns, archiveRtId);
         RejectIntegralOnTimeRangeArchive(snapshot, options.AggregationColumns);
+        RejectStateDurationOnTimeRangeArchive(snapshot, options.AggregationColumns);
         if (!snapshot.UsesWindowedStorage
             && options.AggregationColumns.Any(c => IsLocfFunction(c.Function)))
         {
@@ -999,6 +1000,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // ExecuteAggregationQueryAsync for the same routing rationale.
         StreamDataAggregationOutputNaming.ValidateDistinct(options.AggregationColumns, archiveRtId);
         RejectIntegralOnTimeRangeArchive(snapshot, options.AggregationColumns);
+        RejectStateDurationOnTimeRangeArchive(snapshot, options.AggregationColumns);
         if (!snapshot.UsesWindowedStorage
             && options.AggregationColumns.Any(c => IsLocfFunction(c.Function)))
         {
@@ -1190,6 +1192,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             groupByColumns: options.GroupByColumnPaths,
             aggregationColumns: options.AggregationColumns);
         StreamDataAggregationOutputNaming.ValidateDistinct(options.AggregationColumns, archiveRtId);
+        RejectLocfDownsamplingWithoutRollup(snapshot, options.AggregationColumns);
         RejectIntegralDownsamplingWithoutRollup(snapshot, options.AggregationColumns);
 
         var q = new CrateQueryBuilder(TenantSchema.QualifiedArchiveTable(_tenantId, archiveRtId.ToString()));
@@ -3712,6 +3715,27 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             : null;
 
     /// <summary>
+    /// StateDuration needs observations to weight; a time-range archive stores one value per window
+    /// and has no materialised state duration. Refused with a readable message (AB#8169) instead of
+    /// invalid SQL.
+    /// </summary>
+    private static void RejectStateDurationOnTimeRangeArchive(
+        ArchiveSnapshot snapshot, IReadOnlyList<AggregationColumn> aggregationColumns)
+    {
+        if (!snapshot.UsesWindowedStorage || snapshot.RollupAggregations is not null)
+        {
+            return;
+        }
+
+        var state = aggregationColumns.FirstOrDefault(c => c.Function == AggregationFunction.StateDuration);
+        if (state is not null)
+        {
+            throw InvalidLocfQuery(snapshot.RtId,
+                $"StateDuration on '{state.AttributePath}' is supported over raw (event-based) archives and over rollups that materialise a StateDuration aggregation for that state; time-range archives are not supported.");
+        }
+    }
+
+    /// <summary>
     /// A StateDuration column the rollup chain resolver could not map (AB#8168): the rollup stores no
     /// StateDuration aggregation of the path for that comparison value. Refused with a readable
     /// message; the single-column fallback would emit invalid SQL.
@@ -3723,6 +3747,37 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             throw InvalidLocfQuery(snapshot.RtId,
                 $"StateDuration on '{column.AttributePath}' for the state '{column.ComparisonValue}' needs a StateDuration aggregation of '{column.AttributePath}' with that comparison value in rollup archive {snapshot.RtId}, " +
                 "which this rollup does not materialise. Query the raw archive, or a rollup with a matching StateDuration aggregation.");
+        }
+    }
+
+    /// <summary>
+    /// TimeWeightedAverage and StateDuration per downsampling bin are served from rollups that
+    /// materialise them (AB#8169). Over a raw or time-range archive the downsampling statement has no
+    /// LOCF weighting; the request is refused with a readable message instead of surfacing as a
+    /// generic error.
+    /// </summary>
+    private static void RejectLocfDownsamplingWithoutRollup(
+        ArchiveSnapshot snapshot, IReadOnlyList<AggregationColumn> aggregationColumns)
+    {
+        if (snapshot.RollupAggregations is not null)
+        {
+            return;
+        }
+
+        var twa = aggregationColumns.FirstOrDefault(c => c.Function == AggregationFunction.TimeWeightedAverage);
+        if (twa is not null)
+        {
+            throw InvalidLocfQuery(snapshot.RtId,
+                $"TimeWeightedAverage on '{twa.AttributePath}' in a downsampling query requires a rollup archive that materialises it; " +
+                "over a raw archive use an aggregation query per window.");
+        }
+
+        var state = aggregationColumns.FirstOrDefault(c => c.Function == AggregationFunction.StateDuration);
+        if (state is not null)
+        {
+            throw InvalidLocfQuery(snapshot.RtId,
+                $"StateDuration on '{state.AttributePath}' in a downsampling query requires a rollup archive that materialises it; " +
+                "over a raw archive use an aggregation query per window.");
         }
     }
 

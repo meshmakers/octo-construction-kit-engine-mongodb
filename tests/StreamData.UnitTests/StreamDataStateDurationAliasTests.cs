@@ -25,10 +25,10 @@ namespace Meshmakers.Octo.Runtime.Engine.UnitTests;
 /// </summary>
 
 /// <summary>
-/// AB#8168 at the repository boundary: several StateDuration columns on one attribute get
+/// AB#8168 / AB#8169 at the repository boundary: several StateDuration columns on one attribute get
 /// distinct, deterministic output keys (a single one keeps <c>{col}_stateduration</c>), the rollup read
-/// path picks the state each column names, and duplicate columns are refused with a readable
-/// <see cref="StreamDataException"/> instead of a generic error.
+/// path picks the state each column names, and query shapes the engine cannot answer are refused with a
+/// readable <see cref="StreamDataException"/> instead of a generic error.
 /// </summary>
 public class StreamDataStateDurationAliasTests
 {
@@ -213,5 +213,38 @@ public class StreamDataStateDurationAliasTests
 
         Assert.Contains(_executedSql, sql => sql.Contains("\"position_stateduration_0\"", StringComparison.Ordinal)
                                              && sql.Contains("\"position_stateduration_100\"", StringComparison.Ordinal));
+    }
+
+    // ---- AB#8169: readable rejections ----
+
+    [Theory]
+    [InlineData(AggregationFunction.TimeWeightedAverage, "TimeWeightedAverage")]
+    [InlineData(AggregationFunction.StateDuration, "StateDuration")]
+    public async Task Downsampling_LocfFunctionOnARawArchive_IsAReadableError(AggregationFunction function, string name)
+    {
+        var options = StreamDataDownsamplingQueryOptions.Create()
+            .WithCkTypeId(DeviceType)
+            .WithAggregationColumns([new AggregationColumn("Position", function, function == AggregationFunction.StateDuration ? "0" : null)])
+            .WithTimeRange(From, To)
+            .WithLimit(10);
+
+        var ex = await Assert.ThrowsAsync<StreamDataException>(
+            () => NewSut().ExecuteDownsamplingQueryAsync(RawArchive, options));
+
+        Assert.Contains(name, ex.Message, StringComparison.Ordinal);
+        Assert.Contains("downsampling", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("requires a rollup archive", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(RawArchive, ex.ArchiveRtId);
+        A.CallTo(() => _db.GetDataAsync(A<string>._, A<string>._)).MustNotHaveHappened();
+    }
+
+    [Fact]
+    public async Task Aggregation_StateDurationOnATimeRangeArchive_IsAReadableError()
+    {
+        var ex = await Assert.ThrowsAsync<StreamDataException>(
+            () => NewSut().ExecuteAggregationQueryAsync(TimeRangeArchive, Aggregation(State("0"))));
+
+        Assert.Contains("time-range archives are not supported", ex.Message, StringComparison.Ordinal);
+        A.CallTo(() => _db.GetDataAsync(A<string>._, A<string>._)).MustNotHaveHappened();
     }
 }
