@@ -148,6 +148,59 @@ public class ArchiveAddColumnIntegrationTests(CrateStagingCopyFixture fixture)
         Assert.Equal(48, await CountAsync(lane, "\"dischargekw\" IS NULL"));
     }
 
+    /// <summary>
+    ///     AB#8060: rows that carry only one of the two operands (the history before the column was added, an on-change
+    ///     source) get a value from a formula that handles the NULL with <c>coalesce</c> — in the backfill and at ingest.
+    ///     Before, every such row was NULL because the NULL operand was not bound at all.
+    /// </summary>
+    [Fact]
+    public async Task NullOperands_ACoalescedFormula_ComputesEveryRow_InTheBackfillAndAtIngest()
+    {
+        var lane = await NewLaneAsync(hourlyRows: 48);
+        await lane.Lifecycle.AddArchiveColumnAsync(lane.Archive, "DischargingPower", indexed: false, Ct);
+        await lane.Repository.InsertAsync(lane.Archive, new StreamDataPoint
+        {
+            RtId = OctoObjectId.GenerateNewId(),
+            CkTypeId = SensorType,
+            Timestamp = FirstRow.AddDays(10),
+            Attributes = new Dictionary<string, object?> { ["DischargingPower"] = 3.0 },
+        });
+        await fixture.SqlAsync($"REFRESH TABLE {lane.Table}");
+
+        await lane.Lifecycle.EnqueueAddComputedColumnAsync(lane.Archive, "total",
+            "coalesce(Value, 0) + coalesce(DischargingPower, 0)", FormulaResultType.Double, indexed: false, Ct);
+        await lane.Lifecycle.EnqueueAddComputedColumnAsync(lane.Archive, "strictTotal",
+            "Value + DischargingPower", FormulaResultType.Double, indexed: false, Ct);
+        Assert.Equal(2, await lane.Lifecycle.RunPendingComputedColumnBackfillsAsync(Ct));
+
+        // Backfill: the 48 history rows carry only Value, the added row only DischargingPower.
+        Assert.Equal(0, await CountAsync(lane, "\"total\" IS NULL"));
+        Assert.Equal(48, await CountAsync(lane, "\"dischargingpower\" IS NULL AND abs(\"total\" - \"value\") < 0.0000001"));
+        Assert.Equal(1, await CountAsync(lane, "\"value\" IS NULL AND abs(\"total\" - 3) < 0.0000001"));
+        // An unhandled NULL in arithmetic stays NULL (documented rule).
+        Assert.Equal(49, await CountAsync(lane, "\"stricttotal\" IS NULL"));
+
+        // Ingest: a row with only Value and a row with both operands.
+        await lane.Repository.InsertAsync(lane.Archive, new StreamDataPoint
+        {
+            RtId = OctoObjectId.GenerateNewId(),
+            CkTypeId = SensorType,
+            Timestamp = FirstRow.AddDays(11),
+            Attributes = new Dictionary<string, object?> { ["Value"] = 4.0 },
+        });
+        await lane.Repository.InsertAsync(lane.Archive, new StreamDataPoint
+        {
+            RtId = OctoObjectId.GenerateNewId(),
+            CkTypeId = SensorType,
+            Timestamp = FirstRow.AddDays(12),
+            Attributes = new Dictionary<string, object?> { ["Value"] = 4.0, ["DischargingPower"] = 2.0 },
+        });
+
+        Assert.Equal(0, await CountAsync(lane, "\"total\" IS NULL"));
+        Assert.Equal(1, await CountAsync(lane, "\"timestamp\" = '2026-01-12T00:00:00Z' AND abs(\"total\" - 4) < 0.0000001"));
+        Assert.Equal(1, await CountAsync(lane, "abs(\"total\" - 6) < 0.0000001 AND abs(\"stricttotal\" - 6) < 0.0000001"));
+    }
+
     [Fact]
     public async Task AnUnknownPath_ChangesNeitherTheTableNorTheDefinition()
     {

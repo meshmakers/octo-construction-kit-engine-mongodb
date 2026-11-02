@@ -133,6 +133,82 @@ public class CrateDbStreamDataComputedColumnIngestTests
         Assert.Null(dto.Attributes["ratio"]);
     }
 
+    // ---- NULL operands (AB#8060) ------------------------------------------------------------------
+    // An on-change source sends a row with only one of two attributes. The missing operand is bound as
+    // NaN (the formula engine's NULL), so the formula decides — it is no longer NULL as a whole.
+
+    private const string DischargeFormula =
+        "if(chargingpower<0,-chargingpower,if(coalesce(dischargingpower,0)>0,dischargingpower,0))";
+
+    [Fact]
+    public async Task ComputedColumn_MissingOperandInTheBranchNotTaken_StillComputes()
+    {
+        StubArchive(Ing("chargingPower"), Ing("dischargingPower"),
+            Comp("dischargePower", "if(chargingpower<0,-chargingpower,dischargingpower)", FormulaResultType.Double));
+
+        var dto = await CaptureInsertAsync(Point(new() { ["chargingPower"] = -4.0 }));
+
+        Assert.Equal(4.0, Assert.IsType<double>(dto.Attributes["dischargepower"]), 10);
+    }
+
+    [Theory]
+    [InlineData(-4.0, null, 4.0)]  // only chargingpower, battery discharging
+    [InlineData(2.0, null, 0.0)]   // only chargingpower, battery charging
+    [InlineData(-4.0, 0.0, 4.0)]   // both
+    [InlineData(0.0, 6.0, 6.0)]    // both, discharge reported positively
+    public async Task ComputedColumn_EnergyIqDischargeFormula_WithCoalesce(double charging, double? discharging,
+        double expected)
+    {
+        StubArchive(Ing("chargingPower"), Ing("dischargingPower"),
+            Comp("dischargePower", DischargeFormula, FormulaResultType.Double));
+        var attributes = new Dictionary<string, object?> { ["chargingPower"] = charging };
+        if (discharging is { } d)
+        {
+            attributes["dischargingPower"] = d;
+        }
+
+        var dto = await CaptureInsertAsync(Point(attributes));
+
+        Assert.Equal(expected, Assert.IsType<double>(dto.Attributes["dischargepower"]), 10);
+    }
+
+    [Fact]
+    public async Task ComputedColumn_OnlyTheOtherOperand_CoalescedFormulaComputes()
+    {
+        // Only dischargingpower: a formula that coalesces both operands still gives a value.
+        StubArchive(Ing("chargingPower"), Ing("dischargingPower"),
+            Comp("dischargePower",
+                "if(coalesce(chargingpower,0)<0,-chargingpower,if(coalesce(dischargingpower,0)>0,dischargingpower,0))",
+                FormulaResultType.Double));
+
+        var dto = await CaptureInsertAsync(Point(new() { ["dischargingPower"] = 3.0 }));
+
+        Assert.Equal(3.0, Assert.IsType<double>(dto.Attributes["dischargepower"]), 10);
+    }
+
+    [Fact]
+    public async Task ComputedColumn_UnhandledNullInArithmetic_StoresNull()
+    {
+        // The documented rule: an unhandled NULL operand in arithmetic makes the result NULL.
+        StubArchive(Ing("chargingPower"), Ing("dischargingPower"),
+            Comp("net", "chargingpower + dischargingpower", FormulaResultType.Double));
+
+        var dto = await CaptureInsertAsync(Point(new() { ["chargingPower"] = -4.0, ["dischargingPower"] = null }));
+
+        Assert.Null(dto.Attributes["net"]);
+    }
+
+    [Fact]
+    public async Task ComputedColumn_NonNumericOperand_IsBoundAsNull()
+    {
+        StubArchive(Ing("label"), Ing("value"),
+            Comp("safe", "coalesce(label, value)", FormulaResultType.Double));
+
+        var dto = await CaptureInsertAsync(Point(new() { ["label"] = "not-a-number", ["value"] = 7.0 }));
+
+        Assert.Equal(7.0, Assert.IsType<double>(dto.Attributes["safe"]), 10);
+    }
+
     [Fact]
     public async Task ComputedColumn_Chained_EvaluatedInDependencyOrder()
     {
