@@ -134,6 +134,20 @@ public interface ISystemContext : ITenantContext
     ITenantRepository GetRegisteredTenantRepository(OctoTenant tenant);
 
     /// <summary>
+    /// Re-ensures the MongoDB user of a registered tenant's database through the admin connection (AB#8177).
+    /// </summary>
+    /// <remarks>
+    /// The tenant database user is created only when a tenant is created or attached. If it disappears later
+    /// (restored or re-created MongoDB, manual cleanup), every access to that tenant's database fails with an
+    /// authentication error and nothing re-creates the user. The tenant setup retry calls this before it retries,
+    /// so one retry cycle heals the tenant. Idempotent and cheap (one <c>usersInfo</c> when the user exists).
+    /// Throws when the admin connection is not available or not authorized, so callers wrap it best-effort.
+    /// </remarks>
+    /// <param name="tenantId">The tenant id (also supports the system tenant id).</param>
+    /// <returns>What happened to the user, see <see cref="TenantDatabaseUserEnsureResult"/>.</returns>
+    Task<TenantDatabaseUserEnsureResult> EnsureTenantDatabaseUserAsync(string tenantId);
+
+    /// <summary>
     /// Ensures that the system construction kit model is imported into the tenant with the correct version.
     /// </summary>
     /// <returns>></returns>

@@ -85,6 +85,13 @@ public class AdminMongoRepositoryClient(
         string user,
         string? password)
     {
+        await EnsureUserAsync(authenticationDatabaseName, userDatabaseName, user, password);
+    }
+
+    public async Task<bool> EnsureUserAsync(string authenticationDatabaseName, string userDatabaseName,
+        string user,
+        string? password)
+    {
         ArgumentValidation.ValidateString(nameof(authenticationDatabaseName), authenticationDatabaseName);
         ArgumentValidation.ValidateString(nameof(userDatabaseName), userDatabaseName);
         ArgumentValidation.ValidateString(nameof(user), user);
@@ -95,7 +102,7 @@ public class AdminMongoRepositoryClient(
         var result = await database.RunCommandAsync<BsonDocument>("{usersInfo: '" + user + "'}");
         if (result.GetValue("ok").AsDouble > 0 && result.GetValue("users").AsBsonArray.Count > 0)
         {
-            return;
+            return false;
         }
 
         var createUserCommand = new BsonDocument
@@ -113,11 +120,13 @@ public class AdminMongoRepositoryClient(
         try
         {
             await database.RunCommandAsync(new BsonDocumentCommand<BsonDocument>(createUserCommand));
+            return true;
         }
         catch (MongoCommandException e) when (e.Code == 51003)
         {
             // 51003 = user already exists: a second replica raced us between the usersInfo check and
             // the createUser command. The user is there, which is all this method guarantees.
+            return false;
         }
     }
 

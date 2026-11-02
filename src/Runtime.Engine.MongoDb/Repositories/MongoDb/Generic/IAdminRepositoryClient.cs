@@ -30,6 +30,13 @@ public interface IAdminRepositoryClient : IRepositoryClient
         string? password);
 
     /// <summary>
+    ///     Idempotent <see cref="CreateUser" /> that reports whether it had to create the user (AB#8177):
+    ///     <c>true</c> = the user was missing and has been created, <c>false</c> = it already existed.
+    /// </summary>
+    Task<bool> EnsureUserAsync(string authenticationDatabaseName, string userDatabaseName, string user,
+        string? password);
+
+    /// <summary>
     ///     Drops a database user. No-op if the user does not exist. Used to roll back a partially
     ///     created tenant (AB#1958).
     /// </summary>
