@@ -110,7 +110,7 @@ public class BlueprintArchiveActivationIntegrationTests(BlueprintArchiveActivati
     }
 
     [Fact]
-    public async Task Install_WithoutStreamData_Succeeds_AndLeavesTheArchivesCreated()
+    public async Task Install_WithoutStreamData_Succeeds_AndLeavesTheArchivesOut()
     {
         var service = fixture.GetBlueprintService();
         var tenantId = await fixture.CreateTestTenantAsync("bpoff");
@@ -128,9 +128,10 @@ public class BlueprintArchiveActivationIntegrationTests(BlueprintArchiveActivati
             installed.OperationResult.Messages.Should().Contain(m =>
                 m.MessageNumber == 71 && m.MessageText.Contains("Stream data is not enabled"));
             var tenant = await fixture.GetSystemContext().FindTenantContextAsync(tenantId);
+            // AB#7991: with stream data off the stream-data part of the seed is left out, so the archives are not created.
             foreach (var archive in new[] { Raw, Excluded, Rollup5m, Rollup1h, RollupTwa })
             {
-                (await StatusAsync(tenant, archive)).Should().Be(CkArchiveStatus.Created);
+                (await StatusAsync(tenant, archive)).Should().BeNull();
             }
         }
         finally
