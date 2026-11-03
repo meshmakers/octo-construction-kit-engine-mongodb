@@ -706,6 +706,24 @@ public class ArchiveDefinitionGuardIntegrationTests(ArchiveDefinitionGuardFixtur
         column.ComputedVersion.Should().Be(1);
     }
 
+    // AB#8255: a seed that drops the formula of a computed column would lose the live formula; refused, nothing written.
+    [Fact]
+    public async Task ImportRt_ASeedThatDropsTheFormulaOfAComputedColumn_IsRefused_AndNothingIsWritten()
+    {
+        var raw = await CreateWithComputedAtVersion1Async("doubled", "amountvalue * 2");
+        var lines = Computed("doubled", "Double", "amountvalue * 2").Split('\n').ToList();
+        lines.RemoveRange(lines.FindIndex(l => l.Contains("CkArchiveColumn.Formula")), 2);
+        var withoutFormula = string.Join('\n', lines);
+        withoutFormula.Should().NotContain("CkArchiveColumn.Formula");
+
+        var act = () => ImportCommandAsync(Raw(raw, Column("amountvalue_sum"), withoutFormula));
+
+        await act.Should().ThrowAsync<ArchiveSchemaImmutableException>();
+        var column = (await ColumnsOfAsync(raw)).Single(c => c.Name == "doubled");
+        column.Formula.Should().Be("amountvalue * 2");
+        column.ComputedVersion.Should().Be(1);
+    }
+
     // AB#8255 through a blueprint: an update with the live formula keeps the column at version 1; an update with a changed
     // formula queues the versioned change and reports it.
     [Fact]
