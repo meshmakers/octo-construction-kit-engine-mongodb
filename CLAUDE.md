@@ -1300,6 +1300,25 @@ queries and MeshBoard widgets. Tests: `CrateDbStreamDataComputedColumnLogicalNam
   archive store into `RollupArchiveLifecycleService`; the archive store is needed by
   `CreateAsync` to look up the source archive's `TargetCkTypeId`.
 
+### Gas-day rollups: DayStartOffsetMs (AB#7359)
+
+A `CalendarDay` rollup may declare `ReferenceTimeZone` and `DayStartOffsetMs` (System.StreamData 1.22.0; e.g. 06:00 Europe/Vienna =
+`21600000`), so one bucket is one gas day of 23, 24 or 25 hours. Rules to keep:
+
+- **One calendar for every path.** Bucket boundaries come from `BucketCalendar.For(rollup)` (engine `Runtime.Engine/StreamData/BucketCalendar.cs`)
+  in the live orchestrator, the recompute (`RecomputeBucketEnumerator`, `CrateDbArchiveRecomputeExecutor`), the repair watermark target
+  (`RollupRepairer.WatermarkTargetAsync`) and the calendar bin axis of a downsampling query (`BuildCalendarBinAxis`). **Never call the old
+  `BucketBoundary.AlignDown/NextBucketEnd/InitialWatermark(alignment, bucketSize, zone)` overloads in this repository**: they silently mean a
+  midnight day and put recompute and repair buckets next to the 06:00 buckets of the live pass (a grep for them must stay empty; the
+  `FixedSize` call in `DownsamplingBinQuantizer` is the one exception, a fixed grid has no calendar).
+- **Persistence.** `MongoRollupArchiveRuntimeStore.InsertAsync(..., long? dayStartOffsetMs)` writes `DayStartOffsetMs`; null and 0 leave the
+  attribute unset (midnight day, a row identical to before), `MapToSnapshot` projects it into `RollupArchiveSnapshot.DayStartOffsetMs`; a rollup
+  stored without it loads as null.
+- **No offset rollup before this is deployed.** An offset rollup must not be created or recomputed by a build without this change.
+- Tests: `GasDayRollupIntegrationTests` (real CrateDB: live pass 23/24/25 h through the engine's `RollupOrchestrator`, recompute, repair,
+  backfill by the repair's rewind, downsampling bins equal the stored `window_start`), `MongoRollupArchiveRuntimeStoreDayStartOffsetTests`,
+  `RecomputeBucketEnumeratorGasDayTests`. No CHANGELOG file exists in this repo; this section is the entry.
+
 ### Optimistic Recompute — Per-Window Generation Pointer (AB#4184, Phase 6)
 
 A partial-range rollup recompute must swap the recomputed windows **atomically** even though CrateDB

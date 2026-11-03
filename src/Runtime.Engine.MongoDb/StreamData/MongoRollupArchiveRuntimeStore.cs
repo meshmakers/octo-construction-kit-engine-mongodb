@@ -414,7 +414,7 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
         return OctoObjectId.TryParse(raw, out var id) ? id : null;
     }
 
-    private static RollupArchiveSnapshot MapToSnapshot(RtRollupArchive entity)
+    internal static RollupArchiveSnapshot MapToSnapshot(RtRollupArchive entity)
     {
         var status = (CkArchiveStatus)(int)entity.Status;
         var targetCkTypeId = entity.TargetCkTypeId is null
