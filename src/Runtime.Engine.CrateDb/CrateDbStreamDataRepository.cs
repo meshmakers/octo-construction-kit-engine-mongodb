@@ -1230,8 +1230,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // source window as soon as the range has a single empty grain slot (or the merge does
         // not divide the count evenly). The grain route needs no probe at all; a too-fine
         // request quantizes up to one grain per bin. Time-range archives stay on the probe
-        // route: their Period is advisory and their windows may be irregular, so a declared
-        // grain is no basis for the bin axis there.
+        // route only when they declare no Period. AB#7659: a time-range archive WITH a Period uses the
+        // grain route too — the probe-derived width (range / COUNT(DISTINCT window_start)) drifts as
+        // soon as the data has gaps (367 buckets of 85,929 s instead of 365 of 86,400 s). Its Period is only
+        // a window length (windows may sit at any phase), so the axis starts at From instead of snapping to the grain.
         int effectiveLimit;
         // A calendar-aligned rollup rung (CalendarDay / Iso8601Week / CalendarMonth /
         // CalendarQuarter / CalendarYear) bins on its own stored calendar windows: each variable-
@@ -1253,10 +1255,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             effectiveLimit = binAxis.Count;
             q.WithDownsamplingByWindowStart(options.From.Value, options.To.Value, binAxis);
         }
-        else if (snapshot.RollupAggregations is not null
+        else if (snapshot.UsesWindowedStorage
             && snapshot.Period is { } grain
             && DownsamplingBinQuantizer.QuantizeToGrain(options.Limit.Value,
-                options.From.Value, options.To.Value, grain) is { } quantized)
+                options.From.Value, options.To.Value, grain,
+                alignOriginToGrain: snapshot.RollupAggregations is not null) is { } quantized)
         {
             // The quantizer's Origin is the requested start snapped down to the grain, and it is
             // passed as the query's lower bound as well: the source filter matches OVERLAPPING
