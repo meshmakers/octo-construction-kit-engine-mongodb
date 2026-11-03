@@ -217,10 +217,12 @@ public class StreamDataFieldResolverTests
         Assert.NotNull(ingested);
         Assert.Equal("amountvalue", ingested.CrateDbName);
 
-        // Computed column resolves under its logical name to the versioned physical column.
+        // Computed column resolves under its logical name: the output key stays unversioned, the SQL
+        // column is the versioned physical one (AB#8236).
         var computed = resolver.Resolve("amountkw3");
         Assert.NotNull(computed);
-        Assert.Equal("amountkw3__v2", computed.CrateDbName);
+        Assert.Equal("amountkw3", computed.CrateDbName);
+        Assert.Equal("amountkw3__v2", computed.PhysicalName);
     }
 
     [Fact]

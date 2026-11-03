@@ -1278,6 +1278,17 @@ is physical, so comparing the caller's logical spelling against it would always 
 re-saving the identical formula from the UI would version the column (`power__v1`, `__v2`, …),
 backfill it and swap the pointer, every time.
 
+**Logical names in results (AB#8236).** The versioned physical column (`{base}__v{N}`) is SQL-internal.
+`StreamDataFieldResolver.RegisterComputedColumn` registers a computed column with `CrateDbName` = the
+unversioned base (the key of every result alias, `StreamDataRow.Values` entry and GraphQL wire mapping)
+and `PhysicalName` = the active versioned column. All SQL (SELECT, WHERE field filters, ORDER BY, aggregate
+arguments, LOCF/TWA/Integral/StateDuration columns, downsampling group-by) uses `PhysicalName`; every alias
+is built from `CrateDbName`. A rollup whose source is a computed column reads the source's active version
+(`RollupAggregationColumns.BindDeclared(spec, source)`), while its own target column names stay logical.
+Never put `PhysicalName` into an alias — a second formula change would rename it again and break saved
+queries and MeshBoard widgets. Tests: `CrateDbStreamDataComputedColumnLogicalNamingTests` (unit, SQL),
+`ComputedColumnLogicalNameQueryIntegrationTests` (real CrateDB, formula changed 0/1/2 times).
+
 ### Rollup Lifecycle
 
 - `MongoCkRollupArchiveRuntimeStore` extends the runtime-store contract with:

@@ -20,13 +20,15 @@ public enum StreamDataFieldCategory
 /// </summary>
 /// <param name="Category">Whether the field is a default, data stream, or unknown field.</param>
 /// <param name="CrateDbName">
-/// The CrateDB column name (concept §9, T17). For data-stream attributes this is the lower-case
-/// concatenated form produced by <see cref="ColumnNameMapper.PathToColumnName"/>
-/// (e.g. <c>obiscode</c>, <c>sensorreadingvalue</c>) — see that type for why the physical column
-/// is lower-cased. For default fields (rtId, timestamp, ...) this is the field name as registered
-/// by <c>Constants.GetDefaultStreamDataFields</c> (camelCase). Both default and data-stream
-/// fields are first-class typed columns on the per-archive table — there is no longer a generic
-/// <c>data</c> blob, so this is always a direct column reference.
+/// The <em>logical</em> column key (concept §9, T17): the name every result alias and
+/// <c>StreamDataRow.Values</c> key is built from, and the key the GraphQL wire mapping looks cells up
+/// by. For data-stream attributes this is the lower-case concatenated form produced by
+/// <see cref="ColumnNameMapper.PathToColumnName"/> (e.g. <c>obiscode</c>, <c>sensorreadingvalue</c>) — see
+/// that type for why the physical column is lower-cased. For default fields (rtId, timestamp, ...) this
+/// is the field name as registered by <c>Constants.GetDefaultStreamDataFields</c> (camelCase). For every
+/// column except a computed one that has been through a formula change this is also the physical column
+/// name; a versioned computed column (<c>{base}__v{N}</c>, AB#8236) keeps the unversioned base here and
+/// exposes the real column as <see cref="PhysicalName"/>. SQL must reference <see cref="PhysicalName"/>.
 /// </param>
 /// <param name="GraphQlAlias">
 /// The alias the resolver suggests for the GraphQL wire. Engine-side callers that need a wire
@@ -34,10 +36,24 @@ public enum StreamDataFieldCategory
 /// the <c>ColumnNameMapping</c> themselves rather than relying on this default — see
 /// <c>StreamDataFieldResolverExtensions.ResolveToMappings</c>.
 /// </param>
+/// <param name="PhysicalColumnName">
+/// The column as it exists in the CrateDB table when it differs from <paramref name="CrateDbName"/>
+/// (a versioned computed column); <c>null</c> otherwise. Read it through <see cref="PhysicalName"/>.
+/// </param>
 public record ResolvedField(
     StreamDataFieldCategory Category,
     string CrateDbName,
-    string GraphQlAlias);
+    string GraphQlAlias,
+    string? PhysicalColumnName = null)
+{
+    /// <summary>
+    /// The column name to put into SQL (SELECT / WHERE / ORDER BY / aggregate arguments). Equals
+    /// <see cref="CrateDbName"/> except for a computed column with a formula history, where it is the
+    /// versioned <c>{base}__v{N}</c> column. The physical name must never reach a result alias
+    /// (AB#8236) — a second formula change would rename the alias again and break saved queries.
+    /// </summary>
+    public string PhysicalName => PhysicalColumnName ?? CrateDbName;
+}
 
 /// <summary>
 /// Central resolver for stream data field names. Maps input attribute paths (in any casing) to
@@ -102,7 +118,8 @@ public class StreamDataFieldResolver
     /// <summary>
     /// Registers a computed column (AB#4189 Phase 7) under its logical <paramref name="logicalName"/>
     /// (the <c>Name</c> a query uses) mapped to its <em>versioned</em> physical column
-    /// <paramref name="physicalName"/> (<see cref="ComputedColumnNaming.Active"/>). Unlike the
+    /// <paramref name="physicalName"/> (<see cref="ComputedColumnNaming.Active"/>), kept apart from the output key
+    /// (<see cref="ResolvedField.PhysicalName"/>, AB#8236). Unlike the
     /// ctor-registered ingested columns, a computed column's physical name is not a pure function of
     /// its logical name — a formula change moves it to <c>{base}__v{N}</c> — so it must be registered
     /// explicitly rather than derived via <see cref="ColumnNameMapper.PathToColumnName"/>. Never
@@ -115,8 +132,11 @@ public class StreamDataFieldResolver
             return;
         }
 
+        // Output key = the unversioned base (what the column was called before any formula change and
+        // what saved queries / widgets read); SQL goes to the active versioned physical column (AB#8236).
+        var outputName = ColumnNameMapper.PathToColumnName(logicalName);
         _fields[logicalName] = new ResolvedField(
-            StreamDataFieldCategory.DataStream, physicalName, physicalName);
+            StreamDataFieldCategory.DataStream, outputName, outputName, physicalName);
     }
 
     /// <summary>

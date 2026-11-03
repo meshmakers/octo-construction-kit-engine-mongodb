@@ -221,18 +221,30 @@ internal static class RollupAggregationColumns
         }
 
         return resolution.Kind == RollupSourceColumnResolutionKind.DeclaredColumn
-            ? BindDeclared(spec)
+            ? BindDeclared(spec, source)
             : BindChildAggregation(spec, resolution.ChildAggregation!, source.RtId, rollupRtId);
     }
 
     /// <summary>
     /// The rule-1 binding of <paramref name="spec"/>: every target column of <see cref="Resolve"/>
-    /// reads the spec's own mapped source column with the function <see cref="Resolve"/> assigns.
+    /// reads the spec's own mapped source column with the function <see cref="Resolve"/> assigns
+    /// (the versioned physical column when <paramref name="source"/> declares it as a computed column).
     /// Also the binding a base (raw / time-range) source always gets.
     /// </summary>
-    public static RollupSourceAggregation BindDeclared(CkRollupAggregationSpec spec)
+    public static RollupSourceAggregation BindDeclared(CkRollupAggregationSpec spec, ArchiveSnapshot? source = null)
     {
         var (sourceColumn, targets) = Resolve(spec);
+
+        // AB#8236: the target column names above stay derived from the logical SourcePath (they are the
+        // rollup's own wire contract), but a computed source column that went through a formula change
+        // lives in {base}__v{N} — reading the base name would aggregate the orphaned pre-change values.
+        var computedSource = source?.Columns.FirstOrDefault(c =>
+            c.IsComputed && string.Equals(c.Name, spec.SourcePath, StringComparison.Ordinal));
+        if (computedSource is not null)
+        {
+            sourceColumn = ComputedColumnNaming.Active(computedSource);
+        }
+
         var columns = new RollupBoundTargetColumn[targets.Count];
         for (var i = 0; i < targets.Count; i++)
         {
