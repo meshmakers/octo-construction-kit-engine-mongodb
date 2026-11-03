@@ -759,7 +759,7 @@ into the definition: the definition keeps the live formula, and after the commit
 queued changes are in `IImportRtModelCommand.ArchiveFormulaChanges` and `BlueprintUpdateResult.ArchiveFormulaChanges` (and as warnings / info
 messages). A change that cannot be queued (e.g. a backfill of the column still runs) throws `ArchiveFormulaChangeFailedException` after the
 entities are committed; the column keeps its live formula and the next import retries it. On a `Disabled` archive that was activated
-before a formula change is refused ("enable it first"); on an archive without a table the seed formula is written as before.
+before a formula change is refused ("enable it first"); a seed that drops the formula of a computed column is refused; the formula already in progress (compared normalised) is no new change; on an archive without a table the seed formula is written as before.
 
 Tests: `ArchiveDefinitionGuardIntegrationTests` (`ImportRt_AnUnchangedFormula_*`, `ImportRt_ARuntimeMemberInTheSeed_*`,
 `ImportRt_AChangedFormula_*`, `ABlueprintUpdate_KeepsTheVersionOfAComputedColumn_*`), `BlueprintEntityComparerTests` (engine).
