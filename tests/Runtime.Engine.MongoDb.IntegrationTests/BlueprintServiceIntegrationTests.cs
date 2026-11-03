@@ -35,6 +35,7 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
     private static readonly BlueprintId TestMigBpV2 = new("TestMigBp", "2.0.0");
     private static readonly BlueprintId TestSplitBpV1 = new("TestSplitBp", "1.0.0");
     private static readonly BlueprintId TestSplitAssocBpV1 = new("TestSplitAssocBp", "1.0.0");
+    private static readonly BlueprintId TestDnBpV2 = new("TestDnBp", "2.0.0");
     private static readonly RtCkId<CkTypeId> CustomerCkType = new("Test/Customer");
     private static readonly RtCkId<CkTypeId> ContinentCkType = new("Test/Continent");
     private static readonly RtCkId<CkTypeId> CountryCkType = new("Test/Country");
@@ -1132,6 +1133,87 @@ public class BlueprintServiceIntegrationTests(BlueprintServiceFixture fixture)
     /// attribute the seed sets. The blueprint provenance attributes are stripped — they name the
     /// blueprint, which differs by construction.
     /// </summary>
+    // AB#8256: a tenant that holds the content of a blueprint without an installation of it (here: a manual import of
+    // one continent of TestDnBp, next to continents of another blueprint) gets a real diff in the preview instead of a
+    // placeholder, and the install does exactly what the preview listed: the held entity is updated in place (same
+    // rtId), the new one added, nothing else touched. Afterwards the same preview shows everything unchanged.
+    [Fact]
+    public async Task PreviewWithoutInstallation_DiffsByRtId_AndTheInstallAdoptsAsPreviewed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var blueprintService = _fixture.GetBlueprintService();
+        var history = _fixture.GetBlueprintHistory();
+        var tenantId = await _fixture.CreateTestTenantAsync("adopt");
+
+        try
+        {
+            // Another blueprint brings the Test model and the continents Europe/Asia (other rtIds).
+            (await blueprintService.ApplyBlueprintAsync(tenantId, TestSplitBpV1, force: false, ct)).IsSuccess.Should().BeTrue();
+            // "Manual import" of DnEurope with the rtId of the TestDnBp seed, an older name and no blueprint stamps.
+            await InsertUnmanagedContinentAsync(tenantId, "507f1f77bcf86cd79943d010", "DnEurope", "Europe");
+            (await history.GetCurrentByBlueprintNameAsync(tenantId, TestDnBpV2.Name, ct)).Should().BeNull();
+
+            foreach (var mode in new[] { BlueprintUpdateMode.Merge, BlueprintUpdateMode.Full })
+            {
+                var preview = await blueprintService.PreviewUpdateAsync(tenantId, TestDnBpV2, mode, ct);
+
+                preview.EntitiesToAdd.Should().Be(1, $"DnAfrica is not in the tenant ({mode})");
+                preview.EntitiesToUpdate.Should().Be(1, $"DnEurope exists by rtId with another name ({mode})");
+                preview.EntitiesUnchanged.Should().Be(0);
+                preview.EntitiesToDelete.Should().Be(0, $"Europe/Asia are not this blueprint's entities ({mode})");
+                preview.Conflicts.Should().BeEmpty();
+                var change = preview.Changes.Should().ContainSingle().Which;
+                change.EntityId.Should().Be("507f1f77bcf86cd79943d010");
+                var name = change.Attributes.Should().ContainSingle().Which;
+                name.AttributeName.Should().Be("Name");
+                name.OldValue.Should().Be("Europe");
+                name.NewValue.Should().Be("Europa");
+                preview.Warnings.Should().Contain(w => w.Contains("is not installed on the tenant"));
+                preview.Warnings.Should().Contain(w => w.StartsWith("1 seed entities already exist in the tenant"));
+            }
+
+            var result = await blueprintService.ApplyBlueprintAsync(tenantId, TestDnBpV2, force: false, ct);
+            result.IsSuccess.Should().BeTrue(string.Join("; ", result.OperationResult.Messages.Select(m => m.MessageText)));
+
+            var continents = (await QueryAllAsync(tenantId, ContinentCkType)).ToDictionary(c => c.RtWellKnownName!);
+            continents.Keys.Should().BeEquivalentTo(["Europe", "Asia", "DnEurope", "DnAfrica"]);
+            continents["DnEurope"].RtId.ToString().Should().Be("507f1f77bcf86cd79943d010");
+            continents["DnEurope"].GetAttributeStringValueOrDefault("Name").Should().Be("Europa");
+            continents["DnEurope"].GetAttributeStringValueOrDefault("RtBlueprintSource").Should().Be(TestDnBpV2.FullName);
+            continents["DnAfrica"].GetAttributeStringValueOrDefault("RtBlueprintSource").Should().Be(TestDnBpV2.FullName);
+            continents["Europe"].GetAttributeStringValueOrDefault("RtBlueprintSource").Should().Be(TestSplitBpV1.FullName,
+                "an entity the seed does not contain is left alone");
+            (await history.GetCurrentByBlueprintNameAsync(tenantId, TestDnBpV2.Name, ct))!.BlueprintId.Should().Be(TestDnBpV2);
+
+            var after = await blueprintService.PreviewUpdateAsync(tenantId, TestDnBpV2, BlueprintUpdateMode.Full, ct);
+            after.EntitiesToAdd.Should().Be(0);
+            after.EntitiesToUpdate.Should().Be(0);
+            after.EntitiesUnchanged.Should().Be(2);
+            after.EntitiesToDelete.Should().Be(0);
+        }
+        finally
+        {
+            await _fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    private async Task InsertUnmanagedContinentAsync(string tenantId, string rtId, string wellKnownName, string name)
+    {
+        var repository = await _fixture.GetRuntimeRepositoryProvider().GetRepositoryAsync(tenantId);
+        repository.Should().NotBeNull();
+
+        using var session = await repository!.GetSessionAsync();
+        var entity = new RtEntity(ContinentCkType, new OctoObjectId(rtId),
+            new Dictionary<string, object?> { ["Name"] = name })
+        {
+            RtWellKnownName = wellKnownName
+        };
+
+        session.StartTransaction();
+        await repository.InsertOneRtEntityAsync(session, ContinentCkType, entity);
+        await session.CommitTransactionAsync();
+    }
+
     private async Task<List<(string RtId, string? WellKnownName, List<KeyValuePair<string, object?>> Attributes)>>
         QueryComparableAsync(string tenantId, RtCkId<CkTypeId> ckTypeId)
     {
