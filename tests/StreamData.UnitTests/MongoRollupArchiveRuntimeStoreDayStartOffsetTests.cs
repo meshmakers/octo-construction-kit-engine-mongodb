@@ -59,4 +59,19 @@ public class MongoRollupArchiveRuntimeStoreDayStartOffsetTests
         Assert.Equal(TimeSpan.FromHours(6), Meshmakers.Octo.Runtime.Engine.StreamData.BucketCalendar.For(withOffset).DayStart);
         Assert.Equal(TimeSpan.Zero, Meshmakers.Octo.Runtime.Engine.StreamData.BucketCalendar.For(legacy).DayStart);
     }
+
+    [Theory]
+    [InlineData(-1L)]
+    [InlineData(-3_600_000L)]
+    [InlineData(86_400_000L)]
+    public void Insert_WithAnOffsetOutsideTheDay_IsRejected_InsteadOfStoredAsAMidnightDay(long offset)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => Build(offset));
+    }
+
+    [Fact]
+    public void Insert_WithTheLastMillisecondOfTheDay_IsAccepted()
+    {
+        Assert.Equal(86_399_999L, Build(86_399_999L).DayStartOffsetMs);
+    }
 }

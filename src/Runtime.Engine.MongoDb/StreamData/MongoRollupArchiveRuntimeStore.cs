@@ -91,6 +91,13 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
         TimeSpan? carryLookback,
         long? dayStartOffsetMs = null)
     {
+        // A day start is a time of day: reject what BucketCalendar cannot mean instead of silently storing a midnight day.
+        if (dayStartOffsetMs is < 0 or >= 86_400_000)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(dayStartOffsetMs), dayStartOffsetMs, "The day start offset must be in [0, 24 h).");
+        }
+
         var columnList = new AttributeRecordValueList<RtCkArchiveColumnRecord>();
         columnList.AddRange(columns.Select(c => new RtCkArchiveColumnRecord
         {
