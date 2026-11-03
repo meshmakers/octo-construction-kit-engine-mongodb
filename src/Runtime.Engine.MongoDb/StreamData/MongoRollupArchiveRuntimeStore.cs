@@ -60,11 +60,12 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
         IReadOnlyList<CkArchiveColumnSpec> columns,
         BucketAlignment bucketAlignment = BucketAlignment.FixedSize,
         string? referenceTimeZone = null,
-        TimeSpan? carryLookback = null)
+        TimeSpan? carryLookback = null,
+        long? dayStartOffsetMs = null)
     {
         var entity = BuildInsertEntity(
             rtWellKnownName, targetCkTypeId, sources, bucketSize, watermarkLag, aggregations, columns,
-            bucketAlignment, referenceTimeZone, carryLookback);
+            bucketAlignment, referenceTimeZone, carryLookback, dayStartOffsetMs);
 
         var session = await _tenantRepository.GetSessionAsync();
         await _tenantRepository.InsertOneRtEntityAsync(session, entity);
@@ -87,8 +88,16 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
         IReadOnlyList<CkArchiveColumnSpec> columns,
         BucketAlignment bucketAlignment,
         string? referenceTimeZone,
-        TimeSpan? carryLookback)
+        TimeSpan? carryLookback,
+        long? dayStartOffsetMs = null)
     {
+        // A day start is a time of day: reject what BucketCalendar cannot mean instead of silently storing a midnight day.
+        if (dayStartOffsetMs is < 0 or >= 86_400_000)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(dayStartOffsetMs), dayStartOffsetMs, "The day start offset must be in [0, 24 h).");
+        }
+
         var columnList = new AttributeRecordValueList<RtCkArchiveColumnRecord>();
         columnList.AddRange(columns.Select(c => new RtCkArchiveColumnRecord
         {
@@ -140,6 +149,9 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             // Optional TWA carry-in lookback bound (AB#4336 / System.StreamData 1.6.5). Null keeps
             // the attribute unset so the SQL builder applies its 35-day engine default.
             CarryLookbackMs = carryLookback is { } cl ? (long)cl.TotalMilliseconds : null,
+            // AB#7359 / System.StreamData 1.22.0 — optional gas-day start offset (ms after local midnight
+            // of the reference zone). Null (and 0) keeps the attribute unset: midnight days as before.
+            DayStartOffsetMs = dayStartOffsetMs is > 0 ? dayStartOffsetMs : null,
             Columns = columnList,
             Aggregations = aggregationList,
         };
@@ -409,7 +421,7 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
         return OctoObjectId.TryParse(raw, out var id) ? id : null;
     }
 
-    private static RollupArchiveSnapshot MapToSnapshot(RtRollupArchive entity)
+    internal static RollupArchiveSnapshot MapToSnapshot(RtRollupArchive entity)
     {
         var status = (CkArchiveStatus)(int)entity.Status;
         var targetCkTypeId = entity.TargetCkTypeId is null
@@ -461,6 +473,8 @@ public sealed class MongoRollupArchiveRuntimeStore : IRollupArchiveRuntimeStore
             // Optional TWA carry-in lookback bound (AB#4336 / System.StreamData 1.6.5). Null
             // (unset, or pre-1.6.5 entities) ⇒ the SQL builder's 35-day engine default.
             CarryLookback = entity.CarryLookbackMs is { } carryMs ? TimeSpan.FromMilliseconds(carryMs) : null,
+            // AB#7359: unset (or pre-1.22.0 entities) ⇒ null ⇒ midnight days, as before.
+            DayStartOffsetMs = entity.DayStartOffsetMs,
             // Recompute observability (AB#4184) — projected from the engine-maintained Archive-base
             // attributes so rollupsFor can surface recompute health. Counts fall back to 0 when the
             // RecordArray attribute was never written (steady state / pre-1.6.0 entities).

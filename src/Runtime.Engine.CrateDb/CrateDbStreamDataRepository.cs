@@ -1249,9 +1249,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         if (rollupForBinning is not null && rollupForBinning.BucketAlignment != BucketAlignment.FixedSize)
         {
             var binAxis = BuildCalendarBinAxis(
-                options.From.Value, options.To.Value,
-                rollupForBinning.BucketAlignment, rollupForBinning.BucketSize,
-                rollupForBinning.ReferenceTimeZone);
+                options.From.Value, options.To.Value, BucketCalendar.For(rollupForBinning));
             effectiveLimit = binAxis.Count;
             q.WithDownsamplingByWindowStart(options.From.Value, options.To.Value, binAxis);
         }
@@ -1409,30 +1407,29 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// <summary>
     /// Bin axis for downsampling a calendar-aligned rollup rung (AB#5157 review): the stored
     /// calendar window-start instants that overlap <c>[from, to)</c>, empty bins included. Built with
-    /// the same <see cref="BucketBoundary"/> logic and reference zone the orchestrator used to
+    /// the same <see cref="BucketCalendar"/> (alignment, reference zone, gas-day start offset — AB#7359) the orchestrator used to
     /// produce the window boundaries, so the axis instants equal the stored <c>window_start</c>
     /// values exactly and populated / synthesized bins align. The first entry is the boundary that
     /// contains <paramref name="from"/> (its window overlaps the range); the last is the greatest
     /// boundary strictly before <paramref name="to"/>.
     /// </summary>
     private static IReadOnlyList<DateTime> BuildCalendarBinAxis(
-        DateTime from, DateTime to, BucketAlignment alignment, TimeSpan bucketSize, string? referenceTimeZone)
+        DateTime from, DateTime to, BucketCalendar calendar)
     {
-        var zone = BucketBoundary.ResolveZone(referenceTimeZone);
         var axis = new List<DateTime>();
         if (to <= from)
         {
             return axis;
         }
 
-        var cursor = BucketBoundary.AlignDown(from, alignment, bucketSize, zone);
+        var cursor = BucketBoundary.AlignDown(from, calendar);
         // NextBucketEnd strictly advances for every non-FixedSize alignment, so the guard only
         // defends against a future zero-length alignment rather than a real loop bound.
         const int maxBins = 1_000_000;
         for (var i = 0; cursor < to && i < maxBins; i++)
         {
             axis.Add(cursor);
-            cursor = BucketBoundary.NextBucketEnd(cursor, alignment, bucketSize, zone);
+            cursor = BucketBoundary.NextBucketEnd(cursor, calendar);
         }
 
         return axis;

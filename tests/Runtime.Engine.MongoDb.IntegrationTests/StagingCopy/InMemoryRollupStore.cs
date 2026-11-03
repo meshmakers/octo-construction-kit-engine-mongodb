@@ -36,7 +36,8 @@ internal sealed class InMemoryRollupStore(params RollupArchiveSnapshot[] snapsho
     public Task<OctoObjectId> InsertAsync(
         string? rtWellKnownName, RtCkId<CkTypeId> targetCkTypeId, IReadOnlyList<RollupSourceReference> sources, TimeSpan bucketSize,
         TimeSpan watermarkLag, IReadOnlyList<CkRollupAggregationSpec> aggregations, IReadOnlyList<CkArchiveColumnSpec> columns,
-        BucketAlignment bucketAlignment = BucketAlignment.FixedSize, string? referenceTimeZone = null, TimeSpan? carryLookback = null)
+        BucketAlignment bucketAlignment = BucketAlignment.FixedSize, string? referenceTimeZone = null, TimeSpan? carryLookback = null,
+        long? dayStartOffsetMs = null)
         => throw new NotSupportedException();
 
     public Task ArchiveEntityAsync(OctoObjectId rollupRtId) => throw new NotSupportedException();

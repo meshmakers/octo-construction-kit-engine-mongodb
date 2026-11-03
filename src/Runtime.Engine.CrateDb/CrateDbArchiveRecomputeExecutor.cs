@@ -285,12 +285,14 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         // Calendar buckets snap to this zone's local wall-clock boundaries (AB#4300 / O6); null ⇒
         // UTC. Resolved once per recompute — the enumerator yields the zone-correct UTC instants
         // that become each row's window_start / window_end.
-        var zone = BucketBoundary.ResolveZone(rollup.ReferenceTimeZone);
+        // AB#7359: BucketCalendar also carries the gas-day start offset (DayStartOffsetMs), so the buckets
+        // are the same 23/24/25 h gas days the live pass writes.
+        var calendar = BucketCalendar.For(rollup);
 
         var rows = 0;
         var windows = 0;
         foreach (var (bucketStart, bucketEnd) in
-                 RecomputeBucketEnumerator.Enumerate(rangeStart, rangeEnd, rollup.BucketAlignment, rollup.BucketSize, zone))
+                 RecomputeBucketEnumerator.Enumerate(rangeStart, rangeEnd, calendar))
         {
             cancellationToken.ThrowIfCancellationRequested();
 

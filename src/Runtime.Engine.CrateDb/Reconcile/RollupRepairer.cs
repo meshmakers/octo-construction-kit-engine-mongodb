@@ -259,15 +259,15 @@ internal sealed class RollupRepairer(
 
     private async Task<DateTime?> WatermarkTargetAsync(RollupArchiveSnapshot rollup, WatermarkGap gap, CancellationToken cancellationToken)
     {
-        var zone = BucketBoundary.ResolveZone(rollup.ReferenceTimeZone);
+        var calendar = BucketCalendar.For(rollup);
         if (gap.LastRowEnd is { } end)
         {
-            return BucketBoundary.AlignDown(end, rollup.BucketAlignment, rollup.BucketSize, zone);
+            return BucketBoundary.AlignDown(end, calendar);
         }
 
         // No rollup row at all: start at the bucket of the earliest source row.
         var first = await validator.ReadEarliestSourceTimeAsync(rollup, cancellationToken);
-        return first is { } time ? BucketBoundary.AlignDown(time, rollup.BucketAlignment, rollup.BucketSize, zone) : null;
+        return first is { } time ? BucketBoundary.AlignDown(time, calendar) : null;
     }
 
     // recompute of a gap ------------------------------------------------------------------------------------------
