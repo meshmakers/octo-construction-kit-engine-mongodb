@@ -26,6 +26,16 @@ internal static class RecomputeBucketEnumerator
     /// </summary>
     public static IEnumerable<(DateTime Start, DateTime End)> Enumerate(
         DateTime from, DateTime to, BucketAlignment alignment, TimeSpan bucketSize, TimeZoneInfo? zone = null)
+        => Enumerate(from, to, new BucketCalendar(alignment, bucketSize, zone));
+
+    /// <summary>
+    /// Yields the <c>[Start, End)</c> bucket intervals tiling <c>[from, to)</c> on the rollup's calendar
+    /// (<see cref="BucketCalendar.For(RollupArchiveSnapshot)"/>): the reference zone and the gas-day start
+    /// offset (AB#7359) decide where a calendar day begins, so a recompute walks the same 23/24/25 h buckets
+    /// as the live pass.
+    /// </summary>
+    public static IEnumerable<(DateTime Start, DateTime End)> Enumerate(
+        DateTime from, DateTime to, BucketCalendar calendar)
     {
         var start = AsUtc(from);
         var endBound = AsUtc(to);
@@ -33,7 +43,7 @@ internal static class RecomputeBucketEnumerator
         var iterations = 0;
         while (start < endBound)
         {
-            var end = BucketBoundary.NextBucketEnd(start, alignment, bucketSize, zone);
+            var end = BucketBoundary.NextBucketEnd(start, calendar);
             if (end <= start)
             {
                 yield break; // defensive: zero / negative bucket would loop forever
