@@ -739,9 +739,30 @@ A column is added to an `Activated` raw or time-range archive without recreating
 
 - **Directly**: `IArchiveLifecycleService.AddArchiveColumnAsync(archive, path, indexed)` (REST `POST streamdata/archives/{rtId}/columns`, GraphQL `addArchiveColumn`, octo-cli `AddArchiveColumn`, MCP `add_archive_column`). Storage first: `IStreamDataRepository.AddIngestedColumnStorageAsync` resolves the one path against the CK model (unknown or Hidden = `ArchivePathInvalidException`, no DDL) and runs `ALTER TABLE … ADD COLUMN`, always nullable; "already exists" counts as done. Only then the column is appended to `Columns`. Existing rows keep their data and read NULL, the next ingested rows fill it, and a computed column may reference it. Idempotent (a path the archive captures is a no-op); refused on a rollup, on a non-activated archive and for a name a computed column already uses.
 - **Through a seed** (`ImportRt`, blueprint install, `--force` re-apply and update): `ArchiveDefinitionGuard.TakeColumnAdditions` takes the columns the seed adds to a guarded archive out of the import, so the import writes the definition without them; after the commit `ImportRtModelCommand` adds them through the tenant's lifecycle (`IArchiveLifecycleServiceProvider`, registered by `AddMongoDbRuntimeRepository`): ingested columns first through the direct path above, then computed columns through `EnqueueAddComputedColumnAsync` (Pending, storage, background backfill job of AB#8002, Active). The additions and their outcome are in `IImportRtModelCommand.ArchiveColumnAdditions` and `BlueprintUpdateResult.ArchiveColumnsAdded` (REST/GraphQL `archiveColumnsAdded`); an install lists them as info messages. A failed addition throws `ArchiveColumnAdditionFailedException` after all were tried; the entities stay committed, the definition does not name the failed column, and running the import again retries it.
-- **Not added**: a column added to a `Disabled` archive that was activated before is refused ("enable it first"); without a lifecycle (stream data off) the import is refused before anything is written. Removing or retyping a column stays refused as above. A changed formula of an existing computed column is not handled here (use `UpdateComputedColumnFormula`). A seed of an archive that was never activated keeps writing its columns with the definition, as before.
+- **Not added**: a column added to a `Disabled` archive that was activated before is refused ("enable it first"); without a lifecycle (stream data off) the import is refused before anything is written. Removing or retyping a column stays refused as above. A changed formula of an existing computed column is handled below (AB#8255). A seed of an archive that was never activated keeps writing its columns with the definition, as before.
 
 Tests: `ArchiveLifecycleServiceAddColumnTests` (engine), `ComputedColumns/ArchiveAddColumnIntegrationTests` (real CrateDB: history kept, NULL for existing rows, new row filled, computed column over it, unknown path, idempotent), `ArchiveDefinitionGuardIntegrationTests` (seed adds an ingested and a computed column, failed storage and rerun, disabled archive, blueprint update result).
+
+### Runtime state and formula changes of existing columns on re-import (AB#8255)
+
+The Upsert import replaces the whole `Columns` list, and a seed carries none of the engine-managed members of a column
+(`ComputedVersion`, `ComputedState`, `PendingFormula`). `ArchiveDefinitionGuard.KeepColumnRuntimeState` (after
+`TakeColumnAdditions`) therefore carries these members over from the stored column for every column the archive already has
+(same identity as above: physical name of an ingested path, name of a computed column); the stored value wins, also when the seed
+names one. Before, a blueprint install/update or `ImportRt -r` reset a column that had been re-formulated to version 0, so reads hit
+the stale physical column of the original formula (`{name}` instead of `{name}__v1`).
+
+A seed formula that differs from the live formula of a computed column of an `Activated` raw or time-range archive is never written
+into the definition: the definition keeps the live formula, and after the commit the import queues the same versioned change as
+`UpdateComputedColumnFormula` (`EnqueueUpdateComputedColumnFormulaAsync`: storage `{name}__v{N+1}`, background backfill, atomic swap of
+`Formula`/`ComputedVersion`). The lifecycle compares the normalised formula, so a logical spelling of the live formula is no change. The
+queued changes are in `IImportRtModelCommand.ArchiveFormulaChanges` and `BlueprintUpdateResult.ArchiveFormulaChanges` (and as warnings / info
+messages). A change that cannot be queued (e.g. a backfill of the column still runs) throws `ArchiveFormulaChangeFailedException` after the
+entities are committed; the column keeps its live formula and the next import retries it. On a `Disabled` archive that was activated
+before a formula change is refused ("enable it first"); on an archive without a table the seed formula is written as before.
+
+Tests: `ArchiveDefinitionGuardIntegrationTests` (`ImportRt_AnUnchangedFormula_*`, `ImportRt_ARuntimeMemberInTheSeed_*`,
+`ImportRt_AChangedFormula_*`, `ABlueprintUpdate_KeepsTheVersionOfAComputedColumn_*`), `BlueprintEntityComparerTests` (engine).
 
 **A rollup that keeps failing** does not change its status: `Failed` would stop its reads over what is a passing problem more often than not, and the next tick retries anyway. The orchestrator writes `LastRunError`, `LastRunErrorAt` and `ConsecutiveRunFailures` (runtime state, System.StreamData 1.20.0) on the entity from the first failed run, an event `Archive.RollupRunFailing` to the event log at the third failed run in a row, and clears the error with the next run that succeeds. A rollup that waits for a disabled source does not fail: it stalls by design.
 
