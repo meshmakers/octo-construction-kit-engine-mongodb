@@ -937,8 +937,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 var windowLenMs = $"(\"{Constants.WindowEnd}\"::bigint - \"{Constants.WindowStart}\"::bigint)";
                 var twaAlias = $"{resolvedTwa.CrateDbName}_twavg";
                 q.AddRawAggregationExpression(
-                    $"SUM(CASE WHEN \"{resolvedTwa.CrateDbName}\" IS NOT NULL THEN \"{resolvedTwa.CrateDbName}\" * {windowLenMs} END)"
-                    + $" / NULLIF(SUM(CASE WHEN \"{resolvedTwa.CrateDbName}\" IS NOT NULL THEN {windowLenMs} END), 0)",
+                    $"SUM(CASE WHEN \"{resolvedTwa.PhysicalName}\" IS NOT NULL THEN \"{resolvedTwa.PhysicalName}\" * {windowLenMs} END)"
+                    + $" / NULLIF(SUM(CASE WHEN \"{resolvedTwa.PhysicalName}\" IS NOT NULL THEN {windowLenMs} END), 0)",
                     twaAlias);
                 outputColumnNames.Add(twaAlias);
                 outputNameBySqlAlias[twaAlias] = twaAlias;
@@ -952,7 +952,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
             var aggFunc = MapAggregationFunction(col.Function);
             var sqlAlias = $"{aggFunc}_{resolved.CrateDbName}";
-            q.AddAggregationVariable(resolved.CrateDbName, aggFunc, sqlAlias);
+            q.AddAggregationVariable(resolved.PhysicalName, aggFunc, sqlAlias);
 
             // Same unique-output rule as the chain path: suffix the column name with the
             // lowercase function so MIN+MAX (or COUNT+SUM, etc.) of the same column don't
@@ -1038,7 +1038,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             // (StreamDataQueryColumnValidator). Skipping silently here is the AB#4765 bug.
             if (resolved == null) continue;
 
-            q.AddVariable(resolved.CrateDbName, resolved.CrateDbName, null);
+            q.AddVariable(resolved.PhysicalName, resolved.CrateDbName, null);
             outputColumnNames.Add(resolved.CrateDbName);
             // Grouping columns use CrateDbName as SQL alias — identity mapping
             outputNameBySqlAlias[resolved.CrateDbName] = resolved.CrateDbName;
@@ -1086,8 +1086,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 var windowLenMs = $"(\"{Constants.WindowEnd}\"::bigint - \"{Constants.WindowStart}\"::bigint)";
                 var twaAlias = $"{resolvedTwa.CrateDbName}_twavg";
                 q.AddRawAggregationExpression(
-                    $"SUM(CASE WHEN \"{resolvedTwa.CrateDbName}\" IS NOT NULL THEN \"{resolvedTwa.CrateDbName}\" * {windowLenMs} END)"
-                    + $" / NULLIF(SUM(CASE WHEN \"{resolvedTwa.CrateDbName}\" IS NOT NULL THEN {windowLenMs} END), 0)",
+                    $"SUM(CASE WHEN \"{resolvedTwa.PhysicalName}\" IS NOT NULL THEN \"{resolvedTwa.PhysicalName}\" * {windowLenMs} END)"
+                    + $" / NULLIF(SUM(CASE WHEN \"{resolvedTwa.PhysicalName}\" IS NOT NULL THEN {windowLenMs} END), 0)",
                     twaAlias);
                 outputColumnNames.Add(twaAlias);
                 outputNameBySqlAlias[twaAlias] = twaAlias;
@@ -1101,7 +1101,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
             var aggFunc = MapAggregationFunction(col.Function);
             var sqlAlias = $"{aggFunc}_{resolved.CrateDbName}";
-            q.AddAggregationVariable(resolved.CrateDbName, aggFunc, sqlAlias);
+            q.AddAggregationVariable(resolved.PhysicalName, aggFunc, sqlAlias);
 
             // Same unique-output rule as the chain path: suffix the column name with the
             // lowercase function so MIN+MAX (or COUNT+SUM, etc.) of the same column don't
@@ -1326,7 +1326,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
             var aggFunc = MapAggregationFunction(col.Function);
             var sqlAlias = $"{aggFunc}_{resolved.CrateDbName}";
-            q.AddAggregationVariable(resolved.CrateDbName, aggFunc, sqlAlias);
+            q.AddAggregationVariable(resolved.PhysicalName, aggFunc, sqlAlias);
 
             // Same unique-output rule as the chain path: suffix the column name with the
             // lowercase function so MIN+MAX (or COUNT+SUM, etc.) of the same column don't
@@ -1351,7 +1351,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             var resolvedGroupBy = fieldResolver.Resolve(groupPath);
             // Defensive only — see StreamDataQueryColumnValidator.
             if (resolvedGroupBy == null) continue;
-            q.WithDownsamplingGroupBy(resolvedGroupBy.CrateDbName);
+            q.WithDownsamplingGroupBy(resolvedGroupBy.PhysicalName);
         }
 
         var compiler = new CrateQueryCompiler();
@@ -3451,7 +3451,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             }
 
             // SQL alias = CrateDbName so CrateDB returns the column already in canonical form.
-            q.AddVariable(resolved.CrateDbName, resolved.CrateDbName, null);
+            q.AddVariable(resolved.PhysicalName, resolved.CrateDbName, null);
         }
 
         return resolvedColumnNames;
@@ -3487,7 +3487,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             if (resolved == null) continue;
 
             // SQL aliases now use CrateDbName (PascalCase) for both default and data fields.
-            var sortPath = resolved.CrateDbName;
+            var sortPath = resolved.PhysicalName;
 
             var sortOrder = sort.SortOrder == SortOrders.Descending
                 ? SortOrderDto.Descending
@@ -3542,7 +3542,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             switch (filter.Operator)
             {
                 case FieldFilterOperator.Between:
-                    result.Add(new Dtos.StreamDataFieldFilterDto(resolved.CrateDbName, op,
+                    result.Add(new Dtos.StreamDataFieldFilterDto(resolved.PhysicalName, op,
                         StreamDataFieldFilterValueParser.FormatScalar(filter.ComparisonValue),
                         filter.SecondaryValue == null
                             ? null
@@ -3557,20 +3557,20 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                     // same GraphQL `comparisonValue` syntax (incl. the `"[a, b]"` array form)
                     // works against CrateDB archives. See StreamDataFieldFilterValueParser.
                     var valueList = StreamDataFieldFilterValueParser.ParseInValues(filter.ComparisonValue);
-                    result.Add(new Dtos.StreamDataFieldFilterDto(resolved.CrateDbName, op, "", null, valueList));
+                    result.Add(new Dtos.StreamDataFieldFilterDto(resolved.PhysicalName, op, "", null, valueList));
                     break;
                 }
 
                 case FieldFilterOperator.IsNull:
                 case FieldFilterOperator.IsNotNull:
-                    result.Add(new Dtos.StreamDataFieldFilterDto(resolved.CrateDbName, op, "", null, null));
+                    result.Add(new Dtos.StreamDataFieldFilterDto(resolved.PhysicalName, op, "", null, null));
                     break;
 
                 default:
                     // Invariant rendering — an ambient-culture ToString() on a DateTime or a
                     // double produces text CrateDB either rejects or misreads. See
                     // StreamDataFieldFilterValueParser.FormatScalar.
-                    result.Add(new Dtos.StreamDataFieldFilterDto(resolved.CrateDbName, op,
+                    result.Add(new Dtos.StreamDataFieldFilterDto(resolved.PhysicalName, op,
                         StreamDataFieldFilterValueParser.FormatScalar(filter.ComparisonValue),
                         null, null));
                     break;
@@ -3877,9 +3877,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             var resolvedGroup = fieldResolver.Resolve(groupCol);
             // Defensive only — see StreamDataQueryColumnValidator (AB#4765).
             if (resolvedGroup == null) continue;
-            groupColumns.Add(resolvedGroup.CrateDbName);
+            groupColumns.Add(resolvedGroup.PhysicalName);
             outputColumnNames.Add(resolvedGroup.CrateDbName);
-            outputNameBySqlAlias[resolvedGroup.CrateDbName] = resolvedGroup.CrateDbName;
+            // The raw statement selects the group column under its physical name; the row key is the logical one.
+            outputNameBySqlAlias[resolvedGroup.PhysicalName] = resolvedGroup.CrateDbName;
         }
 
         var twaColumns = new List<TimeWeightedQuerySqlBuilder.TwaColumn>();
@@ -3898,7 +3899,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             {
                 // Alias matches the rollup read path and the GraphQL wire suffix ("_twavg").
                 var twaAlias = $"{resolved.CrateDbName}_twavg";
-                twaColumns.Add(new TimeWeightedQuerySqlBuilder.TwaColumn(resolved.CrateDbName, twaAlias));
+                twaColumns.Add(new TimeWeightedQuerySqlBuilder.TwaColumn(resolved.PhysicalName, twaAlias));
                 outputColumnNames.Add(twaAlias);
                 outputNameBySqlAlias[twaAlias] = twaAlias;
             }
@@ -3912,7 +3913,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
                 var stateAlias = $"{resolved.CrateDbName}_{StreamDataAggregationOutputNaming.StateDurationFunctionSuffix(aggregationColumns, col)}";
                 stateColumns.Add(new TimeWeightedQuerySqlBuilder.StateColumn(
-                    resolved.CrateDbName, col.ComparisonValue!, stateAlias));
+                    resolved.PhysicalName, col.ComparisonValue!, stateAlias));
                 outputColumnNames.Add(stateAlias);
                 outputNameBySqlAlias[stateAlias] = stateAlias;
             }
@@ -3920,7 +3921,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             {
                 // value × hours (kW → kWh), wire suffix "_integral" (AB#7918).
                 var integralAlias = $"{resolved.CrateDbName}_integral";
-                integralColumns.Add(new TimeWeightedQuerySqlBuilder.IntegralColumn(resolved.CrateDbName, integralAlias));
+                integralColumns.Add(new TimeWeightedQuerySqlBuilder.IntegralColumn(resolved.PhysicalName, integralAlias));
                 outputColumnNames.Add(integralAlias);
                 outputNameBySqlAlias[integralAlias] = integralAlias;
             }
@@ -3929,7 +3930,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 // Same "{column}_{lowercaseFunction}" output key as the standard aggregation path.
                 var alias = $"{resolved.CrateDbName}_{aggFunc.ToString().ToLowerInvariant()}";
                 plainColumns.Add(new TimeWeightedQuerySqlBuilder.PlainColumn(
-                    aggFunc.ToString().ToUpperInvariant(), resolved.CrateDbName, alias));
+                    aggFunc.ToString().ToUpperInvariant(), resolved.PhysicalName, alias));
                 outputColumnNames.Add(alias);
                 outputNameBySqlAlias[alias] = alias;
             }
