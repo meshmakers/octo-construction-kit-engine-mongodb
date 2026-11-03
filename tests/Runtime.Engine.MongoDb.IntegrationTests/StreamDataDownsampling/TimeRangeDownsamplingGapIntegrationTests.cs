@@ -147,4 +147,20 @@ public class TimeRangeDownsamplingGapIntegrationTests(CrateStagingCopyFixture fi
         Assert.Equal(24, buckets.Count);
         Assert.All(buckets, b => Assert.Equal(1, b.Count));
     }
+
+    [Fact]
+    public async Task WindowsStoredAtAnOffsetPhase_AreBinnedFromTheRequestedFrom()
+    {
+        // The declared period is only a window length: 15-minute windows at 00:05, 00:20, ... must not be
+        // dropped because the axis was snapped down to 00:00 (their start would sit before a bin edge).
+        var from = new DateTime(2026, 5, 1, 0, 5, 0, DateTimeKind.Utc);
+        var starts = Enumerable.Range(0, 96).Select(i => from.AddMinutes(15 * i)).ToList();
+
+        var archive = await CreateArchiveAsync(starts, Window);
+        var buckets = await CountAsync(archive, from, from.AddHours(24), 24);
+
+        Assert.Equal(24, buckets.Count);
+        Assert.Equal(from, buckets[0].Start);
+        Assert.All(buckets, b => Assert.Equal(4, b.Count));
+    }
 }

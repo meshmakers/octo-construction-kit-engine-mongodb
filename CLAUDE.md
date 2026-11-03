@@ -1663,6 +1663,7 @@ Semantics preserved:
   only yields sparse bins). **Time-range archives** with a declared `Period` take the grain route too
   (AB#7659): the probe-derived width drifted with every data gap (one year of 15-minute windows, `limit` 365: 367 buckets of
   85,929 s instead of 365 of 86,400 s); a request finer than the window length is clamped to one window (AB#4246 protection).
+  The time-range axis starts at `From` (a `Period` is only a window length; windows may sit at any phase, e.g. 00:05–00:20), unlike rollups, whose origin snaps to the grain.
   Only a time-range archive without a `Period` still uses the probe route.
   Both quantizer routes assume the query origin (`From`) sits on a grain boundary — the
   resolver-driven path guarantees this because `SeriesResolutionPlanner` returns a grain-multiple

@@ -197,6 +197,19 @@ public class DownsamplingBinQuantizerTests
     }
 
     [Fact]
+    public void Grain_NotAlignedToGrain_KeepsFromAsTheOrigin()
+    {
+        // AB#7659: a time-range archive's period is only a window length; windows may sit at any phase
+        // (00:05-00:20). The axis must start at the requested From, not snap to the grain.
+        var from = Anchor.AddMinutes(5);
+
+        var result = DownsamplingBinQuantizer.QuantizeToGrain(
+            24, from, from.AddHours(24), TimeSpan.FromMinutes(15), alignOriginToGrain: false);
+
+        Assert.Equal((24, 3600, from), result);
+    }
+
+    [Fact]
     public void Grain_MergedBins_OriginStaysOnTheGrainNotOnTheBinWidth()
     {
         // Snapping to the merged width instead would move the axis of a query that works today;

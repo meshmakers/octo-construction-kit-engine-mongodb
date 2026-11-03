@@ -121,12 +121,18 @@ internal static class DownsamplingBinQuantizer
     /// The archive's window length. Must be a positive whole number of seconds — the SQL interval
     /// literal and the caller-side bin axis both work in whole seconds.
     /// </param>
+    /// <param name="alignOriginToGrain">
+    /// True (default, rollup archives) snaps the axis origin down to the grain: rollup windows are
+    /// grain-aligned by construction. False (time-range archives, AB#7659) keeps <paramref name="from"/>
+    /// as the origin: the declared period is only a window <em>length</em>, windows may be stored at any
+    /// phase (e.g. 00:05–00:20), and the axis must start where the caller asked it to start.
+    /// </param>
     /// <returns>
     /// The bucket count, bin width and axis origin to run the query with, or null when the inputs
     /// are out of contract (caller should fall back to the probe-based <see cref="Quantize"/> route).
     /// </returns>
     public static (int EffectiveLimit, int IntervalSeconds, DateTime Origin)? QuantizeToGrain(
-        int requestedLimit, DateTime from, DateTime to, TimeSpan grain)
+        int requestedLimit, DateTime from, DateTime to, TimeSpan grain, bool alignOriginToGrain = true)
     {
         var range = to - from;
         if (requestedLimit <= 0 || range <= TimeSpan.Zero || grain <= TimeSpan.Zero)
@@ -155,7 +161,7 @@ internal static class DownsamplingBinQuantizer
         // Snap to the GRAIN, not to the (possibly merged) bin width: every bin edge then still lands
         // on a source window start, while an already-grain-aligned window keeps the exact axis it
         // has today. Aligning to the wider bin would move the axis of queries that work fine.
-        var origin = BucketBoundary.AlignDown(from, BucketAlignment.FixedSize, grain);
+        var origin = alignOriginToGrain ? BucketBoundary.AlignDown(from, BucketAlignment.FixedSize, grain) : from;
         var effectiveLimit = (int)Math.Ceiling((to - origin).TotalSeconds / intervalSeconds);
         return (Math.Max(1, effectiveLimit), (int)intervalSeconds, origin);
     }
