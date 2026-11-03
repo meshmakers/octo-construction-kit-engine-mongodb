@@ -1660,8 +1660,10 @@ Semantics preserved:
   observed on prod-1 as "sensor data stopped hours ago"); and even a complete count only yields a
   grain multiple when the merge divides it evenly (720 windows at merge 7 → 103 bins → 25 165 s
   ≠ 7 h). **Raw archives** keep the probe + clamp-down (AB#4246: a request finer than the data
-  only yields sparse bins). **Time-range archives** also stay on the probe route — their `Period`
-  is advisory and their windows may be irregular, so a declared grain is no basis for the axis.
+  only yields sparse bins). **Time-range archives** with a declared `Period` take the grain route too
+  (AB#7659): the probe-derived width drifted with every data gap (one year of 15-minute windows, `limit` 365: 367 buckets of
+  85,929 s instead of 365 of 86,400 s); a request finer than the window length is clamped to one window (AB#4246 protection).
+  Only a time-range archive without a `Period` still uses the probe route.
   Both quantizer routes assume the query origin (`From`) sits on a grain boundary — the
   resolver-driven path guarantees this because `SeriesResolutionPlanner` returns a grain-multiple
   `EffectiveBucketMs` (see octo-construction-kit-engine) that the frontend aligns the window to.
