@@ -70,7 +70,9 @@ public static class RollupQueryAggregationResolver
     public static RollupQueryAggregation? Resolve(
         IReadOnlyList<CkRollupAggregationSpec> rollupAggregations,
         string targetAttributePath,
-        AggregationFunctionDto targetFunction)
+        AggregationFunctionDto targetFunction,
+        string? comparisonValue = null,
+        string? stateDurationSuffix = null)
     {
         if (rollupAggregations.Count == 0 || string.IsNullOrWhiteSpace(targetAttributePath))
         {
@@ -100,7 +102,7 @@ public static class RollupQueryAggregationResolver
         // specs is the tie-breaker.
         foreach (var spec in matchingSpecs)
         {
-            var resolved = TryResolveSingleSpec(spec, targetFunction, targetAttributePath);
+            var resolved = TryResolveSingleSpec(spec, targetFunction, targetAttributePath, comparisonValue, stateDurationSuffix);
             if (resolved != null)
             {
                 return resolved;
@@ -140,8 +142,20 @@ public static class RollupQueryAggregationResolver
     private static RollupQueryAggregation? TryResolveSingleSpec(
         CkRollupAggregationSpec spec,
         AggregationFunctionDto target,
-        string outputColumnName)
+        string outputColumnName,
+        string? comparisonValue,
+        string? stateDurationSuffix)
     {
+        // AB#8168: a StateDuration target names its state; a spec that materialises another state
+        // must not answer it (two specs of one path, state 0 and state 100).
+        if (spec.Function == CkRollupFunction.StateDuration
+            && target == AggregationFunctionDto.StateDuration
+            && !string.IsNullOrWhiteSpace(comparisonValue)
+            && !RollupChainAggregationResolver.SameState(spec.ComparisonValue, comparisonValue))
+        {
+            return null;
+        }
+
         // Re-derive the materialised column names exactly as RollupColumnGenerator / the DDL
         // emitted them — same code path the orchestrator's INSERT SQL uses, so we don't drift.
         var (_, targetColumns) = RollupAggregationColumns.Resolve(spec);
@@ -173,7 +187,7 @@ public static class RollupQueryAggregationResolver
             (CkRollupFunction.StateDuration, AggregationFunctionDto.StateDuration) when targetColumns.Count == 1
                 => new RollupQueryAggregation(
                     SqlExpression: $"SUM(\"{targetColumns[0].ColumnName}\")",
-                    SqlAlias: $"{outputColumnName.ToLowerInvariant()}_stateduration",
+                    SqlAlias: $"{outputColumnName.ToLowerInvariant()}_{stateDurationSuffix ?? StreamDataAggregationOutputNaming.StateDurationSuffix}",
                     OutputColumnName: outputColumnName),
 
             (CkRollupFunction.StateDuration, AggregationFunctionDto.Sum) when targetColumns.Count == 1

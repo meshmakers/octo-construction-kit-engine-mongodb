@@ -1576,6 +1576,26 @@ rule (overlap, whole buckets): only bucket-aligned windows equal the raw Integra
 (real CrateDB: 5-minute TWA rollup and an hourly SUM-chained rollup over it, aligned, rtId scope, grouped, downsampling per hour,
 unaligned window, empty window, AVG-only column, the recorded meter rows). Semantics: engine `docs/concept-time-weighted-aggregation.md` §6.5.
 
+### Several StateDuration columns on one attribute (AB#8168, AB#8169)
+
+The output key of an aggregation column is `{column}_{functionSuffix}` and a wire contract (Refinery Studio `aggregationFunctionSuffix`,
+MeshBoard widgets, persisted queries). `StreamDataAggregationOutputNaming` owns the rule, for the engine row keys and the GraphQL wire mapping alike:
+
+- a single StateDuration column on an attribute keeps `{column}_stateduration` (unchanged);
+- several StateDuration columns on the same attribute (path compared case-insensitively) get `{column}_stateduration_{qualifier}`, e.g.
+  `position_stateduration_0` and `position_stateduration_100`. Qualifier = trimmed comparison value, lower-cased; letters and digits kept,
+  `-` becomes `neg`, other characters `_` (runs collapsed, trimmed), nothing left becomes `x` (`-1.5` is `neg1_5`).
+- the rollup read path (`RollupChainAggregationResolver` / `RollupQueryAggregationResolver`) takes the comparison value and the suffix: it reads the
+  materialised StateDuration whose comparison value equals the column's (before, it read the first StateDuration of the path whatever the
+  state was); a state the rollup does not materialise is refused (`RejectUnresolvedRollupStateDuration`). Two StateDuration specs of one path
+  need distinct `targetColumnName`s on the rollup, or they share one physical column.
+- `ValidateDistinct` refuses columns that would share an output key (same attribute and function twice, states that reduce to one qualifier) with a
+  readable `StreamDataException`; the aggregation, grouped and downsampling entry points call it before any SQL.
+- AB#8169 rejections, all readable `StreamDataException`s via `InvalidLocfQuery`: TimeWeightedAverage / StateDuration in downsampling over a raw or
+  time-range archive (`RejectLocfDownsamplingWithoutRollup`), StateDuration over a time-range archive (`RejectStateDurationOnTimeRangeArchive`).
+
+Tests: `StreamDataStateDurationAliasTests`.
+
 ### Downsampling Query — Single Grouped Scan, Bin Axis Built Caller-Side (AB#4713)
 
 `CrateQueryCompiler.CompileDownsamplingQuery` emits **one grouped aggregation over the filtered

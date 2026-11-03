@@ -28,11 +28,13 @@ public enum LogicalAvgRole
 /// <param name="LogicalFunction">Original aggregation function the chain ultimately materialises.</param>
 /// <param name="PhysicalColumnName">Column name on the *current* rollup table (lower-cased CrateDB identifier).</param>
 /// <param name="AvgRole">Set only when <see cref="LogicalFunction"/> = AVG to distinguish the sum and count slots.</param>
+/// <param name="ComparisonValue">The state literal of a StateDuration origin (AB#8168); null for every other function.</param>
 public sealed record LogicalOriginColumn(
     string LogicalPath,
     CkRollupFunction LogicalFunction,
     string PhysicalColumnName,
-    LogicalAvgRole? AvgRole);
+    LogicalAvgRole? AvgRole,
+    string? ComparisonValue = null);
 
 /// <summary>
 /// Chain-aware aggregation resolver for ad-hoc queries against a (possibly cascade) rollup
@@ -69,13 +71,23 @@ public static class RollupChainAggregationResolver
     /// <param name="getArchive">Loader for any archive snapshot by rtId. Returns null if missing.</param>
     /// <param name="getRollup">Loader for a rollup snapshot by rtId. Returns null if the archive isn't a rollup.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="comparisonValue">
+    /// State literal of a StateDuration target (AB#8168): selects the materialised StateDuration whose
+    /// comparison value equals it. Null keeps the first StateDuration of the path.
+    /// </param>
+    /// <param name="stateDurationSuffix">
+    /// Function suffix of a StateDuration output alias (see <see cref="StreamDataAggregationOutputNaming"/>);
+    /// null means the plain <c>stateduration</c>.
+    /// </param>
     public static async Task<RollupQueryAggregation?> ResolveAsync(
         RollupArchiveSnapshot rollup,
         string targetAttributePath,
         AggregationFunctionDto targetFunction,
         Func<OctoObjectId, Task<ArchiveSnapshot?>> getArchive,
         Func<OctoObjectId, Task<RollupArchiveSnapshot?>> getRollup,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? comparisonValue = null,
+        string? stateDurationSuffix = null)
     {
         if (string.IsNullOrWhiteSpace(targetAttributePath))
         {
@@ -96,7 +108,7 @@ public static class RollupChainAggregationResolver
             return null;
         }
 
-        return BuildTargetAggregation(matching, targetAttributePath, targetFunction);
+        return BuildTargetAggregation(matching, targetAttributePath, targetFunction, comparisonValue, stateDurationSuffix);
     }
 
     /// <summary>
@@ -203,7 +215,7 @@ public static class RollupChainAggregationResolver
                 foreach (var target in targets)
                 {
                     result.Add(new LogicalOriginColumn(
-                        spec.SourcePath, spec.Function, target.ColumnName, null));
+                        spec.SourcePath, spec.Function, target.ColumnName, null, spec.ComparisonValue));
                 }
             }
         }
@@ -252,7 +264,8 @@ public static class RollupChainAggregationResolver
                     parentOrigin.LogicalPath,
                     chainedFunction.Value,
                     target.ColumnName,
-                    chainedAvgRole));
+                    chainedAvgRole,
+                    parentOrigin.ComparisonValue));
             }
         }
         return result;
@@ -312,7 +325,9 @@ public static class RollupChainAggregationResolver
     private static RollupQueryAggregation? BuildTargetAggregation(
         IReadOnlyList<LogicalOriginColumn> matching,
         string outputColumnName,
-        AggregationFunctionDto targetFunction)
+        AggregationFunctionDto targetFunction,
+        string? comparisonValue = null,
+        string? stateDurationSuffix = null)
     {
         var alias = outputColumnName.ToLowerInvariant();
 
@@ -381,11 +396,11 @@ public static class RollupChainAggregationResolver
             {
                 // Total ms-in-state over the window: SUM of the (possibly SUM-cascaded)
                 // per-bucket durations (AB#4336 / AB#4341).
-                var origin = FindSingle(matching, CkRollupFunction.StateDuration);
+                var origin = FindStateDuration(matching, comparisonValue);
                 if (origin is null) return null;
                 return new RollupQueryAggregation(
                     SqlExpression: $"SUM(\"{origin.PhysicalColumnName}\")",
-                    SqlAlias: $"{alias}_stateduration",
+                    SqlAlias: $"{alias}_{stateDurationSuffix ?? StreamDataAggregationOutputNaming.StateDurationSuffix}",
                     OutputColumnName: outputColumnName);
             }
             case AggregationFunctionDto.TimeWeightedAvg:
@@ -420,6 +435,29 @@ public static class RollupChainAggregationResolver
 
     private static LogicalOriginColumn? FindSingle(IReadOnlyList<LogicalOriginColumn> origins, CkRollupFunction function)
         => origins.FirstOrDefault(o => o.LogicalFunction == function && o.AvgRole is null);
+
+    /// <summary>
+    /// Two comparison values name the same state when the materialisation SQL treats them alike: they render
+    /// to the same literal (<see cref="CrateSqlLiteral.StateLiteral"/>: <c>0</c> equals <c>0.0</c> and <c> 0 </c>,
+    /// <c>true</c> equals <c>TRUE</c>, a string state is compared exactly, whitespace included).
+    /// </summary>
+    internal static bool SameState(string? a, string? b) =>
+        a is not null && b is not null
+        && string.Equals(CrateSqlLiteral.StateLiteral(a), CrateSqlLiteral.StateLiteral(b), StringComparison.Ordinal);
+
+    /// <summary>
+    /// The StateDuration origin of the path for <paramref name="comparisonValue"/> (same-literal compare,
+    /// see <see cref="SameState"/>). A blank value keeps the
+    /// first StateDuration origin; a value no origin materialises resolves to null (AB#8168) instead of
+    /// silently reading another state's duration.
+    /// </summary>
+    private static LogicalOriginColumn? FindStateDuration(
+        IReadOnlyList<LogicalOriginColumn> origins, string? comparisonValue)
+        => origins.FirstOrDefault(o =>
+            o.LogicalFunction == CkRollupFunction.StateDuration
+            && o.AvgRole is null
+            && (string.IsNullOrWhiteSpace(comparisonValue)
+                || SameState(o.ComparisonValue, comparisonValue)));
 
     private static LogicalOriginColumn? FindAvgRole(IReadOnlyList<LogicalOriginColumn> origins, LogicalAvgRole role)
         => FindPairRole(origins, CkRollupFunction.Avg, role);
