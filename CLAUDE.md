@@ -1026,6 +1026,37 @@ services) prepends an instance prefix: `{prefix}_{tenant}`. Rules:
   on `StreamData.UnitTests` (pure-logic assembly, serialization costs ~nothing); the naming
   matrix itself tests the pure `SchemaName(tenantId, prefix)` core.
 
+### CrateDB connection pool: failed statements give their connection back (AB#8266)
+
+Every CrateDB access leases its connection through `CrateDatabaseClient.LeaseConnectionAsync`; the pool is per tenant
+(`StreamData:MaxPoolSize`, default 32, one `NpgsqlDataSource` per tenant in `CrateDbConnectionAccess`). Rules to keep:
+
+- **A failed statement used to cost a pool slot for the life of the process.** CrateDB reports the failed-transaction
+  state after every failed statement, Npgsql's reset on close then sends a `ROLLBACK`, CrateDB rejects it (5.x `XX000`,
+  6.x `42601`), and the exception leaves `NpgsqlConnection.CloseAsync` **before** the connector goes back to the pool.
+  `DisposeConnectionSafelyAsync` swallowed the error (AB#4189, AB#7138) but the connection stayed open. A rollup over a
+  missing table (every tick) drained the 32 slots within a minute of each pod start; after that every statement of the
+  tenant, a `DROP TABLE` of `DeleteArchive` too, waited 15 s for a slot, was retried and ended as a "35.0 s"
+  `StreamDataStatementTimeoutException` (test-2 `scratch-eiq-adopt-a`, 2026-11-04).
+- **Now:** after the rejected `ROLLBACK` the still-open connection runs `SELECT 1` (CrateDB answers with the idle state,
+  so the next reset sends no `ROLLBACK`) and is disposed again, which returns it to the pool. If that fails too, the
+  physical connection is broken through the driver's internal `NpgsqlConnector.Break` (reflection, resolved once; there is
+  no public API) so the pool drops it and frees the slot; if even that is impossible it is logged as an error (slot lost).
+  `CrateDatabaseClient.CanDiscardConnections` is pinned by a unit test, so an Npgsql update that renames the internals turns
+  the build red. Npgsql has no setting that skips the rollback (`No Reset On Close` only covers `DISCARD ALL`), and
+  `PoolingEnabled=false` would cost a new connection per statement again (AB#4278).
+- **An exhausted pool fails fast.** `LeaseConnectionAsync` turns the driver's "connection pool has been exhausted"
+  (`NpgsqlException` + inner `TimeoutException`, `IsConnectionPoolExhausted`) into
+  `StreamDataConnectionPoolExhaustedException` (tenant id in the message). It is not an `NpgsqlException`, so
+  `CrateResiliencePipeline` neither retries it nor counts it in the shared circuit breaker (one tenant's full pool must not
+  cut every tenant off). The caller sees it after the pool's wait time (connection string `Timeout`, 15 s default), not
+  after the 35 s call budget.
+
+Tests: `CrateCompat/CrateConnectionPoolReturnTests` (real CrateDB, 5.x and 6.x: pool of 2, five failing reads and writes on a
+missing table, then a read and `DROP TABLE IF EXISTS` succeed; a discarded connection frees its slot; red without the fix),
+`StreamData.UnitTests/CrateDatabaseClientConnectionPoolTests` (classification, no retry, breaker stays closed, driver
+internals present).
+
 ### Conflict Precedence — the upsert stops being last-write-wins (AB#5247)
 
 Every archive write is an upsert on the row key, and the `DO UPDATE SET` was unconditional: the

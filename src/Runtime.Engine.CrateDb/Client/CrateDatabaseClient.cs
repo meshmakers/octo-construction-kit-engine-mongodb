@@ -12,7 +12,9 @@ using Npgsql;
 using NpgsqlTypes;
 using Polly;
 using Polly.Timeout;
+using System.Data;
 using System.Diagnostics;
+using System.Reflection;
 using System.Text;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
@@ -997,13 +999,40 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
     /// <summary>
     /// Leases a CrateDB connection whose disposal swallows the benign reset-time <c>ROLLBACK</c>
-    /// (see <see cref="DisposeConnectionSafelyAsync"/>). Every CrateDB access opens its connection
-    /// through this so a failed statement surfaces its real error instead of being masked by the
-    /// dispose-time ROLLBACK.
+    /// and still hands the connection back to the pool (see <see cref="DisposeConnectionSafelyAsync"/>).
+    /// Every CrateDB access opens its connection through this so a failed statement surfaces its real
+    /// error instead of being masked by the dispose-time ROLLBACK.
     /// </summary>
+    /// <exception cref="StreamDataConnectionPoolExhaustedException">
+    /// No connection of the tenant's pool became free within the pool's wait time (AB#8266). Not an
+    /// <see cref="NpgsqlException"/>, so the resilience pipeline neither retries it nor counts it.
+    /// </exception>
     private async ValueTask<ConnectionLease> LeaseConnectionAsync(string tenantId,
         CancellationToken cancellationToken = default)
-        => new ConnectionLease(await CreateConnectionAsync(tenantId, cancellationToken), this);
+    {
+        try
+        {
+            return new ConnectionLease(await CreateConnectionAsync(tenantId, cancellationToken), this);
+        }
+        catch (NpgsqlException ex) when (IsConnectionPoolExhausted(ex))
+        {
+            _logger.LogError(ex,
+                "CrateDB connection pool of tenant '{TenantId}' is exhausted; the statement was not sent.",
+                tenantId);
+            throw new StreamDataConnectionPoolExhaustedException(tenantId, ex);
+        }
+    }
+
+    /// <summary>
+    /// True for the driver's "connection pool has been exhausted" error: a plain
+    /// <see cref="NpgsqlException"/> with an inner <see cref="TimeoutException"/> raised while waiting for a
+    /// pool slot. A timeout while connecting to the server has the same shape but another text and stays a
+    /// transient connection failure.
+    /// </summary>
+    internal static bool IsConnectionPoolExhausted(Exception ex) =>
+        ex is NpgsqlException and not PostgresException
+        && ex.InnerException is TimeoutException
+        && ex.Message.Contains("connection pool has been exhausted", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Disposes a CrateDB connection, swallowing the benign <c>ROLLBACK</c> that Npgsql emits while
@@ -1018,6 +1047,19 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     /// ROLLBACK rather than the real <c>42P01 Relation … unknown</c> (voest
     /// <c>energy-measurements-daily</c>). <c>No Reset On Close</c> only suppresses <c>DISCARD ALL</c>,
     /// not this in-transaction rollback. Any other dispose error is rethrown.
+    /// <para>
+    /// Swallowing the error is not enough (AB#8266): the ROLLBACK exception leaves Npgsql's close
+    /// <b>before</b> the connector is handed back to the pool, so the connection stays open and its
+    /// pool slot is lost for the life of the process. CrateDB reports the failed-transaction state
+    /// after every failed statement, so every failed statement (a rollup over a missing table, every
+    /// tick) cost one of the tenant's <c>MaxPoolSize</c> slots until the pool was exhausted. The
+    /// connection is therefore brought back to idle with a <c>SELECT 1</c> (CrateDB then reports the
+    /// idle state, so the reset sends no ROLLBACK) and disposed again, which returns it to the pool.
+    /// If that fails too, the physical connection is discarded so the slot is freed
+    /// (<see cref="DiscardConnection"/>). Npgsql offers no setting that skips the rollback on reset
+    /// (<c>No Reset On Close</c> covers only <c>DISCARD ALL</c>), and turning pooling off would cost a
+    /// new connection per statement again (AB#4278).
+    /// </para>
     /// </summary>
     private async Task DisposeConnectionSafelyAsync(NpgsqlConnection connection)
     {
@@ -1027,9 +1069,116 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         }
         catch (PostgresException ex) when (IsBenignCrateResetRollback(ex))
         {
-            _logger.LogDebug(ex,
-                "Ignored benign CrateDB reset-time ROLLBACK on connection dispose (CrateDB has no "
-                + "transactions; the statement already auto-committed).");
+            if (connection.State == ConnectionState.Closed)
+            {
+                _logger.LogDebug(ex,
+                    "Ignored benign CrateDB reset-time ROLLBACK on connection dispose (CrateDB has no "
+                    + "transactions; the statement already auto-committed).");
+                return;
+            }
+
+            await ReturnConnectionAfterRejectedResetAsync(connection, ex);
+        }
+    }
+
+    /// <summary>
+    /// The connection is still open after the rejected reset ROLLBACK and has not been returned to the
+    /// pool. A trivial statement puts it back into the idle state, after which the next dispose returns
+    /// it; failing that, it is discarded. Never throws: the caller is a dispose.
+    /// </summary>
+    private async Task ReturnConnectionAfterRejectedResetAsync(NpgsqlConnection connection, PostgresException resetError)
+    {
+        try
+        {
+            await using (var command = new NpgsqlCommand("SELECT 1", connection))
+            {
+                command.CommandTimeout = ResetProbeTimeoutSeconds;
+                await command.ExecuteScalarAsync();
+            }
+
+            await connection.DisposeAsync();
+            if (connection.State == ConnectionState.Closed)
+            {
+                _logger.LogDebug(resetError,
+                    "CrateDB rejected the reset-time ROLLBACK; the connection was brought back to idle and "
+                    + "returned to the pool.");
+                return;
+            }
+        }
+        catch (Exception recoveryError) when (recoveryError is not OutOfMemoryException)
+        {
+            _logger.LogWarning(recoveryError,
+                "CrateDB connection could not be brought back to idle after the rejected reset-time ROLLBACK.");
+        }
+
+        var discarded = DiscardConnection(connection, resetError);
+        try
+        {
+            await connection.DisposeAsync();
+        }
+        catch (Exception disposeError) when (disposeError is not OutOfMemoryException)
+        {
+            _logger.LogDebug(disposeError, "Dispose of a discarded CrateDB connection failed.");
+        }
+
+        if (discarded)
+        {
+            _logger.LogWarning(resetError,
+                "CrateDB connection was discarded after the rejected reset-time ROLLBACK; its pool slot is free again.");
+        }
+        else
+        {
+            _logger.LogError(resetError,
+                "CrateDB connection could neither be returned to nor removed from the pool after the rejected "
+                + "reset-time ROLLBACK; one pool slot is lost until the process restarts.");
+        }
+    }
+
+    /// <summary>Command timeout of the <c>SELECT 1</c> that brings a connection back to idle.</summary>
+    private const int ResetProbeTimeoutSeconds = 5;
+
+    /// <summary>
+    /// The driver's internal <c>NpgsqlConnection.Connector</c> and <c>NpgsqlConnector.Break(Exception, bool)</c>.
+    /// Breaking the connector is what the driver itself does with an unusable connection: it closes the
+    /// socket and hands the connector back to the pool, which drops it and frees the slot. There is no public
+    /// API for it. Resolved once; <c>null</c> when a driver version renamed them (pinned by a unit test, so a
+    /// driver update that breaks this is seen in the build, not in production).
+    /// </summary>
+    private static readonly (PropertyInfo Connector, MethodInfo Break)? ConnectorBreak = ResolveConnectorBreak();
+
+    internal static bool CanDiscardConnections => ConnectorBreak is not null;
+
+    private static (PropertyInfo, MethodInfo)? ResolveConnectorBreak()
+    {
+        var connectorProperty = typeof(NpgsqlConnection).GetProperty(
+            "Connector", BindingFlags.Instance | BindingFlags.NonPublic);
+        var breakMethod = connectorProperty?.PropertyType.GetMethod(
+            "Break", BindingFlags.Instance | BindingFlags.NonPublic, [typeof(Exception), typeof(bool)]);
+        return connectorProperty is null || breakMethod is null ? null : (connectorProperty, breakMethod);
+    }
+
+    /// <summary>Breaks the physical connection behind <paramref name="connection"/>; true when it was broken.</summary>
+    internal static bool DiscardConnection(NpgsqlConnection connection, Exception reason)
+    {
+        if (ConnectorBreak is not { } accessor)
+        {
+            return false;
+        }
+
+        try
+        {
+            var connector = accessor.Connector.GetValue(connection);
+            if (connector is null)
+            {
+                return connection.State is ConnectionState.Closed or ConnectionState.Broken;
+            }
+
+            accessor.Break.Invoke(connector, [reason, false]);
+            return true;
+        }
+        catch (Exception ex) when (ex is TargetInvocationException or MemberAccessException or ArgumentException)
+        {
+            return false;
         }
     }
 
