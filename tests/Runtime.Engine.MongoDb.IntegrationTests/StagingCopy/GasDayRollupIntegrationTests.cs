@@ -291,4 +291,28 @@ public class GasDayRollupIntegrationTests(CrateStagingCopyFixture fixture)
             ordered.Select(r => DateTime.SpecifyKind(Convert.ToDateTime(r.Values["timestamp"]).ToUniversalTime(), DateTimeKind.Utc)));
         Assert.Equal([24L, 23L, 24L], ordered.Select(r => Convert.ToInt64(r.Values["value_count"])).ToArray());
     }
+
+    [Fact]
+    public async Task LocalDayDownsampling_OverTheOffsetRollup_GivesTheStoredGasDays_AndAnEmptyGasDayReadsCount0()
+    {
+        // AB#7360 criterion 3 for a rollup source: gas-day bins (Europe/Vienna, 06:00, 1 day, no Limit) over the gas-day
+        // rollup are its stored windows; a gas day without a stored row is a bin with Count 0.
+        var rig = await CreateRigAsync(GasDayStart(2026, 3, 27), GasDayStart(2026, 3, 30));
+        await rig.RunLiveAsync();
+        var stored = await rig.ActiveRowsAsync();
+        await rig.SqlAsync($"DELETE FROM {rig.Live} WHERE \"window_start\" = {Ms(GasDayStart(2026, 3, 28))}");
+        var options = StreamDataDownsamplingQueryOptions.Create()
+            .WithCkTypeId(Type)
+            .WithAggregationColumns([new AggregationColumn("Value", AggregationFunction.Count)])
+            .WithTimeRange(rig.RangeStart, rig.RangeEnd)
+            .WithTimeZone("Europe/Vienna")
+            .WithBinOrigin(TimeSpan.FromHours(6))
+            .WithBinInterval(TimeSpan.FromDays(1));
+
+        var result = await rig.Repository.ExecuteDownsamplingQueryAsync(rig.Rollup, options);
+
+        Assert.Equal(stored.Select(s => s.Start),
+            result.Rows.Select(r => DateTime.SpecifyKind(Convert.ToDateTime(r.Values["timestamp"]).ToUniversalTime(), DateTimeKind.Utc)));
+        Assert.Equal([24L, 0L, 24L], result.Rows.Select(r => Convert.ToInt64(r.Values["value_count"])).ToArray());
+    }
 }

@@ -1307,7 +1307,7 @@ A `CalendarDay` rollup may declare `ReferenceTimeZone` and `DayStartOffsetMs` (S
 
 - **One calendar for every path.** Bucket boundaries come from `BucketCalendar.For(rollup)` (engine `Runtime.Engine/StreamData/BucketCalendar.cs`)
   in the live orchestrator, the recompute (`RecomputeBucketEnumerator`, `CrateDbArchiveRecomputeExecutor`), the repair watermark target
-  (`RollupRepairer.WatermarkTargetAsync`) and the calendar bin axis of a downsampling query (`BuildCalendarBinAxis`). **Never call the old
+  (`RollupRepairer.WatermarkTargetAsync`), the calendar bin axis of a downsampling query (`BuildCalendarBinAxis`) and its local-day bins (`DownsamplingBinAxis`, AB#7360). **Never call the old
   `BucketBoundary.AlignDown/NextBucketEnd/InitialWatermark(alignment, bucketSize, zone)` overloads in this repository**: they silently mean a
   midnight day and put recompute and repair buckets next to the 06:00 buckets of the live pass (a grep for them must stay empty; the
   `FixedSize` call in `DownsamplingBinQuantizer` is the one exception, a fixed grid has no calendar).
@@ -1702,6 +1702,50 @@ Semantics preserved:
 - **Generation filter (AB#4184):** `AppendDownsamplingSourceFilters` also emits the
   active-generation predicate when `GenerationTracked` — previously the downsampling path missed
   it entirely, so a read during a recompute double-counted the swapped windows.
+
+### Downsampling into local-day bins (AB#7360)
+
+**Changelog entry (this repository has no CHANGELOG file; this is the entry).** AB#7360: downsampling queries take
+`TimeZone`, `BinOrigin` and `BinInterval` (engine `StreamDataDownsamplingQueryOptions`, AB#7360 part 1) and return one bin
+per local day (23 / 24 / 25 h across DST changes) from raw, time-range and rollup archives. **Behaviour change for every
+downsampling query: a COUNT column of an empty bin reads `0` instead of `null`** (a count over nothing is 0; Studio charts
+of COUNT series show 0 instead of a gap). Other aggregations of an empty bin stay `null`. Without the three options the
+compiled SQL is unchanged (`DownsamplingSqlSnapshotTests`, recorded on main 6966ce9, after AB#7659).
+
+Rules to keep:
+
+- **One axis, from the engine.** `DownsamplingBinAxis.Resolve` validates the options and `DownsamplingBinAxis.Build`
+  builds the bin starts with `BucketBoundary` on a `BucketCalendar` (CalendarDay, zone, day start = `BinOrigin`), the
+  primitive of the day rollups, so raw bins and gas-day rollup buckets coincide. No second primitive here; the end of the
+  last bin is `NextBucketEnd(start, calendar)` × interval (`AdvanceLocalDays`). Invalid options (unknown zone, origin
+  outside `[00:00, 24:00)` or not a whole minute, interval not whole days, more than `MaxBins` = 10,000 bins, no From/To)
+  throw the engine's `DownsamplingBinOptionsInvalidException` (a contracts `StreamDataException`, structured 400) before
+  any SQL.
+- **`Limit` does not decide the bin count** for local-day bins and is not required (decision on AB#7360, 2026-11-03);
+  From and To stay required. Without the options From, To and Limit are required as before.
+- **SQL bin key = one `DATE_BIN` per run of equal-width bins** (`LocalDayBinRuns`, `CrateQueryBuilder.WithDownsamplingByLocalDays`,
+  `CrateQueryCompiler.LocalDayBinExpression`): `CASE WHEN t < run1End THEN DATE_BIN(w1, t, run1Start) … ELSE DATE_BIN(wN, t, runNStart) END`;
+  a single run (UTC, no DST change in range) is a plain `DATE_BIN`. A year in Vienna has five runs. Still one grouped scan,
+  O(source rows), no `generate_series` join (AB#4713); the keys equal the C# axis to the instant. Raw rows key on
+  `timestamp` and get `AND timestamp < <end of last bin>` (the raw filter's inclusive `<= To` would otherwise put the
+  first instant of the next day on no bin); windowed rows key on `window_start` and keep the §7 containment against the
+  bin end of their run.
+- **Sources.** Raw, time-range and fixed-size rollups are binned by key/containment (a fixed-size or time-range window
+  that straddles a local-day boundary is dropped by §7, as on the fixed-width path). A calendar rollup must cut the same
+  days — `CalendarDay`, same zone rules, same day start — otherwise it is refused (`RejectCalendarRollupUnderLocalDayBins`):
+  every stored window would straddle a bin and the chart would read empty.
+- **Rows carry the axis instant** (`DateTimeKind.Utc`), not the `DATE_BIN` value (a timestamp without zone).
+- **Per series** (`GroupByColumnPaths`, e.g. `rtId`): every series found in the result gets a row in every bin
+  (`FillLocalDayBinsPerSeries`); a day without values of one series reads Count 0 with that series' rtId. A series without
+  any value in the whole range is unknown and gets no rows; with no data at all there is one empty row per bin. The
+  fixed-width path keeps its single empty row per bin (unchanged).
+- Tests: `LocalDayBinRunsTests`, `LocalDayDownsamplingQueryTests`, `DownsamplingSqlSnapshotTests` (unit);
+  `StreamDataDownsampling/LocalDayDownsamplingIntegrationTests` and
+  `GasDayRollupIntegrationTests.LocalDayDownsampling_OverTheOffsetRollup_…` (real CrateDB 6.4.6, also green on 5.10.10):
+  gas days 24/23/24 and 24/25/24 from hourly raw data, per rtId with a missing day, an empty day (Count 0, Sum null),
+  Vienna calendar days from a year of 15-minute time-range data per rtId (92 on 2026-03-29, 100 on 2026-10-25, 96 otherwise),
+  a gas-day rollup with a deleted day. Performance (`Category=Performance`, not in the CI): one year of hourly data for
+  50 series (438,000 rows), gas days per rtId: median 237 ms (6.4.6) / 260 ms (5.10.10) on a local Testcontainer, budget 1 s.
 
 ### Native Copy, Sweep Grace Period, Rollup Validate/Repair, Restore Reconcile Marker (AB#5967)
 

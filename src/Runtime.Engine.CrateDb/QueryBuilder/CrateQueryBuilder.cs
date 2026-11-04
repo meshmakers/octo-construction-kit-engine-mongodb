@@ -437,6 +437,42 @@ internal class CrateQueryBuilder
     }
 
     /// <summary>
+    /// Downsampling into local-day bins (AB#7360): the bins are the local days (or groups of
+    /// <c>BinInterval</c> days) of a time zone starting at a local time of day, 23 / 24 / 25 hours across DST
+    /// changes, built by the engine's <c>DownsamplingBinAxis</c> with <c>BucketBoundary</c> on a <c>BucketCalendar</c>.
+    /// The compiler keys each source row (raw: its timestamp, windowed: its <c>window_start</c>) with one
+    /// <c>DATE_BIN</c> per run of equal-width bins (<see cref="LocalDayBinRuns"/>), so the SQL bins equal
+    /// <paramref name="binStarts"/> to the instant and the query stays one grouped scan. Windowed sources keep the §7
+    /// fully-contained predicate against the bin end of their run.
+    /// </summary>
+    /// <param name="from">Requested start (source filter).</param>
+    /// <param name="to">Requested end (source filter).</param>
+    /// <param name="binStarts">UTC bin starts, empty bins included; the first contains <paramref name="from"/>.</param>
+    /// <param name="axisEnd">UTC end of the last bin; raw rows at or after it belong to no bin.</param>
+    public CrateQueryBuilder WithDownsamplingByLocalDays(
+        DateTime from, DateTime to, IReadOnlyList<DateTime> binStarts, DateTime axisEnd)
+    {
+        ArgumentNullException.ThrowIfNull(binStarts);
+        From = from;
+        To = to;
+        QueryMode = QueryModeDto.Downsampling;
+        Limit = binStarts.Count;
+        DownsamplingBinAxis = binStarts;
+        DownsamplingAxisEnd = axisEnd;
+        DownsamplingLocalDayRuns = LocalDayBinRuns.Build(binStarts, axisEnd);
+        return this;
+    }
+
+    /// <summary>
+    /// The runs of equal-width bins of a local-day axis (AB#7360), set by <see cref="WithDownsamplingByLocalDays"/>;
+    /// null otherwise.
+    /// </summary>
+    internal IReadOnlyList<LocalDayBinRun>? DownsamplingLocalDayRuns { get; private set; }
+
+    /// <summary>End of the last bin of a local-day axis (AB#7360); null unless <see cref="WithDownsamplingByLocalDays"/>.</summary>
+    internal DateTime? DownsamplingAxisEnd { get; private set; }
+
+    /// <summary>
     /// True when the downsampling bins are the source's stored calendar windows (keyed by
     /// <c>window_start</c>) rather than a fixed-width <c>DATE_BIN</c> axis. Set by
     /// <see cref="WithDownsamplingByWindowStart"/>.
@@ -445,8 +481,8 @@ internal class CrateQueryBuilder
 
     /// <summary>
     /// The calendar bin axis (window-start instants, empty bins included) when
-    /// <see cref="DownsamplingByWindowStart"/> is set; otherwise null. The caller materializes empty
-    /// bins from this list instead of <see cref="DownsamplingOrigin"/> + interval arithmetic.
+    /// <see cref="DownsamplingByWindowStart"/> or <see cref="DownsamplingLocalDayRuns"/> is set; otherwise null. The
+    /// caller materializes empty bins from this list instead of <see cref="DownsamplingOrigin"/> + interval arithmetic.
     /// </summary>
     internal IReadOnlyList<DateTime>? DownsamplingBinAxis { get; private set; }
 
