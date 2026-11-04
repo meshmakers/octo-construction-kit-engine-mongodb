@@ -66,7 +66,9 @@ public class ArchiveDefinitionGuardIntegrationTests(ArchiveDefinitionGuardFixtur
                         value: true
         """;
 
-    private static string Computed(string name, string resultType) =>
+    private static string Computed(string name, string resultType) => Computed(name, resultType, "amountvalue * 2");
+
+    private static string Computed(string name, string resultType, string formula) =>
         $"""
                   - ckRecordId: System.StreamData/CkArchiveColumn
                     attributes:
@@ -79,7 +81,7 @@ public class ArchiveDefinitionGuardIntegrationTests(ArchiveDefinitionGuardFixtur
                       - id: System.StreamData/CkArchiveColumn.Name
                         value: {name}
                       - id: System.StreamData/CkArchiveColumn.Formula
-                        value: amountvalue * 2
+                        value: {formula}
                       - id: System.StreamData/CkArchiveColumn.ResultType
                         value: {resultType}
         """;
@@ -596,6 +598,170 @@ public class ArchiveDefinitionGuardIntegrationTests(ArchiveDefinitionGuardFixtur
             var columns = (await tenant.GetArchiveRuntimeStore().GetAsync(raw))!.Columns;
             columns.Should().Contain(c => c.Path == "dischargingPower");
             columns.Single(c => c.Name == "dischargeKw").ComputedState.Should().Be(ComputedColumnState.Backfilling);
+        }
+        finally
+        {
+            await fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    /// <summary>
+    /// AB#8255: a computed column whose formula was changed once (UpdateComputedColumnFormula) is at version 1 - its values
+    /// live in the physical column <c>{name}__v1</c>. Puts a computed column <paramref name="name" /> of an activated raw
+    /// archive into that state.
+    /// </summary>
+    private async Task<OctoObjectId> CreateWithComputedAtVersion1Async(string name, string formula,
+        CkArchiveStatus status = CkArchiveStatus.Activated)
+    {
+        var raw = await CreateAsync(id => Raw(id, Column("amountvalue_sum"), Computed(name, "Double", formula)));
+        var store = fixture.TenantContext.GetArchiveRuntimeStore();
+        await store.SwapComputedColumnFormulaAsync(raw, name, formula, 1);
+        await store.SetComputedColumnStateAsync(raw, name, ComputedColumnState.Active);
+        if (status != CkArchiveStatus.Activated)
+        {
+            await store.SetStatusAsync(raw, status);
+        }
+
+        return raw;
+    }
+
+    // AB#8255: the seed carries no runtime state of a column. A re-apply with the live formula keeps the version pointer and
+    // the state; before, the full replace reset the column to version 0, so reads hit the stale physical column.
+    [Fact]
+    public async Task ImportRt_AnUnchangedFormula_KeepsTheVersionAndStateOfAComputedColumn()
+    {
+        var raw = await CreateWithComputedAtVersion1Async("doubled", "amountvalue * 2");
+
+        var command = await ImportCommandAsync(Raw(raw, Column("amountvalue_sum"), Computed("doubled", "Double", "amountvalue * 2")));
+
+        var column = (await ColumnsOfAsync(raw)).Single(c => c.Name == "doubled");
+        column.ComputedVersion.Should().Be(1);
+        column.ComputedState.Should().Be(ComputedColumnState.Active);
+        column.Formula.Should().Be("amountvalue * 2");
+        column.HasPendingFormula.Should().BeFalse();
+        command.ArchiveFormulaChanges.Should().BeEmpty();
+        (await fixture.TenantContext.GetRecomputeJobStore().GetForArchiveAsync(raw, 10)).Should().BeEmpty();
+    }
+
+    // AB#8255: a seed that names a runtime member of a column does not overwrite the stored one.
+    [Fact]
+    public async Task ImportRt_ARuntimeMemberInTheSeed_DoesNotOverwriteTheStoredOne()
+    {
+        var raw = await CreateWithComputedAtVersion1Async("doubled", "amountvalue * 2");
+        var seed = Raw(raw, Column("amountvalue_sum"), Computed("doubled", "Double", "amountvalue * 2")) +
+                   """
+
+                                 - id: System.StreamData/CkArchiveColumn.ComputedVersion
+                                   value: 0
+                   """;
+
+        await ImportCommandAsync(seed);
+
+        (await ColumnsOfAsync(raw)).Single(c => c.Name == "doubled").ComputedVersion.Should().Be(1);
+    }
+
+    // AB#8255: a changed seed formula goes through the versioned change of UpdateComputedColumnFormula: the definition keeps
+    // the live formula and version until the backfill of the new one swaps them; the change is queued and reported. The
+    // same seed again while the change runs is no second change.
+    [Fact]
+    public async Task ImportRt_AChangedFormula_IsQueuedAsAVersionedChangeWithBackfill_AndReported()
+    {
+        var raw = await CreateWithComputedAtVersion1Async("doubled", "amountvalue * 2");
+
+        var command = await ImportCommandAsync(Raw(raw, Column("amountvalue_sum"), Computed("doubled", "Double", "amountvalue * 3")));
+
+        var column = (await ColumnsOfAsync(raw)).Single(c => c.Name == "doubled");
+        column.Formula.Should().Be("amountvalue * 2");
+        column.ComputedVersion.Should().Be(1);
+        column.ComputedState.Should().Be(ComputedColumnState.Active);
+        column.PendingFormula.Should().Be("amountvalue * 3");
+        A.CallTo(() => fixture.StreamDataRepository.AddPendingComputedColumnStorageAsync(
+            A<ArchiveSnapshot>.That.Matches(s => s.RtId == raw), "doubled", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+        var job = (await fixture.TenantContext.GetRecomputeJobStore().GetForArchiveAsync(raw, 10)).Single();
+        command.ArchiveFormulaChanges.Should().ContainSingle().Which.Should()
+            .BeEquivalentTo(new RtImportComputedFormulaChange(raw, Name, "doubled", "amountvalue * 3", job.RtId, null));
+
+        var again = await ImportCommandAsync(Raw(raw, Column("amountvalue_sum"), Computed("doubled", "Double", "amountvalue * 3")));
+
+        again.ArchiveFormulaChanges.Should().BeEmpty();
+        var unchanged = (await ColumnsOfAsync(raw)).Single(c => c.Name == "doubled");
+        unchanged.PendingFormula.Should().Be("amountvalue * 3");
+        unchanged.ComputedVersion.Should().Be(1);
+        (await fixture.TenantContext.GetRecomputeJobStore().GetForArchiveAsync(raw, 10)).Should().ContainSingle();
+    }
+
+    // AB#8255: like a new column, a formula change needs the table to be written; a disabled archive that was activated
+    // refuses it before anything is written.
+    [Fact]
+    public async Task ImportRt_AChangedFormulaOnADisabledArchiveThatWasActivated_IsRefused_AndNothingIsWritten()
+    {
+        var raw = await CreateWithComputedAtVersion1Async("doubled", "amountvalue * 2", CkArchiveStatus.Disabled);
+
+        var act = () => ImportCommandAsync(Raw(raw, Column("amountvalue_sum"), Computed("doubled", "Double", "amountvalue * 3")));
+
+        (await act.Should().ThrowAsync<ArchiveSchemaImmutableException>()).Which.Message.Should()
+            .Contain("formula of computed column 'doubled'").And.Contain("Activated");
+        var column = (await ColumnsOfAsync(raw)).Single(c => c.Name == "doubled");
+        column.Formula.Should().Be("amountvalue * 2");
+        column.ComputedVersion.Should().Be(1);
+    }
+
+    // AB#8255: a seed that drops the formula of a computed column would lose the live formula; refused, nothing written.
+    [Fact]
+    public async Task ImportRt_ASeedThatDropsTheFormulaOfAComputedColumn_IsRefused_AndNothingIsWritten()
+    {
+        var raw = await CreateWithComputedAtVersion1Async("doubled", "amountvalue * 2");
+        var lines = Computed("doubled", "Double", "amountvalue * 2").Split('\n').ToList();
+        lines.RemoveRange(lines.FindIndex(l => l.Contains("CkArchiveColumn.Formula")), 2);
+        var withoutFormula = string.Join('\n', lines);
+        withoutFormula.Should().NotContain("CkArchiveColumn.Formula");
+
+        var act = () => ImportCommandAsync(Raw(raw, Column("amountvalue_sum"), withoutFormula));
+
+        await act.Should().ThrowAsync<ArchiveSchemaImmutableException>();
+        var column = (await ColumnsOfAsync(raw)).Single(c => c.Name == "doubled");
+        column.Formula.Should().Be("amountvalue * 2");
+        column.ComputedVersion.Should().Be(1);
+    }
+
+    // AB#8255 through a blueprint: an update with the live formula keeps the column at version 1; an update with a changed
+    // formula queues the versioned change and reports it.
+    [Fact]
+    public async Task ABlueprintUpdate_KeepsTheVersionOfAComputedColumn_AndTurnsAChangedFormulaIntoAVersionedChange()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var service = fixture.GetBlueprintService();
+        var tenantId = await fixture.CreateTestTenantAsync("archver");
+        try
+        {
+            var tenant = await fixture.EnableStreamDataAsync(tenantId);
+            (await service.ApplyBlueprintAsync(tenantId, new BlueprintId("ArchiveGuardBp", "1.3.0"), force: false, ct)).IsSuccess.Should().BeTrue();
+            var raw = new OctoObjectId("6a7000000000000000007997");
+            var store = tenant.GetArchiveRuntimeStore();
+            await store.SetStatusAsync(raw, CkArchiveStatus.Activated);
+            await store.SwapComputedColumnFormulaAsync(raw, "dischargeKw", "dischargingpower / 1000", 1);
+            await store.SetComputedColumnStateAsync(raw, "dischargeKw", ComputedColumnState.Active);
+
+            var same = await service.ApplyUpdateAsync(tenantId, new BlueprintId("ArchiveGuardBp", "1.4.0"), BlueprintUpdateMode.Full, null, ct);
+
+            same.Success.Should().BeTrue(string.Join("; ", same.Errors));
+            same.ArchiveFormulaChanges.Should().BeEmpty();
+            var kept = (await store.GetAsync(raw))!.Columns.Single(c => c.Name == "dischargeKw");
+            kept.ComputedVersion.Should().Be(1);
+            kept.ComputedState.Should().Be(ComputedColumnState.Active);
+
+            var changed = await service.ApplyUpdateAsync(tenantId, new BlueprintId("ArchiveGuardBp", "1.5.0"), BlueprintUpdateMode.Full, null, ct);
+
+            changed.Success.Should().BeTrue(string.Join("; ", changed.Errors));
+            var change = changed.ArchiveFormulaChanges.Should().ContainSingle().Which;
+            change.Column.Should().Be("dischargeKw");
+            change.Formula.Should().Be("dischargingpower / 1000 * 2");
+            change.BackfillJobRtId.Should().NotBeNull();
+            changed.Warnings.Should().Contain(w => w.Contains("dischargeKw") && w.Contains("new column version with backfill"));
+            var pending = (await store.GetAsync(raw))!.Columns.Single(c => c.Name == "dischargeKw");
+            pending.Formula.Should().Be("dischargingpower / 1000");
+            pending.ComputedVersion.Should().Be(1);
+            pending.PendingFormula.Should().Be("dischargingpower / 1000 * 2");
         }
         finally
         {
