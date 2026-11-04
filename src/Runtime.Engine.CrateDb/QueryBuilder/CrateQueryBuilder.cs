@@ -444,17 +444,26 @@ internal class CrateQueryBuilder
     /// <c>DATE_BIN</c> per run of equal-width bins (<see cref="LocalDayBinRuns"/>), so the SQL bins equal
     /// <paramref name="binStarts"/> to the instant and the query stays one grouped scan. Windowed sources keep the §7
     /// fully-contained predicate against the bin end of their run.
+    /// <para>
+    /// <b>Every bin is a whole local day (review of PR #226).</b> The source range is the axis itself,
+    /// <c>[binStarts[0], axisEnd)</c>, not the requested From/To: the first bin is the local day that contains
+    /// <c>From</c> and counts that whole day, the last bin is the local day that contains <c>To</c> (or starts
+    /// before it) and counts that whole day, like the grain route reads from its snapped origin. A bin labelled as a
+    /// local day never counts only part of it.
+    /// </para>
     /// </summary>
-    /// <param name="from">Requested start (source filter).</param>
-    /// <param name="to">Requested end (source filter).</param>
-    /// <param name="binStarts">UTC bin starts, empty bins included; the first contains <paramref name="from"/>.</param>
-    /// <param name="axisEnd">UTC end of the last bin; raw rows at or after it belong to no bin.</param>
-    public CrateQueryBuilder WithDownsamplingByLocalDays(
-        DateTime from, DateTime to, IReadOnlyList<DateTime> binStarts, DateTime axisEnd)
+    /// <param name="binStarts">UTC bin starts, empty bins included; the first is the local day start at or before From.</param>
+    /// <param name="axisEnd">UTC end of the last bin (exclusive end of the source range).</param>
+    public CrateQueryBuilder WithDownsamplingByLocalDays(IReadOnlyList<DateTime> binStarts, DateTime axisEnd)
     {
         ArgumentNullException.ThrowIfNull(binStarts);
-        From = from;
-        To = to;
+        if (binStarts.Count == 0)
+        {
+            throw new ArgumentException("A local-day axis needs at least one bin.", nameof(binStarts));
+        }
+
+        From = binStarts[0];
+        To = axisEnd;
         QueryMode = QueryModeDto.Downsampling;
         Limit = binStarts.Count;
         DownsamplingBinAxis = binStarts;

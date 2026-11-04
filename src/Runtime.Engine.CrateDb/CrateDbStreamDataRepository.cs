@@ -1275,7 +1275,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
             var axisEnd = AdvanceLocalDays(binStarts[^1], days.Calendar, days.IntervalDays);
             effectiveLimit = binStarts.Count;
-            q.WithDownsamplingByLocalDays(options.From.Value, options.To.Value, binStarts, axisEnd);
+            // Every bin is a whole local day (PR #226 review): the source range is the axis [binStarts[0], axisEnd),
+            // not the requested From/To, so the first and the last bin count their whole day.
+            q.WithDownsamplingByLocalDays(binStarts, axisEnd);
         }
         else if (rollupForBinning is not null && rollupForBinning.BucketAlignment != BucketAlignment.FixedSize)
         {
@@ -1398,6 +1400,15 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
 
         var compiler = new CrateQueryCompiler();
+        if (localDays is not null && snapshot.UsesWindowedStorage
+            && (rollupForBinning is null || rollupForBinning.BucketAlignment == BucketAlignment.FixedSize))
+        {
+            // A time-range or fixed-size rollup window that straddles a local-day boundary would be dropped by the §7
+            // containment, and its bin would read Count 0 (or too little) as if measured. Refuse instead (PR #226 review).
+            // A matching CalendarDay rollup needs no probe: its windows are the bins.
+            await RejectWindowsStraddlingLocalDaysAsync(compiler, q, archiveRtId);
+        }
+
         var sql = compiler.CompileQuery(q);
         _logger.LogDebug("Executing downsampling SQL: {Sql}", sql);
 
@@ -1521,6 +1532,15 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             rowsByBinAndSeries[(dp.Timestamp, series)] = dp;
         }
 
+        // Bound the per-series fill before anything is built (PR #226 review): bins x series rows in memory.
+        var totalRows = (long)binAxis.Count * Math.Max(1, seriesOrder.Count);
+        if (totalRows > MaxLocalDaySeriesRows)
+        {
+            throw new DownsamplingBinOptionsInvalidException(
+                $"the result needs {binAxis.Count} bins x {seriesOrder.Count} series = {totalRows} rows, more than the " +
+                $"cap of {MaxLocalDaySeriesRows} rows per query. Ask for a shorter range, a longer BinInterval or fewer series (RtIds).");
+        }
+
         foreach (var bin in binAxis)
         {
             if (seriesOrder.Count == 0)
@@ -1543,6 +1563,39 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                         countOutputNames, seriesRtId: templates[series].RtId));
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// The most rows a local-day downsampling query grouped per series may return (bins x series, PR #226 review). It
+    /// bounds the in-memory fill of <see cref="FillLocalDayBinsPerSeries"/>; the bin count alone is bounded by the
+    /// engine's <see cref="DownsamplingBinAxis.MaxBins"/> (10,000). A query above the cap is refused with
+    /// <see cref="DownsamplingBinOptionsInvalidException"/> naming bins, series and the cap.
+    /// </summary>
+    internal const int MaxLocalDaySeriesRows = 100_000;
+
+    /// <summary>
+    /// Refuses a local-day query over a windowed source (time-range archive, fixed-size rollup) when a source window in
+    /// range straddles a local-day boundary (PR #226 review). The §7 containment would drop such a window silently, and
+    /// its bin would read Count 0 or too little, indistinguishable from a measured value. One COUNT over the same source
+    /// filters and the same bin end the downsampling SQL uses; a failure of the probe is not swallowed.
+    /// </summary>
+    private async Task RejectWindowsStraddlingLocalDaysAsync(
+        CrateQueryCompiler compiler, CrateQueryBuilder q, OctoObjectId archiveRtId)
+    {
+        var probeSql = compiler.CompileLocalDayStraddlingWindowCountQuery(q);
+        _logger.LogDebug("Executing local-day straddling-window probe SQL: {Sql}", probeSql);
+        var probe = await _databaseClient.GetDataAsync(_tenantId, probeSql);
+        var first = probe.FirstOrDefault();
+        var straddling = first?.Attributes != null && first.Attributes.TryGetValue("c", out var countObj) && countObj != null
+            ? Convert.ToInt64(countObj, CultureInfo.InvariantCulture)
+            : 0L;
+        if (straddling > 0)
+        {
+            throw new DownsamplingBinOptionsInvalidException(
+                $"{straddling} source window(s) of archive '{archiveRtId}' in the range straddle a local-day boundary and " +
+                "cannot be assigned to one bin; the bins would undercount. Query the raw archive or a CalendarDay rollup " +
+                "with the same zone and day start, or use fixed-width bins.");
         }
     }
 

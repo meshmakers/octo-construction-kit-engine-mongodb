@@ -1723,6 +1723,11 @@ Rules to keep:
   any SQL.
 - **`Limit` does not decide the bin count** for local-day bins and is not required (decision on AB#7360, 2026-11-03);
   From and To stay required. Without the options From, To and Limit are required as before.
+- **Every bin is a whole local day** (review of PR #226, decided by Odin 2026-11-04). The source range is the axis,
+  `[binStarts[0], end of the last bin)`, not the requested From/To: a `From` inside a day gives a first bin that counts
+  that whole day (hourly raw, gas day 06:00 Vienna, From 2026-03-27T00:00Z: first bin 2026-03-26T05:00Z, Count 24, not 5),
+  and a `To` inside a day gives a last bin that counts that whole day, as the grain route reads from its snapped origin.
+  `CrateQueryBuilder.WithDownsamplingByLocalDays(binStarts, axisEnd)` sets From/To from the axis itself.
 - **SQL bin key = one `DATE_BIN` per run of equal-width bins** (`LocalDayBinRuns`, `CrateQueryBuilder.WithDownsamplingByLocalDays`,
   `CrateQueryCompiler.LocalDayBinExpression`): `CASE WHEN t < run1End THEN DATE_BIN(w1, t, run1Start) … ELSE DATE_BIN(wN, t, runNStart) END`;
   a single run (UTC, no DST change in range) is a plain `DATE_BIN`. A year in Vienna has five runs. Still one grouped scan,
@@ -1730,8 +1735,13 @@ Rules to keep:
   `timestamp` and get `AND timestamp < <end of last bin>` (the raw filter's inclusive `<= To` would otherwise put the
   first instant of the next day on no bin); windowed rows key on `window_start` and keep the §7 containment against the
   bin end of their run.
-- **Sources.** Raw, time-range and fixed-size rollups are binned by key/containment (a fixed-size or time-range window
-  that straddles a local-day boundary is dropped by §7, as on the fixed-width path). A calendar rollup must cut the same
+- **Sources.** Raw, time-range and fixed-size rollups are binned by key/containment. **A source window that straddles a
+  local-day boundary refuses the query** (review of PR #226): before the downsampling SQL, a time-range archive or a
+  fixed-size rollup gets one probe (`CompileLocalDayStraddlingWindowCountQuery`: same source filters, `window_end` beyond
+  the bin end of its `window_start`); any such window throws `DownsamplingBinOptionsInvalidException` naming the count,
+  because §7 would drop it and its bin would read Count 0 (or too little) as if measured. Raw archives and a matching
+  CalendarDay rollup need no probe. The caller picks the archive (this repository has no rung fallback); the message
+  points to the raw archive or a CalendarDay rollup with the same zone and day start. A calendar rollup must cut the same
   days — `CalendarDay`, same zone rules, same day start — otherwise it is refused (`RejectCalendarRollupUnderLocalDayBins`):
   every stored window would straddle a bin and the chart would read empty.
 - **Rows carry the axis instant** (`DateTimeKind.Utc`), not the `DATE_BIN` value (a timestamp without zone).
@@ -1739,12 +1749,19 @@ Rules to keep:
   (`FillLocalDayBinsPerSeries`); a day without values of one series reads Count 0 with that series' rtId. A series without
   any value in the whole range is unknown and gets no rows; with no data at all there is one empty row per bin. The
   fixed-width path keeps its single empty row per bin (unchanged).
+- **Row cap per query: `CrateDbStreamDataRepository.MaxLocalDaySeriesRows` = 100,000** (bins x series of the per-series
+  fill; review of PR #226). Checked after the SQL, before any row is built; above it the query is refused with
+  `DownsamplingBinOptionsInvalidException` naming bins, series and the cap. The bin count alone stays bounded by the
+  engine's `DownsamplingBinAxis.MaxBins` (10,000).
+- SQL literals of the local-day path (`UtcLiteral`) normalise with `ToUniversalTime()` like the source filter, so a bin
+  origin and a range bound of one instant render the same text.
 - Tests: `LocalDayBinRunsTests`, `LocalDayDownsamplingQueryTests`, `DownsamplingSqlSnapshotTests` (unit);
   `StreamDataDownsampling/LocalDayDownsamplingIntegrationTests` and
   `GasDayRollupIntegrationTests.LocalDayDownsampling_OverTheOffsetRollup_…` (real CrateDB 6.4.6, also green on 5.10.10):
   gas days 24/23/24 and 24/25/24 from hourly raw data, per rtId with a missing day, an empty day (Count 0, Sum null),
   Vienna calendar days from a year of 15-minute time-range data per rtId (92 on 2026-03-29, 100 on 2026-10-25, 96 otherwise),
-  a gas-day rollup with a deleted day. Performance (`Category=Performance`, not in the CI): one year of hourly data for
+  a gas-day rollup with a deleted day; review of PR #226: whole gas days for a `From`/`To` inside a day (24/24/23/24), a
+  time-range archive with windows at half past refused under 06:00 gas days and answered under 06:30 days. Performance (`Category=Performance`, not in the CI): one year of hourly data for
   50 series (438,000 rows), gas days per rtId: median 237 ms (6.4.6) / 260 ms (5.10.10) on a local Testcontainer, budget 1 s.
 
 ### Native Copy, Sweep Grace Period, Rollup Validate/Repair, Restore Reconcile Marker (AB#5967)

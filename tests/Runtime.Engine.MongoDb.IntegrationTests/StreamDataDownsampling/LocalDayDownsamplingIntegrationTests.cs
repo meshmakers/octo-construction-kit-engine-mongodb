@@ -120,6 +120,61 @@ public class LocalDayDownsamplingIntegrationTests(CrateStagingCopyFixture fixtur
         Assert.Equal([24L, 25L, 24L], bins.Select(b => b.Count));
     }
 
+    // ---- whole local days at both ends (PR #226 review, point 1) ----------------------------------------------------
+
+    [Fact]
+    public async Task AFromAndAToInsideAGasDay_GiveWholeGasDays_NotPartialOnes()
+    {
+        var archive = await CreateRawAsync();
+        await InsertHourlyAsync(archive, SeriesA, Utc(2026, 3, 25), Utc(2026, 4, 1));
+        await RefreshAsync(archive);
+        // Reviewer's example: From 00:00Z lies in the gas day starting 2026-03-26T05:00Z (06:00 Vienna); To 10:00Z lies
+        // in the gas day starting 2026-03-29T04:00Z. Before the fix the first bin read 5, the last 7.
+        var from = Utc(2026, 3, 27);
+        var to = Utc(2026, 3, 29, 10);
+
+        var bins = Bins(await archive.Repository.ExecuteDownsamplingQueryAsync(archive.RtId, LocalDays("Value", from, to, 6)), "value");
+
+        Assert.Equal([Utc(2026, 3, 26, 5), Utc(2026, 3, 27, 5), Utc(2026, 3, 28, 5), Utc(2026, 3, 29, 4)], bins.Select(b => b.Start));
+        Assert.Equal([24L, 24L, 23L, 24L], bins.Select(b => b.Count));
+    }
+
+    // ---- windows the §7 containment would drop (PR #226 review, point 2b) ---------------------------------------------
+
+    [Fact]
+    public async Task ATimeRangeArchiveWithWindowsStraddlingTheGasDayStart_IsRefused_InsteadOfReadingCount0()
+    {
+        var tenant = CrateStagingCopyFixture.NewTenantId();
+        var rtId = OctoObjectId.GenerateNewId();
+        var table = TenantSchema.QualifiedArchiveTable(tenant, rtId.ToString());
+        await fixture.SqlAsync(ArchiveDdlGenerator.GenerateCreateWindowedTable(table,
+            [new ArchiveColumnDdl("Amount", new CrateColumnType.Primitive("DOUBLE PRECISION"), false, true)], 2, 0));
+        // hourly windows at half past: the window 05:30-06:30 Vienna straddles every gas-day start
+        var first = ViennaUtc(2026, 6, 1, 0).AddMinutes(30);
+        await fixture.SqlAsync(
+            $"INSERT INTO {table} (\"window_start\", \"window_end\", \"rtid\", \"cktypeid\", \"amount\") " +
+            $"SELECT CAST({Ms(first)} + CAST(generate_series AS BIGINT) * 3600000 AS TIMESTAMP WITH TIME ZONE), " +
+            $"CAST({Ms(first)} + (CAST(generate_series AS BIGINT) + 1) * 3600000 AS TIMESTAMP WITH TIME ZONE), '{SeriesA}', '{TypeLiteral}', 1.0 " +
+            "FROM generate_series(0, 95)");
+        await fixture.SqlAsync($"REFRESH TABLE {table}");
+        var snapshot = new ArchiveSnapshot(rtId, Type, CkArchiveStatus.Activated, "tr", [new CkArchiveColumnSpec("Amount", true, false)])
+        {
+            IsTimeRange = true,
+            Period = TimeSpan.FromHours(1)
+        };
+        var repository = Repository(tenant, rtId, snapshot);
+
+        var ex = await Assert.ThrowsAsync<DownsamplingBinOptionsInvalidException>(() => repository.ExecuteDownsamplingQueryAsync(rtId,
+            LocalDays("Amount", ViennaUtc(2026, 6, 1, 6), ViennaUtc(2026, 6, 4, 6), 6)));
+
+        Assert.Contains("straddle a local-day boundary", ex.Message, StringComparison.Ordinal);
+        // the same windows nest in days that start at 06:30: answered, 24 windows a day
+        var bins = Bins(await repository.ExecuteDownsamplingQueryAsync(rtId,
+            LocalDays("Amount", ViennaUtc(2026, 6, 1, 6).AddMinutes(30), ViennaUtc(2026, 6, 4, 6).AddMinutes(30), 6)
+                .WithBinOrigin(new TimeSpan(6, 30, 0))), "amount");
+        Assert.Equal([24L, 24L, 24L], bins.Select(b => b.Count));
+    }
+
     // ---- criteria 2 and 3: per series, empty days ------------------------------------------------------------------
 
     [Fact]

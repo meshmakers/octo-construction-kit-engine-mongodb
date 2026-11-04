@@ -217,8 +217,10 @@ internal class CrateQueryCompiler
     /// <summary>
     /// The bin key (or, with <paramref name="binEnd"/>, the bin end) of a local-day axis (AB#7360) for the column
     /// <paramref name="column"/>: <c>DATE_BIN(width, column, runStart)</c> of the run that contains the value, as a
-    /// <c>CASE</c> over the run ends; a single run needs no <c>CASE</c>. Rows before the first run cannot occur (the
-    /// first bin contains <c>From</c>), rows after the last run fall into the last branch and are bounded by the caller.
+    /// <c>CASE</c> over the run ends; a single run needs no <c>CASE</c>. Raw rows before the first run cannot occur (the
+    /// source range starts at the first bin); a window that starts before it gets a bin end at or before the first bin
+    /// start and is dropped by the containment (and counted by the straddling-window probe). Rows after the last run fall
+    /// into the last branch and are bounded by the caller.
     /// </summary>
     private static string LocalDayBinExpression(IReadOnlyList<LocalDayBinRun> runs, string column, bool binEnd)
     {
@@ -244,10 +246,12 @@ internal class CrateQueryCompiler
         return expression.ToString();
     }
 
-    /// <summary>A UTC instant in the literal format of the SQL; an unspecified kind is read as UTC.</summary>
-    private static string UtcLiteral(DateTime value) =>
-        (value.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(value, DateTimeKind.Utc) : value.ToUniversalTime())
-        .ToString(Constants.DateTimeFormat);
+    /// <summary>
+    /// An instant in the literal format of the SQL, normalised with <see cref="DateTime.ToUniversalTime"/> exactly like
+    /// the source time filter (<see cref="AppendDownsamplingSourceFilters"/>), so a bin origin and the range bound of the
+    /// same instant always render the same text (PR #226 review).
+    /// </summary>
+    private static string UtcLiteral(DateTime value) => value.ToUniversalTime().ToString(Constants.DateTimeFormat);
 
     /// <summary>
     /// Compiles a scalar query that returns the number of distinct source bins in the requested
@@ -267,6 +271,29 @@ internal class CrateQueryCompiler
         query.Append($" FROM {queryBuilder.TenantId} AS d");
         query.Append(" WHERE 1 = 1");
         AppendDownsamplingSourceFilters(query, queryBuilder, isWindowed, queryBuilder.TimeColumn);
+        return query.ToString();
+    }
+
+    /// <summary>
+    /// Compiles the probe of a local-day downsampling query over a windowed source (AB#7360, PR #226 review): the number
+    /// of source windows in range whose <c>window_end</c> overruns the end of the local-day bin their
+    /// <c>window_start</c> falls in - exactly the windows the §7 containment of <see cref="CompileDownsamplingQuery"/>
+    /// would drop. Same source filters and the same bin-end expression as the downsampling SQL.
+    /// </summary>
+    public string CompileLocalDayStraddlingWindowCountQuery(CrateQueryBuilder queryBuilder)
+    {
+        if (queryBuilder.TimeColumn != Constants.WindowEnd || queryBuilder.DownsamplingLocalDayRuns is not { Count: > 0 } runs)
+        {
+            throw new InvalidOperationException("The straddling-window probe needs a windowed source with local-day bins.");
+        }
+
+        var binEnd = LocalDayBinExpression(runs, $"d.\"{Constants.WindowStart}\"", binEnd: true);
+        var query = new StringBuilder();
+        query.Append("SELECT COUNT(*) AS \"c\"");
+        query.Append($" FROM {queryBuilder.TenantId} AS d");
+        query.Append(" WHERE 1 = 1");
+        AppendDownsamplingSourceFilters(query, queryBuilder, isWindowed: true, queryBuilder.TimeColumn);
+        query.Append($" AND d.\"{Constants.WindowEnd}\" > {binEnd}");
         return query.ToString();
     }
 

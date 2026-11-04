@@ -90,4 +90,30 @@ public class LocalDayBinRunsTests
 
         Assert.Throws<ArgumentException>(() => LocalDayBinRuns.Build([start], start.AddMilliseconds(1500)));
     }
+
+    [Fact]
+    public void TheBinOriginAndTheSourceRangeOfOneInstant_RenderTheSameLiteral_WhateverItsKind()
+    {
+        // PR #226 review: the bin literals and the source filter normalise an instant the same way (ToUniversalTime).
+        var utcStart = new DateTime(2026, 6, 1, 4, 0, 0, DateTimeKind.Utc);
+        foreach (var start in new[] { utcStart, utcStart.ToLocalTime(), DateTime.SpecifyKind(utcStart, DateTimeKind.Unspecified) })
+        {
+            var q = new CrateQueryBuilder("t").AddRawAggregationExpression("COUNT(d.\"timestamp\")", "c")
+                .WithDownsamplingByLocalDays([start], start.AddDays(1));
+
+            var sql = new CrateQueryCompiler().CompileQuery(q);
+
+            var origin = Between(sql, "d.\"timestamp\", '", "'::TIMESTAMP");
+            Assert.Equal(origin, Between(sql, "d.\"timestamp\" >= '", "'"));
+            Assert.Equal(Between(sql, "d.\"timestamp\" < '", "'"), Between(sql, "d.\"timestamp\" <= '", "'"));
+        }
+    }
+
+    private static string Between(string text, string before, string after)
+    {
+        var start = text.IndexOf(before, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"'{before}' not in {text}");
+        start += before.Length;
+        return text[start..text.IndexOf(after, start, StringComparison.Ordinal)];
+    }
 }

@@ -1,3 +1,4 @@
+using System.Globalization;
 using FakeItEasy;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
@@ -25,6 +26,8 @@ public class LocalDayDownsamplingQueryTests
     private static readonly OctoObjectId GasDayRollup = new("bb0000000000000000007361");
     private static readonly OctoObjectId MidnightRollup = new("bb0000000000000000007362");
     private static readonly OctoObjectId MonthRollup = new("bb0000000000000000007363");
+    private static readonly OctoObjectId UtcDayFixedRollup = new("bb0000000000000000007364");
+    private static readonly OctoObjectId TimeRange = new("bb0000000000000000007365");
     private static readonly OctoObjectId SeriesA = new("bb00000000000000000073aa");
     private static readonly OctoObjectId SeriesB = new("bb00000000000000000073bb");
     private static readonly RtCkId<CkTypeId> Type = new("Test", new CkTypeId("Meter"));
@@ -41,6 +44,7 @@ public class LocalDayDownsamplingQueryTests
     private readonly IRollupArchiveRuntimeStore _rollups = A.Fake<IRollupArchiveRuntimeStore>();
     private readonly List<string> _sql = new();
     private List<DataPointDto> _rows = new();
+    private long _straddlingWindows;
 
     public LocalDayDownsamplingQueryTests()
     {
@@ -49,12 +53,19 @@ public class LocalDayDownsamplingQueryTests
         RegisterRollup(GasDayRollup, BucketAlignment.CalendarDay, "Europe/Vienna", 21_600_000);
         RegisterRollup(MidnightRollup, BucketAlignment.CalendarDay, "Europe/Vienna", null);
         RegisterRollup(MonthRollup, BucketAlignment.CalendarMonth, "Europe/Vienna", null);
+        RegisterRollup(UtcDayFixedRollup, BucketAlignment.FixedSize, null, null);
+        A.CallTo(() => _store.GetAsync(TimeRange)).Returns(new ArchiveSnapshot(TimeRange, Type, CkArchiveStatus.Activated, "tr",
+            [new CkArchiveColumnSpec("Amount", true, false)]) { IsTimeRange = true, Period = TimeSpan.FromHours(1) });
         A.CallTo(() => _db.GetDataAsync(A<string>._, A<string>._))
             .Invokes((string _, string sql) => _sql.Add(sql))
-            .ReturnsLazily(() => Task.FromResult(_rows));
+            .ReturnsLazily((string _, string sql) => Task.FromResult(sql.StartsWith(ProbePrefix, StringComparison.Ordinal)
+                ? [new DataPointDto(new Dictionary<string, object?> { ["c"] = _straddlingWindows })]
+                : _rows));
     }
 
-    private void RegisterRollup(OctoObjectId rtId, BucketAlignment alignment, string zone, long? dayStartMs)
+    private const string ProbePrefix = "SELECT COUNT(*) AS \"c\"";
+
+    private void RegisterRollup(OctoObjectId rtId, BucketAlignment alignment, string? zone, long? dayStartMs)
     {
         var specs = new[] { new CkRollupAggregationSpec("Amount", CkRollupFunction.Count, null) };
         A.CallTo(() => _store.GetAsync(rtId)).Returns(
@@ -301,5 +312,126 @@ public class LocalDayDownsamplingQueryTests
 
         Assert.Equal([Bin0, Bin1, Bin2], result.Rows.Select(r => r.Timestamp));
         Assert.All(result.Rows, r => Assert.Equal(0L, r.Values["amount_count"]));
+    }
+
+    // ---- whole local days at both ends (PR #226 review, point 1) --------------------------------------------------
+
+    [Fact]
+    public async Task AFromInsideAGasDay_ReadsTheWholeGasDay_FromItsStart()
+    {
+        // Reviewer's example: From 2026-03-27T00:00Z lies in the gas day that starts 2026-03-26T05:00Z.
+        var from = new DateTime(2026, 3, 27, 0, 0, 0, DateTimeKind.Utc);
+        var gasDay26 = new DateTime(2026, 3, 26, 5, 0, 0, DateTimeKind.Utc);
+
+        var result = await NewSut().ExecuteDownsamplingQueryAsync(Raw, GasDays(from, To));
+
+        var sql = Assert.Single(_sql);
+        Assert.Contains("AND d.\"timestamp\" >= '2026-03-26 05:00:00.000Z'", sql);
+        Assert.DoesNotContain("2026-03-27 00:00:00", sql);
+        Assert.Equal([gasDay26, Bin0, Bin1, Bin2], result.Rows.Select(r => r.Timestamp));
+    }
+
+    [Fact]
+    public async Task AToInsideAGasDay_ReadsTheWholeLastGasDay_UpToItsEnd()
+    {
+        var to = new DateTime(2026, 3, 29, 10, 0, 0, DateTimeKind.Utc);
+
+        var result = await NewSut().ExecuteDownsamplingQueryAsync(Raw, GasDays(From, to));
+
+        var sql = Assert.Single(_sql);
+        Assert.Contains("AND d.\"timestamp\" < '2026-03-30 04:00:00.000Z'", sql);
+        Assert.DoesNotContain("2026-03-29 10:00:00", sql);
+        Assert.Equal([Bin0, Bin1, Bin2], result.Rows.Select(r => r.Timestamp));
+    }
+
+    [Fact]
+    public async Task AWindowedSource_ReadsTheWholeFirstAndLastGasDay_Too()
+    {
+        await NewSut().ExecuteDownsamplingQueryAsync(GasDayRollup,
+            GasDays(new DateTime(2026, 3, 27, 0, 0, 0, DateTimeKind.Utc), new DateTime(2026, 3, 29, 10, 0, 0, DateTimeKind.Utc)));
+
+        var sql = Assert.Single(_sql);
+        Assert.Contains("AND d.\"window_start\" < '2026-03-30 04:00:00.000Z' AND d.\"window_end\" > '2026-03-26 05:00:00.000Z'", sql);
+    }
+
+    // ---- windows dropped by the §7 containment (PR #226 review, point 2b) -----------------------------------------
+
+    [Fact]
+    public async Task ATimeRangeArchive_IsProbedForWindowsStraddlingALocalDay_WithTheBinEndOfTheDownsamplingSql()
+    {
+        await NewSut().ExecuteDownsamplingQueryAsync(TimeRange, GasDays());
+
+        Assert.Equal(2, _sql.Count);
+        var probe = _sql[0];
+        Assert.StartsWith(ProbePrefix + " FROM", probe);
+        Assert.Contains(
+            "AND d.\"window_end\" > CASE WHEN d.\"window_start\" < '2026-03-28 05:00:00.000Z' THEN DATE_BIN('86400 seconds'::INTERVAL, d.\"window_start\", '2026-03-27 05:00:00.000Z'::TIMESTAMP) + '86400 seconds'::INTERVAL",
+            probe);
+        Assert.Contains("AND d.\"window_start\" < '2026-03-30 04:00:00.000Z' AND d.\"window_end\" > '2026-03-27 05:00:00.000Z'", probe);
+    }
+
+    [Theory]
+    [InlineData("TimeRange")]
+    [InlineData("UtcDayFixedRollup")]
+    public async Task AWindowedSourceWithWindowsStraddlingALocalDay_IsRefused_InsteadOfReadingCount0(string archive)
+    {
+        _straddlingWindows = 3;
+        var rtId = archive == "TimeRange" ? TimeRange : UtcDayFixedRollup;
+
+        var ex = await Assert.ThrowsAsync<DownsamplingBinOptionsInvalidException>(
+            () => NewSut().ExecuteDownsamplingQueryAsync(rtId, GasDays()));
+
+        Assert.Contains("3 source window(s)", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("straddle a local-day boundary", ex.Message, StringComparison.Ordinal);
+        Assert.StartsWith(ProbePrefix, Assert.Single(_sql)); // only the probe ran
+    }
+
+    [Fact]
+    public async Task AWindowedSourceWithoutStraddlingWindows_IsAnswered()
+    {
+        _rows = [Row(Bin0, 24, 1.0)];
+
+        var result = await NewSut().ExecuteDownsamplingQueryAsync(TimeRange, GasDays());
+
+        Assert.Equal([24L, 0L, 0L], result.Rows.Select(r => Convert.ToInt64(r.Values["amount_count"], CultureInfo.InvariantCulture)));
+    }
+
+    [Fact]
+    public async Task ARawArchive_AndAMatchingGasDayRollup_NeedNoProbe()
+    {
+        await NewSut().ExecuteDownsamplingQueryAsync(Raw, GasDays());
+        await NewSut().ExecuteDownsamplingQueryAsync(GasDayRollup, GasDays());
+
+        Assert.Equal(2, _sql.Count);
+        Assert.DoesNotContain(_sql, sql => sql.StartsWith(ProbePrefix, StringComparison.Ordinal));
+    }
+
+    // ---- bins x series cap (PR #226 review, point 3) --------------------------------------------------------------
+
+    private static List<DataPointDto> SeriesRows(int count) => Enumerable.Range(1, count)
+        .Select(i => Row(Bin0, 1, 1.0, new OctoObjectId(i.ToString("x24", CultureInfo.InvariantCulture))))
+        .ToList();
+
+    [Fact]
+    public async Task PerSeries_MoreRowsThanTheCap_IsRefused_NamingBinsSeriesAndTheCap()
+    {
+        _rows = SeriesRows(33_334); // 3 bins x 33,334 series = 100,002 rows
+
+        var ex = await Assert.ThrowsAsync<DownsamplingBinOptionsInvalidException>(
+            () => NewSut().ExecuteDownsamplingQueryAsync(Raw, GasDays().WithGroupByColumns(["rtId"])));
+
+        Assert.Contains("3 bins x 33334 series = 100002 rows", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("cap of 100000 rows", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(100_000, CrateDbStreamDataRepository.MaxLocalDaySeriesRows);
+    }
+
+    [Fact]
+    public async Task PerSeries_AtTheCap_IsAnswered()
+    {
+        _rows = SeriesRows(33_333); // 99,999 rows
+
+        var result = await NewSut().ExecuteDownsamplingQueryAsync(Raw, GasDays().WithGroupByColumns(["rtId"]));
+
+        Assert.Equal(99_999, result.Rows.Count);
     }
 }
