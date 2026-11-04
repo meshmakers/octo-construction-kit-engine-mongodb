@@ -1178,11 +1178,25 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         OctoObjectId archiveRtId, StreamDataDownsamplingQueryOptions options)
     {
         var snapshot = await EnsureArchiveActivatedAsync(archiveRtId);
-        if (options.From is null || options.To is null || options.Limit is null)
+        // AB#7360: with local-day bins (TimeZone, BinOrigin or BinInterval) the bins are the local days of the range;
+        // Limit does not decide their number and is not required. From and To stay required.
+        if (options.HasLocalDayBins)
+        {
+            if (options.From is null || options.To is null)
+            {
+                throw new DownsamplingBinOptionsInvalidException(
+                    "a time range (From and To) is required for local-day bins (TimeZone, BinOrigin or BinInterval).");
+            }
+        }
+        else if (options.From is null || options.To is null || options.Limit is null)
         {
             throw StreamDataException.InvalidQueryParameters(
                 "Downsampling queries require From, To, and Limit (bucket count).");
         }
+
+        // Validates zone, origin and interval before any SQL (DownsamplingBinOptionsInvalidException names the option).
+        (BucketCalendar Calendar, int IntervalDays)? localDays =
+            options.HasLocalDayBins ? DownsamplingBinAxis.Resolve(options) : null;
 
         var fieldResolver = CreateFieldResolver(snapshot);
 
@@ -1246,7 +1260,26 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var rollupForBinning = snapshot.RollupAggregations is not null && _rollupArchiveStore is not null
             ? await _rollupArchiveStore.GetAsync(snapshot.RtId).ConfigureAwait(false)
             : null;
-        if (rollupForBinning is not null && rollupForBinning.BucketAlignment != BucketAlignment.FixedSize)
+        if (localDays is { } days)
+        {
+            // Local-day bins (AB#7360) on any source: raw rows by timestamp, windowed rows by window_start with the
+            // §7 containment against the bin end. A calendar rollup must cut the same days, or every stored window
+            // would straddle a bin and the chart would read empty.
+            RejectCalendarRollupUnderLocalDayBins(archiveRtId, rollupForBinning, days.Calendar);
+            var binStarts = DownsamplingBinAxis.Build(options.From.Value, options.To.Value, days.Calendar, days.IntervalDays);
+            if (binStarts.Count == 0)
+            {
+                // To <= From: no local day in range, nothing to read.
+                return new StreamDataQueryResult { Rows = [], TotalCount = 0 };
+            }
+
+            var axisEnd = AdvanceLocalDays(binStarts[^1], days.Calendar, days.IntervalDays);
+            effectiveLimit = binStarts.Count;
+            // Every bin is a whole local day (PR #226 review): the source range is the axis [binStarts[0], axisEnd),
+            // not the requested From/To, so the first and the last bin count their whole day.
+            q.WithDownsamplingByLocalDays(binStarts, axisEnd);
+        }
+        else if (rollupForBinning is not null && rollupForBinning.BucketAlignment != BucketAlignment.FixedSize)
         {
             var binAxis = BuildCalendarBinAxis(
                 options.From.Value, options.To.Value, BucketCalendar.For(rollupForBinning));
@@ -1255,7 +1288,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
         else if (snapshot.UsesWindowedStorage
             && snapshot.Period is { } grain
-            && DownsamplingBinQuantizer.QuantizeToGrain(options.Limit.Value,
+            && DownsamplingBinQuantizer.QuantizeToGrain(options.Limit!.Value,
                 options.From.Value, options.To.Value, grain,
                 alignOriginToGrain: snapshot.RollupAggregations is not null) is { } quantized)
         {
@@ -1278,7 +1311,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             // source resolution; for windowed archives the fully-contained predicate then drops
             // every window and every bin reads null (AB#4246). One cheap COUNT(DISTINCT).
             effectiveLimit = await ResolveEffectiveDownsamplingLimitAsync(
-                q, options.Limit.Value, snapshot.UsesWindowedStorage);
+                q, options.Limit!.Value, snapshot.UsesWindowedStorage);
             q.WithDownsampling(effectiveLimit, options.From.Value, options.To.Value);
         }
 
@@ -1288,6 +1321,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var outputColumnNames = new List<string> { Constants.Timestamp };
         var outputNameBySqlAlias = new Dictionary<string, string>();
+        // AB#7360: a COUNT over an empty bin is 0, not null (a count over nothing is 0); other aggregations stay null.
+        var countOutputNames = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var col in options.AggregationColumns)
         {
@@ -1313,6 +1348,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                     q.AddRawAggregationExpression(chained.SqlExpression, chained.SqlAlias);
                     outputColumnNames.Add(outputName);
                     outputNameBySqlAlias[chained.SqlAlias] = outputName;
+                    if (col.Function == AggregationFunction.Count)
+                    {
+                        countOutputNames.Add(outputName);
+                    }
+
                     continue;
                 }
 
@@ -1335,6 +1375,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             var outputName2 = $"{resolved.CrateDbName}_{aggFunc.ToString().ToLowerInvariant()}";
             outputColumnNames.Add(outputName2);
             outputNameBySqlAlias[sqlAlias] = outputName2;
+            if (col.Function == AggregationFunction.Count)
+            {
+                countOutputNames.Add(outputName2);
+            }
         }
 
         // Per-series grouping (AB#4233): group each requested column by an extra series-identity
@@ -1356,6 +1400,15 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
 
         var compiler = new CrateQueryCompiler();
+        if (localDays is not null && snapshot.UsesWindowedStorage
+            && (rollupForBinning is null || rollupForBinning.BucketAlignment == BucketAlignment.FixedSize))
+        {
+            // A time-range or fixed-size rollup window that straddles a local-day boundary would be dropped by the §7
+            // containment, and its bin would read Count 0 (or too little) as if measured. Refuse instead (PR #226 review).
+            // A matching CalendarDay rollup needs no probe: its windows are the bins.
+            await RejectWindowsStraddlingLocalDaysAsync(compiler, q, archiveRtId);
+        }
+
         var sql = compiler.CompileQuery(q);
         _logger.LogDebug("Executing downsampling SQL: {Sql}", sql);
 
@@ -1381,23 +1434,33 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
 
         var rows = new List<StreamDataRow>();
+        if (localDays is not null && q.DownsamplingGroupByColumns.Count > 0)
+        {
+            // Local-day bins per series (AB#7360): every series of the result gets a row in every bin of the axis,
+            // so a day without values of one series reads Count 0 for that series even when other series have data.
+            FillLocalDayBinsPerSeries(rows, data, q.DownsamplingBinAxis!, q.DownsamplingGroupByColumns,
+                outputColumnNames, outputNameBySqlAlias, countOutputNames, options.CkTypeId);
+            return new StreamDataQueryResult { Rows = rows, TotalCount = rows.Count };
+        }
+
         for (var binIndex = 0; binIndex < effectiveLimit; binIndex++)
         {
-            var binTimestamp = q.DownsamplingByWindowStart
-                ? q.DownsamplingBinAxis![binIndex]
+            var binTimestamp = q.DownsamplingBinAxis is { } binAxis
+                ? binAxis[binIndex]
                 : q.DownsamplingOrigin.AddSeconds((double)q.DownsamplingIntervalSeconds * binIndex);
             if (rowsByBin.TryGetValue(binTimestamp, out var binRows))
             {
                 foreach (var dp in binRows)
                 {
-                    rows.Add(MapDownsamplingRow(dp, dp.Timestamp, false, outputColumnNames,
-                        outputNameBySqlAlias, options.CkTypeId));
+                    // Local-day bins carry the axis instant (UTC); the SQL value of a DATE_BIN is a timestamp without zone.
+                    rows.Add(MapDownsamplingRow(dp, localDays is null ? dp.Timestamp : binTimestamp, false, outputColumnNames,
+                        outputNameBySqlAlias, options.CkTypeId, countOutputNames));
                 }
             }
             else
             {
                 rows.Add(MapDownsamplingRow(null, binTimestamp, true, outputColumnNames,
-                    outputNameBySqlAlias, options.CkTypeId));
+                    outputNameBySqlAlias, options.CkTypeId, countOutputNames));
             }
         }
 
@@ -1436,9 +1499,159 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     }
 
     /// <summary>
+    /// Fills a local-day axis per series (AB#7360). The series are the distinct values of the group columns found in
+    /// <paramref name="data"/>, in the order they first appear; for every bin and series the SQL row is taken, or an
+    /// empty row is synthesized that carries the series' rtId (Count 0, other aggregations null). A series without any
+    /// value in the whole range is not known and gets no rows; without any series one empty row per bin is emitted.
+    /// Rows outside the axis are dropped, as on the other paths.
+    /// </summary>
+    private static void FillLocalDayBinsPerSeries(
+        List<StreamDataRow> rows,
+        IReadOnlyList<DataPointDto> data,
+        IReadOnlyList<DateTime> binAxis,
+        IReadOnlyList<string> groupColumns,
+        IReadOnlyList<string> outputColumnNames,
+        Dictionary<string, string> outputNameBySqlAlias,
+        IReadOnlySet<string> countOutputNames,
+        RtCkId<CkTypeId>? ckTypeId)
+    {
+        var seriesOrder = new List<string>();
+        var templates = new Dictionary<string, DataPointDto>(StringComparer.Ordinal);
+        var rowsByBinAndSeries = new Dictionary<(DateTime Bin, string Series), DataPointDto>();
+        foreach (var dp in data)
+        {
+            var series = string.Join('\u001f', groupColumns.Select(c =>
+                dp.Attributes is { } attributes && attributes.TryGetValue(c, out var value)
+                    ? Convert.ToString(value, CultureInfo.InvariantCulture)
+                    : null));
+            if (templates.TryAdd(series, dp))
+            {
+                seriesOrder.Add(series);
+            }
+
+            rowsByBinAndSeries[(dp.Timestamp, series)] = dp;
+        }
+
+        // Bound the per-series fill before anything is built (PR #226 review): bins x series rows in memory.
+        var totalRows = (long)binAxis.Count * Math.Max(1, seriesOrder.Count);
+        if (totalRows > MaxLocalDaySeriesRows)
+        {
+            throw new DownsamplingBinOptionsInvalidException(
+                $"the result needs {binAxis.Count} bins x {seriesOrder.Count} series = {totalRows} rows, more than the " +
+                $"cap of {MaxLocalDaySeriesRows} rows per query. Ask for a shorter range, a longer BinInterval or fewer series (RtIds).");
+        }
+
+        foreach (var bin in binAxis)
+        {
+            if (seriesOrder.Count == 0)
+            {
+                rows.Add(MapDownsamplingRow(null, bin, true, outputColumnNames, outputNameBySqlAlias, ckTypeId,
+                    countOutputNames));
+                continue;
+            }
+
+            foreach (var series in seriesOrder)
+            {
+                if (rowsByBinAndSeries.TryGetValue((bin, series), out var dp))
+                {
+                    rows.Add(MapDownsamplingRow(dp, bin, false, outputColumnNames, outputNameBySqlAlias,
+                        ckTypeId, countOutputNames));
+                }
+                else
+                {
+                    rows.Add(MapDownsamplingRow(null, bin, true, outputColumnNames, outputNameBySqlAlias, ckTypeId,
+                        countOutputNames, seriesRtId: templates[series].RtId));
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The most rows a local-day downsampling query grouped per series may return (bins x series, PR #226 review). It
+    /// bounds the in-memory fill of <see cref="FillLocalDayBinsPerSeries"/>; the bin count alone is bounded by the
+    /// engine's <see cref="DownsamplingBinAxis.MaxBins"/> (10,000). A query above the cap is refused with
+    /// <see cref="DownsamplingBinOptionsInvalidException"/> naming bins, series and the cap.
+    /// </summary>
+    internal const int MaxLocalDaySeriesRows = 100_000;
+
+    /// <summary>
+    /// Refuses a local-day query over a windowed source (time-range archive, fixed-size rollup) when a source window in
+    /// range straddles a local-day boundary (PR #226 review). The §7 containment would drop such a window silently, and
+    /// its bin would read Count 0 or too little, indistinguishable from a measured value. One COUNT over the same source
+    /// filters and the same bin end the downsampling SQL uses; a failure of the probe is not swallowed.
+    /// </summary>
+    private async Task RejectWindowsStraddlingLocalDaysAsync(
+        CrateQueryCompiler compiler, CrateQueryBuilder q, OctoObjectId archiveRtId)
+    {
+        var probeSql = compiler.CompileLocalDayStraddlingWindowCountQuery(q);
+        _logger.LogDebug("Executing local-day straddling-window probe SQL: {Sql}", probeSql);
+        var probe = await _databaseClient.GetDataAsync(_tenantId, probeSql);
+        var first = probe.FirstOrDefault();
+        var straddling = first?.Attributes != null && first.Attributes.TryGetValue("c", out var countObj) && countObj != null
+            ? Convert.ToInt64(countObj, CultureInfo.InvariantCulture)
+            : 0L;
+        if (straddling > 0)
+        {
+            throw new DownsamplingBinOptionsInvalidException(
+                $"{straddling} source window(s) of archive '{archiveRtId}' in the range straddle a local-day boundary and " +
+                "cannot be assigned to one bin; the bins would undercount. Query the raw archive or a CalendarDay rollup " +
+                "with the same zone and day start, or use fixed-width bins.");
+        }
+    }
+
+    /// <summary>
+    /// The end of the local-day bin that starts at <paramref name="binStart"/>: <paramref name="intervalDays"/> local
+    /// days later on <paramref name="calendar"/> (AB#7360), the same steps <see cref="DownsamplingBinAxis"/> takes.
+    /// </summary>
+    private static DateTime AdvanceLocalDays(DateTime binStart, BucketCalendar calendar, int intervalDays)
+    {
+        var end = binStart;
+        for (var i = 0; i < intervalDays; i++)
+        {
+            end = BucketBoundary.NextBucketEnd(end, calendar);
+        }
+
+        return end;
+    }
+
+    /// <summary>
+    /// Local-day bins over a calendar-aligned rollup (AB#7360) need the rollup to cut the same days: a <c>CalendarDay</c>
+    /// rollup in a zone with the same rules and the same day start. Any other calendar rollup (a midnight day under
+    /// gas-day bins, a week, a month) would have every stored window straddle a bin, the §7 predicate would drop them all
+    /// and every bin would read empty - refused instead. Fixed-size rollups and time-range archives are not refused;
+    /// their windows are binned by containment like on the fixed-width path.
+    /// </summary>
+    private static void RejectCalendarRollupUnderLocalDayBins(
+        OctoObjectId archiveRtId, RollupArchiveSnapshot? rollup, BucketCalendar dayCalendar)
+    {
+        if (rollup is null || rollup.BucketAlignment == BucketAlignment.FixedSize)
+        {
+            return;
+        }
+
+        var rollupCalendar = BucketCalendar.For(rollup);
+        var sameZone = (rollupCalendar.Zone ?? TimeZoneInfo.Utc).HasSameRules(dayCalendar.Zone ?? TimeZoneInfo.Utc);
+        if (rollupCalendar.Alignment == BucketAlignment.CalendarDay && sameZone
+            && rollupCalendar.DayStart == dayCalendar.DayStart)
+        {
+            return;
+        }
+
+        throw new DownsamplingBinOptionsInvalidException(
+            $"archive '{archiveRtId}' is a {rollup.BucketAlignment} rollup in '{rollup.ReferenceTimeZone ?? "UTC"}' " +
+            $"with day start {FormatTimeOfDay(rollupCalendar.DayStart)}; its buckets are not the local days of TimeZone " +
+            $"'{dayCalendar.Zone?.Id ?? "UTC"}' starting at {FormatTimeOfDay(dayCalendar.DayStart)}. Query a source whose " +
+            "buckets nest in these days: raw, time-range, a fixed-size rollup or a CalendarDay rollup with the same zone and day start.");
+    }
+
+    private static string FormatTimeOfDay(TimeSpan value) =>
+        value.ToString(@"hh\:mm", CultureInfo.InvariantCulture);
+
+    /// <summary>
     /// Projects one downsampling bin onto a <see cref="StreamDataRow"/>. <paramref name="dp"/> is
     /// null for a synthesized empty bin (no source row in that bucket); every aggregation column
-    /// then reads null while the timestamp still carries the bin start, so the wire shape is
+    /// then reads null - except a COUNT column (<paramref name="countOutputNames"/>), which reads 0
+    /// (AB#7360) - while the timestamp still carries the bin start, so the wire shape is
     /// identical for populated and empty bins.
     /// </summary>
     private static StreamDataRow MapDownsamplingRow(
@@ -1447,7 +1660,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         bool isEmptyBin,
         IEnumerable<string> outputColumnNames,
         Dictionary<string, string> outputNameBySqlAlias,
-        RtCkId<CkTypeId>? ckTypeId)
+        RtCkId<CkTypeId>? ckTypeId,
+        IReadOnlySet<string> countOutputNames,
+        OctoObjectId? seriesRtId = null)
     {
         var values = new Dictionary<string, object?>();
         foreach (var col in outputColumnNames)
@@ -1460,7 +1675,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
             if (isEmptyBin)
             {
-                values[col] = null;
+                values[col] = countOutputNames.Contains(col) ? 0L : null;
                 continue;
             }
 
@@ -1483,7 +1698,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         return new StreamDataRow
         {
             Timestamp = binTimestamp,
-            RtId = dp?.RtId ?? default,
+            RtId = dp?.RtId ?? seriesRtId ?? default,
             // The downsampling projection doesn't select cktypeid (it isn't grouped), so every
             // bin row — populated or empty — comes back with an empty/absent type. Stamp the
             // query's target Ck type unconditionally so the non-null GraphQL ckTypeId field
