@@ -1053,7 +1053,8 @@ Every CrateDB access leases its connection through `CrateDatabaseClient.LeaseCon
   after the 35 s call budget.
 
 Tests: `CrateCompat/CrateConnectionPoolReturnTests` (real CrateDB, 5.x and 6.x: pool of 2, five failing reads and writes on a
-missing table, then a read and `DROP TABLE IF EXISTS` succeed; a discarded connection frees its slot; red without the fix),
+missing table, then a read and `DROP TABLE IF EXISTS` succeed; a held pool of 1 fails at once with the driver's real exhaustion
+error; a discarded connection frees its slot; red without the fix),
 `StreamData.UnitTests/CrateDatabaseClientConnectionPoolTests` (classification, no retry, breaker stays closed, driver
 internals present).
 

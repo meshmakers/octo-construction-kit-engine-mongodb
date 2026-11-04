@@ -67,6 +67,27 @@ public class CrateConnectionPoolReturnTests(CrateStagingCopyFixture fixture)
     }
 
     [Fact]
+    public async Task AnExhaustedPool_FailsFast_WithTheDriversRealError()
+    {
+        // The classification matches on the driver's text and inner exception; this pins them against the real driver, so an
+        // Npgsql update that changes them is seen here instead of silently turning exhaustion back into a retried error.
+        await using var access = NewAccess(maxPoolSize: 1);
+        var client = NewClient(access);
+        var tenantId = CrateStagingCopyFixture.NewTenantId();
+        await using var held = await access.CreateConnectionAsync(tenantId, Ct);
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var error = await Assert.ThrowsAsync<StreamDataConnectionPoolExhaustedException>(
+            () => client.ExecuteDdlAsync(tenantId, "DROP TABLE IF EXISTS doc.ab8266_never_created", Ct));
+        started.Stop();
+
+        Assert.True(CrateDatabaseClient.IsConnectionPoolExhausted(error.InnerException!), error.ToString());
+        Assert.Equal(tenantId, error.TenantId);
+        // One wait for a slot (Timeout=3), no retries: well below the 35 s the retried wait used to take.
+        Assert.True(started.Elapsed < TimeSpan.FromSeconds(10), $"took {started.Elapsed}");
+    }
+
+    [Fact]
     public async Task ADiscardedConnection_FreesItsPoolSlot()
     {
         // The last resort of the dispose path: a connection that cannot be brought back to idle is broken, so the pool
