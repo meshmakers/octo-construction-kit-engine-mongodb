@@ -77,7 +77,10 @@ public class SeedValueGuardBlueprintIntegrationTests(BlueprintServiceFixture fix
 
             result.BlankedAttributes.Should().OnlyContain(b => !b.AppliedOnUpdate);
             ReasonOf(result.BlankedAttributes, "GuardText").Should().Be("SeedEmpty");
-            ReasonOf(result.BlankedAttributes, "GuardConfig").Should().Be("SeedEmpty");
+            // AB#8263: the skeleton is a non-empty JSON text, so it is not "SeedEmpty"; the report names the field.
+            ReasonOf(result.BlankedAttributes, "GuardConfig").Should().Be("SeedEmptiesJsonField");
+            result.BlankedAttributes.Single(b => b.AttributeName == "GuardConfig").IncomingSummary
+                .Should().Be($"string ({V2Config.Length} chars), empties $.Host");
             ReasonOf(result.BlankedAttributes, "GuardTags").Should().Be("SeedEmpty");
             ReasonOf(result.BlankedAttributes, "GuardCount").Should().Be("SeedOmitted");
             ReasonOf(result.BlankedAttributes, "GuardLevel").Should().Be("ResetToDefault");
@@ -223,6 +226,59 @@ public class SeedValueGuardBlueprintIntegrationTests(BlueprintServiceFixture fix
             Show(entity, "GuardCount").Should().BeEmpty("omitted attribute without default is cleared once confirmed");
             Show(entity, "GuardLevel").Should().Be("5", "an omitted attribute with a CK default is reset to the default once confirmed");
             Show(entity, "GuardMode").Should().Be("3");
+        }
+        finally
+        {
+            await fixture.DropTenantAsync(tenantId);
+        }
+    }
+
+    /// <summary>
+    /// AB#8263: confirming exactly the attribute whose non-empty JSON seed empties a field
+    /// (<c>SeedEmptiesJsonField</c>, the <c>--confirm-blanking &lt;rtId&gt;:&lt;attribute&gt;</c> path) takes the
+    /// whole seed value for that attribute only; the other guarded attributes keep the tenant values.
+    /// The preview announces the same reason and summary as the update. The confirmation also works as a
+    /// second update to the version that is already installed (the follow-up after an install or update
+    /// that kept the tenant value).
+    /// </summary>
+    [Fact]
+    public async Task ApplyUpdate_ConfirmedJsonFieldBlanking_TakesTheSeedValueForThatAttributeOnly()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var service = fixture.GetBlueprintService();
+        var tenantId = await fixture.CreateTestTenantAsync("guard-json");
+
+        try
+        {
+            (await service.ApplyBlueprintAsync(tenantId, GuardBpV1, force: false, ct)).IsSuccess.Should().BeTrue();
+            await SetTenantTextAsync(tenantId, TenantEditedText);
+            var rtId = (await GetGuardEntityAsync(tenantId)).RtId.ToString()!;
+
+            var preview = await service.PreviewUpdateAsync(tenantId, GuardBpV2, BlueprintUpdateMode.Merge, ct);
+            var previewed = preview.BlankedAttributes.Single(b => b.AttributeName == "GuardConfig");
+            previewed.Reason.Should().Be("SeedEmptiesJsonField");
+            previewed.IncomingSummary.Should().Be($"string ({V2Config.Length} chars), empties $.Host");
+            ReasonOf(preview.BlankedAttributes, "GuardText").Should().Be("SeedEmpty");
+
+            var kept = await service.ApplyUpdateAsync(tenantId, GuardBpV2, BlueprintUpdateMode.Merge, null, ct);
+            kept.Success.Should().BeTrue(string.Join("; ", kept.Errors));
+            Show(await GetGuardEntityAsync(tenantId), "GuardConfig").Should().Be(V1Config, "unconfirmed, the tenant value wins");
+
+            // Same version again, now with the confirmation for exactly this attribute.
+            var result = await service.ApplyUpdateAsync(tenantId, GuardBpV2, BlueprintUpdateMode.Merge,
+                new BlueprintUpdateOptions
+                {
+                    ConfirmedBlankings = [new BlueprintBlankingConfirmation { RtId = rtId, AttributeName = "GuardConfig" }]
+                }, ct);
+
+            result.Success.Should().BeTrue(string.Join("; ", result.Errors));
+            result.BlankedAttributes.Single(b => b.AttributeName == "GuardConfig").AppliedOnUpdate.Should().BeTrue();
+            result.BlankedAttributes.Where(b => b.AttributeName != "GuardConfig")
+                .Should().OnlyContain(b => !b.AppliedOnUpdate);
+
+            var entity = await GetGuardEntityAsync(tenantId);
+            Show(entity, "GuardConfig").Should().Be(V2Config, "the confirmed attribute takes the seed value as a whole");
+            Show(entity, "GuardText").Should().Be(TenantEditedText, "an unconfirmed attribute keeps the tenant value");
         }
         finally
         {
