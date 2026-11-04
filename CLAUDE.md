@@ -141,7 +141,9 @@ round-trip gate lives in `RoundTrip/` (`CkMetaModelRoundTripTests`, `CkMetaModel
 - `SeedValueGuardBlueprintIntegrationTests` (AB#6313/AB#6395, `TestBlueprints/.../SeedGuardBp`, CK type
   `Test/SeedGuardEntity`) proves the engine's seed value guard against a real tenant: a blueprint update
   with empty/omitted seed values keeps non-empty tenant values (Merge and Full), reports them, applies them
-  only with `AllowBlanking`, and an omitted attribute at its CK default is not reported. It has its own
+  only with `AllowBlanking` (or a `ConfirmedBlankings` pair), and an omitted attribute at its CK default is not
+  reported. A non-empty JSON seed that empties a field is reported as `SeedEmptiesJsonField` with the field's
+  path, never as `SeedEmpty` (AB#8263). It has its own
   collection. Adding CK elements to `TestCkModel` also requires the golden
   `testData/ckv2-golden-main-v1-ck-documents.txt` to be extended (`CkV2CompatibilityTests`).
 - Put a new long-running class into its own collection (own fixture or a fixture shared only where
