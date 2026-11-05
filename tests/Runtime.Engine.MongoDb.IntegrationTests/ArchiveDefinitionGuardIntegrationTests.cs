@@ -768,4 +768,58 @@ public class ArchiveDefinitionGuardIntegrationTests(ArchiveDefinitionGuardFixtur
             await fixture.DropTenantAsync(tenantId);
         }
     }
+
+    // AB#8332 (prod-1 energyiq): the archive lifecycle appends the columns a seed adds, so after the install the tenant holds
+    // the columns in another order than the seed. Columns are identified by key: a re-apply with the same columns in another
+    // order is no change in the preview, and the update keeps the order, the version and the state of the computed column -
+    // no new backfill.
+    [Fact]
+    public async Task ABlueprintUpdate_WithTheSameColumnsInAnotherOrder_IsNoChange_AndKeepsTheComputedColumn()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var service = fixture.GetBlueprintService();
+        var tenantId = await fixture.CreateTestTenantAsync("archorder");
+        try
+        {
+            var tenant = await fixture.EnableStreamDataAsync(tenantId);
+            (await service.ApplyBlueprintAsync(tenantId, new BlueprintId("ArchiveGuardBp", "1.0.0"), force: false, ct)).IsSuccess.Should().BeTrue();
+            (await service.ApplyUpdateAsync(tenantId, new BlueprintId("ArchiveGuardBp", "1.2.0"), BlueprintUpdateMode.Full, null, ct))
+                .Success.Should().BeTrue();
+            var raw = new OctoObjectId("6a7000000000000000007997");
+            var store = tenant.GetArchiveRuntimeStore();
+            await store.SetStatusAsync(raw, CkArchiveStatus.Activated);
+            (await service.ApplyUpdateAsync(tenantId, new BlueprintId("ArchiveGuardBp", "1.3.0"), BlueprintUpdateMode.Full, null, ct))
+                .Success.Should().BeTrue();
+            await store.SetComputedColumnStateAsync(raw, "dischargeKw", ComputedColumnState.Active);
+            var jobsBefore = (await tenant.GetRecomputeJobStore().GetForArchiveAsync(raw, 10)).Count;
+            string?[] TenantOrder = ["amountvalue_sum", "dischargingPower", "dischargeKw"];
+            (await store.GetAsync(raw))!.Columns.Select(c => c.Name ?? c.Path).Should().Equal(TenantOrder);
+
+            var reordered = new BlueprintId("ArchiveGuardBp", "1.6.0");
+            var preview = await service.PreviewUpdateAsync(tenantId, reordered, BlueprintUpdateMode.Full, ct);
+
+            preview.Changes.Should().NotContain(c => c.EntityId == raw.ToString(),
+                "the seed lists the same columns in another order and carries no runtime state of the computed column");
+
+            var updated = await service.ApplyUpdateAsync(tenantId, reordered, BlueprintUpdateMode.Full, null, ct);
+
+            updated.Success.Should().BeTrue(string.Join("; ", updated.Errors));
+            updated.ArchiveFormulaChanges.Should().BeEmpty();
+            updated.ArchiveColumnsAdded.Should().BeEmpty();
+            var columns = (await store.GetAsync(raw))!.Columns;
+            columns.Select(c => c.Name ?? c.Path).Should().Equal(TenantOrder);
+            var computed = columns.Single(c => c.Name == "dischargeKw");
+            computed.ComputedVersion.Should().Be(0);
+            computed.ComputedState.Should().Be(ComputedColumnState.Active);
+            computed.Formula.Should().Be("dischargingpower / 1000");
+            (await tenant.GetRecomputeJobStore().GetForArchiveAsync(raw, 10)).Should().HaveCount(jobsBefore);
+
+            (await service.PreviewUpdateAsync(tenantId, reordered, BlueprintUpdateMode.Full, ct)).Changes
+                .Should().NotContain(c => c.EntityId == raw.ToString());
+        }
+        finally
+        {
+            await fixture.DropTenantAsync(tenantId);
+        }
+    }
 }
