@@ -2972,6 +2972,17 @@ Rules that keep this closed:
 
 Pinned by `SystemTenantVirginBootstrapTests` (isolated `VirginSystemFixture` container).
 
+## JSON ImportRt against MongoDB (AB#8325)
+
+`ImportRtJsonAwaitIntegrationTests` (own collection and fixture, throw-away child tenants, CK model `JsonAwait` built in C#)
+pins the engine fix of AB#8325 against a real MongoDB: a JSON `ImportRt` (`IImportRtModelCommand.ImportAsync` /
+`ImportAsCallerAsync` with `application/json`) returns only after its entities are committed (readable at once), a record
+member that only a CK method may write is carried over by record key, a keyless (also derived) record array with a stored
+protected value is refused with message 141 and writes nothing, and a duplicate key in the file fails the call and commits no
+entity of the file. Before the engine fix all five were red (the JSON bulks were written from an `async void` handler after the
+call had committed, and record values arrived as JSON objects). The engine side: engine `CLAUDE.md`, "JSON import writes its
+bulks inside the awaited call".
+
 ## Test Data Structure
 
 The test CK model includes this hierarchy:
