@@ -121,8 +121,11 @@ public class ImportRtJsonAwaitIntegrationTests(ImportRtJsonAwaitFixture fixture)
             var fresh = OctoObjectId.GenerateNewId();
 
             // Insert of an active stored rtId fails on the duplicate key; the new entity of the same file must not stay.
-            await Assert.ThrowsAnyAsync<Exception>(() => ImportAsync(tenant,
+            // The refusal comes from the database write (duplicate key of the stored rtId), not from an earlier step.
+            var ex = await Assert.ThrowsAsync<ExchangeException>(() => ImportAsync(tenant,
                 Holders((fresh, "fresh"), (existing, "dup")), ImportStrategy.Insert));
+            Assert.StartsWith("Bulk import failed", ex.Message);
+            Assert.Contains(existing.ToString(), ex.ToString());
 
             Assert.Empty(await TryReadAsync(tenant, fresh));
             Assert.Equal("stored", (await ReadAsync(tenant, existing)).Attributes["Name"]);
