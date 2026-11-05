@@ -764,6 +764,17 @@ before a formula change is refused ("enable it first"); a seed that drops the fo
 Tests: `ArchiveDefinitionGuardIntegrationTests` (`ImportRt_AnUnchangedFormula_*`, `ImportRt_ARuntimeMemberInTheSeed_*`,
 `ImportRt_AChangedFormula_*`, `ABlueprintUpdate_KeepsTheVersionOfAComputedColumn_*`), `BlueprintEntityComparerTests` (engine).
 
+### Column order on re-import (AB#8332)
+
+Columns are identified by key, never by position. The lifecycle appends a column a seed adds (`TakeColumnAdditions`), so after an install
+the stored order can differ from the seed. `ArchiveDefinitionGuard.KeepColumnOrder` writes the columns the archive already has in the
+stored order and every other column behind them in seed order, and the blueprint preview pairs archive columns by key
+(`BlueprintEntityComparer`). A re-apply whose seed lists the same columns in another order is therefore no change in the preview and a
+no-op for the definition: version, state and formula of every computed column stay, no backfill is queued.
+
+Tests: `ArchiveDefinitionGuardIntegrationTests.ABlueprintUpdate_WithTheSameColumnsInAnotherOrder_*` (test blueprint
+`ArchiveGuardBp` 1.6.0), engine `BlueprintEntityComparerTests.ArchiveColumnsInAnotherOrder_*`, `ArchiveDefinitionGuardColumnOrderTests`.
+
 **A rollup that keeps failing** does not change its status: `Failed` would stop its reads over what is a passing problem more often than not, and the next tick retries anyway. The orchestrator writes `LastRunError`, `LastRunErrorAt` and `ConsecutiveRunFailures` (runtime state, System.StreamData 1.20.0) on the entity from the first failed run, an event `Archive.RollupRunFailing` to the event log at the third failed run in a row, and clears the error with the next run that succeeds. A rollup that waits for a disabled source does not fail: it stalls by design.
 
 ### Path validation at activation
