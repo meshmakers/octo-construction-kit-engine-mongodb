@@ -104,7 +104,9 @@ public class ImportRtRecordMemberPreservationIntegrationTests(ImportRtRecordMemb
             Assert.Contains("Looses[0].Token", ex.Message);
             var stored = await ReadAsync(tenant, rtId);
             Assert.Equal("stored", stored.Attributes["Name"]);
-            Assert.Equal("secret", Records(stored.Attributes["Looses"]).Single().Attributes["Token"]);
+            var loose = Records(stored.Attributes["Looses"]).Single();
+            Assert.Equal("l", loose.Attributes["Label"]);
+            Assert.Equal("secret", loose.Attributes["Token"]);
         });
     }
 
@@ -141,8 +143,11 @@ public class ImportRtRecordMemberPreservationIntegrationTests(ImportRtRecordMemb
 
             Assert.Equal(141, ex.MessageNumber);
             Assert.Contains("LooseEntries[0].Token", ex.Message);
-            Assert.Equal("secret",
-                Records((await ReadAsync(tenant, rtId)).Attributes["LooseEntries"]).Single().Attributes["Token"]);
+            var stored = await ReadAsync(tenant, rtId);
+            Assert.Equal("stored", stored.Attributes["Name"]);
+            var loose = Records(stored.Attributes["LooseEntries"]).Single();
+            Assert.Equal("l", loose.Attributes["Label"]);
+            Assert.Equal("secret", loose.Attributes["Token"]);
         });
     }
 
