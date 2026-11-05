@@ -268,6 +268,28 @@ Clamping a diagnostic label is strictly better than refusing to serve the tenant
 this back into a validation rule on the database name — MongoDB's own 63-byte limit is the only one
 callers should have to satisfy.
 
+## Repository clients are released, not only dropped (AB#8281)
+
+Every `AdminMongoRepositoryClient` / `UserMongoRepositoryClient` is a MongoDB driver cluster of its own (own application
+name, own `ClusterConfigurator`, both part of the driver's `ClusterRegistry` key): one heartbeat thread, one RTT-monitor
+thread and its pooled sockets per client and database. Rules:
+
+- **`MongoClient.Dispose()` releases nothing of that** in driver 3.x: with the default cluster source it only returns the
+  cluster to the process-wide registry, which keeps sockets and monitor threads alive. `MongoRepositoryClient.Dispose` calls
+  `ClusterRegistry.Instance.UnregisterAndDisposeCluster(client.Cluster)` and then disposes the client. Do not "simplify" it
+  back to `_client.Dispose()` (the first AB#8281 attempt did; the sockets stayed open) or to `Cluster.Dispose()` alone (the
+  registry entry and, through the configurator, the host's service graph stay reachable).
+- **The accesses own their clients.** `RepositoryClientCache<TClient>` (behind `AdminRepositoryAccess` /
+  `UserRepositoryAccess`) tracks every client it built, evicted ones included, and disposes them all when the DI container
+  disposes the access (both are `IDisposable` singletons). `Invalidate` still only evicts (the FixAll /
+  `CoreServerSessionPool` reason is in the code); an evicted client is released at shutdown instead of never.
+- Why it mattered: no client was ever disposed, so every disposed host leaked its clients. The identity integration suite
+  (one host per test class plus derived hosts, hundreds of tenants) ended with ~5,300 MongoDB connections, ~1,300 RTT-monitor
+  and ~1,800 heartbeat threads and an 8-9 GB test process; on a loaded CI agent it ran out of memory and token requests
+  answered 500 (identity build 65204 on r3.5.61).
+- Test: `RepositoryClientDisposalTests` asserts on the **server** (`$currentOp` by application name) that a disposed access
+  leaves no connection behind - an `ObjectDisposedException` on the client alone also passed with the sockets still open.
+
 ## Write and read concern of the repository clients (AB#8026)
 
 `MongoRepositoryClient.CreateClientSettings` sets the consistency of **every** repository client (admin and user,

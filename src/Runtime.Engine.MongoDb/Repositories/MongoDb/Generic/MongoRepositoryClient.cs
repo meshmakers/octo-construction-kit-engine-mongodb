@@ -25,6 +25,7 @@ using MongoDB.Bson.Serialization.Conventions;
 using MongoDB.Bson.Serialization.IdGenerators;
 using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
+using MongoDB.Driver.Core.Clusters;
 using MongoDB.Driver.Core.Events;
 using MongoDB.Driver.GeoJsonObjectModel;
 
@@ -201,9 +202,30 @@ public abstract class MongoRepositoryClient : IRepositoryClient
         return new MongoRepository(loggerFactory, Client.GetDatabase(name));
     }
 
+    /// <summary>
+    ///     Closes this client's cluster - server monitors, RTT monitor, pooled sockets - and removes it from the
+    ///     driver's process-wide <see cref="MongoDB.Driver.Core.Clusters.ClusterRegistry" /> (AB#8281).
+    /// </summary>
+    /// <remarks>
+    ///     <see cref="MongoClient.Dispose()" /> alone releases nothing of that: with the default cluster source of
+    ///     driver 3.x it only returns the cluster to the registry, which keeps it - and every socket and monitor
+    ///     thread - alive for the rest of the process (verified against a live server in
+    ///     <c>RepositoryClientDisposalTests</c>). Disposing only the cluster (the code before AB#8281) closed the
+    ///     sockets but left the registry entry, and through the cluster's configurator this client's service graph,
+    ///     reachable. The cluster is never shared with another client: every client has its own application name and
+    ///     its own <c>ClusterConfigurator</c> delegate, both part of the registry key. A client that never connected
+    ///     has nothing to release; the getter is not used here so that disposing does not build a driver client first.
+    /// </remarks>
     public void Dispose()
     {
-        Client.Cluster.Dispose();
+        var client = _client;
+        if (client != null)
+        {
+            ClusterRegistry.Instance.UnregisterAndDisposeCluster(client.Cluster);
+            client.Dispose();
+        }
+
+        GC.SuppressFinalize(this);
     }
 
     /// <summary>
