@@ -3119,6 +3119,22 @@ concept `docs/concept-computed-columns.md` §8.3a in the engine repository). Thi
   so the rollup orchestrator never adopts, coalesces into or fails one.
 
 
+## Caller ImportRt keeps protected record members (AB#8141)
+
+Engine rule: engine `CLAUDE.md`, "Omission inside records (AB#8141): merge". `ImportRtRecordMemberPreservationIntegrationTests`
+(own collection, throw-away tenant per test, C#-built `ckLanguage: 2` model `RecMem` imported through `ImportCkModelAsync`, so
+records are resolved by the engine like any installed model) pins it against MongoDB: the stored values are written through the
+repository, a caller `ImportAsCallerAsync` upsert (YAML) omits the `MethodOnly` member, and the document read back keeps it - single
+record (position), record array (record key, reordered, a new element keeps nothing), a member that exists only on a record derived
+from the declared one; a keyless record array (also of a derived record) with a stored value is refused with message 141 and the
+stored document is unchanged. Two limits of the import path the test works around, both outside AB#8141:
+
+- the YAML reader of `ImportRt` (`RtRecordConverter`) reads only scalar member values inside a record, so nested records cannot be
+  written by a YAML file (covered by the engine unit tests);
+- the JSON path writes its bulks from an `async void` event handler (`BulkDeserialized += async ...` in `ImportFileAsync`):
+  `ImportAsync` / `ImportAsCallerAsync` return and commit before the entities are written, and an exception of the write (141
+  included) is lost. Measured here: the entity is not there right after the call, it is there 3 s later. Bug AB#8325.
+
 ## Re-ensuring a tenant's MongoDB user (AB#8177)
 
 The tenant database user (`OctoSystemConfiguration.DatabaseUser`, e.g. `octo-system-ds-user-<db>`) is created only by
