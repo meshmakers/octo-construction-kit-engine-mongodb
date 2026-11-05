@@ -10,7 +10,8 @@ internal interface IUserRepositoryAccess
     /// because the driver never re-authenticates an already-open connection (AB#4690). The evicted client
     /// is deliberately NOT disposed: live TenantContext / data-source instances may still hold it, and
     /// disposing would fail their in-flight operations with ObjectDisposedException('CoreServerSessionPool').
-    /// No-op when nothing is cached.
+    /// The evicted client stays owned by the access and is disposed when the access is disposed with the DI
+    /// container (AB#8281). No-op when nothing is cached.
     /// </summary>
     void Invalidate(string databaseName);
 }
