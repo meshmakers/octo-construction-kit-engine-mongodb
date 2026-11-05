@@ -336,6 +336,8 @@ public class TenantContext : ITenantContext
         // Capture schema versions BEFORE updating (for migration detection)
         // Note: We read directly from the database to avoid recursion through IRuntimeRepositoryProvider
         // which would call TryFindTenantContextAsync and trigger UpdateSystemCkModelAsync again
+        // The capture time lets the upgrade service tell a concurrent upgrade by another service from a manual downgrade (AB#8265).
+        var schemaSnapshotCapturedAtUtc = DateTime.UtcNow;
         IReadOnlyDictionary<string, string>? previousSchemaVersions = null;
         if (!isRepositoryInCreation)
         {
@@ -398,7 +400,7 @@ public class TenantContext : ITenantContext
             }
 
             // Run migrations after updating the System CK model
-            await RunSystemCkModelMigrationsAsync(tenantId, previousSchemaVersions);
+            await RunSystemCkModelMigrationsAsync(tenantId, previousSchemaVersions, schemaSnapshotCapturedAtUtc);
 
             // Invalidate cache so the next access triggers a fresh load with all currently-available models.
             // Use tenantId parameter (not TenantId property) because this method is called for child tenants too.
@@ -430,9 +432,11 @@ public class TenantContext : ITenantContext
     /// </summary>
     private Task RunSystemCkModelMigrationsAsync(
         string tenantId,
-        IReadOnlyDictionary<string, string>? previousSchemaVersions)
+        IReadOnlyDictionary<string, string>? previousSchemaVersions,
+        DateTime schemaSnapshotCapturedAtUtc)
     {
-        return RunCkModelMigrationsForImportAsync(tenantId, SystemCkIds.CkModelId, previousSchemaVersions);
+        return RunCkModelMigrationsForImportAsync(tenantId, SystemCkIds.CkModelId, previousSchemaVersions,
+            schemaSnapshotCapturedAtUtc);
     }
 
     /// <summary>
@@ -441,7 +445,8 @@ public class TenantContext : ITenantContext
     private async Task RunCkModelMigrationsForImportAsync(
         string tenantId,
         CkModelId importedModelId,
-        IReadOnlyDictionary<string, string>? previousSchemaVersions)
+        IReadOnlyDictionary<string, string>? previousSchemaVersions,
+        DateTime schemaSnapshotCapturedAtUtc)
     {
         var ckModelUpgradeService = _serviceProvider.GetService<ICkModelUpgradeService>();
         if (ckModelUpgradeService == null)
@@ -467,7 +472,11 @@ public class TenantContext : ITenantContext
         var result = await ckModelUpgradeService.UpgradeModelsAsync(
             tenantId,
             new[] { modelRange },
-            new CkMigrationOptions { ContinueOnError = false },
+            new CkMigrationOptions
+            {
+                ContinueOnError = false,
+                SchemaSnapshotCapturedAtUtc = schemaSnapshotCapturedAtUtc
+            },
             previousSchemaVersions,
             CancellationToken.None);
 
@@ -2727,6 +2736,7 @@ public class TenantContext : ITenantContext
         }
 
         // Capture schema versions BEFORE importing (for migration detection)
+        var schemaSnapshotCapturedAtUtc = DateTime.UtcNow;
         var previousSchemaVersions = await GetSchemaVersionsDirectAsync(tenantDatabaseSourceIdentifier);
 
         // Capture declared display rules BEFORE importing (for backfill sweep detection, AB#4812)
@@ -2759,7 +2769,7 @@ public class TenantContext : ITenantContext
 
                 // Run migrations after successful import
                 await RunCkModelMigrationsForImportAsync(TenantId, ckCompiledModelRoot.ModelId,
-                    previousSchemaVersions);
+                    previousSchemaVersions, schemaSnapshotCapturedAtUtc);
 
                 // Invalidate cache so the next access triggers a fresh load with all currently-available models
                 if (_cacheService.IsTenantLoaded(TenantId))
@@ -2869,6 +2879,7 @@ public class TenantContext : ITenantContext
         }
 
         // Capture schema versions BEFORE importing (for migration detection)
+        var schemaSnapshotCapturedAtUtc = DateTime.UtcNow;
         var previousSchemaVersions = await GetSchemaVersionsDirectAsync(tenantDatabaseSourceIdentifier);
 
         // Capture declared display rules BEFORE importing (for backfill sweep detection, AB#4812)
@@ -2900,7 +2911,8 @@ public class TenantContext : ITenantContext
             _logger.LogInformation("CK Model '{CkModelId}' imported into tenant '{TenantId}'", ckModelId, TenantId);
 
             // Run migrations after successful import
-            await RunCkModelMigrationsForImportAsync(TenantId, ckModelId, previousSchemaVersions);
+            await RunCkModelMigrationsForImportAsync(TenantId, ckModelId, previousSchemaVersions,
+                schemaSnapshotCapturedAtUtc);
 
             // Invalidate cache so the next access triggers a fresh load with all currently-available models
             if (_cacheService.IsTenantLoaded(TenantId))
