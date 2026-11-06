@@ -3082,6 +3082,78 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         await _databaseClient.RefreshArchiveTableAsync(_tenantId, table, CrateStatementClass.Maintenance, cancellationToken);
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// AB#8331. Walks <c>[from, to)</c> (clipped to the archive's time span) in the backfill's time slices with
+    /// the keyset cursor, but reads only the rows whose active cell is NULL while an operand the formula
+    /// references is not NULL (<see cref="ComputedColumnBackfillSqlBuilder.BuildRepairFilter"/>), evaluates the
+    /// active formula over them and writes the result into the active physical column. A row whose formula
+    /// legitimately yields NULL stays NULL; the keyset cursor moves past it, so the walk always ends.
+    /// </remarks>
+    public async Task RepairComputedColumnAsync(
+        ArchiveSnapshot snapshot, string columnName, DateTime from, DateTime to,
+        IProgress<ComputedColumnBackfillProgress>? progress, CancellationToken cancellationToken)
+    {
+        var target = snapshot.Columns.FirstOrDefault(
+            c => c.IsComputed && string.Equals(c.Name, columnName, StringComparison.Ordinal));
+        if (target?.Name is null || target.ResultType is null || string.IsNullOrWhiteSpace(target.Formula))
+        {
+            throw new InvalidOperationException(
+                $"Computed column '{columnName}' does not exist on archive {snapshot.RtId}.");
+        }
+
+        var targetPhysical = ComputedColumnNaming.Active(target);
+        var operands = ReadableOperandPhysicalColumns(snapshot)
+            .Where(p => !string.Equals(p, targetPhysical, StringComparison.Ordinal))
+            .ToList();
+        var plan = new[]
+        {
+            new ComputedColumnPlanItem(targetPhysical, target.Formula!, target.ResultType.Value, operands.ToArray())
+        };
+        var referenced = operands.Where(p => ReferencesToken(target.Formula!, p)).ToList();
+        var rowFilter = ComputedColumnBackfillSqlBuilder.BuildRepairFilter(targetPhysical, referenced);
+
+        var table = TenantSchema.QualifiedArchiveTable(_tenantId, snapshot.RtId.ToString());
+        var keyColumns = BackfillKeyColumns(snapshot);
+        var updateSql = ComputedColumnBackfillSqlBuilder.BuildBulkUpdate(table, targetPhysical, keyColumns);
+        var timeColumn = keyColumns[0];
+        var sliceWidth = _configuration.ComputedColumnBackfillSlice > TimeSpan.Zero
+            ? _configuration.ComputedColumnBackfillSlice
+            : TimeSpan.FromDays(1);
+
+        long rows = 0;
+        var reporter = new CheckpointReporter(progress);
+        var (readable, span) = await ReadBackfillTimeBoundsAsync(table, timeColumn, cancellationToken);
+        if (!readable)
+        {
+            throw new InvalidOperationException(
+                $"The time span of archive {snapshot.RtId} could not be read; the repair of '{columnName}' needs it.");
+        }
+
+        if (span is { } bounds && referenced.Count > 0)
+        {
+            var start = from > bounds.Lo ? from : bounds.Lo;
+            while (start < to && start <= bounds.Hi)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var end = start + sliceWidth < to ? start + sliceWidth : to;
+                rows = await BackfillSliceAsync(
+                    table, keyColumns, operands, updateSql, plan, targetPhysical,
+                    new ComputedColumnBackfillSqlBuilder.TimeSlice(timeColumn, start, end), rows, reporter,
+                    cancellationToken, rowFilter);
+                start = end;
+                reporter.Checkpoint(rows, start);
+            }
+
+            _logger.LogInformation(
+                "Repair of computed column '{Column}' on archive {Archive}: {Rows} rows re-evaluated in [{From:O}, {To:O}).",
+                columnName, snapshot.RtId, rows, from, to);
+        }
+
+        reporter.Checkpoint(rows, to);
+        await _databaseClient.RefreshArchiveTableAsync(_tenantId, table, CrateStatementClass.Maintenance, cancellationToken);
+    }
+
     /// <summary>Maps the resumable progress to a plain row count (the IProgress&lt;long&gt; overload).</summary>
     private sealed class RowsProgress(IProgress<long> inner) : IProgress<ComputedColumnBackfillProgress>
     {
@@ -3129,7 +3201,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         ComputedColumnBackfillSqlBuilder.TimeSlice? slice,
         long rows,
         IProgress<long>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? rowFilter = null)
     {
         // Keyset (cursor) paging over the primary key, NOT OFFSET: each page seeks straight past the
         // previous page's last row, so memory stays O(BackfillPageSize) regardless of archive size.
@@ -3141,7 +3214,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             cancellationToken.ThrowIfCancellationRequested();
 
             var selectSql = ComputedColumnBackfillSqlBuilder.BuildSelect(
-                table, keyColumns, valueColumns, BackfillPageSize, cursor, slice);
+                table, keyColumns, valueColumns, BackfillPageSize, cursor, slice, rowFilter);
 
             var page = new List<Dictionary<string, object?>>(BackfillPageSize);
             await foreach (var row in _databaseClient.StreamRawRowsAsync(_tenantId, selectSql, CrateStatementClass.Maintenance, cancellationToken))
@@ -3157,23 +3230,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             // Write the whole page in ONE CrateDB bulk (one prepared UPDATE, one round-trip) instead
             // of N individual UPDATE statements — the per-statement cost dominated the backfill
             // (~500x on 4k rows measured). Each computed value is still evaluated per row in .NET.
-            var argumentSets = new List<IReadOnlyList<object?>>(page.Count);
-            foreach (var row in page)
-            {
-                ApplyComputedColumns(row, plan);
-                row.TryGetValue(targetPhysical, out var value);
-
-                // Positional args: [computedValue, key0, key1, …] to match BuildBulkUpdate's $1..$n.
-                var args = new object?[keyColumns.Count + 1];
-                args[0] = value;
-                for (var k = 0; k < keyColumns.Count; k++)
-                {
-                    row.TryGetValue(keyColumns[k], out var keyValue);
-                    args[k + 1] = keyValue;
-                }
-
-                argumentSets.Add(args);
-            }
+            var argumentSets = EvaluateBackfillPage(page, plan, targetPhysical, keyColumns, slice, cursor, rows);
 
             await _databaseClient.ExecuteBulkAsync(_tenantId, updateSql, argumentSets, CrateStatementClass.Maintenance, cancellationToken);
             rows += page.Count;
@@ -3195,6 +3252,80 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
             cursor = nextCursor;
         }
+    }
+
+    /// <summary>
+    /// Evaluates the computed value of every row of a backfill / repair page into the positional bulk
+    /// arguments <c>[computedValue, key0, key1, …]</c> (matching <c>BuildBulkUpdate</c>'s <c>$1..$n</c>).
+    /// <para>
+    /// AB#8331: an evaluation aborted by an exception (out of memory, …) is never written as NULL. The page
+    /// is evaluated once more — a transient allocation failure usually passes — and when that fails too the
+    /// backfill stops with the column, the time slice and the last written key in the message, which the
+    /// job records as its failure reason. Nothing of the page is written.
+    /// </para>
+    /// </summary>
+    private List<IReadOnlyList<object?>> EvaluateBackfillPage(
+        List<Dictionary<string, object?>> page,
+        IReadOnlyList<ComputedColumnPlanItem> plan,
+        string targetPhysical,
+        IReadOnlyList<string> keyColumns,
+        ComputedColumnBackfillSqlBuilder.TimeSlice? slice,
+        IReadOnlyList<(string Column, object? Value)>? cursor,
+        long rowsWritten)
+    {
+        try
+        {
+            return EvaluatePageOnce(page, plan, targetPhysical, keyColumns);
+        }
+        catch (Exception first) when (first is not OperationCanceledException)
+        {
+            _logger.LogWarning(first,
+                "Evaluating a page of {Rows} rows for computed column '{Column}' failed; evaluating the page once more.",
+                page.Count, targetPhysical);
+            try
+            {
+                return EvaluatePageOnce(page, plan, targetPhysical, keyColumns);
+            }
+            catch (Exception second) when (second is not OperationCanceledException)
+            {
+                var range = slice is { } s
+                    ? $"time slice [{s.From:O}, {s.To:O})"
+                    : "an unsliced walk";
+                var after = cursor is { Count: > 0 }
+                    ? "after key (" + string.Join(", ", cursor.Select(c => $"{c.Column}={c.Value}")) + ")"
+                    : "from the start of the slice";
+                throw new Meshmakers.Octo.Runtime.Contracts.StreamData.StreamDataException(
+                    $"Computed column '{targetPhysical}' could not be evaluated for the rows of {range} {after} " +
+                    $"({rowsWritten} rows were written before; nothing of this page was stored): {second.Message}",
+                    inner: second);
+            }
+        }
+    }
+
+    private List<IReadOnlyList<object?>> EvaluatePageOnce(
+        List<Dictionary<string, object?>> page,
+        IReadOnlyList<ComputedColumnPlanItem> plan,
+        string targetPhysical,
+        IReadOnlyList<string> keyColumns)
+    {
+        var argumentSets = new List<IReadOnlyList<object?>>(page.Count);
+        foreach (var row in page)
+        {
+            ApplyComputedColumns(row, plan);
+            row.TryGetValue(targetPhysical, out var value);
+
+            var args = new object?[keyColumns.Count + 1];
+            args[0] = value;
+            for (var k = 0; k < keyColumns.Count; k++)
+            {
+                row.TryGetValue(keyColumns[k], out var keyValue);
+                args[k + 1] = keyValue;
+            }
+
+            argumentSets.Add(args);
+        }
+
+        return argumentSets;
     }
 
     /// <summary>
@@ -4311,9 +4442,15 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// Evaluates each computed column in <paramref name="plan"/> over the row's current column
     /// values and writes the result back into <paramref name="attributes"/> under the column's
     /// physical name. The result also feeds any dependent computed column later in the plan. A
-    /// formula that throws (or yields NaN / null) stores NULL — ingest never fails on a computed
-    /// column (concept §5). An operand without a value is bound as NaN (AB#8060): an unhandled NULL
-    /// in arithmetic yields NULL, <c>coalesce(x, default)</c> / <c>isnull(x)</c> handle it.
+    /// formula that yields no value (NaN / null) stores NULL — bad data never fails ingest (concept §5).
+    /// An operand without a value is bound as NaN (AB#8060): an unhandled NULL in arithmetic yields
+    /// NULL, <c>coalesce(x, default)</c> / <c>isnull(x)</c> handle it.
+    /// <para>
+    /// An evaluation aborted by an exception (<see cref="FormulaEvaluationException"/>, an
+    /// <see cref="OutOfMemoryException"/>) is <b>not</b> stored as NULL (AB#8331): the value is unknown, not
+    /// empty. The exception propagates — ingest fails the write so the producer retries, the backfill retries
+    /// its page and then fails the job. Before, prod-1 stored NULL for rows whose evaluation ran out of memory.
+    /// </para>
     /// </summary>
     private void ApplyComputedColumns(Dictionary<string, object?> attributes,
         IReadOnlyList<ComputedColumnPlanItem> plan)
@@ -4331,12 +4468,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
                 var args = BuildFormulaArguments(attributes, item.Operands);
                 result = _formulaEngine.Evaluate(item.Formula, args, item.ResultType);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogWarning(ex,
-                    "Computed column '{Column}' formula '{Formula}' failed to evaluate; storing NULL.",
+                _logger.LogError(ex,
+                    "Computed column '{Column}' formula '{Formula}' could not be evaluated; nothing is stored for the row.",
                     item.ColumnName, item.Formula);
-                result = null;
+                throw;
             }
 
             attributes[item.ColumnName] = result;

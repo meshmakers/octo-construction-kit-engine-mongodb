@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
@@ -37,7 +38,8 @@ internal static class ComputedColumnBackfillSqlBuilder
         IReadOnlyList<string> valueColumns,
         int? limit = null,
         IReadOnlyList<(string Column, object? Value)>? cursor = null,
-        TimeSlice? slice = null)
+        TimeSlice? slice = null,
+        string? rowFilter = null)
     {
         var sb = new StringBuilder("SELECT ");
         AppendColumnList(sb, keyColumns, valueColumns);
@@ -55,6 +57,12 @@ internal static class ComputedColumnBackfillSqlBuilder
         if (cursor is { Count: > 0 })
         {
             predicates.Add(BuildKeysetPredicate(cursor));
+        }
+
+        if (!string.IsNullOrEmpty(rowFilter))
+        {
+            // AB#8331: the repair walk only reads the rows it has to re-evaluate.
+            predicates.Add(rowFilter);
         }
 
         if (predicates.Count > 0)
@@ -75,6 +83,22 @@ internal static class ComputedColumnBackfillSqlBuilder
         if (limit is { } l) sb.Append(" LIMIT ").Append(l);
         sb.Append(';');
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// <c>("{target}" IS NULL AND ("{op1}" IS NOT NULL OR "{op2}" IS NOT NULL …))</c> — the rows a computed
+    /// column repair re-evaluates (AB#8331): the cell is NULL although at least one operand the formula
+    /// references has a value. A formula without operands has nothing to repair (<c>FALSE</c>).
+    /// </summary>
+    public static string BuildRepairFilter(string targetColumn, IReadOnlyList<string> operandColumns)
+    {
+        if (operandColumns.Count == 0)
+        {
+            return "FALSE";
+        }
+
+        var operands = string.Join(" OR ", operandColumns.Select(c => $"\"{c}\" IS NOT NULL"));
+        return $"(\"{targetColumn}\" IS NULL AND ({operands}))";
     }
 
     /// <summary>
