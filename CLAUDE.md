@@ -1345,6 +1345,16 @@ Never put `PhysicalName` into an alias — a second formula change would rename 
 queries and MeshBoard widgets. Tests: `CrateDbStreamDataComputedColumnLogicalNamingTests` (unit, SQL),
 `ComputedColumnLogicalNameQueryIntegrationTests` (real CrateDB, formula changed 0/1/2 times).
 
+### Computed Columns — No NULL for an aborted evaluation, repair (AB#8331)
+
+`ApplyComputedColumns` no longer stores NULL when the formula engine throws (`FormulaEvaluationException`, out of memory): ingest
+fails the write, the backfill (`EvaluateBackfillPage`) evaluates the page once more and then throws a contracts
+`StreamDataException` naming the column, the time slice and the last written key (nothing of the page is written). A formula that
+yields no value (NaN / null, AB#8060) still stores NULL. `RepairComputedColumnAsync` walks `[from, to)` in the backfill's slices
+with the extra page filter `ComputedColumnBackfillSqlBuilder.BuildRepairFilter` (target NULL and an operand the formula references
+not NULL) and writes the active column. Tests: `CrateDbComputedColumnEvaluationFailureTests` (incl. a 2,000,000-row synthetic
+backfill: ~4.6 KB allocated per row, live heap flat).
+
 ### Rollup Lifecycle
 
 - `MongoCkRollupArchiveRuntimeStore` extends the runtime-store contract with:
