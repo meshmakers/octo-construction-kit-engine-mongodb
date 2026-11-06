@@ -121,6 +121,26 @@ public class TenantException : PersistenceException
         return new TenantException("System tenant database does not exist, is not accessible or the system model is missing.");
     }
 
+    /// <summary>
+    /// The system database is reachable and carries a System CK model, but not the version this
+    /// process was compiled against.
+    /// </summary>
+    /// <remarks>
+    /// Names both sides (AB#5492). The generic <see cref="SystemTenantDatabaseNotExisting" /> text
+    /// hid this case completely: after a platform release bumped the System CK model, every
+    /// externally built adapter that was not rebuilt failed on every call with "database does not
+    /// exist ... or the system model is missing", and the actual cause — a version mismatch between
+    /// the adapter image and the platform — took a day to find (finAPI outage 1.-5.10.2026).
+    /// </remarks>
+    public static Exception SystemModelVersionMismatch(CkModelId compiledModelId,
+        IReadOnlyCollection<string> installedSystemModels)
+    {
+        return new TenantException(
+            $"System CK model '{compiledModelId}' (compiled into this process) is not installed in the system " +
+            $"tenant database; installed System models: {string.Join(", ", installedSystemModels)}. " +
+            "The process was built against an older platform release and must be rebuilt/re-released.");
+    }
+
     public static Exception CannotCreateMongoDbRepositoryClient(string databaseName)
     {
         return new TenantException($"Cannot create MongoDB repository client for database '{databaseName}'.");
