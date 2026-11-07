@@ -100,6 +100,14 @@ public class CkMetaModelCacheRoundTripTests(CkModelImportMigrationFixture fixtur
             Assert.Equal(60, thing.AllMethods["Reindex-1"].TimeoutSeconds);
             Assert.Equal(CkMethodHandlers.Service, thing.AllMethods["Ping-1"].Handler);
             Assert.Null(thing.AllMethods["Ping-1"].Definition.Execution?.Handler);
+            // Execution mode (AB#6926): async and an explicit sync survive the cache rebuilt from Mongo; an undeclared
+            // mode reads as 'sync'.
+            Assert.Equal(CkMethodModes.Async, thing.AllMethods["ChangePassword-2"].Mode);
+            Assert.True(thing.AllMethods["ChangePassword-2"].IsAsync);
+            Assert.Equal("sync", thing.AllMethods["Reindex-1"].Definition.Execution?.Mode);
+            Assert.False(thing.AllMethods["Reindex-1"].IsAsync);
+            Assert.Equal(CkMethodModes.Sync, thing.AllMethods["Ping-1"].Mode);
+            Assert.Null(thing.AllMethods["Ping-1"].Definition.Execution?.Mode);
             // AB#7024: methods that do not set the flag read back as false (Reindex-1 is static, but does not replace it).
             Assert.All(thing.AllMethods.Values, m => Assert.False(m.ReplacesGenericCreate));
             // AB#7006: the sensitive result of ChangePassword-2 survives the cache rebuilt from Mongo; methods without

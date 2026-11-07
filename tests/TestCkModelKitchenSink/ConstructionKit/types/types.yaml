@@ -50,6 +50,7 @@ types:
           timeoutSeconds: 30
           idempotent: true
           handler: service
+          mode: async
       - methodId: Ping-1
         visibility: Internal
       - methodId: Reindex-1
@@ -59,6 +60,7 @@ types:
         execution:
           timeoutSeconds: 60
           handler: pipeline
+          mode: sync
   # Inherits Named from Thing and implements Coded itself.
   # AB#6334: internal — it implements the internal Coded-1 and uses the internal role Link.
   - typeId: Gadget

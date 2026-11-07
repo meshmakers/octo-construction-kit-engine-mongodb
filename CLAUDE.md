@@ -2340,6 +2340,20 @@ the catalog side.
   A service whose persistence predates the marker would drop it on import, so a model with a sensitive result is only
   imported by a service whose engine knows the key: the model's raised `minEngineVersion` makes an older engine refuse it
   (message 126) instead of storing the model without the marker.
+**Phase 3 addition (AB#6926, touch-point row 10 of `execution.mode`, engine AB#6925):**
+- `mode` (`CkMethodExecutionDto.Mode`, `'sync'` | `'async'`) is persisted inside the embedded `CkMethodDto.Execution` (class
+  map `CkMethodExecutionDto` in `MongoRepositoryClient.RegisterCkMethodClassMaps`, `SetIgnoreIfNull`). An undeclared mode is
+  left out of the document, so models without the key stay byte-identical and documents written before the field read back
+  as `null`, i.e. the effective mode `sync` (`CkMethodModes.Effective`, `CkMethodGraph.Mode` / `IsAsync`). An explicitly
+  declared `sync` is stored as declared. There is no separate write or read-back site: the DTO is embedded verbatim. The
+  model's raised `minEngineVersion` (engine `CkEngineVersion.ExecutionModeMinEngineVersion`, 3.5.67) is the existing
+  `CkModel.MinEngineVersion` field. Gates: both kitchen sinks declare `mode: async` on the service method
+  `Thing.ChangePassword-2` (C# `RoundTripMethods.Full`, also `idempotent: true`) and an explicit `mode: sync` on the pipeline
+  method `Thing.Reindex-1` (C# `RoundTripMethods.Static`; pipeline handlers are sync only, message 142);
+  `CkMetaModelReflectionGateTests`, `CkMetaModelCacheRoundTripTests` (cache rebuilt from Mongo) and
+  `CkMetaModelLegacyDocumentTests` (`MethodExecutionMode_*`, `MethodExecution_DocumentWrittenBeforeTheModeField_ReadsAsSync`)
+  cover it. A service whose persistence predates the field would drop it on import and run an async method as sync; the
+  model's raised `minEngineVersion` makes a service with an older engine refuse it (message 126).
 - Hidden is not allowed on association-role assignments (engine rule 108); the kitchen sinks use `ReadOnly` there.
 - Index maintenance: `FetchAttributeMetadataAsync` always binds major-qualified references including `Importing`
   models, while the inheritance chain binding follows `includeModelsInStateImporting`. Intentional: attribute
