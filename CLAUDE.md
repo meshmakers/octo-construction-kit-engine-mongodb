@@ -167,6 +167,13 @@ red suite three times into the job timeout, 51009/51014, and hid a mass failure,
 (no dump) so a single hung test aborts the run and is named in the log. Flaky tests are fixed or
 handled per test, never by retrying the step.
 
+**Container memory caps (AB#8511).** The shared mongod runs with `--wiredTigerCacheSizeGB 1` and a 12 GiB container
+limit (measured peaks 6.4-8.4 GiB, mostly WiredTiger data handles of the fixture databases, not cache), every CrateDB test
+container with a 1 GB heap and a 3 GiB limit (`Fixtures/TestContainerLimits.cs`, pinned by
+`TestContainerLimitsTests`). Without them one suite took memory from the whole CI node and several suites at once
+stalled until MongoDB aborted transactions after 60 s. Never raise `transactionLifetimeLimitSeconds` or a test budget
+to hide a stall. Details: `tests/Runtime.Engine.MongoDb.IntegrationTests/README.md`.
+
 **Performance budget tests are not in the CI (AB#8004).** The Test step runs with
 `--filter "Category!=Performance"`. Tests that assert a wall-clock budget carry
 `[Trait("Category", "Performance")]` (today `GetRtEntitiesByInterfacePerformanceTests`, budget AB#6930) and run only in the

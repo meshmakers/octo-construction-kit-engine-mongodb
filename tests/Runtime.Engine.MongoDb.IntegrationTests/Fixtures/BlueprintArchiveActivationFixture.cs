@@ -56,7 +56,9 @@ public class BlueprintArchiveActivationFixture : BlueprintServiceFixture
         var container = new ContainerBuilder(Image)
             .WithName($"cratedb-bp-archive-test-{Guid.NewGuid():N}")
             .WithPortBinding(5432, true)
-            .WithEnvironment("CRATE_HEAP_SIZE", "1g")
+            .WithEnvironment("CRATE_HEAP_SIZE", TestContainerLimits.CrateHeapSize)
+            // AB#8511: hard cap, see TestContainerLimits.
+            .WithCreateParameterModifier(TestContainerLimits.MemoryLimit(TestContainerLimits.CrateMemoryLimitBytes))
             .WithCommand("-Cdiscovery.type=single-node")
             .WithWaitStrategy(Wait.ForUnixContainer().UntilMessageIsLogged("started"))
             .Build();
