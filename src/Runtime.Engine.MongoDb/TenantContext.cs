@@ -3062,6 +3062,18 @@ public class TenantContext : ITenantContext
             availableDependentVersions, cancellationToken, includeServiceManagedModels: true);
     }
 
+    public async Task<OperationResult> ValidateCkModelAsync(CkCompiledModelRoot ckCompiledModelRoot)
+    {
+        ArgumentNullException.ThrowIfNull(ckCompiledModelRoot);
+
+        // AB#8492: read-only, so the tenant data source (not the admin one the import needs for collMod).
+        var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
+        var operationResult = new OperationResult();
+        await _ckModelRepositoryService.ValidateModelAsync(ckCompiledModelRoot, operationResult,
+            new TenantDatabaseSourceIdentifier(null, repositoryDataSource, TenantId));
+        return operationResult;
+    }
+
     public async Task<bool> IsCkModelExistingAsync(CkModelId ckModelId)
     {
         var repositoryDataSource = CreateRepositoryDataSource(DatabaseName);
