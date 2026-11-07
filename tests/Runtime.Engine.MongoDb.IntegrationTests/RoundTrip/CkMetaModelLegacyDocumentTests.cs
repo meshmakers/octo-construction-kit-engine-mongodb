@@ -301,6 +301,63 @@ public class CkMetaModelLegacyDocumentTests
     }
 
     [Fact]
+    public void MethodExecutionMode_AsyncAndExplicitSyncRoundTrip_AndUndeclaredIsOmittedAndReadsAsSync()
+    {
+        // AB#6926: a declared mode is persisted verbatim (async and an explicit sync) ...
+        var methods = new List<CkMethodDto>
+        {
+            new() { MethodId = "Export-1", Execution = new CkMethodExecutionDto { Mode = CkMethodModes.Async } },
+            new() { MethodId = "Run-1", Execution = new CkMethodExecutionDto { Mode = CkMethodModes.Sync } },
+            new() { MethodId = "Ping-1", Execution = new CkMethodExecutionDto { TimeoutSeconds = 30 } }
+        };
+        var document = NewType(methods).ToBsonDocument();
+        Assert.Equal("async", document["methods"][0]["execution"]["mode"].AsString);
+        Assert.Equal("sync", document["methods"][1]["execution"]["mode"].AsString);
+
+        // ... an undeclared one is left out (documents of models without the key stay byte-identical).
+        Assert.DoesNotContain("mode", document["methods"][2]["execution"].AsBsonDocument.Names);
+
+        var readBack = BsonSerializer.Deserialize<CkType>(document);
+        Assert.Equal("async", readBack.Methods![0].Execution!.Mode);
+        Assert.Equal("sync", readBack.Methods[1].Execution!.Mode);
+        Assert.Null(readBack.Methods[2].Execution!.Mode);
+        Assert.Equal(CkMethodModes.Sync, CkMethodModes.Effective(readBack.Methods[2].Execution!.Mode));
+    }
+
+    [Fact]
+    public void MethodExecution_DocumentWrittenBeforeTheModeField_ReadsAsSync()
+    {
+        // AB#6926: a tenant document written before the field (execution block without 'mode', and no execution block
+        // at all) reads as sync.
+        var legacy = new BsonDocument
+        {
+            ["methods"] = new BsonArray
+            {
+                new BsonDocument
+                {
+                    ["methodId"] = "Ping-1",
+                    ["execution"] = new BsonDocument
+                    {
+                        ["timeoutSeconds"] = 20, ["idempotent"] = true, ["handler"] = "service"
+                    }
+                },
+                new BsonDocument { ["methodId"] = "Touch-1" }
+            }
+        };
+
+        var execution = BsonSerializer.Deserialize<CkMethodDto>(legacy["methods"][0].AsBsonDocument).Execution!;
+        Assert.Null(execution.Mode);
+        Assert.Equal(CkMethodModes.Sync, CkMethodModes.Effective(execution.Mode));
+        Assert.Equal(20, execution.TimeoutSeconds);
+        Assert.True(execution.Idempotent);
+        Assert.Equal("service", execution.Handler);
+
+        var withoutExecution = BsonSerializer.Deserialize<CkMethodDto>(legacy["methods"][1].AsBsonDocument);
+        Assert.Null(withoutExecution.Execution);
+        Assert.Equal(CkMethodModes.Sync, CkMethodModes.Effective(withoutExecution.Execution?.Mode));
+    }
+
+    [Fact]
     public void CkInterface_RoundTrips()
     {
         var entity = new CkInterface

@@ -260,7 +260,11 @@ internal static class RoundTripMethods
         {
             Roles = ["UserManagement"]
         },
-        Execution = new CkMethodExecutionDto { TimeoutSeconds = 60, Handler = CkMethodHandlers.Pipeline }
+        Execution = new CkMethodExecutionDto
+        {
+            // AB#6926: an explicitly declared default mode is persisted as declared (pipeline handlers are sync only).
+            TimeoutSeconds = 60, Handler = CkMethodHandlers.Pipeline, Mode = CkMethodModes.Sync
+        }
     };
 
     /// <summary>
@@ -309,6 +313,10 @@ internal static class RoundTripMethods
             Roles = ["UserManagement"], AllowSelf = true, Scopes = ["octo_api", "extra"],
             DataAccess = CkMethodDataAccessDto.Read
         },
-        Execution = new CkMethodExecutionDto { TimeoutSeconds = 30, Idempotent = true, Handler = CkMethodHandlers.Service }
+        Execution = new CkMethodExecutionDto
+        {
+            // AB#6926: async (allowed with the service handler, also together with idempotent).
+            TimeoutSeconds = 30, Idempotent = true, Handler = CkMethodHandlers.Service, Mode = CkMethodModes.Async
+        }
     };
 }

@@ -615,6 +615,9 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             cm.MapMember(c => c.Idempotent).SetIgnoreIfDefault(true);
             // CK v2 Phase 3 (AB#6878): handler kind ('service' | 'pipeline'); null (omitted) reads as 'service'.
             cm.MapMember(c => c.Handler).SetIgnoreIfNull(true);
+            // CK v2 Phase 3 (AB#6926): execution mode ('sync' | 'async'); null (omitted) reads as 'sync', so documents of
+            // models without the key stay byte-identical and documents written before the field read back as 'sync'.
+            cm.MapMember(c => c.Mode).SetIgnoreIfNull(true);
         });
     }
 
