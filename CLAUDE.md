@@ -965,6 +965,18 @@ replace : replaceOne { _id, rtVersion: <n> }  <document with rtVersion = n + 1> 
   exactly +2, version +2, at least one `RtVersionConflictException` surfaced). The counter is `GuardCount` of the test model's
   `SeedGuardEntity` (the CK round-trip gate compares the whole test model, so no type was added). `ConditionalUpdateTests` (`AttributeNewerThanGuard`) is unchanged.
 
+## Validate a CK model without importing it (AB#8492)
+
+`ITenantContext.ValidateCkModelAsync(CkCompiledModelRoot)` → `OperationResult` (via `IDatabaseCkModelRepository.ValidateModelAsync`) runs the
+checks the import runs **before it writes**, against the models installed in the tenant, and writes nothing (no import lock, no `Importing` row,
+no element rows, no notification, no re-validation; tenant data source, not the admin one). Shared with the import, so there is one rule:
+`DatabaseCkModelRepository.FindEngineRefusal` (CK language, message 91; `minEngineVersion`, message 126) and `FindSystemReferenceMismatchAsync`
+(message 8492, `reason` `system-reference-mismatch`); the import throws `ModelValidationException` with exactly the same text as before
+(`CkModelValidationMessages`). Then `IRepositoryModelResolver.HardResolveAsync` against the tenant; the resolver reports element errors as messages
+but **throws** for a dependency the tenant does not have, which becomes message 8492 with `reason` `dependency-resolution` (never an exception to
+the caller). Consumer: asset repository `Models/ValidateCk` / MCP `validate_ck_model`. Tests: `CkModelImportGuard/ValidateCkModelTests` (valid model
+not imported and the CK collections unchanged, missing dependency, 91 with the import's text, 126).
+
 ## Key Classes
 
 - `TenantRepository` - Main repository for tenant-specific data operations

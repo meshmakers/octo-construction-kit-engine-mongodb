@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Meshmakers.Common.Shared;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
+using Meshmakers.Octo.ConstructionKit.Contracts.Messages;
 using Meshmakers.Octo.ConstructionKit.Contracts.ModelRepositories;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.ConstructionKit.Engine.Resolvers.Repository;
@@ -226,6 +227,52 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         await ExecuteImport(ckCompiledModel, transientCkModel,
             sourceIdentifierObject.MongoDbRepositoryDataSource,
             operationResult, sourceIdentifier, sourceIdentifierObject.TenantId, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task ValidateModelAsync(CkCompiledModelRoot ckCompiledModel, OperationResult operationResult,
+        object? sourceIdentifier = null)
+    {
+        ArgumentValidation.Validate(nameof(ckCompiledModel), ckCompiledModel);
+        ArgumentValidation.Validate(nameof(operationResult), operationResult);
+        var sourceIdentifierObject =
+            ArgumentValidation.ValidateAndCastToObject<TenantDatabaseSourceIdentifier>(nameof(sourceIdentifier),
+                sourceIdentifier);
+
+        // The same checks the import runs before it writes (ExecuteImport), in the same order, but nothing is written:
+        // no import lock, no Importing row, no element rows, no re-validation of installed models.
+        var engineRefusal = FindEngineRefusal(ckCompiledModel);
+        if (engineRefusal != null)
+        {
+            operationResult.AddMessage(engineRefusal);
+            return;
+        }
+
+        var modelName = ckCompiledModel.ModelId.Name;
+        if (modelName != "System" && !modelName.StartsWith("System.", StringComparison.Ordinal))
+        {
+            var mismatch = await FindSystemReferenceMismatchAsync(ckCompiledModel,
+                sourceIdentifierObject.MongoDbRepositoryDataSource);
+            if (mismatch != null)
+            {
+                operationResult.AddMessage(mismatch);
+            }
+        }
+
+        // Dependencies are resolved against the models installed in the tenant. Element errors come back as messages;
+        // a dependency the tenant does not have (or cannot satisfy) is thrown by the resolver - here it becomes an
+        // error message too, so the caller gets one list and never a failed call.
+        var originFileResolver = new OriginFileResolver("-");
+        try
+        {
+            await _repositoryModelResolver.HardResolveAsync(ckCompiledModel, originFileResolver, operationResult,
+                sourceIdentifier);
+        }
+        catch (CkModelException e)
+        {
+            operationResult.AddMessage(
+                CkModelValidationMessages.DependencyResolutionRefused(ckCompiledModel.ModelId, e.Message));
+        }
     }
 
     public async Task<CkCompiledModelRoot?> TryLookupCkModelAsync(CkModelId ckModelId, OperationResult operationResult,
@@ -557,26 +604,15 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
     {
         _logger.LogInformation("Executing import of CK model '{CkModelId}' to database", compiledModel.ModelId);
 
-        // CK v2 (AB#5584, message 91 CkLanguageNotSupported): refuse a model written in a CK language this
-        // engine does not understand before anything is written — persisting it would drop the unknown
-        // constructs silently.
-        if (compiledModel.CkLanguage > CkModelPropertiesDto.MaxSupportedCkLanguage)
+        // CK v2 (AB#5584, message 91 CkLanguageNotSupported) and review M-M2 (G3, message 126 minEngineVersion):
+        // refuse a model this engine cannot hold before anything is written — persisting an unknown CK language would
+        // drop the unknown constructs silently, and the resolver's own engine check runs only after
+        // InsertModelWithImportingState deleted the installed rows of the model name. The same check backs the
+        // read-only ValidateModelAsync (AB#8492).
+        var engineRefusal = FindEngineRefusal(compiledModel);
+        if (engineRefusal != null)
         {
-            throw new ModelValidationException(
-                $"CK model '{compiledModel.ModelId}' declares ckLanguage {compiledModel.CkLanguage}, but this engine " +
-                $"supports up to {CkModelPropertiesDto.MaxSupportedCkLanguage} (CkLanguageNotSupported). " +
-                "Update the services to an engine version that supports it.");
-        }
-
-        // Review M-M2 (G3), message 126: a model that needs a newer engine (minEngineVersion) is refused here, before
-        // the import lock and before InsertModelWithImportingState deletes the installed rows of the model name — the
-        // resolver's own check runs only after that delete and would leave the installed version without its row.
-        if (!CkEngineVersion.IsSatisfiedBy(compiledModel.MinEngineVersion, CkEngineVersion.Current))
-        {
-            throw new ModelValidationException(
-                $"CK model '{compiledModel.ModelId}' requires construction kit engine version " +
-                $"{compiledModel.MinEngineVersion} or later (minEngineVersion, CkModelRequiresNewerEngine); this engine is " +
-                $"version {CkEngineVersion.Current?.ToString(3) ?? "unknown"}. Update the service before importing the model.");
+            throw new ModelValidationException(engineRefusal.MessageText);
         }
 
         // Acquire distributed lock to prevent parallel imports of the same model.
@@ -1794,7 +1830,24 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         CkCompiledModelRoot compiledModel,
         ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
     {
-        if (compiledModel.Types == null) return;
+        var mismatch = await FindSystemReferenceMismatchAsync(compiledModel, mongoDbRepositoryDataSource);
+        if (mismatch != null)
+        {
+            throw new ModelValidationException(mismatch.MessageText);
+        }
+    }
+
+    /// <summary>
+    ///     Pre-validates that the system <c>CkTypeId</c> references of a compiled model match the installed system model
+    ///     versions. Compiled models contain exact versioned references (e.g. <c>System-2.0.7/Entity-1</c>) that must
+    ///     exist in the database. Returns the first mismatch, or null. Read-only; shared by the import and
+    ///     <see cref="ValidateModelAsync" /> (AB#8492).
+    /// </summary>
+    private static async Task<OperationMessage?> FindSystemReferenceMismatchAsync(
+        CkCompiledModelRoot compiledModel,
+        ICkMongoDbRepositoryDataSource mongoDbRepositoryDataSource)
+    {
+        if (compiledModel.Types == null) return null;
 
         // Collect all distinct system model versions referenced in the compiled types
         var referencedSystemVersions = new Dictionary<string, CkModelId>();
@@ -1812,7 +1865,7 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
             }
         }
 
-        if (referencedSystemVersions.Count == 0) return;
+        if (referencedSystemVersions.Count == 0) return null;
 
         // Check each referenced system model against the database.
         // Query by exact CkModelId to avoid LINQ serializer issues with sub-properties.
@@ -1834,10 +1887,32 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
 
             if (installedModel == null) continue; // Not installed at all, let HardResolveAsync handle it
 
-            throw new ModelValidationException(
-                $"Model '{compiledModel.ModelId}' was compiled against '{referencedId.FullName}' " +
-                $"but '{name}-{installedModel.Id.Version}' is installed. " +
-                $"The model needs to be recompiled against the current system version.");
+            return CkModelValidationMessages.SystemReferenceMismatch(compiledModel.ModelId, referencedId, name,
+                installedModel.Id.Version);
         }
+
+        return null;
+    }
+
+    /// <summary>
+    ///     The engine refusals that do not depend on the tenant: a CK language this engine does not understand
+    ///     (message 91) and a <c>minEngineVersion</c> above this engine (message 126). Null when the engine can hold the
+    ///     model. Shared by the import and <see cref="ValidateModelAsync" /> (AB#8492).
+    /// </summary>
+    internal static OperationMessage? FindEngineRefusal(CkCompiledModelRoot compiledModel)
+    {
+        if (compiledModel.CkLanguage > CkModelPropertiesDto.MaxSupportedCkLanguage)
+        {
+            return CkModelValidationMessages.CkLanguageNotSupported(compiledModel.ModelId, compiledModel.CkLanguage,
+                CkModelPropertiesDto.MaxSupportedCkLanguage);
+        }
+
+        if (!CkEngineVersion.IsSatisfiedBy(compiledModel.MinEngineVersion, CkEngineVersion.Current))
+        {
+            return CkModelValidationMessages.RequiresNewerEngine(compiledModel.ModelId, compiledModel.MinEngineVersion,
+                CkEngineVersion.Current?.ToString(3) ?? "unknown");
+        }
+
+        return null;
     }
 }
