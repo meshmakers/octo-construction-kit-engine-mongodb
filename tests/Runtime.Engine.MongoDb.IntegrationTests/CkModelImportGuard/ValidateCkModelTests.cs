@@ -3,6 +3,7 @@ using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Contracts.Messages;
 using Meshmakers.Octo.ConstructionKit.Contracts.Serialization;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
+using Meshmakers.Octo.ConstructionKit.Engine.Versioning;
 using Meshmakers.Octo.ConstructionKit.Models.System.Generated.System.v2;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
@@ -98,6 +99,9 @@ public class ValidateCkModelTests(CkModelImportGuardFixture fixture)
         {
             var model = await ClassicTestV1Async();
             model.MinEngineVersion = "9999.0.0";
+            // A main-line build (0.1.x) and a local build (999.0.0) do not judge minEngineVersion like a release
+            // (an engine version below 1 is never refused), so the test pins a release engine version.
+            using var releaseEngine = CkEngineVersion.OverrideCurrentForTests(new Version(3, 5, 1));
 
             var result = await tenant.ValidateCkModelAsync(model);
 
