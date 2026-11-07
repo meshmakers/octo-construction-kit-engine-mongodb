@@ -10,6 +10,11 @@ public class DatabaseFixture : ConfigurationFixture
     protected readonly SystemTestOptions _options;
     private bool _useLocalDatabase;
 
+    /// <summary>
+    ///     True when the fixture runs against a local MongoDB instead of the shared Testcontainer.
+    /// </summary>
+    public bool UsesLocalDatabase => _useLocalDatabase;
+
     public DatabaseFixture()
     {
         _options = GetOptions<SystemTestOptions>("systemTest");

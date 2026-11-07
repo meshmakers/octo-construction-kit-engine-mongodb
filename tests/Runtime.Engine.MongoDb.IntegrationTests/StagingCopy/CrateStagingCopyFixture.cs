@@ -11,6 +11,7 @@ using Meshmakers.Octo.Runtime.Engine.CrateDb;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Copy;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -54,7 +55,9 @@ public sealed class CrateStagingCopyFixture : IAsyncLifetime
             .WithName($"cratedb-stagingcopy-test-{Guid.NewGuid():N}")
             .WithPortBinding(5432, true)
             .WithPortBinding(4200, true)
-            .WithEnvironment("CRATE_HEAP_SIZE", "1g")
+            .WithEnvironment("CRATE_HEAP_SIZE", TestContainerLimits.CrateHeapSize)
+            // AB#8511: hard cap, see TestContainerLimits.
+            .WithCreateParameterModifier(TestContainerLimits.MemoryLimit(TestContainerLimits.CrateMemoryLimitBytes))
             .WithCommand("-Cdiscovery.type=single-node")
             .WithWaitStrategy(Wait.ForUnixContainer().UntilMessageIsLogged("started"))
             .Build();

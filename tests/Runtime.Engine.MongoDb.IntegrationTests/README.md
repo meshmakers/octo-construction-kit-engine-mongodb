@@ -4,6 +4,27 @@ Integration tests of the MongoDB runtime engine against a Testcontainers MongoDB
 tests, a Testcontainers CrateDB). Layout, parallelism rules and the CI time budget: repository `CLAUDE.md`, section
 *Test layout, parallelism rules and the CI time budget*.
 
+## Container memory caps (AB#8511)
+
+Every Testcontainer of this suite has a fixed memory footprint (`Fixtures/TestContainerLimits.cs`):
+
+| Container | Setting | Container memory limit |
+|---|---|---|
+| shared mongod (`SharedMongoDbContainer`) | `--wiredTigerCacheSizeGB 1` | 12 GiB, no swap (measured peaks 6.4-8.4 GiB) |
+| CrateDB (`BlueprintArchiveActivationFixture`, `CrateStagingCopyFixture`) | `CRATE_HEAP_SIZE=1g` | 3 GiB, no swap (measured peak 1.9 GiB) |
+
+Without them mongod sized its WiredTiger cache from the Docker host (125 GiB on the CI node). With several suites on
+one node, the agents' shared Docker cgroup was throttled as a whole: tests stalled for minutes, MongoDB aborted
+transactions after its 60 s `transactionLifetimeLimitSeconds` and CrateDB DDL ran past its 30 s budget. Do not raise
+the transaction lifetime or a test budget to get around a stall; a suite that needs more memory than the caps is a
+finding. `TestContainerLimitsTests` asks the running mongod for its cache size and its memory limit.
+
+The mongod memory is not the cache: every fixture keeps its databases in the shared server (~70,000-106,000 open
+WiredTiger data handles at the end of a run, up to ~800 connections), so the footprint grows with the number of
+fixtures. A 3 GiB limit was OOM-killed mid-run (tests then fail with `Connection refused`). When that happens, measure
+the peak again (`docker exec <container> cat /sys/fs/cgroup/memory.peak` during a full run) and raise the limit, or let
+the fixtures drop their databases.
+
 ## Performance budget tests (`Category=Performance`, AB#8004)
 
 Tests that assert a **wall-clock budget** (a p95 / median / elapsed ceiling that a slower machine can miss without any

@@ -45,6 +45,10 @@ internal static class SharedMongoDbContainer
                     .WithName($"mongodb-test-shared-{Guid.NewGuid():N}")
                     .WithUsername(options.AdminUser)
                     .WithPassword(options.AdminUserPassword)
+                    // AB#8511: fixed footprint instead of a cache sized from the Docker host
+                    // (see TestContainerLimits). Appended to the --replSet arguments of WithReplicaSet.
+                    .WithCommand("--wiredTigerCacheSizeGB", TestContainerLimits.MongoWiredTigerCacheSizeGb)
+                    .WithCreateParameterModifier(TestContainerLimits.MemoryLimit(TestContainerLimits.MongoMemoryLimitBytes))
                     .Build();
 
                 using var startCts = new CancellationTokenSource(perAttemptTimeout);
