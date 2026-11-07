@@ -1,4 +1,5 @@
 using Meshmakers.Octo.ConstructionKit.Contracts;
+using Meshmakers.Octo.ConstructionKit.Contracts.DataTransferObjects;
 using Meshmakers.Octo.ConstructionKit.Engine.ModelRepositories;
 
 namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
@@ -14,4 +15,13 @@ public interface IDatabaseCkModelRepository : IModelRepository
     /// <returns>The models that returned to <c>Available</c>.</returns>
     Task<IReadOnlyCollection<CkModelId>> RevalidateAsync(object? sourceIdentifier = null,
         CancellationToken? cancellationToken = null);
+
+    /// <summary>
+    ///     Validates a compiled CK model against the models installed in the tenant without importing it (AB#8492): the
+    ///     pre-checks of the import (CK language, <c>minEngineVersion</c>, system model references) and the resolution of
+    ///     its dependencies and elements against the installed models. Strictly read-only. Every finding is added to
+    ///     <paramref name="operationResult" />; a missing dependency is an error message, never an exception.
+    /// </summary>
+    Task ValidateModelAsync(CkCompiledModelRoot ckCompiledModel, OperationResult operationResult,
+        object? sourceIdentifier = null);
 }

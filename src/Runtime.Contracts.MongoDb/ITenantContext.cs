@@ -430,6 +430,20 @@ public interface ITenantContext
     Task ImportCkModelAsync(CkCompiledModelRoot ckCompiledModelRoot);
 
     /// <summary>
+    ///     Validates a compiled CK model against the models installed in this tenant <b>without importing it</b>
+    ///     (AB#8492): the checks the import runs before it writes - CK language (message 91), <c>minEngineVersion</c>
+    ///     (message 126), system model references (message 8492, <c>reason</c> <c>system-reference-mismatch</c>) - and the
+    ///     resolution of the model's dependencies and elements against the installed models (a refused dependency is message
+    ///     8492 with <c>reason</c> <c>dependency-resolution</c>). Strictly read-only: no import lock, no tenant write, no notification,
+    ///     no job, no cache change. A missing or unsatisfiable dependency is reported as an error message, not thrown.
+    ///     The caller checks <see cref="OperationResult.HasErrors" />; an empty result means the import would pass these
+    ///     checks (the tenant upgrade guard, <see cref="EvaluateExplicitCkImportAsync" />, is a separate question).
+    /// </summary>
+    /// <param name="ckCompiledModelRoot">The compiled candidate model.</param>
+    /// <returns>The messages of the validation; no error means valid.</returns>
+    Task<OperationResult> ValidateCkModelAsync(CkCompiledModelRoot ckCompiledModelRoot);
+
+    /// <summary>
     ///     Tenant upgrade guard (CK v2 F2.5, AB#6867): computes which installed models importing
     ///     <paramref name="updateSet" /> would break (turn <c>ResolveFailed</c>), without importing anything. Strictly
     ///     read-only: no tenant write, no job, no catalog access - it judges the compiled candidates against the models
