@@ -1272,12 +1272,18 @@ automated deliveries:** a partial re-delivery no longer clears the columns it di
   `BuildRawInsertSql` / `BuildTimeRangeInsertSql` take the INSERT list and `updatedColumnNames` separately. Ranking
   columns of the conflict precedence are always inserted (bound NULL when not named) and only replaced when named.
 - No column of an upsert relies on a constant DEFAULT (AB#6647): user columns have none, `was_updated` stays a literal.
-- Computed columns at ingest: left out when the point names none of the columns the formula reads
-  (`ComputedColumnPlanItem.ReferencedColumns`, `ApplyComputedColumns(..., ingest: true)`); backfill, repair and rollup
-  evaluation are unchanged.
+- Computed columns at ingest are evaluated on the **merged row** (decided by Reimar 2026-11-09): left out when the
+  point names none of the columns the formula reads (`ComputedColumnPlanItem.ReferencedColumns`,
+  `ApplyComputedColumns(..., ingest: true)`); when it names only some, the others are the stored values of the row
+  (NULL on a new row); an input named with `null` stays null. `ApplyIngestComputedColumnsAsync` reads the missing
+  inputs once per batch by primary key (`IStreamDataDatabaseClient.ReadStoredRowsAsync`, `StoredRowLookup`, real-time
+  in CrateDB, no refresh needed) and only for such points; the stored values feed the formula and are not written back.
+  The formula stays in C# (mXparser has no SQL form). Read and write are two statements, so a concurrent delivery of the
+  same key in between can be missed. Backfill, repair and rollup evaluation are unchanged.
 
-Write-up: `docs/streamdata-archive-concept.md` → *Partial delivery*. Tests: `PartialDeliverySqlTests`,
-`CrateDbStreamDataComputedColumnIngestTests` (AB#8622 cases), `StreamDataOrigin/PartialDeliveryIntegrationTests`.
+Write-up: `docs/streamdata-archive-concept.md` → *Partial delivery*. Tests: `PartialDeliverySqlTests`, `StoredRowLookupTests`,
+`CrateDbStreamDataComputedColumnIngestTests` (AB#8622 cases), `StreamDataOrigin/PartialDeliveryIntegrationTests`,
+`StreamDataOrigin/ComputedColumnPartialDeliveryIntegrationTests` (merged row on raw and time-range, rollup over the column).
 
 ### Declared-vs-physical Column Reconciliation
 

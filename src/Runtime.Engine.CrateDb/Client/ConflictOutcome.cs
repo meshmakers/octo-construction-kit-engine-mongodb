@@ -137,7 +137,7 @@ internal static class ConflictOutcome
                == sent.Origin;
     }
 
-    private static string Key(string? rtId, string? ckTypeId, long? start, long? end)
+    internal static string Key(string? rtId, string? ckTypeId, long? start, long? end)
         => string.Join("\u001f", rtId ?? "", ckTypeId ?? "", start?.ToString(CultureInfo.InvariantCulture) ?? "",
             end?.ToString(CultureInfo.InvariantCulture) ?? "");
 
@@ -205,7 +205,7 @@ internal static class ConflictOutcome
     private static bool IsNumber(object value) => value is sbyte or byte or short or ushort or int or uint or long or ulong
         or float or double or decimal;
 
-    private static long? AsUtcMilliseconds(object? value) => value switch
+    internal static long? AsUtcMilliseconds(object? value) => value switch
     {
         DateTime dt => new DateTimeOffset(dt.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(dt, DateTimeKind.Utc) : dt.ToUniversalTime())
             .ToUnixTimeMilliseconds(),

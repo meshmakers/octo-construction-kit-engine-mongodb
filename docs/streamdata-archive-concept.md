@@ -369,15 +369,37 @@ columns).
   columns and always written.
 - **Constant DEFAULTs (AB#6647).** User columns are nullable without a DEFAULT, so leaving one out of the `INSERT` list
   stores NULL, never a default. `was_updated` is still named with the literal `FALSE` in every row of every statement.
-- **Computed columns** are not sent by anyone. At ingest a computed column is left out of the row (stored value kept)
-  when the point names **none** of the columns its formula reads; a formula without column references is always
-  evaluated. When the point names some of them, the formula is evaluated as before (an unnamed operand is NaN,
-  AB#8060) and its result replaces the stored value: the formula does not see the stored operands.
+- **Computed columns are evaluated on the merged row** (decided by Reimar 2026-11-09). Nobody sends a computed column;
+  its value follows from the inputs its formula reads (ingested columns and other computed columns):
+
+  | The point … | Computed column |
+  |---|---|
+  | names none of the formula's inputs | left out of the row: the stored value stays (a new row: NULL) |
+  | names all inputs | evaluated from the point, as before |
+  | names some inputs | evaluated on the **merged row**: an input the point does not name is the **stored** value of the row; on a new row it is NULL |
+  | names an input with `null` | the formula sees null (NaN, AB#8060), never the stored value |
+
+  Example: stored Consumption 10, Production 4, Net = Consumption − Production = 6; a delivery of Consumption 12 stores
+  Net 8. A formula without column references is always evaluated. A computed input the point leaves out (none of its
+  own inputs named) is read stored as well; one the point triggers is used with its new value (evaluation order).
+- **How the merged row is read.** The formula language (mXparser: NaN as NULL, `coalesce`, `isnull`, `if`) has no SQL
+  counterpart, so the formula cannot run inside `ON CONFLICT … DO UPDATE`. Instead
+  `CrateDbStreamDataRepository.ApplyIngestComputedColumnsAsync` finds the points that name only some inputs of a formula
+  they trigger and reads the missing inputs of their keys **once per batch** (`IStreamDataDatabaseClient.ReadStoredRowsAsync`,
+  `StoredRowLookup`: one `SELECT` per 250 keys, every key an equality on all primary key columns). CrateDB answers such a
+  primary-key lookup in real time, so a row written a moment before is seen without a `REFRESH`. A batch whose points send
+  all inputs or none (the usual pipeline delivery) costs no read. The stored values are formula inputs only; they are not
+  written back, so the column sets of the statement stay those the point names. A point that repeats a key of the same
+  batch sees the values of the earlier point (the order the statements write them).
+- **Limit.** Read and write are two statements: when another delivery of the same key lands between them, the formula
+  can see an input that is replaced a moment later. The next delivery of an input of that row evaluates it again.
 - **Unchanged:** manual protection (`ManualValueProtected`), the write result (`StreamDataWriteResult`), the rollup
   dirty windows, and the import path (`ImportRowsAsync` names every column of every row).
 
-Tests: `PartialDeliverySqlTests`, the AB#8622 cases of `CrateDbStreamDataComputedColumnIngestTests` (unit),
-`StreamDataOrigin/PartialDeliveryIntegrationTests` (real CrateDB, raw and time-range).
+Tests: `PartialDeliverySqlTests`, `StoredRowLookupTests`, the AB#8622 cases of `CrateDbStreamDataComputedColumnIngestTests`
+(unit), `StreamDataOrigin/PartialDeliveryIntegrationTests` and `StreamDataOrigin/ComputedColumnPartialDeliveryIntegrationTests`
+(real CrateDB, raw and time-range: merged row, no refresh in between, explicit null, no input, new row, mixed batch, manual
+protection, manual partial correction, a rollup summing the computed column).
 
 ### Time semantics
 

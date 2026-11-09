@@ -95,6 +95,16 @@ public interface IStreamDataDatabaseClient
     Task<IReadOnlyList<Client.SkippedArchiveRow>> InsertTimeRangeDataAsync(string tenantId, string qualifiedTable, IReadOnlyList<string> userColumnNames, IEnumerable<TimeRangeDataPointDto> datapoints, bool generationTracked = false, IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null);
 
     /// <summary>
+    /// Reads <paramref name="columns" /> of the stored rows with the given primary keys (AB#8622: the inputs of a
+    /// computed column a partial delivery does not send). One primary-key lookup per key, batched into a few
+    /// statements; CrateDB answers them in real time, without a table refresh.
+    /// </summary>
+    /// <param name="windowed">True for a time-range table (key: window, rtid, cktypeid).</param>
+    /// <returns>The stored rows by <see cref="Client.StoredRowKey.Value" />; a key without a row is absent.</returns>
+    Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>>> ReadStoredRowsAsync(string tenantId,
+        string qualifiedTable, bool windowed, IReadOnlyList<Client.StoredRowKey> keys, IReadOnlyList<string> columns);
+
+    /// <summary>
     /// Get data from the stream data database.
     /// </summary>
     Task<List<DataPointDto>> GetDataAsync(string tenantId, string query);

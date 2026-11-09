@@ -320,6 +320,62 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         return skipped;
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>>> ReadStoredRowsAsync(
+        string tenantId, string qualifiedTable, bool windowed, IReadOnlyList<StoredRowKey> keys,
+        IReadOnlyList<string> columns)
+    {
+        var result = new Dictionary<string, IReadOnlyDictionary<string, object?>>(StringComparer.Ordinal);
+        if (keys.Count == 0)
+        {
+            return result;
+        }
+
+        for (var offset = 0; offset < keys.Count; offset += StoredRowLookup.MaxKeysPerStatement)
+        {
+            var start = offset;
+            var end = Math.Min(offset + StoredRowLookup.MaxKeysPerStatement, keys.Count);
+            var sql = StoredRowLookup.BuildSelectSql(qualifiedTable, windowed, columns, end - start);
+            var rows = await _resilience.ExecuteAsync(async _ =>
+            {
+                await using var lease = await LeaseConnectionAsync(tenantId);
+                await using var cmd = new NpgsqlCommand(sql, lease.Connection);
+                for (var i = start; i < end; i++)
+                {
+                    var key = keys[i];
+                    cmd.Parameters.Add(new NpgsqlParameter
+                    {
+                        Value = StoredRowLookup.AsUtc(key.Start),
+                        NpgsqlDbType = NpgsqlDbType.TimestampTz
+                    });
+                    if (windowed)
+                    {
+                        cmd.Parameters.Add(new NpgsqlParameter
+                        {
+                            Value = StoredRowLookup.AsUtc(key.End!.Value),
+                            NpgsqlDbType = NpgsqlDbType.TimestampTz
+                        });
+                    }
+
+                    cmd.Parameters.Add(new NpgsqlParameter { Value = key.RtId });
+                    cmd.Parameters.Add(new NpgsqlParameter { Value = key.CkTypeId });
+                }
+
+                return await ReadReturnedRowsAsync(cmd);
+            });
+
+            foreach (var row in rows)
+            {
+                if (StoredRowKey.Of(row, windowed) is { } key)
+                {
+                    result[key] = row;
+                }
+            }
+        }
+
+        return result;
+    }
+
     /// <summary>Reads the rows a statement returned (its <c>RETURNING</c> clause) as column → value.</summary>
     private static async Task<IReadOnlyList<IReadOnlyDictionary<string, object?>>> ReadReturnedRowsAsync(NpgsqlCommand cmd)
     {

@@ -280,6 +280,10 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
 
     public Task<List<DataPointDto>> GetDataAsync(string tenantId, string query) => throw new NotSupportedException();
 
+    public Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>>> ReadStoredRowsAsync(string tenantId,
+        string qualifiedTable, bool windowed, IReadOnlyList<Meshmakers.Octo.Runtime.Engine.CrateDb.Client.StoredRowKey> keys,
+        IReadOnlyList<string> columns) => throw new NotSupportedException();
+
     public Task ExecuteBulkAsync(string tenantId, string parameterizedSql,
         IReadOnlyList<IReadOnlyList<object?>> argumentSets, CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
