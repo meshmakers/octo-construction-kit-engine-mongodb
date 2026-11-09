@@ -33,6 +33,17 @@ public record TenantDatabaseSourceIdentifier(
     ///     Filled by <c>DatabaseCkModelRepository.UpdateModelAsync</c>: what the import did (CK v2 F1.0, AB#5900).
     /// </summary>
     public CkModelImportOutcome ImportOutcome { get; } = new();
+
+    /// <summary>
+    ///     AB#8677: cancels a wait for a running import of a dependency while this identifier resolves dependencies.
+    /// </summary>
+    public CancellationToken CancellationToken { get; init; }
+
+    /// <summary>
+    ///     AB#8677: the one deadline of all waits for running imports of dependencies while this identifier resolves them;
+    ///     a new identifier (or <c>with { ImportWaitDeadline = new() }</c>) starts a new one.
+    /// </summary>
+    internal CkModelImportWaitDeadline ImportWaitDeadline { get; init; } = new();
 }
 
 /// <summary>

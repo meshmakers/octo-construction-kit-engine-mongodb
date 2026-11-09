@@ -141,8 +141,10 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
                 _logger.LogInformation(
                     "Dependency '{Dependency}' is resolved while CK model '{CkModelName}' is being imported; waiting for the import",
                     modelIdVersionRange, modelIdVersionRange.Name);
+                // One deadline for the whole resolve, cancelled with its caller (AB#8677).
                 await CkModelImportInProgress.WaitUntilFinishedAsync(dataSource,
-                    name => name == modelIdVersionRange.Name, CkModelImportInProgress.DefaultWaitTimeout);
+                    name => name == modelIdVersionRange.Name, sourceIdentifierObject.ImportWaitDeadline,
+                    sourceIdentifierObject.CancellationToken);
             }
         }
 
@@ -716,8 +718,12 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
 
             _logger.LogInformation("Validating of CK model '{CkModelId}'", compiledModel.ModelId);
             var originFileResolver = new OriginFileResolver("-");
+            // AB#8677: a wait for a running import of a dependency ends with the import's caller.
+            var resolveSource = sourceIdentifier is TenantDatabaseSourceIdentifier tenantSource
+                ? tenantSource with { CancellationToken = cancellationToken ?? CancellationToken.None }
+                : sourceIdentifier;
             await _repositoryModelResolver.HardResolveAsync(compiledModel, originFileResolver, operationResult,
-                sourceIdentifier);
+                resolveSource);
             if (operationResult.HasErrors || operationResult.HasFatalErrors)
             {
                 _logger.LogInformation("Import of CK model '{CkModelId}' failed, model is not valid",

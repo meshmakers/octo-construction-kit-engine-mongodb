@@ -2399,7 +2399,9 @@ service that resolved a dependency on the model in that window failed (`ModelVal
 rows are replaced when the element transaction commits, long before the flip, so readers would see an `Available` model with missing or
 foreign elements, and `DeletePreviousVersion` and the AB#7381 restore assume one row per model name. Instead readers wait on the **model
 import lock**, which is held over the whole window: `IsExistingAsync(range)` waits (outside a transaction, up to
-`CkModelImportInProgress.DefaultWaitTimeout`, 2 min) while the lock of the model is held (`ICkMongoDbRepositoryDataSource.GetModelsBeingImportedAsync`,
+`CkModelImportInProgress.DefaultWaitTimeout`, 2 min, **for the whole resolve**: the deadline is
+`TenantDatabaseSourceIdentifier.ImportWaitDeadline`, started by the first wait, so a resolve that meets several running imports does not
+wait 2 min per lookup; cancelled with `TenantDatabaseSourceIdentifier.CancellationToken`, which the import sets from its caller) while the lock of the model is held (`ICkMongoDbRepositoryDataSource.GetModelsBeingImportedAsync`,
 non-expired `ck_model_import_*` locks); `TenantRepository.RefreshCkCacheServiceAsync` (one snapshot transaction, which never sees the
 flip) retries the cache load with a new transaction once running imports are done. When the wait runs out, or an import fails while
 another model is being imported, the exception is marked with `CkModelImportInProgress.ExceptionDataKey` in `Exception.Data`; the tenant
@@ -2407,7 +2409,7 @@ setup of `octo-common-services` retries such a failure instead of failing the ho
 checked the lock just before an import took it can still read the old row while it is replaced (then the cache load retry or the caller's
 retry applies). Tests: `CkRangeRetentionImportTests.InPlaceUpgrade_WhileDependentsResolve_NoResolutionFails`,
 `FailedInPlaceUpgrade_WhileDependentsResolve_*` (both red without the fix with the production message),
-`ModelsBeingImported_ReflectTheHeldImportLocks`.
+`ModelsBeingImported_ReflectTheHeldImportLocks`, `CkModelImportWaitDeadlineTests` (unit: one deadline per resolve, cancellation).
 
 **Import guard (message 91, CkLanguageNotSupported):** `ExecuteImport` refuses a model whose `CkLanguage` is
 above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before anything is written (the engine
