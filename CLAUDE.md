@@ -1269,7 +1269,14 @@ leftovers the next run's step 0 removes. A shortfall under a source pointer that
 again (`SamePointers`). A repeated aggregation row that already existed takes the conflict branch and is flagged `was_updated`.
 Test: `StreamDataWriteLoss/RollupUnderMemoryPressureIntegrationTests` (same container, query breaker 15 %, 6 rollups of one raw
 source with 20,000 entities in parallel; the recompute flipped to an incomplete generation without the check; the forward
-aggregation did not lose rows silently in the measured runs, only loud breaker errors).
+aggregation did not lose rows silently in the measured runs, only loud breaker errors). **Not only the query breaker:** CrateDB's
+parent breaker (`indices.breaker.total`, 95 % of the heap, compared with the real heap usage) refuses an upsert batch the same way.
+With a nearly full heap the loss came in whole blocks of 10,000 rows, the batch size of CrateDB's insert-from-select (measured: exactly 10,000 of 20,000 staged
+rows, three times in a row, at the default query limit, heap 471 of 512 MB; the rows were really missing after a refresh, the count
+was right). The tests of the `CrateMemoryPressure` collection therefore drop their tables after every round
+(`CrateMemoryPressureFixture.DropTenantTablesAsync`); without that the leftover tables of the earlier tests filled the small heap
+and the later tests lost rows without any breaker setting. Their set-up steps run without a retry: at the default limits they must
+not lose a row.
 
 ### Value check on raw and time-range writes (AB#7643, raw path AB#8606)
 

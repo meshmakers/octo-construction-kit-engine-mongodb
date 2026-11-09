@@ -120,6 +120,22 @@ public sealed class CrateMemoryPressureFixture : IAsyncLifetime
         }
     }
 
+    /// <summary>
+    ///     Drops every table of a test tenant's schema. The container has a deliberately small heap, and every table a test
+    ///     leaves behind keeps heap in use (AB#8680): after the stress tests of the collection the real heap usage stayed above
+    ///     CrateDB's parent breaker limit (95 % of the heap), so later statements lost rows at the default limits.
+    /// </summary>
+    public async Task DropTenantTablesAsync(string tenantId)
+    {
+        var schema = TenantSchema.SchemaName(tenantId);
+        var tables = await QueryAsync(
+            $"SELECT table_name FROM information_schema.tables WHERE table_schema = '{schema}'");
+        foreach (var row in tables)
+        {
+            await SqlAsync($"DROP TABLE IF EXISTS \"{schema}\".\"{row["table_name"]}\"");
+        }
+    }
+
     public async Task SqlAsync(string sql)
     {
         await using var connection = new NpgsqlConnection(PlainConnectionString);

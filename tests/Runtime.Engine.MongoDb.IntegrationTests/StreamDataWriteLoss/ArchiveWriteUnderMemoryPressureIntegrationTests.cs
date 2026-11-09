@@ -163,6 +163,9 @@ public class ArchiveWriteUnderMemoryPressureIntegrationTests(CrateMemoryPressure
                                  $"(skipped {skipped.Count}, expected {RowsPerWriter / 2})");
                 }
             }
+
+            // The small heap must not carry this round's tables into the next test (AB#8680).
+            await fixture.DropTenantTablesAsync(tenant);
         }
 
         await SkipUnlessTheBreakerTripped(tripsBefore, loud);
@@ -200,6 +203,9 @@ public class ArchiveWriteUnderMemoryPressureIntegrationTests(CrateMemoryPressure
                     failures.Add($"round {round} writer {outcome.Writer}: write succeeded, {stored} of {RowsPerWriter} rows stored");
                 }
             }
+
+            // The small heap must not carry this round's tables into the next test (AB#8680).
+            await fixture.DropTenantTablesAsync(tenant);
         }
 
         await SkipUnlessTheBreakerTripped(tripsBefore, loud);

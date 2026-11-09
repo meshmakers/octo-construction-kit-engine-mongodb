@@ -55,48 +55,55 @@ public class RollupUnderMemoryPressureIntegrationTests(CrateMemoryPressureFixtur
         for (var round = 0; round < Rounds; round++)
         {
             var rig = await Rig.CreateAsync(fixture);
-            var outcomes = new Exception?[Rollups, Buckets];
-            await fixture.SetQueryBreakerLimitAsync(BreakerLimit);
             try
             {
-                await Task.WhenAll(Enumerable.Range(0, Rollups).Select(r => Task.Run(async () =>
+                var outcomes = new Exception?[Rollups, Buckets];
+                await fixture.SetQueryBreakerLimitAsync(BreakerLimit);
+                try
+                {
+                    await Task.WhenAll(Enumerable.Range(0, Rollups).Select(r => Task.Run(async () =>
+                    {
+                        for (var b = 0; b < Buckets; b++)
+                        {
+                            try
+                            {
+                                await rig.Repository(r).AggregateBucketAsync(
+                                    rig.Source, rig.RollupSnapshot(r), Origin.AddHours(b), Origin.AddHours(b + 1), Ct);
+                            }
+                            catch (Exception ex) when (ex is not OperationCanceledException)
+                            {
+                                outcomes[r, b] = ex;
+                            }
+                        }
+                    })));
+                }
+                finally
+                {
+                    await fixture.ResetQueryBreakerLimitAsync();
+                }
+
+                for (var r = 0; r < Rollups; r++)
                 {
                     for (var b = 0; b < Buckets; b++)
                     {
-                        try
+                        if (outcomes[r, b] is { } error)
                         {
-                            await rig.Repository(r).AggregateBucketAsync(
-                                rig.Source, rig.RollupSnapshot(r), Origin.AddHours(b), Origin.AddHours(b + 1), Ct);
+                            loud.Add(error);
+                            continue;
                         }
-                        catch (Exception ex) when (ex is not OperationCanceledException)
+
+                        var (rows, sum) = await rig.RollupBucketAsync(r, generation: 0, b);
+                        var (expectedRows, expectedSum) = await rig.SourceBucketAsync(b);
+                        if (rows != expectedRows || Math.Abs(sum - expectedSum) > 1e-6)
                         {
-                            outcomes[r, b] = ex;
+                            failures.Add($"round {round} rollup {r} bucket {b}: aggregation succeeded, {rows} of {expectedRows} rows, sum {sum} of {expectedSum}");
                         }
                     }
-                })));
+                }
             }
             finally
             {
-                await fixture.ResetQueryBreakerLimitAsync();
-            }
-
-            for (var r = 0; r < Rollups; r++)
-            {
-                for (var b = 0; b < Buckets; b++)
-                {
-                    if (outcomes[r, b] is { } error)
-                    {
-                        loud.Add(error);
-                        continue;
-                    }
-
-                    var (rows, sum) = await rig.RollupBucketAsync(r, generation: 0, b);
-                    var (expectedRows, expectedSum) = await rig.SourceBucketAsync(b);
-                    if (rows != expectedRows || Math.Abs(sum - expectedSum) > 1e-6)
-                    {
-                        failures.Add($"round {round} rollup {r} bucket {b}: aggregation succeeded, {rows} of {expectedRows} rows, sum {sum} of {expectedSum}");
-                    }
-                }
+                await rig.DropAsync();
             }
         }
 
@@ -114,74 +121,69 @@ public class RollupUnderMemoryPressureIntegrationTests(CrateMemoryPressureFixtur
         for (var round = 0; round < Rounds; round++)
         {
             var rig = await Rig.CreateAsync(fixture);
-
-            // Generation 1 of every rollup without memory pressure: the complete, live generation.
-            // CrateDB can still be short of memory from the previous test: a set-up run may fail loudly (seen once at the
-            // default breaker limit, 10,000 of 20,000 staged rows missing) and is then simply run again.
-            for (var r = 0; r < Rollups; r++)
-            {
-                for (var attempt = 1; ; attempt++)
-                {
-                    try
-                    {
-                        await rig.RecomputeAsync(r);
-                        break;
-                    }
-                    catch (StreamDataWriteIncompleteException) when (attempt < 3)
-                    {
-                    }
-                }
-
-                Assert.Equal(1, await rig.PointerGenerationAsync(r));
-            }
-
-            var outcomes = new Exception?[Rollups];
-            await fixture.SetQueryBreakerLimitAsync(BreakerLimit);
             try
             {
-                await Task.WhenAll(Enumerable.Range(0, Rollups).Select(r => Task.Run(async () =>
+                // Generation 1 of every rollup without memory pressure: the complete, live generation. It must succeed:
+                // at the default limits nothing may be lost (AB#8680). The rounds and the tests before drop their
+                // tables, or the small heap stays above the parent breaker and this set-up loses rows for real.
+                for (var r = 0; r < Rollups; r++)
                 {
-                    try
+                    await rig.RecomputeAsync(r);
+                    Assert.Equal(1, await rig.PointerGenerationAsync(r));
+                }
+
+                var outcomes = new Exception?[Rollups];
+                await fixture.SetQueryBreakerLimitAsync(BreakerLimit);
+                try
+                {
+                    await Task.WhenAll(Enumerable.Range(0, Rollups).Select(r => Task.Run(async () =>
                     {
-                        await rig.RecomputeAsync(r);
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
+                        try
+                        {
+                            await rig.RecomputeAsync(r);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            outcomes[r] = ex;
+                        }
+                    })));
+                }
+                finally
+                {
+                    await fixture.ResetQueryBreakerLimitAsync();
+                }
+
+                var (expectedRows, expectedSum) = await rig.SourceTotalAsync();
+                for (var r = 0; r < Rollups; r++)
+                {
+                    var pointer = await rig.PointerGenerationAsync(r);
+                    if (outcomes[r] is { } error)
                     {
-                        outcomes[r] = ex;
+                        loud.Add(error);
+                        // The run failed: readers must still be on the complete generation 1.
+                        if (pointer != 1)
+                        {
+                            failures.Add($"round {round} rollup {r}: recompute failed ({error.GetType().Name}) but the pointer names generation {pointer}");
+                            continue;
+                        }
                     }
-                })));
+                    else if (pointer != 2)
+                    {
+                        failures.Add($"round {round} rollup {r}: recompute succeeded but the pointer names generation {pointer}");
+                        continue;
+                    }
+
+                    var (rows, sum) = await rig.RollupGenerationAsync(r, pointer);
+                    if (rows != expectedRows || Math.Abs(sum - expectedSum) > 1e-6)
+                    {
+                        failures.Add($"round {round} rollup {r}: the pointer names generation {pointer} with {rows} of {expectedRows} rows, sum {sum} of {expectedSum}" +
+                                     (outcomes[r] is null ? " (recompute succeeded)" : " (recompute failed)"));
+                    }
+                }
             }
             finally
             {
-                await fixture.ResetQueryBreakerLimitAsync();
-            }
-
-            var (expectedRows, expectedSum) = await rig.SourceTotalAsync();
-            for (var r = 0; r < Rollups; r++)
-            {
-                var pointer = await rig.PointerGenerationAsync(r);
-                if (outcomes[r] is { } error)
-                {
-                    loud.Add(error);
-                    // The run failed: readers must still be on the complete generation 1.
-                    if (pointer != 1)
-                    {
-                        failures.Add($"round {round} rollup {r}: recompute failed ({error.GetType().Name}) but the pointer names generation {pointer}");
-                        continue;
-                    }
-                }
-                else if (pointer != 2)
-                {
-                    failures.Add($"round {round} rollup {r}: recompute succeeded but the pointer names generation {pointer}");
-                    continue;
-                }
-
-                var (rows, sum) = await rig.RollupGenerationAsync(r, pointer);
-                if (rows != expectedRows || Math.Abs(sum - expectedSum) > 1e-6)
-                {
-                    failures.Add($"round {round} rollup {r}: the pointer names generation {pointer} with {rows} of {expectedRows} rows, sum {sum} of {expectedSum}" +
-                                 (outcomes[r] is null ? " (recompute succeeded)" : " (recompute failed)"));
-                }
+                await rig.DropAsync();
             }
         }
 
@@ -270,6 +272,9 @@ public class RollupUnderMemoryPressureIntegrationTests(CrateMemoryPressureFixtur
         }
 
         public CrateDbStreamDataRepository Repository(int rollup) => _repositories[rollup];
+
+        /// <summary>Drops the source, the rollups, their staging and pointer tables (the tenant's whole schema).</summary>
+        public Task DropAsync() => _fixture.DropTenantTablesAsync(_tenant);
 
         public RollupArchiveSnapshot RollupSnapshot(int rollup) => new(_rollupRtIds[rollup], Type, CkArchiveStatus.Activated, "hourly",
             new[] { new RollupSourceReference(Source.RtId) }, TimeSpan.FromHours(1), TimeSpan.Zero, null, Specs, null);
