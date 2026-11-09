@@ -377,12 +377,25 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
     [Fact]
     public async Task EmbeddedImport_SkippedUnderTheLock_UnloadsACacheLoadedBeforeTheOtherServicesImport()
     {
-        for (var round = 0; round < 3; round++)
+        // Three rounds in one tenant (a tenant per round cost ~13 s each, 38.6 s in total): each round puts the tenant back
+        // on Test-1.0.0 the way another service would (explicit import, may downgrade) and loads the cache from it.
+        await WithTenantAsync("staleck", async (tenant, tenantId) =>
         {
-            await WithTenantAsync("staleck", async (tenant, tenantId) =>
+            var cache = fixture.GetService<ICkCacheService>();
+            await tenant.ImportCkModelAsync(TestV1ModelId, new OperationResult());
+            for (var round = 0; round < 3; round++)
             {
-                var cache = fixture.GetService<ICkCacheService>();
-                await tenant.ImportCkModelAsync(TestV1ModelId, new OperationResult());
+                if (round > 0)
+                {
+                    await InstallAsAnotherServiceAsync(tenantId, TestV1ModelId);
+                    Assert.Equal(TestV1ModelId.FullName, await InstalledAsync(tenantId, TestV1ModelId.Name));
+                }
+
+                if (cache.IsTenantLoaded(tenantId))
+                {
+                    cache.Unload(tenantId);
+                }
+
                 await tenant.LoadCacheForTenantAsync();
                 Assert.Contains(TestV1ModelId, cache.GetCkModelIds(tenantId));
 
@@ -394,8 +407,8 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
                 Assert.False(result.HasErrors);
 
                 await AssertCacheHoldsAsync(tenant, tenantId, TestV2ModelId);
-            });
-        }
+            }
+        });
     }
 
     /// <summary>AB#8667: a cache that already holds the installed version is kept - no reload at every service start.</summary>
