@@ -204,6 +204,36 @@ public class RollupSourceGenerationReadTests
     }
 
     [Fact]
+    public async Task Aggregate_SourceRowDeletedDuringTheStatement_RecountMatchesTheRowsWritten_IsNotALoss()
+    {
+        // The count saw 5 groups, a source row (the only one of an entity) was deleted before the statement ran.
+        var harness = new Harness();
+        harness.Returns(expected: new long[] { 5, 4 }, 4);
+
+        var rows = await harness.Aggregator.AggregateAsync(
+            BaseSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, harness.Discard, CancellationToken.None);
+
+        Assert.Equal(4, rows);
+        Assert.Equal(1, harness.Statements); // no repeat
+        Assert.Equal(2, harness.Counts);
+    }
+
+    [Fact]
+    public async Task Aggregate_RecountStillAboveTheRowsWritten_IsWrittenOnceMore_AndJudgedAgainstTheRecount()
+    {
+        var harness = new Harness();
+        harness.Returns(expected: new long[] { 5, 4 }, 3, 3);
+
+        var ex = await Assert.ThrowsAsync<StreamDataWriteIncompleteException>(() => harness.Aggregator.AggregateAsync(
+            BaseSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, harness.Discard, CancellationToken.None));
+
+        Assert.Equal(4, ex.RowsSent);
+        Assert.Equal(1, ex.RowsMissing);
+        Assert.Equal(2, harness.Statements);
+        Assert.Equal(2, harness.Counts); // counted once more, not per attempt
+    }
+
+    [Fact]
     public async Task Aggregate_RollupSource_ShortfallUnderAChangedPointer_IsAggregatedAgain_NotFailed()
     {
         // The source swept the counted generation between the count and the statement: not a loss.
@@ -471,6 +501,18 @@ public class RollupSourceGenerationReadTests
                     Tenant, A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
                 .ReturnsNextFromSequence(affected);
         }
+
+        /// <summary>Makes the expected-row counts return <paramref name="expected"/> in turn and the statements <paramref name="affected"/>.</summary>
+        public void Returns(long[] expected, params int[] affected)
+        {
+            A.CallTo(() => Client.GetCountAsync(Tenant, A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
+                .ReturnsNextFromSequence(expected);
+            A.CallTo(() => Client.ExecuteNonQueryAsync(
+                    Tenant, A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
+                .ReturnsNextFromSequence(affected);
+        }
+
+        public int Counts => Fake.GetCalls(Client).Count(c => c.Method.Name == nameof(IStreamDataDatabaseClient.GetCountAsync));
 
         public int Statements => Fake.GetCalls(Client).Count(c => c.Method.Name == nameof(IStreamDataDatabaseClient.ExecuteNonQueryAsync));
 

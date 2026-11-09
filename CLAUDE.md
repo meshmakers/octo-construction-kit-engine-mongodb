@@ -1270,7 +1270,9 @@ through `RollupSourceBucketAggregator`) and the staging-to-live copy are `INSERT
 same way. Each compares its affected rows with the rows it must write: the aggregation with
 `RollupAggregationSqlBuilder.BuildExpectedRowCount` (same source predicate and generations, `GROUP BY rtid` of the key only,
 counted **before** the statement, so late source rows can only raise the affected count; on the LOCF path the carry window is
-part of it), the copy with the row count of its slice that sizes it anyway. A shortfall is written once more (the aggregation
+part of it; on a shortfall the source is counted once more, because a source row deleted meanwhile lowers what the statement can
+write: rows written >= the recount is no loss, and the repeat is judged against the recount), the copy with the row count of its
+slice that sizes it anyway. A shortfall is written once more (the aggregation
 upsert again, the copy with `ON CONFLICT DO NOTHING` and then counted in the live table after a refresh); still short, it throws
 `StreamDataWriteIncompleteException` naming the table, the bucket or slice and the counts. Before the flip the executor also
 checks the generation end to end, independent of the reported counts (`VerifyGenerationCompleteAsync`): staged rows >= the rows

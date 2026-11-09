@@ -158,8 +158,9 @@ internal sealed class RollupSourceBucketAggregator
     /// <summary>
     /// Executes one aggregation statement and checks that CrateDB wrote every row its <c>SELECT</c> produces
     /// (AB#8680). The expected rows are counted first: rows the source gains meanwhile can only raise the affected
-    /// count. A shortfall is written once more — the statement is an idempotent upsert — and fails the bucket when
-    /// rows are still missing.
+    /// count. On a shortfall the rows are counted once more: a source row deleted meanwhile lowers the count, and
+    /// when the statement wrote the recounted rows nothing is missing. A real shortfall is written once more — the
+    /// statement is an idempotent upsert — and fails the bucket when rows are still missing against the recount.
     /// </summary>
     /// <remarks>
     /// CrateDB answers an <c>INSERT … SELECT</c> whose shard request a tripped memory circuit breaker ended without
@@ -180,6 +181,19 @@ internal sealed class RollupSourceBucketAggregator
             return rows;
         }
 
+        // A source row deleted between the count and the statement lowers what the statement can write: count once
+        // more before the shortfall is called a loss (AB#8680).
+        var recounted = await _databaseClient.GetCountAsync(
+            _tenantId, expectedCountSql, CrateStatementClass.Maintenance, cancellationToken);
+        if (rows >= recounted)
+        {
+            _logger.LogInformation(
+                "Rollup aggregation of bucket [{BucketStart:O}, {BucketEnd:O}) into {TargetTable} wrote {Rows} rows; the source grouped into {Expected} rows before the statement and into {Recounted} rows after it, so no row is missing.",
+                bucketStart, bucketEnd, targetTable, rows, expected, recounted);
+            return rows;
+        }
+
+        expected = recounted;
         _logger.LogWarning(
             "Rollup aggregation of bucket [{BucketStart:O}, {BucketEnd:O}) into {TargetTable} wrote {Rows} of {Expected} rows without an error; writing the bucket once more.",
             bucketStart, bucketEnd, targetTable, rows, expected);
