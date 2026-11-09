@@ -50,6 +50,16 @@ public class RollupRecomputeSqlBuilderTests
     }
 
     [Fact]
+    public void BuildInsertFromStagingSlice_SkipExisting_InsertsOnlyTheMissingRows()
+    {
+        // The repeat of a slice CrateDB stored only in part (AB#8680).
+        var sql = RollupRecomputeSqlBuilder.BuildInsertFromStagingSlice(
+            LiveTable, StagingTable, new List<string> { "window_start" }, 7, SliceFrom, SliceTo, skipExisting: true);
+
+        Assert.EndsWith($"\"window_start\" < {SliceToMs} ON CONFLICT DO NOTHING;", sql);
+    }
+
+    [Fact]
     public void BuildInsertFromStagingSlice_EmptyColumns_Throws()
     {
         Assert.Throws<ArgumentException>(() =>

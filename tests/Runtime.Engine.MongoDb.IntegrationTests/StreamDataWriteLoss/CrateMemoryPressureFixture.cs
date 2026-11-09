@@ -33,6 +33,9 @@ public sealed class CrateMemoryPressureFixture : IAsyncLifetime
 
     internal CrateDatabaseClient Client { get; private set; } = null!;
 
+    /// <summary>The stream-data configuration of <see cref="Client" />, for a repository over this CrateDB (AB#8680).</summary>
+    internal IOptions<StreamDataConfiguration> Configuration { get; private set; } = null!;
+
     private string PlainConnectionString { get; set; } = string.Empty;
 
     public async ValueTask InitializeAsync()
@@ -60,6 +63,7 @@ public sealed class CrateMemoryPressureFixture : IAsyncLifetime
         var connectionString = $"Host=localhost;Port={container.GetMappedPublicPort(5432)};Username=crate;SSL Mode=Prefer";
         PlainConnectionString = connectionString + ";Pooling=false";
         var configuration = Options.Create(new StreamDataConfiguration { ConnectionString = connectionString });
+        Configuration = configuration;
         Client = new CrateDatabaseClient(
             NullLogger<CrateDatabaseClient>.Instance,
             new CrateDbConnectionAccess(configuration, NullLogger<CrateDbConnectionAccess>.Instance),
@@ -120,7 +124,9 @@ public sealed class CrateMemoryPressureFixture : IAsyncLifetime
     {
         await using var connection = new NpgsqlConnection(PlainConnectionString);
         await connection.OpenAsync();
-        await using var command = new NpgsqlCommand(sql, connection);
+        // The setup statements of the rollup stress (AB#8680) seed 240,000 rows into a CrateDB that may still be busy with the
+        // previous test's load; the driver's 30 s default ended them.
+        await using var command = new NpgsqlCommand(sql, connection) { CommandTimeout = 300 };
         await command.ExecuteNonQueryAsync();
     }
 

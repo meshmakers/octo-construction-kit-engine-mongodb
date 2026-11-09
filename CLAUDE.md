@@ -1254,7 +1254,22 @@ missing rows once more (guarded: those rows, unguarded: the statement) and then 
 400. Rules: never turn a missing `RETURNING` row back into a skip reason, never catch the exception into a success. Test:
 `StreamDataWriteLoss/ArchiveWriteUnderMemoryPressureIntegrationTests` (own CrateDB container, 512 MB heap, query breaker set per
 test: guarded 25 %, unguarded 5 %; skipped with that reason if the breaker never trips; ~15 s; red without the check).
-Not covered by it (other statements): the rollup aggregation and the recompute staging copy (`INSERT … SELECT`).
+**The rollup statements check their rows too (AB#8680).** The forward aggregation, the recompute's staging aggregation (both
+through `RollupSourceBucketAggregator`) and the staging-to-live copy are `INSERT … SELECT` statements that CrateDB answers the
+same way. Each compares its affected rows with the rows it must write: the aggregation with
+`RollupAggregationSqlBuilder.BuildExpectedRowCount` (same source predicate and generations, `GROUP BY rtid` of the key only,
+counted **before** the statement, so late source rows can only raise the affected count; on the LOCF path the carry window is
+part of it), the copy with the row count of its slice that sizes it anyway. A shortfall is written once more (the aggregation
+upsert again, the copy with `ON CONFLICT DO NOTHING` and then counted in the live table after a refresh); still short, it throws
+`StreamDataWriteIncompleteException` naming the table, the bucket or slice and the counts. Before the flip the executor also
+checks the generation end to end, independent of the reported counts (`VerifyGenerationCompleteAsync`): staged rows >= the rows
+the aggregations reported, rows of the new generation in the live range >= staged rows. The copy fails before the flip, so the
+pointer stays on the previous generation, the staging stays until the next run clears it, and the rows already copied are
+leftovers the next run's step 0 removes. A shortfall under a source pointer that moved is not a loss: the bucket is aggregated
+again (`SamePointers`). A repeated aggregation row that already existed takes the conflict branch and is flagged `was_updated`.
+Test: `StreamDataWriteLoss/RollupUnderMemoryPressureIntegrationTests` (same container, query breaker 15 %, 6 rollups of one raw
+source with 20,000 entities in parallel; the recompute flipped to an incomplete generation without the check; the forward
+aggregation did not lose rows silently in the measured runs, only loud breaker errors).
 
 ### Value check on raw and time-range writes (AB#7643, raw path AB#8606)
 

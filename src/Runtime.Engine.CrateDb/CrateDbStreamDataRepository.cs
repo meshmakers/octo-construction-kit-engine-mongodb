@@ -2288,6 +2288,17 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             return sql;
         }
 
+        // What the statement above must write for the same source generations (AB#8680).
+        string BuildExpectedCountSql(IReadOnlyList<GenerationRange>? sourceGenerationRanges) =>
+            RollupAggregationSqlBuilder.BuildExpectedRowCount(
+                sourceTable,
+                resolved,
+                bucketStart,
+                bucketEnd,
+                sourceArchive.UsesWindowedStorage,
+                carryLookback: rollup.CarryLookback,
+                sourceGenerationRanges: sourceGenerationRanges);
+
         // A discarded attempt's generation-0 rows are removed before the bucket is aggregated again:
         // the upsert only overwrites the rows the repeated attempt produces. The delete is a search
         // operation, so the rows have to be on the read path first.
@@ -2302,7 +2313,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // source commits a recompute of the bucket meanwhile.
         _bucketAggregator ??= new RollupSourceBucketAggregator(_tenantId, _databaseClient, _managementClient, _logger);
         var affected = await _bucketAggregator.AggregateAsync(
-            sourceArchive, bucketStart, bucketEnd, rtIdScope: null, BuildSql, DiscardForwardBucketAsync, cancellationToken);
+            sourceArchive, bucketStart, bucketEnd, rtIdScope: null, BuildSql, BuildExpectedCountSql, targetTable,
+            DiscardForwardBucketAsync, cancellationToken);
 
         CrateDbDiagnostics.RollupBucketUpserts.Add(affected,
             new("octo.tenant.id", _tenantId),

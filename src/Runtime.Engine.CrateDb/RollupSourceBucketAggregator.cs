@@ -71,6 +71,12 @@ internal sealed class RollupSourceBucketAggregator
     /// it — unscoped ones and its own — are rendered and compared; a recompute of another entity
     /// must not make this bucket repeat.
     /// </param>
+    /// <param name="buildExpectedCountSql">
+    /// Builds the count of the rows the statement of <paramref name="buildSql"/> writes for the same source pointer
+    /// entries (<see cref="RollupAggregationSqlBuilder.BuildExpectedRowCount"/>). The statement's affected rows are
+    /// compared with it (AB#8680): a shortfall is written once more, then it fails the bucket.
+    /// </param>
+    /// <param name="targetTable">The table the statement writes, named in the failure.</param>
     /// <param name="discardAttemptAsync">
     /// Removes what a discarded attempt wrote. Called after every attempt whose result is not kept —
     /// before the bucket is aggregated again and before giving up — because an upsert only
@@ -85,13 +91,15 @@ internal sealed class RollupSourceBucketAggregator
         DateTime bucketEnd,
         string? rtIdScope,
         Func<IReadOnlyList<GenerationRange>?, string> buildSql,
+        Func<IReadOnlyList<GenerationRange>?, string> buildExpectedCountSql,
+        string targetTable,
         Func<CancellationToken, Task>? discardAttemptAsync,
         CancellationToken cancellationToken)
     {
         if (source.RollupAggregations is null)
         {
-            return await _databaseClient.ExecuteNonQueryAsync(
-                _tenantId, buildSql(null), CrateStatementClass.Maintenance, cancellationToken);
+            return await ExecuteVerifiedAsync(
+                buildSql(null), buildExpectedCountSql(null), targetTable, bucketStart, bucketEnd, cancellationToken);
         }
 
         var genMapTable = GenerationMapSqlBuilder.GenMapTable(_tenantId, source.RtId.ToString());
@@ -102,11 +110,28 @@ internal sealed class RollupSourceBucketAggregator
             cancellationToken.ThrowIfCancellationRequested();
 
             var before = await LoadOverlappingAsync(genMapTable, bucketStart, bucketEnd, rtIdScope, cancellationToken);
-            var rows = await _databaseClient.ExecuteNonQueryAsync(
-                _tenantId, buildSql(before), CrateStatementClass.Maintenance, cancellationToken);
+            int rows;
+            try
+            {
+                rows = await ExecuteVerifiedAsync(
+                    buildSql(before), buildExpectedCountSql(before), targetTable, bucketStart, bucketEnd, cancellationToken);
+            }
+            catch (StreamDataWriteIncompleteException)
+            {
+                // A source recompute that swept the counted generation between the count and the statement looks
+                // like a loss; it is not one. Only an unchanged pointer makes the shortfall a failure.
+                var afterShortfall = await LoadOverlappingAsync(genMapTable, bucketStart, bucketEnd, rtIdScope, cancellationToken);
+                if (SamePointers(before, afterShortfall))
+                {
+                    throw;
+                }
+
+                rows = -1;
+            }
+
             var after = await LoadOverlappingAsync(genMapTable, bucketStart, bucketEnd, rtIdScope, cancellationToken);
 
-            if (SamePointers(before, after))
+            if (rows >= 0 && SamePointers(before, after))
             {
                 return rows;
             }
@@ -128,6 +153,49 @@ internal sealed class RollupSourceBucketAggregator
                 "Source rollup {SourceRtId} committed a recompute of bucket [{BucketStart:O}, {BucketEnd:O}) while it was being aggregated; aggregating it again (attempt {Attempt}/{MaxAttempts}).",
                 source.RtId, bucketStart, bucketEnd, attempt + 1, MaxAttempts);
         }
+    }
+
+    /// <summary>
+    /// Executes one aggregation statement and checks that CrateDB wrote every row its <c>SELECT</c> produces
+    /// (AB#8680). The expected rows are counted first: rows the source gains meanwhile can only raise the affected
+    /// count. A shortfall is written once more — the statement is an idempotent upsert — and fails the bucket when
+    /// rows are still missing.
+    /// </summary>
+    /// <remarks>
+    /// CrateDB answers an <c>INSERT … SELECT</c> whose shard request a tripped memory circuit breaker ended without
+    /// an error (AB#8679); the affected-row count is then the only sign of the loss. The upsert reports a row for
+    /// every row it inserted or updated, so a complete repeat reports the expected count again. A repeated row
+    /// that existed takes the conflict branch and is flagged <c>was_updated</c>, as any re-aggregation is.
+    /// </remarks>
+    private async Task<int> ExecuteVerifiedAsync(
+        string sql, string expectedCountSql, string targetTable, DateTime bucketStart, DateTime bucketEnd,
+        CancellationToken cancellationToken)
+    {
+        var expected = await _databaseClient.GetCountAsync(
+            _tenantId, expectedCountSql, CrateStatementClass.Maintenance, cancellationToken);
+        var rows = await _databaseClient.ExecuteNonQueryAsync(
+            _tenantId, sql, CrateStatementClass.Maintenance, cancellationToken);
+        if (rows >= expected)
+        {
+            return rows;
+        }
+
+        _logger.LogWarning(
+            "Rollup aggregation of bucket [{BucketStart:O}, {BucketEnd:O}) into {TargetTable} wrote {Rows} of {Expected} rows without an error; writing the bucket once more.",
+            bucketStart, bucketEnd, targetTable, rows, expected);
+        rows = await _databaseClient.ExecuteNonQueryAsync(
+            _tenantId, sql, CrateStatementClass.Maintenance, cancellationToken);
+        if (rows >= expected)
+        {
+            return rows;
+        }
+
+        throw new StreamDataWriteIncompleteException(
+            targetTable,
+            checked((int)expected),
+            checked((int)(expected - rows)),
+            FormattableString.Invariant(
+                $"Rollup aggregation of bucket [{bucketStart:O}, {bucketEnd:O}): the source groups into {expected} rows, the statement wrote {rows}."));
     }
 
     /// <summary>
