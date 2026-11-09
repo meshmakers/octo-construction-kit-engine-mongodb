@@ -9,8 +9,11 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
 /// <param name="InsertColumns">
 /// The user columns of the <c>INSERT</c> list, in archive order: the named columns plus every ranking column of the
 /// conflict precedence (bound as NULL when the row does not name it), because the guard reads <c>EXCLUDED."k"</c>.
+/// The guard judges an unnamed ranking column on the merged row (<c>COALESCE(EXCLUDED."k", "k")</c>, AB#8622).
 /// </param>
-/// <param name="UpdatedColumns">The user columns a winning write replaces: exactly the named columns.</param>
+/// <param name="UpdatedColumns">
+/// The user columns a winning write replaces: exactly the named columns, so an unnamed ranking column keeps its value.
+/// </param>
 /// <param name="Indexes">Positions of the rows in the batch, ascending.</param>
 internal sealed record ArchiveColumnSetGroup(
     IReadOnlyList<string> InsertColumns, IReadOnlyList<string> UpdatedColumns, IReadOnlyList<int> Indexes);

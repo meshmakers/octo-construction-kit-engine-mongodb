@@ -56,6 +56,18 @@ public class ConflictOutcomeTests
     }
 
     [Fact]
+    public void ARankingColumnTheRowDoesNotSend_IsNotCompared_TheRowCountsAsStored()
+    {
+        // AB#8622: an unsent ranking column keeps its stored value; the guard compared it on the merged row.
+        var sent = new ConflictOutcome.SentRow("rt1", "Test/Meter", T0, T0.AddMinutes(15),
+            new Dictionary<string, object?> { ["consumption"] = 12d }, ArchiveRowOrigin.Manual);
+
+        Assert.Empty(ConflictOutcome.FindSkipped([sent], [Returned(1, "manual")], Precedence, true, true));
+        Assert.Equal(StreamDataSkipReason.LowerPrecedence,
+            Assert.Single(ConflictOutcome.FindSkipped([sent], [Returned(1, "automated")], Precedence, true, true)).Reason);
+    }
+
+    [Fact]
     public void AnAutomatedRowAgainstAStoredManualValue_IsManualValueProtected_EvenWithEqualQuality()
     {
         var skipped = ConflictOutcome.FindSkipped([Sent(1)], [Returned(1, "manual")], Precedence, true, true);

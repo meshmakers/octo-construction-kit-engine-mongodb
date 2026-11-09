@@ -124,8 +124,14 @@ internal static class ConflictOutcome
     {
         foreach (var column in keyColumns)
         {
+            // AB#8622: a ranking column the row does not send keeps its stored value; the guard compared it on the
+            // merged row, so it equals what CrateDB holds and says nothing about the outcome.
+            if (!sent.Values.TryGetValue(column, out var sentValue))
+            {
+                continue;
+            }
+
             var storedValue = stored.TryGetValue(column, out var v) ? v : null;
-            var sentValue = sent.Values.TryGetValue(column, out var w) ? w : null;
             if (!ValuesEqual(storedValue, sentValue))
             {
                 return false;

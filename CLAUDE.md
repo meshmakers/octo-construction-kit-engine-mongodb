@@ -1269,8 +1269,17 @@ automated deliveries:** a partial re-delivery no longer clears the columns it di
 - "Named" = the key is in the point's attribute dictionary. Never fill missing keys with `null` on the way to
   `CrateDatabaseClient` (that is exactly the old defect); the import path fills every column on purpose.
 - `ArchiveColumnSets.Group` splits a batch by named column set (one statement shape per set, order kept per row key);
-  `BuildRawInsertSql` / `BuildTimeRangeInsertSql` take the INSERT list and `updatedColumnNames` separately. Ranking
-  columns of the conflict precedence are always inserted (bound NULL when not named) and only replaced when named.
+  `BuildRawInsertSql` / `BuildTimeRangeInsertSql` take the INSERT list and `updatedColumnNames` separately.
+- **Ranking columns** (the column keys of `ConflictPrecedence`; `$Origin` is no column) follow the rule, but cannot be
+  null (decided by Reimar 2026-11-09). Not sent: the stored value stays **and is the value the guard compares** — the
+  guard reads `COALESCE(EXCLUDED."k", "k")` for the keys the statement's rows do not send
+  (`BuildConflictGuard(precedence, insertColumns, sentColumnNames)`), so the next key decides; a new row stores NULL.
+  `ConflictOutcome.Holds` skips an unsent ranking column, so a point that wins without sending it is reported stored
+  (a manual one never gets a 409). Sent with a value: compared and written as before. Sent as explicit `null`:
+  `ArchiveRankingColumnValidator` refuses the whole batch with an `ArgumentException` before anything is read or
+  written (asset repository: 400), raw and time-range, automated and manual. Ranking columns are always in the INSERT
+  list (bound NULL when not sent) and only replaced when sent. Two earlier variants are withdrawn: refusing points
+  without every ranking column (C) and writing an unsent ranking column as NULL (D).
 - No column of an upsert relies on a constant DEFAULT (AB#6647): user columns have none, `was_updated` stays a literal.
 - Computed columns at ingest are evaluated on the **merged row** (decided by Reimar 2026-11-09): left out when the
   point names none of the columns the formula reads (`ComputedColumnPlanItem.ReferencedColumns`,
@@ -1282,6 +1291,8 @@ automated deliveries:** a partial re-delivery no longer clears the columns it di
   same key in between can be missed. Backfill, repair and rollup evaluation are unchanged.
 
 Write-up: `docs/streamdata-archive-concept.md` → *Partial delivery*. Tests: `PartialDeliverySqlTests`, `StoredRowLookupTests`,
+`ArchiveRankingColumnValidatorTests`, `ConflictOutcomeTests`, `StreamDataOrigin/PartialDeliveryOriginPrecedenceIntegrationTests`
+(EC case, merged-row ranking, explicit null refused, mixed batches),
 `CrateDbStreamDataComputedColumnIngestTests` (AB#8622 cases), `StreamDataOrigin/PartialDeliveryIntegrationTests`,
 `StreamDataOrigin/ComputedColumnPartialDeliveryIntegrationTests` (merged row on raw and time-range, rollup over the column).
 

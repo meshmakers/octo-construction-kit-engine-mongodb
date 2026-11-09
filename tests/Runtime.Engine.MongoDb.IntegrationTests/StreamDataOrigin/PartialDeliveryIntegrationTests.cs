@@ -216,20 +216,47 @@ public class PartialDeliveryIntegrationTests(CrateStagingCopyFixture fixture)
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task APrecedenceKeyTheDeliveryDoesNotName_CountsAsNull_AndTheGuardKeepsTheStoredRow(bool timeRange)
+    public async Task APrecedenceKeyTheDeliveryDoesNotName_KeepsItsStoredValue_AndCountsAsEqualForTheGuard(bool timeRange)
     {
-        // The guard reads EXCLUDED."quality": the key column is always in the INSERT list, bound NULL when not named.
-        // An incoming NULL key never beats a stored value (AB#5247), so the stored row and its quality stay.
+        // AB#8622: an unsent ranking column keeps its stored value and the guard compares the point against the merged
+        // row (COALESCE(EXCLUDED."quality", "quality")): equal on the last key, so the later point wins and is reported
+        // as stored; the quality stays. A point that sends a worse quality loses, a better one wins.
         var archive = await CreateArchiveAsync(timeRange, [new ArchiveConflictKey("Quality", ConflictKeyOrder.LowerWins)]);
         var meter = OctoObjectId.GenerateNewId();
         await WriteAsync(archive, new Delivery(meter, 0, Full(100, 230.5, 2)));
 
-        var lost = await WriteAsync(archive, new Delivery(meter, 0, new() { ["MeterReading"] = 150d }));
-        var won = await WriteAsync(archive, new Delivery(meter, 0, new() { ["MeterReading"] = 160d, ["Quality"] = 1 }));
+        var unsent = await WriteAsync(archive, new Delivery(meter, 0, new() { ["MeterReading"] = 150d }));
+        Assert.Equal(1, unsent.Stored);
+        Assert.Empty(unsent.Skipped);
+        AssertRow(await RowAsync(archive, meter), 150, 230.5, 2);
 
-        Assert.Equal(StreamDataSkipReason.LowerPrecedence, Assert.Single(lost.Skipped).Reason);
+        var worse = await WriteAsync(archive, new Delivery(meter, 0, new() { ["MeterReading"] = 155d, ["Quality"] = 3 }));
+        Assert.Equal(StreamDataSkipReason.LowerPrecedence, Assert.Single(worse.Skipped).Reason);
+        AssertRow(await RowAsync(archive, meter), 150, 230.5, 2);
+
+        var won = await WriteAsync(archive, new Delivery(meter, 0, new() { ["MeterReading"] = 160d, ["Quality"] = 1 }));
         Assert.Equal(1, won.Stored);
         AssertRow(await RowAsync(archive, meter), 160, 230.5, 1);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task APrecedenceKeySentAsExplicitNull_RefusesTheWholeBatch_AndWritesNothing(bool timeRange)
+    {
+        var archive = await CreateArchiveAsync(timeRange, [new ArchiveConflictKey("Quality", ConflictKeyOrder.LowerWins)]);
+        var meter = OctoObjectId.GenerateNewId();
+        var other = OctoObjectId.GenerateNewId();
+        await WriteAsync(archive, new Delivery(meter, 0, Full(100, 230.5, 2)));
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => WriteAsync(archive,
+            new Delivery(other, 0, Full(500, 231, 1)),
+            new Delivery(meter, 0, new() { ["MeterReading"] = 150d, ["Quality"] = null })));
+
+        Assert.Contains("sends null for 'Quality'", error.Message);
+        AssertRow(await RowAsync(archive, meter), 100, 230.5, 2);
+        await fixture.SqlAsync($"REFRESH TABLE {archive.Table}");
+        Assert.Empty(await fixture.QueryAsync($"SELECT \"rtid\" FROM {archive.Table} WHERE \"rtid\" = '{other}'"));
     }
 
     [Fact]

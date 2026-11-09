@@ -17,7 +17,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.StreamDataOrig
 ///     evaluated on the merged row (stored-row read) must honour where the archive puts <c>$Origin</c>:
 ///     ignored, after <c>DataQuality</c>, or not named (origin first). A manual value wins a conflict only when the
 ///     archive is not configured otherwise. Archive: Net = Consumption - Production, ranked by DataQuality (LowerWins)
-///     and SourceDocumentDate (HigherWins).
+///     and SourceDocumentDate (HigherWins). A ranking column the point does not send keeps its stored value and counts
+///     as the stored value for the comparison (the guard judges the merged row); an explicit null on one is refused.
 /// </summary>
 [Collection(CrateStagingCopyCollection.Name)]
 public class PartialDeliveryOriginPrecedenceIntegrationTests(CrateStagingCopyFixture fixture)
@@ -156,6 +157,22 @@ public class PartialDeliveryOriginPrecedenceIntegrationTests(CrateStagingCopyFix
         static double? D(object? v) => v is null ? null : Convert.ToDouble(v);
     }
 
+    /// <summary>The stored ranking column SourceDocumentDate of the row (not part of <see cref="Row" />).</summary>
+    private async Task<DateTime?> DocumentDateAsync(Archive archive, OctoObjectId meter, int slot = 0)
+    {
+        var rows = await fixture.QueryAsync(
+            $"SELECT \"sourcedocumentdate\" FROM {archive.Table} " +
+            $"WHERE \"rtid\" = '{meter}' AND \"{archive.TimeColumn}\" = '{Start.AddMinutes(15 * slot):yyyy-MM-ddTHH:mm:ss}Z'");
+        var value = Assert.Single(rows)["sourcedocumentdate"];
+        return value switch
+        {
+            null => null,
+            DateTime d => d.ToUniversalTime(),
+            long ms => DateTimeOffset.FromUnixTimeMilliseconds(ms).UtcDateTime,
+            _ => Convert.ToDateTime(value).ToUniversalTime()
+        };
+    }
+
     private static Row ManualRow(double consumption, double production, int quality) =>
         new(consumption, production, quality, consumption - production, "manual", "jane.doe", "meter exchanged");
 
@@ -255,8 +272,8 @@ public class PartialDeliveryOriginPrecedenceIntegrationTests(CrateStagingCopyFix
     [InlineData(true)]
     public async Task OriginAfterQuality_ABetterQualityPartialPoint_ThatDoesNotSendTheRecencyKey_IsReportedAsStored(bool timeRange)
     {
-        // The point does not name SourceDocumentDate: its statement inserts the key as NULL, the quality decides before
-        // it, and the stored document date stays. The write result must still report the row as stored.
+        // The point does not send SourceDocumentDate: the quality decides before it, and the stored document date stays.
+        // The write result compares against the merged row and reports the row as stored.
         var archive = await CreateArchiveAsync(timeRange, OriginAfterQuality);
         var meter = OctoObjectId.GenerateNewId();
         await WriteAsync(archive, Manual(meter, Full(10, 4, 2, OldDocument)));
@@ -264,6 +281,7 @@ public class PartialDeliveryOriginPrecedenceIntegrationTests(CrateStagingCopyFix
         var result = await WriteAsync(archive, new Delivery(meter, new() { ["Consumption"] = 12d, ["DataQuality"] = 1 }));
 
         Assert.Equal(AutomatedRow(12, 4, 1, 8), await RowAsync(archive, meter));
+        Assert.Equal(OldDocument, await DocumentDateAsync(archive, meter));
         Assert.Empty(result.Skipped);
         Assert.Equal(1, result.Stored);
     }
@@ -336,7 +354,9 @@ public class PartialDeliveryOriginPrecedenceIntegrationTests(CrateStagingCopyFix
         var result = await WriteAsync(archive, Manual(meter, new() { ["Production"] = 3d, ["DataQuality"] = 3 }));
 
         Assert.Equal(1, result.Stored);
+        Assert.Empty(result.Skipped);
         Assert.Equal(new Row(10, 3, 3, 7, "manual", "jane.doe", "meter exchanged"), await RowAsync(archive, meter));
+        Assert.Equal(NewDocument, await DocumentDateAsync(archive, meter));
     }
 
     // 4. A manual point that loses against a configured precedence fails the write (REST: 409 ManualWriteNotStored).
@@ -377,10 +397,13 @@ public class PartialDeliveryOriginPrecedenceIntegrationTests(CrateStagingCopyFix
         var meter = OctoObjectId.GenerateNewId();
         await WriteAsync(archive, new Delivery(meter, Full(10, 4, 1, OldDocument)));
 
-        await Assert.ThrowsAsync<ManualStreamDataNotAppliedException>(() => WriteAsync(archive,
+        // The point loses on the quality; its unsent document date does not matter.
+        var ex = await Assert.ThrowsAsync<ManualStreamDataNotAppliedException>(() => WriteAsync(archive,
             Manual(meter, new() { ["Production"] = null, ["DataQuality"] = 2 })));
 
+        Assert.Equal(StreamDataSkipReason.LowerPrecedence, Assert.Single(ex.Result.Skipped).Reason);
         Assert.Equal(AutomatedRow(10, 4, 1, 6), await RowAsync(archive, meter));
+        Assert.Equal(OldDocument, await DocumentDateAsync(archive, meter));
     }
 
     [Theory]
@@ -395,8 +418,11 @@ public class PartialDeliveryOriginPrecedenceIntegrationTests(CrateStagingCopyFix
         var result = await WriteAsync(archive, Manual(meter, new() { ["Production"] = null, ["DataQuality"] = 1 }));
 
         Assert.Equal(1, result.Stored);
-        // An explicit null is a value: Production becomes NULL and the formula sees null.
+        Assert.Empty(result.Skipped);
+        // An explicit null on a non-ranking column is a value: Production becomes NULL and the formula sees null. The
+        // unsent document date keeps its stored value.
         Assert.Equal(new Row(10, null, 1, null, "manual", "jane.doe", "meter exchanged"), await RowAsync(archive, meter));
+        Assert.Equal(NewDocument, await DocumentDateAsync(archive, meter));
     }
 
     // 5. A mixed batch with different column sets: every row is decided on its own.
@@ -459,6 +485,134 @@ public class PartialDeliveryOriginPrecedenceIntegrationTests(CrateStagingCopyFix
         Assert.Equal((a, StreamDataSkipReason.ManualValueProtected), (Assert.Single(result.Skipped).RtId, result.Skipped[0].Reason));
         Assert.Equal(ManualRow(10, 4, 3), await RowAsync(archive, a));
         Assert.Equal(AutomatedRow(20, 1, 1, 19), await RowAsync(archive, b));
+        Assert.Equal(OldDocument, await DocumentDateAsync(archive, b));
+        // c sends no ranking column: DataQuality and SourceDocumentDate keep their stored values.
         Assert.Equal(new Row(31, 6, 1, 25, "manual", "jane.doe", "meter exchanged"), await RowAsync(archive, c));
+        Assert.Equal(OldDocument, await DocumentDateAsync(archive, c));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AMixedBatchWithOneExplicitNullRankingColumn_IsRefusedAsAWhole(bool timeRange)
+    {
+        var archive = await CreateArchiveAsync(timeRange, OriginNotNamed);
+        var a = OctoObjectId.GenerateNewId();
+        var b = OctoObjectId.GenerateNewId();
+        await WriteAsync(archive, new Delivery(a, Full(10, 4, 3, OldDocument)));
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => WriteAsync(archive,
+            new Delivery(a, new() { ["Consumption"] = 11d, ["DataQuality"] = 1 }),
+            Manual(b, new() { ["Consumption"] = 5d, ["SourceDocumentDate"] = null })));
+
+        Assert.Contains("point 1 (", error.Message);
+        Assert.Contains("sends null for 'SourceDocumentDate'", error.Message);
+        Assert.Equal(AutomatedRow(10, 4, 3, 6), await RowAsync(archive, a));
+        Assert.Empty(await fixture.QueryAsync($"SELECT \"rtid\" FROM {archive.Table} WHERE \"rtid\" = '{b}'"));
+    }
+
+    // 6. The energy community case: a manual correction without SourceDocumentDate over a stored EDA row.
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OriginNotNamed_AManualCorrectionWithoutTheDocumentDate_OverAStoredEdaRow_IsStoredAndReportedAsStored(bool timeRange)
+    {
+        // EC Base/manual-metering-entry.yaml sends the quality the user stated, but no SourceDocumentDate. The archive
+        // ranks [DataQuality LowerWins, SourceDocumentDate HigherWins] with $Origin first (not named).
+        var archive = await CreateArchiveAsync(timeRange, OriginNotNamed);
+        var meter = OctoObjectId.GenerateNewId();
+        await WriteAsync(archive, new Delivery(meter, Full(10, 4, 1, NewDocument)));
+
+        // No ManualStreamDataNotAppliedException: the REST layer answers 200, not 409 ManualWriteNotStored.
+        var result = await WriteAsync(archive, Manual(meter, new() { ["Consumption"] = 12d, ["DataQuality"] = 2 }));
+
+        Assert.Equal(1, result.Stored);
+        Assert.Empty(result.Skipped);
+        Assert.Equal(new Row(12, 4, 2, 8, "manual", "jane.doe", "meter exchanged"), await RowAsync(archive, meter));
+        Assert.Equal(NewDocument, await DocumentDateAsync(archive, meter));
+
+        // A later EDA re-delivery of the window is kept out by the manual row.
+        var redelivery = await WriteAsync(archive, new Delivery(meter, Full(10, 4, 1, NewDocument)));
+        Assert.Equal(StreamDataSkipReason.ManualValueProtected, Assert.Single(redelivery.Skipped).Reason);
+        Assert.Equal(new Row(12, 4, 2, 8, "manual", "jane.doe", "meter exchanged"), await RowAsync(archive, meter));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OriginAfterQuality_AManualCorrectionWithoutTheDocumentDate_OverAStoredEdaRow_IsStoredAndReportedAsStored(bool timeRange)
+    {
+        // Same case with $Origin after the quality: a correction of equal quality wins on the origin, the unsent
+        // document date is equal on the merged row and stays.
+        var archive = await CreateArchiveAsync(timeRange, OriginAfterQuality);
+        var meter = OctoObjectId.GenerateNewId();
+        await WriteAsync(archive, new Delivery(meter, Full(10, 4, 1, NewDocument)));
+
+        var result = await WriteAsync(archive, Manual(meter, new() { ["Consumption"] = 12d, ["DataQuality"] = 1 }));
+
+        Assert.Equal(1, result.Stored);
+        Assert.Empty(result.Skipped);
+        Assert.Equal(new Row(12, 4, 1, 8, "manual", "jane.doe", "meter exchanged"), await RowAsync(archive, meter));
+        Assert.Equal(NewDocument, await DocumentDateAsync(archive, meter));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OriginNotNamed_ABetterQualityAutomatedPointWithoutTheDocumentDate_Wins_AndTheDocumentDateStays(bool timeRange)
+    {
+        var archive = await CreateArchiveAsync(timeRange, OriginNotNamed);
+        var meter = OctoObjectId.GenerateNewId();
+        await WriteAsync(archive, new Delivery(meter, Full(10, 4, 3, NewDocument)));
+
+        var result = await WriteAsync(archive, new Delivery(meter, new() { ["Consumption"] = 11d, ["DataQuality"] = 1 }));
+
+        Assert.Equal(1, result.Stored);
+        Assert.Empty(result.Skipped);
+        Assert.Equal(AutomatedRow(11, 4, 1, 7), await RowAsync(archive, meter));
+        Assert.Equal(NewDocument, await DocumentDateAsync(archive, meter));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OriginAfterQuality_AnAutomatedPointWithoutAQuality_IsRankedByTheNextKey_AndTheQualityStays(bool timeRange)
+    {
+        // The unsent quality equals the stored one on the merged row, so the document date decides: a newer point wins
+        // and the row keeps its quality, an older one loses.
+        var archive = await CreateArchiveAsync(timeRange, OriginAfterQuality);
+        var meter = OctoObjectId.GenerateNewId();
+        await WriteAsync(archive, new Delivery(meter, Full(10, 4, 1, OldDocument)));
+
+        var older = await WriteAsync(archive,
+            new Delivery(meter, new() { ["Consumption"] = 98d, ["SourceDocumentDate"] = OldDocument.AddDays(-1) }));
+        Assert.Equal(StreamDataSkipReason.LowerPrecedence, Assert.Single(older.Skipped).Reason);
+        Assert.Equal(AutomatedRow(10, 4, 1, 6), await RowAsync(archive, meter));
+
+        var newer = await WriteAsync(archive,
+            new Delivery(meter, new() { ["Consumption"] = 99d, ["SourceDocumentDate"] = NewDocument }));
+        Assert.Equal(1, newer.Stored);
+        Assert.Empty(newer.Skipped);
+        Assert.Equal(AutomatedRow(99, 4, 1, 95), await RowAsync(archive, meter));
+        Assert.Equal(NewDocument, await DocumentDateAsync(archive, meter));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnExplicitNullOnDataQuality_IsRefused_AndNothingIsWritten(bool timeRange)
+    {
+        var archive = await CreateArchiveAsync(timeRange, OriginNotNamed);
+        var meter = OctoObjectId.GenerateNewId();
+        await WriteAsync(archive, new Delivery(meter, Full(10, 4, 1, OldDocument)));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => WriteAsync(archive,
+            new Delivery(meter, new() { ["Consumption"] = 12d, ["DataQuality"] = null, ["SourceDocumentDate"] = NewDocument })));
+        await Assert.ThrowsAsync<ArgumentException>(() => WriteAsync(archive,
+            Manual(meter, new() { ["Consumption"] = 13d, ["DataQuality"] = null })));
+
+        Assert.Equal(AutomatedRow(10, 4, 1, 6), await RowAsync(archive, meter));
+        Assert.Equal(OldDocument, await DocumentDateAsync(archive, meter));
     }
 }

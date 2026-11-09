@@ -51,14 +51,15 @@ public class ComputedColumnPartialDeliveryIntegrationTests(CrateStagingCopyFixtu
         public string TimeColumn => TimeRange ? "window_start" : "timestamp";
     }
 
-    private async Task<Archive> CreateArchiveAsync(bool timeRange)
+    private async Task<Archive> CreateArchiveAsync(bool timeRange, IReadOnlyList<ArchiveConflictKey>? precedence = null)
     {
         var tenant = CrateStagingCopyFixture.NewTenantId();
         var rtId = OctoObjectId.GenerateNewId();
         var snapshot = new ArchiveSnapshot(rtId, Type, CkArchiveStatus.Activated, "measurements", Columns)
         {
             IsTimeRange = timeRange,
-            Period = timeRange ? TimeSpan.FromMinutes(15) : null
+            Period = timeRange ? TimeSpan.FromMinutes(15) : null,
+            ConflictPrecedence = precedence ?? []
         };
         var store = A.Fake<IArchiveRuntimeStore>();
         A.CallTo(() => store.GetAsync(rtId)).Returns(snapshot);
@@ -301,5 +302,23 @@ public class ComputedColumnPartialDeliveryIntegrationTests(CrateStagingCopyFixtu
         var row = Assert.Single(await fixture.QueryAsync(
             $"SELECT \"{ColumnNameMapper.PathToColumnName(target)}\" AS v FROM {rollupTable} WHERE \"rtid\" = '{meter}'"));
         Assert.Equal(8d + 15d, Convert.ToDouble(row["v"]));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnUnsentRankingColumn_FeedsTheFormulaWithItsStoredValue(bool timeRange)
+    {
+        // AB#8622: a ranking column the point does not send keeps its stored value, so the formula reads the stored value
+        // (stored-row read) and the guard compares the merged row. A manual point wins on $Origin; Production stays 4.
+        var archive = await CreateArchiveAsync(timeRange, [new ArchiveConflictKey("Production", ConflictKeyOrder.LowerWins)]);
+        var meter = OctoObjectId.GenerateNewId();
+        await WriteAsync(archive, new Delivery(meter, 0, Inputs(10, 4)));
+
+        var result = await WriteAsync(archive, new Delivery(meter, 0, new() { ["Consumption"] = 12d }, ArchiveRowOrigin.Manual));
+
+        Assert.Equal(1, result.Stored);
+        Assert.Empty(result.Skipped);
+        Assert.Equal((12d, (double?)4d, (double?)null, (double?)8d), await RowAsync(archive, meter));
     }
 }

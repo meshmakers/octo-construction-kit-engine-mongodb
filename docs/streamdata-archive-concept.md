@@ -363,10 +363,27 @@ columns).
   A uniform batch (the usual pipeline delivery) is one group, so the statement count is unchanged. Two points of the
   same row key with different column sets run in the order they were sent (a new segment starts where a key repeats
   with another set).
-- **Ranking columns** of the conflict precedence are always in the `INSERT` list, because the guard reads
-  `EXCLUDED."k"`; when the point does not name one it is bound NULL and **not** replaced. An absent key therefore ranks
-  like an incoming NULL: it never beats a stored value (§ *Conflict precedence*). The origin columns are platform
-  columns and always written.
+- **Ranking columns** — the columns named in `Archive.ConflictPrecedence` (`$Origin` is no column) — follow the same
+  rule, except that they cannot be null (decided by Reimar 2026-11-09):
+
+  | The point … the ranking column | Effect |
+  |---|---|
+  | does not send | the **stored value stays**, also as the value the comparison uses: the guard compares the point against the **merged row**, so the missing key equals the stored key and the next key decides. On a new row it is NULL. |
+  | sends with a value | compared as usual and written when the point wins |
+  | sends as explicit `null` | **refused**: the whole batch fails with an `ArgumentException` before anything is read or written (`ArchiveRankingColumnValidator`, asset repository: 400 naming the point and the field). Raw and time-range, automated and manual. |
+
+  A ranking column is always in the `INSERT` list (the guard reads `EXCLUDED."k"`); when the point does not send it,
+  it is bound NULL, **not** replaced, and the guard reads `COALESCE(EXCLUDED."k", "k")` for it, only for the keys the
+  statement's rows do not send (`BuildConflictGuard(..., sentColumnNames)`). The write result compares against the same
+  merged value: `ConflictOutcome.Holds` skips a ranking column the row did not send. So a point that wins on an earlier
+  key without sending `SourceDocumentDate` is reported as **stored**, and a manual point that is stored never fails the
+  write (no 409).
+
+  EC example — archive `[{DataQuality, LowerWins}, {SourceDocumentDate, HigherWins}]`, `$Origin` first by default, a
+  stored automated EDA row L1 / document date D: a manual correction with quality L2 and no document date wins on the
+  origin, is reported stored and the row keeps D. An automated point with a better quality and no document date wins
+  and the row keeps D. An automated point without a quality is ranked by the document date (the quality counts as the
+  stored one and stays). The origin columns are platform columns and always written.
 - **Constant DEFAULTs (AB#6647).** User columns are nullable without a DEFAULT, so leaving one out of the `INSERT` list
   stores NULL, never a default. `was_updated` is still named with the literal `FALSE` in every row of every statement.
 - **Computed columns are evaluated on the merged row** (decided by Reimar 2026-11-09). Nobody sends a computed column;

@@ -117,6 +117,44 @@ public class PartialDeliverySqlTests
     }
 
     [Fact]
+    public void AnUnsentRankingColumn_IsComparedOnTheMergedRow_ASentOneOnTheIncomingValue()
+    {
+        // AB#8622: an unsent ranking column keeps its stored value, so the guard reads COALESCE(EXCLUDED."k", "k"),
+        // which equals the stored key and lets the next key decide. A sent key is compared as before.
+        var sql = CrateDatabaseClient.BuildRawInsertSql("\"t\".\"archive_a\"", ["meterreading", "quality", "documentdate"],
+            [new ArchiveConflictKey("quality", ConflictKeyOrder.LowerWins),
+             new ArchiveConflictKey("documentdate", ConflictKeyOrder.HigherWins)],
+            rowCount: 1, updatedColumnNames: ["meterreading", "quality"]);
+
+        Assert.Contains("COALESCE(EXCLUDED.\"documentdate\", \"documentdate\")", sql);
+        Assert.DoesNotContain("COALESCE(EXCLUDED.\"quality\"", sql);
+        Assert.Contains("EXCLUDED.\"quality\" < \"quality\"", sql);
+        Assert.Contains("\"quality\" = CASE WHEN", sql);
+        Assert.DoesNotContain("\"documentdate\" = CASE WHEN", sql);
+    }
+
+    [Fact]
+    public void WithoutUpdatedColumns_EveryRankingColumnCountsAsSent()
+    {
+        var guard = CrateDatabaseClient.BuildConflictGuard(
+            [new ArchiveConflictKey("quality", ConflictKeyOrder.LowerWins)], ["meterreading", "quality"]);
+
+        Assert.DoesNotContain("COALESCE", guard);
+    }
+
+    [Fact]
+    public void TheTimeRangeStatement_ComparesAnUnsentRankingColumnOnTheMergedRow()
+    {
+        var sql = CrateDatabaseClient.BuildTimeRangeInsertSql("\"t\".\"archive_a\"", ["voltage", "quality"], rowCount: 1,
+            conflictPrecedence: [new ArchiveConflictKey(ArchiveConflictKey.OriginKey, ConflictKeyOrder.HigherWins),
+                new ArchiveConflictKey("quality", ConflictKeyOrder.LowerWins)],
+            updatedColumnNames: ["voltage"]);
+
+        Assert.Contains("COALESCE(EXCLUDED.\"quality\", \"quality\")", sql);
+        Assert.DoesNotContain("\"quality\" = CASE WHEN", sql);
+    }
+
+    [Fact]
     public void TheTimeRangeStatement_ReplacesOnlyTheUpdatedColumns_AndStillWritesWasUpdatedFalse()
     {
         var sql = CrateDatabaseClient.BuildTimeRangeInsertSql("\"t\".\"archive_a\"", ["voltage"], rowCount: 2,

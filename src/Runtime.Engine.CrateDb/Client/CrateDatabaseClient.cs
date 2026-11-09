@@ -538,7 +538,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
         var values = BuildValuesList(allColumns.Count, rowCount, generationTracked ? ", FALSE, 0" : ", FALSE");
         var conflictGenerationSuffix = generationTracked ? $", \"{Constants.Generation}\"" : string.Empty;
-        var guard = BuildConflictGuard(conflictPrecedence ?? [], userColumnNames);
+        var guard = BuildConflictGuard(conflictPrecedence ?? [], userColumnNames, updatedColumnNames);
         var updated = updatedColumnNames ?? userColumnNames;
         var conflictUpdates = BuildConflictUpdates(includeOrigin ? WithOriginColumns(updated) : updated, guard);
 
@@ -578,9 +578,21 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     /// The last key admits equality so that re-delivering the identical document is idempotent rather
     /// than a no-op that leaves the row looking untouched.
     /// </para>
+    /// <para>
+    /// AB#8622: a ranking column the statement's rows do not send (not in <paramref name="sentColumnNames" />) keeps
+    /// its stored value, and the guard compares the incoming point against that merged row:
+    /// <c>COALESCE(EXCLUDED."k", "k")</c> equals the stored key, so the next key decides. An explicit null on a ranking
+    /// column is refused before the write (<c>ArchiveRankingColumnValidator</c>), so a sent key is never NULL.
+    /// </para>
     /// </remarks>
+    /// <param name="precedence">The archive's conflict precedence, physical column names.</param>
+    /// <param name="userColumnNames">The INSERT list of the statement; every ranking column must be in it.</param>
+    /// <param name="sentColumnNames">
+    /// The user columns the rows of the statement send (its replaced columns), or <c>null</c> when every column is sent.
+    /// </param>
     internal static string? BuildConflictGuard(
-        IReadOnlyList<ArchiveConflictKey> precedence, IReadOnlyList<string> userColumnNames)
+        IReadOnlyList<ArchiveConflictKey> precedence, IReadOnlyList<string> userColumnNames,
+        IReadOnlyCollection<string>? sentColumnNames = null)
     {
         if (precedence.Count == 0)
         {
@@ -624,13 +636,14 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             }
         }
 
-        return BuildPrecedenceLevel(precedence, 0);
+        return BuildPrecedenceLevel(precedence, 0, sentColumnNames);
     }
 
     /// <summary>
     /// Renders the lexicographic comparison from key <paramref name="index" /> onwards.
     /// </summary>
-    private static string BuildPrecedenceLevel(IReadOnlyList<ArchiveConflictKey> keys, int index)
+    private static string BuildPrecedenceLevel(IReadOnlyList<ArchiveConflictKey> keys, int index,
+        IReadOnlyCollection<string>? sentColumnNames)
     {
         var key = keys[index];
         var isLast = index == keys.Count - 1;
@@ -639,32 +652,36 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             // AB#5356: a manual write always wins and is never displaced by an automated one; two manual
             // writes do not fall through to the following keys (the later one wins, so a wrong manual value
             // is fixed with another manual write); two automated writes are ranked by the following keys.
-            var bothAutomated = isLast ? "TRUE" : BuildPrecedenceLevel(keys, index + 1);
+            var bothAutomated = isLast ? "TRUE" : BuildPrecedenceLevel(keys, index + 1, sentColumnNames);
             return $"({ArchiveRowOriginColumns.IncomingIsManual} OR (NOT {ArchiveRowOriginColumns.StoredIsManual} AND {bothAutomated}))";
         }
 
-        var better = BuildKeyBetter(key);
-        var equal = BuildKeyEqual(key.Column);
+        // AB#8622: an unsent ranking column is judged on the merged row, where it holds the stored value.
+        var incoming = sentColumnNames is null || sentColumnNames.Contains(key.Column)
+            ? $"EXCLUDED.\"{key.Column}\""
+            : $"COALESCE(EXCLUDED.\"{key.Column}\", \"{key.Column}\")";
+        var better = BuildKeyBetter(key, incoming);
+        var equal = BuildKeyEqual(key.Column, incoming);
 
         // Last key: equality is accepted, which is what makes an identical re-delivery idempotent.
         return isLast
             ? $"({better} OR {equal})"
-            : $"({better} OR ({equal} AND {BuildPrecedenceLevel(keys, index + 1)}))";
+            : $"({better} OR ({equal} AND {BuildPrecedenceLevel(keys, index + 1, sentColumnNames)}))";
     }
 
     /// <summary>Incoming value is strictly better than the stored one for this key.</summary>
-    private static string BuildKeyBetter(ArchiveConflictKey key)
+    private static string BuildKeyBetter(ArchiveConflictKey key, string incoming)
     {
         var c = key.Column;
         var op = key.Order == ConflictKeyOrder.HigherWins ? ">" : "<";
-        return $"((\"{c}\" IS NULL AND EXCLUDED.\"{c}\" IS NOT NULL) "
-             + $"OR (\"{c}\" IS NOT NULL AND EXCLUDED.\"{c}\" IS NOT NULL AND EXCLUDED.\"{c}\" {op} \"{c}\"))";
+        return $"((\"{c}\" IS NULL AND {incoming} IS NOT NULL) "
+             + $"OR (\"{c}\" IS NOT NULL AND {incoming} IS NOT NULL AND {incoming} {op} \"{c}\"))";
     }
 
     /// <summary>Incoming and stored value are indistinguishable for this key, nulls included.</summary>
-    private static string BuildKeyEqual(string c)
-        => $"((\"{c}\" IS NULL AND EXCLUDED.\"{c}\" IS NULL) "
-         + $"OR (\"{c}\" IS NOT NULL AND EXCLUDED.\"{c}\" IS NOT NULL AND EXCLUDED.\"{c}\" = \"{c}\"))";
+    private static string BuildKeyEqual(string c, string incoming)
+        => $"((\"{c}\" IS NULL AND {incoming} IS NULL) "
+         + $"OR (\"{c}\" IS NOT NULL AND {incoming} IS NOT NULL AND {incoming} = \"{c}\"))";
 
     /// <summary>
     /// Renders one <c>ON CONFLICT DO UPDATE</c> assignment: the incoming value unguarded, or a
@@ -760,7 +777,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
         var columnList = string.Join(", ", allColumns.Select(c => $"\"{c}\""));
         var values = BuildValuesList(allColumns.Count, rowCount);
-        var guard = BuildConflictGuard(conflictPrecedence ?? [], userColumnNames);
+        var guard = BuildConflictGuard(conflictPrecedence ?? [], userColumnNames, updatedColumnNames);
         var conflictUpdates = BuildConflictUpdates(WithOriginColumns(updatedColumnNames ?? userColumnNames), guard);
 
         return $"INSERT INTO {qualifiedTable} ({columnList}) VALUES {values} "
