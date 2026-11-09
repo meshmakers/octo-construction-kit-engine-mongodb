@@ -17,8 +17,8 @@ internal static class RetroactiveWriteDetector
     /// <summary>
     /// Returns <c>true</c> and the covering dirty window when at least one timestamp is strictly
     /// before <paramref name="consumedWatermark"/>. The window spans the earliest..latest retroactive
-    /// timestamp; <see cref="ArchiveDirtyWindow.WindowEnd"/> is one tick past the latest so the
-    /// planner's bucket alignment always includes the latest point's own bucket. Returns
+    /// timestamp; <see cref="ArchiveDirtyWindow.WindowEnd"/> is <see cref="ExclusiveEndAfter"/> the latest
+    /// so the planner's bucket alignment always includes the latest point's own bucket. Returns
     /// <c>false</c> when the watermark is null (no dependent has consumed anything yet) or no
     /// timestamp is retroactive.
     /// <para>
@@ -92,11 +92,37 @@ internal static class RetroactiveWriteDetector
 
         window = new ArchiveDirtyWindow(
             earliest.Value,
-            latest!.Value.AddTicks(1),
+            ExclusiveEndAfter(latest!.Value),
             RecomputeChangeKind.RetroactiveModify,
             source,
             detectedAt);
         return true;
+    }
+
+    /// <summary>
+    /// The resolution at which a dirty window is persisted: <c>CkArchiveDirtyWindow</c> is a MongoDB record and a BSON
+    /// date holds milliseconds, so every finer part of a timestamp is cut off on the way through the store.
+    /// </summary>
+    internal static readonly TimeSpan StoredWindowResolution = TimeSpan.FromMilliseconds(1);
+
+    /// <summary>
+    /// The exclusive window end that keeps <paramref name="latest" /> inside the window after the dirty window went
+    /// through the store: <paramref name="latest" /> cut to <see cref="StoredWindowResolution" /> plus one unit of it.
+    /// </summary>
+    /// <remarks>
+    /// AB#8621: the end used to be <c>latest + 1 tick</c>. The store cut that back to <c>latest</c>, and for a
+    /// timestamp on a bucket boundary - every hourly value stamped on the hour - the planner's half-open
+    /// alignment then ended the recompute range at <c>latest</c> and left out the bucket that holds it. The last
+    /// bucket of every late delivery was never recomputed; only a later, overlapping delivery repaired it, so the
+    /// last bucket before a pause in the source stayed missing for good. The returned value is already on the
+    /// stored grid, so the round trip leaves it unchanged, and it is at most one unit past <paramref name="latest" />,
+    /// so it never reaches into the following bucket of any rollup whose buckets are at least a millisecond long.
+    /// </remarks>
+    internal static DateTime ExclusiveEndAfter(DateTime latest)
+    {
+        var resolutionTicks = StoredWindowResolution.Ticks;
+        var truncated = new DateTime(latest.Ticks - latest.Ticks % resolutionTicks, latest.Kind);
+        return truncated + StoredWindowResolution;
     }
 
     /// <summary>
@@ -135,7 +161,7 @@ internal static class RetroactiveWriteDetector
 
             if (i > start)
             {
-                windows.Add(new ArchiveDirtyWindow(retroactive[start], retroactive[i - 1].AddTicks(1),
+                windows.Add(new ArchiveDirtyWindow(retroactive[start], ExclusiveEndAfter(retroactive[i - 1]),
                     RecomputeChangeKind.RetroactiveModify, RecomputeChangeSource.Manual, detectedAt));
             }
 

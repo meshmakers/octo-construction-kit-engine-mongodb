@@ -1636,6 +1636,22 @@ apart recompute two small ranges instead of everything in between. The recompute
 bounded, generation-flipped path (AB#5483, AB#6283); a replaced value is recomputed away, never added twice.
 Tests: `RetroactiveWriteDetectorTests` (unit), `RollupManualWriteTests` (asset-repo integration, real CrateDB).
 
+### Dirty-Window End Survives the Store (AB#8621)
+
+A dirty window is a MongoDB record (`CkArchiveDirtyWindow`), and a BSON date holds milliseconds. The detector used to
+end a window at `latest + 1 tick`; the store cut that back to `latest`, and for a timestamp on a bucket boundary (every
+hourly value is stamped on the hour) the planner's half-open alignment (`RecomputePlanner.AlignRangeToBuckets`) ended
+the recompute range at `latest`, so the bucket that holds the latest value of a late delivery was never recomputed.
+Only a later delivery that overlapped it repaired it, so the last bucket before a pause in the source stayed missing
+for good (voestalpine, test-2 13.10. 03:00Z and staging-1 30.10. 04:00Z, hourly rollup `6a4268000000000000000001`).
+Both detector paths (`TryBuildDirtyWindow`, `BuildManualDirtyWindows`) now end the window at
+`RetroactiveWriteDetector.ExclusiveEndAfter(latest)`: `latest` cut to `StoredWindowResolution` (1 ms) plus 1 ms. The
+value is on the stored grid (the round trip leaves it unchanged) and never reaches into the next bucket. The forward
+`RollupOrchestrator` was never involved: it closes buckets by the clock, and a bucket closed before its data arrived
+is the recompute path's job. Buckets lost before the fix are closed with `octo-cli -c RecomputeArchive` over the
+range (documentation: *Rollups & recompute*, "Closing buckets a late delivery missed"). Tests:
+`RetroactiveWriteDetectorBucketBoundaryTests` (detector, BSON date conversion, planner alignment; red with the old end).
+
 ### Query Time Filter — One-sided Ranges (AB#4617)
 
 `StreamDataQueryOptionsBase.From` / `.To` are independently optional. The three read paths

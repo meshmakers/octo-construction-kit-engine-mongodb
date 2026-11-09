@@ -47,7 +47,7 @@ public class RetroactiveWriteDetectorTests
         Assert.True(result);
         Assert.False(capped);
         Assert.Equal(Utc(8, 15), window.WindowStart);
-        Assert.Equal(Utc(9, 45).AddTicks(1), window.WindowEnd);
+        Assert.Equal(Utc(9, 45).AddMilliseconds(1), window.WindowEnd);
         Assert.Equal(RecomputeChangeKind.RetroactiveModify, window.ChangeKind);
         Assert.Equal(RecomputeChangeSource.Pipeline, window.Source);
         Assert.Equal(DetectedAt, window.DetectedAt);
@@ -64,12 +64,12 @@ public class RetroactiveWriteDetectorTests
         Assert.True(result);
         Assert.False(capped);
         Assert.Equal(Utc(8, 30), window.WindowStart);   // earliest retroactive
-        Assert.Equal(Utc(9).AddTicks(1), window.WindowEnd); // latest retroactive (+1 tick)
+        Assert.Equal(Utc(9).AddMilliseconds(1), window.WindowEnd); // latest retroactive (+1 ms, the stored resolution)
         Assert.Equal(RecomputeChangeSource.Import, window.Source);
     }
 
     [Fact]
-    public void SingleRetroactivePoint_WindowIsOneTickWide()
+    public void SingleRetroactivePoint_WindowIsOneMillisecondWide()
     {
         var result = RetroactiveWriteDetector.TryBuildDirtyWindow(
             consumedWatermark: Utc(10),
@@ -79,7 +79,7 @@ public class RetroactiveWriteDetectorTests
         Assert.True(result);
         Assert.False(capped);
         Assert.Equal(Utc(9, 30), window.WindowStart);
-        Assert.Equal(Utc(9, 30).AddTicks(1), window.WindowEnd);
+        Assert.Equal(Utc(9, 30).AddMilliseconds(1), window.WindowEnd);
     }
 
     // ---------- Bounded retro reach (AB#4196) ----------
@@ -97,7 +97,7 @@ public class RetroactiveWriteDetectorTests
         Assert.True(result);
         Assert.False(capped);
         Assert.Equal(Utc(8, 30), window.WindowStart);
-        Assert.Equal(Utc(9, 45).AddTicks(1), window.WindowEnd);
+        Assert.Equal(Utc(9, 45).AddMilliseconds(1), window.WindowEnd);
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class RetroactiveWriteDetectorTests
         Assert.True(result);
         Assert.True(capped);                              // the 07:00 tail was dropped
         Assert.Equal(Utc(9, 30), window.WindowStart);     // only the in-reach point survives
-        Assert.Equal(Utc(9, 30).AddTicks(1), window.WindowEnd);
+        Assert.Equal(Utc(9, 30).AddMilliseconds(1), window.WindowEnd);
     }
 
     [Fact]
@@ -227,7 +227,7 @@ public class RetroactiveWriteDetectorTests
 
         var window = Assert.Single(windows);
         Assert.Equal(yearAgo, window.WindowStart);
-        Assert.Equal(yearAgo.AddTicks(1), window.WindowEnd);
+        Assert.Equal(yearAgo.AddMilliseconds(1), window.WindowEnd);
         Assert.Equal(RecomputeChangeSource.Manual, window.Source);
         Assert.Equal(RecomputeChangeKind.RetroactiveModify, window.ChangeKind);
     }
@@ -254,7 +254,7 @@ public class RetroactiveWriteDetectorTests
         var window = Assert.Single(RetroactiveWriteDetector.BuildManualDirtyWindows(Watermark, quarterHours, DetectedAt));
 
         Assert.Equal(first, window.WindowStart);
-        Assert.Equal(quarterHours[^1].AddTicks(1), window.WindowEnd);
+        Assert.Equal(quarterHours[^1].AddMilliseconds(1), window.WindowEnd);
     }
 
     [Fact]
