@@ -156,6 +156,22 @@ public class PartialDeliveryOriginPrecedenceIntegrationTests(CrateStagingCopyFix
         static double? D(object? v) => v is null ? null : Convert.ToDouble(v);
     }
 
+    /// <summary>
+    ///     AB#8622 option C: a point that does not send every ranking column refuses the whole batch before the write.
+    /// </summary>
+    private async Task AssertRefusedAsync(Archive archive, string missing, params Delivery[] deliveries)
+    {
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => WriteAsync(archive, deliveries));
+        Assert.Contains("nothing was written", error.Message);
+        Assert.Contains($"does not send {missing}", error.Message);
+    }
+
+    private async Task<int> RowCountAsync(Archive archive)
+    {
+        var rows = await fixture.QueryAsync($"SELECT COUNT(*) AS n FROM {archive.Table}");
+        return Convert.ToInt32(Assert.Single(rows)["n"]);
+    }
+
     private static Row ManualRow(double consumption, double production, int quality) =>
         new(consumption, production, quality, consumption - production, "manual", "jane.doe", "meter exchanged");
 
@@ -253,19 +269,18 @@ public class PartialDeliveryOriginPrecedenceIntegrationTests(CrateStagingCopyFix
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task OriginAfterQuality_ABetterQualityPartialPoint_ThatDoesNotSendTheRecencyKey_IsReportedAsStored(bool timeRange)
+    public async Task OriginAfterQuality_ABetterQualityPartialPoint_ThatDoesNotSendTheRecencyKey_IsRefused(bool timeRange)
     {
-        // The point does not name SourceDocumentDate: its statement inserts the key as NULL, the quality decides before
-        // it, and the stored document date stays. The write result must still report the row as stored.
+        // AB#8622 option C: the point does not send SourceDocumentDate. It would win on the quality while the write
+        // result compared the NULL it sent against the stored date it kept; it is refused before the write instead.
         var archive = await CreateArchiveAsync(timeRange, OriginAfterQuality);
         var meter = OctoObjectId.GenerateNewId();
         await WriteAsync(archive, Manual(meter, Full(10, 4, 2, OldDocument)));
 
-        var result = await WriteAsync(archive, new Delivery(meter, new() { ["Consumption"] = 12d, ["DataQuality"] = 1 }));
+        await AssertRefusedAsync(archive, "'SourceDocumentDate'",
+            new Delivery(meter, new() { ["Consumption"] = 12d, ["DataQuality"] = 1 }));
 
-        Assert.Equal(AutomatedRow(12, 4, 1, 8), await RowAsync(archive, meter));
-        Assert.Empty(result.Skipped);
-        Assert.Equal(1, result.Stored);
+        Assert.Equal(ManualRow(10, 4, 2), await RowAsync(archive, meter));
     }
 
     [Theory]
@@ -327,15 +342,34 @@ public class PartialDeliveryOriginPrecedenceIntegrationTests(CrateStagingCopyFix
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task OriginNotNamed_AManualPartialCorrection_ReplacesABetterAutomatedRow_OnTheMergedRow(bool timeRange)
+    public async Task OriginNotNamed_AManualPartialCorrection_WithoutTheRecencyKey_IsRefused(bool timeRange)
     {
         var archive = await CreateArchiveAsync(timeRange, OriginNotNamed);
         var meter = OctoObjectId.GenerateNewId();
         await WriteAsync(archive, new Delivery(meter, Full(10, 4, 1, NewDocument)));
 
-        var result = await WriteAsync(archive, Manual(meter, new() { ["Production"] = 3d, ["DataQuality"] = 3 }));
+        await AssertRefusedAsync(archive, "'SourceDocumentDate'",
+            Manual(meter, new() { ["Production"] = 3d, ["DataQuality"] = 3 }));
+
+        Assert.Equal(AutomatedRow(10, 4, 1, 6), await RowAsync(archive, meter));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OriginNotNamed_AManualPartialCorrection_ThatSendsEveryRankingColumn_ReplacesABetterAutomatedRow_OnTheMergedRow(bool timeRange)
+    {
+        // The partial point sends both ranking columns (and Production) but not Consumption: it wins on the origin, is
+        // reported as stored, Consumption keeps its stored value and Net = 10 - 3 on the merged row.
+        var archive = await CreateArchiveAsync(timeRange, OriginNotNamed);
+        var meter = OctoObjectId.GenerateNewId();
+        await WriteAsync(archive, new Delivery(meter, Full(10, 4, 1, NewDocument)));
+
+        var result = await WriteAsync(archive,
+            Manual(meter, new() { ["Production"] = 3d, ["DataQuality"] = 3, ["SourceDocumentDate"] = OldDocument }));
 
         Assert.Equal(1, result.Stored);
+        Assert.Empty(result.Skipped);
         Assert.Equal(new Row(10, 3, 3, 7, "manual", "jane.doe", "meter exchanged"), await RowAsync(archive, meter));
     }
 
@@ -378,7 +412,7 @@ public class PartialDeliveryOriginPrecedenceIntegrationTests(CrateStagingCopyFix
         await WriteAsync(archive, new Delivery(meter, Full(10, 4, 1, OldDocument)));
 
         await Assert.ThrowsAsync<ManualStreamDataNotAppliedException>(() => WriteAsync(archive,
-            Manual(meter, new() { ["Production"] = null, ["DataQuality"] = 2 })));
+            Manual(meter, new() { ["Production"] = null, ["DataQuality"] = 2, ["SourceDocumentDate"] = NewDocument })));
 
         Assert.Equal(AutomatedRow(10, 4, 1, 6), await RowAsync(archive, meter));
     }
@@ -386,17 +420,17 @@ public class PartialDeliveryOriginPrecedenceIntegrationTests(CrateStagingCopyFix
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task OriginAfterQuality_AManualPartialPointOfEqualQuality_WinsOnTheOrigin_OnTheMergedRow(bool timeRange)
+    public async Task OriginAfterQuality_AManualPartialPointOfEqualQuality_WithoutTheRecencyKey_IsRefused(bool timeRange)
     {
+        // It would win on the origin and fail the write as "not stored" (REST 409) although the row was written.
         var archive = await CreateArchiveAsync(timeRange, OriginAfterQuality);
         var meter = OctoObjectId.GenerateNewId();
         await WriteAsync(archive, new Delivery(meter, Full(10, 4, 1, NewDocument)));
 
-        var result = await WriteAsync(archive, Manual(meter, new() { ["Production"] = null, ["DataQuality"] = 1 }));
+        await AssertRefusedAsync(archive, "'SourceDocumentDate'",
+            Manual(meter, new() { ["Production"] = null, ["DataQuality"] = 1 }));
 
-        Assert.Equal(1, result.Stored);
-        // An explicit null is a value: Production becomes NULL and the formula sees null.
-        Assert.Equal(new Row(10, null, 1, null, "manual", "jane.doe", "meter exchanged"), await RowAsync(archive, meter));
+        Assert.Equal(AutomatedRow(10, 4, 1, 6), await RowAsync(archive, meter));
     }
 
     // 5. A mixed batch with different column sets: every row is decided on its own.
@@ -439,26 +473,33 @@ public class PartialDeliveryOriginPrecedenceIntegrationTests(CrateStagingCopyFix
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task OriginNotNamed_AMixedBatchWithDifferentColumnSets_DecidesEveryRowIndependently(bool timeRange)
+    public async Task OriginNotNamed_AMixedBatchWithPointsWithoutRankingColumns_IsRefusedAsAWhole(bool timeRange)
     {
         var archive = await CreateArchiveAsync(timeRange, OriginNotNamed);
         var a = OctoObjectId.GenerateNewId();
         var b = OctoObjectId.GenerateNewId();
         var c = OctoObjectId.GenerateNewId();
+        var d = OctoObjectId.GenerateNewId();
         await WriteAsync(archive,
             Manual(a, Full(10, 4, 3, OldDocument)),
             new Delivery(b, Full(20, 5, 3, OldDocument)),
             new Delivery(c, Full(30, 6, 1, OldDocument)));
 
-        var result = await WriteAsync(archive,
-            new Delivery(a, new() { ["Consumption"] = 11d, ["DataQuality"] = 1, ["SourceDocumentDate"] = NewDocument }),   // manual stored: protected
-            new Delivery(b, new() { ["Production"] = 1d, ["DataQuality"] = 1 }),                                           // better: wins
-            Manual(c, new() { ["Consumption"] = 31d }));                                                                    // manual: always wins
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => WriteAsync(archive,
+            new Delivery(a, new() { ["Consumption"] = 11d, ["DataQuality"] = 1, ["SourceDocumentDate"] = NewDocument }),   // complete
+            new Delivery(b, new() { ["Production"] = 1d, ["DataQuality"] = 1 }),                                           // no recency key
+            Manual(c, new() { ["Consumption"] = 31d }),                                                                     // no ranking column
+            new Delivery(d, Full(40, 8, 1, NewDocument))));                                                                // new row, complete
 
-        Assert.Equal(2, result.Stored);
-        Assert.Equal((a, StreamDataSkipReason.ManualValueProtected), (Assert.Single(result.Skipped).RtId, result.Skipped[0].Reason));
+        Assert.Contains("2 point(s) do not, nothing was written", error.Message);
+        Assert.Contains($"point 1 (rtId '{b}'", error.Message);
+        Assert.Contains("does not send 'SourceDocumentDate'", error.Message);
+        Assert.Contains($"point 2 (rtId '{c}'", error.Message);
+        Assert.Contains("does not send 'DataQuality', 'SourceDocumentDate'", error.Message);
+        // Nothing of the batch is stored, the complete points included.
         Assert.Equal(ManualRow(10, 4, 3), await RowAsync(archive, a));
-        Assert.Equal(AutomatedRow(20, 1, 1, 19), await RowAsync(archive, b));
-        Assert.Equal(new Row(31, 6, 1, 25, "manual", "jane.doe", "meter exchanged"), await RowAsync(archive, c));
+        Assert.Equal(AutomatedRow(20, 5, 3, 15), await RowAsync(archive, b));
+        Assert.Equal(AutomatedRow(30, 6, 1, 24), await RowAsync(archive, c));
+        Assert.Equal(3, await RowCountAsync(archive));
     }
 }

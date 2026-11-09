@@ -363,10 +363,21 @@ columns).
   A uniform batch (the usual pipeline delivery) is one group, so the statement count is unchanged. Two points of the
   same row key with different column sets run in the order they were sent (a new segment starts where a key repeats
   with another set).
-- **Ranking columns** of the conflict precedence are always in the `INSERT` list, because the guard reads
-  `EXCLUDED."k"`; when the point does not name one it is bound NULL and **not** replaced. An absent key therefore ranks
-  like an incoming NULL: it never beats a stored value (§ *Conflict precedence*). The origin columns are platform
-  columns and always written.
+- **A point on an archive with a conflict precedence sends every ranking column** (decided by Odin 2026-11-09, option
+  C). Every key of `ConflictPrecedence` except `$Origin` (derived from the point's origin, not a column) must be named by
+  every point, automated or manual, raw or time-range; `null` is allowed and is a stated rank (an incoming NULL never
+  beats a stored value). Otherwise the whole batch is refused before anything is read or written, with an
+  `ArgumentException` (asset repository: 400) that names every such point (index, rtId, timestamp or window start) and
+  its missing ranking columns (`ArchiveRankingColumnValidator`, called right after the value check). Why: the guard
+  compares the sent value of every ranking column. A point that won on an earlier key but did not send a later one kept
+  the stored value of that column, and the write result compared the NULL it sent against it: an automated point was
+  reported as skipped (`LowerPrecedence`), a manual point failed the write (`ManualStreamDataNotAppliedException`, REST
+  409) although the row had been written. Rejected: judging the unsent keys on the merged row (an automated point without
+  a quality would replace the value of a stored L1 measurement while the row still says L1), and a win marker in
+  `RETURNING` (fixes the report only and keeps a semantics that contradicts "absent keeps"). Archives without column keys
+  (no precedence, or `$Origin` alone) are not affected; the import path does not apply the precedence and is not checked.
+  The ranking columns stay in the `INSERT` list of every statement (the guard reads `EXCLUDED."k"`), so a direct caller
+  of the database client still gets valid SQL. The origin columns are platform columns and always written.
 - **Constant DEFAULTs (AB#6647).** User columns are nullable without a DEFAULT, so leaving one out of the `INSERT` list
   stores NULL, never a default. `was_updated` is still named with the literal `FALSE` in every row of every statement.
 - **Computed columns are evaluated on the merged row** (decided by Reimar 2026-11-09). Nobody sends a computed column;

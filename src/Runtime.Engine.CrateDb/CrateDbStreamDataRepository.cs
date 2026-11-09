@@ -367,6 +367,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // become their keys.
         materialised = ArchiveWriteValueValidator.Normalize(_ckCacheService, _tenantId, snapshot, materialised);
 
+        // AB#8622 (option C): on an archive with a conflict precedence every point sends each ranking column, or the
+        // whole batch is refused before anything is read or written.
+        ArchiveRankingColumnValidator.Validate(snapshot, materialised);
+
         // Filter to items whose CkTypeId matches the archive's TargetCkTypeId. An archive is
         // schema-bound to one CkType: its user columns come from that type's attribute graph and
         // none of the others. Heterogeneous callers (e.g. the Loxone pipeline that flattens both
@@ -554,6 +558,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // unexplained error. Enum names become their keys, as on the pipeline write path.
         materialised = ArchiveWriteValueValidator.Normalize(_ckCacheService, _tenantId, snapshot, materialised,
             FlattenRecordValues);
+
+        // AB#8622 (option C): every point sends each ranking column of the conflict precedence, or nothing is written.
+        ArchiveRankingColumnValidator.Validate(snapshot, materialised, FlattenRecordValues);
 
         // Same CkTypeId-binding rule as raw archive inserts: each per-archive table holds one CkType.
         var filtered = materialised.Where(p => p.CkTypeId == snapshot.TargetCkTypeId).ToList();
