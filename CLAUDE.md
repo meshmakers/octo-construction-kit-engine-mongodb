@@ -2616,15 +2616,24 @@ Used by `UpdateSystemCkModelAsync` (tenant resolve/create; the AB#4854 infrastru
 position after it), `ImportCkModelAsync(CkModelId, OperationResult)` (every service's tenant setup, blueprint
 dependencies via `MongoRuntimeRepositoryProvider`) and, through it, `ImportEmbeddedCkModelWithDowngradeGuardAsync`
 (System.StreamData descriptor, service-managed models — the guard that used to live only there). A skip sends
-**no** pre/post tenant-update notification, runs no migration and leaves the CK cache alone.
+**no** pre/post tenant-update notification, runs no migration and leaves the CK cache alone - unless the loaded cache
+lacks the installed `Available` version (AB#8667, next bullet but one).
 
 - **The decision is repeated under the model import lock** (G-H1). The early decision only saves the lock wait:
   while a caller waits, another service may install this or a newer version (parallel stack start, rolling update,
   a fresh tenant set up by two services), and the old exact-id re-check under the lock missed the newer row, so
   `InsertModelWithImportingState` deleted it. Embedded callers pass `TenantDatabaseSourceIdentifier.GuardAgainstDowngrade`;
   `ExecuteImport` then decides by name under the lock and reports a skip in `TenantDatabaseSourceIdentifier.ImportOutcome`
-  (`SkippedUnderLock`, `InstalledModelId`). The caller sends the Post that pairs its Pre, runs no migration and does not
-  unload the cache. Explicit imports keep the exact-id re-check.
+  (`SkippedUnderLock`, `InstalledModelId`). The caller sends the Post that pairs its Pre and runs no migration.
+  Explicit imports keep the exact-id re-check.
+- **A skip drops a cache that lacks the installed version** (AB#8667, `TenantContext.UnloadCkCacheIfItLacks`). At service
+  start a service often loads the tenant's CK cache before another service's import of the same model, and that
+  service's `PosUpdateTenant` is published before this process listens to the bus, so nothing unloaded the cache: it,
+  and the asset repository's GraphQL schema built from it, missed the new types (archive types after a System.StreamData
+  bump) until a manual ClearCache. Every skip (already installed, newer installed, skipped under the lock; embedded models
+  and the System model) now compares the installed `Available` version with the model ids of the loaded cache and
+  unloads it only when the version is missing - an in-memory check, so a tenant whose models did not change keeps its
+  cache. Tests: `CkModelImportGuardTests.EmbeddedImport_*Cache*`.
 - **Skips are reported to the caller** as a `Warning` in the `OperationResult` (the blueprint install path names the
   installed row and its state in its error 25 instead of guessing at missing dependencies).
 - **Logged once per process** (G-L2): the first skip per (tenant, embedded id, installed id) logs INFO/WARN and is

@@ -306,10 +306,11 @@ public class TenantContext : ITenantContext
         // CK v2 F1.0-S1 (AB#5900): compare by NAME, not by exact id. The embedded System is imported only when
         // the tenant has none or an older one; a newer installed version (another service already upgraded the
         // tenant) is never replaced — the import deletes every row of the model name before it inserts.
-        var (decision, _) = await EmbeddedCkModelImportGuard.EvaluateAsync(databaseContext, SystemCkIds.CkModelId,
-            tenantId, _logger);
+        var (decision, installed) = await EmbeddedCkModelImportGuard.EvaluateAsync(databaseContext,
+            SystemCkIds.CkModelId, tenantId, _logger);
         if (decision != EmbeddedImportDecision.Import)
         {
+            UnloadCkCacheIfItLacks(tenantId, installed);
             return false;
         }
 
@@ -390,7 +391,9 @@ public class TenantContext : ITenantContext
             if (databaseSourceIdentifier.ImportOutcome.SkippedUnderLock)
             {
                 // Another service installed this or a newer System while we waited for the lock (G-H1): nothing
-                // was imported. Pair the Pre notification; no migration, no cache unload of our own.
+                // was imported. Pair the Pre notification; no migration. The other service's import may still be
+                // missing from a cache loaded before it (AB#8667).
+                UnloadCkCacheIfItLacks(tenantId, databaseSourceIdentifier.ImportOutcome.InstalledModelId);
                 if (!isRepositoryInCreation)
                 {
                     await _tenantNotifications.NotifyPosTenantUpdateAsync(tenantId, correlationId);
@@ -2828,6 +2831,9 @@ public class TenantContext : ITenantContext
                 operationResult.AddMessage(EmbeddedCkModelImportGuard.SkipWarning(ckModelId, installed!));
             }
 
+            // AB#8667: another service may have installed this version after our cache was loaded.
+            UnloadCkCacheIfItLacks(TenantId, installed);
+
             if (installed!.ModelState == ModelState.ResolveFailed)
             {
                 // G-M1: before F1.0 a restart re-imported a ResolveFailed model of the service's own version, which
@@ -2903,7 +2909,10 @@ public class TenantContext : ITenantContext
                     operationResult.AddMessage(EmbeddedCkModelImportGuard.SkipWarning(ckModelId, installedNow));
                 }
 
-                // Pair the Pre notification; nothing was imported here, so no migration and no cache unload.
+                // Pair the Pre notification; nothing was imported here, so no migration. The cache may still have
+                // been loaded before the other service's import, and its Pos notification can arrive before this
+                // process listens to the bus (AB#8667) - drop a cache that does not hold the installed version.
+                UnloadCkCacheIfItLacks(TenantId, installedNow);
                 await _tenantNotifications.NotifyPosTenantUpdateAsync(TenantId, correlationId);
                 return;
             }
@@ -2953,6 +2962,49 @@ public class TenantContext : ITenantContext
             "Skipping CK model '{CkModelId}' import for tenant '{TenantId}' due to missing dependencies: {Message}. " +
             "This import will be retried when the dependent CK model becomes available.",
             ckModelId, TenantId, details);
+    }
+
+    /// <summary>
+    ///     AB#8667: an embedded import that installs nothing (the version is already there, a newer one is, or another
+    ///     service installed it while this one waited for the import lock) left a loaded CK cache alone - but at
+    ///     service start that cache is often loaded <em>before</em> another service's import of the same model, and
+    ///     that service's <c>PosUpdateTenant</c> is published before this process listens to the bus, so nothing
+    ///     ever unloads it. The cache (and the GraphQL schema built from it) then misses the new types until a manual
+    ///     ClearCache. Unloads the cache only when it lacks the installed <c>Available</c> version - an in-memory
+    ///     check, so tenants whose models did not change keep their cache and pay nothing.
+    /// </summary>
+    private void UnloadCkCacheIfItLacks(string tenantId, InstalledCkModel? installed)
+    {
+        if (installed is { ModelState: ModelState.Available })
+        {
+            UnloadCkCacheIfItLacks(tenantId, installed.ModelId);
+        }
+    }
+
+    /// <inheritdoc cref="UnloadCkCacheIfItLacks(string, InstalledCkModel?)" />
+    private void UnloadCkCacheIfItLacks(string tenantId, CkModelId? installedModelId)
+    {
+        if (installedModelId == null || !_cacheService.IsTenantLoaded(tenantId))
+        {
+            return;
+        }
+
+        try
+        {
+            if (_cacheService.GetCkModelIds(tenantId).Contains(installedModelId))
+            {
+                return;
+            }
+
+            _logger.LogInformation(
+                "CK cache of tenant '{TenantId}' does not hold the installed CK model '{CkModelId}' (imported by another " +
+                "service after the cache was loaded); unloading it (AB#8667)", tenantId, installedModelId);
+            _cacheService.Unload(tenantId);
+        }
+        catch (CkCacheException)
+        {
+            // Unloaded concurrently (or created but not yet filled): the next access loads it fresh either way.
+        }
     }
 
     /// <summary>
