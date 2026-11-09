@@ -2346,6 +2346,23 @@ import - a forced one whose dependency is `ResolveFailed`, a stale System refere
 (test-2 meshtest, 2026-10-23: Industry.Energy 3.5.0 vanished after a failed 3.6.0). Tests: `CkRangeRetentionImportTests.FailedImport_*`
 (dependency resolution fails after a forced Basic update; system reference mismatch), red without the restore.
 
+**Readers wait for a running import (AB#8677).** Between `InsertModelWithImportingState` and the state flip the tenant holds no `Available`
+version of the imported model (about a second for System.Bot; longer for big models), and the element rows are replaced in between. A
+service that resolved a dependency on the model in that window failed (`ModelValidationException` "no Available version ... (installed:
+3.6.0 Importing)") and, for the system tenant, stopped the host. Keeping the old row `Available` until the flip was rejected: its element
+rows are replaced when the element transaction commits, long before the flip, so readers would see an `Available` model with missing or
+foreign elements, and `DeletePreviousVersion` and the AB#7381 restore assume one row per model name. Instead readers wait on the **model
+import lock**, which is held over the whole window: `IsExistingAsync(range)` waits (outside a transaction, up to
+`CkModelImportInProgress.DefaultWaitTimeout`, 2 min) while the lock of the model is held (`ICkMongoDbRepositoryDataSource.GetModelsBeingImportedAsync`,
+non-expired `ck_model_import_*` locks); `TenantRepository.RefreshCkCacheServiceAsync` (one snapshot transaction, which never sees the
+flip) retries the cache load with a new transaction once running imports are done. When the wait runs out, or an import fails while
+another model is being imported, the exception is marked with `CkModelImportInProgress.ExceptionDataKey` in `Exception.Data`; the tenant
+setup of `octo-common-services` retries such a failure instead of failing the host. Residual race: a reader outside a transaction that
+checked the lock just before an import took it can still read the old row while it is replaced (then the cache load retry or the caller's
+retry applies). Tests: `CkRangeRetentionImportTests.InPlaceUpgrade_WhileDependentsResolve_NoResolutionFails`,
+`FailedInPlaceUpgrade_WhileDependentsResolve_*` (both red without the fix with the production message),
+`ModelsBeingImported_ReflectTheHeldImportLocks`.
+
 **Import guard (message 91, CkLanguageNotSupported):** `ExecuteImport` refuses a model whose `CkLanguage` is
 above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before anything is written (the engine
 `ElementResolver` raises 91 on resolve too; this guard covers callers that bypass resolution).

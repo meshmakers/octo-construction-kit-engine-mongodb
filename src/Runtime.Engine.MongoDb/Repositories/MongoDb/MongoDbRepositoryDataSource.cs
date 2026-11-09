@@ -22,6 +22,9 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb;
 
 internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongoDbRepositoryDataSource
 {
+    /// <summary>Prefix of the lock id of a CK model import lock; the model name follows it.</summary>
+    internal const string ModelImportLockIdPrefix = "ck_model_import_";
+
     private readonly IMongoDbDataSourceCollection<OctoObjectId, CkTypeInheritance> _ckTypeInheritances;
     private readonly IMongoDbDataSourceCollection<CkId<CkTypeId>, CkType> _ckTypes;
     private readonly IRepositoryInternal _repository;
@@ -1526,7 +1529,7 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
     public async Task<IDistributedLockHandle> AcquireModelImportLockAsync(string modelName,
         CancellationToken cancellationToken = default)
     {
-        var lockId = $"ck_model_import_{modelName}";
+        var lockId = $"{ModelImportLockIdPrefix}{modelName}";
         _logger.LogInformation("Acquiring model import lock for '{ModelName}' with lock ID '{LockId}'", modelName, lockId);
 
         var lockService = new RepositoryDistributedLockService(_repositoryClient, _repository, _logger, lockId);
@@ -1541,6 +1544,13 @@ internal sealed class MongoDbRepositoryDataSource : RepositoryDataSource, IMongo
         }
 
         return lockService;
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<string>> GetModelsBeingImportedAsync(CancellationToken cancellationToken = default)
+    {
+        return RepositoryDistributedLockService.FindHeldLockIdSuffixesAsync(_repository, ModelImportLockIdPrefix,
+            cancellationToken);
     }
 
     internal QueryResultCacheService CreateQueryResultCacheService()

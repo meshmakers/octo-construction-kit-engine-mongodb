@@ -44,6 +44,13 @@ public interface ICkMongoDbRepositoryDataSource
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    ///     AB#8677: the names of the CK models whose import lock (<see cref="AcquireModelImportLockAsync" />) is held
+    ///     right now, i.e. whose in-place import or upgrade is running in some service. An expired lock (its holder
+    ///     crashed) does not count. Read without a transaction, so it sees the current state.
+    /// </summary>
+    Task<IReadOnlyList<string>> GetModelsBeingImportedAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Cleans up empty collections that do not belong to a collection root.
     /// Only deletes collections that:
     /// 1. Start with "RtEntity_" prefix

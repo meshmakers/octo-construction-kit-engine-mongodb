@@ -68,12 +68,49 @@ internal class TenantRepository(
 
     protected override async Task RefreshCkCacheServiceAsync(ICkCacheService ckCacheService)
     {
-        using var session = await mongoDbRepositoryDataSource.GetSessionAsync();
-        session.StartTransaction();
+        // AB#8677: the cache load resolves the dependencies of all Available models inside one transaction. While
+        // another service imports or upgrades a model in place, no Available version of that model may exist for a
+        // moment, and the transaction's snapshot never sees the promotion. Retry the load with a new transaction once
+        // the running imports are done, instead of failing the tenant (and the host). A failure while no import runs
+        // is retried once (the import may have ended between the failure and the check) and then thrown as it is.
+        var deadline = DateTime.UtcNow + CkModelImportInProgress.DefaultWaitTimeout;
+        var retriedWithoutImport = false;
+        while (true)
+        {
+            try
+            {
+                using var session = await mongoDbRepositoryDataSource.GetSessionAsync();
+                session.StartTransaction();
 
-        await modelLoaderService.LoadAsync(TenantId, session, mongoDbRepositoryDataSource);
+                await modelLoaderService.LoadAsync(TenantId, session, mongoDbRepositoryDataSource);
 
-        await session.CommitTransactionAsync();
+                await session.CommitTransactionAsync();
+                return;
+            }
+            catch (ModelValidationException ex)
+            {
+                var running = await mongoDbRepositoryDataSource.GetModelsBeingImportedAsync();
+                if (running.Count == 0)
+                {
+                    if (retriedWithoutImport)
+                    {
+                        throw;
+                    }
+
+                    retriedWithoutImport = true;
+                    continue;
+                }
+
+                var remaining = deadline - DateTime.UtcNow;
+                if (remaining <= TimeSpan.Zero ||
+                    !await CkModelImportInProgress.WaitUntilFinishedAsync(mongoDbRepositoryDataSource, _ => true,
+                        remaining))
+                {
+                    CkModelImportInProgress.Mark(ex, running);
+                    throw;
+                }
+            }
+        }
     }
 
     public override async Task<IOctoSession> GetSessionAsync()

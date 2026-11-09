@@ -124,17 +124,30 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
 
         await using var scope = await SessionScope.CreateAsync(sourceIdentifierObject);
         var session = scope.Session;
+        var dataSource = sourceIdentifierObject.MongoDbRepositoryDataSource;
 
-        // AB#5901: the post-import re-validation also resolves ResolveFailed models (and their dependencies).
-        var includeResolveFailed = sourceIdentifierObject.IncludeResolveFailedModels;
-        var ckModels = await sourceIdentifierObject.MongoDbRepositoryDataSource.CkModels.FindManyAsync(session,
-            e => e.ModelId == modelIdVersionRange.Name && (e.ModelState == ModelState.Available ||
-                                                           (includeResolveFailed &&
-                                                            e.ModelState == ModelState.ResolveFailed)));
+        // AB#8677: an import or in-place upgrade of the model replaces its installed version: the old CkModel row is
+        // removed first, its element rows later, and the new version becomes Available only at the end. A reader that
+        // resolved the model in between would see no Available version, or an Available row whose elements are being
+        // replaced. So while the model's import lock is held, wait for the import to finish and read afterwards.
+        // Not inside a transaction: its snapshot never sees the end of the import (the cache load retries its
+        // transaction instead, see TenantRepository.RefreshCkCacheServiceAsync), and the importer's own re-validation
+        // of the dependents runs in one.
+        if (session is not IOctoSessionInternal { IsTransactionActive: true })
+        {
+            var running = await dataSource.GetModelsBeingImportedAsync();
+            if (running.Contains(modelIdVersionRange.Name, StringComparer.Ordinal))
+            {
+                _logger.LogInformation(
+                    "Dependency '{Dependency}' is resolved while CK model '{CkModelName}' is being imported; waiting for the import",
+                    modelIdVersionRange, modelIdVersionRange.Name);
+                await CkModelImportInProgress.WaitUntilFinishedAsync(dataSource,
+                    name => name == modelIdVersionRange.Name, CkModelImportInProgress.DefaultWaitTimeout);
+            }
+        }
 
-        var satisfiedModels = ckModels
-            .Where(m => modelIdVersionRange.IsSatisfiedBy(m.Id))
-            .ToList();
+        var satisfiedModels = await FindSatisfyingModelsAsync(dataSource, session, modelIdVersionRange,
+            sourceIdentifierObject.IncludeResolveFailedModels);
 
         if (!satisfiedModels.Any())
         {
@@ -147,6 +160,20 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
             .First();
 
         return new ModelExistingResult { Exists = true, ModelId = latestSatisfiedModel.Id };
+    }
+
+    private static async Task<List<CkModel>> FindSatisfyingModelsAsync(ICkMongoDbRepositoryDataSource dataSource,
+        IOctoSession session, CkModelIdVersionRange modelIdVersionRange, bool includeResolveFailed)
+    {
+        // AB#5901: the post-import re-validation also resolves ResolveFailed models (and their dependencies).
+        var ckModels = await dataSource.CkModels.FindManyAsync(session,
+            e => e.ModelId == modelIdVersionRange.Name && (e.ModelState == ModelState.Available ||
+                                                           (includeResolveFailed &&
+                                                            e.ModelState == ModelState.ResolveFailed)));
+
+        return ckModels
+            .Where(m => modelIdVersionRange.IsSatisfiedBy(m.Id))
+            .ToList();
     }
 
     /// <summary>
@@ -874,6 +901,13 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
         {
             _logger.LogError(ex, "Import of CK model {CkModelId}  to database failed", compiledModel.ModelId);
 
+            // AB#8677: a dependency that is being imported by another service right now (the wait in IsExistingAsync
+            // ran out) is not a defect of this model; mark the failure so that the caller retries instead of failing.
+            if (ex is ModelValidationException)
+            {
+                await MarkIfOtherImportsRunAsync(ex, mongoDbRepositoryDataSource, compiledModel.ModelId.Name);
+            }
+
             if (elementsCommitted)
             {
                 _logger.LogError(
@@ -928,6 +962,26 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
             await session.CommitTransactionAsync();
 
             throw;
+        }
+    }
+
+    private async Task MarkIfOtherImportsRunAsync(Exception exception, ICkMongoDbRepositoryDataSource dataSource,
+        string ownModelName)
+    {
+        try
+        {
+            var running = (await dataSource.GetModelsBeingImportedAsync())
+                .Where(name => name != ownModelName)
+                .ToList();
+            if (running.Count > 0)
+            {
+                CkModelImportInProgress.Mark(exception, running);
+            }
+        }
+        catch (Exception lookupException)
+        {
+            // The lookup only classifies the failure; it must never replace it.
+            _logger.LogWarning(lookupException, "Could not read the running CK model imports");
         }
     }
 
