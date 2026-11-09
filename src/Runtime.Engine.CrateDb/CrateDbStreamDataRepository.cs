@@ -362,6 +362,11 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // Materialise once so we can both count and pass to the client.
         var materialised = datapoints as IReadOnlyList<StreamDataPoint> ?? datapoints.ToList();
 
+        // AB#8606: the AB#7643 value check of the time-range path, for raw points. A value that does not fit its
+        // column refuses the whole batch (point, column, expected type) before anything is written; enum names
+        // become their keys.
+        materialised = ArchiveWriteValueValidator.Normalize(_ckCacheService, _tenantId, snapshot, materialised);
+
         // Filter to items whose CkTypeId matches the archive's TargetCkTypeId. An archive is
         // schema-bound to one CkType: its user columns come from that type's attribute graph and
         // none of the others. Heterogeneous callers (e.g. the Loxone pipeline that flattens both

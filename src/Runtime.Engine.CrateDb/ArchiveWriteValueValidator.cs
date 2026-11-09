@@ -8,7 +8,7 @@ using Meshmakers.Octo.Runtime.Contracts.StreamData;
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb;
 
 /// <summary>
-/// Checks the values of a time-range batch against the types of the archive's columns before anything is
+/// Checks the values of a raw or time-range batch against the types of the archive's columns before anything is
 /// written. A value of the wrong type used to reach CrateDB, which refused the whole statement, so the caller
 /// saw an unexplained server error (REST: HTTP 500). Every mismatch is collected and the batch is refused once
 /// with an <see cref="ArgumentException" /> naming the point, the column and the expected type — the same
@@ -39,6 +39,35 @@ internal static class ArchiveWriteValueValidator
     public static IReadOnlyList<TimeRangeStreamDataPoint> Normalize(ICkCacheService ckCache, string tenantId,
         ArchiveSnapshot snapshot, IReadOnlyList<TimeRangeStreamDataPoint> points,
         Func<IReadOnlyDictionary<string, object?>, IReadOnlyDictionary<string, object?>> flatten)
+        => NormalizeCore(ckCache, tenantId, snapshot, points, p => p.CkTypeId, p => flatten(p.Attributes),
+            static (index, _) => $"point {index}", WithAttributes, nameof(points));
+
+    /// <summary>
+    /// Raw-archive overload (AB#8606): the same check for the points of <c>InsertAsync</c>. A mismatch names the
+    /// point by its index in the caller's order, its rtId and its timestamp.
+    /// </summary>
+    /// <remarks>
+    /// The raw insert path maps the attribute keys to columns as they are, without expanding records, so the
+    /// check reads the keys the same way: a key that is no ingested column is not checked (and not written).
+    /// </remarks>
+    /// <param name="ckCache">The CK cache of the tenant.</param>
+    /// <param name="tenantId">The tenant.</param>
+    /// <param name="snapshot">The archive the batch is written to.</param>
+    /// <param name="points">The batch in the caller's order; indexes in the message refer to it.</param>
+    public static IReadOnlyList<StreamDataPoint> Normalize(ICkCacheService ckCache, string tenantId,
+        ArchiveSnapshot snapshot, IReadOnlyList<StreamDataPoint> points)
+        => NormalizeCore(ckCache, tenantId, snapshot, points, p => p.CkTypeId, p => p.Attributes,
+            static (index, p) =>
+                $"point {index} (rtId '{p.RtId}', timestamp {p.Timestamp.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)})",
+            WithAttributes, nameof(points));
+
+    private static IReadOnlyList<TPoint> NormalizeCore<TPoint>(ICkCacheService ckCache, string tenantId,
+        ArchiveSnapshot snapshot, IReadOnlyList<TPoint> points,
+        Func<TPoint, RtCkId<CkTypeId>> ckTypeIdOf,
+        Func<TPoint, IReadOnlyDictionary<string, object?>> attributesOf,
+        Func<int, TPoint, string> describePoint,
+        Func<TPoint, IReadOnlyDictionary<string, object?>, TPoint> withAttributes,
+        string parameterName)
     {
         var columns = ResolveColumns(ckCache, tenantId, snapshot);
         if (columns.Count == 0)
@@ -47,19 +76,19 @@ internal static class ArchiveWriteValueValidator
         }
 
         var mismatches = new List<string>();
-        var result = new List<TimeRangeStreamDataPoint>(points.Count);
+        var result = new List<TPoint>(points.Count);
         for (var index = 0; index < points.Count; index++)
         {
             var point = points[index];
-            if (point.CkTypeId != snapshot.TargetCkTypeId)
+            if (ckTypeIdOf(point) != snapshot.TargetCkTypeId)
             {
                 result.Add(point);
                 continue;
             }
 
-            var flattened = flatten(point.Attributes);
+            var attributes = attributesOf(point);
             Dictionary<string, object?>? normalized = null;
-            foreach (var (key, value) in flattened)
+            foreach (var (key, value) in attributes)
             {
                 if (value is null || !columns.TryGetValue(ColumnNameMapper.PathToColumnName(key), out var column))
                 {
@@ -68,18 +97,19 @@ internal static class ArchiveWriteValueValidator
 
                 if (!TryConvert(ckCache, tenantId, column.Attribute, value, out var converted, out var expected))
                 {
-                    mismatches.Add($"point {index}: column '{column.Path}' expects {expected}, got {Describe(value)}");
+                    mismatches.Add(
+                        $"{describePoint(index, point)}: column '{column.Path}' expects {expected}, got {Describe(value)}");
                     continue;
                 }
 
                 if (!Equals(converted, value))
                 {
-                    normalized ??= new Dictionary<string, object?>(flattened, StringComparer.Ordinal);
+                    normalized ??= new Dictionary<string, object?>(attributes, StringComparer.Ordinal);
                     normalized[key] = converted;
                 }
             }
 
-            result.Add(normalized is null ? point : WithAttributes(point, normalized));
+            result.Add(normalized is null ? point : withAttributes(point, normalized));
         }
 
         if (mismatches.Count > 0)
@@ -90,7 +120,7 @@ internal static class ArchiveWriteValueValidator
                 : string.Empty;
             throw new ArgumentException(
                 $"Archive '{snapshot.RtId}': {mismatches.Count} value(s) do not fit their column, nothing was written: {listed}{more}.",
-                nameof(points));
+                parameterName);
         }
 
         return result;
@@ -249,6 +279,21 @@ internal static class ArchiveWriteValueValidator
         From = point.From,
         To = point.To,
         RtWellKnownName = point.RtWellKnownName,
+        Attributes = attributes,
+        Origin = point.Origin,
+        ManualWrittenBy = point.ManualWrittenBy,
+        ManualReason = point.ManualReason
+    };
+
+    private static StreamDataPoint WithAttributes(StreamDataPoint point,
+        IReadOnlyDictionary<string, object?> attributes) => new()
+    {
+        RtId = point.RtId,
+        CkTypeId = point.CkTypeId,
+        Timestamp = point.Timestamp,
+        RtWellKnownName = point.RtWellKnownName,
+        RtCreationDateTime = point.RtCreationDateTime,
+        RtChangedDateTime = point.RtChangedDateTime,
         Attributes = attributes,
         Origin = point.Origin,
         ManualWrittenBy = point.ManualWrittenBy,

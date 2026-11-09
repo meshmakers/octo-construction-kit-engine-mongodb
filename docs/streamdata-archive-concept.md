@@ -332,6 +332,16 @@ Tests: `StreamDataOrigin/RollupManualColumnsIntegrationTests` (real CrateDB), `A
 
 Skipped automated rows are a normal outcome and only reported (and not marked dirty for the rollups: they changed nothing). A **manual** row that cannot be stored — possible only when a column key ranks before `$Origin` or the archive ignores the origin — throws `ManualStreamDataNotAppliedException` after the rest of the batch was written; its `Result` says what was stored. The import path (`ImportRowsAsync`) is unguarded and ignores the result.
 
+### Value check before the write (AB#7643, raw path AB#8606)
+
+`InsertAsync` (raw) and `InsertTimeRangeAsync` check every value against the CK type of its ingested column before anything is written (`ArchiveWriteValueValidator.Normalize`, one overload per point type). A value that does not fit refuses the **whole batch** with an `ArgumentException` (the asset repository answers 400) that names each point, the column and the expected type, at most ten mismatches listed, the rest counted:
+
+```
+Archive '<rtId>': 1 value(s) do not fit their column, nothing was written: point 1 (rtId '<rtId>', timestamp 2026-03-01T07:30:00.0000000Z): column 'Value' expects a number, got text 'twelve'.
+```
+
+A raw point is named by its index in the caller's order, its rtId and its timestamp; a time-range point by its index. Enum columns take the key or the member name (case-insensitive) and store the key. Points of another CK type and keys that are no ingested column are not checked (the write skips them anyway). The raw path checks the attribute keys as it writes them (no record expansion); the time-range path expands records first, as it does for the write. The check applies to manual and automated points alike.
+
 ### Time semantics
 
 - **Canonical timezone is UTC.** Incoming timestamps with offset are normalized to UTC before insert. Naive `DateTime` values (no offset) are interpreted as UTC, never as local time.

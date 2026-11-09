@@ -1239,6 +1239,26 @@ not stored throws `ManualStreamDataNotAppliedException`. The single-point `Inser
 Tests: `ConflictOutcomeTests`, `StreamDataOrigin/ArchiveRowOriginIntegrationTests` (multi-statement exactness on
 CrateDB). Write-up: `docs/streamdata-archive-concept.md` → *Write result*.
 
+### Value check on raw and time-range writes (AB#7643, raw path AB#8606)
+
+**Changelog entry (this repository has no CHANGELOG file; this is the entry).** AB#8606: `InsertAsync` (raw archives) now
+runs the same value check as `InsertTimeRangeAsync`: `ArchiveWriteValueValidator.Normalize` has a `StreamDataPoint`
+overload, called first thing after the archive snapshot is loaded. A value that does not fit its column's CK type refuses
+the whole batch with an `ArgumentException` (asset repository: 400) naming point (index, rtId, timestamp), column and
+expected type; nothing is written, no origin column is added, no dirty window is recorded. Enum names become their keys.
+**Behaviour change for automated raw writes too:** the check does not look at the origin, so a pipeline batch with e.g.
+text in a Double column is now refused up front with this message instead of being handed to CrateDB. Rules to keep:
+
+- One core (`NormalizeCore`) for both point types; the overloads differ only in how a point is named and rebuilt and in the
+  record expansion: the raw path checks the keys as `MapToDataPointDto` writes them (no `FlattenRecordValues`), the
+  time-range path expands records first, as its write does. Checking a shape the write does not use would refuse or pass
+  the wrong value.
+- Manual protection and the rollup recompute of raw manual writes are proven against CrateDB:
+  `StreamDataOrigin/RawArchiveManualWriteIntegrationTests` (manual value, writer and reason survive an automated delivery
+  of the same rtId + ckTypeId + timestamp; a manual write inside an aggregated window records a `Manual` dirty window and
+  the recomputed hourly bucket holds the corrected value, replaced, not added; a mismatched batch stores nothing).
+- Unit tests: `ArchiveWriteValueValidatorRawTests`. Write-up: `docs/streamdata-archive-concept.md` → *Value check before the write*.
+
 ### Declared-vs-physical Column Reconciliation
 
 Archive tables are provisioned with `CREATE TABLE IF NOT EXISTS`, so on an **already-activated**
