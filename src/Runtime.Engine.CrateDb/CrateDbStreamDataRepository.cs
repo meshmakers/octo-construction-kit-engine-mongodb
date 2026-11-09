@@ -362,6 +362,10 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // Materialise once so we can both count and pass to the client.
         var materialised = datapoints as IReadOnlyList<StreamDataPoint> ?? datapoints.ToList();
 
+        // AB#8666: record values become their dotted member paths before anything reads the attributes, exactly as on
+        // the time-range path, so a pipeline that delivers NamePlate -> RtRecord writes NamePlate.SerialNumber.
+        materialised = ArchiveRecordFlattening.Flatten(materialised);
+
         // AB#8606: the AB#7643 value check of the time-range path, for raw points. A value that does not fit its
         // column refuses the whole batch (point, column, expected type) before anything is written; enum names
         // become their keys.
@@ -553,14 +557,16 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var materialised = datapoints as IReadOnlyList<TimeRangeStreamDataPoint> ?? datapoints.ToList();
 
+        // Record values become their dotted member paths first (AB#8666: the same helper as the raw path).
+        materialised = ArchiveRecordFlattening.Flatten(materialised);
+
         // A value that does not fit its column refuses the whole batch with the point, the column and the
         // expected type, before anything is written; CrateDB would otherwise refuse the statement with an
         // unexplained error. Enum names become their keys, as on the pipeline write path.
-        materialised = ArchiveWriteValueValidator.Normalize(_ckCacheService, _tenantId, snapshot, materialised,
-            FlattenRecordValues);
+        materialised = ArchiveWriteValueValidator.Normalize(_ckCacheService, _tenantId, snapshot, materialised);
 
         // AB#8622: a ranking column cannot be null, or nothing is written.
-        ArchiveRankingColumnValidator.Validate(snapshot, materialised, FlattenRecordValues);
+        ArchiveRankingColumnValidator.Validate(snapshot, materialised);
 
         // Same CkTypeId-binding rule as raw archive inserts: each per-archive table holds one CkType.
         var filtered = materialised.Where(p => p.CkTypeId == snapshot.TargetCkTypeId).ToList();
@@ -690,17 +696,9 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     private Dictionary<string, object?> ToTimeRangeRowAttributes(TimeRangeStreamDataPoint point)
     {
         RequireManualWriter(point.Origin, point.ManualWrittenBy, point.RtId);
-        // Expand any nested RtRecord values into dotted attribute paths so an entity attribute
-        // like Amount → RtRecord{Value, Unit} ends up as "Amount.Value" / "Amount.Unit" — that's
-        // the same key shape the archive's Columns[] use, so the per-archive table's
-        // user-column lookup picks them up. Without this, the Amount column stays NULL because
-        // the dict has "Amount" → record instead of the leaf "Amount.Value".
-        var flattened = FlattenRecordValues(point.Attributes);
-        var attributes = flattened.ToDictionary(
-            kv => ColumnNameMapper.PathToColumnName(kv.Key),
-            kv => kv.Value,
-            StringComparer.Ordinal);
-        return attributes;
+        // The attributes are already flattened (ArchiveRecordFlattening, AB#8666): "Amount" -> RtRecord{Value, Unit}
+        // arrives here as "Amount.Value" / "Amount.Unit", the key shape of the archive's Columns[].
+        return ToColumnKeyedAttributes(point.Attributes);
     }
 
     private static Dtos.TimeRangeDataPointDto MapToTimeRangeDataPointDto(TimeRangeStreamDataPoint point,
@@ -735,38 +733,6 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             throw new ArgumentException(
                 $"Manual stream data point for entity '{rtId}' has no writer. A manual write records who wrote it; " +
                 "the writer is set by the platform from the authenticated caller.");
-        }
-    }
-
-    /// <summary>
-    /// Walks an attribute dictionary and replaces every <see cref="RtRecord"/> value with one
-    /// dotted-path entry per leaf attribute (recursively for nested records). Non-record values
-    /// are passed through unchanged. Used by the archive insert paths so callers can pass the
-    /// RtEntity attributes as-is, no pre-flattening needed in the pipeline node.
-    /// </summary>
-    private static IReadOnlyDictionary<string, object?> FlattenRecordValues(
-        IReadOnlyDictionary<string, object?> attrs)
-    {
-        var result = new Dictionary<string, object?>(attrs.Count, StringComparer.Ordinal);
-        foreach (var kv in attrs)
-        {
-            FlattenInto(result, kv.Key, kv.Value);
-        }
-        return result;
-    }
-
-    private static void FlattenInto(Dictionary<string, object?> result, string prefix, object? value)
-    {
-        if (value is RtRecord record && record.Attributes.Count > 0)
-        {
-            foreach (var sub in record.Attributes)
-            {
-                FlattenInto(result, $"{prefix}.{sub.Key}", sub.Value);
-            }
-        }
-        else
-        {
-            result[prefix] = value;
         }
     }
 
@@ -4749,16 +4715,22 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     private Dictionary<string, object?> ToRawRowAttributes(StreamDataPoint point)
     {
         RequireManualWriter(point.Origin, point.ManualWrittenBy, point.RtId);
-        // Re-key attributes from raw CK paths (e.g. "sensor.reading.value") to the camelCase
-        // column names that exist on the per-archive table — the data plane no longer carries a
-        // dynamic `data` blob, so the dictionary must align with the table schema directly.
-        var attributes = new Dictionary<string, object?>(point.Attributes.Count);
-        foreach (var kvp in point.Attributes)
+        // The attributes are already flattened (ArchiveRecordFlattening, AB#8666). Re-key the CK paths
+        // (e.g. "NamePlate.SerialNumber") to the physical column names of the per-archive table; the data plane
+        // carries no dynamic `data` blob, so the dictionary must align with the table schema directly.
+        return ToColumnKeyedAttributes(point.Attributes);
+    }
+
+    /// <summary>The attributes keyed by physical column name (<see cref="ColumnNameMapper" />).</summary>
+    private static Dictionary<string, object?> ToColumnKeyedAttributes(IReadOnlyDictionary<string, object?> attributes)
+    {
+        var result = new Dictionary<string, object?>(attributes.Count, StringComparer.Ordinal);
+        foreach (var (key, value) in attributes)
         {
-            attributes[ColumnNameMapper.PathToColumnName(kvp.Key)] = kvp.Value;
+            result[ColumnNameMapper.PathToColumnName(key)] = value;
         }
 
-        return attributes;
+        return result;
     }
 
     private static DataPointDto MapToDataPointDto(StreamDataPoint point, Dictionary<string, object?> attributes,

@@ -30,7 +30,10 @@ internal static class ArchiveRankingColumnValidator
     /// <summary>At most this many points are listed in the message; the count names the rest.</summary>
     private const int MaxReportedPoints = 10;
 
-    /// <summary>Raw-archive points; a point is named by its index in the caller's order, its rtId and its timestamp.</summary>
+    /// <summary>
+    /// Raw-archive points; a point is named by its index in the caller's order, its rtId and its timestamp. The attributes
+    /// are flattened (<see cref="ArchiveRecordFlattening" />, AB#8666), so a ranking column on a record member is checked.
+    /// </summary>
     public static void Validate(ArchiveSnapshot snapshot, IReadOnlyList<StreamDataPoint> points)
         => ValidateCore(snapshot, points, p => p.CkTypeId, p => p.Attributes,
             static (index, p) =>
@@ -38,12 +41,11 @@ internal static class ArchiveRankingColumnValidator
             nameof(points));
 
     /// <summary>
-    /// Time-range points; <paramref name="flatten" /> expands record values into dotted column paths, as the insert path
-    /// does, so a null ranking column inside a record is found as well.
+    /// Time-range points. Like the raw points they arrive flattened (<see cref="ArchiveRecordFlattening" />, AB#8666), so a
+    /// null ranking column inside a record is found as well.
     /// </summary>
-    public static void Validate(ArchiveSnapshot snapshot, IReadOnlyList<TimeRangeStreamDataPoint> points,
-        Func<IReadOnlyDictionary<string, object?>, IReadOnlyDictionary<string, object?>> flatten)
-        => ValidateCore(snapshot, points, p => p.CkTypeId, p => flatten(p.Attributes),
+    public static void Validate(ArchiveSnapshot snapshot, IReadOnlyList<TimeRangeStreamDataPoint> points)
+        => ValidateCore(snapshot, points, p => p.CkTypeId, p => p.Attributes,
             static (index, p) =>
                 $"point {index} (rtId '{p.RtId}', from {p.From.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)})",
             nameof(points));

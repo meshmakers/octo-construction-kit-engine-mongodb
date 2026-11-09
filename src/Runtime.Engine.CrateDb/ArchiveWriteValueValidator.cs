@@ -35,20 +35,22 @@ internal static class ArchiveWriteValueValidator
     /// <param name="tenantId">The tenant.</param>
     /// <param name="snapshot">The archive the batch is written to.</param>
     /// <param name="points">The batch in the caller's order; indexes in the message refer to it.</param>
-    /// <param name="flatten">Expands record values into dotted column paths, as the insert path does.</param>
+    /// <remarks>
+    /// The attributes are expected flattened (<see cref="ArchiveRecordFlattening" />, AB#8666): the check reads the keys
+    /// as the write maps them to columns, and a key that is no ingested column is not checked (and not written).
+    /// </remarks>
     public static IReadOnlyList<TimeRangeStreamDataPoint> Normalize(ICkCacheService ckCache, string tenantId,
-        ArchiveSnapshot snapshot, IReadOnlyList<TimeRangeStreamDataPoint> points,
-        Func<IReadOnlyDictionary<string, object?>, IReadOnlyDictionary<string, object?>> flatten)
-        => NormalizeCore(ckCache, tenantId, snapshot, points, p => p.CkTypeId, p => flatten(p.Attributes),
-            static (index, _) => $"point {index}", WithAttributes, nameof(points));
+        ArchiveSnapshot snapshot, IReadOnlyList<TimeRangeStreamDataPoint> points)
+        => NormalizeCore(ckCache, tenantId, snapshot, points, p => p.CkTypeId, p => p.Attributes,
+            static (index, _) => $"point {index}", ArchiveRecordFlattening.WithAttributes, nameof(points));
 
     /// <summary>
     /// Raw-archive overload (AB#8606): the same check for the points of <c>InsertAsync</c>. A mismatch names the
     /// point by its index in the caller's order, its rtId and its timestamp.
     /// </summary>
     /// <remarks>
-    /// The raw insert path maps the attribute keys to columns as they are, without expanding records, so the
-    /// check reads the keys the same way: a key that is no ingested column is not checked (and not written).
+    /// The attributes are expected flattened (<see cref="ArchiveRecordFlattening" />, AB#8666), as on the time-range
+    /// path: a record member is checked against its column like any other value.
     /// </remarks>
     /// <param name="ckCache">The CK cache of the tenant.</param>
     /// <param name="tenantId">The tenant.</param>
@@ -59,7 +61,7 @@ internal static class ArchiveWriteValueValidator
         => NormalizeCore(ckCache, tenantId, snapshot, points, p => p.CkTypeId, p => p.Attributes,
             static (index, p) =>
                 $"point {index} (rtId '{p.RtId}', timestamp {p.Timestamp.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)})",
-            WithAttributes, nameof(points));
+            ArchiveRecordFlattening.WithAttributes, nameof(points));
 
     private static IReadOnlyList<TPoint> NormalizeCore<TPoint>(ICkCacheService ckCache, string tenantId,
         ArchiveSnapshot snapshot, IReadOnlyList<TPoint> points,
@@ -269,34 +271,5 @@ internal static class ArchiveWriteValueValidator
         bool b => b ? "true" : "false",
         DateTime or DateTimeOffset => $"date '{Convert.ToString(value, CultureInfo.InvariantCulture)}'",
         _ => $"{value.GetType().Name} '{Convert.ToString(value, CultureInfo.InvariantCulture)}'"
-    };
-
-    private static TimeRangeStreamDataPoint WithAttributes(TimeRangeStreamDataPoint point,
-        IReadOnlyDictionary<string, object?> attributes) => new()
-    {
-        RtId = point.RtId,
-        CkTypeId = point.CkTypeId,
-        From = point.From,
-        To = point.To,
-        RtWellKnownName = point.RtWellKnownName,
-        Attributes = attributes,
-        Origin = point.Origin,
-        ManualWrittenBy = point.ManualWrittenBy,
-        ManualReason = point.ManualReason
-    };
-
-    private static StreamDataPoint WithAttributes(StreamDataPoint point,
-        IReadOnlyDictionary<string, object?> attributes) => new()
-    {
-        RtId = point.RtId,
-        CkTypeId = point.CkTypeId,
-        Timestamp = point.Timestamp,
-        RtWellKnownName = point.RtWellKnownName,
-        RtCreationDateTime = point.RtCreationDateTime,
-        RtChangedDateTime = point.RtChangedDateTime,
-        Attributes = attributes,
-        Origin = point.Origin,
-        ManualWrittenBy = point.ManualWrittenBy,
-        ManualReason = point.ManualReason
     };
 }

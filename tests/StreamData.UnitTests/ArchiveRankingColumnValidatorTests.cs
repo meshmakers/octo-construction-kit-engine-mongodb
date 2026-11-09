@@ -6,6 +6,7 @@ using FakeItEasy;
 using Meshmakers.Octo.ConstructionKit.Contracts;
 using Meshmakers.Octo.ConstructionKit.Contracts.Services;
 using Meshmakers.Octo.Runtime.Contracts.Formulas;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
 using Meshmakers.Octo.Runtime.Engine.CrateDb.Configuration;
@@ -66,13 +67,11 @@ public class ArchiveRankingColumnValidatorTests
         ManualWrittenBy = origin == ArchiveRowOrigin.Manual ? "jane.doe" : null
     };
 
-    private static IReadOnlyDictionary<string, object?> NoFlatten(IReadOnlyDictionary<string, object?> a) => a;
-
     [Fact]
     public void APointWithoutRankingColumns_Passes_ItKeepsTheStoredValues()
     {
         ArchiveRankingColumnValidator.Validate(Snapshot(Quality, Recency), [Raw(new() { ["Value"] = 1d })]);
-        ArchiveRankingColumnValidator.Validate(Snapshot(Quality, Recency), [Window(new() { ["Value"] = 1d })], NoFlatten);
+        ArchiveRankingColumnValidator.Validate(Snapshot(Quality, Recency), [Window(new() { ["Value"] = 1d })]);
     }
 
     [Fact]
@@ -116,7 +115,7 @@ public class ArchiveRankingColumnValidatorTests
         var bad = Window(new() { ["Value"] = 2d, ["DataQuality"] = null, ["Document.Date"] = DBNull.Value }, origin);
 
         var error = Assert.Throws<ArgumentException>(() =>
-            ArchiveRankingColumnValidator.Validate(Snapshot(Quality, Origin, Recency), [bad], NoFlatten));
+            ArchiveRankingColumnValidator.Validate(Snapshot(Quality, Origin, Recency), [bad]));
 
         Assert.Contains($"point 0 (rtId '{bad.RtId}', from 2026-03-01T07:30:00.0000000Z) sends null for 'DataQuality', 'Document.Date'",
             error.Message);
@@ -133,7 +132,7 @@ public class ArchiveRankingColumnValidatorTests
     public void AnArchiveWithoutPrecedence_ChecksNothing()
     {
         ArchiveRankingColumnValidator.Validate(Snapshot(), [Raw(new() { ["DataQuality"] = null })]);
-        ArchiveRankingColumnValidator.Validate(Snapshot(), [Window(new() { ["DataQuality"] = null })], NoFlatten);
+        ArchiveRankingColumnValidator.Validate(Snapshot(), [Window(new() { ["DataQuality"] = null })]);
     }
 
     [Fact]
@@ -146,18 +145,21 @@ public class ArchiveRankingColumnValidatorTests
     }
 
     [Fact]
-    public void ANullRankingColumnInsideARecord_IsFoundOnTheTimeRangePath_AfterTheRecordIsExpanded()
+    public void ANullRankingColumnInsideARecord_IsFound_OnBothPaths_AfterTheRecordIsFlattened()
     {
-        var point = Window(new() { ["DataQuality"] = 1, ["Document"] = "record" });
-        IReadOnlyDictionary<string, object?> Flatten(IReadOnlyDictionary<string, object?> a) =>
-            a.ContainsKey("Document")
-                ? new Dictionary<string, object?> { ["DataQuality"] = a["DataQuality"], ["Document.Date"] = null }
-                : a;
+        // AB#8666: both insert paths flatten first (ArchiveRecordFlattening), so the record member is a ranking column.
+        var document = new RtRecord(new RtCkId<CkRecordId>("Test", new CkRecordId("Document")),
+            new Dictionary<string, object?> { ["Date"] = null });
+        var raw = ArchiveRecordFlattening.Flatten(new[] { Raw(new() { ["DataQuality"] = 1, ["Document"] = document }) });
+        var window = ArchiveRecordFlattening.Flatten(new[] { Window(new() { ["DataQuality"] = 1, ["Document"] = document }) });
 
-        var error = Assert.Throws<ArgumentException>(() =>
-            ArchiveRankingColumnValidator.Validate(Snapshot(Quality, Recency), [point], Flatten));
+        var rawError = Assert.Throws<ArgumentException>(() =>
+            ArchiveRankingColumnValidator.Validate(Snapshot(Quality, Recency), raw));
+        var windowError = Assert.Throws<ArgumentException>(() =>
+            ArchiveRankingColumnValidator.Validate(Snapshot(Quality, Recency), window));
 
-        Assert.Contains("sends null for 'Document.Date'", error.Message);
+        Assert.Contains("sends null for 'Document.Date'", rawError.Message);
+        Assert.Contains("sends null for 'Document.Date'", windowError.Message);
     }
 
     [Fact]

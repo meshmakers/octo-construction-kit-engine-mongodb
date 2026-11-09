@@ -1255,10 +1255,9 @@ expected type; nothing is written, no origin column is added, no dirty window is
 **Behaviour change for automated raw writes too:** the check does not look at the origin, so a pipeline batch with e.g.
 text in a Double column is now refused up front with this message instead of being handed to CrateDB. Rules to keep:
 
-- One core (`NormalizeCore`) for both point types; the overloads differ only in how a point is named and rebuilt and in the
-  record expansion: the raw path checks the keys as `MapToDataPointDto` writes them (no `FlattenRecordValues`), the
-  time-range path expands records first, as its write does. Checking a shape the write does not use would refuse or pass
-  the wrong value.
+- One core (`NormalizeCore`) for both point types; the overloads differ only in how a point is named and rebuilt. Both
+  get the points already flattened (`ArchiveRecordFlattening`, AB#8666), so the check reads exactly the keys the write
+  maps to columns. Checking a shape the write does not use would refuse or pass the wrong value.
 - Manual protection and the rollup recompute of raw manual writes are proven against CrateDB:
   `StreamDataOrigin/RawArchiveManualWriteIntegrationTests` (manual value, writer and reason survive an automated delivery
   of the same rtId + ckTypeId + timestamp; a manual write inside an aggregated window records a `Manual` dirty window and
@@ -1301,6 +1300,38 @@ Write-up: `docs/streamdata-archive-concept.md` → *Partial delivery*. Tests: `P
 (EC case, merged-row ranking, explicit null refused, mixed batches),
 `CrateDbStreamDataComputedColumnIngestTests` (AB#8622 cases), `StreamDataOrigin/PartialDeliveryIntegrationTests`,
 `StreamDataOrigin/ComputedColumnPartialDeliveryIntegrationTests` (merged row on raw and time-range, rollup over the column).
+
+### Record values become their member columns on both write paths (AB#8666)
+
+**Changelog entry (this repository has no CHANGELOG file; this is the entry).** AB#8666: `InsertAsync` (raw archives)
+dropped every record value a point carried. A pipeline (`CreateUpdateInfo@1` → `SaveStreamDataInArchive@1`) delivers the
+entity's attributes as they are, so a column on a record sub-path (`NamePlate.SerialNumber`) arrived as one key
+`NamePlate` → `RtRecord`, which is no column: the member was neither written nor cleared, and since AB#8622 the stored
+value simply stayed. The time-range path expanded records (`FlattenRecordValues`); the raw path did not. The REST raw
+`insert` was not affected because the asset repository accepts only dotted column paths (`ArchivePointValidation`
+refuses a record key with 400), so its points carry no record values. **Behaviour change for raw writes from pipelines:**
+record members are now written (value), cleared (`null`) or kept (member not in the record), like every other column.
+Rules to keep:
+
+- **One place.** `ArchiveRecordFlattening.Flatten` runs first in both insert paths, right after the snapshot is loaded and
+  before the value check, the ranking-column check, the computed columns and the row mapping; every later step reads the
+  same dotted keys. The validators no longer take a flatten function. Do not flatten again further down, and do not add a
+  second expansion elsewhere.
+- **Members, not records.** A member with a value is named with it, a member set to `null` is named with null (clears the
+  column), a member the record does not contain is not named (keeps the stored value, AB#8622). Nested records expand
+  recursively; a record without members names nothing. A whole record sent as `null` (`NamePlate: null`) names the key
+  `NamePlate`, which is no column, so the members keep their values (unchanged, same on both paths).
+- **No double work for REST.** Points without a record value pass through as the same instance (same list when no point
+  carries one), so dotted REST keys are not copied or re-keyed. The import path (`ImportRowsAsync`) maps exported physical
+  column names and is unchanged.
+- Ranking columns on a record member are found by the null refusal and compared on the merged row; computed columns that
+  read a record member see it; manual protection applies as for any column.
+
+Tests: `ArchiveRecordFlatteningTests`, `ArchiveRankingColumnValidatorTests` (a null ranking member inside a record, both
+paths), `StreamDataOrigin/RecordMemberWriteIntegrationTests` (real CrateDB, raw and time-range: member value over a value
+the REST shape stored, explicit null, member left out and no record at all, new row, computed column over a record member,
+ranking column on a record member compared and its null refused, manual protection). The pipeline chain against the real
+repository: `octo-mesh-adapter` `RawArchiveRecordMemberPipelineIntegrationTests`.
 
 ### Declared-vs-physical Column Reconciliation
 

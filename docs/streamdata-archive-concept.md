@@ -340,7 +340,7 @@ Skipped automated rows are a normal outcome and only reported (and not marked di
 Archive '<rtId>': 1 value(s) do not fit their column, nothing was written: point 1 (rtId '<rtId>', timestamp 2026-03-01T07:30:00.0000000Z): column 'Value' expects a number, got text 'twelve'.
 ```
 
-A raw point is named by its index in the caller's order, its rtId and its timestamp; a time-range point by its index. Enum columns take the key or the member name (case-insensitive) and store the key. Points of another CK type and keys that are no ingested column are not checked (the write skips them anyway). The raw path checks the attribute keys as it writes them (no record expansion); the time-range path expands records first, as it does for the write. The check applies to manual and automated points alike.
+A raw point is named by its index in the caller's order, its rtId and its timestamp; a time-range point by its index. Enum columns take the key or the member name (case-insensitive) and store the key. Points of another CK type and keys that are no ingested column are not checked (the write skips them anyway). Both paths check the keys after the record expansion (see *Record values* below), i.e. exactly as they write them. The check applies to manual and automated points alike.
 
 ### Partial delivery — absent keeps, null clears (AB#8622)
 
@@ -417,6 +417,30 @@ Tests: `PartialDeliverySqlTests`, `StoredRowLookupTests`, the AB#8622 cases of `
 (unit), `StreamDataOrigin/PartialDeliveryIntegrationTests` and `StreamDataOrigin/ComputedColumnPartialDeliveryIntegrationTests`
 (real CrateDB, raw and time-range: merged row, no refresh in between, explicit null, no input, new row, mixed batch, manual
 protection, manual partial correction, a rollup summing the computed column).
+
+### Record values — written as their member columns (AB#8666)
+
+A column on a record sub-path (`NamePlate.SerialNumber`, stored as `nameplateserialnumber`) is filled from the record
+member. A pipeline sends the record as one attribute (`NamePlate` → record with `SerialNumber`), the asset repository's
+REST `insert` sends the dotted path (`NamePlate.SerialNumber`); both arrive at the same column. Both insert paths expand
+record values first (`ArchiveRecordFlattening`), before the value check, the ranking-column check, the computed columns
+and the write, and then apply the partial-delivery rule above per member:
+
+| The record … the member | Effect |
+|---|---|
+| contains with a value | written |
+| contains with `null` | cleared (NULL) |
+| does not contain | not named: the stored value stays (NULL on a new row) |
+
+Nested records expand recursively. A whole record sent as `null` names no member column, so the members keep their
+values. Points without a record value are passed on unchanged (the REST shape is not expanded twice). Until AB#8666 the
+raw path skipped this expansion: a pipeline write dropped every record member, values and nulls alike, and the stored
+value stayed.
+
+Tests: `ArchiveRecordFlatteningTests` (unit), `StreamDataOrigin/RecordMemberWriteIntegrationTests` (real CrateDB, raw and
+time-range; computed column over a member, ranking column on a member, manual protection), and in `octo-mesh-adapter`
+`RawArchiveRecordMemberPipelineIntegrationTests` (`CreateUpdateInfo@1` → `SaveStreamDataInArchive@1` against the real
+repository).
 
 ### Time semantics
 
