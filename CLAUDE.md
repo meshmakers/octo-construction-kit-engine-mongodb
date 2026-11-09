@@ -1235,7 +1235,7 @@ needs a backfill: `scripts/rollup-manual-rows-check.sh`. Write-up: `docs/streamd
 
 The repository inserts return `StreamDataWriteResult` (`Stored`, `Skipped` with reason `CkTypeMismatch` /
 `LowerPrecedence` / `ManualValueProtected`). A guarded statement ends with `RETURNING` key + ranking columns +
-`row_origin`; `ConflictOutcome.FindSkipped` decides stored ⇔ the returned values equal the sent ones (exact because
+`row_origin`; `ConflictOutcome.Decide` decides stored ⇔ the returned values equal the sent ones (exact because
 the last key admits equality); the reason of a skipped row is the key that decided (AB#8637;
 **changelog entry:** an automated write that loses on a column key placed before `$Origin` was reported as
 `ManualValueProtected` whenever the stored row was manual, now `LowerPrecedence`; storage is unchanged). Tests:
@@ -1244,6 +1244,17 @@ unguarded statements send no `RETURNING`. Only stored rows feed the retroactive 
 not stored throws `ManualStreamDataNotAppliedException`. The single-point `InsertAsync` goes through the batch path.
 Tests: `ConflictOutcomeTests`, `StreamDataOrigin/ArchiveRowOriginIntegrationTests` (multi-statement exactness on
 CrateDB). Write-up: `docs/streamdata-archive-concept.md` → *Write result*.
+
+**A dropped shard request is a failed write (AB#8679).** When CrateDB's memory circuit breaker trips it ends a shard request
+of a multi-row INSERT and answers **without an error**. A guarded statement then lacks the `RETURNING` rows of the dropped rows
+(`ConflictOutcome.Decide` reports them as `Missing`, never as a skip: an upsert returns a row for every row it processed), an
+unguarded statement reports fewer affected rows than distinct keys sent. `CrateDatabaseClient.InsertGroupedAsync` writes the
+missing rows once more (guarded: those rows, unguarded: the statement) and then throws `StreamDataWriteIncompleteException`
+(archive table, rows sent / missing). It is not a contracts `StreamDataException` on purpose: the asset repository maps that to
+400. Rules: never turn a missing `RETURNING` row back into a skip reason, never catch the exception into a success. Test:
+`StreamDataWriteLoss/ArchiveWriteUnderMemoryPressureIntegrationTests` (own CrateDB container, 512 MB heap, query breaker set per
+test: guarded 25 %, unguarded 5 %; skipped with that reason if the breaker never trips; ~15 s; red without the check).
+Not covered by it (other statements): the rollup aggregation and the recompute staging copy (`INSERT … SELECT`).
 
 ### Value check on raw and time-range writes (AB#7643, raw path AB#8606)
 

@@ -54,11 +54,26 @@ internal static class ConflictOutcome
     }
 
     /// <summary>
-    /// The rows of <paramref name="sent" /> whose values are not what CrateDB returned for their key, with the reason.
-    /// A row for which CrateDB returned nothing is reported as not stored as well — it never happens for an upsert,
-    /// and counting it as stored would be the success-without-write this exists to rule out.
+    /// What a guarded statement did with its rows: the rows the guard kept the stored values for, with the reason,
+    /// and the rows CrateDB did not write at all (AB#8679).
     /// </summary>
-    public static IReadOnlyList<SkippedArchiveRow> FindSkipped(
+    /// <param name="Skipped">Rows the guard decided against; their positions in the statement's rows.</param>
+    /// <param name="Missing">Positions of rows without a <c>RETURNING</c> row: not written.</param>
+    internal sealed record GuardOutcome(IReadOnlyList<SkippedArchiveRow> Skipped, IReadOnlyList<int> Missing);
+
+    /// <summary>
+    /// Decides for every row of <paramref name="sent" /> whether it was stored, skipped by the guard (with the reason)
+    /// or not written.
+    /// </summary>
+    /// <remarks>
+    /// A guarded upsert "updates" every conflicting row, also when the guard keeps the stored values, so CrateDB returns
+    /// a row for every row it processed: a won insert, a won update and a lost update alike. A sent row without a
+    /// returned row was therefore not processed — CrateDB dropped its shard request, e.g. when its memory circuit
+    /// breaker tripped, and answered the statement without an error (AB#8679). Such a row is reported as
+    /// <see cref="GuardOutcome.Missing" />, never as a precedence decision: before AB#8679 it was reported as
+    /// <see cref="StreamDataSkipReason.LowerPrecedence" />, and the loss looked like a decision nobody retries.
+    /// </remarks>
+    public static GuardOutcome Decide(
         IReadOnlyList<SentRow> sent,
         IReadOnlyList<IReadOnlyDictionary<string, object?>> returned,
         IReadOnlyList<ArchiveConflictKey> precedence,
@@ -85,13 +100,14 @@ internal static class ConflictOutcome
         }
 
         var skipped = new List<SkippedArchiveRow>();
+        var missing = new List<int>();
         for (var i = 0; i < sent.Count; i++)
         {
             var s = sent[i];
             var key = Key(s.RtId, s.CkTypeId, AsUtcMilliseconds(s.Start), windowed ? AsUtcMilliseconds(s.End) : null);
             if (!byKey.TryGetValue(key, out var candidates) || candidates.Count == 0)
             {
-                skipped.Add(new SkippedArchiveRow(i, StreamDataSkipReason.LowerPrecedence));
+                missing.Add(i);
                 continue;
             }
 
@@ -105,7 +121,7 @@ internal static class ConflictOutcome
             skipped.Add(new SkippedArchiveRow(i, DecidingReason(candidates[0], s, precedence, includeOrigin)));
         }
 
-        return skipped;
+        return new GuardOutcome(skipped, missing);
     }
 
     /// <summary>

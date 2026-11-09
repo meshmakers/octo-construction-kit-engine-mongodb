@@ -231,7 +231,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // statement to several KB: 10,000 rows took 7.4 s as single-row commands and 0.8 s as
         // multi-row statements (local CrateDB 5.10, octogrid EDA replay, 2026-09-24).
         // AB#8622: one statement shape per set of named columns (ArchiveColumnSets).
-        return await InsertGroupedAsync(tenantId, d, userColumnNames, conflictPrecedence,
+        return await InsertGroupedAsync(tenantId, qualifiedTable, d, userColumnNames, conflictPrecedence,
             windowed: false, includeOrigin: true,
             fixedParametersPerRow: 4 + ArchiveRowOriginColumns.Names.Count,
             keyOf: x => (x.Timestamp, x.RtId?.ToString(), x.CkTypeId?.ToString()),
@@ -245,9 +245,12 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     /// Writes the rows of one insert batch, one statement shape per set of named user columns (AB#8622,
     /// <see cref="ArchiveColumnSets" />), each in sub-batches of at most <see cref="RowsPerStatement" /> rows.
     /// Returns the rows the conflict guard did not store, with their positions in <paramref name="rows" />.
+    /// Rows CrateDB did not write at all (a guarded statement without their <c>RETURNING</c> row, an unguarded one with
+    /// fewer affected rows than sent) are written once more; when rows are still missing the write throws
+    /// <see cref="StreamDataWriteIncompleteException" /> (AB#8679).
     /// </summary>
     private async Task<IReadOnlyList<SkippedArchiveRow>> InsertGroupedAsync<T>(
-        string tenantId, T[] rows, IReadOnlyList<string> userColumnNames,
+        string tenantId, string qualifiedTable, T[] rows, IReadOnlyList<string> userColumnNames,
         IReadOnlyList<ArchiveConflictKey>? conflictPrecedence, bool windowed, bool includeOrigin,
         int fixedParametersPerRow, Func<T, object> keyOf,
         Func<IReadOnlyList<string>, IReadOnlyList<string>, int, string> buildSql,
@@ -256,7 +259,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         where T : RtTypeWithAttributes
     {
         // AB#7598: a guarded upsert reports which rows it kept the stored values for (RETURNING, see
-        // ConflictOutcome); an unguarded one stores every row and needs no answer from CrateDB.
+        // ConflictOutcome); an unguarded one stores every row, which its affected-row count confirms (AB#8679).
         var guarded = conflictPrecedence is { Count: > 0 };
         var returning = guarded ? ConflictOutcome.ReturningClause(windowed, conflictPrecedence!, includeOrigin) : "";
         if (guarded)
@@ -274,41 +277,89 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             var fullSql = group.Indexes.Count >= rowsPerStatement
                 ? buildSql(group.InsertColumns, group.UpdatedColumns, rowsPerStatement) + returning
                 : null;
+            string SqlFor(int rowCount) => rowCount == rowsPerStatement && fullSql is not null
+                ? fullSql
+                : buildSql(group.InsertColumns, group.UpdatedColumns, rowCount) + returning;
 
             // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
             // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
             for (var offset = 0; offset < group.Indexes.Count; offset += rowsPerStatement)
             {
-                var start = offset;
                 var end = Math.Min(offset + rowsPerStatement, group.Indexes.Count);
-                var sql = end - start == rowsPerStatement && fullSql is not null
-                    ? fullSql
-                    : buildSql(group.InsertColumns, group.UpdatedColumns, end - start) + returning;
-                var outcome = await _resilience.ExecuteAsync(async _ =>
+                var batch = new int[end - offset];
+                for (var i = 0; i < batch.Length; i++)
+                {
+                    batch[i] = group.Indexes[offset + i];
+                }
+
+                skipped.AddRange(await WriteSubBatchAsync(batch));
+            }
+
+            // One sub-batch as one statement (AB#8679): rows CrateDB did not write are written once more, then the
+            // write fails. The rows of the statement are positions in `rows`.
+            async Task<IReadOnlyList<SkippedArchiveRow>> WriteSubBatchAsync(int[] batch)
+            {
+                var first = await ExecuteSubBatchAsync(batch);
+                if (first.Missing.Count == 0)
+                {
+                    return first.Skipped;
+                }
+
+                // Both statements are idempotent upserts: a guarded one decides again on the merged row and answers
+                // the same for a row it did store, an unguarded one writes the same values again. The unguarded
+                // count does not say which rows are missing, so its retry repeats the whole statement.
+                var retryRows = guarded ? first.Missing.ToArray() : batch;
+                _logger.LogWarning(
+                    "CrateDB did not store {Missing} of {Rows} rows of a write to {Table} without reporting an error " +
+                    "(likely a memory circuit breaker); writing them once more.",
+                    first.Missing.Count, batch.Length, qualifiedTable);
+                var retry = await ExecuteSubBatchAsync(retryRows);
+                if (retry.Missing.Count > 0)
+                {
+                    throw new StreamDataWriteIncompleteException(qualifiedTable,
+                        retryRows.Length, retry.Missing.Count,
+                        guarded
+                            ? $"{retry.Missing.Count} rows had no RETURNING row."
+                            : $"CrateDB reported {retryRows.Length - retry.Missing.Count} affected rows for {retryRows.Length} rows sent.");
+                }
+
+                return guarded ? first.Skipped.Concat(retry.Skipped).OrderBy(r => r.Index).ToList() : retry.Skipped;
+            }
+
+            // Runs one statement over `statementRows` and returns the skipped rows and the missing rows, both as
+            // positions in `rows`. For an unguarded statement "missing" is the shortfall of the affected-row count.
+            async Task<(IReadOnlyList<SkippedArchiveRow> Skipped, IReadOnlyList<int> Missing)> ExecuteSubBatchAsync(
+                int[] statementRows)
+            {
+                var sql = SqlFor(statementRows.Length);
+                return await _resilience.ExecuteAsync(async _ =>
                 {
                     await using var lease = await LeaseConnectionAsync(tenantId);
                     await using var cmd = new NpgsqlCommand(sql, lease.Connection);
-                    for (var i = start; i < end; i++)
+                    foreach (var row in statementRows)
                     {
-                        bind(cmd.Parameters, rows[group.Indexes[i]], group.InsertColumns);
+                        bind(cmd.Parameters, rows[row], group.InsertColumns);
                     }
 
                     if (!guarded)
                     {
-                        await cmd.ExecuteNonQueryAsync();
-                        return (IReadOnlyList<SkippedArchiveRow>)[];
+                        // AB#8679: an upsert counts one affected row per row it inserted or updated; fewer means CrateDB
+                        // dropped part of the statement. A key named twice in one statement can count once, so the
+                        // count is compared with the distinct keys.
+                        var affected = await cmd.ExecuteNonQueryAsync();
+                        var expected = statementRows.Select(r => keyOf(rows[r])).Distinct().Count();
+                        var shortfall = Math.Max(0, expected - affected);
+                        return ((IReadOnlyList<SkippedArchiveRow>)[],
+                            (IReadOnlyList<int>)statementRows.Take(shortfall).ToArray());
                     }
 
                     var returned = await ReadReturnedRowsAsync(cmd);
-                    var sent = new List<ConflictOutcome.SentRow>(end - start);
-                    for (var i = start; i < end; i++)
-                    {
-                        sent.Add(sentRow(rows[group.Indexes[i]]));
-                    }
-
-                    return ConflictOutcome.FindSkipped(sent, returned, conflictPrecedence!, includeOrigin, windowed);
+                    var sent = statementRows.Select(r => sentRow(rows[r])).ToList();
+                    var outcome = ConflictOutcome.Decide(sent, returned, conflictPrecedence!, includeOrigin, windowed);
+                    return ((IReadOnlyList<SkippedArchiveRow>)outcome.Skipped
+                            .Select(o => o with { Index = statementRows[o.Index] }).ToList(),
+                        (IReadOnlyList<int>)outcome.Missing.Select(m => statementRows[m]).ToArray());
                 });
-                skipped.AddRange(outcome.Select(o => o with { Index = group.Indexes[o.Index + start] }));
             }
         }
 
@@ -447,7 +498,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // Same shape as InsertDataAsync (AB#4773, AB#8622): one bind parameter per value, one multi-row
         // statement per sub-batch and set of named columns.
         var includeOrigin = !generationTracked;
-        return await InsertGroupedAsync(tenantId, d, userColumnNames, conflictPrecedence,
+        return await InsertGroupedAsync(tenantId, qualifiedTable, d, userColumnNames, conflictPrecedence,
             windowed: true, includeOrigin,
             fixedParametersPerRow: 5 + (generationTracked ? 0 : ArchiveRowOriginColumns.Names.Count),
             keyOf: x => (x.From, x.To, x.RtId?.ToString(), x.CkTypeId?.ToString()),
