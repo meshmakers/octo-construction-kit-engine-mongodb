@@ -86,6 +86,59 @@ public class ConflictOutcomeTests
         Assert.Equal(StreamDataSkipReason.LowerPrecedence, Assert.Single(skipped).Reason);
     }
 
+    // AB#8637: the reason names the key that decided, the first key in which the stored row differs from the sent one.
+    private static readonly ArchiveConflictKey[] QualityBeforeOrigin =
+    [
+        new("dataquality", ConflictKeyOrder.LowerWins),
+        new(ArchiveConflictKey.OriginKey, ConflictKeyOrder.HigherWins),
+    ];
+
+    [Fact]
+    public void WithTheOriginFirst_AnAutomatedRowAgainstAManualValue_IsManualValueProtected_AlsoWhenItsQualityIsWorse()
+    {
+        var skipped = ConflictOutcome.FindSkipped([Sent(3)], [Returned(1, "manual")], Precedence, true, true);
+
+        Assert.Equal(StreamDataSkipReason.ManualValueProtected, Assert.Single(skipped).Reason);
+    }
+
+    [Fact]
+    public void WithQualityBeforeTheOrigin_AnAutomatedRowWithWorseQualityAgainstAManualValue_IsLowerPrecedence()
+    {
+        var skipped = ConflictOutcome.FindSkipped([Sent(3)], [Returned(2, "manual")], QualityBeforeOrigin, true, true);
+
+        Assert.Equal(StreamDataSkipReason.LowerPrecedence, Assert.Single(skipped).Reason);
+    }
+
+    [Fact]
+    public void WithQualityBeforeTheOrigin_AnAutomatedRowWithEqualQualityAgainstAManualValue_IsManualValueProtected()
+    {
+        var skipped = ConflictOutcome.FindSkipped([Sent(2)], [Returned(2L, "manual")], QualityBeforeOrigin, true, true);
+
+        Assert.Equal(StreamDataSkipReason.ManualValueProtected, Assert.Single(skipped).Reason);
+    }
+
+    [Fact]
+    public void WithQualityBeforeTheOrigin_AnAutomatedRowWithoutQualityAgainstAManualValue_IsManualValueProtected()
+    {
+        // AB#8622 + AB#8637: an unsent ranking column keeps its stored value and ties, so the origin decides.
+        var sent = new ConflictOutcome.SentRow("rt1", "Test/Meter", T0, T0.AddMinutes(15),
+            new Dictionary<string, object?> { ["consumption"] = 12d }, ArchiveRowOrigin.Automated);
+
+        var skipped = ConflictOutcome.FindSkipped([sent], [Returned(2, "manual")], QualityBeforeOrigin, true, true);
+
+        Assert.Equal(StreamDataSkipReason.ManualValueProtected, Assert.Single(skipped).Reason);
+    }
+
+    [Fact]
+    public void WithQualityBeforeTheOrigin_AManualRowThatLostOnQuality_IsLowerPrecedence()
+    {
+        // The reason a manual row that was not stored carries in ManualStreamDataNotAppliedException.
+        var skipped = ConflictOutcome.FindSkipped([Sent(3, ArchiveRowOrigin.Manual)], [Returned(1, "automated")],
+            QualityBeforeOrigin, true, true);
+
+        Assert.Equal(StreamDataSkipReason.LowerPrecedence, Assert.Single(skipped).Reason);
+    }
+
     [Fact]
     public void TimestampsCompareAtMillisecondPrecision()
     {

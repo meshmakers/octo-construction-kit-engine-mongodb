@@ -1170,8 +1170,11 @@ Rules to keep:
   when the archive does not name it (also with no precedence at all: the guard is then `$Origin` alone, automated vs
   automated stays last-write-wins). Named explicitly, `$Origin` applies at the author's position; `Order: Ignore` on it is
   the opt-out (the key is dropped; with no other key there is no guard). `LowerWins` on `$Origin`, `Ignore` on a column
-  and `$Origin` named twice are refused at activation. `ManualValueProtected` is only reported when the guard ranks by
-  origin. Rollups and the import path are unchanged.
+  and `$Origin` named twice are refused at activation. The skip reason names the key that decided (AB#8637,
+  `ConflictOutcome.DecidingReason`: the first key in which the stored row differs from the write; a ranking column the
+  write does not send ties, AB#8622): `ManualValueProtected` only
+  when `$Origin` decided (origin first, or every key before it tied), `LowerPrecedence` when a column key before it decided,
+  also against a manual row; never `ManualValueProtected` when the origin is ignored. Rollups and the import path are unchanged.
 
 - **Reading the origin (AB#7616)**: `row_origin`, `manual_written_by`, `manual_written_at`, `manual_reason` are
   selectable/filterable/groupable on raw and time-range archives. Every read-path column reference goes through
@@ -1233,7 +1236,10 @@ needs a backfill: `scripts/rollup-manual-rows-check.sh`. Write-up: `docs/streamd
 The repository inserts return `StreamDataWriteResult` (`Stored`, `Skipped` with reason `CkTypeMismatch` /
 `LowerPrecedence` / `ManualValueProtected`). A guarded statement ends with `RETURNING` key + ranking columns +
 `row_origin`; `ConflictOutcome.FindSkipped` decides stored ⇔ the returned values equal the sent ones (exact because
-the last key admits equality). The client inserts return the skipped rows as `SkippedArchiveRow(Index, Reason)`;
+the last key admits equality); the reason of a skipped row is the key that decided (AB#8637;
+**changelog entry:** an automated write that loses on a column key placed before `$Origin` was reported as
+`ManualValueProtected` whenever the stored row was manual, now `LowerPrecedence`; storage is unchanged). Tests:
+`StreamDataOrigin/SkipReasonDecidingKeyIntegrationTests` (raw and time-range). The client inserts return the skipped rows as `SkippedArchiveRow(Index, Reason)`;
 unguarded statements send no `RETURNING`. Only stored rows feed the retroactive detection. A manual row that is
 not stored throws `ManualStreamDataNotAppliedException`. The single-point `InsertAsync` goes through the batch path.
 Tests: `ConflictOutcomeTests`, `StreamDataOrigin/ArchiveRowOriginIntegrationTests` (multi-statement exactness on

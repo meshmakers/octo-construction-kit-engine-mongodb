@@ -302,9 +302,8 @@ public class PartialDeliveryOriginPrecedenceIntegrationTests(CrateStagingCopyFix
         var skipped = Assert.Single(result.Skipped);
         Assert.Equal(meter, skipped.RtId);
         Assert.Equal(ArchiveRowOrigin.Automated, skipped.Origin);
-        // The stored row is manual and the archive ranks by origin: reported as the manual value's protection, also
-        // though the quality decided before the origin was reached.
-        Assert.Equal(StreamDataSkipReason.ManualValueProtected, skipped.Reason);
+        // The quality decided before the origin was reached: the reason names it, although the stored row is manual (AB#8637).
+        Assert.Equal(StreamDataSkipReason.LowerPrecedence, skipped.Reason);
         Assert.Equal(ManualRow(10, 4, 2), await RowAsync(archive, meter));
     }
 

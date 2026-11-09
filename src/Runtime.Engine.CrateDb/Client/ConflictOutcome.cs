@@ -67,9 +67,6 @@ internal static class ConflictOutcome
     {
         var keyColumns = precedence.Where(k => !k.IsOrigin).Select(k => k.Column).Distinct(StringComparer.Ordinal).ToList();
 
-        // Only a guard that ranks by origin protects a manual value; otherwise the ranking columns decided (AB#7656).
-        var ranksByOrigin = precedence.Any(k => k.IsOrigin);
-
         // Returned rows by key; a batch may name one key twice, so each key holds a list that is consumed.
         var byKey = new Dictionary<string, List<IReadOnlyDictionary<string, object?>>>(StringComparer.Ordinal);
         foreach (var row in returned)
@@ -105,18 +102,61 @@ internal static class ConflictOutcome
                 continue;
             }
 
-            // The stored row stays. When the guard ranks by origin, the stored row is manual and the write was
-            // automated, that is the permanence of a manual value; otherwise the ranking columns decided.
-            var storedOrigin = includeOrigin && ranksByOrigin
-                ? ArchiveRowOriginColumns.FromStoredValue(candidates[0].TryGetValue(Constants.RowOrigin, out var o) ? o : null)
-                : ArchiveRowOrigin.Automated;
-            skipped.Add(new SkippedArchiveRow(i,
-                storedOrigin == ArchiveRowOrigin.Manual && s.Origin != ArchiveRowOrigin.Manual
-                    ? StreamDataSkipReason.ManualValueProtected
-                    : StreamDataSkipReason.LowerPrecedence));
+            skipped.Add(new SkippedArchiveRow(i, DecidingReason(candidates[0], s, precedence, includeOrigin)));
         }
 
         return skipped;
+    }
+
+    /// <summary>
+    /// Why the stored row stayed, named after the key that decided (AB#8637). The guard is lexicographic, so the
+    /// deciding key is the first one, in the archive's order, in which the stored row differs from the sent one; a
+    /// ranking column the row does not send keeps its stored value and ties (AB#8622).
+    /// That is <c>$Origin</c> — the stored row manual, the write automated — only when no column key before it
+    /// differs: <see cref="StreamDataSkipReason.ManualValueProtected" />. A column key that differs earlier decided,
+    /// also against a manual row: <see cref="StreamDataSkipReason.LowerPrecedence" />. An archive that ignores the
+    /// origin has no <c>$Origin</c> key here, so it never reports a protected manual value.
+    /// </summary>
+    private static StreamDataSkipReason DecidingReason(IReadOnlyDictionary<string, object?> stored, SentRow sent,
+        IReadOnlyList<ArchiveConflictKey> precedence, bool includeOrigin)
+    {
+        foreach (var key in precedence)
+        {
+            if (key.IsOrigin)
+            {
+                if (!includeOrigin)
+                {
+                    continue;
+                }
+
+                var storedOrigin = ArchiveRowOriginColumns.FromStoredValue(
+                    stored.TryGetValue(Constants.RowOrigin, out var origin) ? origin : null);
+                if (storedOrigin != sent.Origin)
+                {
+                    // A manual write always passes the origin key, so a difference that decided against the write
+                    // is a manual row kept against an automated delivery.
+                    return storedOrigin == ArchiveRowOrigin.Manual
+                        ? StreamDataSkipReason.ManualValueProtected
+                        : StreamDataSkipReason.LowerPrecedence;
+                }
+
+                continue;
+            }
+
+            // AB#8622: a ranking column the row does not send keeps its stored value, so it ties and cannot decide.
+            if (!sent.Values.TryGetValue(key.Column, out var sentValue))
+            {
+                continue;
+            }
+
+            var storedValue = stored.TryGetValue(key.Column, out var v) ? v : null;
+            if (!ValuesEqual(storedValue, sentValue))
+            {
+                return StreamDataSkipReason.LowerPrecedence;
+            }
+        }
+
+        return StreamDataSkipReason.LowerPrecedence;
     }
 
     private static bool Holds(IReadOnlyDictionary<string, object?> stored, SentRow sent, IReadOnlyList<string> keyColumns,

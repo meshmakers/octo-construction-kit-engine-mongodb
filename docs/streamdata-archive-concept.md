@@ -325,8 +325,8 @@ Tests: `StreamDataOrigin/RollupManualColumnsIntegrationTests` (real CrateDB), `A
 | Reason | When |
 |---|---|
 | `CkTypeMismatch` | the row's CK type is not the archive's target (was a silent drop before) |
-| `LowerPrecedence` | the conflict precedence ranks the stored row above it |
-| `ManualValueProtected` | the stored row is manual, the write automated, and the guard ranks by `$Origin` (the default) |
+| `LowerPrecedence` | a column key of the conflict precedence decided: the first key, in the archive's order, in which the stored row differs from the write. Also against a stored manual row when that key comes before `$Origin`, and always when the archive ignores the origin |
+| `ManualValueProtected` | `$Origin` decided: the stored row is manual, the write automated, and no column key before `$Origin` differs (always with the default origin-first guard; with `$Origin` after a key only on a tie in it; a ranking column the write does not send keeps its stored value and ties, AB#8622). Never reported when the archive ignores the origin (AB#8637) |
 
 **How the count is exact.** A guarded upsert always "updates" the conflicting row (the `CASE` keeps the stored values), so the affected-row count cannot tell a win from a loss. A guarded statement therefore ends with `RETURNING` the row key, the ranking columns and `row_origin`, and `ConflictOutcome.FindSkipped` compares what CrateDB holds afterwards with what was sent: equal in every ranking column (and the origin) ⇔ stored. That is exact because the last key admits equality — a write equal in every key always wins — and a lost write leaves a stored row that differs in the deciding column or in the origin. Timestamps compare at millisecond precision, numbers by value, text ordinally; two rows for one key in one statement are matched one to one. It holds per multi-row statement and across the sub-batches of a large write. An archive **without** precedence sends no `RETURNING` and reports every row of its target type as stored, as before.
 
