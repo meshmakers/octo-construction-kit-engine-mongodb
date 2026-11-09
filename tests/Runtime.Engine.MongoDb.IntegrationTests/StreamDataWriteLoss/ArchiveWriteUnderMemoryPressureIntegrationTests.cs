@@ -22,6 +22,9 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.StreamDataWrit
 ///     its own. The verdict per writer reads the table after <c>REFRESH</c>. A test that saw no breaker trip proves
 ///     nothing and is skipped with that reason instead of passing.
 /// </remarks>
+// Stress test (AB#8679/AB#8680): own small-heap CrateDB, minutes of load. Not in the CI integration step
+// (filter Category!=Stress); runs in the octo-construction-kit-engine-mongodb-Performance pipeline.
+[Trait("Category", "Stress")]
 [Collection(CrateMemoryPressureCollection.Name)]
 public class ArchiveWriteUnderMemoryPressureIntegrationTests(CrateMemoryPressureFixture fixture)
 {

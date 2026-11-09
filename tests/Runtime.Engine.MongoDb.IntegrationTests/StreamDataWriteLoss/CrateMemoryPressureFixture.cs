@@ -17,7 +17,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.StreamDataWrit
 ///     A CrateDB with a small heap whose query circuit breaker the tests tighten (AB#8679), so that parallel multi-row archive
 ///     writes trip the breaker. CrateDB then ends the affected shard requests and answers the statement without an
 ///     error; the tests prove the client notices it. A container of its own: the setting would make every other test
-///     of a shared CrateDB lose rows.
+///     of a shared CrateDB lose rows. Only the stress tests (trait <c>Category=Stress</c>) use it, so the CI integration step
+///     (<c>Category!=Stress</c>) never starts the container.
 /// </summary>
 public sealed class CrateMemoryPressureFixture : IAsyncLifetime
 {

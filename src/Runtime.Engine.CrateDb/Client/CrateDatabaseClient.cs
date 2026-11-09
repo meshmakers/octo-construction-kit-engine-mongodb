@@ -292,43 +292,14 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
                     batch[i] = group.Indexes[offset + i];
                 }
 
-                skipped.AddRange(await WriteSubBatchAsync(batch));
-            }
-
-            // One sub-batch as one statement (AB#8679): rows CrateDB did not write are written once more, then the
-            // write fails. The rows of the statement are positions in `rows`.
-            async Task<IReadOnlyList<SkippedArchiveRow>> WriteSubBatchAsync(int[] batch)
-            {
-                var first = await ExecuteSubBatchAsync(batch);
-                if (first.Missing.Count == 0)
-                {
-                    return first.Skipped;
-                }
-
-                // Both statements are idempotent upserts: a guarded one decides again on the merged row and answers
-                // the same for a row it did store, an unguarded one writes the same values again. The unguarded
-                // count does not say which rows are missing, so its retry repeats the whole statement.
-                var retryRows = guarded ? first.Missing.ToArray() : batch;
-                _logger.LogWarning(
-                    "CrateDB did not store {Missing} of {Rows} rows of a write to {Table} without reporting an error " +
-                    "(likely a memory circuit breaker); writing them once more.",
-                    first.Missing.Count, batch.Length, qualifiedTable);
-                var retry = await ExecuteSubBatchAsync(retryRows);
-                if (retry.Missing.Count > 0)
-                {
-                    throw new StreamDataWriteIncompleteException(qualifiedTable,
-                        retryRows.Length, retry.Missing.Count,
-                        guarded
-                            ? $"{retry.Missing.Count} rows had no RETURNING row."
-                            : $"CrateDB reported {retryRows.Length - retry.Missing.Count} affected rows for {retryRows.Length} rows sent.");
-                }
-
-                return guarded ? first.Skipped.Concat(retry.Skipped).OrderBy(r => r.Index).ToList() : retry.Skipped;
+                // One sub-batch as one statement; rows CrateDB did not write are written once more, then the write
+                // fails (AB#8679, MissingRowRetry).
+                skipped.AddRange(await MissingRowRetry.WriteAsync(batch, guarded, qualifiedTable, ExecuteSubBatchAsync, _logger));
             }
 
             // Runs one statement over `statementRows` and returns the skipped rows and the missing rows, both as
             // positions in `rows`. For an unguarded statement "missing" is the shortfall of the affected-row count.
-            async Task<(IReadOnlyList<SkippedArchiveRow> Skipped, IReadOnlyList<int> Missing)> ExecuteSubBatchAsync(
+            async Task<MissingRowRetry.StatementOutcome> ExecuteSubBatchAsync(
                 int[] statementRows)
             {
                 var sql = SqlFor(statementRows.Length);
@@ -349,16 +320,15 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
                         var affected = await cmd.ExecuteNonQueryAsync();
                         var expected = statementRows.Select(r => keyOf(rows[r])).Distinct().Count();
                         var shortfall = Math.Max(0, expected - affected);
-                        return ((IReadOnlyList<SkippedArchiveRow>)[],
-                            (IReadOnlyList<int>)statementRows.Take(shortfall).ToArray());
+                        return new MissingRowRetry.StatementOutcome([], statementRows.Take(shortfall).ToArray());
                     }
 
                     var returned = await ReadReturnedRowsAsync(cmd);
                     var sent = statementRows.Select(r => sentRow(rows[r])).ToList();
                     var outcome = ConflictOutcome.Decide(sent, returned, conflictPrecedence!, includeOrigin, windowed);
-                    return ((IReadOnlyList<SkippedArchiveRow>)outcome.Skipped
-                            .Select(o => o with { Index = statementRows[o.Index] }).ToList(),
-                        (IReadOnlyList<int>)outcome.Missing.Select(m => statementRows[m]).ToArray());
+                    return new MissingRowRetry.StatementOutcome(
+                        outcome.Skipped.Select(o => o with { Index = statementRows[o.Index] }).ToList(),
+                        outcome.Missing.Select(m => statementRows[m]).ToArray());
                 });
             }
         }
