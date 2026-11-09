@@ -44,7 +44,7 @@ try {
     $headers = @{ Authorization = "Bearer $($env:SYSTEM_ACCESSTOKEN)" }
 
     $details = "Run <a href=""$runUrl"">$($env:BUILD_BUILDNUMBER)</a> (build $($env:BUILD_BUILDID), reason $reason) on <code>$branch</code> " +
-               "at <code>$commit</code> failed the Category=Performance tests. Open the run's Tests tab for the failed test and its " +
+               "at <code>$commit</code> failed the Category=Performance or Category=Stress tests. Open the run's Tests tab for the failed test and its " +
                'message, and the log of the step "Performance tests" for every measured median / p95 (octo-progress lines). ' +
                'Judge load first: did a release train or many agent builds run at the same time? Budget: decision AB#6930; ' +
                'pipeline and triage: AB#8004, tests/Runtime.Engine.MongoDb.IntegrationTests/README.md.'

@@ -173,12 +173,17 @@ stages:
           #    AB#6930) failed main CI runs 62273/62285/62304 on agent load alone and a red main
           #    CI blocks the engine cascade and the train. They run in the separate, non-gating
           #    nightly pipeline azure-pipelines-performance.yml instead.
+          #  - "&Category!=Stress" (AB#8679/AB#8680): the memory-pressure stress tests (trait Category=Stress,
+          #    StreamDataWriteLoss/*UnderMemoryPressureIntegrationTests with their own small-heap CrateDB) took a
+          #    local full run from ~13 to more than 22 minutes. They run in the same nightly pipeline; the
+          #    shortfall detection and retry they prove stay covered here by fast tests (MissingRowRetryTests,
+          #    ArchiveWriteShortfallIntegrationTests, RollupShortfallIntegrationTests).
           - task: DotNetCoreCLI@2
             displayName: 'Test'
             timeoutInMinutes: 50
             inputs:
               command: 'test'
-              arguments: '--configuration $(buildConfiguration) --no-build /p:OctoNugetPrivateServer=$(nugetPrivateServer) --filter "Category!=Performance" --blame-hang --blame-hang-timeout 15m --blame-hang-dump-type none'
+              arguments: '--configuration $(buildConfiguration) --no-build /p:OctoNugetPrivateServer=$(nugetPrivateServer) --filter "Category!=Performance&Category!=Stress" --blame-hang --blame-hang-timeout 15m --blame-hang-dump-type none'
               projects: |
                 **/*Tests.csproj
               testRunTitle: 'CI'

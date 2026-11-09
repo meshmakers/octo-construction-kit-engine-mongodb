@@ -76,13 +76,46 @@ dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL --filter "Ca
 OCTO_TEST_INTERFACE_QUERY_ENTITIES=1000000 dotnet test tests/Runtime.Engine.MongoDb.IntegrationTests -c DebugL --filter "Category=Performance"
 
 # everything except them (what the CI runs)
-dotnet test Octo.ConstructionKit.Engine.MongoDb.sln -c DebugL --filter "Category!=Performance"
+dotnet test Octo.ConstructionKit.Engine.MongoDb.sln -c DebugL --filter "Category!=Performance&Category!=Stress"
 
 # the xUnit v3 executable directly
 dotnet tests/Runtime.Engine.MongoDb.IntegrationTests/bin/DebugL/net10.0/Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.dll -trait "Category=Performance"
 ```
 
 Numbers measured on a developer machine: repository `CLAUDE.md`, section *Interface query*.
+
+## Stress tests (`Category=Stress`, AB#8679 / AB#8680)
+
+Tests that put a component under real load for minutes carry `[Trait("Category", "Stress")]`. Today that is the
+`StreamDataWriteLoss` memory-pressure pair with its own CrateDB (512 MB heap, query breaker set per test,
+`CrateMemoryPressureFixture`):
+
+| Test | Proves | Fast coverage in the CI |
+|---|---|---|
+| `ArchiveWriteUnderMemoryPressureIntegrationTests` | guarded and unguarded archive writes store what they report or throw `StreamDataWriteIncompleteException` (AB#8679) | `MissingRowRetryTests`, `ConflictOutcomeTests` (unit), `StreamDataWriteLoss/ArchiveWriteShortfallIntegrationTests` (a `CHECK` constraint makes CrateDB drop rows without an error, < 1 s) |
+| `RollupUnderMemoryPressureIntegrationTests` | forward aggregation and recompute write every row or fail loudly; a failed recompute keeps the previous generation (AB#8680) | `RollupSourceGenerationReadTests`, `CrateDbArchiveRecomputeExecutorTests` (unit), `StreamDataWriteLoss/RollupShortfallIntegrationTests` (a wrapped client deletes rows after the statement, < 1 s each) |
+
+Decision (Reimar, 2026-11-09): stress tests do not belong in the integration suite. They took a local full run from about
+13 to more than 22 minutes. The CI Test step (`azure-pipelines.yml`) runs with `--filter "Category!=Performance&Category!=Stress"`;
+the stress tests run in the pipeline `octo-construction-kit-engine-mongodb-Performance` together with the budget tests
+(`--filter "Category=Performance|Category=Stress"`, nightly 03:30 UTC and on demand). Unlike a budget breach, a red stress
+test is a correctness finding: the write lost rows silently or the recompute flipped to an incomplete generation. A
+stress test that saw no breaker trip is skipped with that reason, it never passes without proving anything.
+
+Run them locally (Docker running, solution built in DebugL):
+
+```bash
+# only the stress tests
+dotnet tests/Runtime.Engine.MongoDb.IntegrationTests/bin/DebugL/net10.0/Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.dll -trait "Category=Stress"
+
+# what the CI runs (without performance and stress tests)
+dotnet tests/Runtime.Engine.MongoDb.IntegrationTests/bin/DebugL/net10.0/Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.dll -trait- "Category=Performance" -trait- "Category=Stress"
+dotnet test Octo.ConstructionKit.Engine.MongoDb.sln -c DebugL --filter "Category!=Performance&Category!=Stress"
+```
+
+A new test belongs in `Stress` when it needs sustained load (parallel writers, a tightened breaker, large data) to show its
+effect. Keep a fast test of the same rule in the CI that produces the condition on purpose (an injected client, a SQL
+constraint), so a regression is caught by every PR and not only overnight.
 
 ### Adding a test that asserts a timing budget
 

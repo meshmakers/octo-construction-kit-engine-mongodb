@@ -185,6 +185,15 @@ cascade. Correctness timeouts with a wide margin (`RepositoryDistributedLockServ
 `StagingCopyIntegrationTests` 30 s, the orchestrator tick waits, `TenantUpgradeGuardTests` 2 s for 100 in-memory models) stay in
 the CI. Local run, triage and the classification rule: `tests/Runtime.Engine.MongoDb.IntegrationTests/README.md`.
 
+**Stress tests are not in the CI either (AB#8679/AB#8680).** Trait `[Trait("Category", "Stress")]`: the
+`StreamDataWriteLoss/*UnderMemoryPressureIntegrationTests` with their own small-heap CrateDB (`CrateMemoryPressureFixture`).
+They took a local full run from ~13 to more than 22 minutes (decision Reimar 2026-11-09: stress tests do not belong in the
+integration suite). The CI filter is `Category!=Performance&Category!=Stress`; the pipeline
+`octo-construction-kit-engine-mongodb-Performance` runs `Category=Performance|Category=Stress`. Locally:
+`dotnet tests/Runtime.Engine.MongoDb.IntegrationTests/bin/DebugL/net10.0/Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.dll -trait "Category=Stress"`.
+The rules they prove stay in the CI as fast tests that produce the shortfall on purpose: `MissingRowRetryTests`,
+`StreamDataWriteLoss/ArchiveWriteShortfallIntegrationTests`, `StreamDataWriteLoss/RollupShortfallIntegrationTests`.
+
 ## Tenant Registry vs. Tenant Hierarchy (AB#5025)
 
 The system tenant's database doubles as the **platform-wide routing registry**: every tenant of
@@ -1249,9 +1258,11 @@ CrateDB). Write-up: `docs/streamdata-archive-concept.md` → *Write result*.
 of a multi-row INSERT and answers **without an error**. A guarded statement then lacks the `RETURNING` rows of the dropped rows
 (`ConflictOutcome.Decide` reports them as `Missing`, never as a skip: an upsert returns a row for every row it processed), an
 unguarded statement reports fewer affected rows than distinct keys sent. `CrateDatabaseClient.InsertGroupedAsync` writes the
-missing rows once more (guarded: those rows, unguarded: the statement) and then throws `StreamDataWriteIncompleteException`
+missing rows once more (`MissingRowRetry`) (guarded: those rows, unguarded: the statement) and then throws `StreamDataWriteIncompleteException`
 (archive table, rows sent / missing). It is not a contracts `StreamDataException` on purpose: the asset repository maps that to
-400. Rules: never turn a missing `RETURNING` row back into a skip reason, never catch the exception into a success. Test:
+400. Rules: never turn a missing `RETURNING` row back into a skip reason, never catch the exception into a success. Tests:
+`MissingRowRetryTests` (unit), `StreamDataWriteLoss/ArchiveWriteShortfallIntegrationTests` (CI, < 1 s: a `CHECK` constraint makes
+CrateDB drop rows of a multi-row INSERT without an error, the same signature), and the stress test (`Category=Stress`, not in the CI)
 `StreamDataWriteLoss/ArchiveWriteUnderMemoryPressureIntegrationTests` (own CrateDB container, 512 MB heap, query breaker set per
 test: guarded 25 %, unguarded 5 %; skipped with that reason if the breaker never trips; ~15 s; red without the check).
 **The rollup statements check their rows too (AB#8680).** The forward aggregation, the recompute's staging aggregation (both
@@ -1267,7 +1278,9 @@ the aggregations reported, rows of the new generation in the live range >= stage
 pointer stays on the previous generation, the staging stays until the next run clears it, and the rows already copied are
 leftovers the next run's step 0 removes. A shortfall under a source pointer that moved is not a loss: the bucket is aggregated
 again (`SamePointers`). A repeated aggregation row that already existed takes the conflict branch and is flagged `was_updated`.
-Test: `StreamDataWriteLoss/RollupUnderMemoryPressureIntegrationTests` (same container, query breaker 15 %, 6 rollups of one raw
+Tests: `StreamDataWriteLoss/RollupShortfallIntegrationTests` (CI, < 1 s each: a wrapped client deletes rows after the statement and
+reports the count without them; forward once / always, staging once, copy once / always) and the stress test (`Category=Stress`,
+not in the CI) `StreamDataWriteLoss/RollupUnderMemoryPressureIntegrationTests` (same container, query breaker 15 %, 6 rollups of one raw
 source with 20,000 entities in parallel; the recompute flipped to an incomplete generation without the check; the forward
 aggregation did not lose rows silently in the measured runs, only loud breaker errors). **Not only the query breaker:** CrateDB's
 parent breaker (`indices.breaker.total`, 95 % of the heap, compared with the real heap usage) refuses an upsert batch the same way.
