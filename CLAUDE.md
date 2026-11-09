@@ -1270,15 +1270,7 @@ automated deliveries:** a partial re-delivery no longer clears the columns it di
   `CrateDatabaseClient` (that is exactly the old defect); the import path fills every column on purpose.
 - `ArchiveColumnSets.Group` splits a batch by named column set (one statement shape per set, order kept per row key);
   `BuildRawInsertSql` / `BuildTimeRangeInsertSql` take the INSERT list and `updatedColumnNames` separately. Ranking
-  columns of the conflict precedence are always inserted and only replaced when named.
-- **Every point sends every ranking column** (option C, decided by Odin 2026-11-09): on an archive whose
-  `ConflictPrecedence` has column keys, a point (raw or time-range, automated or manual) that does not name each of them
-  (`$Origin` excluded, `null` allowed) refuses the whole batch before anything is read or written:
-  `ArchiveRankingColumnValidator`, `ArgumentException` naming point and missing columns (asset repository: 400).
-  **Behaviour change for pipelines:** a writer that leaves out a ranking column fails now. Before, such a point that won
-  on an earlier key was misreported (automated: skipped; manual: `ManualStreamDataNotAppliedException`) although the
-  row was written. Do not "fix" it by filling the missing key with NULL or judging it on the merged row; both were
-  rejected (`docs/streamdata-archive-concept.md`, *Partial delivery*).
+  columns of the conflict precedence are always inserted (bound NULL when not named) and only replaced when named.
 - No column of an upsert relies on a constant DEFAULT (AB#6647): user columns have none, `was_updated` stays a literal.
 - Computed columns at ingest are evaluated on the **merged row** (decided by Reimar 2026-11-09): left out when the
   point names none of the columns the formula reads (`ComputedColumnPlanItem.ReferencedColumns`,
@@ -1290,11 +1282,8 @@ automated deliveries:** a partial re-delivery no longer clears the columns it di
   same key in between can be missed. Backfill, repair and rollup evaluation are unchanged.
 
 Write-up: `docs/streamdata-archive-concept.md` → *Partial delivery*. Tests: `PartialDeliverySqlTests`, `StoredRowLookupTests`,
-`CrateDbStreamDataComputedColumnIngestTests` (AB#8622 cases), `ArchiveRankingColumnValidatorTests`,
-`StreamDataOrigin/PartialDeliveryIntegrationTests`,
-`StreamDataOrigin/ComputedColumnPartialDeliveryIntegrationTests` (merged row on raw and time-range, rollup over the column),
-`StreamDataOrigin/PartialDeliveryOriginPrecedenceIntegrationTests` (`$Origin` ignored / after the quality / not named,
-partial points, refusals of points without ranking columns).
+`CrateDbStreamDataComputedColumnIngestTests` (AB#8622 cases), `StreamDataOrigin/PartialDeliveryIntegrationTests`,
+`StreamDataOrigin/ComputedColumnPartialDeliveryIntegrationTests` (merged row on raw and time-range, rollup over the column).
 
 ### Declared-vs-physical Column Reconciliation
 

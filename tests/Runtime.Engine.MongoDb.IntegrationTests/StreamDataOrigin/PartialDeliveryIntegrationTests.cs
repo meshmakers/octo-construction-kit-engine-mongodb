@@ -216,20 +216,17 @@ public class PartialDeliveryIntegrationTests(CrateStagingCopyFixture fixture)
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task APrecedenceKeyTheDeliveryDoesNotName_RefusesTheWrite_AndAnExplicitNullKeyLoses(bool timeRange)
+    public async Task APrecedenceKeyTheDeliveryDoesNotName_CountsAsNull_AndTheGuardKeepsTheStoredRow(bool timeRange)
     {
-        // AB#8622 option C: a point on a guarded archive sends every ranking column, otherwise nothing is written.
-        // An explicit null is a stated rank and never beats a stored value (AB#5247).
+        // The guard reads EXCLUDED."quality": the key column is always in the INSERT list, bound NULL when not named.
+        // An incoming NULL key never beats a stored value (AB#5247), so the stored row and its quality stay.
         var archive = await CreateArchiveAsync(timeRange, [new ArchiveConflictKey("Quality", ConflictKeyOrder.LowerWins)]);
         var meter = OctoObjectId.GenerateNewId();
         await WriteAsync(archive, new Delivery(meter, 0, Full(100, 230.5, 2)));
 
-        var refused = await Assert.ThrowsAsync<ArgumentException>(() =>
-            WriteAsync(archive, new Delivery(meter, 0, new() { ["MeterReading"] = 150d })));
-        var lost = await WriteAsync(archive, new Delivery(meter, 0, new() { ["MeterReading"] = 155d, ["Quality"] = null }));
+        var lost = await WriteAsync(archive, new Delivery(meter, 0, new() { ["MeterReading"] = 150d }));
         var won = await WriteAsync(archive, new Delivery(meter, 0, new() { ["MeterReading"] = 160d, ["Quality"] = 1 }));
 
-        Assert.Contains("does not send 'Quality'", refused.Message);
         Assert.Equal(StreamDataSkipReason.LowerPrecedence, Assert.Single(lost.Skipped).Reason);
         Assert.Equal(1, won.Stored);
         AssertRow(await RowAsync(archive, meter), 160, 230.5, 1);
