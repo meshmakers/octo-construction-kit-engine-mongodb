@@ -342,6 +342,43 @@ Archive '<rtId>': 1 value(s) do not fit their column, nothing was written: point
 
 A raw point is named by its index in the caller's order, its rtId and its timestamp; a time-range point by its index. Enum columns take the key or the member name (case-insensitive) and store the key. Points of another CK type and keys that are no ingested column are not checked (the write skips them anyway). The raw path checks the attribute keys as it writes them (no record expansion); the time-range path expands records first, as it does for the write. The check applies to manual and automated points alike.
 
+### Partial delivery — absent keeps, null clears (AB#8622)
+
+`InsertAsync` (raw) and `InsertTimeRangeAsync` update **only the columns a point names**. "Named" means the point's
+attribute dictionary has the key, whatever its value:
+
+| The point … | New row | Existing row (the write wins the conflict guard) |
+|---|---|---|
+| names the column with a value | value | value |
+| names the column with `null` | NULL | NULL (cleared) |
+| does not name the column | NULL | **stored value kept** |
+
+Before, every ingested column of the archive was bound and an unnamed one went in as NULL, so
+`ON CONFLICT … DO UPDATE SET "col" = EXCLUDED."col"` cleared every column a partial re-delivery did not send (silent
+data loss when several sources fill different columns of one archive, AB#5157, or a pipeline delivers part of the
+columns).
+
+- **How.** `ArchiveColumnSets.Group` splits a batch by the set of named columns; each group is one statement shape
+  whose `INSERT` list and `DO UPDATE SET` list name exactly those columns (`CrateDatabaseClient.InsertGroupedAsync`).
+  A uniform batch (the usual pipeline delivery) is one group, so the statement count is unchanged. Two points of the
+  same row key with different column sets run in the order they were sent (a new segment starts where a key repeats
+  with another set).
+- **Ranking columns** of the conflict precedence are always in the `INSERT` list, because the guard reads
+  `EXCLUDED."k"`; when the point does not name one it is bound NULL and **not** replaced. An absent key therefore ranks
+  like an incoming NULL: it never beats a stored value (§ *Conflict precedence*). The origin columns are platform
+  columns and always written.
+- **Constant DEFAULTs (AB#6647).** User columns are nullable without a DEFAULT, so leaving one out of the `INSERT` list
+  stores NULL, never a default. `was_updated` is still named with the literal `FALSE` in every row of every statement.
+- **Computed columns** are not sent by anyone. At ingest a computed column is left out of the row (stored value kept)
+  when the point names **none** of the columns its formula reads; a formula without column references is always
+  evaluated. When the point names some of them, the formula is evaluated as before (an unnamed operand is NaN,
+  AB#8060) and its result replaces the stored value: the formula does not see the stored operands.
+- **Unchanged:** manual protection (`ManualValueProtected`), the write result (`StreamDataWriteResult`), the rollup
+  dirty windows, and the import path (`ImportRowsAsync` names every column of every row).
+
+Tests: `PartialDeliverySqlTests`, the AB#8622 cases of `CrateDbStreamDataComputedColumnIngestTests` (unit),
+`StreamDataOrigin/PartialDeliveryIntegrationTests` (real CrateDB, raw and time-range).
+
 ### Time semantics
 
 - **Canonical timezone is UTC.** Incoming timestamps with offset are normalized to UTC before insert. Naive `DateTime` values (no offset) are interpreted as UTC, never as local time.

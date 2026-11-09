@@ -1259,6 +1259,26 @@ text in a Double column is now refused up front with this message instead of bei
   the recomputed hourly bucket holds the corrected value, replaced, not added; a mismatched batch stores nothing).
 - Unit tests: `ArchiveWriteValueValidatorRawTests`. Write-up: `docs/streamdata-archive-concept.md` → *Value check before the write*.
 
+### Partial delivery: a column the point does not name keeps its value (AB#8622)
+
+**Changelog entry (this repository has no CHANGELOG file; this is the entry).** AB#8622: raw and time-range writes
+update only the columns a point names. A column not named keeps its stored value, a column named with `null` is
+cleared, a new row stores NULL for every column not named (decided by Reimar 2026-11-09). **Behaviour change for
+automated deliveries:** a partial re-delivery no longer clears the columns it did not send. Rules to keep:
+
+- "Named" = the key is in the point's attribute dictionary. Never fill missing keys with `null` on the way to
+  `CrateDatabaseClient` (that is exactly the old defect); the import path fills every column on purpose.
+- `ArchiveColumnSets.Group` splits a batch by named column set (one statement shape per set, order kept per row key);
+  `BuildRawInsertSql` / `BuildTimeRangeInsertSql` take the INSERT list and `updatedColumnNames` separately. Ranking
+  columns of the conflict precedence are always inserted (bound NULL when not named) and only replaced when named.
+- No column of an upsert relies on a constant DEFAULT (AB#6647): user columns have none, `was_updated` stays a literal.
+- Computed columns at ingest: left out when the point names none of the columns the formula reads
+  (`ComputedColumnPlanItem.ReferencedColumns`, `ApplyComputedColumns(..., ingest: true)`); backfill, repair and rollup
+  evaluation are unchanged.
+
+Write-up: `docs/streamdata-archive-concept.md` → *Partial delivery*. Tests: `PartialDeliverySqlTests`,
+`CrateDbStreamDataComputedColumnIngestTests` (AB#8622 cases), `StreamDataOrigin/PartialDeliveryIntegrationTests`.
+
 ### Declared-vs-physical Column Reconciliation
 
 Archive tables are provisioned with `CREATE TABLE IF NOT EXISTS`, so on an **already-activated**

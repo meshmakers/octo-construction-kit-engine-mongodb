@@ -683,7 +683,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             kv => ColumnNameMapper.PathToColumnName(kv.Key),
             kv => kv.Value,
             StringComparer.Ordinal);
-        ApplyComputedColumns(attributes, computedPlan);
+        ApplyComputedColumns(attributes, computedPlan, ingest: true);
         return new Dtos.TimeRangeDataPointDto(attributes)
         {
             RtId = point.RtId,
@@ -4313,10 +4313,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// declared result type the double result is cast back to (concept §5). <c>Operands</c> are the
     /// physical column names a formula may reference; one a row does not carry (or carries as NULL)
     /// is bound as NaN, so a formula can handle it with <c>coalesce</c> / <c>isnull</c> or an
-    /// <c>if</c> branch instead of failing as a whole (AB#8060).
+    /// <c>if</c> branch instead of failing as a whole (AB#8060). <c>ReferencedColumns</c> (AB#8622) are the
+    /// columns the formula actually names, operands and other computed columns alike; <c>null</c> means
+    /// "evaluate always" (backfill and repair, which read whole stored rows).
     /// </summary>
     private readonly record struct ComputedColumnPlanItem(
-        string ColumnName, string Formula, FormulaResultType ResultType, IReadOnlyList<string> Operands);
+        string ColumnName, string Formula, FormulaResultType ResultType, IReadOnlyList<string> Operands,
+        IReadOnlyList<string>? ReferencedColumns = null);
 
     /// <summary>
     /// Builds the per-archive computed-column evaluation plan in dependency order: a computed column
@@ -4356,6 +4359,20 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         if (items is null)
         {
             return Array.Empty<ComputedColumnPlanItem>();
+        }
+
+        // AB#8622: the columns each formula names, so ingest can leave a computed column out of a delivery that
+        // names none of its inputs (ApplyComputedColumns).
+        var candidates = operands!.Concat(items.Select(i => i.ColumnName)).Distinct(StringComparer.Ordinal).ToArray();
+        for (var i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            items[i] = item with
+            {
+                ReferencedColumns = candidates
+                    .Where(cn => !string.Equals(cn, item.ColumnName, StringComparison.Ordinal) && ReferencesToken(item.Formula, cn))
+                    .ToArray()
+            };
         }
 
         return items.Count <= 1 ? items : TopologicalSort(items);
@@ -4457,8 +4474,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// its page and then fails the job. Before, prod-1 stored NULL for rows whose evaluation ran out of memory.
     /// </para>
     /// </summary>
+    /// <param name="attributes">The row; the results are written into it.</param>
+    /// <param name="plan">The computed columns in evaluation order.</param>
+    /// <param name="ingest">
+    /// <c>true</c> for a delivered point (AB#8622): a computed column whose formula reads none of the columns the
+    /// point names is left out. The backfill, repair and rollup paths read whole stored rows and pass <c>false</c>.
+    /// </param>
     private void ApplyComputedColumns(Dictionary<string, object?> attributes,
-        IReadOnlyList<ComputedColumnPlanItem> plan)
+        IReadOnlyList<ComputedColumnPlanItem> plan, bool ingest = false)
     {
         if (plan.Count == 0)
         {
@@ -4467,6 +4490,14 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         foreach (var item in plan)
         {
+            // AB#8622: a delivery that names none of the columns a formula reads changes none of its inputs, so the
+            // computed column is left out of the row like any column the caller did not send: a stored row keeps
+            // its value, a new row stores NULL. A formula without column references is always evaluated.
+            if (ingest && item.ReferencedColumns is { Count: > 0 } referenced && !referenced.Any(attributes.ContainsKey))
+            {
+                continue;
+            }
+
             object? result;
             try
             {
@@ -4547,7 +4578,7 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         {
             attributes[ColumnNameMapper.PathToColumnName(kvp.Key)] = kvp.Value;
         }
-        ApplyComputedColumns(attributes, computedPlan);
+        ApplyComputedColumns(attributes, computedPlan, ingest: true);
         return new DataPointDto(attributes)
         {
             RtId = point.RtId,

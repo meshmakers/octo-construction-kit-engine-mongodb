@@ -234,4 +234,56 @@ public class CrateDbStreamDataComputedColumnIngestTests
 
         Assert.True(Assert.IsType<bool>(dto.Attributes["ishigh"]));
     }
+
+    // ---- Partial deliveries (AB#8622) -------------------------------------------------------------
+    // A column the point does not name keeps its stored value. A computed column is not sent by anyone; it is
+    // left out of the row when the point names none of the columns its formula reads, so a delivery of another
+    // column does not overwrite it with a value computed from nothing.
+
+    [Fact]
+    public async Task ComputedColumn_PointNamesNoneOfItsOperands_IsLeftOutOfTheRow()
+    {
+        StubArchive(Ing("activePower"), Ing("voltage"), Comp("derived", "activepower * 2", FormulaResultType.Double));
+
+        var dto = await CaptureInsertAsync(Point(new() { ["voltage"] = 230.0 }));
+
+        Assert.False(dto.Attributes.ContainsKey("derived"));
+        Assert.Equal(230.0, dto.Attributes["voltage"]);
+    }
+
+    [Fact]
+    public async Task ComputedColumn_OperandSentAsExplicitNull_IsStillEvaluated()
+    {
+        StubArchive(Ing("activePower"), Ing("voltage"), Comp("derived", "activepower * 2", FormulaResultType.Double));
+
+        var dto = await CaptureInsertAsync(Point(new() { ["activePower"] = null }));
+
+        Assert.True(dto.Attributes.ContainsKey("derived"));
+        Assert.Null(dto.Attributes["derived"]);
+    }
+
+    [Fact]
+    public async Task ComputedColumn_OverAnotherComputedColumn_FollowsItsSource()
+    {
+        StubArchive(Ing("activePower"), Ing("voltage"),
+            Comp("doubled", "activepower * 2", FormulaResultType.Double),
+            Comp("quadrupled", "doubled * 2", FormulaResultType.Double));
+
+        var skipped = await CaptureInsertAsync(Point(new() { ["voltage"] = 230.0 }));
+        var evaluated = await CaptureInsertAsync(Point(new() { ["activePower"] = 1.5 }));
+
+        Assert.False(skipped.Attributes.ContainsKey("doubled"));
+        Assert.False(skipped.Attributes.ContainsKey("quadrupled"));
+        Assert.Equal(6.0, Assert.IsType<double>(evaluated.Attributes["quadrupled"]), 10);
+    }
+
+    [Fact]
+    public async Task ComputedColumn_WithoutColumnReferences_IsAlwaysEvaluated()
+    {
+        StubArchive(Ing("activePower"), Comp("constant", "42", FormulaResultType.Double));
+
+        var dto = await CaptureInsertAsync(Point(new() { ["somethingElse"] = 1.0 }));
+
+        Assert.Equal(42.0, Assert.IsType<double>(dto.Attributes["constant"]), 10);
+    }
 }
