@@ -192,6 +192,11 @@ internal static class CkV2KitchenSinkModel
                     TypeId = new CkTypeId("Thing-1"),
                     Derivable = CkDerivableDto.Model,
                     IsAbstract = true,
+                    // AB#8574: a declared write restriction (both lists) must survive import -> Mongo -> read-back.
+                    WriteAccess = new CkTypeWriteAccessDto
+                    {
+                        Principals = [CkWritePrincipals.Interactive], Channels = ["KitchenSink.Tools/Writer"]
+                    },
                     DerivedFromCkTypeId = new CkId<CkTypeId>(systemId, new CkTypeId("Entity-1")),
                     Implements = [Interface("Named")],
                     Attributes =

@@ -454,6 +454,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
                 Derivable = t.Derivable,
                 // CK v2 (AB#5669): the declared methods, embedded verbatim.
                 Methods = t.Methods,
+                // AB#8574: the declared write restriction, embedded verbatim; null when none.
+                WriteAccess = t.WriteAccess,
                 // AB#7125: the declared indexes; null when none, matching the compiled DTO. Without them the installed
                 // baseline of the upgrade guard has no indexes and every index of the new version looks ADDED.
                 Indexes = IndexesOf(t.Indexes),
@@ -1812,6 +1814,8 @@ public class DatabaseCkModelRepository : IDatabaseCkModelRepository, IRepository
                 OwnerAttributePath = ckTypeDto.OwnerAttributePath,
                 // CK v2 (AB#5669): declared methods, embedded verbatim; null keeps the pre-v2 document shape.
                 Methods = ckTypeDto.Methods is { Count: > 0 } ? ckTypeDto.Methods : null,
+                // AB#8574: declared write restriction, embedded verbatim; null keeps the document shape.
+                WriteAccess = ckTypeDto.WriteAccess,
                 // CK v2 Phase 1 (AB#5915)
                 Visibility = ckTypeDto.Visibility,
                 Derivable = ckTypeDto.Derivable,
