@@ -335,7 +335,7 @@ Tests: `StreamDataOrigin/RollupManualColumnsIntegrationTests` (real CrateDB), `A
 | Statement | Sign of a dropped request |
 |---|---|
 | guarded (with `RETURNING`) | a sent row without a returned row — an upsert returns a row for every row it processed, a lost update included, so this is never a precedence decision |
-| unguarded | fewer affected rows than distinct keys sent (an upsert counts one per inserted or updated row) |
+| unguarded | fewer affected rows than rows sent (an upsert counts one per row it processed, a key repeated in the statement once per row; row keys compare timestamps at millisecond precision) |
 
 The rows CrateDB missed are written once more (guarded: only those rows; unguarded: the whole statement, the count does not say which rows are missing). Both are idempotent upserts: the guard decides again on the merged row, last-write-wins writes the same values again. When rows are still missing, the write throws `StreamDataWriteIncompleteException` (archive table, rows sent, rows missing, the likely cause); the rows of earlier statements of the same call may be stored. Callers treat it as a failure: the asset repository answers 503 with the message, a pipeline node fails, the archive import job and the row restore fail. Sending the whole write again is safe. Before AB#8679 a guarded write reported the dropped rows as `LowerPrecedence` and an unguarded write reported nothing. Test: `StreamDataWriteLoss/ArchiveWriteUnderMemoryPressureIntegrationTests` (CrateDB with a 512 MB heap and a tightened query breaker; red without the check).
 

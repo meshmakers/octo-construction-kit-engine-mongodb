@@ -1257,7 +1257,7 @@ CrateDB). Write-up: `docs/streamdata-archive-concept.md` → *Write result*.
 **A dropped shard request is a failed write (AB#8679).** When CrateDB's memory circuit breaker trips it ends a shard request
 of a multi-row INSERT and answers **without an error**. A guarded statement then lacks the `RETURNING` rows of the dropped rows
 (`ConflictOutcome.Decide` reports them as `Missing`, never as a skip: an upsert returns a row for every row it processed), an
-unguarded statement reports fewer affected rows than distinct keys sent. `CrateDatabaseClient.InsertGroupedAsync` writes the
+unguarded statement reports fewer affected rows than rows sent (CrateDB counts a key repeated in one statement once per row, also two points less than 1 ms apart that are one stored row; `ArchiveWriteRepeatedKeyIntegrationTests`). `CrateDatabaseClient.InsertGroupedAsync` writes the
 missing rows once more (`MissingRowRetry`) (guarded: those rows, unguarded: the statement) and then throws `StreamDataWriteIncompleteException`
 (archive table, rows sent / missing). It is not a contracts `StreamDataException` on purpose: the asset repository maps that to
 400. Rules: never turn a missing `RETURNING` row back into a skip reason, never catch the exception into a success. Tests:

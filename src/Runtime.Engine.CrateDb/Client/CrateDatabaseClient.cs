@@ -234,12 +234,20 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         return await InsertGroupedAsync(tenantId, qualifiedTable, d, userColumnNames, conflictPrecedence,
             windowed: false, includeOrigin: true,
             fixedParametersPerRow: 4 + ArchiveRowOriginColumns.Names.Count,
-            keyOf: x => (x.Timestamp, x.RtId?.ToString(), x.CkTypeId?.ToString()),
+            keyOf: x => RowKey(x.RtId, x.CkTypeId, x.Timestamp, null),
             buildSql: (insert, updated, rows) => BuildRawInsertSql(qualifiedTable, insert, conflictPrecedence, rows, updated),
             bind: AddInsertParameters,
             sentRow: x => new ConflictOutcome.SentRow(x.RtId?.ToString(), x.CkTypeId?.ToString(),
                 x.Timestamp, null, x.Attributes ?? new Dictionary<string, object?>(), x.Origin));
     }
+
+    /// <summary>
+    /// The primary key of an archive row as CrateDB compares it (AB#8679): entity, CK type and the timestamp or window
+    /// at millisecond precision, the precision of a CrateDB <c>TIMESTAMP</c>. Two rows less than a millisecond apart
+    /// are one row in CrateDB and therefore one key here, like the keys <see cref="ConflictOutcome" /> matches.
+    /// </summary>
+    internal static string RowKey(object? rtId, object? ckTypeId, DateTime start, DateTime? end)
+        => new StoredRowKey(rtId?.ToString() ?? "", ckTypeId?.ToString() ?? "", start, end).Value;
 
     /// <summary>
     /// Writes the rows of one insert batch, one statement shape per set of named user columns (AB#8622,
@@ -252,7 +260,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     private async Task<IReadOnlyList<SkippedArchiveRow>> InsertGroupedAsync<T>(
         string tenantId, string qualifiedTable, T[] rows, IReadOnlyList<string> userColumnNames,
         IReadOnlyList<ArchiveConflictKey>? conflictPrecedence, bool windowed, bool includeOrigin,
-        int fixedParametersPerRow, Func<T, object> keyOf,
+        int fixedParametersPerRow, Func<T, string> keyOf,
         Func<IReadOnlyList<string>, IReadOnlyList<string>, int, string> buildSql,
         Action<NpgsqlParameterCollection, T, IReadOnlyList<string>> bind,
         Func<T, ConflictOutcome.SentRow> sentRow)
@@ -315,11 +323,11 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
                     if (!guarded)
                     {
                         // AB#8679: an upsert counts one affected row per row it inserted or updated; fewer means CrateDB
-                        // dropped part of the statement. A key named twice in one statement can count once, so the
-                        // count is compared with the distinct keys.
+                        // dropped part of the statement. CrateDB counts a key named twice in one statement once per
+                        // row sent, also for two points less than a millisecond apart (one stored row), so the count
+                        // is compared with the rows sent (ArchiveWriteRepeatedKeyIntegrationTests).
                         var affected = await cmd.ExecuteNonQueryAsync();
-                        var expected = statementRows.Select(r => keyOf(rows[r])).Distinct().Count();
-                        var shortfall = Math.Max(0, expected - affected);
+                        var shortfall = Math.Max(0, statementRows.Length - affected);
                         return new MissingRowRetry.StatementOutcome([], statementRows.Take(shortfall).ToArray());
                     }
 
@@ -471,7 +479,7 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         return await InsertGroupedAsync(tenantId, qualifiedTable, d, userColumnNames, conflictPrecedence,
             windowed: true, includeOrigin,
             fixedParametersPerRow: 5 + (generationTracked ? 0 : ArchiveRowOriginColumns.Names.Count),
-            keyOf: x => (x.From, x.To, x.RtId?.ToString(), x.CkTypeId?.ToString()),
+            keyOf: x => RowKey(x.RtId, x.CkTypeId, x.From, x.To),
             buildSql: (insert, updated, rows) => BuildTimeRangeInsertSql(qualifiedTable, insert, generationTracked,
                 conflictPrecedence, rows, updated),
             bind: (parameters, dto, columns) => AddTimeRangeInsertParameters(parameters, dto, columns, includeOrigin),

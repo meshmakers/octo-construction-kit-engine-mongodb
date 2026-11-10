@@ -42,7 +42,10 @@ internal static class ArchiveColumnSets
     /// </summary>
     /// <param name="count">Rows in the batch.</param>
     /// <param name="attributesOf">The attribute dictionary of row <c>i</c> (physical column names as keys).</param>
-    /// <param name="keyOf">The row key of row <c>i</c> (the conflict target); only read for mixed batches.</param>
+    /// <param name="keyOf">
+    /// The row key of row <c>i</c> (the conflict target) as CrateDB compares it, timestamps at millisecond precision
+    /// (AB#8679); only read for mixed batches.
+    /// </param>
     /// <param name="userColumnNames">The user columns of the archive, in archive order.</param>
     /// <param name="conflictPrecedence">The archive's conflict precedence; its column keys are always inserted.</param>
     public static IReadOnlyList<ArchiveColumnSetGroup> Group(
