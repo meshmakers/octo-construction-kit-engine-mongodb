@@ -560,6 +560,35 @@ public class CkMetaModelLegacyDocumentTests
             Access = access
         };
 
+    [Fact]
+    public void TypeWriteAccess_RoundTrips_AndAnUndeclaredBlockIsOmitted()
+    {
+        // AB#8574: a declared block is persisted verbatim, including a block with only one of the lists ...
+        var restricted = NewType(null);
+        restricted.WriteAccess = new CkTypeWriteAccessDto
+        {
+            Principals = [CkWritePrincipals.Interactive, CkWritePrincipals.Client], Channels = ["System.Ai/KnowledgeTools"]
+        };
+        var document = restricted.ToBsonDocument();
+        Assert.Equal("Interactive", document["writeAccess"]["principals"][0].AsString);
+        Assert.Equal("System.Ai/KnowledgeTools", document["writeAccess"]["channels"][0].AsString);
+
+        var readBack = BsonSerializer.Deserialize<CkType>(document);
+        Assert.Equal([CkWritePrincipals.Interactive, CkWritePrincipals.Client], readBack.WriteAccess!.Principals!);
+        Assert.Equal(["System.Ai/KnowledgeTools"], readBack.WriteAccess.Channels!);
+
+        var channelOnly = NewType(null);
+        channelOnly.WriteAccess = new CkTypeWriteAccessDto { Channels = ["System.Ai/KnowledgeTools"] };
+        var channelOnlyDocument = channelOnly.ToBsonDocument();
+        Assert.DoesNotContain("principals", channelOnlyDocument["writeAccess"].AsBsonDocument.Names);
+        Assert.Null(BsonSerializer.Deserialize<CkType>(channelOnlyDocument).WriteAccess!.Principals);
+
+        // ... and a type without the block keeps the document shape (no element), reading back as unrestricted.
+        var plain = NewType(null).ToBsonDocument();
+        Assert.DoesNotContain("writeAccess", plain.Names);
+        Assert.Null(BsonSerializer.Deserialize<CkType>(plain).WriteAccess);
+    }
+
     private static CkType NewType(List<CkMethodDto>? methods) =>
         new()
         {

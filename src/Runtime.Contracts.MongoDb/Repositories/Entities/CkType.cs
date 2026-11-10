@@ -80,6 +80,13 @@ public class CkType
     public List<CkMethodDto>? Methods { get; set; }
 
     /// <summary>
+    ///     AB#8574: the write restriction this type DECLARES (<c>writeAccess</c>; inherited blocks are applied by the engine
+    ///     along the base chain). The Contracts DTO is embedded as-is; <c>null</c> (absent from the document) for types
+    ///     without the block, so existing documents keep their shape. Without it a tenant would not enforce the restriction.
+    /// </summary>
+    public CkTypeWriteAccessDto? WriteAccess { get; set; }
+
+    /// <summary>
     ///     Gets or sets a list of defined indexes
     /// </summary>
     public ICollection<CkTypeIndex>? Indexes { get; set; }

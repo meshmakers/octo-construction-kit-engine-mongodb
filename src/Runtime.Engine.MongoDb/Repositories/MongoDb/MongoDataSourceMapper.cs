@@ -200,7 +200,12 @@ public class CkTypeMongoDataSourceMapper : IMongoDataSourceMapper<CkId<CkTypeId>
                 : update.Set(p => p.Methods, document.Methods),
             // CK v2 Phase 1 (AB#5915): Unset when null, so a full update keeps the v1 document shape.
             document.Visibility == null ? update.Unset(p => p.Visibility) : update.Set(p => p.Visibility, document.Visibility),
-            document.Derivable == null ? update.Unset(p => p.Derivable) : update.Set(p => p.Derivable, document.Derivable)
+            document.Derivable == null ? update.Unset(p => p.Derivable) : update.Set(p => p.Derivable, document.Derivable),
+            // AB#8574: Unset when null, so a full update keeps the document shape of an unrestricted type and removes a
+            // block the new model version dropped.
+            document.WriteAccess == null
+                ? update.Unset(p => p.WriteAccess)
+                : update.Set(p => p.WriteAccess, document.WriteAccess)
         ];
 
         return update.Combine(list);

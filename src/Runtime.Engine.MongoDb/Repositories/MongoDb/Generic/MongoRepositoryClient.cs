@@ -683,6 +683,17 @@ public abstract class MongoRepositoryClient : IRepositoryClient
             // CK v2 Phase 1 (AB#5915): absent when undeclared, so v1 documents keep their shape.
             cm.MapMember(c => c.Visibility).SetIgnoreIfNull(true);
             cm.MapMember(c => c.Derivable).SetIgnoreIfNull(true);
+            // AB#8574: absent for types without a write restriction (existing documents keep their shape).
+            cm.MapMember(c => c.WriteAccess).SetIgnoreIfNull(true);
+        });
+
+        BsonClassMap.RegisterClassMap<CkTypeWriteAccessDto>(cm =>
+        {
+            cm.SetIgnoreExtraElements(true);
+            cm.AutoMap();
+
+            cm.MapMember(c => c.Principals).SetIgnoreIfNull(true);
+            cm.MapMember(c => c.Channels).SetIgnoreIfNull(true);
         });
 
         BsonClassMap.RegisterClassMap<CkRecord>(cm =>
