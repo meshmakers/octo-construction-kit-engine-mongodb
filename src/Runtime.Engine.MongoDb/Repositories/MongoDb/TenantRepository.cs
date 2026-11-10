@@ -45,6 +45,8 @@ internal class TenantRepository(
         dataPermissionResolver, auditEventSink, logger), ITenantRepository,
         ISecureSessionFactory
 {
+    private readonly ILogger? _importLookupLogger = logger;
+
     /// <summary>
     ///     Direct access to the Mongo data source for engine-internal maintenance work that needs
     ///     collection-level writes without the ApplyChanges pipeline (e.g. the display-rule sweep).
@@ -89,7 +91,15 @@ internal class TenantRepository(
             }
             catch (ModelValidationException ex)
             {
-                var running = await mongoDbRepositoryDataSource.GetModelsBeingImportedAsync();
+                // The lookups only classify the failure; they must never replace it (like
+                // DatabaseCkModelRepository.MarkIfOtherImportsRunAsync). A failed lookup throws the original
+                // exception unmarked; a failed wait for a running import throws it marked, the import did run.
+                var running = await TryGetModelsBeingImportedAsync();
+                if (running is null)
+                {
+                    throw;
+                }
+
                 if (running.Count == 0)
                 {
                     if (retriedWithoutImport)
@@ -102,14 +112,44 @@ internal class TenantRepository(
                 }
 
                 var remaining = deadline - DateTime.UtcNow;
-                if (remaining <= TimeSpan.Zero ||
-                    !await CkModelImportInProgress.WaitUntilFinishedAsync(mongoDbRepositoryDataSource, _ => true,
-                        remaining))
+                if (remaining <= TimeSpan.Zero || !await TryWaitUntilImportsFinishedAsync(remaining))
                 {
                     CkModelImportInProgress.Mark(ex, running);
                     throw;
                 }
             }
+        }
+    }
+
+    /// <summary>The models being imported, or <c>null</c> when they could not be read (logged).</summary>
+    private async Task<IReadOnlyList<string>?> TryGetModelsBeingImportedAsync()
+    {
+        try
+        {
+            return await mongoDbRepositoryDataSource.GetModelsBeingImportedAsync();
+        }
+        catch (Exception lookupException)
+        {
+            _importLookupLogger?.LogWarning(lookupException,
+                "Could not read the running CK model imports after the CK cache load of tenant {TenantId} failed",
+                TenantId);
+            return null;
+        }
+    }
+
+    /// <summary>Whether the running imports finished within <paramref name="timeout" />; <c>false</c> when the wait failed (logged).</summary>
+    private async Task<bool> TryWaitUntilImportsFinishedAsync(TimeSpan timeout)
+    {
+        try
+        {
+            return await CkModelImportInProgress.WaitUntilFinishedAsync(mongoDbRepositoryDataSource, _ => true, timeout);
+        }
+        catch (Exception waitException)
+        {
+            _importLookupLogger?.LogWarning(waitException,
+                "Could not wait for the running CK model imports after the CK cache load of tenant {TenantId} failed",
+                TenantId);
+            return false;
         }
     }
 
