@@ -51,7 +51,7 @@ internal static class MissingRowRetry
         var retry = await execute(retryRows);
         if (retry.Missing.Count > 0)
         {
-            throw new StreamDataWriteIncompleteException(qualifiedTable,
+            throw StreamDataWriteIncompleteException.AfterRetry(qualifiedTable,
                 retryRows.Length, retry.Missing.Count,
                 guarded
                     ? $"{retry.Missing.Count} rows had no RETURNING row."

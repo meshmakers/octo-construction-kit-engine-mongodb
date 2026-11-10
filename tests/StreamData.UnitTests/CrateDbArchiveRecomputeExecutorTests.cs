@@ -173,6 +173,7 @@ public class CrateDbArchiveRecomputeExecutorTests
         Assert.Equal(1, ex.RowsMissing);
         Assert.Contains("generation 4", ex.Message, StringComparison.Ordinal);
         Assert.Contains("pointer was not flipped", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("also after one retry", ex.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("flip", harness.Crate.Kinds);
         Assert.Equal(new[] { pointer }, harness.Crate.Pointers);
         Assert.Equal(60, harness.Crate.Live.Count(r => r.Generation == 3));
@@ -196,6 +197,32 @@ public class CrateDbArchiveRecomputeExecutorTests
 
         Assert.Equal(harness.LiveTable, ex.QualifiedTable);
         Assert.Equal(1, ex.RowsMissing);
+        // Found by the end-to-end count, which does not retry; the message must not claim a retry.
+        Assert.Contains("live copy count check", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("after one retry", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("flip", harness.Crate.Kinds);
+        Assert.Equal(new[] { pointer }, harness.Crate.Pointers);
+    }
+
+    [Fact]
+    public async Task ARowTheAggregationReportedButDidNotStage_IsFoundBeforeTheCopy_WithoutClaimingARetry()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(5);
+        harness.SeedLive(buckets: 12, series, generation: 3);
+        var pointer = new GenerationRange(StartMs, StartMs + 12 * HourMs, string.Empty, 3);
+        harness.Crate.Pointers.Add(pointer);
+        var lost = new Row(StartMs + 4 * HourMs, 0, series[2]);
+        harness.Crate.DropOnStage = row => row == lost;
+
+        var ex = await Assert.ThrowsAsync<StreamDataWriteIncompleteException>(() => harness.RunAsync(buckets: 12, series));
+
+        Assert.Equal(RollupRecomputeSqlBuilder.StagingTable(Tenant, harness.RollupRtId.ToString()), ex.QualifiedTable);
+        Assert.Equal(60, ex.RowsSent);
+        Assert.Equal(1, ex.RowsMissing);
+        Assert.Contains("staging count check", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("does not retry", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("after one retry", ex.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("flip", harness.Crate.Kinds);
         Assert.Equal(new[] { pointer }, harness.Crate.Pointers);
     }

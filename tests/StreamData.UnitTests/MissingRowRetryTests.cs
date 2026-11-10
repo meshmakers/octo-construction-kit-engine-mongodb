@@ -91,6 +91,7 @@ public class MissingRowRetryTests
         Assert.Equal(2, ex.RowsSent);
         Assert.Equal(1, ex.RowsMissing);
         Assert.Contains("1 rows had no RETURNING row", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("also after one retry", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -105,5 +106,6 @@ public class MissingRowRetryTests
         Assert.Equal(4, ex.RowsSent);
         Assert.Equal(1, ex.RowsMissing);
         Assert.Contains("CrateDB reported 3 affected rows for 4 rows sent", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("also after one retry", ex.Message, StringComparison.Ordinal);
     }
 }

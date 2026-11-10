@@ -204,7 +204,7 @@ internal sealed class RollupSourceBucketAggregator
             return rows;
         }
 
-        throw new StreamDataWriteIncompleteException(
+        throw StreamDataWriteIncompleteException.AfterRetry(
             targetTable,
             checked((int)expected),
             checked((int)(expected - rows)),

@@ -109,6 +109,12 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
     /// <summary>The copy reports the rows <see cref="DropOnCopy" /> dropped as written (a loss the affected count does not show).</summary>
     public bool ReportDroppedCopyRows { get; set; }
 
+    /// <summary>
+    /// A row the aggregation into the staging table neither stores nor reports as missing when this returns true:
+    /// the statement reports every row as written (a loss only the count of the staging table shows).
+    /// </summary>
+    public Func<Row, bool>? DropOnStage { get; set; }
+
     /// <summary>Called before a statement is applied; may throw to make the statement fail.</summary>
     public Action<Call, CancellationToken>? BeforeStatement { get; set; }
 
@@ -429,7 +435,7 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
                 EnsureStagingExists();
 
                 var staged = StageForAggregate(_aggregates++).ToList();
-                Staging.AddRange(staged);
+                Staging.AddRange(staged.Where(row => DropOnStage?.Invoke(row) != true));
                 return staged.Count;
             }
             case "copy":

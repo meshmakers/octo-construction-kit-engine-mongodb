@@ -1051,7 +1051,7 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
             return;
         }
 
-        throw new StreamDataWriteIncompleteException(
+        throw StreamDataWriteIncompleteException.AfterRetry(
             check.TargetTable,
             checked((int)expected),
             checked((int)(expected - written)),
@@ -1064,7 +1064,8 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
     {
         if (stagedRows < aggregatedRows)
         {
-            throw new StreamDataWriteIncompleteException(
+            throw StreamDataWriteIncompleteException.CountCheckFailed(
+                "staging",
                 stagingTable,
                 checked((int)aggregatedRows),
                 checked((int)(aggregatedRows - stagedRows)),
@@ -1079,7 +1080,8 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
             CrateStatementClass.Maintenance, cancellationToken);
         if (inLive < stagedRows)
         {
-            throw new StreamDataWriteIncompleteException(
+            throw StreamDataWriteIncompleteException.CountCheckFailed(
+                "live copy",
                 liveTable,
                 checked((int)stagedRows),
                 checked((int)(stagedRows - inLive)),
