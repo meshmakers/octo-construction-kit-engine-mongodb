@@ -16,6 +16,7 @@ using System.Data;
 using System.Diagnostics;
 using System.Reflection;
 using System.Text;
+using Meshmakers.Octo.Runtime.Contracts.RepositoryEntities;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 
 namespace Meshmakers.Octo.Runtime.Engine.CrateDb.Client;
@@ -219,12 +220,6 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         var d = datapoints.ToArray();
         if (d.Length == 0) return [];
 
-        // AB#7598: a guarded upsert reports which rows it kept the stored values for (RETURNING, see
-        // ConflictOutcome); an unguarded one stores every row and needs no answer from CrateDB.
-        var guarded = conflictPrecedence is { Count: > 0 };
-        var returning = guarded ? ConflictOutcome.ReturningClause(windowed: false, conflictPrecedence!, includeOrigin: true) : "";
-        var skipped = new List<SkippedArchiveRow>();
-
         // Per-archive tables have a typed schema (one CrateDB column per archive column with the
         // CK-derived primitive type), so the legacy `unnest(@arr,...)` bulk path no longer fits:
         // it required `NpgsqlDbType.Array|Json` for the dynamic `data` blob, but typed columns
@@ -235,42 +230,179 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         // per row — which became the dominant cost when the ConflictPrecedence guard grew every
         // statement to several KB: 10,000 rows took 7.4 s as single-row commands and 0.8 s as
         // multi-row statements (local CrateDB 5.10, octogrid EDA replay, 2026-09-24).
-        var rowsPerStatement = RowsPerStatement(4 + ArchiveRowOriginColumns.Names.Count + userColumnNames.Count);
-        var fullSql = BuildRawInsertSql(qualifiedTable, userColumnNames, conflictPrecedence, rowsPerStatement) + returning;
+        // AB#8622: one statement shape per set of named columns (ArchiveColumnSets).
+        return await InsertGroupedAsync(tenantId, qualifiedTable, d, userColumnNames, conflictPrecedence,
+            windowed: false, includeOrigin: true,
+            fixedParametersPerRow: 4 + ArchiveRowOriginColumns.Names.Count,
+            keyOf: x => RowKey(x.RtId, x.CkTypeId, x.Timestamp, null),
+            buildSql: (insert, updated, rows) => BuildRawInsertSql(qualifiedTable, insert, conflictPrecedence, rows, updated),
+            bind: AddInsertParameters,
+            sentRow: x => new ConflictOutcome.SentRow(x.RtId?.ToString(), x.CkTypeId?.ToString(),
+                x.Timestamp, null, x.Attributes ?? new Dictionary<string, object?>(), x.Origin));
+    }
 
-        // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
-        // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
-        for (var offset = 0; offset < d.Length; offset += rowsPerStatement)
+    /// <summary>
+    /// The primary key of an archive row as CrateDB compares it (AB#8679): entity, CK type and the timestamp or window
+    /// at millisecond precision, the precision of a CrateDB <c>TIMESTAMP</c>. Two rows less than a millisecond apart
+    /// are one row in CrateDB and therefore one key here, like the keys <see cref="ConflictOutcome" /> matches.
+    /// </summary>
+    internal static string RowKey(object? rtId, object? ckTypeId, DateTime start, DateTime? end)
+        => new StoredRowKey(rtId?.ToString() ?? "", ckTypeId?.ToString() ?? "", start, end).Value;
+
+    /// <summary>
+    /// Writes the rows of one insert batch, one statement shape per set of named user columns (AB#8622,
+    /// <see cref="ArchiveColumnSets" />), each in sub-batches of at most <see cref="RowsPerStatement" /> rows.
+    /// Returns the rows the conflict guard did not store, with their positions in <paramref name="rows" />.
+    /// Rows CrateDB did not write at all (a guarded statement without their <c>RETURNING</c> row, an unguarded one with
+    /// fewer affected rows than sent) are written once more; when rows are still missing the write throws
+    /// <see cref="StreamDataWriteIncompleteException" /> (AB#8679).
+    /// </summary>
+    private async Task<IReadOnlyList<SkippedArchiveRow>> InsertGroupedAsync<T>(
+        string tenantId, string qualifiedTable, T[] rows, IReadOnlyList<string> userColumnNames,
+        IReadOnlyList<ArchiveConflictKey>? conflictPrecedence, bool windowed, bool includeOrigin,
+        int fixedParametersPerRow, Func<T, string> keyOf,
+        Func<IReadOnlyList<string>, IReadOnlyList<string>, int, string> buildSql,
+        Action<NpgsqlParameterCollection, T, IReadOnlyList<string>> bind,
+        Func<T, ConflictOutcome.SentRow> sentRow)
+        where T : RtTypeWithAttributes
+    {
+        // AB#7598: a guarded upsert reports which rows it kept the stored values for (RETURNING, see
+        // ConflictOutcome); an unguarded one stores every row, which its affected-row count confirms (AB#8679).
+        var guarded = conflictPrecedence is { Count: > 0 };
+        var returning = guarded ? ConflictOutcome.ReturningClause(windowed, conflictPrecedence!, includeOrigin) : "";
+        if (guarded)
+        {
+            // Validates the keys against all columns of the archive (a group's statement names fewer).
+            BuildConflictGuard(conflictPrecedence!, userColumnNames);
+        }
+
+        var groups = ArchiveColumnSets.Group(rows.Length, i => rows[i].Attributes, i => keyOf(rows[i]),
+            userColumnNames, conflictPrecedence);
+        var skipped = new List<SkippedArchiveRow>();
+        foreach (var group in groups)
+        {
+            var rowsPerStatement = RowsPerStatement(fixedParametersPerRow + group.InsertColumns.Count);
+            var fullSql = group.Indexes.Count >= rowsPerStatement
+                ? buildSql(group.InsertColumns, group.UpdatedColumns, rowsPerStatement) + returning
+                : null;
+            string SqlFor(int rowCount) => rowCount == rowsPerStatement && fullSql is not null
+                ? fullSql
+                : buildSql(group.InsertColumns, group.UpdatedColumns, rowCount) + returning;
+
+            // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
+            // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
+            for (var offset = 0; offset < group.Indexes.Count; offset += rowsPerStatement)
+            {
+                var end = Math.Min(offset + rowsPerStatement, group.Indexes.Count);
+                var batch = new int[end - offset];
+                for (var i = 0; i < batch.Length; i++)
+                {
+                    batch[i] = group.Indexes[offset + i];
+                }
+
+                // One sub-batch as one statement; rows CrateDB did not write are written once more, then the write
+                // fails (AB#8679, MissingRowRetry).
+                skipped.AddRange(await MissingRowRetry.WriteAsync(batch, guarded, qualifiedTable, ExecuteSubBatchAsync, _logger));
+            }
+
+            // Runs one statement over `statementRows` and returns the skipped rows and the missing rows, both as
+            // positions in `rows`. For an unguarded statement "missing" is the shortfall of the affected-row count.
+            async Task<MissingRowRetry.StatementOutcome> ExecuteSubBatchAsync(
+                int[] statementRows)
+            {
+                var sql = SqlFor(statementRows.Length);
+                return await _resilience.ExecuteAsync(async _ =>
+                {
+                    await using var lease = await LeaseConnectionAsync(tenantId);
+                    await using var cmd = new NpgsqlCommand(sql, lease.Connection);
+                    foreach (var row in statementRows)
+                    {
+                        bind(cmd.Parameters, rows[row], group.InsertColumns);
+                    }
+
+                    if (!guarded)
+                    {
+                        // AB#8679: an upsert counts one affected row per row it inserted or updated; fewer means CrateDB
+                        // dropped part of the statement. CrateDB counts a key named twice in one statement once per
+                        // row sent, also for two points less than a millisecond apart (one stored row), so the count
+                        // is compared with the rows sent (ArchiveWriteRepeatedKeyIntegrationTests).
+                        var affected = await cmd.ExecuteNonQueryAsync();
+                        var shortfall = Math.Max(0, statementRows.Length - affected);
+                        return new MissingRowRetry.StatementOutcome([], statementRows.Take(shortfall).ToArray());
+                    }
+
+                    var returned = await ReadReturnedRowsAsync(cmd);
+                    var sent = statementRows.Select(r => sentRow(rows[r])).ToList();
+                    var outcome = ConflictOutcome.Decide(sent, returned, conflictPrecedence!, includeOrigin, windowed);
+                    return new MissingRowRetry.StatementOutcome(
+                        outcome.Skipped.Select(o => o with { Index = statementRows[o.Index] }).ToList(),
+                        outcome.Missing.Select(m => statementRows[m]).ToArray());
+                });
+            }
+        }
+
+        if (groups.Count > 1)
+        {
+            skipped.Sort((a, b) => a.Index.CompareTo(b.Index));
+        }
+
+        return skipped;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>>> ReadStoredRowsAsync(
+        string tenantId, string qualifiedTable, bool windowed, IReadOnlyList<StoredRowKey> keys,
+        IReadOnlyList<string> columns)
+    {
+        var result = new Dictionary<string, IReadOnlyDictionary<string, object?>>(StringComparer.Ordinal);
+        if (keys.Count == 0)
+        {
+            return result;
+        }
+
+        for (var offset = 0; offset < keys.Count; offset += StoredRowLookup.MaxKeysPerStatement)
         {
             var start = offset;
-            var end = Math.Min(offset + rowsPerStatement, d.Length);
-            var sql = end - start == rowsPerStatement
-                ? fullSql
-                : BuildRawInsertSql(qualifiedTable, userColumnNames, conflictPrecedence, end - start) + returning;
-            var outcome = await _resilience.ExecuteAsync(async _ =>
+            var end = Math.Min(offset + StoredRowLookup.MaxKeysPerStatement, keys.Count);
+            var sql = StoredRowLookup.BuildSelectSql(qualifiedTable, windowed, columns, end - start);
+            var rows = await _resilience.ExecuteAsync(async _ =>
             {
                 await using var lease = await LeaseConnectionAsync(tenantId);
                 await using var cmd = new NpgsqlCommand(sql, lease.Connection);
                 for (var i = start; i < end; i++)
                 {
-                    AddInsertParameters(cmd.Parameters, d[i], userColumnNames);
+                    var key = keys[i];
+                    cmd.Parameters.Add(new NpgsqlParameter
+                    {
+                        Value = StoredRowLookup.AsUtc(key.Start),
+                        NpgsqlDbType = NpgsqlDbType.TimestampTz
+                    });
+                    if (windowed)
+                    {
+                        cmd.Parameters.Add(new NpgsqlParameter
+                        {
+                            Value = StoredRowLookup.AsUtc(key.End!.Value),
+                            NpgsqlDbType = NpgsqlDbType.TimestampTz
+                        });
+                    }
+
+                    cmd.Parameters.Add(new NpgsqlParameter { Value = key.RtId });
+                    cmd.Parameters.Add(new NpgsqlParameter { Value = key.CkTypeId });
                 }
 
-                if (!guarded)
-                {
-                    await cmd.ExecuteNonQueryAsync();
-                    return (IReadOnlyList<SkippedArchiveRow>)[];
-                }
-
-                var returned = await ReadReturnedRowsAsync(cmd);
-                var sent = d[start..end].Select(x => new ConflictOutcome.SentRow(x.RtId?.ToString(), x.CkTypeId?.ToString(),
-                    x.Timestamp, null, x.Attributes ?? new Dictionary<string, object?>(), x.Origin)).ToList();
-                return ConflictOutcome.FindSkipped(sent, returned, conflictPrecedence!, includeOrigin: true, windowed: false);
+                return await ReadReturnedRowsAsync(cmd);
             });
-            skipped.AddRange(outcome.Select(o => o with { Index = o.Index + start }));
+
+            foreach (var row in rows)
+            {
+                if (StoredRowKey.Of(row, windowed) is { } key)
+                {
+                    result[key] = row;
+                }
+            }
         }
 
-        return skipped;
+        return result;
     }
 
     /// <summary>Reads the rows a statement returned (its <c>RETURNING</c> clause) as column → value.</summary>
@@ -341,52 +473,18 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
         var d = datapoints.ToArray();
         if (d.Length == 0) return [];
 
-        // AB#7598: see InsertDataAsync.
-        var guarded = conflictPrecedence is { Count: > 0 };
+        // Same shape as InsertDataAsync (AB#4773, AB#8622): one bind parameter per value, one multi-row
+        // statement per sub-batch and set of named columns.
         var includeOrigin = !generationTracked;
-        var returning = guarded ? ConflictOutcome.ReturningClause(windowed: true, conflictPrecedence!, includeOrigin) : "";
-        var skipped = new List<SkippedArchiveRow>();
-
-        // Same shape as InsertDataAsync (AB#4773): one bind parameter per value, one multi-row
-        // statement per sub-batch.
-        var rowsPerStatement = RowsPerStatement(5 + (generationTracked ? 0 : ArchiveRowOriginColumns.Names.Count) + userColumnNames.Count);
-        var fullSql = BuildTimeRangeInsertSql(qualifiedTable, userColumnNames, generationTracked, conflictPrecedence,
-            rowsPerStatement) + returning;
-
-        // AB#4278: chunk into bounded sub-batches so one resilience attempt (and its timeout) never
-        // spans more inserts than can complete in the budget; a retry replays only the sub-batch.
-        for (var offset = 0; offset < d.Length; offset += rowsPerStatement)
-        {
-            var start = offset;
-            var end = Math.Min(offset + rowsPerStatement, d.Length);
-            var sql = end - start == rowsPerStatement
-                ? fullSql
-                : BuildTimeRangeInsertSql(qualifiedTable, userColumnNames, generationTracked, conflictPrecedence,
-                    end - start) + returning;
-            var outcome = await _resilience.ExecuteAsync(async _ =>
-            {
-                await using var lease = await LeaseConnectionAsync(tenantId);
-                await using var cmd = new NpgsqlCommand(sql, lease.Connection);
-                for (var i = start; i < end; i++)
-                {
-                    AddTimeRangeInsertParameters(cmd.Parameters, d[i], userColumnNames, includeOrigin);
-                }
-
-                if (!guarded)
-                {
-                    await cmd.ExecuteNonQueryAsync();
-                    return (IReadOnlyList<SkippedArchiveRow>)[];
-                }
-
-                var returned = await ReadReturnedRowsAsync(cmd);
-                var sent = d[start..end].Select(x => new ConflictOutcome.SentRow(x.RtId?.ToString(), x.CkTypeId?.ToString(),
-                    x.From, x.To, x.Attributes ?? new Dictionary<string, object?>(), x.Origin)).ToList();
-                return ConflictOutcome.FindSkipped(sent, returned, conflictPrecedence!, includeOrigin, windowed: true);
-            });
-            skipped.AddRange(outcome.Select(o => o with { Index = o.Index + start }));
-        }
-
-        return skipped;
+        return await InsertGroupedAsync(tenantId, qualifiedTable, d, userColumnNames, conflictPrecedence,
+            windowed: true, includeOrigin,
+            fixedParametersPerRow: 5 + (generationTracked ? 0 : ArchiveRowOriginColumns.Names.Count),
+            keyOf: x => RowKey(x.RtId, x.CkTypeId, x.From, x.To),
+            buildSql: (insert, updated, rows) => BuildTimeRangeInsertSql(qualifiedTable, insert, generationTracked,
+                conflictPrecedence, rows, updated),
+            bind: (parameters, dto, columns) => AddTimeRangeInsertParameters(parameters, dto, columns, includeOrigin),
+            sentRow: x => new ConflictOutcome.SentRow(x.RtId?.ToString(), x.CkTypeId?.ToString(),
+                x.From, x.To, x.Attributes ?? new Dictionary<string, object?>(), x.Origin));
     }
 
     /// <summary>
@@ -417,8 +515,14 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     internal static string BuildTimeRangeInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames,
         bool generationTracked = false,
         IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null,
-        int rowCount = 1)
+        int rowCount = 1,
+        IReadOnlyList<string>? updatedColumnNames = null)
     {
+        // AB#8622: userColumnNames is the INSERT list of the statement, updatedColumnNames (default: the same)
+        // the user columns a winning write replaces. A column the row does not name is in neither list, so a
+        // new row stores NULL for it (user columns are nullable without a DEFAULT, AB#6647) and an existing
+        // row keeps its stored value.
+        //
         // Column order matches the DDL emitted by GenerateCreateWindowedTable: window_start,
         // window_end, rtid, ckTypeId, rtWellKnownName, then user columns. The CONFLICT clause's
         // natural key is the full window (start, end) + entity (rtid, ckTypeId) — a re-delivery
@@ -463,8 +567,9 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
         var values = BuildValuesList(allColumns.Count, rowCount, generationTracked ? ", FALSE, 0" : ", FALSE");
         var conflictGenerationSuffix = generationTracked ? $", \"{Constants.Generation}\"" : string.Empty;
-        var guard = BuildConflictGuard(conflictPrecedence ?? [], userColumnNames);
-        var conflictUpdates = BuildConflictUpdates(includeOrigin ? WithOriginColumns(userColumnNames) : userColumnNames, guard);
+        var guard = BuildConflictGuard(conflictPrecedence ?? [], userColumnNames, updatedColumnNames);
+        var updated = updatedColumnNames ?? userColumnNames;
+        var conflictUpdates = BuildConflictUpdates(includeOrigin ? WithOriginColumns(updated) : updated, guard);
 
         // The rejected branch reads the stored flag through COALESCE: a row stored without the flag
         // (see above) must come out of a losing write as FALSE, not keep its NULL.
@@ -502,9 +607,21 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     /// The last key admits equality so that re-delivering the identical document is idempotent rather
     /// than a no-op that leaves the row looking untouched.
     /// </para>
+    /// <para>
+    /// AB#8622: a ranking column the statement's rows do not send (not in <paramref name="sentColumnNames" />) keeps
+    /// its stored value, and the guard compares the incoming point against that merged row:
+    /// <c>COALESCE(EXCLUDED."k", "k")</c> equals the stored key, so the next key decides. An explicit null on a ranking
+    /// column is refused before the write (<c>ArchiveRankingColumnValidator</c>), so a sent key is never NULL.
+    /// </para>
     /// </remarks>
+    /// <param name="precedence">The archive's conflict precedence, physical column names.</param>
+    /// <param name="userColumnNames">The INSERT list of the statement; every ranking column must be in it.</param>
+    /// <param name="sentColumnNames">
+    /// The user columns the rows of the statement send (its replaced columns), or <c>null</c> when every column is sent.
+    /// </param>
     internal static string? BuildConflictGuard(
-        IReadOnlyList<ArchiveConflictKey> precedence, IReadOnlyList<string> userColumnNames)
+        IReadOnlyList<ArchiveConflictKey> precedence, IReadOnlyList<string> userColumnNames,
+        IReadOnlyCollection<string>? sentColumnNames = null)
     {
         if (precedence.Count == 0)
         {
@@ -548,13 +665,14 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             }
         }
 
-        return BuildPrecedenceLevel(precedence, 0);
+        return BuildPrecedenceLevel(precedence, 0, sentColumnNames);
     }
 
     /// <summary>
     /// Renders the lexicographic comparison from key <paramref name="index" /> onwards.
     /// </summary>
-    private static string BuildPrecedenceLevel(IReadOnlyList<ArchiveConflictKey> keys, int index)
+    private static string BuildPrecedenceLevel(IReadOnlyList<ArchiveConflictKey> keys, int index,
+        IReadOnlyCollection<string>? sentColumnNames)
     {
         var key = keys[index];
         var isLast = index == keys.Count - 1;
@@ -563,32 +681,36 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             // AB#5356: a manual write always wins and is never displaced by an automated one; two manual
             // writes do not fall through to the following keys (the later one wins, so a wrong manual value
             // is fixed with another manual write); two automated writes are ranked by the following keys.
-            var bothAutomated = isLast ? "TRUE" : BuildPrecedenceLevel(keys, index + 1);
+            var bothAutomated = isLast ? "TRUE" : BuildPrecedenceLevel(keys, index + 1, sentColumnNames);
             return $"({ArchiveRowOriginColumns.IncomingIsManual} OR (NOT {ArchiveRowOriginColumns.StoredIsManual} AND {bothAutomated}))";
         }
 
-        var better = BuildKeyBetter(key);
-        var equal = BuildKeyEqual(key.Column);
+        // AB#8622: an unsent ranking column is judged on the merged row, where it holds the stored value.
+        var incoming = sentColumnNames is null || sentColumnNames.Contains(key.Column)
+            ? $"EXCLUDED.\"{key.Column}\""
+            : $"COALESCE(EXCLUDED.\"{key.Column}\", \"{key.Column}\")";
+        var better = BuildKeyBetter(key, incoming);
+        var equal = BuildKeyEqual(key.Column, incoming);
 
         // Last key: equality is accepted, which is what makes an identical re-delivery idempotent.
         return isLast
             ? $"({better} OR {equal})"
-            : $"({better} OR ({equal} AND {BuildPrecedenceLevel(keys, index + 1)}))";
+            : $"({better} OR ({equal} AND {BuildPrecedenceLevel(keys, index + 1, sentColumnNames)}))";
     }
 
     /// <summary>Incoming value is strictly better than the stored one for this key.</summary>
-    private static string BuildKeyBetter(ArchiveConflictKey key)
+    private static string BuildKeyBetter(ArchiveConflictKey key, string incoming)
     {
         var c = key.Column;
         var op = key.Order == ConflictKeyOrder.HigherWins ? ">" : "<";
-        return $"((\"{c}\" IS NULL AND EXCLUDED.\"{c}\" IS NOT NULL) "
-             + $"OR (\"{c}\" IS NOT NULL AND EXCLUDED.\"{c}\" IS NOT NULL AND EXCLUDED.\"{c}\" {op} \"{c}\"))";
+        return $"((\"{c}\" IS NULL AND {incoming} IS NOT NULL) "
+             + $"OR (\"{c}\" IS NOT NULL AND {incoming} IS NOT NULL AND {incoming} {op} \"{c}\"))";
     }
 
     /// <summary>Incoming and stored value are indistinguishable for this key, nulls included.</summary>
-    private static string BuildKeyEqual(string c)
-        => $"((\"{c}\" IS NULL AND EXCLUDED.\"{c}\" IS NULL) "
-         + $"OR (\"{c}\" IS NOT NULL AND EXCLUDED.\"{c}\" IS NOT NULL AND EXCLUDED.\"{c}\" = \"{c}\"))";
+    private static string BuildKeyEqual(string c, string incoming)
+        => $"((\"{c}\" IS NULL AND {incoming} IS NULL) "
+         + $"OR (\"{c}\" IS NOT NULL AND {incoming} IS NOT NULL AND {incoming} = \"{c}\"))";
 
     /// <summary>
     /// Renders one <c>ON CONFLICT DO UPDATE</c> assignment: the incoming value unguarded, or a
@@ -667,8 +789,10 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
     }
 
     internal static string BuildRawInsertSql(string qualifiedTable, IReadOnlyList<string> userColumnNames,
-        IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null, int rowCount = 1)
+        IReadOnlyList<ArchiveConflictKey>? conflictPrecedence = null, int rowCount = 1,
+        IReadOnlyList<string>? updatedColumnNames = null)
     {
+        // AB#8622: see BuildTimeRangeInsertSql — the INSERT list and the replaced columns are those the rows name.
         // Column-explicit INSERT against a per-archive table. Columns = standard time-series set
         // (rtId, ckTypeId, timestamp, rtWellKnownName) plus the user-defined columns. Unknown
         // attributes on the data point are dropped: DDL would have rejected them at activation, so
@@ -682,8 +806,8 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
         var columnList = string.Join(", ", allColumns.Select(c => $"\"{c}\""));
         var values = BuildValuesList(allColumns.Count, rowCount);
-        var guard = BuildConflictGuard(conflictPrecedence ?? [], userColumnNames);
-        var conflictUpdates = BuildConflictUpdates(WithOriginColumns(userColumnNames), guard);
+        var guard = BuildConflictGuard(conflictPrecedence ?? [], userColumnNames, updatedColumnNames);
+        var conflictUpdates = BuildConflictUpdates(WithOriginColumns(updatedColumnNames ?? userColumnNames), guard);
 
         return $"INSERT INTO {qualifiedTable} ({columnList}) VALUES {values} "
              + $"ON CONFLICT (\"{Constants.Timestamp}\", \"{Constants.RtId}\", \"{Constants.CkTypeId}\") "

@@ -45,6 +45,8 @@ internal class TenantRepository(
         dataPermissionResolver, auditEventSink, logger), ITenantRepository,
         ISecureSessionFactory
 {
+    private readonly ILogger? _importLookupLogger = logger;
+
     /// <summary>
     ///     Direct access to the Mongo data source for engine-internal maintenance work that needs
     ///     collection-level writes without the ApplyChanges pipeline (e.g. the display-rule sweep).
@@ -68,12 +70,87 @@ internal class TenantRepository(
 
     protected override async Task RefreshCkCacheServiceAsync(ICkCacheService ckCacheService)
     {
-        using var session = await mongoDbRepositoryDataSource.GetSessionAsync();
-        session.StartTransaction();
+        // AB#8677: the cache load resolves the dependencies of all Available models inside one transaction. While
+        // another service imports or upgrades a model in place, no Available version of that model may exist for a
+        // moment, and the transaction's snapshot never sees the promotion. Retry the load with a new transaction once
+        // the running imports are done, instead of failing the tenant (and the host). A failure while no import runs
+        // is retried once (the import may have ended between the failure and the check) and then thrown as it is.
+        var deadline = DateTime.UtcNow + CkModelImportInProgress.DefaultWaitTimeout;
+        var retriedWithoutImport = false;
+        while (true)
+        {
+            try
+            {
+                using var session = await mongoDbRepositoryDataSource.GetSessionAsync();
+                session.StartTransaction();
 
-        await modelLoaderService.LoadAsync(TenantId, session, mongoDbRepositoryDataSource);
+                await modelLoaderService.LoadAsync(TenantId, session, mongoDbRepositoryDataSource);
 
-        await session.CommitTransactionAsync();
+                await session.CommitTransactionAsync();
+                return;
+            }
+            catch (ModelValidationException ex)
+            {
+                // The lookups only classify the failure; they must never replace it (like
+                // DatabaseCkModelRepository.MarkIfOtherImportsRunAsync). A failed lookup throws the original
+                // exception unmarked; a failed wait for a running import throws it marked, the import did run.
+                var running = await TryGetModelsBeingImportedAsync();
+                if (running is null)
+                {
+                    throw;
+                }
+
+                if (running.Count == 0)
+                {
+                    if (retriedWithoutImport)
+                    {
+                        throw;
+                    }
+
+                    retriedWithoutImport = true;
+                    continue;
+                }
+
+                var remaining = deadline - DateTime.UtcNow;
+                if (remaining <= TimeSpan.Zero || !await TryWaitUntilImportsFinishedAsync(remaining))
+                {
+                    CkModelImportInProgress.Mark(ex, running);
+                    throw;
+                }
+            }
+        }
+    }
+
+    /// <summary>The models being imported, or <c>null</c> when they could not be read (logged).</summary>
+    private async Task<IReadOnlyList<string>?> TryGetModelsBeingImportedAsync()
+    {
+        try
+        {
+            return await mongoDbRepositoryDataSource.GetModelsBeingImportedAsync();
+        }
+        catch (Exception lookupException)
+        {
+            _importLookupLogger?.LogWarning(lookupException,
+                "Could not read the running CK model imports after the CK cache load of tenant {TenantId} failed",
+                TenantId);
+            return null;
+        }
+    }
+
+    /// <summary>Whether the running imports finished within <paramref name="timeout" />; <c>false</c> when the wait failed (logged).</summary>
+    private async Task<bool> TryWaitUntilImportsFinishedAsync(TimeSpan timeout)
+    {
+        try
+        {
+            return await CkModelImportInProgress.WaitUntilFinishedAsync(mongoDbRepositoryDataSource, _ => true, timeout);
+        }
+        catch (Exception waitException)
+        {
+            _importLookupLogger?.LogWarning(waitException,
+                "Could not wait for the running CK model imports after the CK cache load of tenant {TenantId} failed",
+                TenantId);
+            return false;
+        }
     }
 
     public override async Task<IOctoSession> GetSessionAsync()

@@ -472,6 +472,225 @@ public class CkRangeRetentionImportTests(CkModelImportMigrationFixture fixture)
         }
     }
 
+    /// <summary>
+    ///     AB#8677 (local stack 2026-11-09: System.Bot 3.5.0 -> 3.6.0 while CommunicationController and PlatformServices
+    ///     started): an in-place upgrade of a model must not leave a moment in which a model depending on it cannot be
+    ///     resolved. Three upgrades of RrBase run while two readers resolve the dependent RangeDep in a tight loop: the
+    ///     CK cache load (one transaction, the path of every service start) and a resolution outside a transaction (the
+    ///     path of an embedded import of a dependent). An observer proves that the window without an Available RrBase
+    ///     really occurred; no resolution may fail.
+    /// </summary>
+    [Fact]
+    public async Task InPlaceUpgrade_WhileDependentsResolve_NoResolutionFails()
+    {
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = $"upgwin{Guid.NewGuid():N}"[..20];
+        try
+        {
+            await CreateChildAsync(tenantId);
+            var tenant = await GetChildAsync(tenantId);
+            var system = await GetInstalledSystemIdAsync(tenant);
+            var database = GetTenantDatabase(tenantId);
+
+            await tenant.ImportCkModelAsync(BuildBase("RrBase-1.0.0", system, withExtra: false));
+            await tenant.ImportCkModelAsync(BuildDependent("RangeDep-1.0.0", "RrBase-1.0.0", system,
+                rangeRetaining: true));
+
+            var (failures, counters) = await RunReadersDuringAsync(tenantId, tenant, database, "RrBase", async () =>
+            {
+                for (var minor = 1; minor <= 3; minor++)
+                {
+                    await tenant.ImportCkModelAsync(BuildBase($"RrBase-1.{minor}.0", system,
+                        withExtra: minor % 2 == 1));
+                }
+            });
+
+            Assert.Empty(failures);
+            Assert.True(counters.WindowsObserved > 0, "the test never observed the upgrade window");
+            Assert.True(counters.CacheLoads > 0 && counters.Resolutions > 0,
+                $"readers did not run: {counters.CacheLoads} cache loads, {counters.Resolutions} resolutions");
+            Assert.Equal("RrBase-1.3.0=1, RangeDep-1.0.0=1", await StatesAsync(database, "RrBase", "RangeDep"));
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(systemContext, tenantId);
+        }
+    }
+
+    /// <summary>
+    ///     AB#8677 with AB#7381: a failed in-place upgrade (system reference mismatch, rolled back) while a dependent is
+    ///     resolved in a tight loop: no resolution fails, and the installed version is Available afterwards.
+    /// </summary>
+    [Fact]
+    public async Task FailedInPlaceUpgrade_WhileDependentsResolve_NoResolutionFails_AndOldVersionStaysAvailable()
+    {
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = $"upgfail{Guid.NewGuid():N}"[..20];
+        try
+        {
+            await CreateChildAsync(tenantId);
+            var tenant = await GetChildAsync(tenantId);
+            var system = await GetInstalledSystemIdAsync(tenant);
+            var database = GetTenantDatabase(tenantId);
+
+            await tenant.ImportCkModelAsync(ExactOnSystem("StaleSys-1.0.0", system));
+            await tenant.ImportCkModelAsync(ExactOnSystem("StaleDep-1.0.0", system, new CkModelId("StaleSys-1.0.0")));
+            var otherSystem = new CkModelId(system.Name,
+                new CkVersion(system.Version.Major, system.Version.Minor, system.Version.Revision + 1));
+
+            var importFailures = 0;
+            var (failures, counters) = await RunReadersDuringAsync(tenantId, tenant, database, "StaleSys",
+                async () =>
+                {
+                    for (var attempt = 0; attempt < 3; attempt++)
+                    {
+                        var failure = await Record.ExceptionAsync(() =>
+                            tenant.ImportCkModelAsync(ExactOnSystem("StaleSys-1.1.0", otherSystem)));
+                        Assert.IsAssignableFrom<ModelValidationException>(failure);
+                        importFailures++;
+                    }
+                }, resolveModelId: new CkModelId("StaleDep-1.0.0"));
+
+            Assert.Equal(3, importFailures);
+            Assert.Empty(failures);
+            Assert.True(counters.CacheLoads > 0 && counters.Resolutions > 0,
+                $"readers did not run: {counters.CacheLoads} cache loads, {counters.Resolutions} resolutions");
+            Assert.Equal("StaleSys-1.0.0=1, StaleDep-1.0.0=1", await StatesAsync(database, "StaleSys", "StaleDep"));
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(systemContext, tenantId);
+        }
+    }
+
+    /// <summary>
+    ///     AB#8677: the held model import locks are visible to readers while held and gone after the release; a failure
+    ///     can be marked as "a CK model was being imported" for the caller's retry decision.
+    /// </summary>
+    [Fact]
+    public async Task ModelsBeingImported_ReflectTheHeldImportLocks()
+    {
+        var systemContext = fixture.GetSystemContext();
+        var tenantId = $"upglock{Guid.NewGuid():N}"[..20];
+        try
+        {
+            await CreateChildAsync(tenantId);
+            var dataSource = NewDataSource(tenantId);
+            var ct = TestContext.Current.CancellationToken;
+
+            Assert.Empty(await dataSource.GetModelsBeingImportedAsync(ct));
+            await using (await dataSource.AcquireModelImportLockAsync("LockedModel", ct))
+            {
+                Assert.Equal(["LockedModel"], await dataSource.GetModelsBeingImportedAsync(ct));
+                Assert.False(await CkModelImportInProgress.WaitUntilFinishedAsync(dataSource,
+                    name => name == "LockedModel", TimeSpan.FromMilliseconds(600), ct));
+                Assert.True(await CkModelImportInProgress.WaitUntilFinishedAsync(dataSource,
+                    name => name == "OtherModel", TimeSpan.FromMilliseconds(600), ct));
+            }
+
+            Assert.Empty(await dataSource.GetModelsBeingImportedAsync(ct));
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(systemContext, tenantId);
+        }
+    }
+
+    private sealed class ReaderCounters
+    {
+        public int CacheLoads;
+        public int Resolutions;
+        public int WindowsObserved;
+    }
+
+    /// <summary>
+    ///     Runs <paramref name="writer" /> while three loops run until it ends: the tenant's CK cache load, a resolution
+    ///     of <paramref name="resolveModelId" /> (default RangeDep-1.0.0) outside a transaction, and an observer that
+    ///     counts the reads in which <paramref name="upgradedModel" /> had no Available version.
+    /// </summary>
+    private async Task<(IReadOnlyList<Exception> Failures, ReaderCounters Counters)> RunReadersDuringAsync(
+        string tenantId, ITenantContext tenant, IMongoDatabase database, string upgradedModel, Func<Task> writer,
+        CkModelId? resolveModelId = null)
+    {
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+        var counters = new ReaderCounters();
+        var cacheService = fixture.GetService<ICkCacheService>();
+        var resolver = fixture.GetService<IRepositoryModelResolver>();
+        var source = new TenantDatabaseSourceIdentifier(null, NewDataSource(tenantId), tenantId);
+        var modelToResolve = resolveModelId ?? new CkModelId("RangeDep-1.0.0");
+        using var stop = new CancellationTokenSource();
+
+        var cacheLoop = Task.Run(async () =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                try
+                {
+                    if (cacheService.IsTenantLoaded(tenantId))
+                    {
+                        cacheService.Unload(tenantId);
+                    }
+
+                    await tenant.LoadCacheForTenantAsync();
+                    Interlocked.Increment(ref counters.CacheLoads);
+                }
+                catch (Exception e)
+                {
+                    failures.Enqueue(e);
+                }
+            }
+        }, CancellationToken.None);
+
+        var resolveLoop = Task.Run(async () =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                try
+                {
+                    await resolver.HardResolveAsync([modelToResolve], new OriginFileResolver("-"),
+                        new OperationResult(), source);
+                    Interlocked.Increment(ref counters.Resolutions);
+                }
+                catch (Exception e)
+                {
+                    failures.Enqueue(e);
+                }
+            }
+        }, CancellationToken.None);
+
+        var observer = Task.Run(async () =>
+        {
+            var models = database.GetCollection<BsonDocument>("CkModel");
+            var filter = new BsonDocument { { "modelId", upgradedModel }, { "modelState", 1 } };
+            while (!stop.IsCancellationRequested)
+            {
+                if (await models.CountDocumentsAsync(filter, cancellationToken: CancellationToken.None) == 0)
+                {
+                    Interlocked.Increment(ref counters.WindowsObserved);
+                }
+            }
+        }, CancellationToken.None);
+
+        try
+        {
+            await writer();
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            await Task.WhenAll(cacheLoop, resolveLoop, observer);
+        }
+
+        return (failures.ToList(), counters);
+    }
+
+    private MongoDbRepositoryDataSource NewDataSource(string tenantId)
+    {
+        var databaseName = tenantId.ToLowerInvariant();
+        return new MongoDbRepositoryDataSource(NullLogger<MongoDbRepositoryDataSource>.Instance,
+            fixture.GetService<IAdminRepositoryAccess>().GetRepositoryClient(databaseName), databaseName, tenantId);
+    }
+
     /// <summary>Same fields and values; the field order of a restored document may differ (BSON equality is ordered).</summary>
     private static void AssertSameDocument(BsonDocument expected, BsonDocument actual)
     {

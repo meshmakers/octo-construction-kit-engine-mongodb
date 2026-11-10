@@ -271,6 +271,22 @@ internal class RepositoryDistributedLockService(
     }
 
     /// <summary>
+    ///     AB#8677: the ids of the locks whose id starts with <paramref name="idPrefix" /> and that are held right now
+    ///     (not expired), with the prefix removed. Reads without a session, so it always sees the current state.
+    /// </summary>
+    internal static async Task<IReadOnlyList<string>> FindHeldLockIdSuffixesAsync(IRepositoryInternal repository,
+        string idPrefix, CancellationToken cancellationToken = default)
+    {
+        var collection = repository.GetCollection(new LockMongoDataSourceMapper()).GetMongoCollection();
+        var filter = Builders<SysLock>.Filter.Regex(sysLock => sysLock.Id,
+                         new MongoDB.Bson.BsonRegularExpression("^" + System.Text.RegularExpressions.Regex.Escape(idPrefix))) &
+                     Builders<SysLock>.Filter.Gt(sysLock => sysLock.ExpiryDateTime, DateTime.UtcNow);
+        var ids = await collection.Find(filter).Project(sysLock => sysLock.Id).ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return ids.Select(lockId => lockId.Substring(idPrefix.Length)).ToList();
+    }
+
+    /// <summary>
     /// True when the exception (or any exception it wraps — the data-source collection wraps
     /// driver errors in <c>OperationFailedException</c>) is a MongoDB WriteConflict or carries the
     /// <c>TransientTransactionError</c> label, i.e. the server asks the client to retry the transaction.

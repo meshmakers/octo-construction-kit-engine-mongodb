@@ -325,12 +325,133 @@ Tests: `StreamDataOrigin/RollupManualColumnsIntegrationTests` (real CrateDB), `A
 | Reason | When |
 |---|---|
 | `CkTypeMismatch` | the row's CK type is not the archive's target (was a silent drop before) |
-| `LowerPrecedence` | the conflict precedence ranks the stored row above it |
-| `ManualValueProtected` | the stored row is manual, the write automated, and the guard ranks by `$Origin` (the default) |
+| `LowerPrecedence` | a column key of the conflict precedence decided: the first key, in the archive's order, in which the stored row differs from the write. Also against a stored manual row when that key comes before `$Origin`, and always when the archive ignores the origin |
+| `ManualValueProtected` | `$Origin` decided: the stored row is manual, the write automated, and no column key before `$Origin` differs (always with the default origin-first guard; with `$Origin` after a key only on a tie in it; a ranking column the write does not send keeps its stored value and ties, AB#8622). Never reported when the archive ignores the origin (AB#8637) |
 
-**How the count is exact.** A guarded upsert always "updates" the conflicting row (the `CASE` keeps the stored values), so the affected-row count cannot tell a win from a loss. A guarded statement therefore ends with `RETURNING` the row key, the ranking columns and `row_origin`, and `ConflictOutcome.FindSkipped` compares what CrateDB holds afterwards with what was sent: equal in every ranking column (and the origin) ⇔ stored. That is exact because the last key admits equality — a write equal in every key always wins — and a lost write leaves a stored row that differs in the deciding column or in the origin. Timestamps compare at millisecond precision, numbers by value, text ordinally; two rows for one key in one statement are matched one to one. It holds per multi-row statement and across the sub-batches of a large write. An archive **without** precedence sends no `RETURNING` and reports every row of its target type as stored, as before.
+**How the count is exact.** A guarded upsert always "updates" the conflicting row (the `CASE` keeps the stored values), so the affected-row count cannot tell a win from a loss. A guarded statement therefore ends with `RETURNING` the row key, the ranking columns and `row_origin`, and `ConflictOutcome.Decide` compares what CrateDB holds afterwards with what was sent: equal in every ranking column (and the origin) ⇔ stored. That is exact because the last key admits equality — a write equal in every key always wins — and a lost write leaves a stored row that differs in the deciding column or in the origin. Timestamps compare at millisecond precision, numbers by value, text ordinally; two rows for one key in one statement are matched one to one. It holds per multi-row statement and across the sub-batches of a large write. An archive **without** precedence sends no `RETURNING` and reports every row of its target type as stored, as before.
 
-Skipped automated rows are a normal outcome and only reported (and not marked dirty for the rollups: they changed nothing). A **manual** row that cannot be stored — possible only when a column key ranks before `$Origin` or the archive ignores the origin — throws `ManualStreamDataNotAppliedException` after the rest of the batch was written; its `Result` says what was stored. The import path (`ImportRowsAsync`) is unguarded and ignores the result.
+**A missing row is a failed write, never a skip (AB#8679).** Under memory pressure CrateDB ends a shard request of a multi-row `INSERT` when its memory circuit breaker trips (server log: `[query] New used memory … would be larger than configured breaker …, breaking`) and answers the statement **without an error**: the rows of that request are neither stored nor reported, and `sys.jobs_log` shows nothing. Measured on CrateDB 6.4.6 with 8 parallel writers of 2,500 rows: up to the whole write of a writer gone. The client therefore checks every statement:
+
+| Statement | Sign of a dropped request |
+|---|---|
+| guarded (with `RETURNING`) | a sent row without a returned row — an upsert returns a row for every row it processed, a lost update included, so this is never a precedence decision |
+| unguarded | fewer affected rows than rows sent (an upsert counts one per row it processed, a key repeated in the statement once per row; row keys compare timestamps at millisecond precision) |
+
+The rows CrateDB missed are written once more (guarded: only those rows; unguarded: the whole statement, the count does not say which rows are missing). Both are idempotent upserts: the guard decides again on the merged row, last-write-wins writes the same values again. When rows are still missing, the write throws `StreamDataWriteIncompleteException` (archive table, rows sent, rows missing, the likely cause); the rows of earlier statements of the same call may be stored. Callers treat it as a failure: the asset repository answers 503 with the message, a pipeline node fails, the archive import job and the row restore fail. Sending the whole write again is safe. Before AB#8679 a guarded write reported the dropped rows as `LowerPrecedence` and an unguarded write reported nothing. Test: `StreamDataWriteLoss/ArchiveWriteUnderMemoryPressureIntegrationTests` (CrateDB with a 512 MB heap and a tightened query breaker; red without the check).
+
+**The rollup statements (AB#8680).** The forward aggregation, the staging aggregation of a recompute and the staging-to-live copy are `INSERT … SELECT` statements and lose rows the same way. Each compares its affected rows with the rows it must write: an aggregation with a count of the `rtid` groups of its source rows (same predicate, same source generations, counted before the statement, and once more after a shortfall: a source row deleted meanwhile is no loss), a copy slice with the count that sizes the slice. A shortfall is written once more (the copy only its missing rows, `ON CONFLICT DO NOTHING`, then counted in the live table); still short, the run fails with `StreamDataWriteIncompleteException` (table, bucket or slice, counts). The copy fails before the generation pointer flips: readers stay on the previous, complete generation. Measured on CrateDB 6.4.6 (512 MB heap, query breaker 15 %, six recomputes of 60,000 rows in parallel): without the check a recompute committed a generation with 58,573 of 60,000 rows. The parent breaker (real heap usage above 95 % of the heap) drops rows the same way, also at the default query limit: a nearly full heap refused whole blocks of 10,000 rows, the batch size of the insert-from-select (10,000 of 20,000 rows, checked after a refresh); the check reports it. Test: `StreamDataWriteLoss/RollupUnderMemoryPressureIntegrationTests`.
+
+Skipped automated rows are a normal outcome and only reported (and not marked dirty for the rollups: they changed nothing). A **manual** row that cannot be stored — possible only when a column key ranks before `$Origin` or the archive ignores the origin — throws `ManualStreamDataNotAppliedException` after the rest of the batch was written; its `Result` says what was stored. The import path (`ImportRowsAsync`) is unguarded and ignores the result; a dropped request fails it as above.
+
+### Value check before the write (AB#7643, raw path AB#8606)
+
+`InsertAsync` (raw) and `InsertTimeRangeAsync` check every value against the CK type of its ingested column before anything is written (`ArchiveWriteValueValidator.Normalize`, one overload per point type). A value that does not fit refuses the **whole batch** with an `ArgumentException` (the asset repository answers 400) that names each point, the column and the expected type, at most ten mismatches listed, the rest counted:
+
+```
+Archive '<rtId>': 1 value(s) do not fit their column, nothing was written: point 1 (rtId '<rtId>', timestamp 2026-03-01T07:30:00.0000000Z): column 'Value' expects a number, got text 'twelve'.
+```
+
+A raw point is named by its index in the caller's order, its rtId and its timestamp; a time-range point by its index. Enum columns take the key or the member name (case-insensitive) and store the key. Points of another CK type and keys that are no ingested column are not checked (the write skips them anyway). Both paths check the keys after the record expansion (see *Record values* below), i.e. exactly as they write them. The check applies to manual and automated points alike.
+
+### Partial delivery — absent keeps, null clears (AB#8622)
+
+`InsertAsync` (raw) and `InsertTimeRangeAsync` update **only the columns a point names**. "Named" means the point's
+attribute dictionary has the key, whatever its value:
+
+| The point … | New row | Existing row (the write wins the conflict guard) |
+|---|---|---|
+| names the column with a value | value | value |
+| names the column with `null` | NULL | NULL (cleared) |
+| does not name the column | NULL | **stored value kept** |
+
+Before, every ingested column of the archive was bound and an unnamed one went in as NULL, so
+`ON CONFLICT … DO UPDATE SET "col" = EXCLUDED."col"` cleared every column a partial re-delivery did not send (silent
+data loss when several sources fill different columns of one archive, AB#5157, or a pipeline delivers part of the
+columns).
+
+- **How.** `ArchiveColumnSets.Group` splits a batch by the set of named columns; each group is one statement shape
+  whose `INSERT` list and `DO UPDATE SET` list name exactly those columns (`CrateDatabaseClient.InsertGroupedAsync`).
+  A uniform batch (the usual pipeline delivery) is one group, so the statement count is unchanged. Two points of the
+  same row key with different column sets run in the order they were sent (a new segment starts where a key repeats
+  with another set).
+- **Ranking columns** — the columns named in `Archive.ConflictPrecedence` (`$Origin` is no column) — follow the same
+  rule, except that they cannot be null (decided by Reimar 2026-11-09):
+
+  | The point … the ranking column | Effect |
+  |---|---|
+  | does not send | the **stored value stays**, also as the value the comparison uses: the guard compares the point against the **merged row**, so the missing key equals the stored key and the next key decides. On a new row it is NULL. |
+  | sends with a value | compared as usual and written when the point wins |
+  | sends as explicit `null` | **refused**: the whole batch fails with an `ArgumentException` before anything is read or written (`ArchiveRankingColumnValidator`, asset repository: 400 naming the point and the field). Raw and time-range, automated and manual. |
+
+  A ranking column is always in the `INSERT` list (the guard reads `EXCLUDED."k"`); when the point does not send it,
+  it is bound NULL, **not** replaced, and the guard reads `COALESCE(EXCLUDED."k", "k")` for it, only for the keys the
+  statement's rows do not send (`BuildConflictGuard(..., sentColumnNames)`). The write result compares against the same
+  merged value: `ConflictOutcome.Holds` skips a ranking column the row did not send. So a point that wins on an earlier
+  key without sending `SourceDocumentDate` is reported as **stored**, and a manual point that is stored never fails the
+  write (no 409).
+
+  EC example — archive `[{DataQuality, LowerWins}, {SourceDocumentDate, HigherWins}]`, `$Origin` first by default, a
+  stored automated EDA row L1 / document date D: a manual correction with quality L2 and no document date wins on the
+  origin, is reported stored and the row keeps D. An automated point with a better quality and no document date wins
+  and the row keeps D. An automated point without a quality is ranked by the document date (the quality counts as the
+  stored one and stays). The origin columns are platform columns and always written.
+- **Constant DEFAULTs (AB#6647).** User columns are nullable without a DEFAULT, so leaving one out of the `INSERT` list
+  stores NULL, never a default. `was_updated` is still named with the literal `FALSE` in every row of every statement.
+- **Computed columns are evaluated on the merged row** (decided by Reimar 2026-11-09). Nobody sends a computed column;
+  its value follows from the inputs its formula reads (ingested columns and other computed columns):
+
+  | The point … | Computed column |
+  |---|---|
+  | names none of the formula's inputs | left out of the row: the stored value stays (a new row: NULL) |
+  | names all inputs | evaluated from the point, as before |
+  | names some inputs | evaluated on the **merged row**: an input the point does not name is the **stored** value of the row; on a new row it is NULL |
+  | names an input with `null` | the formula sees null (NaN, AB#8060), never the stored value |
+
+  Example: stored Consumption 10, Production 4, Net = Consumption − Production = 6; a delivery of Consumption 12 stores
+  Net 8. A formula without column references is always evaluated. A computed input the point leaves out (none of its
+  own inputs named) is read stored as well; one the point triggers is used with its new value (evaluation order).
+- **How the merged row is read.** The formula language (mXparser: NaN as NULL, `coalesce`, `isnull`, `if`) has no SQL
+  counterpart, so the formula cannot run inside `ON CONFLICT … DO UPDATE`. Instead
+  `CrateDbStreamDataRepository.ApplyIngestComputedColumnsAsync` finds the points that name only some inputs of a formula
+  they trigger and reads the missing inputs of their keys **once per batch** (`IStreamDataDatabaseClient.ReadStoredRowsAsync`,
+  `StoredRowLookup`: one `SELECT` per 250 keys, every key an equality on all primary key columns). CrateDB answers such a
+  primary-key lookup in real time, so a row written a moment before is seen without a `REFRESH`. A batch whose points send
+  all inputs or none (the usual pipeline delivery) costs no read. The stored values are formula inputs only; they are not
+  written back, so the column sets of the statement stay those the point names. A point that repeats a key of the same
+  batch sees the values of the earlier point (the order the statements write them).
+- **Limit.** Read and write are two statements: when another delivery of the same key lands between them, the formula
+  can see an input that is replaced a moment later. The next delivery of an input of that row evaluates it again.
+- **Unchanged:** manual protection (`ManualValueProtected`), the write result (`StreamDataWriteResult`), the rollup
+  dirty windows, and the import path (`ImportRowsAsync` names every column of every row).
+
+Tests: `PartialDeliverySqlTests`, `StoredRowLookupTests`, the AB#8622 cases of `CrateDbStreamDataComputedColumnIngestTests`
+(unit), `StreamDataOrigin/PartialDeliveryIntegrationTests` and `StreamDataOrigin/ComputedColumnPartialDeliveryIntegrationTests`
+(real CrateDB, raw and time-range: merged row, no refresh in between, explicit null, no input, new row, mixed batch, manual
+protection, manual partial correction, a rollup summing the computed column).
+
+### Record values — written as their member columns (AB#8666)
+
+A column on a record sub-path (`NamePlate.SerialNumber`, stored as `nameplateserialnumber`) is filled from the record
+member. A pipeline sends the record as one attribute (`NamePlate` → record with `SerialNumber`), the asset repository's
+REST `insert` sends the dotted path (`NamePlate.SerialNumber`); both arrive at the same column. Both insert paths expand
+record values first (`ArchiveRecordFlattening`), before the value check, the ranking-column check, the computed columns
+and the write, and then apply the partial-delivery rule above per member:
+
+| The record … the member | Effect |
+|---|---|
+| contains with a value | written |
+| contains with `null` | cleared (NULL) |
+| does not contain | not named: the stored value stays (NULL on a new row) |
+
+Nested records expand recursively. A whole record sent as `null` names no member column, so the members keep their
+values. Points without a record value are passed on unchanged (the REST shape is not expanded twice). Until AB#8666 the
+raw path skipped this expansion: a pipeline write dropped every record member, values and nulls alike, and the stored
+value stayed.
+
+Tests: `ArchiveRecordFlatteningTests` (unit), `StreamDataOrigin/RecordMemberWriteIntegrationTests` (real CrateDB, raw and
+time-range; computed column over a member, ranking column on a member, manual protection), and in `octo-mesh-adapter`
+`RawArchiveRecordMemberPipelineIntegrationTests` (`CreateUpdateInfo@1` → `SaveStreamDataInArchive@1` against the real
+repository).
 
 ### Time semantics
 

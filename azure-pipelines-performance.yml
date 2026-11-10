@@ -26,6 +26,12 @@
 # The Bug step needs the project Build Service to be allowed to create/edit work items in the Core
 # Platform area; if it is not, the step warns and the red run remains the signal.
 #
+# Stress tests (AB#8679/AB#8680): the run also executes the trait Category=Stress, the CrateDB memory-pressure tests
+# (StreamDataWriteLoss/ArchiveWriteUnderMemoryPressureIntegrationTests, RollupUnderMemoryPressureIntegrationTests, own
+# small-heap CrateDB container via CrateMemoryPressureFixture). They prove that no archive or rollup write loses rows
+# silently under a tripped breaker; they are excluded from the normal CI because they cost minutes. A red Stress test is
+# a correctness finding, not load noise: the Bug filed below names the failed test in the run's Tests tab.
+#
 # Manual run: Run pipeline, pick the branch, optionally set the entity count (1 000 000 = the opt-in 1M run).
 # Local run: tests/Runtime.Engine.MongoDb.IntegrationTests/README.md.
 
@@ -77,7 +83,7 @@ variables:
 
 jobs:
   - job: performanceTests
-    displayName: 'Performance budget tests (Category=Performance)'
+    displayName: 'Performance budget and stress tests (Category=Performance|Category=Stress)'
     timeoutInMinutes: 60
     pool:
       name: meshmakers-ci-agents
@@ -105,7 +111,7 @@ jobs:
       - pwsh: Write-Host "##vso[task.setvariable variable=perfTestsStarted]true"
         displayName: 'Mark: performance tests start'
       # No retryCountOnTaskFailure: a retry would hide a breach (the whole point of this run).
-      # Only the integration test project holds Category=Performance tests; naming it avoids a
+      # Only the integration test project holds Category=Performance and Category=Stress tests; naming it avoids a
       # "no test matches the filter" pass over the unit test project. performance.runsettings sets
       # TreatNoTestsAsError: a removed or renamed trait must turn the run red, not green.
       - task: DotNetCoreCLI@2
@@ -116,7 +122,7 @@ jobs:
         inputs:
           command: 'test'
           projects: '$(perfTestProject)'
-          arguments: '--configuration $(buildConfiguration) --no-build /p:OctoNugetPrivateServer=$(nugetPrivateServer) --filter "Category=Performance" --settings pipelines/performance.runsettings --logger "console;verbosity=normal" --blame-hang --blame-hang-timeout 15m --blame-hang-dump-type none'
+          arguments: '--configuration $(buildConfiguration) --no-build /p:OctoNugetPrivateServer=$(nugetPrivateServer) --filter "Category=Performance|Category=Stress" --settings pipelines/performance.runsettings --logger "console;verbosity=normal" --blame-hang --blame-hang-timeout 15m --blame-hang-dump-type none'
           testRunTitle: 'Performance'
       - ${{ if eq(parameters.fileBugOnBreach, true) }}:
           - task: PowerShell@2

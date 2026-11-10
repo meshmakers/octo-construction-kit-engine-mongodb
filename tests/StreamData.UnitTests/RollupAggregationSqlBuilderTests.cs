@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Meshmakers.Octo.Runtime.Contracts.StreamData;
 using Meshmakers.Octo.Runtime.Engine.CrateDb;
+using Meshmakers.Octo.Runtime.Engine.CrateDb.QueryBuilder;
 using Xunit;
 
 namespace Meshmakers.Octo.Runtime.Engine.UnitTests;
@@ -14,6 +15,59 @@ public class RollupAggregationSqlBuilderTests
 
     private static readonly DateTime BucketStart = new(2026, 5, 11, 14, 0, 0, DateTimeKind.Utc);
     private static readonly DateTime BucketEnd = new(2026, 5, 11, 14, 1, 0, DateTimeKind.Utc);
+
+    // ---- the expected row count of the statement (AB#8680) ----
+
+    [Fact]
+    public void BuildExpectedRowCount_RawSource_CountsTheEntitiesOfTheBucket_WithTheStatementsPredicate()
+    {
+        var resolved = new[] { RollupAggregationColumns.BindDeclared(new CkRollupAggregationSpec("voltage", CkRollupFunction.Sum, null)) };
+
+        var count = RollupAggregationSqlBuilder.BuildExpectedRowCount(
+            SourceTable, resolved, BucketStart, BucketEnd, sourceUsesWindowedStorage: false, rtIdScope: "mp-42");
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, resolved, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: false, rtIdScope: "mp-42");
+
+        Assert.StartsWith($"SELECT COUNT(*) FROM (SELECT \"rtid\" FROM {SourceTable}", count);
+        Assert.EndsWith("GROUP BY \"rtid\") \"expected\";", count);
+        // Same rows as the statement: its predicate verbatim.
+        var predicate = count[count.IndexOf("WHERE", StringComparison.Ordinal)..count.IndexOf("GROUP BY", StringComparison.Ordinal)];
+        Assert.Contains(predicate, sql);
+        Assert.DoesNotContain("SUM(", count);
+    }
+
+    [Fact]
+    public void BuildExpectedRowCount_RollupSource_ReadsTheSameGenerations()
+    {
+        var resolved = new[] { RollupAggregationColumns.BindDeclared(new CkRollupAggregationSpec("voltage", CkRollupFunction.Sum, null)) };
+        var startMs = new DateTimeOffset(BucketStart).ToUnixTimeMilliseconds();
+        var ranges = new[] { new GenerationRange(startMs, startMs + 60_000, string.Empty, 3) };
+
+        var count = RollupAggregationSqlBuilder.BuildExpectedRowCount(
+            SourceTable, resolved, BucketStart, BucketEnd, sourceUsesWindowedStorage: true, sourceGenerationRanges: ranges);
+        var sql = RollupAggregationSqlBuilder.Build(
+            SourceTable, TargetTable, RollupCkTypeId, resolved, BucketStart, BucketEnd,
+            sourceUsesWindowedStorage: true, sourceGenerationRanges: ranges);
+
+        var predicate = count[count.IndexOf("WHERE", StringComparison.Ordinal)..count.IndexOf("GROUP BY", StringComparison.Ordinal)];
+        Assert.Contains("\"generation\"", predicate);
+        Assert.Contains(predicate, sql);
+    }
+
+    [Fact]
+    public void BuildExpectedRowCount_TimeWeightedOverRawSource_AlsoCountsEntitiesWithOnlyACarryRow()
+    {
+        var resolved = new[] { RollupAggregationColumns.BindDeclared(new CkRollupAggregationSpec("voltage", CkRollupFunction.TimeWeightedAvg, null)) };
+
+        var count = RollupAggregationSqlBuilder.BuildExpectedRowCount(
+            SourceTable, resolved, BucketStart, BucketEnd, sourceUsesWindowedStorage: false,
+            carryLookback: TimeSpan.FromHours(1));
+
+        var carryFrom = BucketStart.AddHours(-1).ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+        var end = BucketEnd.ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Contains($"WHERE \"timestamp\" >= '{carryFrom}'::timestamp AND \"timestamp\" < '{end}'::timestamp", count);
+    }
 
     [Fact]
     public void Build_AvgFunction_GeneratesSumAndCountColumns()

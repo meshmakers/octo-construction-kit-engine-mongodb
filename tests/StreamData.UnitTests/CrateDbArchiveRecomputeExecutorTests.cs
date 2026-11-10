@@ -107,6 +107,8 @@ public class CrateDbArchiveRecomputeExecutorTests
                 "copy-slices",
                 // The copied rows have to be readable before the flip makes them authoritative.
                 "refresh:live",
+                // ... and they are counted before it (AB#8680).
+                "count:generation",
                 "flip",
                 // Every reader has to select the new generation before the old one is removed.
                 "refresh:genmap",
@@ -123,6 +125,124 @@ public class CrateDbArchiveRecomputeExecutorTests
         // No refresh between the slices of the copy, none between the slices of the sweep.
         Assert.True(harness.Crate.Calls.Count(c => c.Kind == "copy") > 1);
         Assert.True(harness.Crate.Calls.Count(c => c.Kind == "delete:superseded") > 1);
+    }
+
+    // ---- a copy slice CrateDB stored only in part (AB#8680) ----
+
+    [Fact]
+    public async Task CopySliceShortOnce_IsCopiedOnceMore_AndTheRunCommitsAllRows()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(5);
+        harness.SeedLive(buckets: 12, series, generation: 3);
+        harness.Crate.Pointers.Add(new GenerationRange(StartMs, StartMs + 12 * HourMs, string.Empty, 3));
+        var dropped = false;
+        harness.Crate.DropOnCopy = row =>
+        {
+            if (dropped || row.RtId != series[2])
+            {
+                return false;
+            }
+
+            dropped = true;
+            return true;
+        };
+
+        await harness.RunAsync(buckets: 12, series);
+
+        Assert.True(dropped);
+        Assert.Equal(60, harness.Crate.Live.Count);
+        Assert.All(harness.Crate.Live, r => Assert.Equal(4, r.Generation));
+        Assert.Contains(harness.Crate.Calls, c => c.Kind == "copy" && c.Text.EndsWith("ON CONFLICT DO NOTHING;", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CopySliceStillShortAfterTheRepeat_FailsBeforeTheFlip_AndThePreviousGenerationStaysLive()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(5);
+        harness.SeedLive(buckets: 12, series, generation: 3);
+        var pointer = new GenerationRange(StartMs, StartMs + 12 * HourMs, string.Empty, 3);
+        harness.Crate.Pointers.Add(pointer);
+        var lost = new Row(StartMs + 5 * HourMs, 0, series[1]);
+        harness.Crate.DropOnCopy = row => row == lost;
+
+        var ex = await Assert.ThrowsAsync<StreamDataWriteIncompleteException>(() => harness.RunAsync(buckets: 12, series));
+
+        Assert.Equal(harness.LiveTable, ex.QualifiedTable);
+        Assert.Equal(1, ex.RowsMissing);
+        Assert.Contains("generation 4", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("pointer was not flipped", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("also after one retry", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("flip", harness.Crate.Kinds);
+        Assert.Equal(new[] { pointer }, harness.Crate.Pointers);
+        Assert.Equal(60, harness.Crate.Live.Count(r => r.Generation == 3));
+        // The staged rows stay for diagnosis; the next run clears them before it stages.
+        Assert.Equal(60, harness.Crate.Staging.Count);
+    }
+
+    [Fact]
+    public async Task ARowTheCopyReportedButDidNotStore_IsFoundBeforeTheFlip()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(5);
+        harness.SeedLive(buckets: 12, series, generation: 3);
+        var pointer = new GenerationRange(StartMs, StartMs + 12 * HourMs, string.Empty, 3);
+        harness.Crate.Pointers.Add(pointer);
+        var lost = new Row(StartMs + 7 * HourMs, 0, series[3]);
+        harness.Crate.DropOnCopy = row => row == lost;
+        harness.Crate.ReportDroppedCopyRows = true;
+
+        var ex = await Assert.ThrowsAsync<StreamDataWriteIncompleteException>(() => harness.RunAsync(buckets: 12, series));
+
+        Assert.Equal(harness.LiveTable, ex.QualifiedTable);
+        Assert.Equal(1, ex.RowsMissing);
+        // Found by the end-to-end count, which does not retry; the message must not claim a retry.
+        Assert.Contains("live copy count check", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("after one retry", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("flip", harness.Crate.Kinds);
+        Assert.Equal(new[] { pointer }, harness.Crate.Pointers);
+    }
+
+    [Fact]
+    public async Task ARowTheAggregationReportedButDidNotStage_IsFoundBeforeTheCopy_WithoutClaimingARetry()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(5);
+        harness.SeedLive(buckets: 12, series, generation: 3);
+        var pointer = new GenerationRange(StartMs, StartMs + 12 * HourMs, string.Empty, 3);
+        harness.Crate.Pointers.Add(pointer);
+        var lost = new Row(StartMs + 4 * HourMs, 0, series[2]);
+        harness.Crate.DropOnStage = row => row == lost;
+
+        var ex = await Assert.ThrowsAsync<StreamDataWriteIncompleteException>(() => harness.RunAsync(buckets: 12, series));
+
+        Assert.Equal(RollupRecomputeSqlBuilder.StagingTable(Tenant, harness.RollupRtId.ToString()), ex.QualifiedTable);
+        Assert.Equal(60, ex.RowsSent);
+        Assert.Equal(1, ex.RowsMissing);
+        Assert.Contains("staging count check", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("does not retry", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("after one retry", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("flip", harness.Crate.Kinds);
+        Assert.Equal(new[] { pointer }, harness.Crate.Pointers);
+    }
+
+    [Fact]
+    public async Task CopySliceShort_TheNextRunRemovesTheUncommittedRows_AndCommitsAllRows()
+    {
+        var harness = new Harness(sliceTargetRows: 10);
+        var series = Series(5);
+        harness.SeedLive(buckets: 12, series, generation: 3);
+        harness.Crate.Pointers.Add(new GenerationRange(StartMs, StartMs + 12 * HourMs, string.Empty, 3));
+        var lost = new Row(StartMs + 5 * HourMs, 0, series[1]);
+        harness.Crate.DropOnCopy = row => row == lost;
+        await Assert.ThrowsAsync<StreamDataWriteIncompleteException>(() => harness.RunAsync(buckets: 12, series));
+
+        harness.Crate.DropOnCopy = null;
+        await harness.RunAsync(buckets: 12, series);
+
+        Assert.Equal(60, harness.Crate.Live.Count);
+        Assert.All(harness.Crate.Live, r => Assert.Equal(4, r.Generation));
     }
 
     [Fact]

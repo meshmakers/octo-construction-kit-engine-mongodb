@@ -312,6 +312,18 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
                     sourceGenerationRanges: sourceGenerationRanges,
                     sourceIsRollup: source.RollupAggregations is not null);
 
+            // What the statement above must stage for the same source generations (AB#8680).
+            string BuildExpectedCountSql(IReadOnlyList<GenerationRange>? sourceGenerationRanges) =>
+                RollupAggregationSqlBuilder.BuildExpectedRowCount(
+                    sourceTable,
+                    resolvedAggregations,
+                    bucketStart,
+                    bucketEnd,
+                    source.UsesWindowedStorage,
+                    rtIdScope: scope,
+                    carryLookback: rollup.CarryLookback,
+                    sourceGenerationRanges: sourceGenerationRanges);
+
             // A discarded attempt may have staged a row for an entity the repeated attempt no longer
             // produces; clear the bucket from staging so it cannot be copied into the live table. The
             // delete is a search operation, so the staged rows have to be on the read path first.
@@ -333,7 +345,8 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
             // another retry loop here (it would multiply against the Polly retries and amplify load on
             // a struggling cluster).
             rows += await _bucketAggregator.AggregateAsync(
-                source, bucketStart, bucketEnd, scope, BuildAggregateSql, DiscardStagedBucketAsync, cancellationToken);
+                source, bucketStart, bucketEnd, scope, BuildAggregateSql, BuildExpectedCountSql, stagingTable,
+                DiscardStagedBucketAsync, cancellationToken);
             windows++;
         }
 
@@ -380,13 +393,30 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         //    (every staged window starts inside it). The slices read staging, refreshed above, and
         //    write disjoint keys, so nothing has to be refreshed between them. Refresh once at the
         //    end so the rows are on the read path before the pointer flip makes them authoritative.
+        //    Every slice must insert the rows it counted (AB#8680): a slice CrateDB stored only in part
+        //    is copied once more (only its missing rows), and a slice still short fails the run here,
+        //    before the flip — readers stay on the previous generation, and the rows this run copied are
+        //    leftovers of an uncommitted copy that the next run removes (step 0).
         var copied = await RunSlicedAsync(
             rangeStart, rangeEnd,
             (from, to) => RollupRecomputeSqlBuilder.BuildCountStaged(stagingTable, from, to),
             (from, to) => RollupRecomputeSqlBuilder.BuildInsertFromStagingSlice(
                 liveTable, stagingTable, columnNames, generation, from, to),
-            cancellationToken);
+            cancellationToken,
+            writeCheck: new SliceWriteCheck(
+                liveTable,
+                (from, to) => RollupRecomputeSqlBuilder.BuildInsertFromStagingSlice(
+                    liveTable, stagingTable, columnNames, generation, from, to, skipExisting: true),
+                (from, to) => RollupRecomputeSqlBuilder.BuildCountGeneration(liveTable, from, to, generation, rowScope),
+                (from, to, expected, written) => FormattableString.Invariant(
+                    $"Recompute copy of rollup {rollup.RtId} slice [{from:O}, {to:O}) from {stagingTable} into generation {generation}: {written} of {expected} staged rows are in the live table. The generation pointer was not flipped; the previous generation stays live.")));
         await _databaseClient.RefreshArchiveTableAsync(_tenantId, liveTable, CrateStatementClass.Maintenance, cancellationToken);
+
+        // 1b. The whole generation, end to end, before it is committed (AB#8680): staging holds every row the
+        //     aggregations reported, and the live table every staged row under the new generation. Independent of
+        //     what CrateDB reported per statement; one count over the range, the rows are on the read path.
+        await VerifyGenerationCompleteAsync(
+            rollup.RtId, liveTable, stagingTable, rangeStart, rangeEnd, generation, rowScope, rows, copied.Rows, cancellationToken);
 
         // 2. Flip the pointer (atomic commit) — scoped to the entity when a per-rtId recompute.
         //    Refresh so every reader selects the new generation BEFORE the sweep removes the old one:
@@ -945,7 +975,8 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
         Func<DateTime, DateTime, string> buildCount,
         Func<DateTime, DateTime, string> buildStatement,
         CancellationToken cancellationToken,
-        Func<CancellationToken, Task<bool>>? mayExecuteAsync = null)
+        Func<CancellationToken, Task<bool>>? mayExecuteAsync = null,
+        SliceWriteCheck? writeCheck = null)
     {
         var fromMs = ToEpochMs(rangeStart);
         var toMs = ToEpochMsCeiling(rangeEnd);
@@ -983,15 +1014,96 @@ public sealed class CrateDbArchiveRecomputeExecutor : IArchiveRecomputeExecutor
                 break;
             }
 
-            await _databaseClient.ExecuteNonQueryAsync(
+            var affected = await _databaseClient.ExecuteNonQueryAsync(
                 _tenantId, buildStatement(sliceFrom, sliceTo), CrateStatementClass.Maintenance, cancellationToken);
             statements++;
+            if (writeCheck is not null && affected < sliceRows)
+            {
+                await RepeatShortSliceAsync(writeCheck, sliceFrom, sliceTo, sliceRows, affected, cancellationToken);
+                statements++;
+            }
         }
 
         return new SlicedRun(total, statements);
     }
 
+    /// <summary>
+    /// A slice whose statement reported fewer rows than were counted for it (AB#8680): CrateDB ends a shard request
+    /// of an <c>INSERT … SELECT</c> whose memory circuit breaker tripped and answers without an error. The slice is
+    /// written once more — the repeat inserts only the missing rows — and then counted in its target; still short,
+    /// it fails the run.
+    /// </summary>
+    private async Task RepeatShortSliceAsync(
+        SliceWriteCheck check, DateTime sliceFrom, DateTime sliceTo, long expected, int affected,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogWarning(
+            "Slice [{From:O},{To:O}) of {Table} wrote {Rows} of {Expected} rows without an error; writing it once more.",
+            sliceFrom, sliceTo, check.TargetTable, affected, expected);
+        await _databaseClient.ExecuteNonQueryAsync(
+            _tenantId, check.BuildRepeat(sliceFrom, sliceTo), CrateStatementClass.Maintenance, cancellationToken);
+        // The count is a search read; the repeat's rows have to be on the read path.
+        await _databaseClient.RefreshArchiveTableAsync(_tenantId, check.TargetTable, CrateStatementClass.Maintenance, cancellationToken);
+        var written = await _databaseClient.GetCountAsync(
+            _tenantId, check.BuildCountWritten(sliceFrom, sliceTo), CrateStatementClass.Maintenance, cancellationToken);
+        if (written >= expected)
+        {
+            return;
+        }
+
+        throw StreamDataWriteIncompleteException.AfterRetry(
+            check.TargetTable,
+            checked((int)expected),
+            checked((int)(expected - written)),
+            check.Describe(sliceFrom, sliceTo, expected, written));
+    }
+
+    private async Task VerifyGenerationCompleteAsync(
+        OctoObjectId rollupRtId, string liveTable, string stagingTable, DateTime rangeStart, DateTime rangeEnd,
+        long generation, string? rowScope, long aggregatedRows, long stagedRows, CancellationToken cancellationToken)
+    {
+        if (stagedRows < aggregatedRows)
+        {
+            throw StreamDataWriteIncompleteException.CountCheckFailed(
+                "staging",
+                stagingTable,
+                checked((int)aggregatedRows),
+                checked((int)(aggregatedRows - stagedRows)),
+                FormattableString.Invariant(
+                    $"Recompute of rollup {rollupRtId} range [{rangeStart:O}, {rangeEnd:O}): the aggregations reported {aggregatedRows} rows, the staging table holds {stagedRows}. The generation pointer was not flipped; the previous generation stays live."));
+        }
+
+        var inLive = await _databaseClient.GetCountAsync(
+            _tenantId,
+            RollupRecomputeSqlBuilder.BuildCountGeneration(
+                liveTable, FromEpochMs(ToEpochMs(rangeStart)), FromEpochMs(ToEpochMsCeiling(rangeEnd)), generation, rowScope),
+            CrateStatementClass.Maintenance, cancellationToken);
+        if (inLive < stagedRows)
+        {
+            throw StreamDataWriteIncompleteException.CountCheckFailed(
+                "live copy",
+                liveTable,
+                checked((int)stagedRows),
+                checked((int)(stagedRows - inLive)),
+                FormattableString.Invariant(
+                    $"Recompute copy of rollup {rollupRtId} range [{rangeStart:O}, {rangeEnd:O}) into generation {generation}: {inLive} of {stagedRows} staged rows are in the live table. The generation pointer was not flipped; the previous generation stays live."));
+        }
+    }
+
     private readonly record struct SlicedRun(long Rows, int Statements);
+
+    /// <summary>
+    /// How <see cref="RunSlicedAsync"/> checks that a slice statement wrote every row counted for it (AB#8680).
+    /// </summary>
+    /// <param name="TargetTable">The table the statements write.</param>
+    /// <param name="BuildRepeat">The slice's statement once more, writing only what is missing.</param>
+    /// <param name="BuildCountWritten">Counts the slice's rows in <paramref name="TargetTable"/>.</param>
+    /// <param name="Describe">The failure detail: slice, expected rows, rows written.</param>
+    private sealed record SliceWriteCheck(
+        string TargetTable,
+        Func<DateTime, DateTime, string> BuildRepeat,
+        Func<DateTime, DateTime, string> BuildCountWritten,
+        Func<DateTime, DateTime, long, long, string> Describe);
 
     private static long ToEpochMs(DateTime value) => new DateTimeOffset(AsUtc(value)).ToUnixTimeMilliseconds();
 

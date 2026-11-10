@@ -100,6 +100,21 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
     /// </summary>
     public Func<int, IEnumerable<Row>> StageForAggregate { get; set; } = _ => Array.Empty<Row>();
 
+    /// <summary>
+    /// A staged row the copy into the live table neither stores nor reports when this returns true — what CrateDB
+    /// does with the rows of a shard request its memory circuit breaker ended (AB#8680).
+    /// </summary>
+    public Func<Row, bool>? DropOnCopy { get; set; }
+
+    /// <summary>The copy reports the rows <see cref="DropOnCopy" /> dropped as written (a loss the affected count does not show).</summary>
+    public bool ReportDroppedCopyRows { get; set; }
+
+    /// <summary>
+    /// A row the aggregation into the staging table neither stores nor reports as missing when this returns true:
+    /// the statement reports every row as written (a loss only the count of the staging table shows).
+    /// </summary>
+    public Func<Row, bool>? DropOnStage { get; set; }
+
     /// <summary>Called before a statement is applied; may throw to make the statement fail.</summary>
     public Action<Call, CancellationToken>? BeforeStatement { get; set; }
 
@@ -130,6 +145,13 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
         {
             kind = "count:sweep-table-exists";
             rows = SweepTableExists && countQuery.Contains($"'{_sweepTableName}'", StringComparison.Ordinal) ? 1 : 0;
+        }
+        else if (countQuery.StartsWith("SELECT COUNT(*) FROM (SELECT \"rtid\" FROM ", StringComparison.Ordinal))
+        {
+            // The expected rows of an aggregation statement (AB#8680). The simulation has no source table, and the
+            // rows an aggregation stages are only known when it runs: no expected rows, so the check never fires
+            // here (RollupSourceGenerationReadTests covers it). Not recorded, so the call sequences stay as they are.
+            return Task.FromResult(0L);
         }
         else if (countQuery.Contains($"FROM {_stagingTable}", StringComparison.Ordinal))
         {
@@ -280,6 +302,10 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
 
     public Task<List<DataPointDto>> GetDataAsync(string tenantId, string query) => throw new NotSupportedException();
 
+    public Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>>> ReadStoredRowsAsync(string tenantId,
+        string qualifiedTable, bool windowed, IReadOnlyList<Meshmakers.Octo.Runtime.Engine.CrateDb.Client.StoredRowKey> keys,
+        IReadOnlyList<string> columns) => throw new NotSupportedException();
+
     public Task ExecuteBulkAsync(string tenantId, string parameterizedSql,
         IReadOnlyList<IReadOnlyList<object?>> argumentSets, CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
@@ -409,14 +435,15 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
                 EnsureStagingExists();
 
                 var staged = StageForAggregate(_aggregates++).ToList();
-                Staging.AddRange(staged);
+                Staging.AddRange(staged.Where(row => DropOnStage?.Invoke(row) != true));
                 return staged.Count;
             }
             case "copy":
             {
                 EnsureStagingExists();
                 var generation = long.Parse(CopyGenerationRegex.Match(sql).Groups["g"].Value, CultureInfo.InvariantCulture);
-                var rows = (RangeRegex.IsMatch(sql) ? Select(Staging, sql) : Staging).ToList();
+                var selected = (RangeRegex.IsMatch(sql) ? Select(Staging, sql) : Staging).ToList();
+                var rows = selected.Where(row => DropOnCopy?.Invoke(row) != true).ToList();
                 foreach (var row in rows)
                 {
                     // Like CrateDB's INSERT … SELECT without ON CONFLICT: a row whose key exists is skipped.
@@ -426,7 +453,7 @@ internal sealed class RecomputeCrateSimulator : IStreamDataDatabaseClient, IStre
                     }
                 }
 
-                return rows.Count;
+                return ReportDroppedCopyRows ? selected.Count : rows.Count;
             }
             case "flip":
             {

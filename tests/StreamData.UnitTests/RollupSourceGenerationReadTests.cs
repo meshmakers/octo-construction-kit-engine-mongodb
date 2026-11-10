@@ -150,13 +150,125 @@ public class RollupSourceGenerationReadTests
         };
 
         var rows = await harness.Aggregator.AggregateAsync(
-            baseSource, BucketStart, BucketEnd, null, harness.BuildSql, harness.Discard, CancellationToken.None);
+            baseSource, BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, harness.Discard, CancellationToken.None);
 
         Assert.Equal(Harness.RowsPerStatement, rows);
         Assert.Equal(new IReadOnlyList<GenerationRange>?[] { null }, harness.BuiltWith);
         Assert.Equal(0, harness.PointerReads);
         Assert.Equal(0, harness.Discards);
     }
+
+    // ---- the affected rows against the expected rows (AB#8680) ----
+
+    [Fact]
+    public async Task Aggregate_ShortStatement_IsWrittenOnceMore_AndKeptWhenComplete()
+    {
+        var harness = new Harness();
+        harness.Returns(expected: 5, 3, 5);
+
+        var rows = await harness.Aggregator.AggregateAsync(
+            BaseSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, harness.Discard, CancellationToken.None);
+
+        Assert.Equal(5, rows);
+        Assert.Equal(2, harness.Statements);
+    }
+
+    [Fact]
+    public async Task Aggregate_StatementStillShortAfterTheRepeat_FailsNamingTableAndCounts()
+    {
+        var harness = new Harness();
+        harness.Returns(expected: 5, 3, 4);
+
+        var ex = await Assert.ThrowsAsync<StreamDataWriteIncompleteException>(() => harness.Aggregator.AggregateAsync(
+            BaseSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, harness.Discard, CancellationToken.None));
+
+        Assert.Equal(Harness.Target, ex.QualifiedTable);
+        Assert.Equal(5, ex.RowsSent);
+        Assert.Equal(1, ex.RowsMissing);
+        Assert.Contains(BucketStart.ToString("O", System.Globalization.CultureInfo.InvariantCulture), ex.Message, StringComparison.Ordinal);
+        Assert.Equal(2, harness.Statements);
+    }
+
+    [Fact]
+    public async Task Aggregate_MoreRowsThanCounted_IsNotAShortfall()
+    {
+        // The source can gain an entity between the count and the statement.
+        var harness = new Harness();
+        harness.Returns(expected: 5, 6);
+
+        var rows = await harness.Aggregator.AggregateAsync(
+            BaseSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, harness.Discard, CancellationToken.None);
+
+        Assert.Equal(6, rows);
+        Assert.Equal(1, harness.Statements);
+    }
+
+    [Fact]
+    public async Task Aggregate_SourceRowDeletedDuringTheStatement_RecountMatchesTheRowsWritten_IsNotALoss()
+    {
+        // The count saw 5 groups, a source row (the only one of an entity) was deleted before the statement ran.
+        var harness = new Harness();
+        harness.Returns(expected: new long[] { 5, 4 }, 4);
+
+        var rows = await harness.Aggregator.AggregateAsync(
+            BaseSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, harness.Discard, CancellationToken.None);
+
+        Assert.Equal(4, rows);
+        Assert.Equal(1, harness.Statements); // no repeat
+        Assert.Equal(2, harness.Counts);
+    }
+
+    [Fact]
+    public async Task Aggregate_RecountStillAboveTheRowsWritten_IsWrittenOnceMore_AndJudgedAgainstTheRecount()
+    {
+        var harness = new Harness();
+        harness.Returns(expected: new long[] { 5, 4 }, 3, 3);
+
+        var ex = await Assert.ThrowsAsync<StreamDataWriteIncompleteException>(() => harness.Aggregator.AggregateAsync(
+            BaseSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, harness.Discard, CancellationToken.None));
+
+        Assert.Equal(4, ex.RowsSent);
+        Assert.Equal(1, ex.RowsMissing);
+        Assert.Equal(2, harness.Statements);
+        Assert.Equal(2, harness.Counts); // counted once more, not per attempt
+    }
+
+    [Fact]
+    public async Task Aggregate_RollupSource_ShortfallUnderAChangedPointer_IsAggregatedAgain_NotFailed()
+    {
+        // The source swept the counted generation between the count and the statement: not a loss.
+        var pointer = new GenerationRange(StartMs, EndMs, string.Empty, 4);
+        var flipped = new GenerationRange(StartMs, EndMs, string.Empty, 5);
+        var harness = new Harness(new[] { pointer }, new[] { flipped }, new[] { flipped }, new[] { flipped }, new[] { flipped });
+        harness.Returns(expected: 5, 3, 3, 5);
+
+        var rows = await harness.Aggregator.AggregateAsync(
+            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, harness.Discard, CancellationToken.None);
+
+        Assert.Equal(5, rows);
+        Assert.Equal(1, harness.Discards);
+        Assert.Equal(new[] { flipped }, harness.BuiltWith[^1]);
+    }
+
+    [Fact]
+    public async Task Aggregate_RollupSource_ShortfallUnderAnUnchangedPointer_Fails()
+    {
+        var pointer = new GenerationRange(StartMs, EndMs, string.Empty, 4);
+        var harness = new Harness(new[] { pointer }, new[] { pointer });
+        harness.Returns(expected: 5, 3, 3);
+
+        await Assert.ThrowsAsync<StreamDataWriteIncompleteException>(() => harness.Aggregator.AggregateAsync(
+            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, harness.Discard, CancellationToken.None));
+        Assert.Equal(0, harness.Discards);
+    }
+
+    private static ArchiveSnapshot BaseSource() =>
+        new(OctoObjectId.GenerateNewId(), MeterType, CkArchiveStatus.Activated,
+            "base", new[] { new CkArchiveColumnSpec("voltage", Indexed: true, Required: false) })
+        {
+            IsTimeRange = true,
+            Period = TimeSpan.FromMinutes(15),
+        };
 
     [Fact]
     public async Task Aggregate_RollupSource_PointerUnchanged_KeepsTheFirstAttempt()
@@ -165,7 +277,7 @@ public class RollupSourceGenerationReadTests
         var harness = new Harness(new[] { pointer }, new[] { pointer });
 
         var rows = await harness.Aggregator.AggregateAsync(
-            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.Discard, CancellationToken.None);
+            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, harness.Discard, CancellationToken.None);
 
         Assert.Equal(Harness.RowsPerStatement, rows);
         Assert.Single(harness.BuiltWith);
@@ -182,7 +294,7 @@ public class RollupSourceGenerationReadTests
         var harness = new Harness(new[] { old }, new[] { flipped }, new[] { flipped }, new[] { flipped });
 
         await harness.Aggregator.AggregateAsync(
-            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.Discard, CancellationToken.None);
+            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, harness.Discard, CancellationToken.None);
 
         Assert.Equal(2, harness.BuiltWith.Count);
         Assert.Equal(new[] { old }, harness.BuiltWith[0]);
@@ -198,7 +310,7 @@ public class RollupSourceGenerationReadTests
         var harness = new Harness(Array.Empty<GenerationRange>(), new[] { first }, new[] { first }, new[] { first });
 
         await harness.Aggregator.AggregateAsync(
-            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.Discard, CancellationToken.None);
+            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, harness.Discard, CancellationToken.None);
 
         Assert.Equal(2, harness.BuiltWith.Count);
         Assert.Empty(harness.BuiltWith[0]!);
@@ -214,7 +326,7 @@ public class RollupSourceGenerationReadTests
         var harness = new Harness(new[] { mine, elsewhereOld }, new[] { mine, elsewhereNew });
 
         await harness.Aggregator.AggregateAsync(
-            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.Discard, CancellationToken.None);
+            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, harness.Discard, CancellationToken.None);
 
         Assert.Single(harness.BuiltWith);
         Assert.Equal(new[] { mine }, harness.BuiltWith[0]);
@@ -229,7 +341,7 @@ public class RollupSourceGenerationReadTests
         var harness = new Harness(reads);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => harness.Aggregator.AggregateAsync(
-            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.Discard, CancellationToken.None));
+            RollupSource(), BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, harness.Discard, CancellationToken.None));
 
         Assert.Equal(RollupSourceBucketAggregator.MaxAttempts, harness.BuiltWith.Count);
         // The last attempt's rows are discarded too — nothing unverified is left behind.
@@ -247,7 +359,7 @@ public class RollupSourceGenerationReadTests
         var harness = new Harness(new[] { global, mine, otherOld }, new[] { global, mine, otherNew });
 
         await harness.Aggregator.AggregateAsync(
-            RollupSource(), BucketStart, BucketEnd, "entity-a", harness.BuildSql, harness.Discard, CancellationToken.None);
+            RollupSource(), BucketStart, BucketEnd, "entity-a", harness.BuildSql, harness.BuildCount, Harness.Target, harness.Discard, CancellationToken.None);
 
         Assert.Single(harness.BuiltWith);
         Assert.Equal(new[] { global, mine }, harness.BuiltWith[0]);
@@ -261,8 +373,8 @@ public class RollupSourceGenerationReadTests
         var harness = new Harness(new[] { pointer }, new[] { pointer }, new[] { pointer }, new[] { pointer });
         var source = RollupSource();
 
-        await harness.Aggregator.AggregateAsync(source, BucketStart, BucketEnd, null, harness.BuildSql, null, CancellationToken.None);
-        await harness.Aggregator.AggregateAsync(source, BucketStart, BucketEnd, null, harness.BuildSql, null, CancellationToken.None);
+        await harness.Aggregator.AggregateAsync(source, BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, null, CancellationToken.None);
+        await harness.Aggregator.AggregateAsync(source, BucketStart, BucketEnd, null, harness.BuildSql, harness.BuildCount, Harness.Target, null, CancellationToken.None);
 
         A.CallTo(() => harness.Management.ExecuteDdlAsync(
                 Tenant, A<string>.That.Contains("__genmap"), A<CancellationToken>._))
@@ -375,6 +487,34 @@ public class RollupSourceGenerationReadTests
             BuiltWith.Add(ranges);
             return "INSERT …";
         }
+
+        public const string Target = "\"t\".\"archive_target\"";
+
+        public string BuildCount(IReadOnlyList<GenerationRange>? ranges) => "SELECT COUNT(*) …";
+
+        /// <summary>Makes the expected-row count return <paramref name="expected"/> and the statements <paramref name="affected"/> in turn.</summary>
+        public void Returns(long expected, params int[] affected)
+        {
+            A.CallTo(() => Client.GetCountAsync(Tenant, A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
+                .Returns(expected);
+            A.CallTo(() => Client.ExecuteNonQueryAsync(
+                    Tenant, A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
+                .ReturnsNextFromSequence(affected);
+        }
+
+        /// <summary>Makes the expected-row counts return <paramref name="expected"/> in turn and the statements <paramref name="affected"/>.</summary>
+        public void Returns(long[] expected, params int[] affected)
+        {
+            A.CallTo(() => Client.GetCountAsync(Tenant, A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
+                .ReturnsNextFromSequence(expected);
+            A.CallTo(() => Client.ExecuteNonQueryAsync(
+                    Tenant, A<string>._, CrateStatementClass.Maintenance, A<CancellationToken>._))
+                .ReturnsNextFromSequence(affected);
+        }
+
+        public int Counts => Fake.GetCalls(Client).Count(c => c.Method.Name == nameof(IStreamDataDatabaseClient.GetCountAsync));
+
+        public int Statements => Fake.GetCalls(Client).Count(c => c.Method.Name == nameof(IStreamDataDatabaseClient.ExecuteNonQueryAsync));
 
         public Task Discard(CancellationToken cancellationToken)
         {

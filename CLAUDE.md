@@ -185,6 +185,15 @@ cascade. Correctness timeouts with a wide margin (`RepositoryDistributedLockServ
 `StagingCopyIntegrationTests` 30 s, the orchestrator tick waits, `TenantUpgradeGuardTests` 2 s for 100 in-memory models) stay in
 the CI. Local run, triage and the classification rule: `tests/Runtime.Engine.MongoDb.IntegrationTests/README.md`.
 
+**Stress tests are not in the CI either (AB#8679/AB#8680).** Trait `[Trait("Category", "Stress")]`: the
+`StreamDataWriteLoss/*UnderMemoryPressureIntegrationTests` with their own small-heap CrateDB (`CrateMemoryPressureFixture`).
+They took a local full run from ~13 to more than 22 minutes (decision Reimar 2026-11-09: stress tests do not belong in the
+integration suite). The CI filter is `Category!=Performance&Category!=Stress`; the pipeline
+`octo-construction-kit-engine-mongodb-Performance` runs `Category=Performance|Category=Stress`. Locally:
+`dotnet tests/Runtime.Engine.MongoDb.IntegrationTests/bin/DebugL/net10.0/Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.dll -trait "Category=Stress"`.
+The rules they prove stay in the CI as fast tests that produce the shortfall on purpose: `MissingRowRetryTests`,
+`StreamDataWriteLoss/ArchiveWriteShortfallIntegrationTests`, `StreamDataWriteLoss/RollupShortfallIntegrationTests`.
+
 ## Tenant Registry vs. Tenant Hierarchy (AB#5025)
 
 The system tenant's database doubles as the **platform-wide routing registry**: every tenant of
@@ -1170,8 +1179,11 @@ Rules to keep:
   when the archive does not name it (also with no precedence at all: the guard is then `$Origin` alone, automated vs
   automated stays last-write-wins). Named explicitly, `$Origin` applies at the author's position; `Order: Ignore` on it is
   the opt-out (the key is dropped; with no other key there is no guard). `LowerWins` on `$Origin`, `Ignore` on a column
-  and `$Origin` named twice are refused at activation. `ManualValueProtected` is only reported when the guard ranks by
-  origin. Rollups and the import path are unchanged.
+  and `$Origin` named twice are refused at activation. The skip reason names the key that decided (AB#8637,
+  `ConflictOutcome.DecidingReason`: the first key in which the stored row differs from the write; a ranking column the
+  write does not send ties, AB#8622): `ManualValueProtected` only
+  when `$Origin` decided (origin first, or every key before it tied), `LowerPrecedence` when a column key before it decided,
+  also against a manual row; never `ManualValueProtected` when the origin is ignored. Rollups and the import path are unchanged.
 
 - **Reading the origin (AB#7616)**: `row_origin`, `manual_written_by`, `manual_written_at`, `manual_reason` are
   selectable/filterable/groupable on raw and time-range archives. Every read-path column reference goes through
@@ -1232,12 +1244,142 @@ needs a backfill: `scripts/rollup-manual-rows-check.sh`. Write-up: `docs/streamd
 
 The repository inserts return `StreamDataWriteResult` (`Stored`, `Skipped` with reason `CkTypeMismatch` /
 `LowerPrecedence` / `ManualValueProtected`). A guarded statement ends with `RETURNING` key + ranking columns +
-`row_origin`; `ConflictOutcome.FindSkipped` decides stored ⇔ the returned values equal the sent ones (exact because
-the last key admits equality). The client inserts return the skipped rows as `SkippedArchiveRow(Index, Reason)`;
+`row_origin`; `ConflictOutcome.Decide` decides stored ⇔ the returned values equal the sent ones (exact because
+the last key admits equality); the reason of a skipped row is the key that decided (AB#8637;
+**changelog entry:** an automated write that loses on a column key placed before `$Origin` was reported as
+`ManualValueProtected` whenever the stored row was manual, now `LowerPrecedence`; storage is unchanged). Tests:
+`StreamDataOrigin/SkipReasonDecidingKeyIntegrationTests` (raw and time-range). The client inserts return the skipped rows as `SkippedArchiveRow(Index, Reason)`;
 unguarded statements send no `RETURNING`. Only stored rows feed the retroactive detection. A manual row that is
 not stored throws `ManualStreamDataNotAppliedException`. The single-point `InsertAsync` goes through the batch path.
 Tests: `ConflictOutcomeTests`, `StreamDataOrigin/ArchiveRowOriginIntegrationTests` (multi-statement exactness on
 CrateDB). Write-up: `docs/streamdata-archive-concept.md` → *Write result*.
+
+**A dropped shard request is a failed write (AB#8679).** When CrateDB's memory circuit breaker trips it ends a shard request
+of a multi-row INSERT and answers **without an error**. A guarded statement then lacks the `RETURNING` rows of the dropped rows
+(`ConflictOutcome.Decide` reports them as `Missing`, never as a skip: an upsert returns a row for every row it processed), an
+unguarded statement reports fewer affected rows than rows sent (CrateDB counts a key repeated in one statement once per row, also two points less than 1 ms apart that are one stored row; `ArchiveWriteRepeatedKeyIntegrationTests`). `CrateDatabaseClient.InsertGroupedAsync` writes the
+missing rows once more (`MissingRowRetry`) (guarded: those rows, unguarded: the statement) and then throws `StreamDataWriteIncompleteException`
+(archive table, rows sent / missing). It is not a contracts `StreamDataException` on purpose: the asset repository maps that to
+400. Rules: never turn a missing `RETURNING` row back into a skip reason, never catch the exception into a success. Tests:
+`MissingRowRetryTests` (unit), `StreamDataWriteLoss/ArchiveWriteShortfallIntegrationTests` (CI, < 1 s: a `CHECK` constraint makes
+CrateDB drop rows of a multi-row INSERT without an error, the same signature), and the stress test (`Category=Stress`, not in the CI)
+`StreamDataWriteLoss/ArchiveWriteUnderMemoryPressureIntegrationTests` (own CrateDB container, 512 MB heap, query breaker set per
+test: guarded 25 %, unguarded 5 %; skipped with that reason if the breaker never trips; ~15 s; red without the check).
+**The rollup statements check their rows too (AB#8680).** The forward aggregation, the recompute's staging aggregation (both
+through `RollupSourceBucketAggregator`) and the staging-to-live copy are `INSERT … SELECT` statements that CrateDB answers the
+same way. Each compares its affected rows with the rows it must write: the aggregation with
+`RollupAggregationSqlBuilder.BuildExpectedRowCount` (same source predicate and generations, `GROUP BY rtid` of the key only,
+counted **before** the statement, so late source rows can only raise the affected count; on the LOCF path the carry window is
+part of it; on a shortfall the source is counted once more, because a source row deleted meanwhile lowers what the statement can
+write: rows written >= the recount is no loss, and the repeat is judged against the recount), the copy with the row count of its
+slice that sizes it anyway. A shortfall is written once more (the aggregation
+upsert again, the copy with `ON CONFLICT DO NOTHING` and then counted in the live table after a refresh); still short, it throws
+`StreamDataWriteIncompleteException` naming the table, the bucket or slice and the counts. Before the flip the executor also
+checks the generation end to end, independent of the reported counts (`VerifyGenerationCompleteAsync`): staged rows >= the rows
+the aggregations reported, rows of the new generation in the live range >= staged rows. The copy fails before the flip, so the
+pointer stays on the previous generation, the staging stays until the next run clears it, and the rows already copied are
+leftovers the next run's step 0 removes. A shortfall under a source pointer that moved is not a loss: the bucket is aggregated
+again (`SamePointers`). A repeated aggregation row that already existed takes the conflict branch and is flagged `was_updated`.
+Tests: `StreamDataWriteLoss/RollupShortfallIntegrationTests` (CI, < 1 s each: a wrapped client deletes rows after the statement and
+reports the count without them; forward once / always, staging once, copy once / always) and the stress test (`Category=Stress`,
+not in the CI) `StreamDataWriteLoss/RollupUnderMemoryPressureIntegrationTests` (same container, query breaker 15 %, 6 rollups of one raw
+source with 20,000 entities in parallel; the recompute flipped to an incomplete generation without the check; the forward
+aggregation did not lose rows silently in the measured runs, only loud breaker errors). **Not only the query breaker:** CrateDB's
+parent breaker (`indices.breaker.total`, 95 % of the heap, compared with the real heap usage) refuses an upsert batch the same way.
+With a nearly full heap the loss came in whole blocks of 10,000 rows, the batch size of CrateDB's insert-from-select (measured: exactly 10,000 of 20,000 staged
+rows, three times in a row, at the default query limit, heap 471 of 512 MB; the rows were really missing after a refresh, the count
+was right). The tests of the `CrateMemoryPressure` collection therefore drop their tables after every round
+(`CrateMemoryPressureFixture.DropTenantTablesAsync`); without that the leftover tables of the earlier tests filled the small heap
+and the later tests lost rows without any breaker setting. Their set-up steps run without a retry: at the default limits they must
+not lose a row.
+
+### Value check on raw and time-range writes (AB#7643, raw path AB#8606)
+
+**Changelog entry (this repository has no CHANGELOG file; this is the entry).** AB#8606: `InsertAsync` (raw archives) now
+runs the same value check as `InsertTimeRangeAsync`: `ArchiveWriteValueValidator.Normalize` has a `StreamDataPoint`
+overload, called first thing after the archive snapshot is loaded. A value that does not fit its column's CK type refuses
+the whole batch with an `ArgumentException` (asset repository: 400) naming point (index, rtId, timestamp), column and
+expected type; nothing is written, no origin column is added, no dirty window is recorded. Enum names become their keys.
+**Behaviour change for automated raw writes too:** the check does not look at the origin, so a pipeline batch with e.g.
+text in a Double column is now refused up front with this message instead of being handed to CrateDB. Rules to keep:
+
+- One core (`NormalizeCore`) for both point types; the overloads differ only in how a point is named and rebuilt. Both
+  get the points already flattened (`ArchiveRecordFlattening`, AB#8666), so the check reads exactly the keys the write
+  maps to columns. Checking a shape the write does not use would refuse or pass the wrong value.
+- Manual protection and the rollup recompute of raw manual writes are proven against CrateDB:
+  `StreamDataOrigin/RawArchiveManualWriteIntegrationTests` (manual value, writer and reason survive an automated delivery
+  of the same rtId + ckTypeId + timestamp; a manual write inside an aggregated window records a `Manual` dirty window and
+  the recomputed hourly bucket holds the corrected value, replaced, not added; a mismatched batch stores nothing).
+- Unit tests: `ArchiveWriteValueValidatorRawTests`. Write-up: `docs/streamdata-archive-concept.md` → *Value check before the write*.
+
+### Partial delivery: a column the point does not name keeps its value (AB#8622)
+
+**Changelog entry (this repository has no CHANGELOG file; this is the entry).** AB#8622: raw and time-range writes
+update only the columns a point names. A column not named keeps its stored value, a column named with `null` is
+cleared, a new row stores NULL for every column not named (decided by Reimar 2026-11-09). **Behaviour change for
+automated deliveries:** a partial re-delivery no longer clears the columns it did not send. Rules to keep:
+
+- "Named" = the key is in the point's attribute dictionary. Never fill missing keys with `null` on the way to
+  `CrateDatabaseClient` (that is exactly the old defect); the import path fills every column on purpose.
+- `ArchiveColumnSets.Group` splits a batch by named column set (one statement shape per set, order kept per row key);
+  `BuildRawInsertSql` / `BuildTimeRangeInsertSql` take the INSERT list and `updatedColumnNames` separately.
+- **Ranking columns** (the column keys of `ConflictPrecedence`; `$Origin` is no column) follow the rule, but cannot be
+  null (decided by Reimar 2026-11-09). Not sent: the stored value stays **and is the value the guard compares** — the
+  guard reads `COALESCE(EXCLUDED."k", "k")` for the keys the statement's rows do not send
+  (`BuildConflictGuard(precedence, insertColumns, sentColumnNames)`), so the next key decides; a new row stores NULL.
+  `ConflictOutcome.Holds` skips an unsent ranking column, so a point that wins without sending it is reported stored
+  (a manual one never gets a 409). Sent with a value: compared and written as before. Sent as explicit `null`:
+  `ArchiveRankingColumnValidator` refuses the whole batch with an `ArgumentException` before anything is read or
+  written (asset repository: 400), raw and time-range, automated and manual. Ranking columns are always in the INSERT
+  list (bound NULL when not sent) and only replaced when sent. Two earlier variants are withdrawn: refusing points
+  without every ranking column (C) and writing an unsent ranking column as NULL (D).
+- No column of an upsert relies on a constant DEFAULT (AB#6647): user columns have none, `was_updated` stays a literal.
+- Computed columns at ingest are evaluated on the **merged row** (decided by Reimar 2026-11-09): left out when the
+  point names none of the columns the formula reads (`ComputedColumnPlanItem.ReferencedColumns`,
+  `ApplyComputedColumns(..., ingest: true)`); when it names only some, the others are the stored values of the row
+  (NULL on a new row); an input named with `null` stays null. `ApplyIngestComputedColumnsAsync` reads the missing
+  inputs once per batch by primary key (`IStreamDataDatabaseClient.ReadStoredRowsAsync`, `StoredRowLookup`, real-time
+  in CrateDB, no refresh needed) and only for such points; the stored values feed the formula and are not written back.
+  The formula stays in C# (mXparser has no SQL form). Read and write are two statements, so a concurrent delivery of the
+  same key in between can be missed. Backfill, repair and rollup evaluation are unchanged.
+
+Write-up: `docs/streamdata-archive-concept.md` → *Partial delivery*. Tests: `PartialDeliverySqlTests`, `StoredRowLookupTests`,
+`ArchiveRankingColumnValidatorTests`, `ConflictOutcomeTests`, `StreamDataOrigin/PartialDeliveryOriginPrecedenceIntegrationTests`
+(EC case, merged-row ranking, explicit null refused, mixed batches),
+`CrateDbStreamDataComputedColumnIngestTests` (AB#8622 cases), `StreamDataOrigin/PartialDeliveryIntegrationTests`,
+`StreamDataOrigin/ComputedColumnPartialDeliveryIntegrationTests` (merged row on raw and time-range, rollup over the column).
+
+### Record values become their member columns on both write paths (AB#8666)
+
+**Changelog entry (this repository has no CHANGELOG file; this is the entry).** AB#8666: `InsertAsync` (raw archives)
+dropped every record value a point carried. A pipeline (`CreateUpdateInfo@1` → `SaveStreamDataInArchive@1`) delivers the
+entity's attributes as they are, so a column on a record sub-path (`NamePlate.SerialNumber`) arrived as one key
+`NamePlate` → `RtRecord`, which is no column: the member was neither written nor cleared, and since AB#8622 the stored
+value simply stayed. The time-range path expanded records (`FlattenRecordValues`); the raw path did not. The REST raw
+`insert` was not affected because the asset repository accepts only dotted column paths (`ArchivePointValidation`
+refuses a record key with 400), so its points carry no record values. **Behaviour change for raw writes from pipelines:**
+record members are now written (value), cleared (`null`) or kept (member not in the record), like every other column.
+Rules to keep:
+
+- **One place.** `ArchiveRecordFlattening.Flatten` runs first in both insert paths, right after the snapshot is loaded and
+  before the value check, the ranking-column check, the computed columns and the row mapping; every later step reads the
+  same dotted keys. The validators no longer take a flatten function. Do not flatten again further down, and do not add a
+  second expansion elsewhere.
+- **Members, not records.** A member with a value is named with it, a member set to `null` is named with null (clears the
+  column), a member the record does not contain is not named (keeps the stored value, AB#8622). Nested records expand
+  recursively; a record without members names nothing. A whole record sent as `null` (`NamePlate: null`) names the key
+  `NamePlate`, which is no column, so the members keep their values (unchanged, same on both paths).
+- **No double work for REST.** Points without a record value pass through as the same instance (same list when no point
+  carries one), so dotted REST keys are not copied or re-keyed. The import path (`ImportRowsAsync`) maps exported physical
+  column names and is unchanged.
+- Ranking columns on a record member are found by the null refusal and compared on the merged row; computed columns that
+  read a record member see it; manual protection applies as for any column.
+
+Tests: `ArchiveRecordFlatteningTests`, `ArchiveRankingColumnValidatorTests` (a null ranking member inside a record, both
+paths), `StreamDataOrigin/RecordMemberWriteIntegrationTests` (real CrateDB, raw and time-range: member value over a value
+the REST shape stored, explicit null, member left out and no record at all, new row, computed column over a record member,
+ranking column on a record member compared and its null refused, manual protection). The pipeline chain against the real
+repository: `octo-mesh-adapter` `RawArchiveRecordMemberPipelineIntegrationTests`.
 
 ### Declared-vs-physical Column Reconciliation
 
@@ -2268,6 +2410,25 @@ import - a forced one whose dependency is `ResolveFailed`, a stale System refere
 (test-2 meshtest, 2026-10-23: Industry.Energy 3.5.0 vanished after a failed 3.6.0). Tests: `CkRangeRetentionImportTests.FailedImport_*`
 (dependency resolution fails after a forced Basic update; system reference mismatch), red without the restore.
 
+**Readers wait for a running import (AB#8677).** Between `InsertModelWithImportingState` and the state flip the tenant holds no `Available`
+version of the imported model (about a second for System.Bot; longer for big models), and the element rows are replaced in between. A
+service that resolved a dependency on the model in that window failed (`ModelValidationException` "no Available version ... (installed:
+3.6.0 Importing)") and, for the system tenant, stopped the host. Keeping the old row `Available` until the flip was rejected: its element
+rows are replaced when the element transaction commits, long before the flip, so readers would see an `Available` model with missing or
+foreign elements, and `DeletePreviousVersion` and the AB#7381 restore assume one row per model name. Instead readers wait on the **model
+import lock**, which is held over the whole window: `IsExistingAsync(range)` waits (outside a transaction, up to
+`CkModelImportInProgress.DefaultWaitTimeout`, 2 min, **for the whole resolve**: the deadline is
+`TenantDatabaseSourceIdentifier.ImportWaitDeadline`, started by the first wait, so a resolve that meets several running imports does not
+wait 2 min per lookup; cancelled with `TenantDatabaseSourceIdentifier.CancellationToken`, which the import sets from its caller) while the lock of the model is held (`ICkMongoDbRepositoryDataSource.GetModelsBeingImportedAsync`,
+non-expired `ck_model_import_*` locks); `TenantRepository.RefreshCkCacheServiceAsync` (one snapshot transaction, which never sees the
+flip) retries the cache load with a new transaction once running imports are done. When the wait runs out, or an import fails while
+another model is being imported, the exception is marked with `CkModelImportInProgress.ExceptionDataKey` in `Exception.Data`; the tenant
+setup of `octo-common-services` retries such a failure instead of failing the host. Residual race: a reader outside a transaction that
+checked the lock just before an import took it can still read the old row while it is replaced (then the cache load retry or the caller's
+retry applies). Tests: `CkRangeRetentionImportTests.InPlaceUpgrade_WhileDependentsResolve_NoResolutionFails`,
+`FailedInPlaceUpgrade_WhileDependentsResolve_*` (both red without the fix with the production message),
+`ModelsBeingImported_ReflectTheHeldImportLocks`, `CkModelImportWaitDeadlineTests` (unit: one deadline per resolve, cancellation).
+
 **Import guard (message 91, CkLanguageNotSupported):** `ExecuteImport` refuses a model whose `CkLanguage` is
 above `CkModelPropertiesDto.MaxSupportedCkLanguage` before the lock and before anything is written (the engine
 `ElementResolver` raises 91 on resolve too; this guard covers callers that bypass resolution).
@@ -2538,15 +2699,24 @@ Used by `UpdateSystemCkModelAsync` (tenant resolve/create; the AB#4854 infrastru
 position after it), `ImportCkModelAsync(CkModelId, OperationResult)` (every service's tenant setup, blueprint
 dependencies via `MongoRuntimeRepositoryProvider`) and, through it, `ImportEmbeddedCkModelWithDowngradeGuardAsync`
 (System.StreamData descriptor, service-managed models — the guard that used to live only there). A skip sends
-**no** pre/post tenant-update notification, runs no migration and leaves the CK cache alone.
+**no** pre/post tenant-update notification, runs no migration and leaves the CK cache alone - unless the loaded cache
+lacks the installed `Available` version (AB#8667, next bullet but one).
 
 - **The decision is repeated under the model import lock** (G-H1). The early decision only saves the lock wait:
   while a caller waits, another service may install this or a newer version (parallel stack start, rolling update,
   a fresh tenant set up by two services), and the old exact-id re-check under the lock missed the newer row, so
   `InsertModelWithImportingState` deleted it. Embedded callers pass `TenantDatabaseSourceIdentifier.GuardAgainstDowngrade`;
   `ExecuteImport` then decides by name under the lock and reports a skip in `TenantDatabaseSourceIdentifier.ImportOutcome`
-  (`SkippedUnderLock`, `InstalledModelId`). The caller sends the Post that pairs its Pre, runs no migration and does not
-  unload the cache. Explicit imports keep the exact-id re-check.
+  (`SkippedUnderLock`, `InstalledModelId`). The caller sends the Post that pairs its Pre and runs no migration.
+  Explicit imports keep the exact-id re-check.
+- **A skip drops a cache that lacks the installed version** (AB#8667, `TenantContext.UnloadCkCacheIfItLacks`). At service
+  start a service often loads the tenant's CK cache before another service's import of the same model, and that
+  service's `PosUpdateTenant` is published before this process listens to the bus, so nothing unloaded the cache: it,
+  and the asset repository's GraphQL schema built from it, missed the new types (archive types after a System.StreamData
+  bump) until a manual ClearCache. Every skip (already installed, newer installed, skipped under the lock; embedded models
+  and the System model) now compares the installed `Available` version with the model ids of the loaded cache and
+  unloads it only when the version is missing - an in-memory check, so a tenant whose models did not change keeps its
+  cache. Tests: `CkModelImportGuardTests.EmbeddedImport_*Cache*`.
 - **Skips are reported to the caller** as a `Warning` in the `OperationResult` (the blueprint install path names the
   installed row and its state in its error 25 instead of guessing at missing dependencies).
 - **Logged once per process** (G-L2): the first skip per (tenant, embedded id, installed id) logs INFO/WARN and is

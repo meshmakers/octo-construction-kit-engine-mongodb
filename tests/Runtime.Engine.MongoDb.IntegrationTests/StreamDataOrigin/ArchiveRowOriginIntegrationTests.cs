@@ -640,7 +640,10 @@ public class ArchiveRowOriginIntegrationTests(CrateStagingCopyFixture fixture)
     {
         // 2,500 rows go out as three multi-row statements (1,000 rows each at most).
         var archive = await CreateTimeRangeArchiveAsync(EnergyCommunityPrecedence);
-        await WriteBatchAsync(archive, Enumerable.Range(0, 2500).Select(i => WindowPoint(i, i, 1)));
+        var first = await WriteBatchAsync(archive, Enumerable.Range(0, 2500).Select(i => WindowPoint(i, i, 1)));
+        // AB#8679: every key is new, so every row is stored; a row CrateDB dropped is never reported as skipped.
+        Assert.Equal(2500, first.Stored);
+        Assert.Equal(0, first.SkippedCount);
 
         var result = await WriteBatchAsync(archive, Enumerable.Range(0, 2500).Select(i => WindowPoint(i, -i, i % 2 == 0 ? 3 : 1)));
 

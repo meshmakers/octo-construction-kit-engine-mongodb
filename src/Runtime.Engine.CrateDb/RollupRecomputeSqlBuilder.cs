@@ -55,9 +55,19 @@ internal static class RollupRecomputeSqlBuilder
     /// bound. The slices write disjoint keys of the same generation, and no reader can select that
     /// generation before the pointer names it, so splitting the copy changes nothing a reader sees.
     /// </remarks>
+    /// <param name="liveTable">The rollup's live table.</param>
+    /// <param name="stagingTable">The staging table the rows are copied from.</param>
+    /// <param name="columnNames">The columns copied (all but the generation).</param>
+    /// <param name="generation">The generation every copied row is stamped with.</param>
+    /// <param name="from">Inclusive start of the slice (window start).</param>
+    /// <param name="to">Exclusive end of the slice (window start).</param>
+    /// <param name="skipExisting">
+    /// Adds <c>ON CONFLICT DO NOTHING</c>: the repeat of a slice CrateDB did not store completely (AB#8680) inserts
+    /// only the rows that are missing and leaves the ones the first statement stored alone.
+    /// </param>
     public static string BuildInsertFromStagingSlice(
         string liveTable, string stagingTable, IReadOnlyList<string> columnNames, long generation,
-        DateTime from, DateTime to)
+        DateTime from, DateTime to, bool skipExisting = false)
     {
         if (columnNames.Count == 0)
         {
@@ -68,7 +78,8 @@ internal static class RollupRecomputeSqlBuilder
         var g = generation.ToString(CultureInfo.InvariantCulture);
         return
             $"INSERT INTO {liveTable} ({cols}, \"{Constants.Generation}\") " +
-            $"SELECT {cols}, {g} FROM {stagingTable} WHERE {WindowStartIn(from, to)};";
+            $"SELECT {cols}, {g} FROM {stagingTable} WHERE {WindowStartIn(from, to)}" +
+            (skipExisting ? " ON CONFLICT DO NOTHING;" : ";");
     }
 
     /// <summary>Builds the count of every row in the staging table.</summary>

@@ -362,6 +362,19 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // Materialise once so we can both count and pass to the client.
         var materialised = datapoints as IReadOnlyList<StreamDataPoint> ?? datapoints.ToList();
 
+        // AB#8666: record values become their dotted member paths before anything reads the attributes, exactly as on
+        // the time-range path, so a pipeline that delivers NamePlate -> RtRecord writes NamePlate.SerialNumber.
+        materialised = ArchiveRecordFlattening.Flatten(materialised);
+
+        // AB#8606: the AB#7643 value check of the time-range path, for raw points. A value that does not fit its
+        // column refuses the whole batch (point, column, expected type) before anything is written; enum names
+        // become their keys.
+        materialised = ArchiveWriteValueValidator.Normalize(_ckCacheService, _tenantId, snapshot, materialised);
+
+        // AB#8622: a ranking column of the conflict precedence cannot be null; one such point refuses the whole batch
+        // before anything is read or written. An unsent ranking column keeps its stored value.
+        ArchiveRankingColumnValidator.Validate(snapshot, materialised);
+
         // Filter to items whose CkTypeId matches the archive's TargetCkTypeId. An archive is
         // schema-bound to one CkType: its user columns come from that type's attribute graph and
         // none of the others. Heterogeneous callers (e.g. the Loxone pipeline that flattens both
@@ -397,7 +410,12 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var sw = Stopwatch.StartNew();
         var computedPlan = BuildComputedPlan(snapshot);
         var writtenAt = _clock.GetUtcNow().UtcDateTime;
-        var dtos = filtered.Select(p => MapToDataPointDto(p, computedPlan, writtenAt)).ToList();
+        var rows = filtered.Select(ToRawRowAttributes).ToList();
+        await ApplyIngestComputedColumnsAsync(qualifiedTable, windowed: false, computedPlan, rows,
+            i => filtered[i].RtId is { } rtId && filtered[i].CkTypeId is { } ckTypeId
+                ? new Client.StoredRowKey(rtId.ToString(), ckTypeId.ToString(), filtered[i].Timestamp, null)
+                : null);
+        var dtos = filtered.Select((p, i) => MapToDataPointDto(p, rows[i], writtenAt)).ToList();
         var notStored = await _databaseClient.InsertDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
             ResolveConflictPrecedence(snapshot)) ?? [];
         await RefreshAfterManualWriteAsync(qualifiedTable, filtered.Select(p => p.Origin));
@@ -539,11 +557,16 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         var materialised = datapoints as IReadOnlyList<TimeRangeStreamDataPoint> ?? datapoints.ToList();
 
+        // Record values become their dotted member paths first (AB#8666: the same helper as the raw path).
+        materialised = ArchiveRecordFlattening.Flatten(materialised);
+
         // A value that does not fit its column refuses the whole batch with the point, the column and the
         // expected type, before anything is written; CrateDB would otherwise refuse the statement with an
         // unexplained error. Enum names become their keys, as on the pipeline write path.
-        materialised = ArchiveWriteValueValidator.Normalize(_ckCacheService, _tenantId, snapshot, materialised,
-            FlattenRecordValues);
+        materialised = ArchiveWriteValueValidator.Normalize(_ckCacheService, _tenantId, snapshot, materialised);
+
+        // AB#8622: a ranking column cannot be null, or nothing is written.
+        ArchiveRankingColumnValidator.Validate(snapshot, materialised);
 
         // Same CkTypeId-binding rule as raw archive inserts: each per-archive table holds one CkType.
         var filtered = materialised.Where(p => p.CkTypeId == snapshot.TargetCkTypeId).ToList();
@@ -586,7 +609,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         var sw = Stopwatch.StartNew();
         var computedPlan = BuildComputedPlan(snapshot);
         var writtenAt = _clock.GetUtcNow().UtcDateTime;
-        var dtos = filtered.Select(p => MapToTimeRangeDataPointDto(p, computedPlan, writtenAt)).ToList();
+        var rows = filtered.Select(ToTimeRangeRowAttributes).ToList();
+        await ApplyIngestComputedColumnsAsync(qualifiedTable, windowed: true, computedPlan, rows,
+            i => filtered[i].RtId is { } rtId && filtered[i].CkTypeId is { } ckTypeId
+                ? new Client.StoredRowKey(rtId.ToString(), ckTypeId.ToString(), filtered[i].From.ToUniversalTime(),
+                    filtered[i].To.ToUniversalTime())
+                : null);
+        var dtos = filtered.Select((p, i) => MapToTimeRangeDataPointDto(p, rows[i], writtenAt)).ToList();
         var notStored = await _databaseClient.InsertTimeRangeDataAsync(_tenantId, qualifiedTable, userColumnNames, dtos,
             conflictPrecedence: ResolveConflictPrecedence(snapshot)) ?? [];
         await RefreshAfterManualWriteAsync(qualifiedTable, filtered.Select(p => p.Origin));
@@ -661,24 +690,23 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         return result;
     }
 
-    private Dtos.TimeRangeDataPointDto MapToTimeRangeDataPointDto(TimeRangeStreamDataPoint point,
-        IReadOnlyList<ComputedColumnPlanItem> computedPlan, DateTime writtenAt)
+    /// <summary>
+    /// The user columns of a time-range point keyed by physical column name, before the computed columns are added.
+    /// </summary>
+    private Dictionary<string, object?> ToTimeRangeRowAttributes(TimeRangeStreamDataPoint point)
     {
         RequireManualWriter(point.Origin, point.ManualWrittenBy, point.RtId);
+        // The attributes are already flattened (ArchiveRecordFlattening, AB#8666): "Amount" -> RtRecord{Value, Unit}
+        // arrives here as "Amount.Value" / "Amount.Unit", the key shape of the archive's Columns[].
+        return ToColumnKeyedAttributes(point.Attributes);
+    }
+
+    private static Dtos.TimeRangeDataPointDto MapToTimeRangeDataPointDto(TimeRangeStreamDataPoint point,
+        Dictionary<string, object?> attributes, DateTime writtenAt)
+    {
         // Normalise to UTC: the storage column is TIMESTAMP WITH TIME ZONE so Npgsql writes the
         // offset; downstream queries always read UTC. Matches MapToDataPointDto's behaviour for
         // single-timestamp archives.
-        // Expand any nested RtRecord values into dotted attribute paths so an entity attribute
-        // like Amount → RtRecord{Value, Unit} ends up as "Amount.Value" / "Amount.Unit" — that's
-        // the same key shape the archive's Columns[] use, so the per-archive table's
-        // user-column lookup picks them up. Without this, the Amount column stays NULL because
-        // the dict has "Amount" → record instead of the leaf "Amount.Value".
-        var flattened = FlattenRecordValues(point.Attributes);
-        var attributes = flattened.ToDictionary(
-            kv => ColumnNameMapper.PathToColumnName(kv.Key),
-            kv => kv.Value,
-            StringComparer.Ordinal);
-        ApplyComputedColumns(attributes, computedPlan);
         return new Dtos.TimeRangeDataPointDto(attributes)
         {
             RtId = point.RtId,
@@ -705,38 +733,6 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             throw new ArgumentException(
                 $"Manual stream data point for entity '{rtId}' has no writer. A manual write records who wrote it; " +
                 "the writer is set by the platform from the authenticated caller.");
-        }
-    }
-
-    /// <summary>
-    /// Walks an attribute dictionary and replaces every <see cref="RtRecord"/> value with one
-    /// dotted-path entry per leaf attribute (recursively for nested records). Non-record values
-    /// are passed through unchanged. Used by the archive insert paths so callers can pass the
-    /// RtEntity attributes as-is, no pre-flattening needed in the pipeline node.
-    /// </summary>
-    private static IReadOnlyDictionary<string, object?> FlattenRecordValues(
-        IReadOnlyDictionary<string, object?> attrs)
-    {
-        var result = new Dictionary<string, object?>(attrs.Count, StringComparer.Ordinal);
-        foreach (var kv in attrs)
-        {
-            FlattenInto(result, kv.Key, kv.Value);
-        }
-        return result;
-    }
-
-    private static void FlattenInto(Dictionary<string, object?> result, string prefix, object? value)
-    {
-        if (value is RtRecord record && record.Attributes.Count > 0)
-        {
-            foreach (var sub in record.Attributes)
-            {
-                FlattenInto(result, $"{prefix}.{sub.Key}", sub.Value);
-            }
-        }
-        else
-        {
-            result[prefix] = value;
         }
     }
 
@@ -2292,6 +2288,17 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             return sql;
         }
 
+        // What the statement above must write for the same source generations (AB#8680).
+        string BuildExpectedCountSql(IReadOnlyList<GenerationRange>? sourceGenerationRanges) =>
+            RollupAggregationSqlBuilder.BuildExpectedRowCount(
+                sourceTable,
+                resolved,
+                bucketStart,
+                bucketEnd,
+                sourceArchive.UsesWindowedStorage,
+                carryLookback: rollup.CarryLookback,
+                sourceGenerationRanges: sourceGenerationRanges);
+
         // A discarded attempt's generation-0 rows are removed before the bucket is aggregated again:
         // the upsert only overwrites the rows the repeated attempt produces. The delete is a search
         // operation, so the rows have to be on the read path first.
@@ -2306,7 +2313,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         // source commits a recompute of the bucket meanwhile.
         _bucketAggregator ??= new RollupSourceBucketAggregator(_tenantId, _databaseClient, _managementClient, _logger);
         var affected = await _bucketAggregator.AggregateAsync(
-            sourceArchive, bucketStart, bucketEnd, rtIdScope: null, BuildSql, DiscardForwardBucketAsync, cancellationToken);
+            sourceArchive, bucketStart, bucketEnd, rtIdScope: null, BuildSql, BuildExpectedCountSql, targetTable,
+            DiscardForwardBucketAsync, cancellationToken);
 
         CrateDbDiagnostics.RollupBucketUpserts.Add(affected,
             new("octo.tenant.id", _tenantId),
@@ -4308,10 +4316,13 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// declared result type the double result is cast back to (concept §5). <c>Operands</c> are the
     /// physical column names a formula may reference; one a row does not carry (or carries as NULL)
     /// is bound as NaN, so a formula can handle it with <c>coalesce</c> / <c>isnull</c> or an
-    /// <c>if</c> branch instead of failing as a whole (AB#8060).
+    /// <c>if</c> branch instead of failing as a whole (AB#8060). <c>ReferencedColumns</c> (AB#8622) are the
+    /// columns the formula actually names, operands and other computed columns alike; <c>null</c> means
+    /// "evaluate always" (backfill and repair, which read whole stored rows).
     /// </summary>
     private readonly record struct ComputedColumnPlanItem(
-        string ColumnName, string Formula, FormulaResultType ResultType, IReadOnlyList<string> Operands);
+        string ColumnName, string Formula, FormulaResultType ResultType, IReadOnlyList<string> Operands,
+        IReadOnlyList<string>? ReferencedColumns = null);
 
     /// <summary>
     /// Builds the per-archive computed-column evaluation plan in dependency order: a computed column
@@ -4351,6 +4362,20 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         if (items is null)
         {
             return Array.Empty<ComputedColumnPlanItem>();
+        }
+
+        // AB#8622: the columns each formula names, so ingest can leave a computed column out of a delivery that
+        // names none of its inputs (ApplyComputedColumns).
+        var candidates = operands!.Concat(items.Select(i => i.ColumnName)).Distinct(StringComparer.Ordinal).ToArray();
+        for (var i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            items[i] = item with
+            {
+                ReferencedColumns = candidates
+                    .Where(cn => !string.Equals(cn, item.ColumnName, StringComparison.Ordinal) && ReferencesToken(item.Formula, cn))
+                    .ToArray()
+            };
         }
 
         return items.Count <= 1 ? items : TopologicalSort(items);
@@ -4439,6 +4464,138 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     private static bool IsIdentifierChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 
     /// <summary>
+    /// Evaluates the computed columns of an ingest batch on the merged row (AB#8622, decided by Reimar 2026-11-09).
+    /// A computed column whose formula reads none of the columns a point names is left out (the stored value stays).
+    /// A point that names only some of the inputs gets the others from the stored row of its key: one batched
+    /// primary-key read for the whole batch, only for those points (<see cref="MissingComputedInputs" />), so a batch
+    /// that sends every input or none costs no read. A new row has no stored row: its unsent inputs are NULL. A point
+    /// that repeats a key of the same batch sees the values of the earlier point, the order the statements write them.
+    /// </summary>
+    /// <remarks>
+    /// The formula language (mXparser, NaN as NULL, <c>coalesce</c>/<c>isnull</c>/<c>if</c>) has no SQL counterpart,
+    /// so the formula cannot run inside <c>ON CONFLICT DO UPDATE</c>; reading the inputs before the write keeps a single
+    /// evaluator for ingest, backfill and repair. The read and the write are two statements: a concurrent delivery of
+    /// the same key between them can make the formula see an input that is replaced a moment later.
+    /// </remarks>
+    private async Task ApplyIngestComputedColumnsAsync(string qualifiedTable, bool windowed,
+        IReadOnlyList<ComputedColumnPlanItem> plan, IReadOnlyList<Dictionary<string, object?>> rows,
+        Func<int, Client.StoredRowKey?> keyOf)
+    {
+        if (plan.Count == 0)
+        {
+            return;
+        }
+
+        // Which rows need stored inputs, and which columns.
+        var keys = new Client.StoredRowKey?[rows.Count];
+        var lookup = new List<Client.StoredRowKey>();
+        var lookupValues = new HashSet<string>(StringComparer.Ordinal);
+        var columns = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var missing = MissingComputedInputs(rows[i], plan);
+            if (missing.Count == 0 || keyOf(i) is not { } key)
+            {
+                continue;
+            }
+
+            keys[i] = key;
+            columns.UnionWith(missing);
+            if (lookupValues.Add(key.Value))
+            {
+                lookup.Add(key);
+            }
+        }
+
+        if (lookup.Count == 0)
+        {
+            foreach (var row in rows)
+            {
+                ApplyComputedColumns(row, plan, ingest: true);
+            }
+
+            return;
+        }
+
+        var stored = await _databaseClient.ReadStoredRowsAsync(_tenantId, qualifiedTable, windowed, lookup,
+            columns.OrderBy(c => c, StringComparer.Ordinal).ToArray());
+
+        // The merged state per looked-up key: the stored row, then every earlier point of the batch with that key.
+        var merged = new Dictionary<string, Dictionary<string, object?>>(StringComparer.Ordinal);
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            var key = keys[i]?.Value ?? (keyOf(i) is { } k && lookupValues.Contains(k.Value) ? k.Value : null);
+            if (key is null)
+            {
+                ApplyComputedColumns(row, plan, ingest: true);
+                continue;
+            }
+
+            if (!merged.TryGetValue(key, out var state))
+            {
+                // Only the requested columns: the key columns of the read are no formula inputs.
+                state = new Dictionary<string, object?>(StringComparer.Ordinal);
+                if (stored.TryGetValue(key, out var storedRow))
+                {
+                    foreach (var column in columns)
+                    {
+                        if (storedRow.TryGetValue(column, out var value))
+                        {
+                            state[column] = value;
+                        }
+                    }
+                }
+                merged[key] = state;
+            }
+
+            ApplyComputedColumns(row, plan, ingest: true, stored: state);
+            foreach (var kv in row)
+            {
+                state[kv.Key] = kv.Value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The columns a point's computed columns read but the point does not name (AB#8622), following the evaluation
+    /// order: a computed column the point triggers counts as named for the formulas after it; one it leaves out does
+    /// not, so a formula that reads it takes the stored value. Empty when the point names every input of every
+    /// formula it triggers, or none.
+    /// </summary>
+    private static IReadOnlyCollection<string> MissingComputedInputs(IReadOnlyDictionary<string, object?> attributes,
+        IReadOnlyList<ComputedColumnPlanItem> plan)
+    {
+        HashSet<string>? named = null;
+        HashSet<string>? missing = null;
+        foreach (var item in plan)
+        {
+            if (item.ReferencedColumns is not { Count: > 0 } referenced)
+            {
+                continue;
+            }
+
+            named ??= new HashSet<string>(attributes.Keys, StringComparer.Ordinal);
+            if (!referenced.Any(named.Contains))
+            {
+                continue;
+            }
+
+            foreach (var column in referenced)
+            {
+                if (!named.Contains(column))
+                {
+                    (missing ??= new HashSet<string>(StringComparer.Ordinal)).Add(column);
+                }
+            }
+
+            named.Add(item.ColumnName);
+        }
+
+        return missing ?? (IReadOnlyCollection<string>)Array.Empty<string>();
+    }
+
+    /// <summary>
     /// Evaluates each computed column in <paramref name="plan"/> over the row's current column
     /// values and writes the result back into <paramref name="attributes"/> under the column's
     /// physical name. The result also feeds any dependent computed column later in the plan. A
@@ -4452,8 +4609,20 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// its page and then fails the job. Before, prod-1 stored NULL for rows whose evaluation ran out of memory.
     /// </para>
     /// </summary>
+    /// <param name="attributes">The row; the results are written into it.</param>
+    /// <param name="plan">The computed columns in evaluation order.</param>
+    /// <param name="ingest">
+    /// <c>true</c> for a delivered point (AB#8622): a computed column whose formula reads none of the columns the
+    /// point names is left out. The backfill, repair and rollup paths read whole stored rows and pass <c>false</c>.
+    /// </param>
+    /// <param name="stored">
+    /// AB#8622: the stored row of the same key, for a delivery that sends only some inputs of a formula. An input the
+    /// row does not name is read from it; a named input (also a named <c>null</c>) is never replaced. <c>null</c> for a
+    /// new row and on every path that is not ingest.
+    /// </param>
     private void ApplyComputedColumns(Dictionary<string, object?> attributes,
-        IReadOnlyList<ComputedColumnPlanItem> plan)
+        IReadOnlyList<ComputedColumnPlanItem> plan, bool ingest = false,
+        IReadOnlyDictionary<string, object?>? stored = null)
     {
         if (plan.Count == 0)
         {
@@ -4462,10 +4631,18 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
 
         foreach (var item in plan)
         {
+            // AB#8622: a delivery that names none of the columns a formula reads changes none of its inputs, so the
+            // computed column is left out of the row like any column the caller did not send: a stored row keeps
+            // its value, a new row stores NULL. A formula without column references is always evaluated.
+            if (ingest && item.ReferencedColumns is { Count: > 0 } referenced && !referenced.Any(attributes.ContainsKey))
+            {
+                continue;
+            }
+
             object? result;
             try
             {
-                var args = BuildFormulaArguments(attributes, item.Operands);
+                var args = BuildFormulaArguments(attributes, item.Operands, stored);
                 result = _formulaEngine.Evaluate(item.Formula, args, item.ResultType);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -4490,7 +4667,8 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
     /// a <c>coalesce</c>).
     /// </summary>
     internal static IReadOnlyDictionary<string, double> BuildFormulaArguments(
-        IReadOnlyDictionary<string, object?> attributes, IReadOnlyList<string> operands)
+        IReadOnlyDictionary<string, object?> attributes, IReadOnlyList<string> operands,
+        IReadOnlyDictionary<string, object?>? stored = null)
     {
         var args = new Dictionary<string, double>(attributes.Count + operands.Count, StringComparer.Ordinal);
         foreach (var kv in attributes)
@@ -4498,6 +4676,19 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
             if (TryToDouble(kv.Value, out var d))
             {
                 args[kv.Key] = d;
+            }
+        }
+
+        // AB#8622: the merged row. A column the delivery does not name takes its stored value; a named one (null
+        // included) was handled above and is never replaced.
+        if (stored is not null)
+        {
+            foreach (var kv in stored)
+            {
+                if (!attributes.ContainsKey(kv.Key) && TryToDouble(kv.Value, out var d))
+                {
+                    args[kv.Key] = d;
+                }
             }
         }
 
@@ -4530,19 +4721,33 @@ internal class CrateDbStreamDataRepository : IStreamDataRepository, IArchiveReco
         }
     }
 
-    private DataPointDto MapToDataPointDto(StreamDataPoint point,
-        IReadOnlyList<ComputedColumnPlanItem> computedPlan, DateTime writtenAt)
+    /// <summary>
+    /// The user columns of a raw point keyed by physical column name, before the computed columns are added.
+    /// </summary>
+    private Dictionary<string, object?> ToRawRowAttributes(StreamDataPoint point)
     {
         RequireManualWriter(point.Origin, point.ManualWrittenBy, point.RtId);
-        // Re-key attributes from raw CK paths (e.g. "sensor.reading.value") to the camelCase
-        // column names that exist on the per-archive table — the data plane no longer carries a
-        // dynamic `data` blob, so the dictionary must align with the table schema directly.
-        var attributes = new Dictionary<string, object?>(point.Attributes.Count);
-        foreach (var kvp in point.Attributes)
+        // The attributes are already flattened (ArchiveRecordFlattening, AB#8666). Re-key the CK paths
+        // (e.g. "NamePlate.SerialNumber") to the physical column names of the per-archive table; the data plane
+        // carries no dynamic `data` blob, so the dictionary must align with the table schema directly.
+        return ToColumnKeyedAttributes(point.Attributes);
+    }
+
+    /// <summary>The attributes keyed by physical column name (<see cref="ColumnNameMapper" />).</summary>
+    private static Dictionary<string, object?> ToColumnKeyedAttributes(IReadOnlyDictionary<string, object?> attributes)
+    {
+        var result = new Dictionary<string, object?>(attributes.Count, StringComparer.Ordinal);
+        foreach (var (key, value) in attributes)
         {
-            attributes[ColumnNameMapper.PathToColumnName(kvp.Key)] = kvp.Value;
+            result[ColumnNameMapper.PathToColumnName(key)] = value;
         }
-        ApplyComputedColumns(attributes, computedPlan);
+
+        return result;
+    }
+
+    private static DataPointDto MapToDataPointDto(StreamDataPoint point, Dictionary<string, object?> attributes,
+        DateTime writtenAt)
+    {
         return new DataPointDto(attributes)
         {
             RtId = point.RtId,

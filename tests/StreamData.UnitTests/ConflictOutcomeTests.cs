@@ -27,6 +27,15 @@ public class ConflictOutcomeTests
         ["dataquality"] = quality, ["row_origin"] = origin
     };
 
+    private static IReadOnlyList<SkippedArchiveRow> FindSkipped(IReadOnlyList<ConflictOutcome.SentRow> sent,
+        IReadOnlyList<IReadOnlyDictionary<string, object?>> returned, IReadOnlyList<ArchiveConflictKey> precedence,
+        bool includeOrigin, bool windowed)
+    {
+        var outcome = ConflictOutcome.Decide(sent, returned, precedence, includeOrigin, windowed);
+        Assert.Empty(outcome.Missing);
+        return outcome.Skipped;
+    }
+
     [Fact]
     public void TheReturningClauseNamesTheKeyTheRankingColumnsAndTheOrigin()
     {
@@ -40,7 +49,7 @@ public class ConflictOutcomeTests
     public void ARowWhoseValuesCrateDbHolds_IsStored_EvenWithAnotherNumericType()
     {
         // The writer sent an int, the driver returns a long or a short: equal by value.
-        var skipped = ConflictOutcome.FindSkipped([Sent(1)], [Returned(1L, "automated")], Precedence, true, true);
+        var skipped = FindSkipped([Sent(1)], [Returned(1L, "automated")], Precedence, true, true);
 
         Assert.Empty(skipped);
     }
@@ -48,7 +57,7 @@ public class ConflictOutcomeTests
     [Fact]
     public void ARowThatLostOnQuality_IsLowerPrecedence()
     {
-        var skipped = ConflictOutcome.FindSkipped([Sent(3)], [Returned(1, "automated")], Precedence, true, true);
+        var skipped = FindSkipped([Sent(3)], [Returned(1, "automated")], Precedence, true, true);
 
         var s = Assert.Single(skipped);
         Assert.Equal(0, s.Index);
@@ -56,9 +65,21 @@ public class ConflictOutcomeTests
     }
 
     [Fact]
+    public void ARankingColumnTheRowDoesNotSend_IsNotCompared_TheRowCountsAsStored()
+    {
+        // AB#8622: an unsent ranking column keeps its stored value; the guard compared it on the merged row.
+        var sent = new ConflictOutcome.SentRow("rt1", "Test/Meter", T0, T0.AddMinutes(15),
+            new Dictionary<string, object?> { ["consumption"] = 12d }, ArchiveRowOrigin.Manual);
+
+        Assert.Empty(FindSkipped([sent], [Returned(1, "manual")], Precedence, true, true));
+        Assert.Equal(StreamDataSkipReason.LowerPrecedence,
+            Assert.Single(FindSkipped([sent], [Returned(1, "automated")], Precedence, true, true)).Reason);
+    }
+
+    [Fact]
     public void AnAutomatedRowAgainstAStoredManualValue_IsManualValueProtected_EvenWithEqualQuality()
     {
-        var skipped = ConflictOutcome.FindSkipped([Sent(1)], [Returned(1, "manual")], Precedence, true, true);
+        var skipped = FindSkipped([Sent(1)], [Returned(1, "manual")], Precedence, true, true);
 
         Assert.Equal(StreamDataSkipReason.ManualValueProtected, Assert.Single(skipped).Reason);
     }
@@ -69,7 +90,60 @@ public class ConflictOutcomeTests
         // AB#7656: an archive that ignores the origin ranks by its columns only; the stored row being manual is incidental.
         ArchiveConflictKey[] qualityOnly = [new("dataquality", ConflictKeyOrder.LowerWins)];
 
-        var skipped = ConflictOutcome.FindSkipped([Sent(3)], [Returned(1, "manual")], qualityOnly, true, true);
+        var skipped = FindSkipped([Sent(3)], [Returned(1, "manual")], qualityOnly, true, true);
+
+        Assert.Equal(StreamDataSkipReason.LowerPrecedence, Assert.Single(skipped).Reason);
+    }
+
+    // AB#8637: the reason names the key that decided, the first key in which the stored row differs from the sent one.
+    private static readonly ArchiveConflictKey[] QualityBeforeOrigin =
+    [
+        new("dataquality", ConflictKeyOrder.LowerWins),
+        new(ArchiveConflictKey.OriginKey, ConflictKeyOrder.HigherWins),
+    ];
+
+    [Fact]
+    public void WithTheOriginFirst_AnAutomatedRowAgainstAManualValue_IsManualValueProtected_AlsoWhenItsQualityIsWorse()
+    {
+        var skipped = FindSkipped([Sent(3)], [Returned(1, "manual")], Precedence, true, true);
+
+        Assert.Equal(StreamDataSkipReason.ManualValueProtected, Assert.Single(skipped).Reason);
+    }
+
+    [Fact]
+    public void WithQualityBeforeTheOrigin_AnAutomatedRowWithWorseQualityAgainstAManualValue_IsLowerPrecedence()
+    {
+        var skipped = FindSkipped([Sent(3)], [Returned(2, "manual")], QualityBeforeOrigin, true, true);
+
+        Assert.Equal(StreamDataSkipReason.LowerPrecedence, Assert.Single(skipped).Reason);
+    }
+
+    [Fact]
+    public void WithQualityBeforeTheOrigin_AnAutomatedRowWithEqualQualityAgainstAManualValue_IsManualValueProtected()
+    {
+        var skipped = FindSkipped([Sent(2)], [Returned(2L, "manual")], QualityBeforeOrigin, true, true);
+
+        Assert.Equal(StreamDataSkipReason.ManualValueProtected, Assert.Single(skipped).Reason);
+    }
+
+    [Fact]
+    public void WithQualityBeforeTheOrigin_AnAutomatedRowWithoutQualityAgainstAManualValue_IsManualValueProtected()
+    {
+        // AB#8622 + AB#8637: an unsent ranking column keeps its stored value and ties, so the origin decides.
+        var sent = new ConflictOutcome.SentRow("rt1", "Test/Meter", T0, T0.AddMinutes(15),
+            new Dictionary<string, object?> { ["consumption"] = 12d }, ArchiveRowOrigin.Automated);
+
+        var skipped = FindSkipped([sent], [Returned(2, "manual")], QualityBeforeOrigin, true, true);
+
+        Assert.Equal(StreamDataSkipReason.ManualValueProtected, Assert.Single(skipped).Reason);
+    }
+
+    [Fact]
+    public void WithQualityBeforeTheOrigin_AManualRowThatLostOnQuality_IsLowerPrecedence()
+    {
+        // The reason a manual row that was not stored carries in ManualStreamDataNotAppliedException.
+        var skipped = FindSkipped([Sent(3, ArchiveRowOrigin.Manual)], [Returned(1, "automated")],
+            QualityBeforeOrigin, true, true);
 
         Assert.Equal(StreamDataSkipReason.LowerPrecedence, Assert.Single(skipped).Reason);
     }
@@ -78,7 +152,7 @@ public class ConflictOutcomeTests
     public void TimestampsCompareAtMillisecondPrecision()
     {
         // CrateDB stores milliseconds; ticks below them are not a different row.
-        var skipped = ConflictOutcome.FindSkipped([Sent(1, at: T0.AddTicks(4))], [Returned(1, "automated")], Precedence, true, true);
+        var skipped = FindSkipped([Sent(1, at: T0.AddTicks(4))], [Returned(1, "automated")], Precedence, true, true);
 
         Assert.Empty(skipped);
     }
@@ -87,18 +161,45 @@ public class ConflictOutcomeTests
     public void TwoRowsForOneKey_AreMatchedOneToOne()
     {
         // The second of two writes for one key in one statement lost; exactly one of them is reported.
-        var skipped = ConflictOutcome.FindSkipped([Sent(1), Sent(3)],
+        var skipped = FindSkipped([Sent(1), Sent(3)],
             [Returned(1, "automated"), Returned(1, "automated")], Precedence, true, true);
 
         Assert.Equal(1, Assert.Single(skipped).Index);
     }
 
     [Fact]
-    public void ARowCrateDbReturnedNothingFor_IsNeverCountedAsStored()
+    public void ARowCrateDbReturnedNothingFor_IsNotWritten_NeitherStoredNorSkipped()
     {
-        var skipped = ConflictOutcome.FindSkipped([Sent(1)], [], Precedence, true, true);
+        // AB#8679: an upsert returns a row for every row it processed, the guard's losers included. No row back means
+        // CrateDB dropped the row (a tripped memory breaker), not that the guard decided against it.
+        var outcome = ConflictOutcome.Decide([Sent(1)], [], Precedence, true, true);
 
-        Assert.Single(skipped);
+        Assert.Empty(outcome.Skipped);
+        Assert.Equal(0, Assert.Single(outcome.Missing));
+    }
+
+    [Fact]
+    public void InAStatementWithMissingRows_TheReturnedRowsAreStillDecided()
+    {
+        // Rows 0 and 2 came back (row 2 lost against a stored L1), row 1 did not.
+        var at1 = T0.AddMinutes(15);
+        var at2 = T0.AddMinutes(30);
+        var outcome = ConflictOutcome.Decide([Sent(1), Sent(1, at: at1), Sent(3, at: at2)],
+            [Returned(1, "automated"), Returned(1, "automated", at2)], Precedence, true, true);
+
+        Assert.Equal(1, Assert.Single(outcome.Missing));
+        var skipped = Assert.Single(outcome.Skipped);
+        Assert.Equal(2, skipped.Index);
+        Assert.Equal(StreamDataSkipReason.LowerPrecedence, skipped.Reason);
+    }
+
+    [Fact]
+    public void ARowForAKeyNamedTwice_WithOnlyOneRowReturned_IsMissing()
+    {
+        var outcome = ConflictOutcome.Decide([Sent(1), Sent(1)], [Returned(1, "automated")], Precedence, true, true);
+
+        Assert.Empty(outcome.Skipped);
+        Assert.Equal(1, Assert.Single(outcome.Missing));
     }
 
     [Theory]

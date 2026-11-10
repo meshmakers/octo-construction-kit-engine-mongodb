@@ -140,6 +140,10 @@ public class CrateRepositoryStagingCopyTests
 
         public Task<List<DataPointDto>> GetDataAsync(string tenantId, string query) => throw new NotSupportedException();
 
+        public Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>>> ReadStoredRowsAsync(string tenantId,
+            string qualifiedTable, bool windowed, IReadOnlyList<Meshmakers.Octo.Runtime.Engine.CrateDb.Client.StoredRowKey> keys,
+            IReadOnlyList<string> columns) => throw new NotSupportedException();
+
         public IAsyncEnumerable<IReadOnlyDictionary<string, object?>> StreamRawRowsAsync(string tenantId, string query,
             CancellationToken cancellationToken = default) => throw new NotSupportedException();
 

@@ -222,6 +222,69 @@ internal static class RollupAggregationSqlBuilder
     }
 
     /// <summary>
+    /// Builds the count of the rows the statement of <see cref="Build(string, string, string, IReadOnlyList{RollupSourceAggregation}, DateTime, DateTime, bool, string?, TimeSpan?, IReadOnlyList{GenerationRange}?, bool)"/>
+    /// writes for the same bucket, source scope and source generations: one row per <c>rtId</c> group of its
+    /// <c>SELECT</c> (AB#8680).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// CrateDB can end a shard request of an <c>INSERT … SELECT</c> when its memory circuit breaker trips and answer
+    /// the statement without an error; the affected-row count is then all that shows the loss. The caller compares
+    /// it with this count. The count reads the same source rows by the same predicate and groups them by the same
+    /// key, but projects only the key: no aggregate, no rank or <c>LEAD</c> window is computed.
+    /// </para>
+    /// <para>
+    /// The statement's groups are the entities with a source row in the bucket — and, on the time-weighted LOCF
+    /// path, also the entities with only a carry-in row, i.e. a row in the lookback before the bucket. The count
+    /// therefore reads <c>[bucketStart - carryLookback, bucketEnd)</c> on that path.
+    /// </para>
+    /// </remarks>
+    public static string BuildExpectedRowCount(
+        string sourceTable,
+        IReadOnlyList<RollupSourceAggregation> resolved,
+        DateTime bucketStart,
+        DateTime bucketEnd,
+        bool sourceUsesWindowedStorage,
+        string? rtIdScope = null,
+        TimeSpan? carryLookback = null,
+        IReadOnlyList<GenerationRange>? sourceGenerationRanges = null)
+    {
+        if (string.IsNullOrWhiteSpace(sourceTable)) throw new ArgumentException("sourceTable must not be empty.", nameof(sourceTable));
+        if (resolved is null || resolved.Count == 0) throw new ArgumentException("At least one aggregation is required.", nameof(resolved));
+        if (bucketEnd <= bucketStart) throw new ArgumentException("bucketEnd must be greater than bucketStart.", nameof(bucketEnd));
+
+        var bucketStartLiteral = bucketStart.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+        var bucketEndLiteral = bucketEnd.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+        var sb = new StringBuilder();
+        sb.Append("SELECT COUNT(*) FROM (SELECT \"").Append(Constants.RtId).Append("\" FROM ").AppendLine(sourceTable);
+
+        // Same branch rule as Build.
+        var hasTimeWeighted = resolved.Any(a =>
+            a.Spec.Function is CkRollupFunction.TimeWeightedAvg or CkRollupFunction.StateDuration);
+        if (hasTimeWeighted && !sourceUsesWindowedStorage)
+        {
+            var carryFromLiteral = (bucketStart.ToUniversalTime() - (carryLookback ?? DefaultCarryLookback))
+                .ToString("O", CultureInfo.InvariantCulture);
+            sb.Append("WHERE \"").Append(Constants.Timestamp).Append("\" >= '").Append(carryFromLiteral).Append("'::timestamp ")
+              .Append("AND \"").Append(Constants.Timestamp).Append("\" < '").Append(bucketEndLiteral).AppendLine("'::timestamp");
+            if (!string.IsNullOrEmpty(rtIdScope))
+            {
+                sb.Append("AND \"").Append(Constants.RtId).Append("\" = '").Append(EscapeLiteral(rtIdScope)).AppendLine("'");
+            }
+        }
+        else
+        {
+            var generationFilter = sourceGenerationRanges is null
+                ? null
+                : GenerationFilterSql.Render(GenerationFilterSql.Overlapping(sourceGenerationRanges, bucketStart, bucketEnd));
+            AppendTimePredicate(sb, bucketStartLiteral, bucketEndLiteral, sourceUsesWindowedStorage, rtIdScope, generationFilter);
+        }
+
+        sb.Append("GROUP BY \"").Append(Constants.RtId).Append("\") \"expected\";");
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// One platform column of a rollup row (AB#7727) and how a bucket computes it from its source.
     /// </summary>
     /// <param name="ColumnName">The rollup column.</param>

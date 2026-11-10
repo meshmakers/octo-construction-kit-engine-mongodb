@@ -341,6 +341,115 @@ public class CkModelImportGuardTests(CkModelImportGuardFixture fixture)
     }
 
     /// <summary>
+    ///     AB#8667, the service-start order of the stale-schema bug: this process loads the tenant's CK cache (Test-1.0.0),
+    ///     then ANOTHER service imports Test-2.0.0 (simulated by the repository directly - no unload in this process,
+    ///     and its Pos notification is lost because this process does not listen to the bus yet). This process's own
+    ///     embedded import of Test-2.0.0 then installs nothing; it must still drop the cache that lacks the new version.
+    /// </summary>
+    [Fact]
+    public async Task EmbeddedImport_AlreadyInstalledByAnotherService_UnloadsACacheLoadedBeforeThatImport()
+    {
+        await WithTenantAsync("staleck", async (tenant, tenantId) =>
+        {
+            var cache = fixture.GetService<ICkCacheService>();
+            await tenant.ImportCkModelAsync(TestV1ModelId, new OperationResult());
+            await tenant.LoadCacheForTenantAsync();
+            Assert.Contains(TestV1ModelId, cache.GetCkModelIds(tenantId));
+
+            await InstallAsAnotherServiceAsync(tenantId, TestV2ModelId);
+            Assert.True(cache.IsTenantLoaded(tenantId), "precondition: the other service's import left our cache alone");
+            Assert.DoesNotContain(TestV2ModelId, cache.GetCkModelIds(tenantId));
+
+            var result = new OperationResult();
+            await tenant.ImportCkModelAsync(TestV2ModelId, result);
+            Assert.False(result.HasErrors);
+
+            await AssertCacheHoldsAsync(tenant, tenantId, TestV2ModelId);
+        });
+    }
+
+    /// <summary>
+    ///     AB#8667, the variant seen in the log: this process decides to import (it still sees Test-1.0.0), waits for
+    ///     the import lock while another service imports Test-2.0.0, and skips under the lock. Whichever way the
+    ///     race goes (skip under the lock, or already installed at the early check), the cache loaded before the
+    ///     other service's import must not survive.
+    /// </summary>
+    [Fact]
+    public async Task EmbeddedImport_SkippedUnderTheLock_UnloadsACacheLoadedBeforeTheOtherServicesImport()
+    {
+        // Three rounds in one tenant (a tenant per round cost ~13 s each, 38.6 s in total): each round puts the tenant back
+        // on Test-1.0.0 the way another service would (explicit import, may downgrade) and loads the cache from it.
+        await WithTenantAsync("staleck", async (tenant, tenantId) =>
+        {
+            var cache = fixture.GetService<ICkCacheService>();
+            await tenant.ImportCkModelAsync(TestV1ModelId, new OperationResult());
+            for (var round = 0; round < 3; round++)
+            {
+                if (round > 0)
+                {
+                    await InstallAsAnotherServiceAsync(tenantId, TestV1ModelId);
+                    Assert.Equal(TestV1ModelId.FullName, await InstalledAsync(tenantId, TestV1ModelId.Name));
+                }
+
+                if (cache.IsTenantLoaded(tenantId))
+                {
+                    cache.Unload(tenantId);
+                }
+
+                await tenant.LoadCacheForTenantAsync();
+                Assert.Contains(TestV1ModelId, cache.GetCkModelIds(tenantId));
+
+                // The other service takes the lock first; this process's import follows while it still runs.
+                var otherService = InstallAsAnotherServiceAsync(tenantId, TestV2ModelId);
+                var result = new OperationResult();
+                var ownImport = tenant.ImportCkModelAsync(TestV2ModelId, result);
+                await Task.WhenAll(otherService, ownImport);
+                Assert.False(result.HasErrors);
+
+                await AssertCacheHoldsAsync(tenant, tenantId, TestV2ModelId);
+            }
+        });
+    }
+
+    /// <summary>AB#8667: a cache that already holds the installed version is kept - no reload at every service start.</summary>
+    [Fact]
+    public async Task EmbeddedImport_AlreadyInstalled_KeepsACacheThatHoldsTheInstalledVersion()
+    {
+        await WithTenantAsync("keepck", async (tenant, tenantId) =>
+        {
+            var cache = fixture.GetService<ICkCacheService>();
+            await tenant.ImportCkModelAsync(TestV2ModelId, new OperationResult());
+            await tenant.LoadCacheForTenantAsync();
+            var loadedTypeGraph = cache.GetCkTypes(tenantId).First();
+
+            await tenant.ImportCkModelAsync(TestV2ModelId, new OperationResult());
+
+            Assert.True(cache.IsTenantLoaded(tenantId));
+            Assert.Same(loadedTypeGraph, cache.GetCkTypes(tenantId).First());
+        });
+    }
+
+    private async Task InstallAsAnotherServiceAsync(string tenantId, CkModelId modelId)
+    {
+        var compiled = await fixture.GetService<ICatalogService>().GetAsync(modelId, new OperationResult());
+        Assert.NotNull(compiled);
+        await fixture.GetService<IDatabaseCkModelRepository>().UpdateModelAsync(compiled, NewSourceIdentifier(tenantId));
+    }
+
+    private async Task AssertCacheHoldsAsync(ITenantContext tenant, string tenantId, CkModelId modelId)
+    {
+        var cache = fixture.GetService<ICkCacheService>();
+        Assert.Equal(modelId.FullName, await InstalledAsync(tenantId, modelId.Name));
+        if (cache.IsTenantLoaded(tenantId))
+        {
+            Assert.Contains(modelId, cache.GetCkModelIds(tenantId));
+        }
+
+        await tenant.LoadCacheForTenantAsync();
+        Assert.Contains(modelId, cache.GetCkModelIds(tenantId));
+    }
+
+    /// <summary>
     ///     G-H2: the system database keeps a NEWER System (another service upgraded it, the guard keeps it). A service
     ///     embedding the older System must still see the system tenant as existing and resolve tenants, and its
     ///     EnsureSystemCkModelAsync must not touch the newer System.

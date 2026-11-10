@@ -54,11 +54,26 @@ internal static class ConflictOutcome
     }
 
     /// <summary>
-    /// The rows of <paramref name="sent" /> whose values are not what CrateDB returned for their key, with the reason.
-    /// A row for which CrateDB returned nothing is reported as not stored as well — it never happens for an upsert,
-    /// and counting it as stored would be the success-without-write this exists to rule out.
+    /// What a guarded statement did with its rows: the rows the guard kept the stored values for, with the reason,
+    /// and the rows CrateDB did not write at all (AB#8679).
     /// </summary>
-    public static IReadOnlyList<SkippedArchiveRow> FindSkipped(
+    /// <param name="Skipped">Rows the guard decided against; their positions in the statement's rows.</param>
+    /// <param name="Missing">Positions of rows without a <c>RETURNING</c> row: not written.</param>
+    internal sealed record GuardOutcome(IReadOnlyList<SkippedArchiveRow> Skipped, IReadOnlyList<int> Missing);
+
+    /// <summary>
+    /// Decides for every row of <paramref name="sent" /> whether it was stored, skipped by the guard (with the reason)
+    /// or not written.
+    /// </summary>
+    /// <remarks>
+    /// A guarded upsert "updates" every conflicting row, also when the guard keeps the stored values, so CrateDB returns
+    /// a row for every row it processed: a won insert, a won update and a lost update alike. A sent row without a
+    /// returned row was therefore not processed — CrateDB dropped its shard request, e.g. when its memory circuit
+    /// breaker tripped, and answered the statement without an error (AB#8679). Such a row is reported as
+    /// <see cref="GuardOutcome.Missing" />, never as a precedence decision: before AB#8679 it was reported as
+    /// <see cref="StreamDataSkipReason.LowerPrecedence" />, and the loss looked like a decision nobody retries.
+    /// </remarks>
+    public static GuardOutcome Decide(
         IReadOnlyList<SentRow> sent,
         IReadOnlyList<IReadOnlyDictionary<string, object?>> returned,
         IReadOnlyList<ArchiveConflictKey> precedence,
@@ -66,9 +81,6 @@ internal static class ConflictOutcome
         bool windowed)
     {
         var keyColumns = precedence.Where(k => !k.IsOrigin).Select(k => k.Column).Distinct(StringComparer.Ordinal).ToList();
-
-        // Only a guard that ranks by origin protects a manual value; otherwise the ranking columns decided (AB#7656).
-        var ranksByOrigin = precedence.Any(k => k.IsOrigin);
 
         // Returned rows by key; a batch may name one key twice, so each key holds a list that is consumed.
         var byKey = new Dictionary<string, List<IReadOnlyDictionary<string, object?>>>(StringComparer.Ordinal);
@@ -88,13 +100,14 @@ internal static class ConflictOutcome
         }
 
         var skipped = new List<SkippedArchiveRow>();
+        var missing = new List<int>();
         for (var i = 0; i < sent.Count; i++)
         {
             var s = sent[i];
             var key = Key(s.RtId, s.CkTypeId, AsUtcMilliseconds(s.Start), windowed ? AsUtcMilliseconds(s.End) : null);
             if (!byKey.TryGetValue(key, out var candidates) || candidates.Count == 0)
             {
-                skipped.Add(new SkippedArchiveRow(i, StreamDataSkipReason.LowerPrecedence));
+                missing.Add(i);
                 continue;
             }
 
@@ -105,18 +118,61 @@ internal static class ConflictOutcome
                 continue;
             }
 
-            // The stored row stays. When the guard ranks by origin, the stored row is manual and the write was
-            // automated, that is the permanence of a manual value; otherwise the ranking columns decided.
-            var storedOrigin = includeOrigin && ranksByOrigin
-                ? ArchiveRowOriginColumns.FromStoredValue(candidates[0].TryGetValue(Constants.RowOrigin, out var o) ? o : null)
-                : ArchiveRowOrigin.Automated;
-            skipped.Add(new SkippedArchiveRow(i,
-                storedOrigin == ArchiveRowOrigin.Manual && s.Origin != ArchiveRowOrigin.Manual
-                    ? StreamDataSkipReason.ManualValueProtected
-                    : StreamDataSkipReason.LowerPrecedence));
+            skipped.Add(new SkippedArchiveRow(i, DecidingReason(candidates[0], s, precedence, includeOrigin)));
         }
 
-        return skipped;
+        return new GuardOutcome(skipped, missing);
+    }
+
+    /// <summary>
+    /// Why the stored row stayed, named after the key that decided (AB#8637). The guard is lexicographic, so the
+    /// deciding key is the first one, in the archive's order, in which the stored row differs from the sent one; a
+    /// ranking column the row does not send keeps its stored value and ties (AB#8622).
+    /// That is <c>$Origin</c> — the stored row manual, the write automated — only when no column key before it
+    /// differs: <see cref="StreamDataSkipReason.ManualValueProtected" />. A column key that differs earlier decided,
+    /// also against a manual row: <see cref="StreamDataSkipReason.LowerPrecedence" />. An archive that ignores the
+    /// origin has no <c>$Origin</c> key here, so it never reports a protected manual value.
+    /// </summary>
+    private static StreamDataSkipReason DecidingReason(IReadOnlyDictionary<string, object?> stored, SentRow sent,
+        IReadOnlyList<ArchiveConflictKey> precedence, bool includeOrigin)
+    {
+        foreach (var key in precedence)
+        {
+            if (key.IsOrigin)
+            {
+                if (!includeOrigin)
+                {
+                    continue;
+                }
+
+                var storedOrigin = ArchiveRowOriginColumns.FromStoredValue(
+                    stored.TryGetValue(Constants.RowOrigin, out var origin) ? origin : null);
+                if (storedOrigin != sent.Origin)
+                {
+                    // A manual write always passes the origin key, so a difference that decided against the write
+                    // is a manual row kept against an automated delivery.
+                    return storedOrigin == ArchiveRowOrigin.Manual
+                        ? StreamDataSkipReason.ManualValueProtected
+                        : StreamDataSkipReason.LowerPrecedence;
+                }
+
+                continue;
+            }
+
+            // AB#8622: a ranking column the row does not send keeps its stored value, so it ties and cannot decide.
+            if (!sent.Values.TryGetValue(key.Column, out var sentValue))
+            {
+                continue;
+            }
+
+            var storedValue = stored.TryGetValue(key.Column, out var v) ? v : null;
+            if (!ValuesEqual(storedValue, sentValue))
+            {
+                return StreamDataSkipReason.LowerPrecedence;
+            }
+        }
+
+        return StreamDataSkipReason.LowerPrecedence;
     }
 
     private static bool Holds(IReadOnlyDictionary<string, object?> stored, SentRow sent, IReadOnlyList<string> keyColumns,
@@ -124,8 +180,14 @@ internal static class ConflictOutcome
     {
         foreach (var column in keyColumns)
         {
+            // AB#8622: a ranking column the row does not send keeps its stored value; the guard compared it on the
+            // merged row, so it equals what CrateDB holds and says nothing about the outcome.
+            if (!sent.Values.TryGetValue(column, out var sentValue))
+            {
+                continue;
+            }
+
             var storedValue = stored.TryGetValue(column, out var v) ? v : null;
-            var sentValue = sent.Values.TryGetValue(column, out var w) ? w : null;
             if (!ValuesEqual(storedValue, sentValue))
             {
                 return false;
@@ -137,7 +199,7 @@ internal static class ConflictOutcome
                == sent.Origin;
     }
 
-    private static string Key(string? rtId, string? ckTypeId, long? start, long? end)
+    internal static string Key(string? rtId, string? ckTypeId, long? start, long? end)
         => string.Join("\u001f", rtId ?? "", ckTypeId ?? "", start?.ToString(CultureInfo.InvariantCulture) ?? "",
             end?.ToString(CultureInfo.InvariantCulture) ?? "");
 
@@ -205,7 +267,7 @@ internal static class ConflictOutcome
     private static bool IsNumber(object value) => value is sbyte or byte or short or ushort or int or uint or long or ulong
         or float or double or decimal;
 
-    private static long? AsUtcMilliseconds(object? value) => value switch
+    internal static long? AsUtcMilliseconds(object? value) => value switch
     {
         DateTime dt => new DateTimeOffset(dt.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(dt, DateTimeKind.Utc) : dt.ToUniversalTime())
             .ToUnixTimeMilliseconds(),
