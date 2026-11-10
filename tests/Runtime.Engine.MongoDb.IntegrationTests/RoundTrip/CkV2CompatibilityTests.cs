@@ -295,6 +295,8 @@ public class CkV2CompatibilityTests(CkModelImportGuardFixture fixture)
     ///     AB#7445 added the record DataPoint, its four attributes and the type ItemUpdateHolder to the Test model; their
     ///     seven lines were appended to the golden file from this writer's output (same serializer path as every other
     ///     element of the file, a main-engine capture of exactly these elements does not exist).
+    ///     AB#8684 added the enum DeployState, the attributes ItemDefinition and ItemDeployState and the type
+    ///     DeployableItem; their five lines were appended the same way.
     /// </summary>
     [Fact]
     public async Task V1Import_WritesTheSameCkDocumentsAsTheMainEngine()

@@ -1,0 +1,30 @@
+$schema: https://schemas.meshmakers.cloud/runtime-model.schema.json
+dependencies:
+  - System-2.0.0
+  - Test-1.0.0
+entities:
+  - rtId: 67d4a2f0b2e4d8c3a1f084a1
+    ckTypeId: Test/DeployableItem
+    attributes:
+      - id: Test/Name
+        value: Unchanged Item
+      - id: Test/ItemDefinition
+        value: "triggers: [upload]"
+      - id: Test/ItemDeployState
+        value: 0
+  - rtId: 67d4a2f0b2e4d8c3a1f084a2
+    ckTypeId: Test/DeployableItem
+    attributes:
+      - id: Test/Name
+        value: Changed Item
+      - id: Test/ItemDefinition
+        value: "triggers: [import, export]"
+      - id: Test/ItemDeployState
+        value: 0
+  - rtId: 67d4a2f0b2e4d8c3a1f084a3
+    ckTypeId: Test/OwnershipEntity
+    attributes:
+      - id: Test/Name
+        value: Sync 2.0.0
+      - id: Test/SyncCursor
+        value: seed-cursor

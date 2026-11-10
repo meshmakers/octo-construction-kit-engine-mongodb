@@ -1,0 +1,16 @@
+$schema: https://schemas.meshmakers.cloud/construction-kit-elements.schema.json
+# AB#8684: mirrors System.Communication/DeploymentState so the blueprint-update tests cover an enum runtime-state
+# attribute the way a seeded pipeline carries it.
+enums:
+  - enumId: DeployState
+    description: Deployment state of a DeployableItem (same keys as System.Communication/DeploymentState).
+    useFlags: false
+    values:
+      - key: 0
+        name: Undeployed
+      - key: 1
+        name: Pending
+      - key: 2
+        name: Deployed
+      - key: 3
+        name: Error
