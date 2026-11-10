@@ -1,0 +1,7 @@
+$schema: https://schemas.meshmakers.cloud/blueprint-meta.schema.json
+blueprintId: DeployStateBp-1.0.0
+description: AB#8684 - two deployable items (one unchanged, one changed in 2.0.0) and an entity with a string runtime state (AB#4582)
+ckModelDependencies:
+  - System-[2.0,3.0)
+  - Test-[1.0,2.0)
+seedDataPath: seed-data/entities.yaml

@@ -1,0 +1,14 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+# AB#8684: the shape of System.Communication/Pipeline - a seed-owned definition plus a runtime-state
+# deployment state with a CK default, which the seed declares explicitly (DeploymentState: 0).
+attributes:
+  - id: ItemDefinition
+    description: Seed-owned definition (the pipeline YAML of a seeded pipeline).
+    valueType: String
+  - id: ItemDeployState
+    description: Runtime state written by the deployment, never by a seed (System.Communication/DeploymentState).
+    valueType: Enum
+    valueCkEnumId: ${this}/DeployState
+    ownership: RuntimeState
+    defaultValues:
+      - 0

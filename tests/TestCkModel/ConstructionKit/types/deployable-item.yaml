@@ -1,0 +1,16 @@
+"$schema": "https://schemas.meshmakers.cloud/construction-kit-elements.schema.json"
+# AB#8684: a seeded entity that is deployed at runtime (the shape of System.Communication/Pipeline).
+types:
+  - typeId: DeployableItem
+    derivedFromCkTypeId: ${System}/Entity
+    isFinal: false
+    isAbstract: false
+    attributes:
+      - id: ${this}/Name
+        name: Name
+        isOptional: true
+      - id: ${this}/ItemDefinition
+        name: ItemDefinition
+        isOptional: true
+      - id: ${this}/ItemDeployState
+        name: ItemDeployState
