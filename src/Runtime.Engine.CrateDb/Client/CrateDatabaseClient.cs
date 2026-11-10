@@ -1379,18 +1379,18 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             // sys.health rows are per-partition and the join would multiply shard rows on
             // partitioned tables (none of ours are partitioned today, but the join would silently
             // misreport totals the first time someone partitions an archive).
-            //
-            // primary = true filter ensures replica copies aren't double-counted.
-            var shardRows = (await connection.QueryAsync<(string TableName, long NumDocs, long SizeBytes)>(
-                @"SELECT table_name AS TableName,
-                         COALESCE(SUM(num_docs), 0) AS NumDocs,
-                         COALESCE(SUM(size), 0) AS SizeBytes
-                  FROM sys.shards
-                  WHERE schema_name = @schema
-                    AND table_name = ANY(@tables)
-                    AND ""primary"" = true
-                  GROUP BY table_name",
-                new { schema, tables = tableNames.ToArray() })).ToDictionary(r => r.TableName);
+            var shardRows = await ReadShardStatsAsync(connection, schema, tableNames);
+
+            // AB#8735: num_docs only counts the rows of the last refresh, and CrateDB skips the periodic
+            // refresh of a shard nobody searched for 30 s ("search idle"). An archive that is written but
+            // not read — an import into a Disabled archive, an ingest nobody queries — reported 0 (or an
+            // old count) until someone searched it; a search only wakes the shard, the rows show up at the
+            // next periodic refresh. So the existing tables are refreshed first and read again. A refresh
+            // of a shard without unrefreshed writes changes nothing.
+            if (shardRows.Count > 0 && await TryRefreshTablesAsync(connection, schema, shardRows.Keys.ToList()))
+            {
+                shardRows = await ReadShardStatsAsync(connection, schema, tableNames);
+            }
 
             var healthRows = (await connection.QueryAsync<(string TableName, string Health)>(
                 @"SELECT table_name AS TableName, health AS Health
@@ -1414,6 +1414,68 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             }
             return (IReadOnlyList<Dtos.CrateTableStatsRow>)result;
         });
+    }
+
+    private static async Task<Dictionary<string, (string TableName, long NumDocs, long SizeBytes)>> ReadShardStatsAsync(
+        NpgsqlConnection connection, string schema, IReadOnlyList<string> tableNames)
+    {
+        // primary = true filter ensures replica copies aren't double-counted.
+        return (await connection.QueryAsync<(string TableName, long NumDocs, long SizeBytes)>(
+            @"SELECT table_name AS TableName,
+                     COALESCE(SUM(num_docs), 0) AS NumDocs,
+                     COALESCE(SUM(size), 0) AS SizeBytes
+              FROM sys.shards
+              WHERE schema_name = @schema
+                AND table_name = ANY(@tables)
+                AND ""primary"" = true
+              GROUP BY table_name",
+            new { schema, tables = tableNames.ToArray() })).ToDictionary(r => r.TableName);
+    }
+
+    /// <summary>
+    /// Refreshes <paramref name="tableNames"/> in one statement (AB#8735), so <c>num_docs</c> counts every row
+    /// written before. Returns <c>false</c> when there is nothing to refresh or a table disappeared between the
+    /// shard read and the refresh (dropped by a concurrent delete); the caller then reports the shard statistics
+    /// as they are.
+    /// </summary>
+    private async Task<bool> TryRefreshTablesAsync(NpgsqlConnection connection, string schema,
+        IReadOnlyList<string> tableNames)
+    {
+        var sql = BuildRefreshTablesSql(schema, tableNames);
+        if (sql is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            await connection.ExecuteAsync(sql);
+            return true;
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+        {
+            _logger.LogWarning(ex,
+                "Refreshing {TableCount} archive tables in schema {Schema} failed because a table was dropped " +
+                "meanwhile; the record counts of this call may lag behind",
+                tableNames.Count, schema);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// <c>REFRESH TABLE "schema"."archive_a", "schema"."archive_b"</c>, or <c>null</c> for no table. The names come
+    /// from <c>sys.shards</c> of the tenant schema; a name that is not a plain lower-case identifier is left out.
+    /// </summary>
+    internal static string? BuildRefreshTablesSql(string schema, IReadOnlyList<string> tableNames)
+    {
+        var tables = tableNames
+            .Where(IsPlainIdentifier)
+            .Select(t => $"\"{schema}\".\"{t}\"")
+            .ToList();
+        return tables.Count == 0 ? null : "REFRESH TABLE " + string.Join(", ", tables);
+
+        static bool IsPlainIdentifier(string name) =>
+            name.Length > 0 && name.All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '_');
     }
 
     public async Task DeleteStreamDataDatabaseAsync(string tenantId)

@@ -7,7 +7,7 @@ namespace Meshmakers.Octo.Runtime.Engine.CrateDb.Dtos;
 /// </summary>
 /// <param name="TableName">Per-archive table name without the schema qualifier (e.g. <c>archive_69fda707…</c>).</param>
 /// <param name="Health">CrateDB health string (<c>GREEN</c> / <c>YELLOW</c> / <c>RED</c>) or null if not in <c>sys.health</c>.</param>
-/// <param name="NumDocs">Sum of <c>num_docs</c> across all primary shards.</param>
+/// <param name="NumDocs">Sum of <c>num_docs</c> across all primary shards, read after a refresh of the table (AB#8735).</param>
 /// <param name="SizeBytes">Sum of <c>size</c> across all primary shards.</param>
 public sealed record CrateTableStatsRow(
     string TableName,

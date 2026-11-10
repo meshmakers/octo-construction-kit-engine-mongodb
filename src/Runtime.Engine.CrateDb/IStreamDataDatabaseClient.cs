@@ -209,8 +209,9 @@ public interface IStreamDataDatabaseClient
     /// Returns per-table storage stats (row count, on-disk size, health) for every entry in
     /// <paramref name="tableNames"/> that exists in the tenant's schema. Tables not found in
     /// <c>sys.shards</c> are omitted from the result — callers handle the "not provisioned yet"
-    /// case at the next layer up. One round-trip per call; CrateDB's <c>sys.shards</c> +
-    /// <c>sys.health</c> are cheap to query under load.
+    /// case at the next layer up. The existing tables are refreshed (one <c>REFRESH TABLE</c> for
+    /// all) before <c>sys.shards</c> is read again, because <c>num_docs</c> lags behind on a shard
+    /// CrateDB has not refreshed — a shard nobody searched for 30 s is not refreshed at all (AB#8735).
     /// </summary>
     Task<IReadOnlyList<Dtos.CrateTableStatsRow>> GetTableStatsAsync(
         string tenantId,
