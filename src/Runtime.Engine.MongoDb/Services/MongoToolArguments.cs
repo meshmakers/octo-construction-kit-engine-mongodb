@@ -97,6 +97,11 @@ internal static partial class MongoToolArguments
             args.Add($"--nsInclude={options.Database}.{options.Collection}");
         }
 
+        foreach (var excluded in options.NsExclude)
+        {
+            args.Add($"--nsExclude={excluded}");
+        }
+
         if (!string.IsNullOrEmpty(options.InputDirectory))
         {
             args.Add(options.InputDirectory);

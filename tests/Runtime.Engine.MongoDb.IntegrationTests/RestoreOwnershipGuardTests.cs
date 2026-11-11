@@ -1,9 +1,14 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Services;
 
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 using Xunit;
 
@@ -461,6 +466,155 @@ public class RestoreOwnershipGuardTests(TwoInstanceFixture fixture)
             await ThrowawayTenant.DropAsync(InstanceA, sourceTenantId);
             DeleteQuietly(archivePath);
         }
+    }
+
+    [Fact]
+    public async Task Restore_HoldsAClaimOnItsTarget_AConcurrentAttachOfAnotherInstanceIsRefused_AndTheAttachTakesItOver()
+    {
+        // AB#8672: the restore claims the target before it drops or writes anything and holds the claim through
+        // mongorestore. Instance B tries to attach the target right before and right after mongorestore ran - both
+        // are refused with the uniform conflict, and A's attach at the end takes the claim over.
+        var sourceTenantId = NewName("rgsrc");
+        var restoredTenantId = NewName("rgclaim");
+        var tenantIdB = NewName("rgclaimb");
+        var archivePath = NewArchivePath();
+        var attempts = new List<Exception?>();
+
+        await CreateTenantAsync(InstanceA, sourceTenantId);
+        try
+        {
+            await BackupAsync(InstanceA, sourceTenantId, archivePath);
+            Func<Task> attachInB = async () => attempts.Add(await TryAttachAsync(InstanceB, restoredTenantId, tenantIdB));
+            var service = CreateBackupServiceOfA(new InterceptingRepositoryOps(
+                fixture.GetService<IRepositoryOpsService>(), beforeRestore: attachInB, afterRestore: attachInB));
+
+            var result = await service.RestoreTenantAsync(restoredTenantId, restoredTenantId, archivePath);
+
+            Assert.True(result.Success, $"Restore should succeed. Error: {result.Error}");
+            Assert.Equal(2, attempts.Count);
+            Assert.All(attempts, attempt =>
+            {
+                var conflict = Assert.IsType<TenantException>(attempt);
+                Assert.True(conflict.IsConflict);
+                Assert.Equal(TenantException.DatabaseNameNotAvailable(restoredTenantId).Message, conflict.Message);
+            });
+            Assert.Null(await InstanceB.TryFindTenantContextAsync(tenantIdB));
+            Assert.NotNull(await InstanceA.TryFindTenantContextAsync(restoredTenantId));
+            var marker = await OwnershipStoreA.GetAsync(restoredTenantId, Ct);
+            Assert.Equal(SystemDatabaseA, marker!.OwnerSystemDatabaseName);
+            Assert.Equal(restoredTenantId, marker.TenantId);
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(InstanceB, tenantIdB);
+            await ThrowawayTenant.DropAsync(InstanceA, sourceTenantId);
+            await ThrowawayTenant.DropAsync(InstanceA, restoredTenantId);
+            DeleteQuietly(archivePath);
+        }
+    }
+
+    [Fact]
+    public async Task Restore_ThatFailsAfterItsClaim_ReleasesTheClaim_AndLeavesNoDatabaseBehind()
+    {
+        // AB#8672: the claim materializes a new target. A restore that fails before anything was written drops that
+        // database again, so the name is not blocked by an empty database; nothing of this instance remains on it.
+        var sourceTenantId = NewName("rgsrc");
+        var restoredTenantId = NewName("rgfail");
+        var archivePath = NewArchivePath();
+        var claimSeen = false;
+
+        await CreateTenantAsync(InstanceA, sourceTenantId);
+        try
+        {
+            await BackupAsync(InstanceA, sourceTenantId, archivePath);
+            var service = CreateBackupServiceOfA(new InterceptingRepositoryOps(
+                fixture.GetService<IRepositoryOpsService>(),
+                beforeRestore: async () =>
+                    claimSeen = (await OwnershipStoreA.GetAsync(restoredTenantId, Ct))?.OwnerSystemDatabaseName ==
+                                SystemDatabaseA,
+                failRestore: true));
+
+            var result = await service.RestoreTenantAsync(restoredTenantId, restoredTenantId, archivePath);
+
+            Assert.False(result.Success);
+            Assert.True(claimSeen, "the target must be claimed before mongorestore runs");
+            Assert.False(await InstanceA.IsDatabaseExistingAsync(restoredTenantId));
+            Assert.Null(await InstanceA.TryFindTenantContextAsync(restoredTenantId));
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(InstanceA, sourceTenantId);
+            await ThrowawayTenant.DropAsync(InstanceA, restoredTenantId);
+            DeleteQuietly(archivePath);
+        }
+    }
+
+    private TenantBackupService CreateBackupServiceOfA(IRepositoryOpsService repositoryOps) => new(
+        InstanceA, repositoryOps, fixture.GetService<ILogger<TenantBackupService>>(), OwnershipStoreA,
+        fixture.GetService<TenantDatabaseRegistrationLookup>(), fixture.GetService<SystemDatabaseMarkerStore>(),
+        fixture.GetService<ITenantLifecycleStore>(), fixture.GetService<IOptions<OctoSystemConfiguration>>());
+
+    private static async Task<Exception?> TryAttachAsync(ISystemContext instance, string databaseName, string tenantId)
+    {
+        try
+        {
+            using var session = await instance.GetAdminSessionAsync();
+            session.StartTransaction();
+            await instance.AttachChildTenantAsync(session, databaseName, tenantId);
+            await session.CommitTransactionAsync();
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex;
+        }
+    }
+
+    /// <summary>Runs code right before and after the real mongorestore of a restore, or fails it.</summary>
+    private sealed class InterceptingRepositoryOps(IRepositoryOpsService inner, Func<Task>? beforeRestore = null,
+        Func<Task>? afterRestore = null, bool failRestore = false) : IRepositoryOpsService
+    {
+        public Task<CommandResult> ExecuteMongoShellScriptAsync(string databaseName, string scriptPath,
+            CancellationToken? cancellationToken = null) =>
+            inner.ExecuteMongoShellScriptAsync(databaseName, scriptPath, cancellationToken);
+
+        public Task<CommandResult> ExecuteMongoShellCommandAsync(string databaseName, string command,
+            CancellationToken? cancellationToken = null) =>
+            inner.ExecuteMongoShellCommandAsync(databaseName, command, cancellationToken);
+
+        public Task<CommandResult> ExecuteMongoDumpAsync(MongoDumpOptions options, TimeSpan? timeout = null,
+            CancellationToken? cancellationToken = null) =>
+            inner.ExecuteMongoDumpAsync(options, timeout, cancellationToken);
+
+        public async Task<CommandResult> ExecuteMongoRestoreAsync(MongoRestoreOptions options, TimeSpan? timeout = null,
+            CancellationToken? cancellationToken = null)
+        {
+            if (beforeRestore != null)
+            {
+                await beforeRestore();
+            }
+
+            if (failRestore)
+            {
+                return CommandResult.Failure("mongorestore failed (test)");
+            }
+
+            var result = await inner.ExecuteMongoRestoreAsync(options, timeout, cancellationToken);
+            if (afterRestore != null)
+            {
+                await afterRestore();
+            }
+
+            return result;
+        }
+
+        public Task<CommandResult> ExecuteCommandAsync(string fileName, string arguments,
+            string? workingDirectory = null, TimeSpan? timeout = null, CancellationToken? cancellationToken = null) =>
+            inner.ExecuteCommandAsync(fileName, arguments, workingDirectory, timeout, cancellationToken);
+
+        public Task<CommandResult> ExecuteCommandAsync(string fileName, IReadOnlyList<string> arguments,
+            string? workingDirectory = null, TimeSpan? timeout = null, CancellationToken? cancellationToken = null) =>
+            inner.ExecuteCommandAsync(fileName, arguments, workingDirectory, timeout, cancellationToken);
     }
 
     private static async Task CreateTenantAsync(ISystemContext instance, string tenantId)

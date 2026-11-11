@@ -306,45 +306,11 @@ internal class TenantBackupService(
                     archiveFilePath, databaseName);
             }
 
-            // Check if tenant exists and optionally drop it
-            var existingTenantContext = await systemContext.TryFindTenantContextAsync(tenantId);
-            if (existingTenantContext != null)
-            {
-                if (dropExistingTenant)
-                {
-                    logger.LogInformation("Tenant '{TenantId}' already exists, dropping it before restore",
-                        tenantId);
-                    using var session = await systemContext.GetAdminSessionAsync();
-                    session.StartTransaction();
-                    // The delete has its own ownership guard (AB#8807) for the existing tenant's database. The
-                    // administrator's override was checked against the restore TARGET only (AB#8672), so it
-                    // covers the drop only when the existing tenant lives in that very database; a different
-                    // database of the existing tenant is dropped only when the delete guard lets it go on its own.
-                    var existingDatabaseIsTarget = string.Equals(
-                        TenantDatabaseRegistrationLookup.Normalize(existingTenantContext.DatabaseName),
-                        TenantDatabaseRegistrationLookup.Normalize(normalizedTargetDatabaseName),
-                        StringComparison.Ordinal);
-                    await systemContext.DropChildTenantAsync(session, tenantId,
-                        overrideForeignOwnership: overrideForeignOwnership && existingDatabaseIsTarget);
-                    await session.CommitTransactionAsync();
-                    logger.LogInformation("Tenant '{TenantId}' dropped successfully", tenantId);
-                }
-                else
-                {
-                    var errorMessage = $"Tenant '{tenantId}' already exists and dropExistingTenant is false";
-                    logger.LogError(errorMessage);
-                    return CommandResult.Failure(errorMessage);
-                }
-            }
-            else
-            {
-                logger.LogInformation("Tenant '{TenantId}' does not exist, proceeding with restore", tenantId);
-            }
-
             // The restore below runs with Drop = true against an operator-supplied database name, so it
             // silently overwrites whatever lives there. Everything else validating that name happens
             // AFTER the data is already gone (the attach at the end), which made this a second route to
-            // the AB#4762 data loss. Refuse up front when the name belongs to a different tenant.
+            // the AB#4762 data loss. Refuse up front when the name belongs to a different tenant - before the
+            // existing tenant is dropped, so a refused restore destroys nothing.
             // (The system database and MongoDB's own databases are refused earlier — they carry no
             // RtTenant registry record, so this lookup is blind to them.)
             var claimingTenantId = await systemContext.TryGetTenantIdByDatabaseNameAsync(databaseName);
@@ -358,83 +324,236 @@ internal class TenantBackupService(
                 return CommandResult.Failure(errorMessage);
             }
 
-            // Perform the restore
-            logger.LogInformation("Executing mongorestore for database '{DatabaseName}'", databaseName);
-            var restoreOptions = new MongoRestoreOptions
+            // AB#8672: the ownership check above only reads. Before anything is dropped or written, the restore
+            // CLAIMS the target for this instance (insert-if-absent marker with a claim token) and holds the claim
+            // through the whole restore, so another instance can neither attach nor restore the database in
+            // between. mongorestore leaves the claim alone (the marker collections are excluded from the restore);
+            // the attach at the end takes it over, and a restore that ends without attach or fails releases it.
+            var claim = new RestoreClaim(tenantOwnershipStore, databaseName, tenantId.NormalizeString(),
+                systemContext.DatabaseName.Trim().ToLowerInvariant(),
+                await systemContext.IsDatabaseExistingAsync(databaseName));
+            var claimRefusal = await claim.AcquireAsync(overrideForeignOwnership, cancellationToken ?? CancellationToken.None);
+            if (claimRefusal != null)
             {
-                Database = databaseName,
-                Archive = archiveFilePath,
-                Gzip = true,
-                Drop = true
-            };
-
-            // Enable namespace mapping if restoring to a different database name
-            if (!string.IsNullOrEmpty(effectiveSourceDatabaseName) && effectiveSourceDatabaseName != databaseName)
-            {
-                restoreOptions.NsFrom = $"{effectiveSourceDatabaseName}.*";
-                restoreOptions.NsTo = $"{databaseName}.*";
-                logger.LogInformation(
-                    "Using namespace mapping: '{NsFrom}' -> '{NsTo}'",
-                    restoreOptions.NsFrom, restoreOptions.NsTo);
+                return CommandResult.Failure(RefuseRestore(tenantId, databaseName, claimRefusal));
             }
 
-            var result = await repositoryOpsService.ExecuteMongoRestoreAsync(restoreOptions, timeout,
-                cancellationToken);
-
-            if (!result.Success)
+            var restored = false;
+            try
             {
-                logger.LogError("Restore failed for tenant '{TenantId}': {Error}", tenantId, result.Error);
+                var result = await RestoreClaimedTargetAsync(tenantId, databaseName, archiveFilePath,
+                    effectiveSourceDatabaseName, detectedDatabases, dropExistingTenant, attachTenant,
+                    overrideForeignOwnership, claim, timeout, cancellationToken);
+                restored = result.Success;
                 return result;
             }
-
-            // AB#4367: a mongorestore whose --nsInclude matched no namespace exits 0 with
-            // "0 documents restored" and never creates the target database — turn that silent
-            // no-op into a descriptive failure instead of a misleading downstream attach error.
-            if (!await systemContext.IsDatabaseExistingAsync(databaseName))
+            finally
             {
-                var archiveInfo = detectedDatabases.Count > 0
-                    ? $" The archive contains database(s) '{string.Join("', '", detectedDatabases)}'."
-                    : string.Empty;
-                var errorMessage =
-                    $"mongorestore completed but restored no data into database '{databaseName}' — " +
-                    $"no namespaces in the archive matched.{archiveInfo}";
-                logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
-                return CommandResult.Failure(errorMessage);
+                if (!restored || !attachTenant)
+                {
+                    // Failed: release the claim (and the database the claim materialized, when nothing else got into
+                    // it). Restored without attach: the database stays unowned like any detached database.
+                    await claim.ReleaseAsync(dropIfOnlyTheClaim: !restored);
+                }
             }
-
-            // AB#8672: the archive carries the ownership marker (AB#4945) of the instance it was dumped from.
-            // In the restored copy that marker is stale: it would make the attach below refuse a dump taken on
-            // another instance, and leave a foreign owner on a database this instance just wrote. Remove it;
-            // the attach stamps this instance as owner, and a database restored without attach stays
-            // unowned like any detached database.
-            await tenantOwnershipStore.RemoveAsync(databaseName, cancellationToken ?? CancellationToken.None);
-            // The same for the system-database marker of a dumped system database: the restored copy is a
-            // tenant database and must not look like another instance's system database.
-            await systemDatabaseMarkerStore.RemoveAsync(databaseName, cancellationToken ?? CancellationToken.None);
-
-            logger.LogInformation("Database '{DatabaseName}' restored successfully for tenant '{TenantId}'",
-                databaseName, tenantId);
-
-            // Optionally attach tenant after restore
-            if (attachTenant)
-            {
-                logger.LogInformation("Attaching tenant '{TenantId}' to database '{DatabaseName}'",
-                    tenantId, databaseName);
-                using var session = await systemContext.GetAdminSessionAsync();
-                session.StartTransaction();
-                await systemContext.AttachChildTenantAsync(session, databaseName, tenantId);
-                await session.CommitTransactionAsync();
-                logger.LogInformation(
-                    "Tenant '{TenantId}' successfully restored and attached to database '{DatabaseName}'",
-                    tenantId, databaseName);
-            }
-
-            return result;
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error during restore of tenant '{TenantId}'", tenantId);
             return CommandResult.Failure($"Exception during restore: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    ///     The destructive part of the restore, under the claim of <paramref name="claim" /> (AB#8672): drop the existing
+    ///     tenant if asked, mongorestore, attach.
+    /// </summary>
+    private async Task<CommandResult> RestoreClaimedTargetAsync(string tenantId, string databaseName,
+        string archivePath, string? effectiveSourceDatabaseName, IReadOnlyList<string> detectedDatabases,
+        bool dropExistingTenant, bool attachTenant, bool overrideForeignOwnership, RestoreClaim claim,
+        TimeSpan? timeout, CancellationToken? cancellationToken)
+    {
+        // Check if tenant exists and optionally drop it
+        var existingTenantContext = await systemContext.TryFindTenantContextAsync(tenantId);
+        if (existingTenantContext != null)
+        {
+            if (!dropExistingTenant)
+            {
+                var errorMessage = $"Tenant '{tenantId}' already exists and dropExistingTenant is false";
+                logger.LogError(errorMessage);
+                return CommandResult.Failure(errorMessage);
+            }
+
+            logger.LogInformation("Tenant '{TenantId}' already exists, dropping it before restore", tenantId);
+            // The delete has its own ownership guard (AB#8807) for the existing tenant's database. The
+            // administrator's override was checked against the restore TARGET only (AB#8672), so it
+            // covers the drop only when the existing tenant lives in that very database; a different
+            // database of the existing tenant is dropped only when the delete guard lets it go on its own.
+            var existingDatabaseIsTarget = string.Equals(
+                TenantDatabaseRegistrationLookup.Normalize(existingTenantContext.DatabaseName),
+                TenantDatabaseRegistrationLookup.Normalize(databaseName),
+                StringComparison.Ordinal);
+            using (var session = await systemContext.GetAdminSessionAsync())
+            {
+                session.StartTransaction();
+                await systemContext.DropChildTenantAsync(session, tenantId,
+                    overrideForeignOwnership: overrideForeignOwnership && existingDatabaseIsTarget);
+                await session.CommitTransactionAsync();
+            }
+
+            logger.LogInformation("Tenant '{TenantId}' dropped successfully", tenantId);
+
+            if (existingDatabaseIsTarget)
+            {
+                // The claim went with the dropped database: claim the target again before mongorestore writes into
+                // it. Until then the database does not exist, so no attach can take it.
+                claim.TargetDropped();
+                var reclaimRefusal = await claim.AcquireAsync(overrideForeignOwnership: false,
+                    cancellationToken ?? CancellationToken.None);
+                if (reclaimRefusal != null)
+                {
+                    return CommandResult.Failure(RefuseRestore(tenantId, databaseName, reclaimRefusal));
+                }
+            }
+        }
+        else
+        {
+            logger.LogInformation("Tenant '{TenantId}' does not exist, proceeding with restore", tenantId);
+        }
+
+        // Perform the restore
+        logger.LogInformation("Executing mongorestore for database '{DatabaseName}'", databaseName);
+        var restoreOptions = new MongoRestoreOptions
+        {
+            Database = databaseName,
+            Archive = archivePath,
+            Gzip = true,
+            Drop = true,
+            // AB#8672: the archive carries the ownership markers of the instance it was dumped from. They are never
+            // restored: the claim of this restore stays in place, and a restored copy never looks like a database
+            // of the source instance (its tenant marker or its system-database marker).
+            NsExclude = [$"*.{TenantOwnershipStore.CollectionName}", $"*.{SystemDatabaseMarkerStore.CollectionName}"]
+        };
+
+        // Enable namespace mapping if restoring to a different database name
+        if (!string.IsNullOrEmpty(effectiveSourceDatabaseName) && effectiveSourceDatabaseName != databaseName)
+        {
+            restoreOptions.NsFrom = $"{effectiveSourceDatabaseName}.*";
+            restoreOptions.NsTo = $"{databaseName}.*";
+            logger.LogInformation(
+                "Using namespace mapping: '{NsFrom}' -> '{NsTo}'",
+                restoreOptions.NsFrom, restoreOptions.NsTo);
+        }
+
+        var result = await repositoryOpsService.ExecuteMongoRestoreAsync(restoreOptions, timeout,
+            cancellationToken);
+
+        if (!result.Success)
+        {
+            logger.LogError("Restore failed for tenant '{TenantId}': {Error}", tenantId, result.Error);
+            return result;
+        }
+
+        // AB#4367: a mongorestore whose --nsInclude matched no namespace exits 0 with
+        // "0 documents restored" and writes nothing - the target then holds no more than the claim of this
+        // restore. Turn that silent no-op into a descriptive failure instead of a misleading downstream attach error.
+        if (await tenantOwnershipStore.HoldsOnlyMarkersAsync(databaseName, cancellationToken ?? CancellationToken.None))
+        {
+            var archiveInfo = detectedDatabases.Count > 0
+                ? $" The archive contains database(s) '{string.Join("', '", detectedDatabases)}'."
+                : string.Empty;
+            var errorMessage =
+                $"mongorestore completed but restored no data into database '{databaseName}' — " +
+                $"no namespaces in the archive matched.{archiveInfo}";
+            logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
+            return CommandResult.Failure(errorMessage);
+        }
+
+        // A restored copy of a dumped system database is a tenant database and must not look like another
+        // instance's system database. The marker collection is excluded from the restore above; this removes one an
+        // older mongorestore without namespace exclusion may still have written.
+        await systemDatabaseMarkerStore.RemoveAsync(databaseName, cancellationToken ?? CancellationToken.None);
+
+        logger.LogInformation("Database '{DatabaseName}' restored successfully for tenant '{TenantId}'",
+            databaseName, tenantId);
+
+        // Optionally attach tenant after restore. The attach finds this restore's claim (a marker of this instance)
+        // and takes it over in its transaction.
+        if (attachTenant)
+        {
+            logger.LogInformation("Attaching tenant '{TenantId}' to database '{DatabaseName}'",
+                tenantId, databaseName);
+            using var session = await systemContext.GetAdminSessionAsync();
+            session.StartTransaction();
+            await systemContext.AttachChildTenantAsync(session, databaseName, tenantId);
+            await session.CommitTransactionAsync();
+            logger.LogInformation(
+                "Tenant '{TenantId}' successfully restored and attached to database '{DatabaseName}'",
+                tenantId, databaseName);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    ///     The ownership claim a restore holds on its target from before the first destructive step until the attach
+    ///     (AB#8672). Only a claim THIS restore inserted is ever released; a marker of this instance that was there
+    ///     before (a restore over the instance's own tenant) is left alone.
+    /// </summary>
+    private sealed class RestoreClaim(TenantOwnershipStore store, string databaseName, string tenantId,
+        string ownerSystemDatabaseName, bool databaseExistedBefore)
+    {
+        private readonly DateTime _claimTime = TenantOwnershipStore.NewClaimTime();
+        private bool _inserted;
+        private bool _materializedByClaim = !databaseExistedBefore;
+
+        /// <summary>The restore dropped the target (the existing tenant's database): a new claim materializes it again.</summary>
+        public void TargetDropped() => _materializedByClaim = true;
+
+        /// <summary>Claims the target; returns the logged refusal reason when another instance holds it.</summary>
+        public async Task<string?> AcquireAsync(bool overrideForeignOwnership, CancellationToken cancellationToken)
+        {
+            var marker = await store.StampIfAbsentAndGetAsync(databaseName, tenantId, ownerSystemDatabaseName,
+                cancellationToken, _claimTime);
+            if (string.Equals(marker.OwnerSystemDatabaseName, ownerSystemDatabaseName, StringComparison.Ordinal))
+            {
+                _inserted |= TenantOwnershipStore.IsClaim(marker, ownerSystemDatabaseName, tenantId, _claimTime);
+                return null;
+            }
+
+            // The ownership guard granted the deliberate override for this foreign marker: take it over, but only
+            // while it is still the marker the guard saw.
+            if (overrideForeignOwnership && await store.TryTakeOverMarkerAsync(databaseName, marker, tenantId,
+                    ownerSystemDatabaseName, _claimTime, cancellationToken))
+            {
+                _inserted = true;
+                return null;
+            }
+
+            return $"another OctoMesh instance (owner system database '{marker.OwnerSystemDatabaseName}', tenant " +
+                   $"'{marker.TenantId}') claimed the database concurrently, after the ownership check of this " +
+                   "restore; nothing was dropped or written by the restore";
+        }
+
+        /// <summary>
+        ///     Releases a claim this restore inserted. With <paramref name="dropIfOnlyTheClaim" />, a database the claim
+        ///     materialized (a new name, or the existing tenant's database this restore dropped) and nothing else got
+        ///     into is dropped again, so a failed restore leaves no empty database behind that would block the name.
+        /// </summary>
+        public async Task ReleaseAsync(bool dropIfOnlyTheClaim)
+        {
+            if (!_inserted)
+            {
+                return;
+            }
+
+            if (dropIfOnlyTheClaim && _materializedByClaim &&
+                await store.TryDropIfOnlyClaimAsync(databaseName, ownerSystemDatabaseName, tenantId, _claimTime))
+            {
+                return;
+            }
+
+            await store.TryRemoveClaimAsync(databaseName, ownerSystemDatabaseName, tenantId, _claimTime);
         }
     }
 

@@ -3078,16 +3078,27 @@ counted, never stamped. Asset repo:
 `POST system/v1/tenants/review-ownership`; octo-cli `ReviewTenantOwnership [--stamp]`.
 
 **Restore guard (AB#8672).** `TenantBackupService.RestoreTenantAsync` checks the target before any
-write (before `dropExistingTenant` and mongorestore): another instance's system database is refused and
+write (before `dropExistingTenant` and mongorestore; the "registered to another tenant of this instance" check runs
+there too now, so that refusal drops nothing either): another instance's system database is refused and
 never overridable; a database whose ownership marker names another instance, or that another system
 database registers, is refused naming the owner. `overrideForeignOwnership` lets the restore overwrite
 such a tenant database with an `OWNERSHIP OVERRIDE` warning — except a database another instance still
 registers when `attachTenant` is true: the attach gate above would refuse it after the data was
 replaced, and a successful attach would register one database in two instances. The override covers the
 checked target only: with `dropExistingTenant`, the existing tenant's database is dropped under the override only
-when it IS the target; a different existing database goes through the delete guard without it. After mongorestore the
-archive's ownership marker and system-database marker are removed, so a backup of another instance (or
-of a system database) restores as a tenant database the restoring instance owns after the attach.
+when it IS the target; a different existing database goes through the delete guard without it.
+The check only reads, so before the first destructive step the restore **claims** the target (`RestoreClaim`:
+insert-if-absent marker of this instance with a claim token; under a granted override the foreign marker is taken
+over, only while it is still the one the check saw) and holds the claim through the whole restore: another
+instance can neither attach nor restore the database in between (a claim it won in between refuses this restore
+with the uniform conflict before anything is dropped). A target that is the dropped existing tenant's database is
+claimed again right after that drop. mongorestore never restores the archive's markers (`MongoRestoreOptions.NsExclude`
+= `*.tenant_ownership`, `*.system_database_marker`), so the claim survives `--drop` and a backup of another instance
+(or of a system database) never looks like that instance's database. The attach at the end takes the claim over in
+its transaction; a restore without attach releases it (the database stays unowned like any detached one); a failed
+restore releases a claim it inserted and drops a database its claim materialized and nothing else got into, so a
+failed restore into a new name leaves no empty database behind. "Restored no data" is detected as "holds nothing but
+markers" (`HoldsOnlyMarkersAsync`).
 
 **Delete guard (AB#8807).** `DeleteChildTenantMetadataAsync` (and so `DropChildTenantAsync`, the REST
 two-phase delete and `ClearChildTenantAsync`) calls `EnsureDatabaseNotOwnedByAnotherInstanceAsync`
@@ -3128,8 +3139,11 @@ foreign-owned attach conflicts uniformly with the foreign claim untouched; unsta
 adopted and stamped; tenant-resolve lazily stamps an unmarked DB). Two real instances on one server
 (`TwoInstanceFixture`, collection `TwoInstance`): `TenantDatabaseRegistrationLookupTests`,
 `TenantOwnershipCrossInstanceTests` (unmarked attach refused/allowed, other system database refused,
-resolve warning once + Degraded + detach in the non-owner keeps the marker, idempotent list/stamp with
-the ambiguous databases untouched), `RestoreOwnershipGuardTests`, `SystemDatabaseMarkerTests` (fresh
+resolve warning once + Degraded + detach in the non-owner keeps the marker, the attach claim inside the
+transaction (concurrent attach refused, abort releases it), Degraded rechecked: persists, bounded by the interval,
+Healthy once the owner detached, idempotent list/stamp with the ambiguous databases untouched),
+`RestoreOwnershipGuardTests` (incl. the restore claim against a concurrent attach of the other instance before and
+after mongorestore, and a failed restore that releases its claim and its materialized database), `SystemDatabaseMarkerTests` (fresh
 instance without tenants recognised and its system database refused as restore target, idempotent
 startup stamp with the registry rule as fallback, marker removed from a restored copy, a failing stamp still
 starts the instance and reports Degraded until the next stamp).
