@@ -559,11 +559,11 @@ public class SystemContext : TenantContext, ISystemContext
 
     public Task<CommandResult> RestoreTenantAsync(string tenantId, string databaseName, string archiveFilePath,
         string? sourceDatabaseName = null, bool dropExistingTenant = true, bool attachTenant = true,
-        TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
+        TimeSpan? timeout = null, CancellationToken? cancellationToken = null, bool overrideForeignOwnership = false)
     {
         var backupService = _serviceProvider.GetRequiredService<ITenantBackupService>();
         return backupService.RestoreTenantAsync(tenantId, databaseName, archiveFilePath, sourceDatabaseName,
-            dropExistingTenant, attachTenant, timeout, cancellationToken);
+            dropExistingTenant, attachTenant, timeout, cancellationToken, overrideForeignOwnership);
     }
 
     public Task<CommandResult> CloneTenantToTempAsync(string sourceTenantId, string tempTenantId,

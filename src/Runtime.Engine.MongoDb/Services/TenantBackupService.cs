@@ -3,6 +3,7 @@ using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.TenantLifecycle;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Configuration;
 using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 
 using Microsoft.Extensions.Logging;
 
@@ -16,6 +17,7 @@ internal class TenantBackupService(
     ISystemContext systemContext,
     IRepositoryOpsService repositoryOpsService,
     ILogger<TenantBackupService> logger,
+    TenantOwnershipStore tenantOwnershipStore,
     ITenantLifecycleStore? tenantLifecycleStore = null) : ITenantBackupService
 {
     /// <inheritdoc />
@@ -153,7 +155,8 @@ internal class TenantBackupService(
     /// <inheritdoc />
     public async Task<CommandResult> RestoreTenantAsync(string tenantId, string databaseName,
         string archiveFilePath, string? sourceDatabaseName = null, bool dropExistingTenant = true,
-        bool attachTenant = true, TimeSpan? timeout = null, CancellationToken? cancellationToken = null)
+        bool attachTenant = true, TimeSpan? timeout = null, CancellationToken? cancellationToken = null,
+        bool overrideForeignOwnership = false)
     {
         try
         {
@@ -211,6 +214,19 @@ internal class TenantBackupService(
                     $"database. Refusing to restore tenant '{tenantId}' into it.";
                 logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
                 return CommandResult.Failure(errorMessage);
+            }
+
+            // AB#8672: the checks above and the registry check further down only know THIS instance. On a
+            // shared MongoDB server the target can belong to another OctoMesh instance (different
+            // SystemDatabaseName, Epic AB#4944), and mongorestore --drop would destroy it before the attach
+            // guard (AB#4945) refuses the result. Runs before the dropExistingTenant block, which is itself
+            // destructive.
+            var foreignOwnershipRefusal = await CheckForeignOwnershipAsync(tenantId,
+                normalizedTargetDatabaseName, overrideForeignOwnership,
+                cancellationToken ?? CancellationToken.None);
+            if (foreignOwnershipRefusal != null)
+            {
+                return CommandResult.Failure(foreignOwnershipRefusal);
             }
 
             // AB#4829: the restore mongorestores into an UNREGISTERED database first and attaches
@@ -369,6 +385,13 @@ internal class TenantBackupService(
                 return CommandResult.Failure(errorMessage);
             }
 
+            // AB#8672: the archive carries the ownership marker (AB#4945) of the instance it was dumped from.
+            // In the restored copy that marker is stale: it would make the attach below refuse a dump taken on
+            // another instance, and leave a foreign owner on a database this instance just wrote. Remove it;
+            // the attach stamps this instance as owner, and a database restored without attach stays
+            // unowned like any detached database.
+            await tenantOwnershipStore.RemoveAsync(databaseName, cancellationToken ?? CancellationToken.None);
+
             logger.LogInformation("Database '{DatabaseName}' restored successfully for tenant '{TenantId}'",
                 databaseName, tenantId);
 
@@ -393,5 +416,52 @@ internal class TenantBackupService(
             logger.LogError(ex, "Error during restore of tenant '{TenantId}'", tenantId);
             return CommandResult.Failure($"Exception during restore: {ex.Message}");
         }
+    }
+    /// <summary>
+    ///     Cross-instance ownership guard of the restore (AB#8672). Returns the refusal message when the
+    ///     existing target database belongs to another OctoMesh instance on the same MongoDB server, or
+    ///     null when the restore may proceed: the database does not exist yet, it carries no marker, or
+    ///     its marker names this instance. A deliberate <paramref name="overrideForeignOwnership" /> lets
+    ///     the restore proceed and logs the override as a warning naming the owner.
+    /// </summary>
+    private async Task<string?> CheckForeignOwnershipAsync(string tenantId, string databaseName,
+        bool overrideForeignOwnership, CancellationToken cancellationToken)
+    {
+        if (!await systemContext.IsDatabaseExistingAsync(databaseName))
+        {
+            return null;
+        }
+
+        var ownInstance = systemContext.DatabaseName.Trim().ToLowerInvariant();
+        string? foreignOwner = null;
+
+        var marker = await tenantOwnershipStore.GetAsync(databaseName, cancellationToken);
+        if (marker != null && !string.Equals(marker.OwnerSystemDatabaseName, ownInstance, StringComparison.Ordinal))
+        {
+            foreignOwner =
+                $"is owned by another OctoMesh instance (owner system database '{marker.OwnerSystemDatabaseName}', " +
+                $"tenant '{marker.TenantId}', stamped {marker.AttachedAtUtc:u})";
+        }
+
+        if (foreignOwner == null)
+        {
+            return null;
+        }
+
+        if (overrideForeignOwnership)
+        {
+            logger.LogWarning(
+                "OWNERSHIP OVERRIDE: restoring tenant '{TenantId}' into database '{DatabaseName}', which {ForeignOwner}. " +
+                "The administrator overrode the cross-instance ownership guard; the other instance's data in " +
+                "this database is replaced", tenantId, databaseName, foreignOwner);
+            return null;
+        }
+
+        var errorMessage =
+            $"Database '{databaseName}' {foreignOwner}. Refusing to restore tenant '{tenantId}' into it, because " +
+            "the restore would overwrite the other instance's data. Detach the tenant in the owning instance " +
+            "first, choose another database name, or override the ownership guard deliberately.";
+        logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, errorMessage);
+        return errorMessage;
     }
 }
