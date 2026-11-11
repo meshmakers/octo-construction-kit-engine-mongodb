@@ -3117,7 +3117,13 @@ adopted and stamped; tenant-resolve lazily stamps an unmarked DB). Two real inst
 resolve warning once + Degraded + detach in the non-owner keeps the marker, idempotent list/stamp with
 the ambiguous databases untouched), `RestoreOwnershipGuardTests`, `SystemDatabaseMarkerTests` (fresh
 instance without tenants recognised and its system database refused as restore target, idempotent
-startup stamp with the registry rule as fallback, marker removed from a restored copy).
+startup stamp with the registry rule as fallback, marker removed from a restored copy, a failing stamp still
+starts the instance and reports Degraded until the next stamp).
+
+**System-database marker stamp failure (AB#8672).** `SystemContext.TryStampSystemDatabaseMarkerAsync` (bootstrap
+and every `EnsureSystemCkModelAsync` over an existing system tenant) never fails the start: a failed stamp logs a
+warning and sets `ITenantOwnershipConflicts.SystemDatabaseMarkerProblem`, so `TenantContextHealthCheck` reports
+`Degraded` with the reason; the next successful stamp clears it.
 
 ### Tenant-Database Prefix — per-instance names on a shared MongoDB (AB#8797 / Epic AB#4944)
 

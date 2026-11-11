@@ -1,7 +1,14 @@
 using Meshmakers.Octo.Runtime.Contracts.MongoDb;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Collections;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.IntegrationTests.Fixtures;
+using Meshmakers.Octo.Runtime.Contracts.MongoDb.Services;
+using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.MongoDb.Generic;
 using Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
+
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Logging;
 
 using Xunit;
 
@@ -47,6 +54,43 @@ public class SystemDatabaseMarkerTests(TwoInstanceFixture fixture)
         Assert.NotNull(await MarkerStore.GetStampedAtUtcAsync(freshSystemDatabase, Ct));
         Assert.True(await Lookup.IsSystemDatabaseAsync(freshSystemDatabase, Ct));
         Assert.Empty(await Lookup.FindRegisteringSystemDatabasesAsync(freshSystemDatabase, Ct));
+    }
+
+    [Fact]
+    public async Task FailingMarkerStamp_StillStartsTheInstance_ReportsDegradedWithTheReason_UntilTheNextStamp()
+    {
+        var store = (FailingSystemDatabaseMarkerStore?)null;
+        var logs = new CapturingLoggerProvider();
+        await using var fresh = new SystemFixture();
+        fresh.Services.AddSingleton<ILoggerProvider>(logs);
+        fresh.Services.Replace(ServiceDescriptor.Singleton<SystemDatabaseMarkerStore>(sp =>
+            store = new FailingSystemDatabaseMarkerStore(sp.GetRequiredService<IAdminRepositoryAccess>())));
+
+        // The bootstrap stamps the marker; the failure must not fail it.
+        await fresh.InitializeAsync();
+        var freshSystemDatabase = fresh.SystemDatabaseName.ToLowerInvariant();
+        Assert.True(await fresh.GetSystemContext().IsSystemTenantExistingAsync());
+        Assert.NotNull(store);
+        Assert.Null(await MarkerStore.GetStampedAtUtcAsync(freshSystemDatabase, Ct));
+
+        var healthCheck = ActivatorUtilities.CreateInstance<TenantContextHealthCheck>(fresh.Provider!);
+        var degraded = await healthCheck.CheckHealthAsync(new HealthCheckContext(), Ct);
+        Assert.Equal(HealthStatus.Degraded, degraded.Status);
+        Assert.Contains("system-database marker could not be stamped", degraded.Description, StringComparison.Ordinal);
+        Assert.Contains(FailingSystemDatabaseMarkerStore.FailureMessage, degraded.Description, StringComparison.Ordinal);
+        Assert.True(degraded.Data.ContainsKey("systemDatabaseMarker"));
+        Assert.Contains(logs.Entries, e =>
+            e.Level == LogLevel.Warning &&
+            e.Message.Contains("Could not stamp the system-database marker", StringComparison.Ordinal) &&
+            e.Message.Contains(freshSystemDatabase, StringComparison.OrdinalIgnoreCase));
+
+        // The next start of a service that ensures the System CK model stamps it and the health recovers.
+        store!.Fail = false;
+        await fresh.GetSystemContext().EnsureSystemCkModelAsync();
+
+        Assert.NotNull(await MarkerStore.GetStampedAtUtcAsync(freshSystemDatabase, Ct));
+        var healthy = await healthCheck.CheckHealthAsync(new HealthCheckContext(), Ct);
+        Assert.Equal(HealthStatus.Healthy, healthy.Status);
     }
 
     [Fact]
@@ -163,4 +207,19 @@ public class SystemDatabaseMarkerTests(TwoInstanceFixture fixture)
             // Cleanup only.
         }
     }
+}
+
+/// <summary>A marker store whose stamp fails while <see cref="Fail" /> is set (AB#8672 Degraded path).</summary>
+internal sealed class FailingSystemDatabaseMarkerStore(IAdminRepositoryAccess adminRepositoryAccess)
+    : SystemDatabaseMarkerStore(adminRepositoryAccess)
+{
+    public const string FailureMessage = "simulated marker write failure";
+
+    public volatile bool Fail = true;
+
+    public override Task StampIfAbsentAsync(string systemDatabaseName, string systemTenantId,
+        CancellationToken cancellationToken = default) =>
+        Fail
+            ? throw new InvalidOperationException(FailureMessage)
+            : base.StampIfAbsentAsync(systemDatabaseName, systemTenantId, cancellationToken);
 }

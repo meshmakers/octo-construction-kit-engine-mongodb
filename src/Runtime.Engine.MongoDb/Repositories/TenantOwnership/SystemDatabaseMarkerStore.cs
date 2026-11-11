@@ -24,7 +24,7 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 ///         but the marker is still an infrastructure shell and stays bootstrappable (AB#4854).
 ///     </para>
 /// </remarks>
-internal sealed class SystemDatabaseMarkerStore
+internal class SystemDatabaseMarkerStore
 {
     internal const string CollectionName = InfrastructureCollections.SystemDatabaseMarker;
 
@@ -44,9 +44,10 @@ internal sealed class SystemDatabaseMarkerStore
 
     /// <summary>
     ///     Stamps <paramref name="systemDatabaseName" /> as a system database. Insert-if-absent: a second
-    ///     call changes nothing, so the marker keeps the time of the first stamp.
+    ///     call changes nothing, so the marker keeps the time of the first stamp. Virtual for the tests of a
+    ///     failing stamp (the instance still starts and reports <c>Degraded</c>).
     /// </summary>
-    public async Task StampIfAbsentAsync(string systemDatabaseName, string systemTenantId,
+    public virtual async Task StampIfAbsentAsync(string systemDatabaseName, string systemTenantId,
         CancellationToken cancellationToken = default)
     {
         var normalizedName = TenantDatabaseRegistrationLookup.Normalize(systemDatabaseName);

@@ -5,8 +5,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 
 /// <summary>
 ///     Process-wide record of the ownership conflicts seen on tenant resolve (AB#8796), keyed by
-///     normalized tenant id. Feeds the service health check (<c>Degraded</c>) and decides that the
-///     resolve warning is logged once per process and tenant.
+///     normalized tenant id, and of a failed system-database marker stamp (AB#8672). Feeds the service health
+///     check (<c>Degraded</c>) and decides that the resolve warning is logged once per process and tenant.
 /// </summary>
 internal sealed class TenantOwnershipConflictTracker : ITenantOwnershipConflicts
 {
@@ -39,4 +39,15 @@ internal sealed class TenantOwnershipConflictTracker : ITenantOwnershipConflicts
 
     /// <summary>Forgets the conflict of a tenant (resolved without conflict, detached or deleted).</summary>
     public void Clear(string tenantId) => _conflicts.TryRemove(tenantId, out _);
+
+    private volatile string? _systemDatabaseMarkerProblem;
+
+    /// <inheritdoc />
+    public string? SystemDatabaseMarkerProblem => _systemDatabaseMarkerProblem;
+
+    /// <summary>Records why the system-database marker could not be stamped (AB#8672).</summary>
+    public void ReportSystemDatabaseMarkerProblem(string reason) => _systemDatabaseMarkerProblem = reason;
+
+    /// <summary>The system-database marker is stamped: forgets an earlier failure.</summary>
+    public void ClearSystemDatabaseMarkerProblem() => _systemDatabaseMarkerProblem = null;
 }

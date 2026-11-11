@@ -26,4 +26,13 @@ public interface ITenantOwnershipConflicts
 {
     /// <summary>The current conflicts, ordered by tenant id.</summary>
     IReadOnlyList<TenantOwnershipConflict> Current { get; }
+
+    /// <summary>
+    ///     Why this instance could not stamp the system-database marker into its own system database (AB#8672), or
+    ///     null while the marker is stamped (or the stamp was never attempted in this process). Without the marker the
+    ///     other instances on the server recognise this system database only while it registers a tenant, so the
+    ///     health check reports <c>Degraded</c> with this reason; the next successful stamp (every start of a
+    ///     service that ensures the System CK model) clears it.
+    /// </summary>
+    string? SystemDatabaseMarkerProblem { get; }
 }

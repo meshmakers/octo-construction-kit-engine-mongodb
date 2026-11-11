@@ -559,22 +559,28 @@ public class SystemContext : TenantContext, ISystemContext
     }
 
     /// <summary>
-    ///     Stamps the system-database marker (AB#8672, idempotent). Best effort: without the marker the
-    ///     other instances still recognise this system database by its tenant registry rows, so a failed
-    ///     stamp is logged and never fails the bootstrap or the start.
+    ///     Stamps the system-database marker (AB#8672, idempotent). A failure never fails the bootstrap or the start:
+    ///     the instance keeps running, logs a warning and its health check reports <c>Degraded</c> with the reason
+    ///     (<see cref="ITenantOwnershipConflicts.SystemDatabaseMarkerProblem" />), because without the marker the
+    ///     other instances on the server recognise this system database only while it registers a tenant. The next
+    ///     successful stamp clears the state.
     /// </summary>
     private async Task TryStampSystemDatabaseMarkerAsync()
     {
+        var tracker = _serviceProvider.GetRequiredService<TenantOwnershipConflictTracker>();
         try
         {
             await _serviceProvider.GetRequiredService<SystemDatabaseMarkerStore>()
                 .StampIfAbsentAsync(DatabaseName, TenantId);
+            tracker.ClearSystemDatabaseMarkerProblem();
         }
         catch (Exception ex)
         {
+            tracker.ReportSystemDatabaseMarkerProblem($"stamping '{DatabaseName}' failed ({ex.GetType().Name}: {ex.Message})");
             _serviceProvider.GetService<ILoggerFactory>()?.CreateLogger<SystemContext>().LogWarning(ex,
                 "Could not stamp the system-database marker into '{DatabaseName}'; other OctoMesh instances on " +
-                "this server recognise it as a system database only while it registers a tenant", DatabaseName);
+                "this server recognise it as a system database only while it registers a tenant. The health check " +
+                "reports Degraded until the next successful stamp", DatabaseName);
         }
     }
 
