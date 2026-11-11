@@ -477,8 +477,9 @@ CrateDB skips the periodic refresh of a shard nobody searched for 30 s ("search 
 Disabled, or written to while nobody read it, showed 0 (or an old count) until a query touched it — and even a query only
 wakes the shard, the rows appear at its next periodic refresh. Since AB#8735 the stats call refreshes the listed tables
 that exist (one `REFRESH TABLE a, b, …`) and reads `sys.shards` again, so the count includes every row written before the
-list was loaded. A refresh of a shard without unrefreshed writes changes nothing; a table dropped between the reads skips
-the refresh for that call (warning in the log). Tests: `StreamDataExportImport/ArchiveStatsAfterImportIntegrationTests`
+list was loaded. A refresh of a shard without unrefreshed writes changes nothing. When CrateDB refuses the refresh (a table dropped
+between the reads, a missing privilege, a timeout) the call reports the counts of the last refresh and logs a warning;
+the list does not fail over it. Tests: `StreamDataExportImport/ArchiveStatsAfterImportIntegrationTests`
 (real CrateDB, import into a search-idle table), `ArchiveRefreshTablesSqlTests` (unit).
 
 ### Time semantics

@@ -52,6 +52,12 @@ public class ArchiveStatsAfterImportIntegrationTests(CrateStagingCopyFixture fix
         }).ToList();
         await repository.ImportRowsAsync(rtId, rows.ToAsyncEnumerable(), ArchiveImportMode.InsertOnly, ct);
 
+        // Precondition: the shard is search idle, so the shard statistics alone still miss the rows (the bug).
+        var shards = await fixture.QueryAsync(
+            "SELECT SUM(num_docs) AS n FROM sys.shards WHERE \"primary\" = true AND table_name = " +
+            $"'{TenantSchema.ArchiveTableName(rtId.ToString())}'");
+        Assert.Equal(0L, Convert.ToInt64(shards[0]["n"]));
+
         // No REFRESH TABLE and no search in between: the list reads the stats right after the import.
         var stats = await repository.GetArchiveStatsAsync([rtId], ct);
 

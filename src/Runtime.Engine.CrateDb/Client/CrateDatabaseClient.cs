@@ -1434,9 +1434,10 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
 
     /// <summary>
     /// Refreshes <paramref name="tableNames"/> in one statement (AB#8735), so <c>num_docs</c> counts every row
-    /// written before. Returns <c>false</c> when there is nothing to refresh or a table disappeared between the
-    /// shard read and the refresh (dropped by a concurrent delete); the caller then reports the shard statistics
-    /// as they are.
+    /// written before. Returns <c>false</c> when there is nothing to refresh or CrateDB refused the refresh (a table
+    /// dropped by a concurrent delete, a missing privilege, a statement timeout); the caller then reports the shard
+    /// statistics as they are. The refresh only makes the count current, so its failure must not fail the archive
+    /// list: it is logged as a warning.
     /// </summary>
     private async Task<bool> TryRefreshTablesAsync(NpgsqlConnection connection, string schema,
         IReadOnlyList<string> tableNames)
@@ -1452,12 +1453,12 @@ internal class CrateDatabaseClient : IStreamDataDatabaseClient, IStreamDataDatab
             await connection.ExecuteAsync(sql);
             return true;
         }
-        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+        catch (PostgresException ex)
         {
             _logger.LogWarning(ex,
-                "Refreshing {TableCount} archive tables in schema {Schema} failed because a table was dropped " +
-                "meanwhile; the record counts of this call may lag behind",
-                tableNames.Count, schema);
+                "Refreshing {TableCount} archive tables in schema {Schema} failed ({SqlState}); the record counts of " +
+                "this call come from the last refresh of each table and may lag behind",
+                tableNames.Count, schema, ex.SqlState);
             return false;
         }
     }
