@@ -3132,7 +3132,8 @@ namespace gate refuses a database name that exists anywhere on the server (AB#47
 database after the tenant id by convention. `OctoSystemConfiguration.TenantDatabasePrefix` (section `System`,
 env `OCTO_SYSTEM__TENANTDATABASEPREFIX`, **default empty**) gives each instance its own name space, the MongoDB
 counterpart of `StreamData:SchemaInstancePrefix` (CrateDB). It is its own setting on purpose: an instance may
-set either one without the other, and existing instances must keep both empty.
+set either one without the other. Both default to empty, so an existing instance changes nothing until the
+operator configures a prefix; its existing tenants then keep their names (see the exemption rule below).
 
 | Rule | Where |
 |---|---|
