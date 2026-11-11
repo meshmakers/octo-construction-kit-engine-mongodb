@@ -151,6 +151,112 @@ public class TenantOwnershipCrossInstanceTests(TwoInstanceFixture fixture)
     }
 
     [Fact]
+    public async Task Attach_ClaimsInsideTheAttachTransaction_AConcurrentAttachIsRefused_AndAnAbortReleasesTheClaim()
+    {
+        // AB#8796: the attach's claim is part of its transaction. While A's attach is uncommitted, B's attach of
+        // the same unmarked database collides with the claim and is refused; A's abort takes the claim back with
+        // the registry rows, so no rollback has to remove a claim another attach could rely on.
+        var databaseName = NewName("txclaim");
+        var tenantIdA = NewName("txclaima");
+        var tenantIdB = NewName("txclaimb");
+        await CreateAsync(InstanceB, databaseName);
+        try
+        {
+            await InTransactionAsync(InstanceB, s => InstanceB.DetachChildTenantAsync(s, databaseName));
+            Assert.Null(await OwnershipStore.GetAsync(databaseName, Ct));
+
+            using (var sessionA = await InstanceA.GetAdminSessionAsync())
+            {
+                sessionA.StartTransaction();
+                await InstanceA.AttachChildTenantAsync(sessionA, databaseName, tenantIdA);
+
+                var exception = await Assert.ThrowsAsync<TenantException>(() =>
+                    AttachAsync(InstanceB, databaseName, tenantIdB));
+                Assert.True(exception.IsConflict);
+                Assert.Equal(TenantException.DatabaseNameNotAvailable(databaseName).Message, exception.Message);
+
+                await sessionA.AbortTransactionAsync();
+            }
+
+            Assert.Null(await OwnershipStore.GetAsync(databaseName, Ct));
+            Assert.False(await IsRegisteredAsync(InstanceA, tenantIdA));
+
+            // The database is free again: B's attach goes through and B owns it.
+            await AttachAsync(InstanceB, databaseName, tenantIdB);
+            Assert.Equal(IdentityB, (await OwnershipStore.GetAsync(databaseName, Ct))!.OwnerSystemDatabaseName);
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(InstanceB, tenantIdB);
+            await ThrowawayTenant.DropAsync(InstanceA, tenantIdA);
+        }
+    }
+
+    [Fact]
+    public async Task Health_StaysDegradedWhileTheConflictPersists_AndReturnsToHealthy_OnceTheOwnerDetached()
+    {
+        // AB#8796: a recorded conflict is rechecked on a bounded interval (and on resolve). It stays while B's marker
+        // stays, it is not rechecked before the interval passed, and it is gone once B detached the tenant.
+        var tenantIdA = NewName("recheck");
+        var tenantIdB = NewName("recheckb");
+        var databaseName = tenantIdB;
+        var tracker = fixture.GetService<TenantOwnershipConflictTracker>();
+        var healthCheck = ActivatorUtilities.CreateInstance<TenantContextHealthCheck>(fixture.Provider!);
+        await CreateAsync(InstanceB, tenantIdB);
+        try
+        {
+            await RegisterDirectlyAsync(InstanceA, tenantIdA, databaseName);
+            InstanceA.InvalidateTenantResolveImportGuards(tenantIdA);
+            Assert.NotNull(await InstanceA.TryGetChildTenantContextAsync(tenantIdA));
+            Assert.Contains(tracker.Current, c => c.TenantId == tenantIdA);
+
+            // The conflict persists: the recheck keeps it.
+            tracker.RecheckInterval = TimeSpan.Zero;
+            var persisting = await healthCheck.CheckHealthAsync(new HealthCheckContext(), Ct);
+            Assert.Equal(HealthStatus.Degraded, persisting.Status);
+            Assert.Contains(tenantIdA, persisting.Description);
+
+            // B resolves the conflict. Within the interval nothing is rechecked yet.
+            await InTransactionAsync(InstanceB, s => InstanceB.DetachChildTenantAsync(s, tenantIdB));
+            tracker.RecheckInterval = TimeSpan.FromHours(1);
+            Assert.NotNull(await InstanceA.TryGetChildTenantContextAsync(tenantIdA));
+            var withinInterval = await healthCheck.CheckHealthAsync(new HealthCheckContext(), Ct);
+            Assert.Contains(tenantIdA, withinInterval.Description);
+
+            // After the interval the recheck finds no foreign marker, claims the database for A and forgets it.
+            tracker.RecheckInterval = TimeSpan.Zero;
+            var resolved = await healthCheck.CheckHealthAsync(new HealthCheckContext(), Ct);
+            Assert.DoesNotContain(tracker.Current, c => c.TenantId == tenantIdA);
+            Assert.DoesNotContain(tenantIdA, resolved.Description ?? string.Empty);
+            if (tracker.Current.Count == 0 && fixture.GetService<ITenantOwnershipConflicts>().SystemDatabaseMarkerProblem == null)
+            {
+                Assert.Equal(HealthStatus.Healthy, resolved.Status);
+            }
+
+            Assert.Equal(IdentityA, (await OwnershipStore.GetAsync(databaseName, Ct))!.OwnerSystemDatabaseName);
+        }
+        finally
+        {
+            tracker.RecheckInterval = TenantOwnershipConflictTracker.DefaultRecheckInterval;
+            tracker.Clear(tenantIdA);
+            await UnregisterDirectlyQuietlyAsync(InstanceA, tenantIdA);
+            InstanceA.InvalidateTenantResolveImportGuards(tenantIdA);
+            await OwnershipStore.RemoveAsync(databaseName, Ct);
+            await ThrowawayTenant.DropAsync(InstanceB, tenantIdB);
+            try
+            {
+                // B detached it, so no registry names the database any more.
+                await InstanceA.DropTenantDatabaseAsync(new TenantDeletionHandle(databaseName, Guid.NewGuid()),
+                    tenantIdA);
+            }
+            catch (Exception)
+            {
+                // Cleanup only.
+            }
+        }
+    }
+
+    [Fact]
     public async Task Attach_SystemDatabaseOfOtherInstance_IsRefused()
     {
         // A system database is recognised by its tenant registry, so B needs at least one tenant.

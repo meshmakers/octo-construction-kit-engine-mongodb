@@ -40,6 +40,20 @@ public class TenantContextHealthCheck : IHealthCheck
             return HealthCheckResult.Unhealthy("Error while accessing mongodb.");
         }
 
+        if (_ownershipConflicts != null)
+        {
+            // AB#8796: a conflict resolved in the other instance (it detached the tenant) is forgotten here, so the
+            // health returns to Healthy; bounded to one database round per interval, however often the probe runs.
+            try
+            {
+                await _ownershipConflicts.RecheckAsync(cancellationToken);
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                // The recorded state stays; the next probe rechecks.
+            }
+        }
+
         var conflicts = _ownershipConflicts?.Current ?? [];
         var markerProblem = _ownershipConflicts?.SystemDatabaseMarkerProblem;
         if (conflicts.Count == 0 && markerProblem == null)

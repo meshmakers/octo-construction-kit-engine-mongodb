@@ -728,32 +728,52 @@ public class TenantContext : ITenantContext
         // AB#6759: same as create — stale parent-local rows of a deleted tenant with this id go first.
         await PurgeStaleChildRowsAsync(normalizedTenantId, normalizedDatabaseName, correlationId);
 
-        // Tracked for the rollback below: a marker we created on a failed attach must be removed
-        // again, or the database would stay locked for every other instance even though it was
-        // never attached. A marker that predates this call (an earlier failed attach of this
-        // instance, or a detach that crashed mid-way) is left alone — it is ours and self-heals.
-        var hadOwnMarkerBefore = await GetTenantOwnershipStore().GetAsync(normalizedDatabaseName) != null;
+        // AB#8796: the claim below is part of the caller's transaction when one is active (every caller starts one):
+        // it then commits together with the registry rows and an abort takes it back, so a failed attach never
+        // releases - or leaves behind - a claim, and a concurrent attach of the same database (this or another
+        // instance) collides with it. Without a transaction the claim is compensated in the catch, and only while
+        // it is still exactly this call's claim (owner, tenant, claim time) and no marker of this instance was
+        // there before (an earlier failed attach or a crashed detach of this instance - ours, it self-heals).
+        var transactionSession = (adminSession as IOctoSessionInternal) is { IsTransactionActive: true } internalSession
+            ? internalSession.SessionHandle
+            : null;
+        var hadOwnMarkerBefore = transactionSession == null &&
+                                 await GetTenantOwnershipStore().GetAsync(normalizedDatabaseName) != null;
+        var claimTime = TenantOwnershipStore.NewClaimTime();
+        var claimedByThisCall = false;
 
         try
         {
             // Distribute updates (pre) to inform other services.
             await _tenantNotifications.NotifyPreTenantCreateAsync(tenantId, correlationId);
 
-            // AB#4945: claim the database for this instance before anything else in the try — the
-            // marker is the cross-instance lock, so the claim window should be as small as
-            // possible. The registry rows below roll back with the caller's transaction; the
-            // marker is compensated in the catch. AB#8796: insert-if-absent, never an overwrite —
+            // AB#4945: claim the database for this instance before anything else in the try - the
+            // marker is the cross-instance lock. AB#8796: never an overwrite of another instance's marker -
             // another instance attaching the same unmarked database may have claimed it between the
             // gate's read and this write; then the first writer keeps it and this attach is refused
-            // with the same uniform conflict as the gate.
-            var claim = await GetTenantOwnershipStore().StampIfAbsentAndGetAsync(normalizedDatabaseName,
-                normalizedTenantId, OwnerInstanceIdentity);
+            // with the same uniform conflict as the gate. Inside a transaction a claim that is still
+            // uncommitted elsewhere surfaces as a write conflict and is refused the same way.
+            TenantOwnershipRecord claim;
+            try
+            {
+                claim = await GetTenantOwnershipStore().ClaimAsync(normalizedDatabaseName, normalizedTenantId,
+                    OwnerInstanceIdentity, claimTime, transactionSession);
+            }
+            catch (MongoDB.Driver.MongoException ex) when (IsWriteConflict(ex))
+            {
+                throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
+                    "another attach or restore claimed the database concurrently (write conflict on its ownership " +
+                    "marker, the claim of this attach is in its transaction), after the namespace check of this attach");
+            }
+
             if (!string.Equals(claim.OwnerSystemDatabaseName, OwnerInstanceIdentity, StringComparison.Ordinal))
             {
                 throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
                     $"another OctoMesh instance (owner system database '{claim.OwnerSystemDatabaseName}') claimed " +
                     "the database concurrently, after the namespace check of this attach");
             }
+
+            claimedByThisCall = transactionSession == null && !hadOwnMarkerBefore;
 
             // Add the new tenant as child tenant of the current one
             if (TenantId != _systemConfiguration.Value.SystemTenantId.NormalizeString())
@@ -786,15 +806,14 @@ public class TenantContext : ITenantContext
         }
         catch (Exception ex)
         {
-            // AB#4945: remove the ownership marker again when THIS call created it — otherwise a
-            // failed attach leaves the database locked for every other instance without any
-            // registry row backing the claim. Best-effort; a leftover marker of this instance
-            // self-heals on the next attach by this instance.
-            // Only this instance's marker: when another instance won the claim above, its marker stays.
-            if (!hadOwnMarkerBefore)
+            // AB#4945: without a transaction, release the claim THIS call made - otherwise a failed attach
+            // leaves the database locked for every other instance without any registry row backing the
+            // claim. Only while it is still exactly this call's claim; a claim another operation made since
+            // stays. In a transaction the abort of the caller takes the claim back (AB#8796).
+            if (claimedByThisCall)
             {
-                await GetTenantOwnershipStore().TryRemoveIfOwnedByAsync(normalizedDatabaseName,
-                    OwnerInstanceIdentity);
+                await GetTenantOwnershipStore().TryRemoveClaimAsync(normalizedDatabaseName, OwnerInstanceIdentity,
+                    normalizedTenantId, claimTime);
             }
 
             // Attach reuses an already existing database, so it is never dropped here; only the
@@ -1712,6 +1731,15 @@ public class TenantContext : ITenantContext
         return TenantException.TenantIdNotAvailable(normalizedTenantId);
     }
 
+    /// <summary>
+    ///     A write that collided with an uncommitted write of another transaction (AB#8796): the second of two
+    ///     concurrent ownership claims inside transactions.
+    /// </summary>
+    private static bool IsWriteConflict(MongoDB.Driver.MongoException exception) =>
+        exception.HasErrorLabel("TransientTransactionError") ||
+        exception is MongoDB.Driver.MongoCommandException { Code: 112 } ||
+        exception is MongoDB.Driver.MongoWriteException { WriteError.Code: 112 };
+
     private Exception RejectDatabaseName(string normalizedTenantId, string normalizedDatabaseName, Guid correlationId,
         string reason)
     {
@@ -1971,6 +1999,21 @@ public class TenantContext : ITenantContext
         var key = tenantId.NormalizeString();
         if (!_ownershipStampAttempted.TryAdd(key, true))
         {
+            // AB#8796: a recorded conflict is rechecked on resolve too (bounded by the tracker's interval), so it is
+            // forgotten soon after the other instance detached the tenant.
+            var tracker = _serviceProvider.GetRequiredService<TenantOwnershipConflictTracker>();
+            if (tracker.HasConflict(key))
+            {
+                try
+                {
+                    await tracker.RecheckAsync();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Could not recheck the ownership conflict of tenant '{TenantId}'", tenantId);
+                }
+            }
+
             return;
         }
 

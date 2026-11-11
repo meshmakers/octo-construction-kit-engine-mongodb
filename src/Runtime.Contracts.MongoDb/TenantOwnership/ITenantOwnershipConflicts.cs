@@ -20,12 +20,22 @@ public sealed record TenantOwnershipConflict(
 ///     The ownership conflicts this process has seen on tenant resolve (AB#8796). The service health
 ///     check reports <c>Degraded</c> while the list is not empty. Resolve itself is never refused and
 ///     no marker is overwritten; the operator resolves a conflict by detaching the tenant in one of the
-///     two instances.
+///     two instances - here it is forgotten at once, in the other instance at the next
+///     <see cref="RecheckAsync" />.
 /// </summary>
 public interface ITenantOwnershipConflicts
 {
     /// <summary>The current conflicts, ordered by tenant id.</summary>
     IReadOnlyList<TenantOwnershipConflict> Current { get; }
+
+    /// <summary>
+    ///     Rechecks the recorded conflicts against their databases (AB#8796), at most once per bounded interval
+    ///     (one minute in the engine): a conflict whose database no longer carries another instance's marker is
+    ///     forgotten, so the health check returns to <c>Healthy</c> once the conflict is resolved; one that persists
+    ///     stays. The health check calls it before it reads <see cref="Current" />; resolving a conflicting tenant
+    ///     triggers it too. Never throws for a database it cannot read.
+    /// </summary>
+    Task RecheckAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
     /// <summary>
     ///     Why this instance could not stamp the system-database marker into its own system database (AB#8672), or

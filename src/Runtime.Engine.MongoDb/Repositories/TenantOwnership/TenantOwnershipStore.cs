@@ -18,7 +18,9 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 ///     the system-database shell allowlist (AB#4854), and this marker is never written into a
 ///     system database (the namespace gate reserves the system database name before any marker
 ///     access). Reads never materialize a database — every caller operates on a database whose
-///     physical existence the gate has already established.
+///     physical existence the gate has already established. The one write that may materialize one is
+///     the claim of a restore on a new target name (AB#8672), which a failed restore drops again
+///     (<see cref="TryDropIfOnlyClaimAsync" />).
 /// </remarks>
 internal sealed class TenantOwnershipStore
 {
@@ -87,14 +89,23 @@ internal sealed class TenantOwnershipStore
     ///     the own marker when this call or an earlier one of this instance wrote it, or the marker of
     ///     another instance that won the insert-if-absent race. One round trip; never overwrites.
     /// </summary>
+    /// <param name="databaseName">The database to claim.</param>
+    /// <param name="tenantId">The tenant the claim is for.</param>
+    /// <param name="ownerSystemDatabaseName">The claiming instance.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="claimTime">
+    ///     The stamp time to write on insert, default now. The restore and the database drop pass a claim token
+    ///     (<see cref="NewClaimTime" />): the returned marker is <see cref="IsClaim" /> of it only when THIS call
+    ///     inserted it, and only then do they release it again (<see cref="TryRemoveClaimAsync" />).
+    /// </param>
     public async Task<TenantOwnershipRecord> StampIfAbsentAndGetAsync(string databaseName, string tenantId,
-        string ownerSystemDatabaseName, CancellationToken cancellationToken = default)
+        string ownerSystemDatabaseName, CancellationToken cancellationToken = default, DateTime? claimTime = null)
     {
         var collection = GetCollection(databaseName);
         var update = Builders<TenantOwnershipRecord>.Update
             .SetOnInsert(r => r.OwnerSystemDatabaseName, ownerSystemDatabaseName)
             .SetOnInsert(r => r.TenantId, tenantId)
-            .SetOnInsert(r => r.AttachedAtUtc, DateTime.UtcNow);
+            .SetOnInsert(r => r.AttachedAtUtc, claimTime ?? DateTime.UtcNow);
 
         return await collection.FindOneAndUpdateAsync<TenantOwnershipRecord>(
             r => r.Id == TenantOwnershipRecord.DocumentId, update,
@@ -102,6 +113,91 @@ internal sealed class TenantOwnershipStore
             {
                 IsUpsert = true, ReturnDocument = ReturnDocument.After
             }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Claims the database for <paramref name="ownerSystemDatabaseName" /> with a claim token (AB#8796, AB#8672):
+    ///     a marker of this instance is re-stamped with <paramref name="tenantId" /> and <paramref name="claimTime" />,
+    ///     a missing marker is inserted with them, and the marker of another instance is returned untouched. The
+    ///     claim is the caller's exactly when the returned marker is <see cref="IsClaim" /> of it.
+    /// </summary>
+    /// <remarks>
+    ///     The claim always WRITES when it succeeds (also over an own marker), so inside a transaction
+    ///     (<paramref name="session" /> with an active transaction) two concurrent claims of the same database
+    ///     collide: the second gets a write conflict, and an aborted transaction takes its claim with it. That
+    ///     is how the attach ties its claim to its registry commit. Without a session the claim is a plain write
+    ///     the caller releases with <see cref="TryRemoveClaimAsync" />.
+    /// </remarks>
+    public async Task<TenantOwnershipRecord> ClaimAsync(string databaseName, string tenantId,
+        string ownerSystemDatabaseName, DateTime claimTime, IClientSessionHandle? session = null,
+        CancellationToken cancellationToken = default)
+    {
+        var collection = GetCollection(databaseName);
+        var restamp = Builders<TenantOwnershipRecord>.Update
+            .Set(r => r.TenantId, tenantId)
+            .Set(r => r.AttachedAtUtc, claimTime);
+        var ownMarker = Builders<TenantOwnershipRecord>.Filter.Where(r =>
+            r.Id == TenantOwnershipRecord.DocumentId && r.OwnerSystemDatabaseName == ownerSystemDatabaseName);
+        var restamped = session != null
+            ? await collection.UpdateOneAsync(session, ownMarker, restamp, cancellationToken: cancellationToken)
+                .ConfigureAwait(false)
+            : await collection.UpdateOneAsync(ownMarker, restamp, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+        if (restamped.MatchedCount == 1)
+        {
+            return new TenantOwnershipRecord
+            {
+                OwnerSystemDatabaseName = ownerSystemDatabaseName, TenantId = tenantId, AttachedAtUtc = claimTime
+            };
+        }
+
+        var insertIfAbsent = Builders<TenantOwnershipRecord>.Update
+            .SetOnInsert(r => r.OwnerSystemDatabaseName, ownerSystemDatabaseName)
+            .SetOnInsert(r => r.TenantId, tenantId)
+            .SetOnInsert(r => r.AttachedAtUtc, claimTime);
+        var options = new FindOneAndUpdateOptions<TenantOwnershipRecord>
+        {
+            IsUpsert = true, ReturnDocument = ReturnDocument.After
+        };
+        var marker = Builders<TenantOwnershipRecord>.Filter.Where(r => r.Id == TenantOwnershipRecord.DocumentId);
+        return session != null
+            ? await collection.FindOneAndUpdateAsync(session, marker, insertIfAbsent, options, cancellationToken)
+                .ConfigureAwait(false)
+            : await collection.FindOneAndUpdateAsync(marker, insertIfAbsent, options, cancellationToken)
+                .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     The deliberate ownership override of a restore or a delete (AB#8672, AB#8807): replaces exactly the
+    ///     foreign marker <paramref name="foreignMarker" /> the guard saw (owner and stamp time) by a claim of this
+    ///     instance. False when the marker changed in between - then nobody's claim is overwritten.
+    /// </summary>
+    public async Task<bool> TryTakeOverMarkerAsync(string databaseName, TenantOwnershipRecord foreignMarker,
+        string tenantId, string ownerSystemDatabaseName, DateTime claimTime,
+        CancellationToken cancellationToken = default)
+    {
+        var collection = GetCollection(databaseName);
+        var expectedOwner = foreignMarker.OwnerSystemDatabaseName;
+        var expectedStamp = foreignMarker.AttachedAtUtc;
+        var update = Builders<TenantOwnershipRecord>.Update
+            .Set(r => r.OwnerSystemDatabaseName, ownerSystemDatabaseName)
+            .Set(r => r.TenantId, tenantId)
+            .Set(r => r.AttachedAtUtc, claimTime);
+        var result = await collection.UpdateOneAsync(
+            r => r.Id == TenantOwnershipRecord.DocumentId && r.OwnerSystemDatabaseName == expectedOwner &&
+                 r.AttachedAtUtc == expectedStamp, update, cancellationToken: cancellationToken).ConfigureAwait(false);
+        return result.ModifiedCount == 1;
+    }
+
+    /// <summary>
+    ///     Whether the database holds nothing but ownership markers (this collection and the system-database
+    ///     marker): the shape a claim gives a database it materialized. A missing database counts as empty.
+    /// </summary>
+    public async Task<bool> HoldsOnlyMarkersAsync(string databaseName, CancellationToken cancellationToken = default)
+    {
+        var client = _adminRepositoryAccess.GetRepositoryClient(databaseName);
+        var collectionNames = await client.ListCollectionNamesAsync(databaseName).ConfigureAwait(false);
+        return collectionNames.All(name => name == CollectionName || name == SystemDatabaseMarkerStore.CollectionName);
     }
 
     /// <summary>
@@ -118,6 +214,77 @@ internal sealed class TenantOwnershipStore
     }
 
     /// <summary>
+    ///     A stamp time usable as a claim token (AB#8796): UTC, cut to the millisecond precision BSON stores, so
+    ///     the value read back equals the value written.
+    /// </summary>
+    public static DateTime NewClaimTime()
+    {
+        var now = DateTime.UtcNow;
+        return new DateTime(now.Ticks - now.Ticks % TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);
+    }
+
+    /// <summary>Whether <paramref name="marker" /> is exactly the claim one call made (see <see cref="ClaimAsync" />).</summary>
+    public static bool IsClaim(TenantOwnershipRecord marker, string ownerSystemDatabaseName, string tenantId,
+        DateTime claimTime) =>
+        string.Equals(marker.OwnerSystemDatabaseName, ownerSystemDatabaseName, StringComparison.Ordinal) &&
+        string.Equals(marker.TenantId, tenantId, StringComparison.Ordinal) &&
+        marker.AttachedAtUtc.ToUniversalTime() == claimTime;
+
+    /// <summary>
+    ///     Releases a claim made without a transaction (AB#8796, AB#8672): removes the marker only while it is still
+    ///     exactly that claim (owner, tenant and claim time). A claim another operation - of this or another
+    ///     instance - made since is never removed. Best effort.
+    /// </summary>
+    public async Task TryRemoveClaimAsync(string databaseName, string ownerSystemDatabaseName, string tenantId,
+        DateTime claimTime)
+    {
+        try
+        {
+            var collection = GetCollection(databaseName);
+            await collection.DeleteOneAsync(
+                r => r.Id == TenantOwnershipRecord.DocumentId &&
+                     r.OwnerSystemDatabaseName == ownerSystemDatabaseName && r.TenantId == tenantId &&
+                     r.AttachedAtUtc == claimTime).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Could not release the ownership claim on tenant database '{DatabaseName}'; a stale marker of this " +
+                "instance remains (self-heals on the next attach by this instance)", databaseName);
+        }
+    }
+
+    /// <summary>
+    ///     Drops the database when it holds nothing but exactly this claim (AB#8672): the database the claim of a
+    ///     restore materialized and the restore then never filled. Returns false - and drops nothing - when anything
+    ///     else is in it or the marker is not that claim any more. Best effort.
+    /// </summary>
+    public async Task<bool> TryDropIfOnlyClaimAsync(string databaseName, string ownerSystemDatabaseName,
+        string tenantId, DateTime claimTime)
+    {
+        try
+        {
+            var marker = await GetAsync(databaseName).ConfigureAwait(false);
+            if (marker == null || !IsClaim(marker, ownerSystemDatabaseName, tenantId, claimTime) ||
+                !await HoldsOnlyMarkersAsync(databaseName).ConfigureAwait(false))
+            {
+                return false;
+            }
+
+            await _adminRepositoryAccess.GetRepositoryClient(databaseName).DropRepositoryAsync(databaseName)
+                .ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Could not drop database '{DatabaseName}', which holds only the ownership claim of a failed restore",
+                databaseName);
+            return false;
+        }
+    }
+
+    /// <summary>
     ///     Removes the marker only when it names <paramref name="ownerSystemDatabaseName" /> (AB#8796).
     ///     Detach uses it: detaching a double-registered tenant in the instance that does NOT own the
     ///     database must leave the owner's marker in place, otherwise the owner would lose its claim.
@@ -130,25 +297,6 @@ internal sealed class TenantOwnershipStore
         await collection.DeleteOneAsync(
             r => r.Id == TenantOwnershipRecord.DocumentId && r.OwnerSystemDatabaseName == ownerSystemDatabaseName,
             cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    ///     Best-effort <see cref="RemoveIfOwnedByAsync" /> for rollback paths (AB#8796): a failed attach removes
-    ///     the marker it wrote, but never the marker of another instance that won the claim.
-    /// </summary>
-    public async Task TryRemoveIfOwnedByAsync(string databaseName, string ownerSystemDatabaseName)
-    {
-        try
-        {
-            await RemoveIfOwnedByAsync(databaseName, ownerSystemDatabaseName).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Could not remove the ownership marker from tenant database '{DatabaseName}' during rollback; " +
-                "a stale marker of this instance remains (self-heals on the next attach by this instance)",
-                databaseName);
-        }
     }
 
     private IMongoCollection<TenantOwnershipRecord> GetCollection(string databaseName)
