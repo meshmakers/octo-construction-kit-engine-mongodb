@@ -22,14 +22,15 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 ///         paths — attach, restore, the list/stamp operation — not for the per-request resolve.
 ///     </para>
 ///     <para>
-///         A <b>system database</b> is a database that holds a tenant registry with at least one row,
-///         carries no ownership marker (a marker is never written into a system database) and is not
-///         itself registered as a tenant database by any other registry on the server. The last rule
-///         separates a system database from a tenant database that keeps parent-local rows for its own
-///         child tenants: such a parent is always registered in its instance's system database. A
-///         system database whose registry is still empty (an instance without any tenant) cannot be
-///         told apart from an unregistered tenant database and is not recognised; it registers nothing,
-///         so the registration answers stay complete.
+///         A <b>system database</b> is a database that carries the system-database marker
+///         (<see cref="SystemDatabaseMarkerStore" />, AB#8672), or one that holds a tenant registry with
+///         at least one row, carries no ownership marker (a marker is never written into a system
+///         database) and is not itself registered as a tenant database by any other registry on the
+///         server. The marker recognises the system database of an instance without any tenant; the
+///         registry rule stays as the fallback for an instance that has not run a version that stamps
+///         the marker. Its last condition separates a system database from a tenant database that keeps
+///         parent-local rows for its own child tenants: such a parent is always registered in its
+///         instance's system database.
 ///     </para>
 ///     <para>
 ///         All names are compared and returned normalized (trimmed, lower case), like everywhere else
@@ -90,6 +91,7 @@ internal sealed class TenantDatabaseRegistrationLookup
 
         var registries = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         var markedDatabases = new HashSet<string>(StringComparer.Ordinal);
+        var systemMarkedDatabases = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var storedName in databaseNames.Where(n => !MongoInternalDatabases.Contains(n)))
         {
@@ -100,7 +102,11 @@ internal sealed class TenantDatabaseRegistrationLookup
                     new ListCollectionNamesOptions
                     {
                         Filter = Builders<BsonDocument>.Filter.In("name",
-                            new[] { TenantRegistryCollectionName, TenantOwnershipStore.CollectionName })
+                            new[]
+                            {
+                                TenantRegistryCollectionName, TenantOwnershipStore.CollectionName,
+                                SystemDatabaseMarkerStore.CollectionName
+                            })
                     }, cancellationToken).ConfigureAwait(false))
                 .ToListAsync(cancellationToken).ConfigureAwait(false);
 
@@ -110,6 +116,14 @@ internal sealed class TenantDatabaseRegistrationLookup
                     .AnyAsync(cancellationToken).ConfigureAwait(false))
             {
                 markedDatabases.Add(normalizedName);
+            }
+
+            if (collectionNames.Contains(SystemDatabaseMarkerStore.CollectionName) &&
+                await database.GetCollection<BsonDocument>(SystemDatabaseMarkerStore.CollectionName)
+                    .Find(Builders<BsonDocument>.Filter.Eq("_id", SystemDatabaseMarkerStore.DocumentId))
+                    .AnyAsync(cancellationToken).ConfigureAwait(false))
+            {
+                systemMarkedDatabases.Add(normalizedName);
             }
 
             if (!collectionNames.Contains(TenantRegistryCollectionName))
@@ -147,8 +161,15 @@ internal sealed class TenantDatabaseRegistrationLookup
 
         var registeredAnywhere = new HashSet<string>(registries.Values.SelectMany(v => v), StringComparer.Ordinal);
         var systemRegistries = registries
-            .Where(r => !markedDatabases.Contains(r.Key) && !registeredAnywhere.Contains(r.Key))
+            .Where(r => systemMarkedDatabases.Contains(r.Key) ||
+                        (!markedDatabases.Contains(r.Key) && !registeredAnywhere.Contains(r.Key)))
             .ToDictionary(r => r.Key, r => (IReadOnlySet<string>)r.Value, StringComparer.Ordinal);
+
+        // AB#8672: a marked system database without any tenant has no registry rows.
+        foreach (var systemDatabase in systemMarkedDatabases.Where(d => !systemRegistries.ContainsKey(d)))
+        {
+            systemRegistries[systemDatabase] = new HashSet<string>(StringComparer.Ordinal);
+        }
 
         _logger.LogDebug(
             "Tenant registry snapshot: {DatabaseCount} databases on the server, {RegistryCount} with a tenant " +

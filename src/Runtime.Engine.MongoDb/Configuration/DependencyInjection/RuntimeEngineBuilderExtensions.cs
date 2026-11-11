@@ -120,6 +120,11 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services
             .AddSingleton<Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership.TenantOwnershipReview>();
 
+        // AB#8672 system-database marker: lets the lookup recognise the system database of an instance
+        // that has no tenant yet. Stamped by the system context on create and on EnsureSystemCkModelAsync.
+        builder.Services
+            .AddSingleton<Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership.SystemDatabaseMarkerStore>();
+
         // AB#8796 ownership conflicts seen on tenant resolve (a marker of another instance); the
         // system context health check reports Degraded while there is one.
         builder.Services

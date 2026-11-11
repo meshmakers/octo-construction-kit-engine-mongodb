@@ -3048,10 +3048,15 @@ database: every caller operates on a database whose existence the gate has alrea
 **Cross-instance registrations (AB#8796).** Databases from before the marker carry none, so the
 marker alone lets another instance adopt them. `TenantDatabaseRegistrationLookup` (same folder) reads
 the `RtEntity_SystemTenant` registry of every database on the server with the admin client and answers
-which **system databases** register a database. A system database = a registry with at least one row,
-no ownership marker, and not registered as a tenant database by any other registry (separates it from
-a parent tenant's parent-local rows). Limit: a system database with an empty registry is not
-recognised. The attach gate calls it after the marker check (`RejectIfRegisteredByAnotherInstanceAsync`):
+which **system databases** register a database. A system database = a database with the
+system-database marker (AB#8672, `SystemDatabaseMarkerStore`: collection `system_database_marker` in
+the system database itself, listed in `InfrastructureCollections` so a marker-only shell stays
+bootstrappable; stamped insert-if-absent by `CreateSystemTenantAsync` and by `EnsureSystemCkModelAsync`
+over an existing system tenant — identity calls it on every start — best effort, a failed stamp only
+logs), or, as the fallback for instances without the marker, a registry with at least one row, no
+ownership marker, and not registered as a tenant database by any other registry (separates it from a
+parent tenant's parent-local rows). The marker recognises the system database of an instance without
+any tenant. The attach gate calls it after the marker check (`RejectIfRegisteredByAnotherInstanceAsync`):
 another instance's system database, or a database another system database registers, is rejected with
 the same uniform conflict. The lookup takes a fresh snapshot per call — admin paths only, never on
 resolve. `ISystemContext.ReviewTenantOwnershipAsync(session, stamp)` (`TenantOwnershipReview`) lists
@@ -3060,9 +3065,15 @@ the own registry's databases that are `Unmarked`, `MarkedByOtherInstance` or
 registered only here; insert-if-absent); missing databases are counted, never stamped. Asset repo:
 `POST system/v1/tenants/review-ownership`; octo-cli `ReviewTenantOwnership [--stamp]`.
 
-Known residual: `TenantBackupService.RestoreTenantAsync` restores whatever marker the backup
-carries (own-instance backups restore their own marker — correct); restoring another instance's
-backup into this instance requires a detach-style marker removal first, which is intentional.
+**Restore guard (AB#8672).** `TenantBackupService.RestoreTenantAsync` checks the target before any
+write (before `dropExistingTenant` and mongorestore): another instance's system database is refused and
+never overridable; a database whose ownership marker names another instance, or that another system
+database registers, is refused naming the owner. `overrideForeignOwnership` lets the restore overwrite
+such a tenant database with an `OWNERSHIP OVERRIDE` warning — except a database another instance still
+registers when `attachTenant` is true: the attach gate above would refuse it after the data was
+replaced, and a successful attach would register one database in two instances. After mongorestore the
+archive's ownership marker and system-database marker are removed, so a backup of another instance (or
+of a system database) restores as a tenant database the restoring instance owns after the attach.
 
 Tests: `TenantOwnershipGuardTests` (create stamps; detach removes + re-attach re-stamps;
 foreign-owned attach conflicts uniformly with the foreign claim untouched; unstamped legacy DB is
@@ -3070,7 +3081,9 @@ adopted and stamped; tenant-resolve lazily stamps an unmarked DB). Two real inst
 (`TwoInstanceFixture`, collection `TwoInstance`): `TenantDatabaseRegistrationLookupTests`,
 `TenantOwnershipCrossInstanceTests` (unmarked attach refused/allowed, other system database refused,
 resolve warning once + Degraded + detach in the non-owner keeps the marker, idempotent list/stamp with
-the ambiguous databases untouched).
+the ambiguous databases untouched), `RestoreOwnershipGuardTests`, `SystemDatabaseMarkerTests` (fresh
+instance without tenants recognised and its system database refused as restore target, idempotent
+startup stamp with the registry rule as fallback, marker removed from a restored copy).
 
 ### Tenant Lifecycle Store — `EnsureCreatingAsync` is an atomic branch on the stored state (AB#4690)
 

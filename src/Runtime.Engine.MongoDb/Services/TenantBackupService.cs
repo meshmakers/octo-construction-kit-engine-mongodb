@@ -19,6 +19,7 @@ internal class TenantBackupService(
     ILogger<TenantBackupService> logger,
     TenantOwnershipStore tenantOwnershipStore,
     TenantDatabaseRegistrationLookup registrationLookup,
+    SystemDatabaseMarkerStore systemDatabaseMarkerStore,
     ITenantLifecycleStore? tenantLifecycleStore = null) : ITenantBackupService
 {
     /// <inheritdoc />
@@ -392,6 +393,9 @@ internal class TenantBackupService(
             // the attach stamps this instance as owner, and a database restored without attach stays
             // unowned like any detached database.
             await tenantOwnershipStore.RemoveAsync(databaseName, cancellationToken ?? CancellationToken.None);
+            // The same for the system-database marker of a dumped system database: the restored copy is a
+            // tenant database and must not look like another instance's system database.
+            await systemDatabaseMarkerStore.RemoveAsync(databaseName, cancellationToken ?? CancellationToken.None);
 
             logger.LogInformation("Database '{DatabaseName}' restored successfully for tenant '{TenantId}'",
                 databaseName, tenantId);

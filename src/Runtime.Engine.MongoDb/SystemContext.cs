@@ -102,6 +102,10 @@ public class SystemContext : TenantContext, ISystemContext
             await _ckModelRepositoryService.UpdateModelAsync(ckCompiledModelRoot,
                 new TenantDatabaseSourceIdentifier(null, ckModelRepository, normalizedTenantId));
 
+            // AB#8672: mark the database as a system database at once, so an instance without any tenant
+            // is recognised by the other instances on the server.
+            await TryStampSystemDatabaseMarkerAsync();
+
             // Distribute updates (post) to inform other services.
             await _tenantNotifications.NotifyPosTenantCreateAsync(normalizedTenantId, correlationId);
         }
@@ -543,6 +547,34 @@ public class SystemContext : TenantContext, ISystemContext
         {
             // CK v2 (review G3 E-M2): archives of the system tenant are checked after a System import too.
             await RevalidateArchiveAccessAsync();
+        }
+
+        // AB#8672: the service that ensures the System CK model on every start (identity) stamps the
+        // system-database marker, so an instance that predates the marker gets it on its first start with
+        // this version. Only over an existing system tenant: on a virgin server the bootstrap stamps it.
+        if (await IsSystemTenantExistingAsync())
+        {
+            await TryStampSystemDatabaseMarkerAsync();
+        }
+    }
+
+    /// <summary>
+    ///     Stamps the system-database marker (AB#8672, idempotent). Best effort: without the marker the
+    ///     other instances still recognise this system database by its tenant registry rows, so a failed
+    ///     stamp is logged and never fails the bootstrap or the start.
+    /// </summary>
+    private async Task TryStampSystemDatabaseMarkerAsync()
+    {
+        try
+        {
+            await _serviceProvider.GetRequiredService<SystemDatabaseMarkerStore>()
+                .StampIfAbsentAsync(DatabaseName, TenantId);
+        }
+        catch (Exception ex)
+        {
+            _serviceProvider.GetService<ILoggerFactory>()?.CreateLogger<SystemContext>().LogWarning(ex,
+                "Could not stamp the system-database marker into '{DatabaseName}'; other OctoMesh instances on " +
+                "this server recognise it as a system database only while it registers a tenant", DatabaseName);
         }
     }
 
