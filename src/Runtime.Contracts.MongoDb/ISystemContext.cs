@@ -75,9 +75,11 @@ public interface ISystemContext : ITenantContext
     /// <summary>
     ///     Lists the tenant databases of this instance whose ownership is not unambiguous (AB#8796): no
     ///     ownership marker, the marker of another OctoMesh instance, or a registration in another system
-    ///     database on the same MongoDB server as well. With <paramref name="stamp"/> it writes the marker of
-    ///     this instance only for unambiguous databases — no marker and registered only here — and leaves
-    ///     every other database untouched; they stay listed. Idempotent: a second run stamps nothing new and
+    ///     database on the same MongoDB server as well, or a registry row that names a system database. With
+    ///     <paramref name="stamp"/> it writes the marker of this instance only for unambiguous databases — no
+    ///     marker, registered only here and not a system database — and leaves every other database untouched;
+    ///     they stay listed. It never writes into another instance's system database or into a database another
+    ///     instance registers. Idempotent: a second run stamps nothing new and
     ///     lists the same ambiguous databases. Without <paramref name="stamp"/> nothing is written.
     /// </summary>
     /// <remarks>

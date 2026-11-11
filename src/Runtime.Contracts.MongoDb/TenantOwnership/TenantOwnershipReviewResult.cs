@@ -10,13 +10,22 @@ public enum TenantOwnershipIssue
     MarkedByOtherInstance,
 
     /// <summary>The database is registered in this and at least one other system database on the server.</summary>
-    RegisteredByOtherInstance
+    RegisteredByOtherInstance,
+
+    /// <summary>
+    ///     A registry row of this instance names a system database (of another instance, or its own): a corrupt
+    ///     registration. Never stamped; remove the row (detach the tenant) instead.
+    /// </summary>
+    SystemDatabase
 }
 
 /// <summary>A tenant database the ownership review lists (AB#8796).</summary>
 /// <param name="TenantId">Normalized tenant id in this instance.</param>
 /// <param name="DatabaseName">Normalized tenant database name.</param>
-/// <param name="Issue">Why it is listed; a double registration wins over a foreign marker, which wins over no marker.</param>
+/// <param name="Issue">
+///     Why it is listed; a system database wins over a double registration, which wins over a foreign marker, which
+///     wins over no marker.
+/// </param>
 /// <param name="MarkerOwnerSystemDatabaseName">The system database the marker names, or null without marker.</param>
 /// <param name="RegisteringSystemDatabases">All system databases on the server that register the database.</param>
 /// <param name="Stamped">True when this run wrote the marker of this instance.</param>
@@ -46,7 +55,9 @@ public sealed class TenantOwnershipReviewResult
     /// <summary>Registry rows whose database does not exist; they are skipped and never stamped.</summary>
     public int MissingDatabases { get; init; }
 
-    /// <summary>The listed databases: no marker, a marker of another instance, or several registrations.</summary>
+    /// <summary>
+    ///     The listed databases: no marker, a marker of another instance, several registrations, or a system database.
+    /// </summary>
     public IReadOnlyList<TenantOwnershipReviewEntry> Entries { get; init; } = [];
 
     /// <summary>One-line human-readable summary.</summary>
@@ -56,5 +67,6 @@ public sealed class TenantOwnershipReviewResult
         $"{Entries.Count(e => !e.Stamped && e.Issue == TenantOwnershipIssue.Unmarked)} unmarked, " +
         $"{Entries.Count(e => e.Issue == TenantOwnershipIssue.MarkedByOtherInstance)} marked by another instance, " +
         $"{Entries.Count(e => e.Issue == TenantOwnershipIssue.RegisteredByOtherInstance)} registered by another instance, " +
+        $"{Entries.Count(e => e.Issue == TenantOwnershipIssue.SystemDatabase)} system database(s), " +
         $"{MissingDatabases} missing";
 }

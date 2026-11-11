@@ -6,7 +6,8 @@ namespace Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership;
 /// <summary>
 ///     The ownership list/stamp operation (AB#8796) over the tenant databases of one instance, see
 ///     <c>ISystemContext.ReviewTenantOwnershipAsync</c>. Stamps only databases that are unambiguous:
-///     no marker and registered in no other system database on the server.
+///     no marker, registered in no other system database on the server, and not a system database itself.
+///     It never writes into another instance's system database or into a database another instance registers.
 /// </summary>
 internal sealed class TenantOwnershipReview
 {
@@ -52,7 +53,14 @@ internal sealed class TenantOwnershipReview
                                   !string.Equals(marker.OwnerSystemDatabaseName, ownSystemDatabaseName, StringComparison.Ordinal);
 
             TenantOwnershipIssue issue;
-            if (registeredElsewhere)
+            if (registrations.IsSystemDatabase(databaseName))
+            {
+                // A corrupt registry row naming a system database (another instance's, or this one's own). A tenant
+                // marker in there would hide it from the legacy system-database classification of the other
+                // instances, so it is reported and never stamped.
+                issue = TenantOwnershipIssue.SystemDatabase;
+            }
+            else if (registeredElsewhere)
             {
                 issue = TenantOwnershipIssue.RegisteredByOtherInstance;
             }

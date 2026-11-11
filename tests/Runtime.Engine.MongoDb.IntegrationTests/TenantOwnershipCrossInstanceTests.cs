@@ -238,6 +238,39 @@ public class TenantOwnershipCrossInstanceTests(TwoInstanceFixture fixture)
     }
 
     [Fact]
+    public async Task Review_WithStamp_NeverWritesAMarkerIntoTheSystemDatabaseOfAnotherInstance()
+    {
+        // A corrupt row of A names B's system database. B's system marker is removed (an instance from before the
+        // marker): B is a system database by its registry rows only. A tenant marker written there would hide it
+        // from that fallback classification and strip the protection of B's tenant databases.
+        var tenantOfB = NewName("revsysb");
+        var corruptIdA = NewName("revsysa");
+        var systemMarkers = fixture.GetService<SystemDatabaseMarkerStore>();
+        await CreateAsync(InstanceB, tenantOfB);
+        try
+        {
+            await systemMarkers.RemoveAsync(IdentityB, Ct);
+            await RegisterDirectlyAsync(InstanceA, corruptIdA, IdentityB);
+
+            var stamped = await ReviewAsync(InstanceA, stamp: true);
+
+            var entry = Assert.Single(stamped.Entries, e => e.TenantId == corruptIdA);
+            Assert.Equal(TenantOwnershipIssue.SystemDatabase, entry.Issue);
+            Assert.False(entry.Stamped);
+            Assert.Null(await OwnershipStore.GetAsync(IdentityB, Ct));
+            Assert.True(await fixture.GetService<TenantDatabaseRegistrationLookup>().IsSystemDatabaseAsync(IdentityB, Ct));
+            Assert.Contains("1 system database(s)", stamped.Summary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await UnregisterDirectlyQuietlyAsync(InstanceA, corruptIdA);
+            await OwnershipStore.RemoveAsync(IdentityB, Ct);
+            await systemMarkers.StampIfAbsentAsync(IdentityB, InstanceB.TenantId, Ct);
+            await ThrowawayTenant.DropAsync(InstanceB, tenantOfB);
+        }
+    }
+
+    [Fact]
     public async Task Review_ListsWithoutWriting_StampsOnlyUnambiguous_AndIsIdempotent()
     {
         var unmarkedId = NewName("revunmarked");

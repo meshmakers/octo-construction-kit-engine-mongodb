@@ -3062,13 +3062,17 @@ parent has no marker and no registration anywhere; the earlier rule "not registe
 registry" refused every re-attach and restore of a tenant with children), and a corrupt own row that
 registers another instance's system database does not hide it. A system database whose rows all predate
 `parentTenantId` is recognised by its marker only (every instance stamps it on start). The marker
-recognises the system database of an instance without any tenant. This snapshot is the ONE
+recognises the system database of an instance without any tenant. Accepted gap (Odin 2026-11-11): the system
+database of an instance that runs an older version and has no tenant carries neither signal, so it is not
+recognised; rollout rule: upgrade all instances on one MongoDB server together. This snapshot is the ONE
 classification; attach, restore and delete all decide with `TenantDatabaseForeignOwnership.FindAsync`
 on top of it (attach: any foreign owner -> the same uniform conflict, no override). The lookup takes a fresh snapshot per call — admin paths only, never on
 resolve. `ISystemContext.ReviewTenantOwnershipAsync(session, stamp)` (`TenantOwnershipReview`) lists
-the own registry's databases that are `Unmarked`, `MarkedByOtherInstance` or
-`RegisteredByOtherInstance` and with `stamp` writes the marker only for `Unmarked` ones (no marker,
-registered only here; insert-if-absent); missing databases are counted, never stamped. Asset repo:
+the own registry's databases that are `Unmarked`, `MarkedByOtherInstance`, `RegisteredByOtherInstance` or
+`SystemDatabase` (a corrupt row naming a system database, checked first) and with `stamp` writes the marker only
+for `Unmarked` ones (no marker, registered only here, not a system database; insert-if-absent): it never writes
+into another instance's system database or a database another instance registers. Missing databases are
+counted, never stamped. Asset repo:
 `POST system/v1/tenants/review-ownership`; octo-cli `ReviewTenantOwnership [--stamp]`.
 
 **Restore guard (AB#8672).** `TenantBackupService.RestoreTenantAsync` checks the target before any
