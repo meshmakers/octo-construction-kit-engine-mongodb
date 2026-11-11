@@ -190,6 +190,37 @@ internal sealed class TenantOwnershipStore
     }
 
     /// <summary>
+    ///     Reserves the database for one drop attempt (AB#8807): re-stamps <paramref name="marker" /> for
+    ///     <paramref name="ownerSystemDatabaseName" /> with <paramref name="claimTime" /> and a drop lease until
+    ///     <paramref name="reservedUntil" />, but only while the marker is unchanged (owner and stamp) and no other
+    ///     drop attempt holds an unexpired lease. For a foreign marker the override granted, this is also the takeover.
+    ///     Returns false when another attempt holds the database or the marker changed.
+    /// </summary>
+    public async Task<bool> TryReserveForDropAsync(string databaseName, TenantOwnershipRecord marker,
+        string tenantId, string ownerSystemDatabaseName, DateTime claimTime, DateTime reservedUntil,
+        CancellationToken cancellationToken = default)
+    {
+        var collection = GetCollection(databaseName);
+        var expectedOwner = marker.OwnerSystemDatabaseName;
+        var expectedStamp = marker.AttachedAtUtc;
+        var filter = Builders<TenantOwnershipRecord>.Filter.And(
+            Builders<TenantOwnershipRecord>.Filter.Eq(r => r.Id, TenantOwnershipRecord.DocumentId),
+            Builders<TenantOwnershipRecord>.Filter.Eq(r => r.OwnerSystemDatabaseName, expectedOwner),
+            Builders<TenantOwnershipRecord>.Filter.Eq(r => r.AttachedAtUtc, expectedStamp),
+            Builders<TenantOwnershipRecord>.Filter.Or(
+                Builders<TenantOwnershipRecord>.Filter.Eq(r => r.DropReservedUntilUtc, null),
+                Builders<TenantOwnershipRecord>.Filter.Lt(r => r.DropReservedUntilUtc, claimTime)));
+        var update = Builders<TenantOwnershipRecord>.Update
+            .Set(r => r.OwnerSystemDatabaseName, ownerSystemDatabaseName)
+            .Set(r => r.TenantId, tenantId)
+            .Set(r => r.AttachedAtUtc, claimTime)
+            .Set(r => r.DropReservedUntilUtc, reservedUntil);
+        var result = await collection.UpdateOneAsync(filter, update, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        return result.ModifiedCount == 1;
+    }
+
+    /// <summary>
     ///     Whether the database holds nothing but ownership markers (this collection and the system-database
     ///     marker): the shape a claim gives a database it materialized. A missing database counts as empty.
     /// </summary>

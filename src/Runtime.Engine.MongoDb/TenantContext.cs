@@ -1746,31 +1746,32 @@ public class TenantContext : ITenantContext
                 "concurrently, right before the drop");
         }
 
-        // A marker of this instance that this call did not insert (the tenant's own marker, or the reservation of an
-        // earlier or a concurrent drop attempt) is re-stamped atomically, so exactly one attempt holds the
-        // reservation; an attempt that loses refuses and is retried later against the state it then finds.
-        if (!TenantOwnershipStore.IsClaim(claim, OwnerInstanceIdentity, normalizedTenantId, claimTime))
-        {
-            await ReserveExclusivelyAsync(store, normalizedTenantId, normalizedDatabaseName, handle, claim, claimTime);
-        }
+        // Exactly one drop attempt holds the database until its drop: the marker (inserted by this call, the
+        // tenant's own, or left by an earlier attempt whose lease expired) gets this attempt's drop lease.
+        await ReserveExclusivelyAsync(store, normalizedTenantId, normalizedDatabaseName, handle, claim, claimTime);
     }
 
+    /// <summary>How long a drop attempt holds its reservation of a tenant database (AB#8807).</summary>
+    internal static readonly TimeSpan DropReservationLease = TimeSpan.FromMinutes(10);
+
     /// <summary>
-    ///     Makes the drop reservation exclusive to one drop attempt (AB#8807): re-stamps <paramref name="ownMarker" />
-    ///     with this attempt's claim time, conditional on its current stamp. Two overlapping attempts (the delete and
-    ///     the settle sweep, or the sweeps of two replicas) can otherwise both accept the same marker, and the later one
-    ///     could drop a database another instance created under the same name after the first drop.
+    ///     Makes the drop reservation exclusive to one drop attempt (AB#8807): the marker gets this attempt's stamp and
+    ///     a drop lease of <see cref="DropReservationLease" />, conditional on the stamp it read and on no unexpired
+    ///     lease of another attempt. Two overlapping attempts (the delete and the settle sweep, or the sweeps of two
+    ///     replicas) can otherwise both reach the drop, and the later one could drop a database another instance
+    ///     created under the same name after the first drop. The attempt that loses refuses as a pending drop; the
+    ///     settle sweep retries once the lease has expired (a failed drop leaves its lease behind).
     /// </summary>
     private async Task ReserveExclusivelyAsync(TenantOwnershipStore store, string normalizedTenantId,
         string normalizedDatabaseName, TenantDeletionHandle handle, TenantOwnershipRecord ownMarker,
         DateTime claimTime)
     {
-        if (!await store.TryTakeOverMarkerAsync(normalizedDatabaseName, ownMarker, normalizedTenantId,
-                OwnerInstanceIdentity, claimTime))
+        if (!await store.TryReserveForDropAsync(normalizedDatabaseName, ownMarker, normalizedTenantId,
+                OwnerInstanceIdentity, claimTime, claimTime + DropReservationLease))
         {
             throw RefuseDrop(normalizedTenantId, normalizedDatabaseName, handle,
-                "is being dropped by a concurrent drop attempt of this instance (its reservation changed right " +
-                "before this drop)");
+                "is held by another drop attempt of this instance (its drop reservation is not expired yet), or " +
+                "its marker changed right before this drop");
         }
     }
 
@@ -1790,9 +1791,10 @@ public class TenantContext : ITenantContext
         {
             if (owner.CanBeOverridden && owner.ForeignMarker != null &&
                 ToMarkerIdentity(owner.ForeignMarker) == overridden &&
-                await store.TryTakeOverMarkerAsync(normalizedDatabaseName, owner.ForeignMarker, normalizedTenantId,
-                    OwnerInstanceIdentity, claimTime))
+                await store.TryReserveForDropAsync(normalizedDatabaseName, owner.ForeignMarker, normalizedTenantId,
+                    OwnerInstanceIdentity, claimTime, claimTime + DropReservationLease))
             {
+                // Takeover and drop reservation in one conditional update.
                 return;
             }
 

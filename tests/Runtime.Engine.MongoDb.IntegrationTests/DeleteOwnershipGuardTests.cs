@@ -498,28 +498,59 @@ public class DeleteOwnershipGuardTests(TwoInstanceFixture fixture)
     }
 
     [Fact]
-    public async Task DropReservation_OfTwoOverlappingAttempts_OnlyOneWinsTheConditionalReStamp()
+    public async Task DropDatabase_WhileAnotherDropAttemptHoldsTheReservation_IsRefusedAsPending()
     {
-        // AB#8807: two overlapping drop attempts must not share one reservation. Both read the same own marker; the
-        // drop reserves it with a re-stamp conditional on the stamp it read, so only the first attempt wins and the
-        // second refuses instead of dropping.
-        var tenantOfA = NewName("dgexcl");
+        // AB#8807: two overlapping drops of the same tenant (the delete and the settle sweep, or two replicas) must
+        // not both reach the drop. Another attempt holds the drop reservation (unexpired lease): this attempt refuses
+        // as a pending drop and leaves the database and the reservation alone; the sweep retries after the lease.
+        var tenantOfA = NewName("dglease");
 
         await CreateAsync(InstanceA, tenantOfA);
         try
         {
-            var stale = (await OwnershipStore.GetAsync(tenantOfA, Ct))!;
-            await Task.Delay(TimeSpan.FromMilliseconds(20), Ct);
-            Assert.True(await OwnershipStore.TryTakeOverMarkerAsync(tenantOfA, stale, tenantOfA, SystemDatabaseA,
-                TenantOwnershipStore.NewClaimTime(), Ct));
+            var marker = (await OwnershipStore.GetAsync(tenantOfA, Ct))!;
+            var otherAttempt = TenantOwnershipStore.NewClaimTime();
+            Assert.True(await OwnershipStore.TryReserveForDropAsync(tenantOfA, marker, tenantOfA, SystemDatabaseA,
+                otherAttempt, otherAttempt + TenantContext.DropReservationLease, Ct));
 
-            Assert.False(await OwnershipStore.TryTakeOverMarkerAsync(tenantOfA, stale, tenantOfA, SystemDatabaseA,
-                TenantOwnershipStore.NewClaimTime(), Ct));
+            var exception = await Assert.ThrowsAsync<TenantException>(() =>
+                InstanceA.DropTenantDatabaseAsync(new TenantDeletionHandle(tenantOfA, Guid.NewGuid()), tenantOfA));
+
+            AssertUniformConflict(exception, tenantOfA);
+            Assert.True(exception.IsDatabaseDropPending);
             Assert.True(await InstanceA.IsDatabaseExistingAsync(tenantOfA));
+            Assert.Equal(otherAttempt, (await OwnershipStore.GetAsync(tenantOfA, Ct))!.AttachedAtUtc.ToUniversalTime());
         }
         finally
         {
-            await DropDatabaseQuietlyAsync(tenantOfA);
+            await OwnershipStore.RemoveAsync(tenantOfA, Ct);
+            await ThrowawayTenant.DropAsync(InstanceA, tenantOfA);
+        }
+    }
+
+    [Fact]
+    public async Task DropDatabase_AfterTheReservationOfAFailedDropAttemptExpired_Drops()
+    {
+        // AB#8807: a failed drop leaves its reservation behind; once its lease has expired the next attempt (the
+        // settle sweep) reserves the database again and drops it.
+        var tenantOfA = NewName("dgleasexp");
+
+        await CreateAsync(InstanceA, tenantOfA);
+        try
+        {
+            var marker = (await OwnershipStore.GetAsync(tenantOfA, Ct))!;
+            var failedAttempt = TenantOwnershipStore.NewClaimTime() - TimeSpan.FromMinutes(20);
+            Assert.True(await OwnershipStore.TryReserveForDropAsync(tenantOfA, marker, tenantOfA, SystemDatabaseA,
+                failedAttempt, failedAttempt + TenantContext.DropReservationLease, Ct));
+
+            await InstanceA.DropTenantDatabaseAsync(new TenantDeletionHandle(tenantOfA, Guid.NewGuid()), tenantOfA);
+
+            Assert.False(await InstanceA.IsDatabaseExistingAsync(tenantOfA));
+        }
+        finally
+        {
+            await OwnershipStore.RemoveAsync(tenantOfA, Ct);
+            await ThrowawayTenant.DropAsync(InstanceA, tenantOfA);
         }
     }
 
