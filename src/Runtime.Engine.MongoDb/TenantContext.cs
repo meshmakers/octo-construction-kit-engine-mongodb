@@ -1745,6 +1745,33 @@ public class TenantContext : ITenantContext
                 $"another OctoMesh instance (owner system database '{claim.OwnerSystemDatabaseName}') claimed " +
                 "concurrently, right before the drop");
         }
+
+        // A marker of this instance that this call did not insert (the tenant's own marker, or the reservation of an
+        // earlier or a concurrent drop attempt) is re-stamped atomically, so exactly one attempt holds the
+        // reservation; an attempt that loses refuses and is retried later against the state it then finds.
+        if (!TenantOwnershipStore.IsClaim(claim, OwnerInstanceIdentity, normalizedTenantId, claimTime))
+        {
+            await ReserveExclusivelyAsync(store, normalizedTenantId, normalizedDatabaseName, handle, claim, claimTime);
+        }
+    }
+
+    /// <summary>
+    ///     Makes the drop reservation exclusive to one drop attempt (AB#8807): re-stamps <paramref name="ownMarker" />
+    ///     with this attempt's claim time, conditional on its current stamp. Two overlapping attempts (the delete and
+    ///     the settle sweep, or the sweeps of two replicas) can otherwise both accept the same marker, and the later one
+    ///     could drop a database another instance created under the same name after the first drop.
+    /// </summary>
+    private async Task ReserveExclusivelyAsync(TenantOwnershipStore store, string normalizedTenantId,
+        string normalizedDatabaseName, TenantDeletionHandle handle, TenantOwnershipRecord ownMarker,
+        DateTime claimTime)
+    {
+        if (!await store.TryTakeOverMarkerAsync(normalizedDatabaseName, ownMarker, normalizedTenantId,
+                OwnerInstanceIdentity, claimTime))
+        {
+            throw RefuseDrop(normalizedTenantId, normalizedDatabaseName, handle,
+                "is being dropped by a concurrent drop attempt of this instance (its reservation changed right " +
+                "before this drop)");
+        }
     }
 
     /// <summary>
@@ -1780,7 +1807,10 @@ public class TenantContext : ITenantContext
             string.Equals(marker.OwnerSystemDatabaseName, OwnerInstanceIdentity, StringComparison.Ordinal) &&
             string.Equals(marker.TenantId, normalizedTenantId, StringComparison.Ordinal))
         {
-            // An earlier attempt of this delete took the overridden marker over; the drop failed after that.
+            // An earlier attempt of this delete took the overridden marker over; the drop failed after that. Only one
+            // attempt may go on with that reservation.
+            await ReserveExclusivelyAsync(store, normalizedTenantId, normalizedDatabaseName, handle, marker,
+                claimTime);
             return;
         }
 

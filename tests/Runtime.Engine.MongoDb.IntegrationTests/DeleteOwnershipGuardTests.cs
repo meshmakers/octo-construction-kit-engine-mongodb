@@ -497,6 +497,32 @@ public class DeleteOwnershipGuardTests(TwoInstanceFixture fixture)
         }
     }
 
+    [Fact]
+    public async Task DropReservation_OfTwoOverlappingAttempts_OnlyOneWinsTheConditionalReStamp()
+    {
+        // AB#8807: two overlapping drop attempts must not share one reservation. Both read the same own marker; the
+        // drop reserves it with a re-stamp conditional on the stamp it read, so only the first attempt wins and the
+        // second refuses instead of dropping.
+        var tenantOfA = NewName("dgexcl");
+
+        await CreateAsync(InstanceA, tenantOfA);
+        try
+        {
+            var stale = (await OwnershipStore.GetAsync(tenantOfA, Ct))!;
+            await Task.Delay(TimeSpan.FromMilliseconds(20), Ct);
+            Assert.True(await OwnershipStore.TryTakeOverMarkerAsync(tenantOfA, stale, tenantOfA, SystemDatabaseA,
+                TenantOwnershipStore.NewClaimTime(), Ct));
+
+            Assert.False(await OwnershipStore.TryTakeOverMarkerAsync(tenantOfA, stale, tenantOfA, SystemDatabaseA,
+                TenantOwnershipStore.NewClaimTime(), Ct));
+            Assert.True(await InstanceA.IsDatabaseExistingAsync(tenantOfA));
+        }
+        finally
+        {
+            await DropDatabaseQuietlyAsync(tenantOfA);
+        }
+    }
+
     private async Task<TenantOwnershipMarkerIdentity> GetMarkerIdentityAsync(string databaseName)
     {
         var marker = await OwnershipStore.GetAsync(databaseName, Ct);
@@ -515,11 +541,10 @@ public class DeleteOwnershipGuardTests(TwoInstanceFixture fixture)
         await CreateAsync(InstanceB, tenantOfB);
         try
         {
+            // B's real marker: the refusal comes from B's registration, not from a marker mismatch.
+            var marker = await GetMarkerIdentityAsync(tenantOfB);
             var exception = await Assert.ThrowsAsync<TenantException>(() => InstanceA.DropTenantDatabaseAsync(
-                new TenantDeletionHandle(tenantOfB, Guid.NewGuid())
-                {
-                    OverriddenForeignMarker = new TenantOwnershipMarkerIdentity(SystemDatabaseB, DateTime.UtcNow)
-                },
+                new TenantDeletionHandle(tenantOfB, Guid.NewGuid()) { OverriddenForeignMarker = marker },
                 "dgdeleted"));
 
             AssertUniformConflict(exception, tenantOfB);
