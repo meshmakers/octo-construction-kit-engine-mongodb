@@ -112,6 +112,12 @@ public static class RuntimeEngineBuilderExtensions
         builder.Services
             .AddSingleton<Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership.TenantOwnershipStore>();
 
+        // AB#8796 cross-instance view of the tenant registries on the server: which system databases
+        // register a tenant database. Read-only; used by the attach guard, the restore guard and the
+        // ownership list/stamp operation.
+        builder.Services
+            .AddSingleton<Meshmakers.Octo.Runtime.Engine.MongoDb.Repositories.TenantOwnership.TenantDatabaseRegistrationLookup>();
+
         // AB#4812 durable display-rule backfill sweep tasks. The import hook (TenantContext) enqueues a
         // task per type whose display rules changed; the sweep background service (opt-in via
         // AddDisplayRuleSweepBackgroundService) drains them lease-protected.
