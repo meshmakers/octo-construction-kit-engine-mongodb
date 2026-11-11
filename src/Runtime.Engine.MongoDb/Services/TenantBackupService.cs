@@ -18,6 +18,7 @@ internal class TenantBackupService(
     IRepositoryOpsService repositoryOpsService,
     ILogger<TenantBackupService> logger,
     TenantOwnershipStore tenantOwnershipStore,
+    TenantDatabaseRegistrationLookup registrationLookup,
     ITenantLifecycleStore? tenantLifecycleStore = null) : ITenantBackupService
 {
     /// <inheritdoc />
@@ -417,30 +418,60 @@ internal class TenantBackupService(
             return CommandResult.Failure($"Exception during restore: {ex.Message}");
         }
     }
+
     /// <summary>
     ///     Cross-instance ownership guard of the restore (AB#8672). Returns the refusal message when the
-    ///     existing target database belongs to another OctoMesh instance on the same MongoDB server, or
-    ///     null when the restore may proceed: the database does not exist yet, it carries no marker, or
-    ///     its marker names this instance. A deliberate <paramref name="overrideForeignOwnership" /> lets
-    ///     the restore proceed and logs the override as a warning naming the owner.
+    ///     target database belongs to another OctoMesh instance on the same MongoDB server, or null when the
+    ///     restore may proceed. A database belongs to another instance when it is that instance's system
+    ///     database, when its ownership marker (AB#4945) names another instance, or when another instance's
+    ///     system database registers it (a tenant from before the marker shipped). A deliberate
+    ///     <paramref name="overrideForeignOwnership" /> lets the restore proceed into another instance's
+    ///     tenant database and logs the override as a warning naming the owner; another instance's system
+    ///     database is never overwritten.
     /// </summary>
     private async Task<string?> CheckForeignOwnershipAsync(string tenantId, string databaseName,
         bool overrideForeignOwnership, CancellationToken cancellationToken)
     {
-        if (!await systemContext.IsDatabaseExistingAsync(databaseName))
+        var ownInstance = TenantDatabaseRegistrationLookup.Normalize(systemContext.DatabaseName);
+        var registrations = await registrationLookup.GetRegistrationsAsync(cancellationToken);
+
+        if (registrations.IsSystemDatabase(databaseName))
         {
-            return null;
+            var systemDatabaseMessage =
+                $"Database '{databaseName}' is the system database of another OctoMesh instance on this MongoDB " +
+                $"server. Refusing to restore tenant '{tenantId}' into it, because the restore would overwrite " +
+                "that entire instance. This refusal cannot be overridden.";
+            logger.LogError("Restore failed for tenant '{TenantId}': {ErrorMessage}", tenantId, systemDatabaseMessage);
+            return systemDatabaseMessage;
         }
 
-        var ownInstance = systemContext.DatabaseName.Trim().ToLowerInvariant();
         string? foreignOwner = null;
 
-        var marker = await tenantOwnershipStore.GetAsync(databaseName, cancellationToken);
-        if (marker != null && !string.Equals(marker.OwnerSystemDatabaseName, ownInstance, StringComparison.Ordinal))
+        if (await systemContext.IsDatabaseExistingAsync(databaseName))
         {
-            foreignOwner =
-                $"is owned by another OctoMesh instance (owner system database '{marker.OwnerSystemDatabaseName}', " +
-                $"tenant '{marker.TenantId}', stamped {marker.AttachedAtUtc:u})";
+            var marker = await tenantOwnershipStore.GetAsync(databaseName, cancellationToken);
+            if (marker != null &&
+                !string.Equals(marker.OwnerSystemDatabaseName, ownInstance, StringComparison.Ordinal))
+            {
+                foreignOwner =
+                    $"is owned by another OctoMesh instance (owner system database " +
+                    $"'{marker.OwnerSystemDatabaseName}', tenant '{marker.TenantId}', stamped {marker.AttachedAtUtc:u})";
+            }
+        }
+
+        if (foreignOwner == null)
+        {
+            // Also when the database does not exist (yet): a name another instance has registered is not
+            // free, the restored database would show up as that instance's tenant.
+            var foreignRegistrations = registrations.GetRegisteringSystemDatabases(databaseName)
+                .Where(s => !string.Equals(s, ownInstance, StringComparison.Ordinal))
+                .ToList();
+            if (foreignRegistrations.Count > 0)
+            {
+                foreignOwner =
+                    $"is registered as a tenant database by another OctoMesh instance (system database " +
+                    $"'{string.Join("', '", foreignRegistrations)}')";
+            }
         }
 
         if (foreignOwner == null)
