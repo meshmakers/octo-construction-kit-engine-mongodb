@@ -314,6 +314,16 @@ public interface ITenantContext
     ///     the tenant is already deleted, a failure is logged as an error naming the tables that have
     ///     to be dropped manually. Detach does not go through here and keeps the tables for a later
     ///     attach.
+    ///     <para>
+    ///         Right before the drop the cross-instance ownership is checked again (AB#8807), for every
+    ///         caller - also the delete settle sweep, which drops a resurrected database from a handle built
+    ///         out of the lifecycle record. A database that belongs to another OctoMesh instance on the server
+    ///         (its system database, registered by it, or carrying its marker) is never dropped: the call throws
+    ///         the uniform <see cref="TenantException.DatabaseNameNotAvailable" /> conflict and leaves the database
+    ///         untouched; the cache invalidation and the post-delete notification still run. Only an override the
+    ///         metadata deletion granted for an orphaned foreign marker
+    ///         (<see cref="TenantDeletionHandle.ForeignOwnershipOverridden" />) lets that case through.
+    ///     </para>
     /// </remarks>
     /// <param name="handle">The handle returned by <see cref="DeleteChildTenantMetadataAsync" />.</param>
     /// <param name="tenantId">The tenant whose database is dropped (used for the notification).</param>

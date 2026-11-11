@@ -3083,7 +3083,16 @@ of a system database) restores as a tenant database the restoring instance owns 
 
 **Delete guard (AB#8807).** `DeleteChildTenantMetadataAsync` (and so `DropChildTenantAsync`, the REST
 two-phase delete and `ClearChildTenantAsync`) calls `EnsureDatabaseNotOwnedByAnotherInstanceAsync`
-right after the stale-row check, before the pre-delete event and any write.
+right after the stale-row check, before the pre-delete event and any write of the engine. The asset repository's
+REST delete writes its `Deleting` lifecycle tombstone before it calls the engine; after a refusal (409) the
+tombstone stays and the delete settle sweep rolls it back once the settle period has passed, because the tenant
+is still fully registered (until then a re-create of that tenant id answers 409). `DropTenantDatabaseAsync` checks
+the same decision again right before the physical drop, for every caller - also the settle sweep in
+common-services, which re-drops a resurrected database from a `TenantDeletionHandle` built out of the lifecycle
+record after only a local lookup: a database claimed by another instance in the meantime is never dropped (uniform
+conflict, database untouched; cache invalidation and post-delete event still run). Only an override the metadata
+phase granted (`TenantDeletionHandle.ForeignOwnershipOverridden`) passes there, and only while the database is
+still merely an orphaned foreign marker.
 `TenantDatabaseForeignOwnership.FindAsync` (same folder; also the decision of the attach gate and of the
 restore guard, whose `CheckForeignOwnershipAsync` only words the restore's messages) decides: another instance's system database, a marker
 naming another instance, or another system database registering the database (also the owner side of a

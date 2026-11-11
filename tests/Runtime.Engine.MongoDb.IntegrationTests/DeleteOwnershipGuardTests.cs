@@ -311,6 +311,146 @@ public class DeleteOwnershipGuardTests(TwoInstanceFixture fixture)
         }
     }
 
+    [Fact]
+    public async Task DropDatabase_FromASettleSweepHandle_OfADatabaseAnotherInstanceOwns_IsRefused_AndKeepsTheDatabase()
+    {
+        // The delete settle sweep re-drops a "resurrected" database from a handle it builds out of the lifecycle
+        // record, after only a local registry lookup. Meanwhile the name may belong to another instance.
+        var tenantOfB = NewName("dgsweep");
+
+        await CreateAsync(InstanceB, tenantOfB);
+        try
+        {
+            var exception = await Assert.ThrowsAsync<TenantException>(() =>
+                InstanceA.DropTenantDatabaseAsync(new TenantDeletionHandle(tenantOfB, Guid.NewGuid()), "dgdeleted"));
+
+            AssertUniformConflict(exception, tenantOfB);
+            AssertDropRefusalLogged(tenantOfB, SystemDatabaseB);
+            Assert.True(await InstanceA.IsDatabaseExistingAsync(tenantOfB));
+            Assert.NotNull(await InstanceB.TryFindTenantContextAsync(tenantOfB));
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(InstanceB, tenantOfB);
+        }
+    }
+
+    [Fact]
+    public async Task DropDatabase_FromASettleSweepHandle_OfAnUnmarkedDatabaseAnotherInstanceRegisters_IsRefused()
+    {
+        // A tenant of B from before the marker: only B's registry says it is B's.
+        var tenantOfB = NewName("dgsweepleg");
+
+        await CreateAsync(InstanceB, tenantOfB);
+        try
+        {
+            await OwnershipStore.RemoveAsync(tenantOfB, Ct);
+
+            var exception = await Assert.ThrowsAsync<TenantException>(() =>
+                InstanceA.DropTenantDatabaseAsync(new TenantDeletionHandle(tenantOfB, Guid.NewGuid()), "dgdeleted"));
+
+            AssertUniformConflict(exception, tenantOfB);
+            AssertDropRefusalLogged(tenantOfB, SystemDatabaseB);
+            Assert.True(await InstanceA.IsDatabaseExistingAsync(tenantOfB));
+        }
+        finally
+        {
+            await ThrowawayTenant.DropAsync(InstanceB, tenantOfB);
+        }
+    }
+
+    [Fact]
+    public async Task DropDatabase_FromASettleSweepHandle_OfTheSystemDatabaseOfAnotherInstance_IsRefused()
+    {
+        var exception = await Assert.ThrowsAsync<TenantException>(() =>
+            InstanceA.DropTenantDatabaseAsync(new TenantDeletionHandle(SystemDatabaseB, Guid.NewGuid()), "dgdeleted"));
+
+        AssertUniformConflict(exception, SystemDatabaseB);
+        Assert.True(await InstanceB.IsSystemTenantExistingAsync());
+    }
+
+    [Fact]
+    public async Task DropDatabase_AfterTheMetadataPhase_WhenAnotherInstanceClaimedTheDatabaseInBetween_IsRefused()
+    {
+        // The two-phase delete: the metadata guard passed, then B registered the database before the drop.
+        var tenantOfA = NewName("dgclaimed");
+        var claimIdB = NewName("dgclaimb");
+
+        await CreateAsync(InstanceA, tenantOfA);
+        try
+        {
+            TenantDeletionHandle? handle = null;
+            await InTransactionAsync(InstanceA,
+                async s => handle = await InstanceA.DeleteChildTenantMetadataAsync(s, tenantOfA, true));
+            Assert.NotNull(handle);
+            Assert.False(handle!.ForeignOwnershipOverridden);
+            await RegisterDirectlyAsync(InstanceB, claimIdB, tenantOfA);
+
+            var exception = await Assert.ThrowsAsync<TenantException>(() =>
+                InstanceA.DropTenantDatabaseAsync(handle, tenantOfA));
+
+            AssertUniformConflict(exception, tenantOfA);
+            AssertDropRefusalLogged(tenantOfA, SystemDatabaseB);
+            Assert.True(await InstanceA.IsDatabaseExistingAsync(tenantOfA));
+        }
+        finally
+        {
+            await UnregisterDirectlyQuietlyAsync(InstanceB, claimIdB);
+            await ThrowawayTenant.DropAsync(InstanceA, tenantOfA);
+            await DropDatabaseQuietlyAsync(tenantOfA);
+        }
+    }
+
+    [Fact]
+    public async Task DropDatabase_FromASettleSweepHandle_OfAnOrphanedOwnDatabase_DropsIt_AsBefore()
+    {
+        // The sweep's real job: a database a late import resurrected, registered nowhere, unmarked or marked by
+        // this instance.
+        var leftover = NewName("dgleftover");
+
+        await CreateAsync(InstanceA, leftover);
+        try
+        {
+            await UnregisterDirectlyQuietlyAsync(InstanceA, leftover);
+
+            await InstanceA.DropTenantDatabaseAsync(new TenantDeletionHandle(leftover, Guid.NewGuid()), leftover);
+
+            Assert.False(await InstanceA.IsDatabaseExistingAsync(leftover));
+        }
+        finally
+        {
+            await DropDatabaseQuietlyAsync(leftover);
+        }
+    }
+
+    /// <summary>The drop-time refusal names the owner in A's server log.</summary>
+    private void AssertDropRefusalLogged(string databaseName, string ownerSystemDatabase)
+    {
+        Assert.Contains(fixture.Logs.Entries, e =>
+            e.Level == LogLevel.Warning &&
+            e.Message.Contains($"Rejected database name '{databaseName}'", StringComparison.Ordinal) &&
+            e.Message.Contains("the database drop would destroy", StringComparison.Ordinal) &&
+            e.Message.Contains(ownerSystemDatabase, StringComparison.Ordinal));
+    }
+
+    /// <summary>Cleanup of a database no registry names any more (drop-time tests); a failure must not mask the assertion.</summary>
+    private async Task DropDatabaseQuietlyAsync(string databaseName)
+    {
+        try
+        {
+            if (await InstanceA.IsDatabaseExistingAsync(databaseName))
+            {
+                await OwnershipStore.RemoveAsync(databaseName, Ct);
+                await InstanceA.DropTenantDatabaseAsync(new TenantDeletionHandle(databaseName, Guid.NewGuid()),
+                    databaseName);
+            }
+        }
+        catch (Exception)
+        {
+            // Cleanup only.
+        }
+    }
+
     /// <summary>
     ///     The uniform conflict of AB#4763: the same text as every other unavailable database name, nothing about
     ///     the owner.

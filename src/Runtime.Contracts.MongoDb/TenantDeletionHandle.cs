@@ -37,6 +37,14 @@ public sealed record TenantDeletionHandle(
     IReadOnlyList<OctoObjectId> StreamDataArchives,
     bool StreamDataModelPresent = false)
 {
+    /// <summary>
+    ///     True when the metadata deletion let a deliberate administrator override drop a database that only carries
+    ///     another OctoMesh instance's ownership marker (AB#8807). <see cref="ITenantContext.DropTenantDatabaseAsync" />
+    ///     re-checks the cross-instance ownership right before the drop and honours the override only for exactly that
+    ///     case; a handle built from a lifecycle record (the delete settle sweep) never carries it.
+    /// </summary>
+    public bool ForeignOwnershipOverridden { get; init; }
+
     /// <summary>A handle for a plain database drop: no stream data tables go with the database.</summary>
     public TenantDeletionHandle(string databaseName, Guid correlationId)
         : this(databaseName, correlationId, [])

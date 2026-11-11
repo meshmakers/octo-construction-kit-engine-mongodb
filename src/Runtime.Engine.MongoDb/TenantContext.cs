@@ -1122,8 +1122,8 @@ public class TenantContext : ITenantContext
 
         // AB#8807: the delete drops the database, and on a shared MongoDB server that database can belong to
         // another OctoMesh instance (a double registration from before AB#4945). Refuse before any event or write.
-        await EnsureDatabaseNotOwnedByAnotherInstanceAsync(tenantId, octoTenant.DatabaseName,
-            overrideForeignOwnership, correlationId);
+        var foreignOwnershipOverridden = await EnsureDatabaseNotOwnedByAnotherInstanceAsync(tenantId,
+            octoTenant.DatabaseName, overrideForeignOwnership, correlationId);
 
         // Collected BEFORE the record deletion: this is the last moment the child resolves, and the
         // archive entities are gone with its database. Only when the caller drops the tenant for good;
@@ -1155,7 +1155,10 @@ public class TenantContext : ITenantContext
             await RemoveRowFromRegisteredParentAsync(adminSession, octoTenant);
         }
 
-        return new TenantDeletionHandle(octoTenant.DatabaseName, correlationId, streamDataArchives, streamDataModelPresent);
+        return new TenantDeletionHandle(octoTenant.DatabaseName, correlationId, streamDataArchives, streamDataModelPresent)
+        {
+            ForeignOwnershipOverridden = foreignOwnershipOverridden
+        };
     }
 
     /// <inheritdoc />
@@ -1171,6 +1174,13 @@ public class TenantContext : ITenantContext
 
         try
         {
+            // AB#8807: the drop is the destructive step, and it can run long after the metadata guard - the delete
+            // settle sweep re-drops a resurrected database 90 seconds or more later from a handle it builds out of
+            // the lifecycle record. Another OctoMesh instance on the server may have claimed the name in between, so
+            // the cross-instance ownership is re-checked right here, for every caller. Inside the try: the metadata
+            // is gone either way, so the cache invalidation and the post-delete notification still run.
+            await EnsureDropTargetNotOwnedByAnotherInstanceAsync(tenantId, normalizedDatabaseName, handle);
+
             // Drop BOTH spellings: databases from the create path are physically normalized, but a
             // legacy attach adopted the physical database under whatever casing the record holds.
             // MongoDB forbids two databases differing only in case, so at most one of the two
@@ -1593,18 +1603,17 @@ public class TenantContext : ITenantContext
     ///     system database also registers is refused too, because that instance may still work on it. Detach the
     ///     tenant in the instance that does not use it first.
     /// </remarks>
-    private async Task EnsureDatabaseNotOwnedByAnotherInstanceAsync(string tenantId, string databaseName,
+    /// <returns>True when the deliberate override let the delete go on over an orphaned foreign marker.</returns>
+    private async Task<bool> EnsureDatabaseNotOwnedByAnotherInstanceAsync(string tenantId, string databaseName,
         bool overrideForeignOwnership, Guid correlationId)
     {
         var normalizedTenantId = tenantId.NormalizeString();
         var normalizedDatabaseName = NormalizeDatabaseName(databaseName);
 
-        var owner = await TenantDatabaseForeignOwnership.FindAsync(GetTenantOwnershipStore(),
-            _serviceProvider.GetRequiredService<TenantDatabaseRegistrationLookup>(),
-            _systemConfiguration.Value.SystemDatabaseName, normalizedDatabaseName);
+        var owner = await FindForeignOwnerAsync(normalizedDatabaseName);
         if (owner == null)
         {
-            return;
+            return false;
         }
 
         if (!owner.CanBeOverridden)
@@ -1625,13 +1634,41 @@ public class TenantContext : ITenantContext
                 "(correlation {CorrelationId}). The administrator overrode the cross-instance ownership guard; the " +
                 "other instance loses the data of this database", normalizedTenantId, normalizedDatabaseName,
                 owner.Description, correlationId);
-            return;
+            return true;
         }
 
         throw RejectDatabaseName(normalizedTenantId, normalizedDatabaseName, correlationId,
             $"the delete would drop a database that {owner.Description}; detach the tenant in this instance " +
             "instead (keeps the database), or override the ownership guard deliberately");
     }
+
+    /// <summary>
+    ///     The last cross-instance ownership check of a delete (AB#8807), right before the physical drop. Uses the same
+    ///     decision as attach, restore and the metadata guard (<see cref="TenantDatabaseForeignOwnership" />) and throws
+    ///     the uniform database-name conflict of AB#4763 when the database belongs to another OctoMesh instance - its
+    ///     system database, a database another instance registers, or one carrying another instance's marker. The
+    ///     only exception is the deliberate override the metadata guard already granted for an orphaned foreign
+    ///     marker (<see cref="TenantDeletionHandle.ForeignOwnershipOverridden" />); a claim that appeared since then
+    ///     (another instance registers the database now) refuses the drop even then.
+    /// </summary>
+    private async Task EnsureDropTargetNotOwnedByAnotherInstanceAsync(string tenantId, string normalizedDatabaseName,
+        TenantDeletionHandle handle)
+    {
+        var owner = await FindForeignOwnerAsync(normalizedDatabaseName);
+        if (owner == null || (handle.ForeignOwnershipOverridden && owner.CanBeOverridden))
+        {
+            return;
+        }
+
+        throw RejectDatabaseName(tenantId.NormalizeString(), normalizedDatabaseName, handle.CorrelationId,
+            $"the database drop would destroy a database that {owner.Description}; the database is left untouched " +
+            "(it was claimed after the tenant's metadata was deleted, or the delete settle sweep found it claimed)");
+    }
+
+    private Task<TenantDatabaseForeignOwner?> FindForeignOwnerAsync(string normalizedDatabaseName) =>
+        TenantDatabaseForeignOwnership.FindAsync(GetTenantOwnershipStore(),
+            _serviceProvider.GetRequiredService<TenantDatabaseRegistrationLookup>(),
+            _systemConfiguration.Value.SystemDatabaseName, normalizedDatabaseName);
 
     /// <summary>
     ///     AB#8797: with a tenant-database prefix configured, a new tenant database must carry it. The name of a
